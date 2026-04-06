@@ -1,22 +1,24 @@
-import React, { useEffect, useState } from "react";
+import { useMCPAccessGroups } from "@/app/(dashboard)/hooks/mcpServers/useMCPAccessGroups";
+import { useMCPServers } from "@/app/(dashboard)/hooks/mcpServers/useMCPServers";
+import { useMCPToolsets } from "@/app/(dashboard)/hooks/mcpServers/useMCPToolsets";
 import { Select } from "antd";
-import { fetchMCPServers, fetchMCPAccessGroups } from "../networking";
-import { MCPServer } from "../mcp_tools/types";
+import React from "react";
 
 interface MCPServerSelectorProps {
-  onChange: (selected: { 
-    servers: string[]; 
+  onChange: (selected: { servers: string[]; accessGroups: string[]; toolsets: string[] }) => void;
+  value?: {
+    servers: string[];
     accessGroups: string[];
-  }) => void;
-  value?: { 
-    servers: string[]; 
-    accessGroups: string[];
+    toolsets?: string[];
   };
   className?: string;
   accessToken: string;
   placeholder?: string;
   disabled?: boolean;
+  teamId?: string | null;
 }
+
+const TOOLSET_PREFIX = "toolset:";
 
 const MCPServerSelector: React.FC<MCPServerSelectorProps> = ({
   onChange,
@@ -25,57 +27,65 @@ const MCPServerSelector: React.FC<MCPServerSelectorProps> = ({
   accessToken,
   placeholder = "Select MCP servers",
   disabled = false,
+  teamId,
 }) => {
-  const [mcpServers, setMCPServers] = useState<MCPServer[]>([]);
-  const [accessGroups, setAccessGroups] = useState<string[]>([]);
-  const [loading, setLoading] = useState(false);
+  const { data: mcpServers = [], isLoading: serversLoading } = useMCPServers(teamId);
+  const { data: accessGroups = [], isLoading: groupsLoading } = useMCPAccessGroups();
+  const { data: toolsets = [], isLoading: toolsetsLoading } = useMCPToolsets();
 
-  useEffect(() => {
-    const fetchData = async () => {
-      if (!accessToken) return;
-      setLoading(true);
-      try {
-        const [serversRes, groupsRes] = await Promise.all([
-          fetchMCPServers(accessToken),
-          fetchMCPAccessGroups(accessToken),
-        ]);
-        let servers = Array.isArray(serversRes) ? serversRes : serversRes.data || [];
-        let groups = Array.isArray(groupsRes) ? groupsRes : groupsRes.data || [];
-        setMCPServers(servers);
-        setAccessGroups(groups);
-      } catch (error) {
-        console.error("Error fetching MCP servers or access groups:", error);
-      } finally {
-        setLoading(false);
-      }
-    };
-    fetchData();
-  }, [accessToken]);
+  const loading = serversLoading || groupsLoading || toolsetsLoading;
 
-  // Combine options, access groups first
+  const accessGroupSet = new Set(accessGroups);
+
+  // Combine options: access groups (green) + servers (blue) + toolsets (purple)
   const options = [
     ...accessGroups.map((group) => ({
       label: group,
       value: group,
-      isAccessGroup: true,
+      type: "accessGroup" as const,
       searchText: `${group} Access Group`,
     })),
     ...mcpServers.map((server) => ({
       label: `${server.server_name || server.server_id} (${server.server_id})`,
       value: server.server_id,
-      isAccessGroup: false,
+      type: "server" as const,
       searchText: `${server.server_name || server.server_id} ${server.server_id} MCP Server`,
+    })),
+    ...toolsets.map((toolset) => ({
+      label: toolset.toolset_name,
+      value: `${TOOLSET_PREFIX}${toolset.toolset_id}`,
+      type: "toolset" as const,
+      searchText: `${toolset.toolset_name} ${toolset.toolset_id} Toolset`,
     })),
   ];
 
-  // Flatten value for Select
-  const selectedValues = [...(value?.servers || []), ...(value?.accessGroups || [])];
+  const colorByType: Record<string, string> = {
+    accessGroup: "#52c41a",
+    server: "#1890ff",
+    toolset: "#722ed1",
+  };
+  const labelByType: Record<string, string> = {
+    accessGroup: "Access Group",
+    server: "MCP Server",
+    toolset: "Toolset",
+  };
+
+  // Flatten value for Select — prefix toolset IDs
+  const selectedValues = [
+    ...(value?.servers || []),
+    ...(value?.accessGroups || []),
+    ...(value?.toolsets || []).map((id) => `${TOOLSET_PREFIX}${id}`),
+  ];
 
   // Handle selection
   const handleChange = (selected: string[]) => {
-    const servers = selected.filter((v) => !accessGroups.includes(v));
-    const accessGroupsSelected = selected.filter((v) => accessGroups.includes(v));
-    onChange({ servers, accessGroups: accessGroupsSelected });
+    const toolsetsSelected = selected
+      .filter((v) => v.startsWith(TOOLSET_PREFIX))
+      .map((v) => v.slice(TOOLSET_PREFIX.length));
+    const rest = selected.filter((v) => !v.startsWith(TOOLSET_PREFIX));
+    const servers = rest.filter((v) => !accessGroupSet.has(v));
+    const accessGroupsSelected = rest.filter((v) => accessGroupSet.has(v));
+    onChange({ servers, accessGroups: accessGroupsSelected, toolsets: toolsetsSelected });
   };
 
   return (
@@ -87,6 +97,7 @@ const MCPServerSelector: React.FC<MCPServerSelectorProps> = ({
         value={selectedValues}
         loading={loading}
         className={className}
+        allowClear
         showSearch
         style={{ width: "100%" }}
         disabled={disabled}
@@ -104,20 +115,20 @@ const MCPServerSelector: React.FC<MCPServerSelectorProps> = ({
                   width: 8,
                   height: 8,
                   borderRadius: "50%",
-                  background: opt.isAccessGroup ? "#52c41a" : "#1890ff",
+                  background: colorByType[opt.type],
                   flexShrink: 0,
                 }}
               />
               <span style={{ flex: 1 }}>{opt.label}</span>
               <span
                 style={{
-                  color: opt.isAccessGroup ? "#52c41a" : "#1890ff",
+                  color: colorByType[opt.type],
                   fontSize: "12px",
                   fontWeight: 500,
                   opacity: 0.8,
                 }}
               >
-                {opt.isAccessGroup ? "Access Group" : "MCP Server"}
+                {labelByType[opt.type]}
               </span>
             </div>
           </Select.Option>

@@ -1,9 +1,11 @@
 export enum VectorStoreProviders {
   Bedrock = "Amazon Bedrock",
+  S3Vectors = "Amazon S3 Vectors",
   PgVector = "PostgreSQL pgvector (LiteLLM Connector)",
   VertexRagEngine = "Vertex AI RAG Engine",
   OpenAI = "OpenAI",
   Azure = "Azure OpenAI",
+  Milvus = "Milvus",
 }
 
 export const vectorStoreProviderMap: Record<string, string> = {
@@ -12,6 +14,8 @@ export const vectorStoreProviderMap: Record<string, string> = {
   VertexRagEngine: "vertex_ai",
   OpenAI: "openai",
   Azure: "azure",
+  Milvus: "milvus",
+  S3Vectors: "s3_vectors",
 };
 
 const asset_logos_folder = "../ui/assets/logos/";
@@ -22,6 +26,8 @@ export const vectorStoreProviderLogoMap: Record<string, string> = {
   [VectorStoreProviders.VertexRagEngine]: `${asset_logos_folder}google.svg`,
   [VectorStoreProviders.OpenAI]: `${asset_logos_folder}openai_small.svg`,
   [VectorStoreProviders.Azure]: `${asset_logos_folder}microsoft_azure.svg`,
+  [VectorStoreProviders.Milvus]: `${asset_logos_folder}milvus.svg`,
+  [VectorStoreProviders.S3Vectors]: `${asset_logos_folder}s3_vector.png`,
 };
 
 // Define field types for provider-specific configurations
@@ -31,7 +37,7 @@ export interface VectorStoreFieldConfig {
   tooltip: string;
   placeholder?: string;
   required: boolean;
-  type?: "text" | "password";
+  type?: "text" | "password" | "select";
 }
 
 // Provider-specific field configurations
@@ -82,6 +88,67 @@ export const vectorStoreProviderFields: Record<string, VectorStoreFieldConfig[]>
       placeholder: "https://your-resource.openai.azure.com/",
       required: true,
       type: "text",
+    },
+  ],
+  milvus: [
+    {
+      name: "api_key",
+      label: "API Key",
+      tooltip:
+        "To obtain a token, you should use a colon (:) to concatenate the username and password that you use to access your Milvus instance (e.g., username:password)",
+      placeholder: "username:password or api key",
+      required: true,
+      type: "password",
+    },
+    {
+      name: "api_base",
+      label: "API Base",
+      tooltip: "Enter your Milvus endpoint (e.g., https://your-milvus-endpoint.com/)",
+      placeholder: "https://your-milvus-endpoint.com/",
+      required: true,
+      type: "text",
+    },
+    {
+      name: "embedding_model",
+      label: "Embedding Model",
+      tooltip: "Select the embedding model to use",
+      placeholder: "text-embedding-3-small",
+      required: true,
+      type: "select",
+    },
+  ],
+  s3_vectors: [
+    {
+      name: "vector_bucket_name",
+      label: "Vector Bucket Name",
+      tooltip: "S3 bucket name for vector storage (will be auto-created if it doesn't exist)",
+      placeholder: "my-vector-bucket",
+      required: true,
+      type: "text",
+    },
+    {
+      name: "index_name",
+      label: "Index Name",
+      tooltip: "Name for the vector index (optional, will be auto-generated if not provided)",
+      placeholder: "my-vector-index",
+      required: false,
+      type: "text",
+    },
+    {
+      name: "aws_region_name",
+      label: "AWS Region",
+      tooltip: "AWS region where the S3 bucket is located (e.g., us-west-2)",
+      placeholder: "us-west-2",
+      required: true,
+      type: "text",
+    },
+    {
+      name: "embedding_model",
+      label: "Embedding Model",
+      tooltip: "Select the embedding model to use for vector generation",
+      placeholder: "text-embedding-3-small",
+      required: true,
+      type: "select",
     },
   ],
 };

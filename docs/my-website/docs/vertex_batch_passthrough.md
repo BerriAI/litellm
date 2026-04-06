@@ -155,6 +155,6 @@ Common error scenarios and their solutions:
 
 ## Related Documentation
 
-- [Vertex AI Provider Documentation](./vertex.md)
-- [General Batches API Documentation](../batches.md)
-- [Cost Tracking and Monitoring](../observability/telemetry.md)
+- [Vertex AI Provider Documentation](./providers/vertex.md)
+- [General Batches API Documentation](./batches.md)
+- [Cost Tracking and Monitoring](./observability/telemetry.md)

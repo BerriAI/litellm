@@ -20,9 +20,10 @@ class RecraftImageGenerationRequestParams(TypedDict, total=False):
 class RecraftImageEditRequestParams(TypedDict, total=False):
     """
     TypedDict for Recraft image edit request parameters.
-    
+
     Based on Recraft API docs: https://www.recraft.ai/docs#image-to-image
     """
+
     prompt: str  # required - A text description of areas to change. Max 1000 bytes
     strength: float  # required - Defines difference with original image, [0, 1]
     model: Optional[str]  # The model to use, default is recraftv3

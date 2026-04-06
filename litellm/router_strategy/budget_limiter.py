@@ -41,6 +41,53 @@ from litellm.types.utils import GenericBudgetConfigType, StandardLoggingPayload
 DEFAULT_REDIS_SYNC_INTERVAL = 1
 
 
+class _LiteLLMParamsDictView:
+    """
+    Lightweight attribute view over `litellm_params` dict.
+
+    This avoids pydantic construction in request hot-path while preserving
+    attribute-style access used by `litellm.get_llm_provider(...)`.
+    """
+
+    __slots__ = ("_params",)
+
+    def __init__(self, params: Dict[str, Any]):
+        self._params = params
+
+    def __getattr__(self, key: str) -> Any:
+        return self._params.get(key)
+
+    def __getitem__(self, key: str) -> Any:
+        return self._params.get(key)
+
+    def __contains__(self, key: str) -> bool:
+        return key in self._params
+
+    def get(self, key: str, default: Any = None) -> Any:
+        return self._params.get(key, default)
+
+    def keys(self):
+        return self._params.keys()
+
+    def values(self):
+        return self._params.values()
+
+    def items(self):
+        return self._params.items()
+
+    def __iter__(self):
+        return iter(self._params)
+
+    def __len__(self) -> int:
+        return len(self._params)
+
+    def dict(self) -> Dict[str, Any]:
+        return dict(self._params)
+
+    def model_dump(self) -> Dict[str, Any]:
+        return dict(self._params)
+
+
 class RouterBudgetLimiting(CustomLogger):
     def __init__(
         self,
@@ -98,6 +145,7 @@ class RouterBudgetLimiting(CustomLogger):
             cache_keys,
             provider_configs,
             deployment_configs,
+            deployment_providers,
         ) = await self._async_get_cache_keys_for_router_budget_limiting(
             healthy_deployments=healthy_deployments,
             request_kwargs=request_kwargs,
@@ -123,6 +171,7 @@ class RouterBudgetLimiting(CustomLogger):
                 healthy_deployments=healthy_deployments,
                 provider_configs=provider_configs,
                 deployment_configs=deployment_configs,
+                deployment_providers=deployment_providers,
                 spend_map=spend_map,
                 potential_deployments=potential_deployments,
                 request_tags=_get_tags_from_request_kwargs(
@@ -145,6 +194,7 @@ class RouterBudgetLimiting(CustomLogger):
         healthy_deployments: List[Dict[str, Any]],
         provider_configs: Dict[str, GenericBudgetInfo],
         deployment_configs: Dict[str, GenericBudgetInfo],
+        deployment_providers: List[Optional[str]],
         spend_map: Dict[str, float],
         request_tags: List[str],
     ) -> Tuple[List[Dict[str, Any]], str]:
@@ -161,12 +211,15 @@ class RouterBudgetLimiting(CustomLogger):
         """
         # Filter deployments based on both provider and deployment budgets
         deployment_above_budget_info: str = ""
-        for deployment in healthy_deployments:
+        for idx, deployment in enumerate(healthy_deployments):
             is_within_budget = True
 
             # Check provider budget
             if self.provider_budget_config:
-                provider = self._get_llm_provider_for_deployment(deployment)
+                if idx < len(deployment_providers):
+                    provider = deployment_providers[idx]
+                else:
+                    provider = self._get_llm_provider_for_deployment(deployment)
                 if provider in provider_configs:
                     config = provider_configs[provider]
                     if config.max_budget is None:
@@ -230,24 +283,32 @@ class RouterBudgetLimiting(CustomLogger):
         self,
         healthy_deployments: List[Dict[str, Any]],
         request_kwargs: Optional[Dict] = None,
-    ) -> Tuple[List[str], Dict[str, GenericBudgetInfo], Dict[str, GenericBudgetInfo]]:
+    ) -> Tuple[
+        List[str],
+        Dict[str, GenericBudgetInfo],
+        Dict[str, GenericBudgetInfo],
+        List[Optional[str]],
+    ]:
         """
         Returns list of cache keys to fetch from router cache for budget limiting and provider and deployment configs
 
         Returns:
-            Tuple[List[str], Dict[str, GenericBudgetInfo], Dict[str, GenericBudgetInfo]]:
+            Tuple[List[str], Dict[str, GenericBudgetInfo], Dict[str, GenericBudgetInfo], List[Optional[str]]]:
                 - List of cache keys to fetch from router cache for budget limiting
                 - Dict of provider budget configs `provider_configs`
                 - Dict of deployment budget configs `deployment_configs`
+                - List of resolved providers aligned by deployment index `deployment_providers`
         """
         cache_keys: List[str] = []
         provider_configs: Dict[str, GenericBudgetInfo] = {}
         deployment_configs: Dict[str, GenericBudgetInfo] = {}
+        deployment_providers: List[Optional[str]] = []
 
         for deployment in healthy_deployments:
             # Check provider budgets
             if self.provider_budget_config:
                 provider = self._get_llm_provider_for_deployment(deployment)
+                deployment_providers.append(provider)
                 if provider is not None:
                     budget_config = self._get_budget_config_for_provider(provider)
                     if (
@@ -280,7 +341,12 @@ class RouterBudgetLimiting(CustomLogger):
                         cache_keys.append(
                             f"tag_spend:{_tag}:{_tag_budget_config.budget_duration}"
                         )
-        return cache_keys, provider_configs, deployment_configs
+        return (
+            cache_keys,
+            provider_configs,
+            deployment_configs,
+            deployment_providers,
+        )
 
     async def _get_or_set_budget_start_time(
         self, start_time_key: str, current_time: float, ttl_seconds: int
@@ -597,12 +663,23 @@ class RouterBudgetLimiting(CustomLogger):
 
     def _get_llm_provider_for_deployment(self, deployment: Dict) -> Optional[str]:
         try:
-            _litellm_params: LiteLLM_Params = LiteLLM_Params(
-                **deployment.get("litellm_params", {"model": ""})
-            )
+            deployment_litellm_params = deployment.get("litellm_params") or {}
+
+            if isinstance(deployment_litellm_params, LiteLLM_Params):
+                model = deployment_litellm_params.model or ""
+                provider_resolution_params: Any = deployment_litellm_params
+            elif isinstance(deployment_litellm_params, dict):
+                model = deployment_litellm_params.get("model") or ""
+                provider_resolution_params = _LiteLLMParamsDictView(
+                    deployment_litellm_params
+                )
+            else:
+                model = ""
+                provider_resolution_params = _LiteLLMParamsDictView({})
+
             _, custom_llm_provider, _, _ = litellm.get_llm_provider(
-                model=_litellm_params.model,
-                litellm_params=_litellm_params,
+                model=str(model),
+                litellm_params=provider_resolution_params,
             )
         except Exception:
             verbose_router_logger.error(

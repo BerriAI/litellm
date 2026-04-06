@@ -8,6 +8,7 @@ their respective publisher-specific count-tokens endpoints.
 from typing import Any, Dict, Optional
 
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+from litellm.llms.vertex_ai.common_utils import get_vertex_base_url
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 
 
@@ -65,10 +66,8 @@ class VertexAIPartnerModelsTokenCounter(VertexBase):
         # Use custom api_base if provided, otherwise construct default
         if api_base:
             base_url = api_base
-        elif vertex_location == "global":
-            base_url = "https://aiplatform.googleapis.com"
         else:
-            base_url = f"https://{vertex_location}-aiplatform.googleapis.com"
+            base_url = get_vertex_base_url(vertex_location)
 
         # Construct the count-tokens endpoint
         # Format: /v1/projects/{project}/locations/{location}/publishers/{publisher}/models/count-tokens:rawPredict
@@ -106,7 +105,27 @@ class VertexAIPartnerModelsTokenCounter(VertexBase):
         # Extract Vertex AI credentials and settings
         vertex_credentials = self.get_vertex_ai_credentials(litellm_params)
         vertex_project = self.get_vertex_ai_project(litellm_params)
-        vertex_location = self.get_vertex_ai_location(litellm_params)
+
+        # Check for count_tokens specific location override
+        vertex_count_tokens_location = litellm_params.get(
+            "vertex_count_tokens_location"
+        )
+        vertex_location_raw = self.get_vertex_ai_location(litellm_params)
+
+        # Determine final location with precedence:
+        # 1. vertex_count_tokens_location (if provided)
+        # 2. vertex_location (if provided)
+        # 3. Default to us-east5 for Claude models when no location is set
+        # Supported regions: us-east5, europe-west1, asia-southeast1
+        # https://docs.cloud.google.com/vertex-ai/generative-ai/docs/partner-models/claude/count-tokens
+        if vertex_count_tokens_location:
+            vertex_location: str = vertex_count_tokens_location
+        elif vertex_location_raw:
+            vertex_location = vertex_location_raw
+        elif "claude" in model.lower():
+            vertex_location = "us-east5"
+        else:
+            vertex_location = "us-east5"
 
         # Get access token and resolved project ID
         access_token, project_id = await self._ensure_access_token_async(
@@ -119,7 +138,7 @@ class VertexAIPartnerModelsTokenCounter(VertexBase):
         endpoint_url = self._build_count_tokens_endpoint(
             model=model,
             project_id=project_id,
-            vertex_location=vertex_location or "us-central1",
+            vertex_location=vertex_location,
             api_base=litellm_params.get("api_base"),
         )
 

@@ -51,6 +51,28 @@ Here's what an example response looks like
 }
 ```
 
+## Native Finish Reason
+
+LiteLLM maps all provider-specific `finish_reason` values to OpenAI-compatible values (`stop`, `length`, `tool_calls`, `function_call`, `content_filter`). When the original provider value differs from the mapped value, it is preserved in `provider_specific_fields["native_finish_reason"]`.
+
+This is useful for agent loops that need to distinguish between different stop conditions (e.g., Gemini's `MALFORMED_FUNCTION_CALL` vs a normal `stop`).
+
+```python
+response = completion(model="gemini/gemini-2.0-flash", messages=messages)
+
+choice = response.choices[0]
+print(choice.finish_reason)  # "stop" (OpenAI-compatible)
+
+# Access the original provider value when it differs:
+if hasattr(choice, "provider_specific_fields") and choice.provider_specific_fields:
+    native = choice.provider_specific_fields.get("native_finish_reason")
+    if native == "MALFORMED_FUNCTION_CALL":
+        # Handle malformed function call differently from a normal stop
+        pass
+```
+
+When the provider already returns an OpenAI-compatible value (e.g., `stop`), `native_finish_reason` is not set.
+
 ## Additional Attributes
 
 You can also access information like latency. 

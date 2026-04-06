@@ -40,10 +40,14 @@ async def test_image_generation_prompt_rerouting(monkeypatch):
     async def fake_post_call_failure_hook(**_: Any) -> None:
         return None
 
+    async def fake_post_call_success_hook(*, data, user_api_key_dict, response):
+        return response
+
     fake_proxy_logger = SimpleNamespace(
         pre_call_hook=fake_pre_call_hook,
         update_request_status=fake_update_request_status,
         post_call_failure_hook=fake_post_call_failure_hook,
+        post_call_success_hook=fake_post_call_success_hook,
     )
 
     captured_route_request_data: Dict[str, Any] = {}

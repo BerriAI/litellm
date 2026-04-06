@@ -12,7 +12,8 @@ from litellm.types.mcp import MCPAuth, MCPTransport, MCPSpecVersion
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
 
-def test_mcp_server_works_without_config_auth_value():
+@pytest.mark.asyncio
+async def test_mcp_server_works_without_config_auth_value():
     """
     Test that MCP servers work without auth_value in config when headers are provided.
     This validates that auth_value is truly optional in config.yaml.
@@ -32,7 +33,7 @@ def test_mcp_server_works_without_config_auth_value():
     manager = MCPServerManager()
 
     # Test that it works with only header auth
-    client = manager._create_mcp_client(
+    client = await manager._create_mcp_client(
         server=server_without_config_auth,
         mcp_auth_header="Bearer token_from_header_only",
     )
@@ -58,7 +59,7 @@ async def test_mcp_server_config_auth_value_header_used(token_key):
     await manager.load_servers_from_config(config)
 
     server = next(iter(manager.config_mcp_servers.values()))
-    client = manager._create_mcp_client(server)
+    client = await manager._create_mcp_client(server)
     headers = client._get_auth_headers()
 
     assert headers["Authorization"] == "Bearer example_token"

@@ -40,6 +40,14 @@ class ToolPermissionRule(BaseModel):
             return stripped
         return value
 
+    @field_validator("decision", mode="before")
+    @classmethod
+    def normalize_decision(cls, v):
+        """Normalize decision to lowercase to handle case-insensitive input."""
+        if isinstance(v, str):
+            return v.lower()
+        return v
+
     @model_validator(mode="after")
     def _ensure_target_present(self):
         if self.tool_name is None and self.tool_type is None:
@@ -86,6 +94,22 @@ class ToolPermissionGuardrailConfigModel(GuardrailConfigModel):
         default="block",
         description="Choose whether disallowed tools block the request or get rewritten out of the payload",
     )
+
+    @field_validator("default_action", mode="before")
+    @classmethod
+    def normalize_default_action(cls, v):
+        """Normalize default_action to lowercase to handle case-insensitive input."""
+        if isinstance(v, str):
+            return v.lower()
+        return v
+
+    @field_validator("on_disallowed_action", mode="before")
+    @classmethod
+    def normalize_on_disallowed_action(cls, v):
+        """Normalize on_disallowed_action to lowercase to handle case-insensitive input."""
+        if isinstance(v, str):
+            return v.lower()
+        return v
 
     @staticmethod
     def ui_friendly_name() -> str:

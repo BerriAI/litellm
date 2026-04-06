@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { TextInput, Button as TremorButton } from "@tremor/react";
 import { Modal, Form, Select, Tooltip, Input, Alert } from "antd";
 import { InfoCircleOutlined } from "@ant-design/icons";
@@ -10,6 +10,7 @@ import {
   getProviderSpecificFields,
   VectorStoreFieldConfig,
 } from "../vector_store_providers";
+import { fetchAvailableModels, ModelGroup } from "../playground/llm_calls/fetch_models";
 import NotificationsManager from "../molecules/notifications_manager";
 
 interface VectorStoreFormProps {
@@ -30,6 +31,24 @@ const VectorStoreForm: React.FC<VectorStoreFormProps> = ({
   const [form] = Form.useForm();
   const [metadataJson, setMetadataJson] = useState("{}");
   const [selectedProvider, setSelectedProvider] = useState("bedrock");
+  const [modelInfo, setModelInfo] = useState<ModelGroup[]>([]);
+
+  useEffect(() => {
+    if (!accessToken) return;
+
+    const loadModels = async () => {
+      try {
+        const uniqueModels = await fetchAvailableModels(accessToken);
+        if (uniqueModels.length > 0) {
+          setModelInfo(uniqueModels);
+        }
+      } catch (error) {
+        console.error("Error fetching model info:", error);
+      }
+    };
+
+    loadModels();
+  }, [accessToken]);
 
   const handleCreate = async (formValues: any) => {
     if (!accessToken) return;
@@ -57,7 +76,12 @@ const VectorStoreForm: React.FC<VectorStoreFormProps> = ({
       const providerFields = getProviderSpecificFields(formValues.custom_llm_provider);
       const litellmParams = providerFields.reduce(
         (acc, field) => {
-          acc[field.name] = formValues[field.name];
+          // Special handling for Milvus: rename embedding_model to litellm_embedding_model
+          if (formValues.custom_llm_provider === "milvus" && field.name === "embedding_model") {
+            acc["litellm_embedding_model"] = formValues[field.name];
+          } else {
+            acc[field.name] = formValues[field.name];
+          }
           return acc;
         },
         {} as Record<string, any>,
@@ -84,7 +108,7 @@ const VectorStoreForm: React.FC<VectorStoreFormProps> = ({
   };
 
   return (
-    <Modal title="Add New Vector Store" visible={isVisible} width={1000} footer={null} onCancel={handleCancel}>
+    <Modal title="Add New Vector Store" open={isVisible} width={1000} footer={null} onCancel={handleCancel}>
       <Form form={form} onFinish={handleCreate} labelCol={{ span: 8 }} wrapperCol={{ span: 16 }} labelAlign="left">
         <Form.Item
           label={
@@ -207,23 +231,62 @@ const VectorStoreForm: React.FC<VectorStoreFormProps> = ({
         </Form.Item>
 
         {/* Provider-specific fields */}
-        {getProviderSpecificFields(selectedProvider).map((field: VectorStoreFieldConfig) => (
-          <Form.Item
-            key={field.name}
-            label={
-              <span>
-                {field.label}{" "}
-                <Tooltip title={field.tooltip}>
-                  <InfoCircleOutlined style={{ marginLeft: "4px" }} />
-                </Tooltip>
-              </span>
-            }
-            name={field.name}
-            rules={field.required ? [{ required: true, message: `Please input the ${field.label.toLowerCase()}` }] : []}
-          >
-            <TextInput type={field.type || "text"} placeholder={field.placeholder} />
-          </Form.Item>
-        ))}
+        {getProviderSpecificFields(selectedProvider).map((field: VectorStoreFieldConfig) => {
+          if (field.type === "select") {
+            const embeddingModels = modelInfo
+              .filter((option: ModelGroup) => option.mode === "embedding" || option.mode === null)
+              .map((option: ModelGroup) => ({
+                value: option.model_group,
+                label: option.model_group,
+              }));
+
+            return (
+              <Form.Item
+                key={field.name}
+                label={
+                  <span>
+                    {field.label}{" "}
+                    <Tooltip title={field.tooltip}>
+                      <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                    </Tooltip>
+                  </span>
+                }
+                name={field.name}
+                rules={
+                  field.required ? [{ required: true, message: `Please select the ${field.label.toLowerCase()}` }] : []
+                }
+              >
+                <Select
+                  placeholder={field.placeholder}
+                  showSearch={true}
+                  filterOption={(input, option) => (option?.label ?? "").toLowerCase().includes(input.toLowerCase())}
+                  options={embeddingModels}
+                  style={{ width: "100%" }}
+                />
+              </Form.Item>
+            );
+          }
+
+          return (
+            <Form.Item
+              key={field.name}
+              label={
+                <span>
+                  {field.label}{" "}
+                  <Tooltip title={field.tooltip}>
+                    <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                  </Tooltip>
+                </span>
+              }
+              name={field.name}
+              rules={
+                field.required ? [{ required: true, message: `Please input the ${field.label.toLowerCase()}` }] : []
+              }
+            >
+              <TextInput type={field.type || "text"} placeholder={field.placeholder} />
+            </Form.Item>
+          );
+        })}
 
         <Form.Item
           label={

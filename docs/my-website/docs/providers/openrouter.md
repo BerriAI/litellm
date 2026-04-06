@@ -1,5 +1,5 @@
 # OpenRouter
-LiteLLM supports all the text / chat / vision models from [OpenRouter](https://openrouter.ai/docs)
+LiteLLM supports all the text / chat / vision / embedding models from [OpenRouter](https://openrouter.ai/docs)
 
 <a target="_blank" href="https://colab.research.google.com/github/BerriAI/litellm/blob/main/cookbook/LiteLLM_OpenRouter.ipynb">
   <img src="https://colab.research.google.com/assets/colab-badge.svg" alt="Open In Colab"/>
@@ -77,4 +77,223 @@ response = completion(
             transforms = [""],
             route= ""
         )
+```
+
+## Embedding
+
+```python
+from litellm import embedding
+import os
+
+os.environ["OPENROUTER_API_KEY"] = "your-api-key"
+
+response = embedding(
+    model="openrouter/openai/text-embedding-3-small",
+    input=["good morning from litellm", "this is another item"],
+)
+print(response)
+```
+
+## Image Generation
+
+OpenRouter supports image generation through select models like Google Gemini image generation models. LiteLLM transforms standard image generation requests to OpenRouter's chat completion format.
+
+### Supported Parameters
+
+- `size`: Maps to OpenRouter's `aspect_ratio` format
+  - `1024x1024` → `1:1` (square)
+  - `1536x1024` → `3:2` (landscape)
+  - `1024x1536` → `2:3` (portrait)
+  - `1792x1024` → `16:9` (wide landscape)
+  - `1024x1792` → `9:16` (tall portrait)
+
+- `quality`: Maps to OpenRouter's `image_size` format (Gemini models)
+  - `low` or `standard` → `1K`
+  - `medium` → `2K`
+  - `high` or `hd` → `4K`
+
+- `n`: Number of images to generate
+
+### Usage
+
+```python
+from litellm import image_generation
+import os
+
+os.environ["OPENROUTER_API_KEY"] = "your-api-key"
+
+# Basic image generation
+response = image_generation(
+    model="openrouter/google/gemini-2.5-flash-image",
+    prompt="A beautiful sunset over a calm ocean",
+)
+print(response)
+```
+
+### Advanced Usage with Parameters
+
+```python
+from litellm import image_generation
+import os
+
+os.environ["OPENROUTER_API_KEY"] = "your-api-key"
+
+# Generate high-quality landscape image
+response = image_generation(
+    model="openrouter/google/gemini-2.5-flash-image",
+    prompt="A serene mountain landscape with a lake",
+    size="1536x1024",  # Landscape format
+    quality="high",     # High quality (4K)
+)
+
+# Access the generated image
+image_data = response.data[0]
+if image_data.b64_json:
+    # Base64 encoded image
+    print(f"Generated base64 image: {image_data.b64_json[:50]}...")
+elif image_data.url:
+    # Image URL
+    print(f"Generated image URL: {image_data.url}")
+```
+
+### Using OpenRouter-Specific Parameters
+
+You can also pass OpenRouter-specific parameters directly using `image_config`:
+
+```python
+from litellm import image_generation
+import os
+
+os.environ["OPENROUTER_API_KEY"] = "your-api-key"
+
+response = image_generation(
+    model="openrouter/google/gemini-2.5-flash-image",
+    prompt="A futuristic cityscape at night",
+    image_config={
+        "aspect_ratio": "16:9",  # OpenRouter native format
+        "image_size": "4K"       # OpenRouter native format
+    }
+)
+print(response)
+```
+
+### Response Format
+
+The response follows the standard LiteLLM ImageResponse format:
+
+```python
+{
+    "created": 1703658209,
+    "data": [{
+        "b64_json": "iVBORw0KGgoAAAANSUhEUgAA...",  # Base64 encoded image
+        "url": None,
+        "revised_prompt": None
+    }],
+    "usage": {
+        "input_tokens": 10,
+        "output_tokens": 1290,
+        "total_tokens": 1300
+    }
+}
+```
+
+### Cost Tracking
+
+OpenRouter provides cost information in the response, which LiteLLM automatically tracks:
+
+```python
+response = image_generation(
+    model="openrouter/google/gemini-2.5-flash-image",
+    prompt="A cute baby sea otter",
+)
+
+# Cost is available in the response metadata
+print(f"Request cost: ${response._hidden_params['additional_headers']['llm_provider-x-litellm-response-cost']}")
+```
+
+## Image Edit
+
+OpenRouter supports image editing through select models like Google Gemini image models. LiteLLM routes image edit requests to OpenRouter's chat completions endpoint with the source image sent as a base64 data URL and `modalities: ["image", "text"]`.
+
+### Supported Models
+
+| Model | Description |
+|-------|-------------|
+| `openrouter/google/gemini-2.5-flash-image` | Gemini 2.5 Flash with image editing |
+
+See all available image models on [OpenRouter's model list](https://openrouter.ai/models?modality=image).
+
+### Supported Parameters
+
+| Parameter | OpenRouter Mapping | Notes |
+|-----------|--------------------|-------|
+| `size` | `image_config.aspect_ratio` | `1024x1024` → `1:1`, `1536x1024` → `3:2`, `1024x1536` → `2:3`, `1792x1024` → `16:9`, `1024x1792` → `9:16` |
+| `quality` | `image_config.image_size` | `low`/`standard` → `1K`, `medium` → `2K`, `high`/`hd` → `4K` |
+| `n` | `n` | Number of images |
+
+:::note
+`quality=high` (4K) is only supported by `google/gemini-3-pro-image-preview` and `google/gemini-3.1-flash-image-preview`. The `google/gemini-2.5-flash-image` model supports up to `medium` (2K).
+:::
+
+### Usage
+
+```python
+from litellm import image_edit
+import os
+
+os.environ["OPENROUTER_API_KEY"] = "your-api-key"
+
+# Basic image edit
+response = image_edit(
+    model="openrouter/google/gemini-2.5-flash-image",
+    image=open("original_image.png", "rb"),
+    prompt="Make the sky a vibrant purple sunset",
+)
+
+print(response)
+```
+
+### Advanced Usage with Parameters
+
+```python
+from litellm import image_edit
+import os
+
+os.environ["OPENROUTER_API_KEY"] = "your-api-key"
+
+# Edit with size and quality parameters
+response = image_edit(
+    model="openrouter/google/gemini-2.5-flash-image",
+    image=open("photo.png", "rb"),
+    prompt="Add northern lights to the sky",
+    size="1536x1024",   # Maps to aspect_ratio 3:2
+    quality="high",      # Maps to image_size 4K
+)
+
+# Access the edited image
+image_data = response.data[0]
+if image_data.b64_json:
+    import base64
+    with open("edited.png", "wb") as f:
+        f.write(base64.b64decode(image_data.b64_json))
+```
+
+### Multiple Images Edit
+
+```python
+from litellm import image_edit
+import os
+
+os.environ["OPENROUTER_API_KEY"] = "your-api-key"
+
+response = image_edit(
+    model="openrouter/google/gemini-2.5-flash-image",
+    image=[
+        open("scene.png", "rb"),
+        open("style_reference.png", "rb"),
+    ],
+    prompt="Blend the reference style into the scene",
+)
+
+print(response)
 ```

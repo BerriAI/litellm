@@ -1,7 +1,5 @@
 import os
 import sys
-import threading
-from datetime import datetime
 
 sys.path.insert(
     0, os.path.abspath("../..")
@@ -14,7 +12,6 @@ from litellm.integrations.langfuse.langfuse import (
 from litellm.integrations.langfuse.langfuse_handler import LangFuseHandler
 from litellm.litellm_core_utils.litellm_logging import DynamicLoggingCache
 from unittest.mock import Mock, patch
-from respx import MockRouter
 from litellm.types.utils import (
     StandardLoggingPayload,
     StandardLoggingModelInformation,
@@ -130,9 +127,6 @@ def test_get_langfuse_logger_for_request_with_dynamic_params(
     assert result.secret_key == "test_secret"
     assert result.langfuse_host == "https://test.langfuse.com"
 
-    print("langfuse logger=", result)
-    print("vars in langfuse logger=", vars(result))
-
     # Check if the logger is cached
     cached_logger = dynamic_logging_cache.get_cache(
         credentials={
@@ -160,8 +154,6 @@ def test_get_langfuse_logger_for_request_with_no_dynamic_params(
 
     assert result is not None
     assert isinstance(result, LangFuseLogger)
-
-    print("langfuse logger=", result)
 
     if globalLangfuseLogger is not None:
         assert result.public_key == "global_public_key"
@@ -327,7 +319,10 @@ def test_langfuse_e2e_sync(monkeypatch):
     import respx
     import httpx
     import time
-    litellm.disable_aiohttp_transport = True # since this uses respx, we need to set use_aiohttp_transport to False
+
+    litellm.disable_aiohttp_transport = (
+        True  # since this uses respx, we need to set use_aiohttp_transport to False
+    )
 
     litellm._turn_on_debug()
     monkeypatch.setattr(litellm, "success_callback", ["langfuse"])
@@ -387,3 +382,207 @@ def test_get_text_completion_content_for_langfuse():
     mock_response = TextCompletionResponse()
     result = LangFuseLogger._get_text_completion_content_for_langfuse(mock_response)
     assert result is None
+
+
+def test_apply_masking_function_with_string():
+    """
+    Test that _apply_masking_function correctly applies masking to strings
+    """
+    import re
+
+    def mask_credit_cards(data):
+        if isinstance(data, str):
+            return re.sub(r"\b\d{4}[\s-]?\d{4}[\s-]?\d{4}[\s-]?\d{4}\b", "[CARD]", data)
+        return data
+
+    # Test with string containing credit card
+    input_str = "My card is 4532-1234-5678-9012"
+    result = LangFuseLogger._apply_masking_function(input_str, mask_credit_cards)
+    assert result == "My card is [CARD]"
+    assert "4532" not in result
+
+    # Test with string without sensitive data
+    input_str = "Hello world"
+    result = LangFuseLogger._apply_masking_function(input_str, mask_credit_cards)
+    assert result == "Hello world"
+
+
+def test_apply_masking_function_with_dict():
+    """
+    Test that _apply_masking_function correctly applies masking to nested dicts
+    """
+    import re
+
+    def mask_emails(data):
+        if isinstance(data, str):
+            return re.sub(r"[\w\.-]+@[\w\.-]+", "[EMAIL]", data)
+        return data
+
+    # Test with dict containing messages
+    input_dict = {
+        "messages": [{"role": "user", "content": "My email is test@example.com"}]
+    }
+    result = LangFuseLogger._apply_masking_function(input_dict, mask_emails)
+    assert result["messages"][0]["content"] == "My email is [EMAIL]"
+    assert "test@example.com" not in str(result)
+
+
+def test_apply_masking_function_with_none():
+    """
+    Test that _apply_masking_function handles None correctly
+    """
+
+    def dummy_mask(data):
+        return data
+
+    result = LangFuseLogger._apply_masking_function(None, dummy_mask)
+    assert result is None
+
+
+def test_apply_masking_function_with_list():
+    """
+    Test that _apply_masking_function correctly applies masking to lists
+    """
+    import re
+
+    def mask_ssn(data):
+        if isinstance(data, str):
+            return re.sub(r"\b\d{3}-\d{2}-\d{4}\b", "[SSN]", data)
+        return data
+
+    input_list = ["SSN: 123-45-6789", "No sensitive data here"]
+    result = LangFuseLogger._apply_masking_function(input_list, mask_ssn)
+    assert result[0] == "SSN: [SSN]"
+    assert result[1] == "No sensitive data here"
+
+
+def test_masking_function_isolated_from_other_loggers():
+    """
+    Test that langfuse_masking_function is extracted from metadata and stored separately.
+    This ensures the callable doesn't leak to other logging integrations.
+    """
+    from litellm.litellm_core_utils.litellm_logging import (
+        scrub_sensitive_keys_in_metadata,
+    )
+
+    def my_masking_fn(data):
+        return data
+
+    # Simulate litellm_params with masking function in metadata
+    litellm_params = {
+        "metadata": {
+            "langfuse_masking_function": my_masking_fn,
+            "other_key": "other_value",
+        }
+    }
+
+    # Scrub should extract the function
+    result = scrub_sensitive_keys_in_metadata(litellm_params)
+
+    # Function should be removed from metadata (won't leak to other loggers)
+    assert "langfuse_masking_function" not in result["metadata"]
+
+    # Function should be stored in dedicated key for Langfuse to access
+    assert result.get("_langfuse_masking_function") == my_masking_fn
+
+    # Other metadata should remain intact
+    assert result["metadata"]["other_key"] == "other_value"
+
+
+def test_masking_function_not_in_metadata_when_not_provided():
+    """
+    Test that scrub_sensitive_keys_in_metadata works normally when no masking function is provided.
+    """
+    from litellm.litellm_core_utils.litellm_logging import (
+        scrub_sensitive_keys_in_metadata,
+    )
+
+    litellm_params = {
+        "metadata": {
+            "some_key": "some_value",
+        }
+    }
+
+    result = scrub_sensitive_keys_in_metadata(litellm_params)
+
+    # No _langfuse_masking_function should be added
+    assert "_langfuse_masking_function" not in result
+
+    # Original metadata should be unchanged
+    assert result["metadata"]["some_key"] == "some_value"
+
+
+def test_langfuse_model_parameters_no_secret_leakage():
+    """
+    Test that sensitive keys in optional_params (api_key, secret_fields,
+    authorization headers, etc.) are NOT passed to Langfuse as modelParameters.
+    Only whitelisted model parameters (temperature, top_p, etc.) should survive.
+    """
+    from litellm.litellm_core_utils.model_param_helper import ModelParamHelper
+
+    optional_params_with_secrets = {
+        # Safe params that should be kept
+        "temperature": 0.7,
+        "top_p": 0.9,
+        "max_tokens": 100,
+        "stream": True,
+        # Sensitive params that must NOT leak
+        "api_key": "sk-secret-key-12345",
+        "api_base": "https://my-private-endpoint.com",
+        "secret_fields": {"raw_headers": {"Authorization": "Bearer sk-super-secret"}},
+        "authorization": "Bearer sk-another-secret",
+        "headers": {"X-Api-Key": "secret-header-value"},
+    }
+
+    sanitized = ModelParamHelper.get_standard_logging_model_parameters(
+        optional_params_with_secrets
+    )
+
+    # Safe params should be present
+    assert sanitized["temperature"] == 0.7
+    assert sanitized["top_p"] == 0.9
+    assert sanitized["max_tokens"] == 100
+    assert sanitized["stream"] is True
+
+    # Sensitive params must be excluded
+    assert "api_key" not in sanitized
+    assert "api_base" not in sanitized
+    assert "secret_fields" not in sanitized
+    assert "authorization" not in sanitized
+    assert "headers" not in sanitized
+
+
+def test_langfuse_v2_uses_standard_logging_model_parameters():
+    """
+    Test that _log_langfuse_v2 uses sanitized model_parameters from
+    standard_logging_object instead of raw optional_params, preventing
+    secret leakage to Langfuse traces.
+    """
+    standard_logging_object = create_standard_logging_payload()
+    # Simulate standard_logging_object having safe model_parameters
+    standard_logging_object["model_parameters"] = {"temperature": 0.5, "stream": True}
+
+    # optional_params has secrets — these should NOT be used
+    optional_params_with_secrets = {
+        "temperature": 0.5,
+        "api_key": "sk-secret-key-12345",
+        "secret_fields": {"raw_headers": {"Authorization": "Bearer sk-secret"}},
+    }
+
+    # When standard_logging_object is available, its model_parameters should be used
+    sanitized = standard_logging_object.get(
+        "model_parameters", optional_params_with_secrets
+    )
+    assert "api_key" not in sanitized
+    assert "secret_fields" not in sanitized
+    assert sanitized["temperature"] == 0.5
+
+    # When standard_logging_object is None, ModelParamHelper should filter
+    from litellm.litellm_core_utils.model_param_helper import ModelParamHelper
+
+    fallback_sanitized = ModelParamHelper.get_standard_logging_model_parameters(
+        optional_params_with_secrets
+    )
+    assert "api_key" not in fallback_sanitized
+    assert "secret_fields" not in fallback_sanitized
+    assert fallback_sanitized["temperature"] == 0.5

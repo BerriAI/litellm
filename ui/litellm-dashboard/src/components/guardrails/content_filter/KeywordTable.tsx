@@ -1,7 +1,6 @@
-import React from "react";
-import { Typography, Select, Table } from "antd";
 import { DeleteOutlined } from "@ant-design/icons";
-import { Button } from "@tremor/react";
+import { Button, Select, Table, Typography } from "antd";
+import React from "react";
 
 const { Text } = Typography;
 const { Option } = Select;
@@ -59,11 +58,10 @@ const KeywordTable: React.FC<KeywordTableProps> = ({
       width: 100,
       render: (_: any, record: BlockedWord) => (
         <Button
-          type="button"
-          variant="light"
-          color="red"
-          size="xs"
-          icon={DeleteOutlined}
+          type="text"
+          danger
+          size="small"
+          icon={<DeleteOutlined />}
           onClick={() => onRemove(record.id)}
         >
           Delete

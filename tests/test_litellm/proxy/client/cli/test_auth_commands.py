@@ -459,7 +459,13 @@ class TestCLIKeyRegenerationFlow:
             "status": "ready",
             "requires_team_selection": True,
             "user_id": "test-user-456",
-            "teams": ["team-alpha", "team-beta", "team-gamma"]
+            "teams": ["team-alpha", "team-beta", "team-gamma"],
+            # New richer response with team details including aliases
+            "team_details": [
+                {"team_id": "team-alpha", "team_alias": "Alpha Team"},
+                {"team_id": "team-beta", "team_alias": "Beta Team"},
+                {"team_id": "team-gamma", "team_alias": "Gamma Team"},
+            ],
         }
         
         # Mock second response after team selection - JWT with selected team
@@ -486,6 +492,8 @@ class TestCLIKeyRegenerationFlow:
             assert result.exit_code == 0
             assert "✅ Login successful!" in result.output
             assert "team-beta" in result.output
+            # Ensure we surface the human-readable team alias to the user
+            assert "Beta Team" in result.output
             
             # Verify browser was opened
             mock_browser.assert_called_once()

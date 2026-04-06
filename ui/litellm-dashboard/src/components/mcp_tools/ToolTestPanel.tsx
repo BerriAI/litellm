@@ -1,9 +1,104 @@
 import React from "react";
 import { Button, TextInput } from "@tremor/react";
-import { MCPTool, InputSchema } from "./types";
+import { MCPTool, InputSchema, InputSchemaProperty } from "./types";
 import { Form, Tooltip } from "antd";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import NotificationsManager from "../molecules/notifications_manager";
+
+const isPlainObject = (value: unknown): value is Record<string, any> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+function buildArrayItems(items?: InputSchemaProperty | InputSchemaProperty[]): any[] {
+  if (!items) {
+    return [];
+  }
+
+  if (Array.isArray(items)) {
+    return items
+      .map((item) => buildDefaultValue(item))
+      .filter((value) => value !== undefined);
+  }
+
+  const itemDefault = buildDefaultValue(items);
+  if (itemDefault === undefined) {
+    return [];
+  }
+
+  return [itemDefault];
+}
+
+function buildDefaultValue(prop?: InputSchemaProperty, overrideDefault?: any): any {
+  if (!prop) {
+    return undefined;
+  }
+
+  const effectiveDefault = overrideDefault !== undefined ? overrideDefault : prop.default;
+
+  if (prop.type === "object") {
+    const base = isPlainObject(effectiveDefault) ? { ...effectiveDefault } : {};
+
+    if (prop.properties) {
+      Object.entries(prop.properties).forEach(([childKey, childProp]) => {
+        base[childKey] = buildDefaultValue(childProp, base[childKey]);
+      });
+    }
+
+    return base;
+  }
+
+  if (prop.type === "array") {
+    if (Array.isArray(effectiveDefault)) {
+      const itemSchema = prop.items;
+      if (!itemSchema) {
+        return effectiveDefault;
+      }
+
+      if (effectiveDefault.length === 0) {
+        const sample = buildArrayItems(itemSchema);
+        return sample.length ? sample : effectiveDefault;
+      }
+
+      if (Array.isArray(itemSchema)) {
+        return effectiveDefault.map((value, index) => {
+          const schema = itemSchema[index] ?? itemSchema[itemSchema.length - 1];
+          return buildDefaultValue(schema, value);
+        });
+      }
+
+      return effectiveDefault.map((value) => buildDefaultValue(itemSchema, value));
+    }
+
+    if (effectiveDefault !== undefined) {
+      return effectiveDefault;
+    }
+
+    return buildArrayItems(prop.items);
+  }
+
+  if (effectiveDefault !== undefined) {
+    return effectiveDefault;
+  }
+
+  switch (prop.type) {
+    case "integer":
+    case "number":
+      return 0;
+    case "boolean":
+      return false;
+    case "string":
+    default:
+      return "";
+  }
+}
+
+const getInitialValueForField = (prop: InputSchemaProperty): any => {
+  const defaultValue = buildDefaultValue(prop);
+  if (prop.type === "object" || prop.type === "array") {
+    const fallback = prop.type === "array" ? [] : {};
+    return JSON.stringify(defaultValue ?? fallback, null, 2);
+  }
+  return defaultValue;
+};
 
 export function ToolTestPanel({
   tool,
@@ -61,6 +156,21 @@ export function ToolTestPanel({
     return schema;
   }, [schema]);
 
+  React.useEffect(() => {
+    form.resetFields();
+
+    if (!actualSchema.properties) {
+      return;
+    }
+
+    const initialValues: Record<string, any> = {};
+    Object.entries(actualSchema.properties).forEach(([key, prop]) => {
+      initialValues[key] = getInitialValueForField(prop);
+    });
+
+    form.setFieldsValue(initialValues);
+  }, [form, actualSchema, tool]);
+
   const handleSubmit = (values: Record<string, any>) => {
     const start = Date.now();
     setStartTime(start);
@@ -78,8 +188,32 @@ export function ToolTestPanel({
             convertedValues[key] = value === "true" || value === true;
             break;
           case "number":
-            convertedValues[key] = Number(value);
+          case "integer": {
+            const numericValue = Number(value);
+            convertedValues[key] = Number.isNaN(numericValue)
+              ? value
+              : prop.type === "integer"
+                ? Math.trunc(numericValue)
+                : numericValue;
             break;
+          }
+          case "object":
+          case "array": {
+            try {
+              const parsed = typeof value === "string" ? JSON.parse(value) : value;
+              const isValidObject =
+                prop.type === "object" && parsed !== null && typeof parsed === "object" && !Array.isArray(parsed);
+              const isValidArray = prop.type === "array" && Array.isArray(parsed);
+              if ((prop.type === "object" && isValidObject) || (prop.type === "array" && isValidArray)) {
+                convertedValues[key] = parsed;
+              } else {
+                convertedValues[key] = value;
+              }
+            } catch (err) {
+              convertedValues[key] = value;
+            }
+            break;
+          }
           case "string":
             convertedValues[key] = String(value);
             break;
@@ -249,69 +383,136 @@ export function ToolTestPanel({
                 </div>
               ) : (
                 <div className="space-y-3">
-                  {Object.entries(actualSchema.properties).map(([key, prop]) => (
-                    <Form.Item
-                      key={key}
-                      label={
-                        <span className="text-sm font-medium text-gray-700 flex items-center">
-                          {key} {actualSchema.required?.includes(key) && <span className="text-red-500">*</span>}
-                          {prop.description && (
-                            <Tooltip title={prop.description}>
-                              <InfoCircleOutlined className="ml-2 text-gray-400 hover:text-gray-600" />
-                            </Tooltip>
-                          )}
-                        </span>
-                      }
-                      name={key}
-                      rules={[
-                        {
-                          required: actualSchema.required?.includes(key),
+                  {Object.entries(actualSchema.properties).map(([key, prop]) => {
+                    const initialValue = getInitialValueForField(prop);
+                    const fieldKey = `${tool.name}-${key}`;
+                    return (
+                      <Form.Item
+                        key={fieldKey}
+                        label={
+                          <span className="text-sm font-medium text-gray-700 flex items-center">
+                            {key} {actualSchema.required?.includes(key) && <span className="text-red-500">*</span>}
+                            {prop.description && (
+                              <Tooltip title={prop.description}>
+                                <InfoCircleOutlined className="ml-2 text-gray-400 hover:text-gray-600" />
+                              </Tooltip>
+                            )}
+                          </span>
+                        }
+                        name={key}
+                        initialValue={initialValue}
+                        rules={[
+                          {
+                            required: actualSchema.required?.includes(key),
                           message: `Please enter ${key}`,
                         },
+                        ...(prop.type === "object" || prop.type === "array"
+                          ? [
+                              {
+                                validator: (_rule: any, value: any) => {
+                                  if (
+                                    (value === undefined || value === null || value === "") &&
+                                    !actualSchema.required?.includes(key)
+                                  ) {
+                                    return Promise.resolve();
+                                  }
+
+                                  try {
+                                    const parsed = typeof value === "string" ? JSON.parse(value) : value;
+                                    const isValidObject =
+                                      prop.type === "object" &&
+                                      parsed !== null &&
+                                      typeof parsed === "object" &&
+                                      !Array.isArray(parsed);
+                                    const isValidArray = prop.type === "array" && Array.isArray(parsed);
+
+                                    if ((prop.type === "object" && isValidObject) || (prop.type === "array" && isValidArray)) {
+                                      return Promise.resolve();
+                                    }
+
+                                    return Promise.reject(
+                                      new Error(
+                                        prop.type === "object"
+                                          ? "Please enter a JSON object"
+                                          : "Please enter a JSON array",
+                                      ),
+                                    );
+                                  } catch (error) {
+                                    return Promise.reject(new Error("Invalid JSON"));
+                                  }
+                                },
+                              },
+                            ]
+                          : []),
                       ]}
-                      className="mb-3"
-                    >
-                      {prop.type === "string" && prop.enum && (
-                        <select
-                          className="w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm transition-colors"
-                          defaultValue={prop.default}
-                        >
-                          {!actualSchema.required?.includes(key) && <option value="">Select {key}</option>}
-                          {prop.enum.map((value) => (
-                            <option key={value} value={value}>
-                              {value}
-                            </option>
-                          ))}
-                        </select>
-                      )}
+                        className="mb-3"
+                      >
+                        {prop.type === "string" && prop.enum && (
+                          <select
+                            className="w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm transition-colors"
+                            defaultValue={(initialValue as string) ?? ""}
+                          >
+                            {!actualSchema.required?.includes(key) && <option value="">Select {key}</option>}
+                            {prop.enum.map((value) => (
+                              <option key={value} value={value}>
+                                {value}
+                              </option>
+                            ))}
+                          </select>
+                        )}
 
-                      {prop.type === "string" && !prop.enum && (
-                        <TextInput
-                          placeholder={prop.description || `Enter ${key}`}
-                          className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
-                        />
-                      )}
+                        {prop.type === "string" && !prop.enum && (
+                          <TextInput
+                            placeholder={prop.description || `Enter ${key}`}
+                            defaultValue={(initialValue as string) ?? ""}
+                            className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
+                          />
+                        )}
 
-                      {prop.type === "number" && (
-                        <input
-                          type="number"
-                          placeholder={prop.description || `Enter ${key}`}
-                          className="w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm transition-colors"
-                        />
-                      )}
+                        {(prop.type === "number" || prop.type === "integer") && (
+                          <input
+                            type="number"
+                            step={prop.type === "integer" ? 1 : "any"}
+                            placeholder={prop.description || `Enter ${key}`}
+                            defaultValue={initialValue ?? 0}
+                            className="w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm transition-colors"
+                          />
+                        )}
 
-                      {prop.type === "boolean" && (
-                        <select
-                          className="w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm transition-colors"
-                          defaultValue={prop.default?.toString() || ""}
-                        >
-                          {!actualSchema.required?.includes(key) && <option value="">Select {key}</option>}
-                          <option value="true">True</option>
-                          <option value="false">False</option>
-                        </select>
-                      )}
-                    </Form.Item>
-                  ))}
+                        {prop.type === "boolean" && (
+                          <select
+                            className="w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm transition-colors"
+                            defaultValue={(initialValue ?? false).toString()}
+                          >
+                            {!actualSchema.required?.includes(key) && <option value="">Select {key}</option>}
+                            <option value="true">True</option>
+                            <option value="false">False</option>
+                          </select>
+                        )}
+
+                        {(prop.type === "object" || prop.type === "array") && (
+                          <div className="space-y-2">
+                            <textarea
+                              rows={prop.type === "object" ? 6 : 4}
+                              placeholder={
+                                prop.description ||
+                                (prop.type === "object" ? `Enter JSON object for ${key}` : `Enter JSON array for ${key}`)
+                              }
+                              defaultValue={(initialValue as string) ?? (prop.type === "object" ? "{}" : "[]")}
+                              spellCheck={false}
+                              data-testid={`textarea-${key}`}
+                              className="w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm font-mono"
+                            />
+                            <p className="text-xs text-gray-500">
+                              {prop.type === "object"
+                                ? "Provide a valid JSON object."
+                                : "Provide a valid JSON array."}
+                            </p>
+                          </div>
+                        )}
+                      </Form.Item>
+                    );
+                  })}
                 </div>
               )}
 

@@ -2,11 +2,13 @@ import { Settings, X } from "lucide-react";
 import { useState } from "react";
 import { ComparisonInstance } from "../CompareUI";
 import { MessageDisplay } from "./MessageDisplay";
-import { ModelSelector } from "./ModelSelector";
+import { UnifiedSelector } from "./UnifiedSelector";
 import TagSelector from "../../../tag_management/TagSelector";
 import VectorStoreSelector from "../../../vector_store_management/VectorStoreSelector";
 import GuardrailSelector from "../../../guardrails/GuardrailSelector";
 import { Checkbox, Divider, Popover, Slider } from "antd";
+import { SelectorOption, EndpointConfig, isAgentEndpoint, getComparisonSelection } from "../endpoint_config";
+
 interface ComparisonPanelProps {
   comparison: ComparisonInstance;
   onUpdate: (
@@ -15,8 +17,9 @@ interface ComparisonPanelProps {
   ) => void;
   onRemove: () => void;
   canRemove: boolean;
-  modelOptions: string[];
-  isLoadingModels: boolean;
+  selectorOptions: SelectorOption[];
+  isLoadingOptions: boolean;
+  endpointConfig: EndpointConfig;
   apiKey: string;
 }
 export function ComparisonPanel({
@@ -24,10 +27,13 @@ export function ComparisonPanel({
   onUpdate,
   onRemove,
   canRemove,
-  modelOptions,
-  isLoadingModels,
+  selectorOptions,
+  isLoadingOptions,
+  endpointConfig,
   apiKey,
 }: ComparisonPanelProps) {
+  const isA2AMode = isAgentEndpoint(endpointConfig.id);
+  const currentSelection = getComparisonSelection(comparison, endpointConfig.id);
   const [popoverVisible, setPopoverVisible] = useState(false);
 
   const handleSyncChange = (checked: boolean) => {
@@ -194,14 +200,13 @@ export function ComparisonPanel({
     <div className="bg-white first:border-l-0 border-l border-gray-200 flex flex-col min-h-0">
       <div className="border-b flex items-center justify-between gap-3 px-4 py-3">
         <div className="flex items-center gap-3 flex-1">
-          <ModelSelector
-            value={comparison.model}
-            models={modelOptions}
-            loading={isLoadingModels}
-            onChange={(model) =>
-              onUpdate({
-                model,
-              })
+          <UnifiedSelector
+            value={currentSelection}
+            options={selectorOptions}
+            loading={isLoadingOptions}
+            config={endpointConfig}
+            onChange={(value) =>
+              onUpdate(isA2AMode ? { agent: value } : { model: value })
             }
           />
           <div className="flex items-center gap-2">

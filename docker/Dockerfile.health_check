@@ -1,0 +1,24 @@
+FROM python:3.13-slim@sha256:739e7213785e88c0f702dcdc12c0973afcbd606dbf021a589cab77d6b00b579d
+
+WORKDIR /app
+
+# Copy health check script and requirements
+COPY scripts/health_check/health_check_client.py /app/health_check_client.py
+COPY scripts/health_check/health_check_requirements.txt /app/requirements.txt
+
+# Install dependencies
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Make script executable
+RUN chmod +x /app/health_check_client.py
+
+# Run as non-root user
+RUN adduser --disabled-password --gecos "" --uid 1001 healthcheck
+USER healthcheck
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
+  CMD python /app/health_check_client.py --help || exit 1
+
+# Set entrypoint
+ENTRYPOINT ["python", "/app/health_check_client.py"]

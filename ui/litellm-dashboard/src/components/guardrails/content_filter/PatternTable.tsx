@@ -1,7 +1,6 @@
 import React from "react";
-import { Typography, Select, Table, Tag } from "antd";
+import { Typography, Select, Table, Tag, Button } from "antd";
 import { DeleteOutlined } from "@ant-design/icons";
-import { Button } from "@tremor/react";
 
 const { Text } = Typography;
 const { Option } = Select;
@@ -73,11 +72,10 @@ const PatternTable: React.FC<PatternTableProps> = ({
       width: 100,
       render: (_: any, record: Pattern) => (
         <Button
-          type="button"
-          variant="light"
-          color="red"
-          size="xs"
-          icon={DeleteOutlined}
+          type="text"
+          danger
+          size="small"
+          icon={<DeleteOutlined />}
           onClick={() => onRemove(record.id)}
         >
           Delete

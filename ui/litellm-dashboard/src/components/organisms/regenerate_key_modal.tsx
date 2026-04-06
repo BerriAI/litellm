@@ -1,31 +1,22 @@
-import React, { useEffect, useState } from "react";
-import { Button, Text, TextInput, Title, Grid, Col } from "@tremor/react";
-import { Modal, Form, InputNumber } from "antd";
+import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
+import { Button, Col, Grid, Text, TextInput, Title } from "@tremor/react";
+import { Form, InputNumber, Modal } from "antd";
 import { add } from "date-fns";
-import { regenerateKeyCall } from "../networking";
-import { KeyResponse } from "../key_team_helpers/key_list";
+import { useEffect, useState } from "react";
 import { CopyToClipboard } from "react-copy-to-clipboard";
+import { KeyResponse } from "../key_team_helpers/key_list";
 import NotificationManager from "../molecules/notifications_manager";
+import { regenerateKeyCall } from "../networking";
 
 interface RegenerateKeyModalProps {
   selectedToken: KeyResponse | null;
   visible: boolean;
   onClose: () => void;
-  accessToken: string | null;
-  premiumUser: boolean;
-  setAccessToken?: (token: string) => void;
   onKeyUpdate?: (updatedKeyData: Partial<KeyResponse>) => void;
 }
 
-export function RegenerateKeyModal({
-  selectedToken,
-  visible,
-  onClose,
-  accessToken,
-  premiumUser,
-  setAccessToken,
-  onKeyUpdate,
-}: RegenerateKeyModalProps) {
+export function RegenerateKeyModal({ selectedToken, visible, onClose, onKeyUpdate }: RegenerateKeyModalProps) {
+  const { accessToken } = useAuthorized();
   const [form] = Form.useForm();
   const [regeneratedKey, setRegeneratedKey] = useState<string | null>(null);
   const [regenerateFormData, setRegenerateFormData] = useState<any>(null);
@@ -46,6 +37,7 @@ export function RegenerateKeyModal({
         tpm_limit: selectedToken.tpm_limit,
         rpm_limit: selectedToken.rpm_limit,
         duration: selectedToken.duration || "",
+        grace_period: "",
       });
 
       // Initialize the current access token
@@ -113,7 +105,7 @@ export function RegenerateKeyModal({
         formValues,
       );
       setRegeneratedKey(response.key);
-      NotificationManager.success("API Key regenerated successfully");
+      NotificationManager.success("Virtual Key regenerated successfully");
 
       console.log("Full regenerate response:", response); // Debug log to see what's returned
 
@@ -131,14 +123,6 @@ export function RegenerateKeyModal({
       };
 
       console.log("Updated key data with new token:", updatedKeyData); // Debug log
-
-      // If user regenerated their own auth key, update both local and global access tokens
-      if (isOwnKey) {
-        setCurrentAccessToken(response.key); // Update local token immediately
-        if (setAccessToken) {
-          setAccessToken(response.key); // Update global token
-        }
-      }
 
       // Update the parent component with new key data
       if (onKeyUpdate) {
@@ -164,7 +148,7 @@ export function RegenerateKeyModal({
 
   return (
     <Modal
-      title="Regenerate API Key"
+      title="Regenerate Virtual Key"
       open={visible}
       onCancel={handleClose}
       footer={
@@ -199,15 +183,15 @@ export function RegenerateKeyModal({
             <div className="bg-gray-100 p-2 rounded mb-2">
               <pre className="break-words whitespace-normal">{selectedToken?.key_alias || "No alias set"}</pre>
             </div>
-            <Text className="mt-3">New API Key:</Text>
+            <Text className="mt-3">New Virtual Key:</Text>
             <div className="bg-gray-100 p-2 rounded mb-2">
               <pre className="break-words whitespace-normal">{regeneratedKey}</pre>
             </div>
             <CopyToClipboard
               text={regeneratedKey}
-              onCopy={() => NotificationManager.success("API Key copied to clipboard")}
+              onCopy={() => NotificationManager.success("Virtual Key copied to clipboard")}
             >
-              <Button className="mt-3">Copy API Key</Button>
+              <Button className="mt-3">Copy Virtual Key</Button>
             </CopyToClipboard>
           </Col>
         </Grid>
@@ -240,6 +224,23 @@ export function RegenerateKeyModal({
             Current expiry: {selectedToken?.expires ? new Date(selectedToken.expires).toLocaleString() : "Never"}
           </div>
           {newExpiryTime && <div className="mt-2 text-sm text-green-600">New expiry: {newExpiryTime}</div>}
+          <Form.Item
+            name="grace_period"
+            label="Grace Period (eg: 24h, 2d)"
+            tooltip="Keep the old key valid for this duration after rotation. Both keys work during this period for seamless cutover. Empty = immediate revoke."
+            className="mt-8"
+            rules={[
+              {
+                pattern: /^(\d+(s|m|h|d|w|mo))?$/,
+                message: "Must be a duration like 30s, 30m, 24h, 2d, 1w, or 1mo",
+              },
+            ]}
+          >
+            <TextInput placeholder="e.g. 24h, 2d (empty = immediate revoke)" />
+          </Form.Item>
+          <div className="mt-2 text-sm text-gray-500">
+            Recommended: 24h to 72h for production keys to allow seamless client migration.
+          </div>
         </Form>
       )}
     </Modal>

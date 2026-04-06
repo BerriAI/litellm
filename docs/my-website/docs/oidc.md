@@ -106,7 +106,7 @@ model_list:
       aws_region_name: us-west-2
       aws_session_name: "my-test-session"
       aws_role_name: "arn:aws:iam::335785316107:role/litellm-github-unit-tests-circleci"
-      aws_web_identity_token: "oidc/circleci_v2/"
+      aws_web_identity_token: "oidc/example-provider/"
 ```
 
 #### Amazon IAM Role Configuration for CircleCI v2 -> Bedrock
@@ -268,7 +268,7 @@ Please contact us for paid enterprise support if you need help setting up Azure 
 model list:
   - model_name: aws/claude-3-5-sonnet
     litellm_params:
-      model: bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0
+      model: bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0
       aws_region_name: "eu-central-1"
       aws_role_name: "arn:aws:iam::12345678:role/bedrock-role"
       aws_web_identity_token: "oidc/azure/api://123-456-789-9d04"

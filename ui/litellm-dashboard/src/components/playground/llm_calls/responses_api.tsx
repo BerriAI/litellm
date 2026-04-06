@@ -3,7 +3,16 @@ import { MessageType } from "../chat_ui/types";
 import { TokenUsage } from "../chat_ui/ResponseMetrics";
 import { getProxyBaseUrl } from "@/components/networking";
 import NotificationManager from "@/components/molecules/notifications_manager";
-import { MCPEvent } from "../chat_ui/MCPEventsDisplay";
+import type { MCPEvent } from "../../mcp_tools/types";
+import { MCPServer, MCPToolset } from "../../mcp_tools/types";
+import {
+  CodeInterpreterResult,
+  CodeInterpreterState,
+  handleCodeInterpreterCall,
+  handleCodeInterpreterOutput,
+} from "./code_interpreter_handler";
+
+export type { CodeInterpreterResult } from "./code_interpreter_handler";
 
 export async function makeOpenAIResponsesRequest(
   messages: MessageType[],
@@ -18,13 +27,24 @@ export async function makeOpenAIResponsesRequest(
   traceId?: string,
   vector_store_ids?: string[],
   guardrails?: string[],
-  selectedMCPTools?: string[],
+  policies?: string[],
+  selectedMCPServers?: string[],
   previousResponseId?: string | null,
   onResponseId?: (responseId: string) => void,
   onMCPEvent?: (event: MCPEvent) => void,
+  codeInterpreterEnabled?: boolean,
+  onCodeInterpreterResult?: (result: CodeInterpreterResult) => void,
+  customBaseUrl?: string,
+  mcpServers?: MCPServer[],
+  mcpServerToolRestrictions?: Record<string, string[]>,
+  mcpToolsets?: MCPToolset[],
 ) {
   if (!accessToken) {
-    throw new Error("API key is required");
+    throw new Error("Virtual Key is required");
+  }
+
+  if (!selectedModel || selectedModel.trim() === "") {
+    throw new Error("Model is required. Please select a model before sending a request.");
   }
 
   // Base URL should be the current base_url
@@ -33,7 +53,7 @@ export async function makeOpenAIResponsesRequest(
     console.log = function () {};
   }
 
-  const proxyBaseUrl = getProxyBaseUrl();
+  const proxyBaseUrl = customBaseUrl || getProxyBaseUrl();
   // Prepare headers with tags and trace ID
   const headers: Record<string, string> = {};
   if (tags && tags.length > 0) {
@@ -69,19 +89,59 @@ export async function makeOpenAIResponsesRequest(
       };
     });
 
-    // Format MCP tools if selected
-    const tools =
-      selectedMCPTools && selectedMCPTools.length > 0
-        ? [
-            {
+    // Build tools array
+    const tools: any[] = [];
+
+    // Add MCP servers if selected
+    if (selectedMCPServers && selectedMCPServers.length > 0) {
+      if (selectedMCPServers.includes("__all__")) {
+        // All MCP Servers selected
+        tools.push({
+          type: "mcp",
+          server_label: "litellm",
+          server_url: `${proxyBaseUrl}/mcp`,
+          require_approval: "never",
+        });
+      } else {
+        // Individual servers/toolsets selected - create one entry per item
+        selectedMCPServers.forEach((serverId) => {
+          if (serverId.startsWith("toolset:")) {
+            // Toolset: same /{name}/mcp pattern as individual servers
+            const toolsetId = serverId.slice("toolset:".length);
+            const toolset = mcpToolsets?.find((t) => t.toolset_id === toolsetId);
+            const toolsetName = toolset?.toolset_name || toolsetId;
+            tools.push({
               type: "mcp",
-              server_label: "litellm",
-              server_url: `litellm_proxy/mcp`,
+              server_label: toolsetName,
+              server_url: `${proxyBaseUrl}/mcp/${encodeURIComponent(toolsetName)}`,
               require_approval: "never",
-              allowed_tools: selectedMCPTools,
-            },
-          ]
-        : undefined;
+            });
+          } else {
+            const server = mcpServers?.find((s) => s.server_id === serverId);
+            // Use server_name for both routing and labelling. server_name is the
+            // unique registered identifier; aliases can collide across servers.
+            const routeName = server?.server_name || serverId;
+            const allowedTools = mcpServerToolRestrictions?.[serverId] || [];
+
+            tools.push({
+              type: "mcp",
+              server_label: routeName, // unique per request — collisions cause silent tool-routing failures
+              server_url: `${proxyBaseUrl}/mcp/${encodeURIComponent(routeName)}`,
+              require_approval: "never",
+              ...(allowedTools.length > 0 ? { allowed_tools: allowedTools } : {}),
+            });
+          }
+        });
+      }
+    }
+
+    // Add code_interpreter tool if enabled (OpenAI auto-creates container)
+    if (codeInterpreterEnabled) {
+      tools.push({
+        type: "code_interpreter",
+        container: { type: "auto" },
+      });
+    }
 
     // Create request to OpenAI responses API
     // Use 'any' type to avoid TypeScript issues with the experimental API
@@ -94,12 +154,14 @@ export async function makeOpenAIResponsesRequest(
         ...(previousResponseId ? { previous_response_id: previousResponseId } : {}),
         ...(vector_store_ids ? { vector_store_ids } : {}),
         ...(guardrails ? { guardrails } : {}),
-        ...(tools ? { tools, tool_choice: "required" } : {}),
+        ...(policies ? { policies } : {}),
+        ...(tools.length > 0 ? { tools, tool_choice: "auto" } : {}),
       },
       { signal },
     );
 
     let mcpToolUsed = "";
+    let codeInterpreterState: CodeInterpreterState = { code: "", containerId: "" };
 
     for await (const event of response) {
       console.log("Response event:", event);
@@ -137,6 +199,10 @@ export async function makeOpenAIResponsesRequest(
           console.log("MCP tool used:", mcpToolUsed);
         }
 
+        // Handle code interpreter events
+        codeInterpreterState = handleCodeInterpreterCall(event, codeInterpreterState);
+        handleCodeInterpreterOutput(event, codeInterpreterState, onCodeInterpreterResult);
+
         // Handle output text delta
         // 1) drop any "role" streams
         if (event.type === "response.role.delta") {
@@ -147,8 +213,7 @@ export async function makeOpenAIResponsesRequest(
         if (event.type === "response.output_text.delta" && typeof event.delta === "string") {
           const delta = event.delta;
           console.log("Text delta", delta);
-          // skip pure whitespace/newlines
-          if (delta.trim().length > 0) {
+          if (delta.length > 0) {
             updateTextUI("assistant", delta, selectedModel);
 
             // Calculate time to first token

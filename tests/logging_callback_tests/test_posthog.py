@@ -382,6 +382,149 @@ async def test_posthog_atexit_flushes_internal_queue():
 
 
 @pytest.mark.asyncio
+async def test_safe_dumps_serialization_in_sync_log():
+    """
+    Regression test: sync log_success_event should not raise when the payload
+    contains objects that are not natively JSON-serializable (e.g. Pydantic
+    models like UserAPIKeyAuth).
+
+    Before the fix httpx's json= kwarg called stdlib json.dumps which would
+    raise ``TypeError: Object of type UserAPIKeyAuth is not JSON serializable``.
+    After the fix the body is pre-serialized via safe_dumps() and sent with
+    content= so non-primitive values are coerced to their str() representation.
+    """
+    from unittest.mock import Mock, patch
+    from pydantic import BaseModel
+
+    class FakeNonSerializable(BaseModel):
+        """Stand-in for UserAPIKeyAuth or any Pydantic object in metadata."""
+        token: str = "sk-secret"
+
+    posthog_logger = PostHogLogger()
+    standard_payload = create_standard_logging_payload()
+
+    kwargs = {
+        "standard_logging_object": standard_payload,
+        "litellm_params": {
+            "metadata": {
+                # This custom key would leak a non-serializable object into
+                # the PostHog properties dict:
+                "custom_auth_obj": FakeNonSerializable(),
+            }
+        },
+        "standard_callback_dynamic_params": None,
+    }
+
+    with patch.object(posthog_logger.sync_client, "post") as mock_post:
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.raise_for_status = Mock()
+        mock_post.return_value = mock_response
+
+        # Should NOT raise TypeError
+        posthog_logger.log_success_event(kwargs, None, 0.0, 0.0)
+
+        assert mock_post.called, "sync_client.post should have been called"
+        call_kwargs = mock_post.call_args.kwargs
+        # Must use content= (pre-serialized), NOT json=
+        assert "content" in call_kwargs, "Should send pre-serialized body via content="
+        assert "json" not in call_kwargs, "Should NOT use json= kwarg"
+
+
+@pytest.mark.asyncio
+async def test_safe_dumps_serialization_in_async_send_batch():
+    """
+    Regression test: async_send_batch should not raise when the event payload
+    contains non-JSON-serializable objects.
+    """
+    from unittest.mock import Mock, AsyncMock, patch
+    from pydantic import BaseModel
+
+    class FakeNonSerializable(BaseModel):
+        token: str = "sk-secret"
+
+    posthog_logger = PostHogLogger()
+    standard_payload = create_standard_logging_payload()
+
+    kwargs = {
+        "standard_logging_object": standard_payload,
+        "litellm_params": {
+            "metadata": {
+                "custom_auth_obj": FakeNonSerializable(),
+            }
+        },
+    }
+    event_payload = posthog_logger.create_posthog_event_payload(kwargs)
+
+    posthog_logger.log_queue.append({
+        "event": event_payload,
+        "api_key": "test_key",
+        "api_url": "https://app.posthog.com",
+    })
+
+    with patch.object(posthog_logger.async_client, "post") as mock_post:
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.raise_for_status = Mock()
+        mock_post.return_value = mock_response
+
+        # Should NOT raise TypeError
+        await posthog_logger.async_send_batch()
+
+        assert mock_post.called, "async_client.post should have been called"
+        call_kwargs = mock_post.call_args.kwargs
+        assert "content" in call_kwargs, "Should send pre-serialized body via content="
+        assert "json" not in call_kwargs, "Should NOT use json= kwarg"
+
+
+@pytest.mark.asyncio
+async def test_safe_dumps_serialization_in_flush_on_exit():
+    """
+    Regression test: _flush_on_exit (atexit path) should not raise when the
+    event payload contains non-JSON-serializable objects.
+    """
+    from unittest.mock import Mock, patch
+    from pydantic import BaseModel
+
+    class FakeNonSerializable(BaseModel):
+        token: str = "sk-secret"
+
+    posthog_logger = PostHogLogger()
+    standard_payload = create_standard_logging_payload()
+
+    kwargs = {
+        "standard_logging_object": standard_payload,
+        "litellm_params": {
+            "metadata": {
+                "custom_auth_obj": FakeNonSerializable(),
+            }
+        },
+    }
+    event_payload = posthog_logger.create_posthog_event_payload(kwargs)
+
+    posthog_logger.log_queue.append({
+        "event": event_payload,
+        "api_key": "test_key",
+        "api_url": "https://app.posthog.com",
+    })
+
+    with patch.object(posthog_logger.sync_client, "post") as mock_post:
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.raise_for_status = Mock()
+        mock_post.return_value = mock_response
+
+        # Should NOT raise TypeError
+        posthog_logger._flush_on_exit()
+
+        assert mock_post.called, "sync_client.post should have been called"
+        call_kwargs = mock_post.call_args.kwargs
+        assert "content" in call_kwargs, "Should send pre-serialized body via content="
+        assert "json" not in call_kwargs, "Should NOT use json= kwarg"
+        assert len(posthog_logger.log_queue) == 0, "Queue should be empty after flush"
+
+
+@pytest.mark.asyncio
 async def test_sync_callback_not_affected_by_atexit():
     """
     Regression test: ensure sync completions still work immediately.

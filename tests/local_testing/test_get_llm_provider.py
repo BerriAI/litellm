@@ -137,6 +137,12 @@ def test_default_api_base():
             # Get the API base for the given provider
             if provider == "github_copilot":
                 continue
+            # Skip chatgpt as it requires OAuth authentication
+            if provider == "chatgpt":
+                continue
+            # Skip ragflow as it requires specific model format: ragflow/chat/{id}/{model} or ragflow/agent/{id}/{model}
+            if provider == "ragflow":
+                continue
             _, _, _, api_base = _get_openai_compatible_provider_info(
                 model=f"{provider}/*", api_base=None, api_key=None, dynamic_api_key=None
             )
@@ -223,10 +229,10 @@ def test_nova_bedrock_converse():
 
 def test_bedrock_invoke_anthropic():
     model, custom_llm_provider, dynamic_api_key, api_base = litellm.get_llm_provider(
-        model="bedrock/invoke/anthropic.claude-3-5-sonnet-20240620-v1:0",
+        model="bedrock/invoke/anthropic.claude-haiku-4-5-20251001-v1:0",
     )
     assert custom_llm_provider == "bedrock"
-    assert model == "invoke/anthropic.claude-3-5-sonnet-20240620-v1:0"
+    assert model == "invoke/anthropic.claude-haiku-4-5-20251001-v1:0"
 
 
 @pytest.mark.parametrize("model", ["xai/grok-2-vision-latest", "grok-2-vision-latest"])

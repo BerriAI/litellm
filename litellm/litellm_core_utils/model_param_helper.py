@@ -17,15 +17,16 @@ from litellm.types.rerank import RerankRequest
 
 
 class ModelParamHelper:
+    # Cached at class level — deterministic set built from static OpenAI type annotations
+    _relevant_logging_args: frozenset = frozenset()
+
     @staticmethod
     def get_standard_logging_model_parameters(
         model_parameters: dict,
     ) -> dict:
         """ """
         standard_logging_model_parameters: dict = {}
-        supported_model_parameters = (
-            ModelParamHelper._get_relevant_args_to_use_for_logging()
-        )
+        supported_model_parameters = ModelParamHelper._relevant_logging_args
 
         for key, value in model_parameters.items():
             if key in supported_model_parameters:
@@ -92,9 +93,9 @@ class ModelParamHelper:
         streaming_params: Set[str] = set(
             getattr(CompletionCreateParamsStreaming, "__annotations__", {}).keys()
         )
-        litellm_provider_specific_params: Set[str] = (
-            ModelParamHelper.get_litellm_provider_specific_params_for_chat_params()
-        )
+        litellm_provider_specific_params: Set[
+            str
+        ] = ModelParamHelper.get_litellm_provider_specific_params_for_chat_params()
         all_chat_completion_kwargs: Set[str] = non_streaming_params.union(
             streaming_params
         ).union(litellm_provider_specific_params)
@@ -172,3 +173,8 @@ class ModelParamHelper:
         Get the kwargs to exclude from the cache key
         """
         return set(["metadata"])
+
+
+ModelParamHelper._relevant_logging_args = frozenset(
+    ModelParamHelper._get_relevant_args_to_use_for_logging()
+)

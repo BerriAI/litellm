@@ -51,6 +51,7 @@ const VectorStoreSelector: React.FC<VectorStoreSelectorProps> = ({
         value={value}
         loading={loading}
         className={className}
+        allowClear
         options={vectorStores.map((store) => ({
           label: `${store.vector_store_name || store.vector_store_id} (${store.vector_store_id})`,
           value: store.vector_store_id,

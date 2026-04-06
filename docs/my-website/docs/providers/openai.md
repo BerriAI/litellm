@@ -188,9 +188,20 @@ os.environ["OPENAI_BASE_URL"] = "https://your_host/v1"     # OPTIONAL
 | gpt-5-mini-2025-08-07 | `response = completion(model="gpt-5-mini-2025-08-07", messages=messages)` |
 | gpt-5-nano-2025-08-07 | `response = completion(model="gpt-5-nano-2025-08-07", messages=messages)` |
 | gpt-5-pro | `response = completion(model="gpt-5-pro", messages=messages)` |
+| gpt-5.2 | `response = completion(model="gpt-5.2", messages=messages)` |
+| gpt-5.2-2025-12-11 | `response = completion(model="gpt-5.2-2025-12-11", messages=messages)` |
+| gpt-5.2-chat-latest | `response = completion(model="gpt-5.2-chat-latest", messages=messages)` |
+| gpt-5.3-chat-latest | `response = completion(model="gpt-5.3-chat-latest", messages=messages)` |
+| gpt-5.4 | `response = completion(model="gpt-5.4", messages=messages)` |
+| gpt-5.4-2026-03-05 | `response = completion(model="gpt-5.4-2026-03-05", messages=messages)` |
+| gpt-5.2-pro | `response = completion(model="gpt-5.2-pro", messages=messages)` |
+| gpt-5.2-pro-2025-12-11 | `response = completion(model="gpt-5.2-pro-2025-12-11", messages=messages)` |
+| gpt-5.4-pro | `response = completion(model="gpt-5.4-pro", messages=messages)` |
+| gpt-5.4-pro-2026-03-05 | `response = completion(model="gpt-5.4-pro-2026-03-05", messages=messages)` |
 | gpt-5.1 | `response = completion(model="gpt-5.1", messages=messages)` |
 | gpt-5.1-codex | `response = completion(model="gpt-5.1-codex", messages=messages)` |
 | gpt-5.1-codex-mini | `response = completion(model="gpt-5.1-codex-mini", messages=messages)` |
+| gpt-5.1-codex-max | `response = completion(model="gpt-5.1-codex-max", messages=messages)` |
 | gpt-4.1 | `response = completion(model="gpt-4.1", messages=messages)` |
 | gpt-4.1-mini | `response = completion(model="gpt-4.1-mini", messages=messages)` |
 | gpt-4.1-nano | `response = completion(model="gpt-4.1-nano", messages=messages)` |
@@ -224,7 +235,70 @@ os.environ["OPENAI_BASE_URL"] = "https://your_host/v1"     # OPTIONAL
 
 These also support the `OPENAI_BASE_URL` environment variable, which can be used to specify a custom API endpoint.
 
-## OpenAI Vision Models 
+### OpenAI Web Search Models
+
+OpenAI has two ways to use web search, depending on the endpoint:
+
+| Approach | Endpoint | Models | How to enable |
+|----------|----------|--------|---------------|
+| **Search Models** | `/chat/completions` | `gpt-5-search-api`, `gpt-4o-search-preview`, `gpt-4o-mini-search-preview` | Pass `web_search_options` parameter |
+| **Web Search Tool** | `/responses` | `gpt-5`, `gpt-4.1`, `gpt-4o`, and other regular models | Pass `web_search_preview` tool |
+
+<Tabs>
+<TabItem value="sdk-completion" label="SDK - /chat/completions">
+
+```python showLineNumbers
+from litellm import completion
+
+response = completion(
+    model="openai/gpt-5-search-api",
+    messages=[{"role": "user", "content": "What is the capital of France?"}],
+    web_search_options={
+        "search_context_size": "medium"  # Options: "low", "medium", "high"
+    }
+)
+```
+
+</TabItem>
+<TabItem value="sdk-responses" label="SDK - /responses">
+
+```python showLineNumbers
+from litellm import responses
+
+response = responses(
+    model="openai/gpt-5",
+    input="What is the capital of France?",
+    tools=[{
+        "type": "web_search_preview",
+        "search_context_size": "low"
+    }]
+)
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+```yaml
+model_list:
+  # Search model for /chat/completions
+  - model_name: gpt-5-search-api
+    litellm_params:
+      model: openai/gpt-5-search-api
+      api_key: os.environ/OPENAI_API_KEY
+
+  # Regular model for /responses with web_search_preview tool
+  - model_name: gpt-5
+    litellm_params:
+      model: openai/gpt-5
+      api_key: os.environ/OPENAI_API_KEY
+```
+
+</TabItem>
+</Tabs>
+
+For full details, see the [Web Search guide](../completion/web_search.md).
+
+## OpenAI Vision Models
 | Model Name            | Function Call                                                   |
 |-----------------------|-----------------------------------------------------------------|
 | gpt-4o   | `response = completion(model="gpt-4o", messages=messages)` |
@@ -427,7 +501,7 @@ Expected Response:
 
 ### Advanced: Using `reasoning_effort` with `summary` field
 
-By default, `reasoning_effort` accepts a string value (`"none"`, `"minimal"`, `"low"`, `"medium"`, `"high"`) and only sets the effort level without including a reasoning summary.
+By default, `reasoning_effort` accepts a string value (`"none"`, `"minimal"`, `"low"`, `"medium"`, `"high"`, `"xhigh"`—`"xhigh"` is only supported on `gpt-5.1-codex-max` and `gpt-5.2` models) and only sets the effort level without including a reasoning summary.
 
 To opt-in to the `summary` feature, you can pass `reasoning_effort` as a dictionary. **Note:** The `summary` field requires your OpenAI organization to have verification status. Using `summary` without verification will result in a 400 error from OpenAI.
 
@@ -489,19 +563,107 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 |-------|----------------------|------------------|
 | `gpt-5.1` | `none` | `none`, `low`, `medium`, `high` |
 | `gpt-5` | `medium` | `minimal`, `low`, `medium`, `high` |
-| `gpt-5-mini` | `medium` | `none`, `minimal`, `low`, `medium`, `high` |
+| `gpt-5-mini` | `medium` | `minimal`, `low`, `medium`, `high` |
 | `gpt-5-nano` | `none` | `none`, `low`, `medium`, `high` |
 | `gpt-5-codex` | `adaptive` | `low`, `medium`, `high` (no `minimal`) |
 | `gpt-5.1-codex` | `adaptive` | `low`, `medium`, `high` (no `minimal`) |
 | `gpt-5.1-codex-mini` | `adaptive` | `low`, `medium`, `high` (no `minimal`) |
+| `gpt-5.1-codex-max` | `adaptive` | `low`, `medium`, `high`, `xhigh` (no `minimal`) |
+| `gpt-5.2` | `medium` | `none`, `low`, `medium`, `high`, `xhigh` |
+| `gpt-5.2-pro` | `high` | `low`, `medium`, `high`, `xhigh` |
 | `gpt-5-pro` | `high` | `high` only |
 
 **Note:**
 - GPT-5.1 introduced a new `reasoning_effort="none"` setting for faster, lower-latency responses. This replaces the `"minimal"` setting from GPT-5.
+- `gpt-5.1-codex-max` and `gpt-5.2` models support `reasoning_effort="xhigh"`. All other models will reject this value.
 - `gpt-5-pro` only accepts `reasoning_effort="high"`. Other values will return an error.
 - When `reasoning_effort` is not set (None), OpenAI defaults to the value shown in the "Default" column.
 
 See [OpenAI Reasoning documentation](https://platform.openai.com/docs/guides/reasoning) for more details on organization verification requirements.
+
+### Multi-turn Conversations with `reasoning_items`
+
+For multi-turn conversations you need `reasoning_items`: structured blocks that include the `encrypted_content` token OpenAI uses to restore reasoning state on the next request. Pass `include=["reasoning.encrypted_content"]` on every call where you want that token returned.
+
+<Tabs>
+<TabItem value="non-streaming" label="Non-Streaming">
+
+```python showLineNumbers title="Non-streaming: round-trip reasoning_items"
+import litellm
+
+messages = [{"role": "user", "content": "Solve this step by step: 2 + 2"}]
+
+# Turn 1 — get reasoning_items (encrypted_content);
+response = litellm.completion(
+    model="openai/responses/gpt-5-mini",
+    messages=messages,
+    reasoning_effort="low",
+    include=["reasoning.encrypted_content"],
+)
+
+assistant_msg = response.choices[0].message
+
+# Turn 2 — pass reasoning_items back; LiteLLM converts to the correct Responses API format
+messages.append({
+    "role": "assistant",
+    "content": assistant_msg.content,
+    "reasoning_items": assistant_msg.reasoning_items,
+})
+messages.append({"role": "user", "content": "Now summarize your reasoning."})
+
+response2 = litellm.completion(
+    model="openai/responses/gpt-5-mini",
+    messages=messages,
+    reasoning_effort="low",
+    include=["reasoning.encrypted_content"],
+)
+```
+
+</TabItem>
+<TabItem value="streaming" label="Streaming">
+
+`reasoning_items` (with `encrypted_content`) arrive on the final chunk when the full response completes:
+
+```python showLineNumbers title="Streaming: collect and round-trip reasoning_items"
+import litellm
+
+messages = [{"role": "user", "content": "Solve this step by step: 2 + 2"}]
+
+collected_content = []
+collected_reasoning_items = []
+
+stream = litellm.completion(
+    model="openai/responses/gpt-5-mini",
+    messages=messages,
+    stream=True,
+    reasoning_effort="low",
+    include=["reasoning.encrypted_content"],
+)
+
+for chunk in stream:
+    delta = chunk.choices[0].delta
+    if delta.content:
+        collected_content.append(delta.content)
+    if getattr(delta, "reasoning_items", None):
+        collected_reasoning_items.extend(delta.reasoning_items)
+
+messages.append({
+    "role": "assistant",
+    "content": "".join(collected_content),
+    "reasoning_items": collected_reasoning_items or None,
+})
+messages.append({"role": "user", "content": "Continue the conversation."})
+
+response2 = litellm.completion(
+    model="openai/responses/gpt-5-mini",
+    messages=messages,
+    reasoning_effort="low",
+    include=["reasoning.encrypted_content"],
+)
+```
+
+</TabItem>
+</Tabs>
 
 ### Verbosity Control for GPT-5 Models
 
@@ -509,7 +671,7 @@ The `verbosity` parameter controls the length and detail of responses from GPT-5
 
 **Supported models:** `gpt-5`, `gpt-5.1`, `gpt-5-mini`, `gpt-5-nano`, `gpt-5-pro`
 
-**Note:** GPT-5-Codex models (`gpt-5-codex`, `gpt-5.1-codex`, `gpt-5.1-codex-mini`) do **not** support the `verbosity` parameter.
+**Note:** GPT-5-Codex models (`gpt-5-codex`, `gpt-5.1-codex`, `gpt-5.1-codex-mini`, `gpt-5.1-codex-max`) do **not** support the `verbosity` parameter.
 
 **Use cases:**
 - **`"low"`**: Best for concise answers or simple code generation (e.g., SQL queries)
@@ -554,14 +716,75 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 
 ## OpenAI Chat Completion to Responses API Bridge
 
-Call any Responses API model from OpenAI's `/chat/completions` endpoint. 
+LiteLLM offers a chat completion to Responses API bridge. This lets you use the completion interface while calling the Responses API under the hood.
+
+This is useful when you want to use [Responses API](https://platform.openai.com/docs/api-reference/responses) specific features (like built-in tools, web search preview, or code interpreter).
+
+:::tip gpt-5.4 + reasoning_effort + function tools
+
+LiteLLM drops `reasoning_effort` from `gpt-5.4` requests to `litellm.completion()` that include tools, since that combination is supported in the Responses API.
+
+If you need reasoning **and** tools together, use the responses bridge instead:
+
+```python
+response = litellm.completion(
+    model="openai/responses/gpt-5.4",  # routes to /v1/responses
+    messages=[{"role": "user", "content": "What's the weather?"}],
+    tools=[...],
+    reasoning_effort="low",
+)
+```
+
+:::
+
+### When to use the `openai/responses/` prefix
+
+Each model has a `mode` property defined in [`model_prices_and_context_window.json`](https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json) that determines which API endpoint it uses by default:
+
+- **`mode: responses`** - Model automatically uses the Responses API
+- **`mode: chat`** - Model defaults to the Chat Completions API
+
+**Models with `mode: responses`** (automatic Responses API):
+- `o3-deep-research`, `o4-mini-deep-research`
+- `o1-pro`, `o3-pro`
+- `gpt-5.1-codex`, `gpt-5.1-codex-mini`, `gpt-5.1-codex-max`
+- `codex-mini-latest`
+
+**Models with `mode: chat`** (require `openai/responses/` prefix for built-in tools):
+- `gpt-4o`, `gpt-4o-mini`, `gpt-4.1`, `gpt-4.1-mini`
+- `gpt-5`, `gpt-5-mini`
+- `o3`, `o4-mini`
+
+To use built-in tools like `web_search_preview` with `mode: chat` models, add the `openai/responses/` prefix:
+
+```python
+# This will FAIL - gpt-4o has mode: chat, uses Chat Completions API
+response = litellm.completion(
+    model="gpt-4o",
+    messages=[{"role": "user", "content": "What is the weather in Paris today?"}],
+    tools=[{"type": "web_search_preview"}],  # Not supported in Chat Completions
+    # ... other kwargs
+)
+
+# This will WORK - prefix forces Responses API
+response = litellm.completion(
+    model="openai/responses/gpt-4o",
+    messages=[{"role": "user", "content": "What is the weather in Paris today?"}],
+    tools=[{"type": "web_search_preview"}],  # Supported in Responses API
+    # ... other kwargs
+)
+```
+
+### Examples
 
 <Tabs>
 <TabItem value="sdk" label="SDK">
 
+**Using a model with `mode: responses` (automatic):**
+
 ```python
 import litellm
-import os 
+import os
 
 os.environ["OPENAI_API_KEY"] = "sk-1234"
 
@@ -575,6 +798,26 @@ response = litellm.completion(
 )
 print(response)
 ```
+
+**Using a model with `mode: chat` (requires prefix):**
+
+```python
+import litellm
+import os
+
+os.environ["OPENAI_API_KEY"] = "sk-1234"
+
+# Use the openai/responses/ prefix to enable built-in tools
+response = litellm.completion(
+    model="openai/responses/gpt-4o",
+    messages=[{"role": "user", "content": "What is the weather in Paris today?"}],
+    tools=[
+        {"type": "web_search_preview"},
+    ],
+)
+print(response)
+```
+
 </TabItem>
 <TabItem value="proxy" label="PROXY">
 
@@ -582,9 +825,16 @@ print(response)
 
 ```yaml
 model_list:
-  - model_name: openai-model
+  # Model with mode: responses (automatic)
+  - model_name: o3-deep-research
     litellm_params:
       model: o3-deep-research-2025-06-26
+      api_key: os.environ/OPENAI_API_KEY
+
+  # Model with mode: chat (use prefix for built-in tools)
+  - model_name: gpt-4o-with-tools
+    litellm_params:
+      model: openai/responses/gpt-4o
       api_key: os.environ/OPENAI_API_KEY
 ```
 
@@ -600,15 +850,14 @@ litellm --config config.yaml
 curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 -H 'Content-Type: application/json' \
 -H 'Authorization: Bearer sk-1234' \
--d '{ 
-    "model": "openai-model",
+-d '{
+    "model": "gpt-4o-with-tools",
     "messages": [
-        {"role": "user", "content": "What is the capital of France?"}
+        {"role": "user", "content": "What is the weather in Paris today?"}
     ],
     "tools": [
-        {"type": "web_search_preview"},
-        {"type": "code_interpreter", "container": {"type": "auto"}},
-    ],
+        {"type": "web_search_preview"}
+    ]
 }'
 ```
 
@@ -988,4 +1237,4 @@ response = completion(
 
 LiteLLM supports OpenAI's video generation models including Sora.
 
-For detailed documentation on video generation, see [OpenAI Video Generation →](./openai/video_generation.md)
+For detailed documentation on video generation, see [OpenAI Video Generation →](./openai/videos.md)

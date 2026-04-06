@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { Text, Button, Callout, TextInput } from "@tremor/react";
 import { Modal, Form, Spin, Select } from "antd";
+import { getGlobalLitellmHeaderName } from "@/components/networking";
 import NotificationsManager from "./molecules/notifications_manager";
 
 interface CloudZeroExportModalProps {
@@ -43,7 +44,7 @@ const CloudZeroExportModal: React.FC<CloudZeroExportModalProps> = ({ isOpen, onC
       const response = await fetch("/cloudzero/settings", {
         method: "GET",
         headers: {
-          Authorization: `Bearer ${accessToken}`,
+          [getGlobalLitellmHeaderName()]: `Bearer ${accessToken}`,
           "Content-Type": "application/json",
         },
       });
@@ -88,7 +89,7 @@ const CloudZeroExportModal: React.FC<CloudZeroExportModalProps> = ({ isOpen, onC
       const response = await fetch(endpoint, {
         method,
         headers: {
-          Authorization: `Bearer ${accessToken}`,
+          [getGlobalLitellmHeaderName()]: `Bearer ${accessToken}`,
           "Content-Type": "application/json",
         },
         body: JSON.stringify(payload),
@@ -128,7 +129,7 @@ const CloudZeroExportModal: React.FC<CloudZeroExportModalProps> = ({ isOpen, onC
       const response = await fetch("/cloudzero/export", {
         method: "POST",
         headers: {
-          Authorization: `Bearer ${accessToken}`,
+          [getGlobalLitellmHeaderName()]: `Bearer ${accessToken}`,
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
@@ -225,7 +226,7 @@ const CloudZeroExportModal: React.FC<CloudZeroExportModalProps> = ({ isOpen, onC
   ];
 
   return (
-    <Modal title="Export Data" open={isOpen} onCancel={handleModalClose} footer={null} width={600} destroyOnClose>
+    <Modal title="Export Data" open={isOpen} onCancel={handleModalClose} footer={null} width={600} destroyOnHidden>
       <div className="space-y-4">
         {/* Export Type Selection */}
         <div>

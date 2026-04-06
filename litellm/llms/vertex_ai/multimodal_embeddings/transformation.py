@@ -58,35 +58,80 @@ class VertexAIMultimodalEmbeddingConfig(BaseEmbeddingConfig):
         headers.update(default_headers)
         return headers
 
+    def _is_gcs_uri(self, input_str: str) -> bool:
+        """Check if the input string is a GCS URI."""
+        return "gs://" in input_str
+
+    def _is_video(self, input_str: str) -> bool:
+        """Check if the input string represents a video (mp4)."""
+        return "mp4" in input_str
+
+    def _is_media_input(self, input_str: str) -> bool:
+        """Check if the input string is a media element (GCS URI or base64 image)."""
+        return self._is_gcs_uri(input_str) or is_base64_encoded(s=input_str)
+
+    def _create_image_instance(self, input_str: str) -> InstanceImage:
+        """Create an InstanceImage from a GCS URI or base64 string."""
+        if self._is_gcs_uri(input_str):
+            return InstanceImage(gcsUri=input_str)
+        else:
+            return InstanceImage(
+                bytesBase64Encoded=(
+                    input_str.split(",")[1] if "," in input_str else input_str
+                )
+            )
+
+    def _create_video_instance(self, input_str: str) -> InstanceVideo:
+        """Create an InstanceVideo from a GCS URI."""
+        return InstanceVideo(gcsUri=input_str)
+
     def _process_input_element(self, input_element: str) -> Instance:
         """
-        Process the input element for multimodal embedding requests. checks if the if the input is gcs uri, base64 encoded image or plain text.
+        Process a single input element for multimodal embedding requests.
+        Detects if the input is a GCS URI, base64 encoded image, or plain text.
 
         Args:
             input_element (str): The input element to process.
 
         Returns:
-            Dict[str, Any]: A dictionary representing the processed input element.
+            Instance: A dictionary representing the processed input element.
         """
         if len(input_element) == 0:
             return Instance(text=input_element)
-        elif "gs://" in input_element:
-            if "mp4" in input_element:
-                return Instance(video=InstanceVideo(gcsUri=input_element))
+        elif self._is_gcs_uri(input_element):
+            if self._is_video(input_element):
+                return Instance(video=self._create_video_instance(input_element))
             else:
-                return Instance(image=InstanceImage(gcsUri=input_element))
+                return Instance(image=self._create_image_instance(input_element))
         elif is_base64_encoded(s=input_element):
-            return Instance(
-                image=InstanceImage(
-                    bytesBase64Encoded=(
-                        input_element.split(",")[1]
-                        if "," in input_element
-                        else input_element
-                    )
-                )
-            )
+            return Instance(image=self._create_image_instance(input_element))
         else:
             return Instance(text=input_element)
+
+    def _try_merge_text_with_media(
+        self, text_str: str, next_elem: Optional[str]
+    ) -> tuple[Instance, bool]:
+        """
+        Try to merge a text element with a following media element into a single instance.
+
+        Args:
+            text_str: The text string to potentially merge.
+            next_elem: The next element in the input list (may be media).
+
+        Returns:
+            A tuple of (Instance, consumed_next) where consumed_next indicates
+            if the next element was merged into this instance.
+        """
+        instance_args: Instance = {"text": text_str}
+
+        if next_elem and isinstance(next_elem, str) and self._is_media_input(next_elem):
+            if self._is_gcs_uri(next_elem) and self._is_video(next_elem):
+                instance_args["video"] = self._create_video_instance(next_elem)
+            else:
+                instance_args["image"] = self._create_image_instance(next_elem)
+            return instance_args, True
+
+        return instance_args, False
 
     def process_openai_embedding_input(
         self, _input: Union[list, str]
@@ -98,50 +143,33 @@ class VertexAIMultimodalEmbeddingConfig(BaseEmbeddingConfig):
             _input (Union[list, str]): The input data to process.
 
         Returns:
-            Union[Instance, List[Instance]]: Either a single Instance or list of Instance objects.
+            List[Instance]: List of Instance objects for the embedding request.
         """
         _input_list = [_input] if not isinstance(_input, list) else _input
-        processed_instances = []
+        processed_instances: List[Instance] = []
 
         i = 0
         while i < len(_input_list):
             current = _input_list[i]
-
-            # Look ahead for potential media elements
             next_elem = _input_list[i + 1] if i + 1 < len(_input_list) else None
 
-            # If current is a text and next is a GCS URI, or current is a GCS URI
             if isinstance(current, str):
-                instance_args: Instance = {}
-
-                # Process current element
-                if "gs://" not in current:
-                    instance_args["text"] = current
-                elif "mp4" in current:
-                    instance_args["video"] = InstanceVideo(gcsUri=current)
+                if self._is_media_input(current):
+                    # Current element is media - process it standalone
+                    processed_instances.append(self._process_input_element(current))
+                    i += 1
                 else:
-                    instance_args["image"] = InstanceImage(gcsUri=current)
-
-                # Check next element if it's a GCS URI
-                if next_elem and isinstance(next_elem, str) and "gs://" in next_elem:
-                    if "mp4" in next_elem:
-                        instance_args["video"] = InstanceVideo(gcsUri=next_elem)
-                    else:
-                        instance_args["image"] = InstanceImage(gcsUri=next_elem)
-                    i += 2  # Skip next element since we processed it
-                else:
-                    i += 1  # Move to next element
-
-                processed_instances.append(instance_args)
-                continue
-
-            # Handle dict or other types
-            if isinstance(current, dict):
-                instance = Instance(**current)
-                processed_instances.append(instance)
+                    # Current element is text - try to merge with next media element
+                    instance, consumed_next = self._try_merge_text_with_media(
+                        text_str=current, next_elem=next_elem
+                    )
+                    processed_instances.append(instance)
+                    i += 2 if consumed_next else 1
+            elif isinstance(current, dict):
+                processed_instances.append(Instance(**current))
+                i += 1
             else:
                 raise ValueError(f"Unsupported input type: {type(current)}")
-            i += 1
 
         return processed_instances
 
@@ -237,7 +265,7 @@ class VertexAIMultimodalEmbeddingConfig(BaseEmbeddingConfig):
                 image_count += 1
 
         ## Calculate video embeddings usage
-        video_length_seconds = 0
+        video_length_seconds = 0.0
         for prediction in vertex_predictions["predictions"]:
             video_embeddings = prediction.get("videoEmbeddings")
             if video_embeddings:

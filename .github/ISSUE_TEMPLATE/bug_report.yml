@@ -7,6 +7,16 @@ body:
     attributes:
       value: |
         Thanks for taking the time to fill out this bug report!
+        
+        **💡 Tip:** See our [Troubleshooting Guide](https://docs.litellm.ai/docs/troubleshoot) for what information to include.
+  - type: checkboxes
+    id: duplicate-check
+    attributes:
+      label: Check for existing issues
+      description: Please search to see if an issue already exists for the bug you encountered.
+      options:
+        - label: I have searched the existing issues and checked that my issue is not a duplicate.
+          required: true
   - type: textarea
     id: what-happened
     attributes:
@@ -17,19 +27,37 @@ body:
     validations:
       required: true
   - type: textarea
+    id: steps-to-reproduce
+    attributes:
+      label: Steps to Reproduce
+      description: Please provide detailed steps to reproduce this bug(A curl/python code to reproduce the bug)
+      placeholder: |
+        1. config.yaml file/ .env file/ etc.
+        2. Run the following code...
+        3. Observe the error...
+      value: |
+        1. 
+        2. 
+        3. 
+    validations:
+      required: true
+  - type: textarea
     id: logs
     attributes:
       label: Relevant log output
       description: Please copy and paste any relevant log output. This will be automatically formatted into code, so no need for backticks.
       render: shell
   - type: dropdown
-    id: ml-ops-team
+    id: component
     attributes:
-      label: Are you a ML Ops Team?
-      description: This helps us prioritize your requests correctly 
+      label: What part of LiteLLM is this about?
       options:
-        - "No"
-        - "Yes"
+        - ''
+        - "SDK (litellm Python package)"
+        - "Proxy"
+        - "UI Dashboard"
+        - "Docs"
+        - "Other"
     validations:
       required: true
   - type: input

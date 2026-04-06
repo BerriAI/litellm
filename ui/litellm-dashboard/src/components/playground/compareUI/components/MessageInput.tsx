@@ -9,13 +9,17 @@ interface MessageInputProps {
   onChange: (value: string) => void;
   onSend: () => void;
   disabled?: boolean;
+  hasAttachment?: boolean;
+  uploadComponent?: React.ReactNode;
 }
 
-export function MessageInput({ value, onChange, onSend, disabled }: MessageInputProps) {
+export function MessageInput({ value, onChange, onSend, disabled, hasAttachment, uploadComponent }: MessageInputProps) {
+  const canSend = !disabled && (value.trim().length > 0 || Boolean(hasAttachment));
+
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
-      if (!disabled && value.trim()) {
+      if (canSend) {
         onSend();
       }
     }
@@ -24,6 +28,7 @@ export function MessageInput({ value, onChange, onSend, disabled }: MessageInput
   return (
     <div className="flex items-center gap-2">
       <div className="flex items-center flex-1 bg-white border border-gray-300 rounded-xl px-3 py-1 min-h-[44px]">
+        {uploadComponent && <div className="flex-shrink-0 mr-2">{uploadComponent}</div>}
         <TextArea
           value={value}
           onChange={(e) => onChange(e.target.value)}
@@ -42,7 +47,7 @@ export function MessageInput({ value, onChange, onSend, disabled }: MessageInput
             lineHeight: "20px",
           }}
         />
-        <Button onClick={onSend} disabled={disabled || !value.trim()} icon={<ArrowUpOutlined />} shape="circle" />
+        <Button onClick={onSend} disabled={!canSend} icon={<ArrowUpOutlined />} shape="circle" />
       </div>
     </div>
   );

@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any, Optional
 
 from litellm._logging import verbose_proxy_logger
 from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
+from litellm.types.utils import GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
     from litellm.integrations.custom_guardrail import CustomGuardrail
@@ -56,6 +57,8 @@ class OpenAIAudioTranscriptionHandler(BaseTranslation):
         response: "TranscriptionResponse",
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: Optional[Any] = None,
+        user_api_key_dict: Optional[Any] = None,
+        request_data: Optional[dict] = None,
     ) -> Any:
         """
         Process output transcription by applying guardrails to transcribed text.
@@ -63,6 +66,8 @@ class OpenAIAudioTranscriptionHandler(BaseTranslation):
         Args:
             response: Transcription response object containing transcribed text
             guardrail_to_apply: The guardrail instance to apply
+            litellm_logging_obj: Optional logging object
+            user_api_key_dict: User API key metadata to pass to guardrails
 
         Returns:
             Modified response with guardrails applied to transcribed text
@@ -75,16 +80,40 @@ class OpenAIAudioTranscriptionHandler(BaseTranslation):
 
         if isinstance(response.text, str):
             original_text = response.text
-            guardrailed_text = await guardrail_to_apply.apply_guardrail(
-                text=original_text
+            # Use the real request_data if provided (proxy path), otherwise
+            # create a standalone dict (SDK / direct-call path).
+            if request_data is None:
+                request_data = {"response": response}
+            else:
+                if "response" not in request_data:
+                    request_data["response"] = response
+
+            # Add user API key metadata with prefixed keys
+            if "litellm_metadata" not in request_data:
+                user_metadata = self.transform_user_api_key_dict_to_metadata(
+                    user_api_key_dict
+                )
+                if user_metadata:
+                    request_data["litellm_metadata"] = user_metadata
+
+            inputs = GenericGuardrailAPIInputs(texts=[original_text])
+            # Include model information from the response if available
+            if hasattr(response, "model") and response.model:
+                inputs["model"] = response.model
+            guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
+                inputs=inputs,
+                request_data=request_data,
+                input_type="response",
+                logging_obj=litellm_logging_obj,
             )
-            response.text = guardrailed_text
+            guardrailed_texts = guardrailed_inputs.get("texts", [])
+            response.text = guardrailed_texts[0] if guardrailed_texts else original_text
 
             verbose_proxy_logger.debug(
                 "OpenAI Audio Transcription: Applied guardrail to transcribed text. "
                 "Original length: %d, New length: %d",
                 len(original_text),
-                len(guardrailed_text),
+                len(response.text),
             )
         else:
             verbose_proxy_logger.debug(

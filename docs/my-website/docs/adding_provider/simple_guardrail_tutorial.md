@@ -101,12 +101,11 @@ model_list:
   - model_name: gpt-4
     litellm_params:
       model: gpt-4
-      api_key: os.environ/OPENAI_API_KEY
+    api_key: os.environ/OPENAI_API_KEY
 
-litellm_settings:
-  guardrails:
+guardrails:
     - guardrail_name: my_guardrail
-      litellm_params:
+        litellm_params:
         guardrail: my_guardrail
         mode: during_call
         api_key: os.environ/MY_GUARDRAIL_API_KEY

@@ -239,3 +239,91 @@ class TestAzureAnthropicMessagesConfig:
         assert "tools" in params
         assert "tool_choice" in params
 
+    def test_transform_anthropic_messages_request_removes_scope_from_cache_control(
+        self,
+    ):
+        """Test that scope is removed from cache_control (Azure AI Foundry doesn't support it)"""
+        config = AzureAnthropicMessagesConfig()
+        model = "claude-sonnet-4-5"
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "Hello",
+                        "cache_control": {"type": "ephemeral", "scope": "global"},
+                    }
+                ],
+            }
+        ]
+        anthropic_messages_optional_request_params = {
+            "max_tokens": 1024,
+            "system": [
+                {
+                    "type": "text",
+                    "text": "You are an AI assistant.",
+                    "cache_control": {"type": "ephemeral", "scope": "global"},
+                }
+            ],
+        }
+        litellm_params = GenericLiteLLMParams()
+        headers = {}
+
+        result = config.transform_anthropic_messages_request(
+            model=model,
+            messages=messages,
+            anthropic_messages_optional_request_params=anthropic_messages_optional_request_params,
+            litellm_params=litellm_params,
+            headers=headers,
+        )
+
+        assert "scope" not in result["system"][0]["cache_control"]
+        assert result["system"][0]["cache_control"]["type"] == "ephemeral"
+        assert "scope" not in result["messages"][0]["content"][0]["cache_control"]
+        assert result["messages"][0]["content"][0]["cache_control"]["type"] == "ephemeral"
+
+
+class TestProviderConfigManagerAzureAnthropicMessages:
+    """Test ProviderConfigManager returns correct config for Azure AI Anthropic Messages API"""
+
+    def test_get_provider_anthropic_messages_config_returns_azure_config(self):
+        """Test that ProviderConfigManager returns AzureAnthropicMessagesConfig for azure_ai provider with claude model"""
+        import litellm
+        from litellm.utils import ProviderConfigManager
+
+        config = ProviderConfigManager.get_provider_anthropic_messages_config(
+            model="claude-sonnet-4-5_gb_20250929",
+            provider=litellm.LlmProviders.AZURE_AI,
+        )
+
+        assert config is not None
+        assert isinstance(config, AzureAnthropicMessagesConfig)
+
+    def test_get_provider_anthropic_messages_config_case_insensitive_model_name(self):
+        """Test that model name check is case insensitive"""
+        import litellm
+        from litellm.utils import ProviderConfigManager
+
+        # Test with uppercase CLAUDE
+        config = ProviderConfigManager.get_provider_anthropic_messages_config(
+            model="CLAUDE-SONNET-4-5",
+            provider=litellm.LlmProviders.AZURE_AI,
+        )
+
+        assert config is not None
+        assert isinstance(config, AzureAnthropicMessagesConfig)
+
+    def test_get_provider_anthropic_messages_config_returns_none_for_non_claude_model(
+        self,
+    ):
+        """Test that ProviderConfigManager returns None for non-claude model on azure_ai"""
+        import litellm
+        from litellm.utils import ProviderConfigManager
+
+        config = ProviderConfigManager.get_provider_anthropic_messages_config(
+            model="gpt-4o",
+            provider=litellm.LlmProviders.AZURE_AI,
+        )
+
+        assert config is None

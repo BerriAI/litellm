@@ -187,4 +187,37 @@ export AIOHTTP_TRUST_ENV='True'
 ```
 </TabItem>
 </Tabs>
+## 7. Per-Service SSL Verification
 
+LiteLLM allows you to override SSL verification settings for specific services or provider calls. This is useful when different services (e.g., an internal guardrail vs. a public LLM provider) require different CA certificates.
+
+### Bedrock (SDK)
+You can pass `ssl_verify` directly in the `completion` call.
+
+```python
+import litellm
+
+response = litellm.completion(
+    model="bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
+    messages=[{"role": "user", "content": "hi"}],
+    ssl_verify="path/to/bedrock_cert.pem" # Or False to disable
+)
+```
+
+### AIM Guardrail (Proxy)
+You can configure `ssl_verify` per guardrail in your `config.yaml`.
+
+```yaml
+guardrails:
+  - guardrail_name: aim-protected-app
+    litellm_params:
+      guardrail: aim
+      ssl_verify: "/path/to/aim_cert.pem" # Use specific cert for AIM
+```
+
+### Priority Logic
+LiteLLM resolves `ssl_verify` using the following priority:
+1. **Explicit Parameter**: Passed in `completion()` or guardrail config.
+2. **Environment Variable**: `SSL_VERIFY` environment variable.
+3. **Global Setting**: `litellm.ssl_verify` setting.
+4. **System Standard**: `SSL_CERT_FILE` environment variable.

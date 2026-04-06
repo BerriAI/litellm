@@ -1,2 +1,2 @@
 -- AlterTable
-ALTER TABLE "LiteLLM_MCPServerTable" ADD COLUMN     "static_headers" JSONB DEFAULT '{}';
+ALTER TABLE "LiteLLM_MCPServerTable" ADD COLUMN IF NOT EXISTS "static_headers" JSONB DEFAULT '{}';

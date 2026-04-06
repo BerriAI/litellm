@@ -422,7 +422,7 @@ def test_streaming_tool_calls_transformation():
         ChatCompletionDeltaToolCall,
         Delta,
         Function,
-        ModelResponse,
+        ModelResponseStream,
         StreamingChoices,
     )
     
@@ -454,7 +454,7 @@ def test_streaming_tool_calls_transformation():
         delta=mock_delta
     )
     
-    mock_response = ModelResponse(
+    mock_response = ModelResponseStream(
         id="test-streaming",
         choices=[mock_choice],
         created=1234567890,
@@ -493,7 +493,7 @@ def test_streaming_partial_tool_calls_accumulation():
         ChatCompletionDeltaToolCall,
         Delta,
         Function,
-        ModelResponse,
+        ModelResponseStream,
         StreamingChoices,
     )
     
@@ -543,7 +543,7 @@ def test_streaming_partial_tool_calls_accumulation():
             delta=mock_delta
         )
         
-        mock_response = ModelResponse(
+        mock_response = ModelResponseStream(
             id="test-streaming",
             choices=[mock_choice],
             created=1234567890,
@@ -595,7 +595,7 @@ def test_streaming_multiple_partial_tool_calls():
         ChatCompletionDeltaToolCall,
         Delta,
         Function,
-        ModelResponse,
+        ModelResponseStream,
         StreamingChoices,
     )
     
@@ -642,7 +642,7 @@ def test_streaming_multiple_partial_tool_calls():
             delta=mock_delta
         )
         
-        mock_response = ModelResponse(
+        mock_response = ModelResponseStream(
             id="test-streaming",
             choices=[mock_choice],
             created=1234567890,
@@ -1090,8 +1090,8 @@ async def test_google_generate_content_with_openai():
         usage=mock_usage
     )
     
-    # Use AsyncMock for proper async function mocking
-    with unittest.mock.patch("litellm.acompletion", new_callable=unittest.mock.AsyncMock) as mock_completion:
+    # Use AsyncMock for proper async function mocking - patch at the module level where it's imported
+    with unittest.mock.patch("litellm.google_genai.main.litellm.acompletion", new_callable=unittest.mock.AsyncMock) as mock_completion:
         # Set the return value directly on the MagicMock
         mock_completion.return_value = mock_response
         
@@ -1120,12 +1120,13 @@ async def test_google_generate_content_with_openai():
         
         # Print the response for verification
         print(f"Response: {response}")
-        ######################################################### 
+        #########################################################
         # validate only expected fields were sent to litellm.completion
         passed_fields = set(call_kwargs.keys())
         # remove any GenericLiteLLMParams fields
         passed_fields = passed_fields - set(GenericLiteLLMParams.model_fields.keys())
-        assert passed_fields == set(["model", "messages"]), f"Expected only model and messages to be passed through, got {passed_fields}"
+        # extra_headers is now explicitly passed through for providers that need custom headers
+        assert passed_fields == set(["model", "messages", "extra_headers"]), f"Expected model, messages, and extra_headers to be passed through, got {passed_fields}"
 @pytest.mark.asyncio
 async def test_agenerate_content_x_goog_api_key_header():
     """
@@ -1197,6 +1198,131 @@ async def test_agenerate_content_x_goog_api_key_header():
             
             # Verify other expected headers
             assert headers.get("Content-Type") == "application/json", f"Expected Content-Type application/json, got {headers.get('Content-Type')}"
-            
+
             print(f"✓ Test passed: x-goog-api-key header correctly set to {api_key_value}")
             print(f"✓ All headers: {list(headers.keys())}")
+
+
+def test_inline_data_base64_image_transformation():
+    """Test transformation of Gemini inline_data (Base64 images) to OpenAI format"""
+    from litellm.google_genai.adapters.transformation import GoogleGenAIAdapter
+
+    adapter = GoogleGenAIAdapter()
+
+    # Test input with Base64 image
+    model = "gpt-4-vision-preview"
+    contents = {
+        "role": "user",
+        "parts": [
+            {"text": "What's in this image?"},
+            {
+                "inline_data": {
+                    "mime_type": "image/jpeg",
+                    "data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+                }
+            }
+        ]
+    }
+
+    # Transform to completion format
+    completion_request = adapter.translate_generate_content_to_completion(
+        model=model,
+        contents=contents
+    )
+
+    # Verify the transformation
+    assert completion_request["model"] == model
+    assert len(completion_request["messages"]) == 1
+    assert completion_request["messages"][0]["role"] == "user"
+
+    # Verify content is an array (multimodal format)
+    content = completion_request["messages"][0]["content"]
+    assert isinstance(content, list), "Content should be a list for multimodal messages"
+    assert len(content) == 2, "Should have 2 content parts (text + image)"
+
+    # Verify text part
+    text_part = content[0]
+    assert text_part["type"] == "text"
+    assert text_part["text"] == "What's in this image?"
+
+    # Verify image part
+    image_part = content[1]
+    assert image_part["type"] == "image_url"
+    assert "image_url" in image_part
+    assert "url" in image_part["image_url"]
+    assert image_part["image_url"]["url"].startswith("data:image/jpeg;base64,")
+    assert "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==" in image_part["image_url"]["url"]
+
+
+def test_inline_data_image_only_transformation():
+    """Test transformation of Gemini inline_data with only image (no text)"""
+    from litellm.google_genai.adapters.transformation import GoogleGenAIAdapter
+
+    adapter = GoogleGenAIAdapter()
+
+    # Test input with only Base64 image (no text)
+    model = "gpt-4-vision-preview"
+    contents = {
+        "role": "user",
+        "parts": [
+            {
+                "inline_data": {
+                    "mime_type": "image/png",
+                    "data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+                }
+            }
+        ]
+    }
+
+    # Transform to completion format
+    completion_request = adapter.translate_generate_content_to_completion(
+        model=model,
+        contents=contents
+    )
+
+    # Verify the transformation
+    assert completion_request["model"] == model
+    assert len(completion_request["messages"]) == 1
+    assert completion_request["messages"][0]["role"] == "user"
+
+    # Verify content is an array (multimodal format)
+    content = completion_request["messages"][0]["content"]
+    assert isinstance(content, list), "Content should be a list for multimodal messages"
+    assert len(content) == 1, "Should have 1 content part (image only)"
+
+    # Verify image part
+    image_part = content[0]
+    assert image_part["type"] == "image_url"
+    assert "image_url" in image_part
+    assert "url" in image_part["image_url"]
+    assert image_part["image_url"]["url"].startswith("data:image/png;base64,")
+
+
+def test_inline_data_backward_compatibility_text_only():
+    """Test that pure text messages still use simple string format (backward compatibility)"""
+    from litellm.google_genai.adapters.transformation import GoogleGenAIAdapter
+
+    adapter = GoogleGenAIAdapter()
+
+    # Test input with only text (no images)
+    model = "gpt-3.5-turbo"
+    contents = {
+        "role": "user",
+        "parts": [{"text": "Hello, how are you?"}]
+    }
+
+    # Transform to completion format
+    completion_request = adapter.translate_generate_content_to_completion(
+        model=model,
+        contents=contents
+    )
+
+    # Verify the transformation
+    assert completion_request["model"] == model
+    assert len(completion_request["messages"]) == 1
+    assert completion_request["messages"][0]["role"] == "user"
+
+    # Verify content is a simple string (not an array) for backward compatibility
+    content = completion_request["messages"][0]["content"]
+    assert isinstance(content, str), "Content should be a string for text-only messages (backward compatibility)"
+    assert content == "Hello, how are you?"

@@ -31,6 +31,7 @@ class LangsmithCredentialsObject(TypedDict):
     LANGSMITH_API_KEY: Optional[str]
     LANGSMITH_PROJECT: Optional[str]
     LANGSMITH_BASE_URL: str
+    LANGSMITH_TENANT_ID: Optional[str]
 
 
 class LangsmithQueueObject(TypedDict):
@@ -52,6 +53,7 @@ class CredentialsKey(NamedTuple):
     api_key: str
     project: str
     base_url: str
+    tenant_id: Optional[str]
 
 
 @dataclass
