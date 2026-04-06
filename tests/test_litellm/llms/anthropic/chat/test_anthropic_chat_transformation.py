@@ -1948,14 +1948,28 @@ def test_transform_request_adds_tool_code_execution_when_container_upload_in_mes
     """
     config = AnthropicConfig()
 
-    messages = [{"role": "user", "content": "Hello"}, {type: "file", file: {file_id: 'uploadedFileId'}}]
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Analyse this file"},
+                {"type": "container_upload", "file_id": "file_abc123"},
+            ],
+        }
+    ]
 
     result = config.transform_request(
         model="claude-sonnet-4-5",
-        messages=messages
+        messages=messages,
+        optional_params={},
+        litellm_params={},
+        headers={},
     )
 
-    assert len(result["tools"]) >= 1
+    assert "tools" in result
+    assert any(
+        t.get("type", "").startswith("code_execution") for t in result["tools"]
+    )
 
 def test_transform_request_respects_user_max_tokens():
     """
