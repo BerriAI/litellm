@@ -667,7 +667,11 @@ class LiteLLMProxyRequestSetup:
             )
 
         if isinstance(data[_metadata_variable_name], dict):
-            data[_metadata_variable_name].update(metadata_from_headers)
+            # Only inject header-derived values for keys NOT already set by the user
+            # in the request body. This ensures body values take priority over headers.
+            for key, value in metadata_from_headers.items():
+                if key not in data[_metadata_variable_name]:
+                    data[_metadata_variable_name][key] = value
         return data
 
     @staticmethod
