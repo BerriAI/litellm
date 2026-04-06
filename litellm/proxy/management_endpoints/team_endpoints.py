@@ -978,6 +978,19 @@ async def new_team(  # noqa: PLR0915
                 budget_duration=complete_team_data.budget_duration,
             )
 
+        # If budget_limits is set, initialize reset_at for each window
+        if complete_team_data.budget_limits:
+            from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
+
+            initialized_windows = []
+            for window in complete_team_data.budget_limits:
+                w = window if isinstance(window, dict) else window.model_dump()
+                w["reset_at"] = get_budget_reset_time(
+                    budget_duration=w["budget_duration"]
+                ).isoformat()
+                initialized_windows.append(w)
+            complete_team_data.budget_limits = initialized_windows
+
         ## Add Team Member Budget Table
         members_with_roles: List[Member] = []
         if complete_team_data.members_with_roles is not None:
@@ -1592,6 +1605,18 @@ def _set_budget_reset_at(data: UpdateTeamRequest, updated_kv: dict) -> None:
 
         reset_at = get_budget_reset_time(budget_duration=data.budget_duration)
         updated_kv["budget_reset_at"] = reset_at
+
+    if data.budget_limits is not None and len(data.budget_limits) > 0:
+        from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
+
+        initialized_windows = []
+        for window in data.budget_limits:
+            w = window if isinstance(window, dict) else window.model_dump()
+            w["reset_at"] = get_budget_reset_time(
+                budget_duration=w["budget_duration"]
+            ).isoformat()
+            initialized_windows.append(w)
+        updated_kv["budget_limits"] = json.dumps(initialized_windows)
 
 
 async def handle_update_object_permission(
