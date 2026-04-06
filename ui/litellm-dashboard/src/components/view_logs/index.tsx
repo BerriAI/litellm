@@ -189,9 +189,9 @@ export default function SpendLogsTable({
         };
       }
 
-      const formattedStartTime = moment(startTime).utc().format("YYYY-MM-DD HH:mm:ss");
+      const formattedStartTime = moment.utc(startTime).format("YYYY-MM-DD HH:mm:ss");
       const formattedEndTime = isCustomDate
-        ? moment(endTime).utc().format("YYYY-MM-DD HH:mm:ss")
+        ? moment.utc(endTime).format("YYYY-MM-DD HH:mm:ss")
         : moment().utc().format("YYYY-MM-DD HH:mm:ss");
 
       // Get base response from API
