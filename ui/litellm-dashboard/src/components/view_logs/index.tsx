@@ -66,8 +66,8 @@ export default function SpendLogsTable({
   const quickSelectRef = useRef<HTMLDivElement>(null);
 
   // New state variables for Start and End Time
-  const [startTime, setStartTime] = useState<string>(moment().utc().subtract(24, "hours").format("YYYY-MM-DDTHH:mm"));
-  const [endTime, setEndTime] = useState<string>(moment().utc().format("YYYY-MM-DDTHH:mm"));
+  const [startTime, setStartTime] = useState<string>(moment().utc().subtract(24, "hours").format("YYYY-MM-DDTHH:mm") + "Z");
+  const [endTime, setEndTime] = useState<string>(moment().utc().format("YYYY-MM-DDTHH:mm") + "Z");
 
   const [isCustomDate, setIsCustomDate] = useState(false);
   const [quickSelectOpen, setQuickSelectOpen] = useState(false);
@@ -262,8 +262,8 @@ export default function SpendLogsTable({
   const handleFilterReset = useCallback(() => {
     handleFilterResetFromHook();
     // Reset custom time range to default (last 24 hours)
-    setStartTime(moment().utc().subtract(24, "hours").format("YYYY-MM-DDTHH:mm"));
-    setEndTime(moment().utc().format("YYYY-MM-DDTHH:mm"));
+    setStartTime(moment().utc().subtract(24, "hours").format("YYYY-MM-DDTHH:mm") + "Z");
+    setEndTime(moment().utc().format("YYYY-MM-DDTHH:mm") + "Z");
     setIsCustomDate(false);
     setSelectedTimeInterval({ value: 24, unit: "hours" });
     setCurrentPage(1);
@@ -575,12 +575,13 @@ export default function SpendLogsTable({
                                       className={`w-full px-3 py-2 text-left text-sm hover:bg-gray-50 rounded-md ${displayLabel === option.label ? "bg-blue-50 text-blue-600" : ""
                                         }`}
                                       onClick={() => {
-                                        setEndTime(moment().utc().format("YYYY-MM-DDTHH:mm"));
+                                        setCurrentPage(1);
+                                        setEndTime(moment().utc().format("YYYY-MM-DDTHH:mm") + "Z");
                                         setStartTime(
                                         moment()
                                           .utc()
                                             .subtract(option.value, option.unit as any)
-                                            .format("YYYY-MM-DDTHH:mm"),
+                                            .format("YYYY-MM-DDTHH:mm") + "Z",
                                         );
                                         setSelectedTimeInterval({ value: option.value, unit: option.unit });
                                         setIsCustomDate(false);
