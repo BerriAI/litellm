@@ -128,6 +128,18 @@ class FakeAnthropicMessagesStreamIterator:
                 f"event: content_block_delta\ndata: {json.dumps(content_block_delta)}\n\n".encode()
             )
 
+        elif block_type in ("server_tool_use", "web_search_tool_result"):
+            # Emit the full block as content_block_start — same as
+            # Anthropic's native streaming format for server-side tools.
+            content_block_start = {
+                "type": "content_block_start",
+                "index": index,
+                "content_block": block_dict,
+            }
+            chunks.append(
+                f"event: content_block_start\ndata: {json.dumps(content_block_start)}\n\n".encode()
+            )
+
         content_block_stop = {"type": "content_block_stop", "index": index}
         chunks.append(
             f"event: content_block_stop\ndata: {json.dumps(content_block_stop)}\n\n".encode()
@@ -168,42 +180,6 @@ class FakeAnthropicMessagesStreamIterator:
         for index, block in enumerate(content_blocks):
             block_dict = cast(Dict[str, Any], block)
             chunks.extend(self._create_content_block_chunks(block_dict, index))
-
-                elif block_type == "server_tool_use":
-                    # Emit the full block as content_block_start (same as
-                    # Anthropic's native streaming format).
-                    content_block_start = {
-                        "type": "content_block_start",
-                        "index": index,
-                        "content_block": block_dict,
-                    }
-                    chunks.append(
-                        f"event: content_block_start\ndata: {json.dumps(content_block_start)}\n\n".encode()
-                    )
-
-                    # content_block_stop
-                    content_block_stop = {"type": "content_block_stop", "index": index}
-                    chunks.append(
-                        f"event: content_block_stop\ndata: {json.dumps(content_block_stop)}\n\n".encode()
-                    )
-
-                elif block_type == "web_search_tool_result":
-                    # Emit the full block as content_block_start (same as
-                    # Anthropic's native streaming format).
-                    content_block_start = {
-                        "type": "content_block_start",
-                        "index": index,
-                        "content_block": block_dict,
-                    }
-                    chunks.append(
-                        f"event: content_block_start\ndata: {json.dumps(content_block_start)}\n\n".encode()
-                    )
-
-                    # content_block_stop
-                    content_block_stop = {"type": "content_block_stop", "index": index}
-                    chunks.append(
-                        f"event: content_block_stop\ndata: {json.dumps(content_block_stop)}\n\n".encode()
-                    )
 
         # 5. message_delta event (with final usage and stop_reason)
         # Include cache usage fields so clients that only read message_delta
