@@ -24,9 +24,9 @@ def test_update_kwargs_does_not_mutate_defaults_and_merges_metadata():
                 "model_name": "gpt-3.5-turbo",
                 "litellm_params": {
                     "model": "azure/gpt-4.1-mini",
-                    "api_key": os.getenv("AZURE_API_KEY"),
+                    "api_key": os.getenv("AZURE_AI_API_KEY"),
                     "api_version": os.getenv("AZURE_API_VERSION"),
-                    "api_base": os.getenv("AZURE_API_BASE"),
+                    "api_base": os.getenv("AZURE_AI_API_BASE"),
                 },
             }
         ],
@@ -646,8 +646,15 @@ def test_arouter_responses_api_bridge():
     mock_response = MagicMock()
     mock_response.status_code = 200
     mock_response.headers = {"content-type": "application/json"}
-    mock_response.json.return_value = {"id": "resp_test", "object": "response", "status": "completed", "output": []}
-    mock_response.text = '{"id": "resp_test", "object": "response", "status": "completed", "output": []}'
+    mock_response.json.return_value = {
+        "id": "resp_test",
+        "object": "response",
+        "status": "completed",
+        "output": [],
+    }
+    mock_response.text = (
+        '{"id": "resp_test", "object": "response", "status": "completed", "output": []}'
+    )
 
     with patch.object(client, "post", return_value=mock_response) as mock_post:
         try:
@@ -2147,7 +2154,10 @@ def test_get_deployment_credentials_with_provider_aws_bedrock_runtime_endpoint()
     )
 
     assert credentials is not None
-    assert credentials["aws_bedrock_runtime_endpoint"] == "https://bedrock-runtime.us-east-1.amazonaws.com"
+    assert (
+        credentials["aws_bedrock_runtime_endpoint"]
+        == "https://bedrock-runtime.us-east-1.amazonaws.com"
+    )
     assert credentials["aws_access_key_id"] == "test-access-key"
     assert credentials["aws_secret_access_key"] == "test-secret-key"
     assert credentials["aws_region_name"] == "us-east-1"
@@ -2169,11 +2179,11 @@ def test_get_deployment_credentials_with_provider_resolves_credential_name():
             credential_values={
                 "api_key": "resolved-api-key",
                 "api_base": "https://resolved.openai.azure.com",
-                "api_version": "2024-02-01"
-            }
+                "api_version": "2024-02-01",
+            },
         )
     ]
-    
+
     router = litellm.Router(
         model_list=[
             {
@@ -2197,7 +2207,7 @@ def test_get_deployment_credentials_with_provider_resolves_credential_name():
     assert credentials["custom_llm_provider"] == "azure"
     # Ensure credential name is removed after resolution
     assert "litellm_credential_name" not in credentials
-    
+
     # Cleanup
     litellm.credential_list = []
 
@@ -2302,7 +2312,10 @@ async def test_aguardrail_helper():
 
     # Mock the original function
     async def mock_original_function(**kwargs):
-        return {"result": "success", "selected_guardrail": kwargs.get("selected_guardrail")}
+        return {
+            "result": "success",
+            "selected_guardrail": kwargs.get("selected_guardrail"),
+        }
 
     result = await router._aguardrail_helper(
         model="content-filter",
@@ -2336,7 +2349,10 @@ async def test_aguardrail():
 
     # Mock the original function
     async def mock_original_function(**kwargs):
-        return {"result": "success", "selected_guardrail": kwargs.get("selected_guardrail")}
+        return {
+            "result": "success",
+            "selected_guardrail": kwargs.get("selected_guardrail"),
+        }
 
     result = await router.aguardrail(
         guardrail_name="content-filter",
@@ -2345,6 +2361,7 @@ async def test_aguardrail():
 
     assert result["result"] == "success"
     assert result["selected_guardrail"]["id"] == "guardrail-1"
+
 
 @pytest.mark.asyncio
 async def test_anthropic_messages_call_type_is_cached():
@@ -2417,36 +2434,33 @@ async def test_anthropic_messages_call_type_is_cached():
                 additional_headers=None,
             ),
         )
-    
+
     cache = DualCache()
     deployment_check = PromptCachingDeploymentCheck(cache=cache)
     prompt_cache = PromptCachingCache(cache=cache)
-    
+
     # Create messages with enough tokens to pass the caching threshold
     test_messages = [
         {
-            "role": "user", 
+            "role": "user",
             "content": [
                 {
-                    "type": "text", 
+                    "type": "text",
                     "text": "test long message here" * 1024,
-                    "cache_control": {
-                        "type": "ephemeral",
-                        "ttl": "5m"
-                    }
+                    "cache_control": {"type": "ephemeral", "ttl": "5m"},
                 }
-            ]
+            ],
         }
     ]
     test_model_id = "test-model-id-123"
-    
+
     # Create a payload with anthropic_messages call type
     payload = create_standard_logging_payload()
     payload["call_type"] = CallTypes.anthropic_messages.value
     payload["messages"] = test_messages
     payload["model"] = "anthropic/claude-3-5-sonnet-20240620"
     payload["model_id"] = test_model_id
-    
+
     # Log the success event (should cache the model_id)
     await deployment_check.async_log_success_event(
         kwargs={"standard_logging_object": payload},
@@ -2454,19 +2468,23 @@ async def test_anthropic_messages_call_type_is_cached():
         start_time=1234567890.0,
         end_time=1234567891.0,
     )
-    
+
     # Small delay to ensure cache write completes
     await asyncio.sleep(0.1)
-    
+
     # Verify that the model_id was actually cached
     cached_result = await prompt_cache.async_get_model_id(
         messages=test_messages,
         tools=None,
     )
-    
+
     # This assertion will FAIL if anthropic_messages is filtered out
-    assert cached_result is not None, "Model ID should be cached for anthropic_messages call type"
-    assert cached_result["model_id"] == test_model_id, f"Expected {test_model_id}, got {cached_result['model_id']}"
+    assert (
+        cached_result is not None
+    ), "Model ID should be cached for anthropic_messages call type"
+    assert (
+        cached_result["model_id"] == test_model_id
+    ), f"Expected {test_model_id}, got {cached_result['model_id']}"
 
 
 def test_update_kwargs_with_deployment_propagates_model_tags():
@@ -2682,9 +2700,7 @@ def test_credential_name_injected_as_tag():
     )
 
     kwargs: dict = {"metadata": {"tags": ["A.101"]}}
-    deployment = router.get_deployment_by_model_group_name(
-        model_group_name="xai-model"
-    )
+    deployment = router.get_deployment_by_model_group_name(model_group_name="xai-model")
     router._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
 
     assert "Credential: xAI" in kwargs["metadata"]["tags"]
@@ -2709,9 +2725,7 @@ def test_credential_name_not_duplicated_in_tags():
     )
 
     kwargs: dict = {"metadata": {"tags": ["Credential: xAI", "A.101"]}}
-    deployment = router.get_deployment_by_model_group_name(
-        model_group_name="xai-model"
-    )
+    deployment = router.get_deployment_by_model_group_name(model_group_name="xai-model")
     router._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
 
     assert kwargs["metadata"]["tags"].count("Credential: xAI") == 1
@@ -2733,9 +2747,7 @@ def test_credential_name_not_injected_when_absent():
     )
 
     kwargs: dict = {"metadata": {"tags": ["A.101"]}}
-    deployment = router.get_deployment_by_model_group_name(
-        model_group_name="gpt-model"
-    )
+    deployment = router.get_deployment_by_model_group_name(model_group_name="gpt-model")
     router._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
 
     assert kwargs["metadata"]["tags"] == ["A.101"]

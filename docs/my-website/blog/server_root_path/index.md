@@ -3,17 +3,9 @@ slug: server-root-path-incident
 title: "Incident Report: SERVER_ROOT_PATH regression broke UI routing"
 date: 2026-02-21T10:00:00
 authors:
-  - name: Yuneng Jiang
-    title: SWE @ LiteLLM (Full Stack)
-    url: https://www.linkedin.com/in/yunengjiang/
-  - name: Ishaan Jaff
-    title: "CTO, LiteLLM"
-    url: https://www.linkedin.com/in/reffajnaahsi/
-    image_url: https://pbs.twimg.com/profile_images/1613813310264340481/lz54oEiB_400x400.jpg
-  - name: Krrish Dholakia
-    title: "CEO, LiteLLM"
-    url: https://www.linkedin.com/in/krish-d/
-    image_url: https://pbs.twimg.com/profile_images/1298587542745358340/DZv3Oj-h_400x400.jpg
+  - yuneng
+  - ishaan-alt
+  - krrish
 tags: [incident-report, ui, stability]
 hide_table_of_contents: false
 ---

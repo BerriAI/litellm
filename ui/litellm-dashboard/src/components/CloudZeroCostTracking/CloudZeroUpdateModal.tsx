@@ -1,6 +1,7 @@
 import { useCloudZeroUpdateSettings } from "@/app/(dashboard)/hooks/cloudzero/useCloudZeroSettings";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
-import { Form, Input, message, Modal } from "antd";
+import { Form, Input, Modal } from "antd";
+import MessageManager from "@/components/molecules/message_manager";
 import { useEffect } from "react";
 import { CloudZeroSettings } from "./types";
 
@@ -39,7 +40,7 @@ export default function CloudZeroUpdateModal({ open, onOk, onCancel, settings }:
         },
         {
           onSuccess: () => {
-            message.success("CloudZero integration updated successfully");
+            MessageManager.success("CloudZero integration updated successfully");
             form.resetFields();
             onOk();
           },
@@ -47,7 +48,7 @@ export default function CloudZeroUpdateModal({ open, onOk, onCancel, settings }:
             if (error?.errorFields) {
               return;
             }
-            message.error(error?.message || "Failed to update CloudZero integration");
+            MessageManager.error(error?.message || "Failed to update CloudZero integration");
           },
         },
       );
@@ -55,7 +56,7 @@ export default function CloudZeroUpdateModal({ open, onOk, onCancel, settings }:
       if (error?.errorFields) {
         return;
       }
-      message.error(error?.message || "Failed to update CloudZero integration");
+      MessageManager.error(error?.message || "Failed to update CloudZero integration");
     }
   };
 

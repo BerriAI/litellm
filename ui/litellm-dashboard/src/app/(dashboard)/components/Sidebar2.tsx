@@ -20,7 +20,6 @@ import {
   ToolOutlined,
   TagsOutlined,
   AuditOutlined,
-  MessageOutlined,
 } from "@ant-design/icons";
 // import {
 //   all_admin_roles,
@@ -196,7 +195,7 @@ const menuItems: MenuItemCfg[] = [
     icon: <UserOutlined style={{ fontSize: 18 }} />,
     roles: all_admin_roles,
   },
-  { key: "14", page: "api_ref", label: "API Reference", icon: <ApiOutlined style={{ fontSize: 18 }} /> },
+  { key: "14", page: "api-reference", label: "API Reference", icon: <ApiOutlined style={{ fontSize: 18 }} /> },
   {
     key: "16",
     page: "model-hub-table",
@@ -466,41 +465,6 @@ const Sidebar2: React.FC<SidebarProps> = ({ accessToken, userRole, defaultSelect
         </ConfigProvider>
         {isAdminRole(userRole) && !collapsed && <UsageIndicator accessToken={accessToken} width={220} />}
 
-        {/* Pinned "Open Chat" button at bottom */}
-        <div style={{
-          padding: collapsed ? "10px 8px" : "10px 12px",
-          borderTop: "1px solid #f0f0f0",
-          flexShrink: 0,
-        }}>
-          <a
-            href={toHref("chat")}
-            target="_blank"
-            rel="noopener noreferrer"
-            style={{
-              display: "flex",
-              alignItems: "center",
-              justifyContent: collapsed ? "center" : "flex-start",
-              gap: 8,
-              padding: collapsed ? "8px 0" : "8px 10px",
-              borderRadius: 8,
-              background: "#1677ff",
-              color: "#fff",
-              textDecoration: "none",
-              fontSize: 13,
-              fontWeight: 600,
-              transition: "background 0.15s",
-            }}
-            onMouseEnter={(e) => {
-              (e.currentTarget as HTMLAnchorElement).style.background = "#0958d9";
-            }}
-            onMouseLeave={(e) => {
-              (e.currentTarget as HTMLAnchorElement).style.background = "#1677ff";
-            }}
-          >
-            <MessageOutlined style={{ fontSize: 16, flexShrink: 0 }} />
-            {!collapsed && <span>Open Chat</span>}
-          </a>
-        </div>
       </Sider>
     </Layout>
   );

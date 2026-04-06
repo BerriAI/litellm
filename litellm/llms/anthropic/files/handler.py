@@ -8,10 +8,8 @@ import httpx
 import litellm
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
-from litellm.llms.custom_httpx.http_handler import (
-    get_async_httpx_client,
-)
 from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.types.llms.openai import (
     FileContentRequest,
     HttpxBinaryResponseContent,
@@ -85,9 +83,9 @@ class AnthropicFilesHandler:
 
         # Get Anthropic API credentials
         api_base = self.anthropic_model_info.get_api_base(api_base)
-        api_key = api_key or self.anthropic_model_info.get_api_key()
+        auth_header = self.anthropic_model_info.get_auth_header(api_key)
 
-        if not api_key:
+        if auth_header is None:
             raise ValueError("Missing Anthropic API Key")
 
         # Construct the Anthropic batch results URL
@@ -97,8 +95,8 @@ class AnthropicFilesHandler:
         headers = {
             "accept": "application/json",
             "anthropic-version": "2023-06-01",
-            "x-api-key": api_key,
         }
+        headers.update(auth_header)
 
         # Make the request to Anthropic
         async_client = get_async_httpx_client(llm_provider=LlmProviders.ANTHROPIC)

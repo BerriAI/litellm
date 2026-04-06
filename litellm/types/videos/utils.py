@@ -195,7 +195,9 @@ def decode_character_id_with_provider(encoded_character_id: str) -> DecodedChara
             character_id=decoded_character_id,
         )
     except Exception as e:
-        verbose_logger.debug(f"Error decoding character_id '{encoded_character_id}': {e}")
+        verbose_logger.debug(
+            f"Error decoding character_id '{encoded_character_id}': {e}"
+        )
         return DecodedCharacterId(
             custom_llm_provider=None,
             model_id=None,

@@ -3,10 +3,7 @@ slug: gemini_embedding_2_multimodal
 title: "Gemini Embedding 2 Preview: Multimodal Embeddings on LiteLLM"
 date: 2025-03-11T10:00:00
 authors:
-  - name: Sameer Kankute
-    title: SWE @ LiteLLM (LLM Translation)
-    url: https://www.linkedin.com/in/sameer-kankute/
-    image_url: https://pbs.twimg.com/profile_images/2001352686994907136/ONgNuSk5_400x400.jpg
+  - sameer
 description: "Generate embeddings from text, images, audio, video, and PDFs with gemini-embedding-2-preview on LiteLLM via Gemini API and Vertex AI."
 tags: [gemini, embeddings, multimodal, vertex ai]
 hide_table_of_contents: false
@@ -18,6 +15,8 @@ import TabItem from '@theme/TabItem';
 # Gemini Embedding 2 Preview: Multimodal Embeddings
 
 LiteLLM now supports **multimodal embeddings** with `gemini-embedding-2-preview`—generating a single embedding from a mix of text, images, audio, video, and PDF content. Available via both the **Gemini API** (API key) and **Vertex AI** (GCP credentials).
+
+{/* truncate */}
 
 ## Supported Input Types
 

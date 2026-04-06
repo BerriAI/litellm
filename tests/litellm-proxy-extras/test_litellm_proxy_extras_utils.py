@@ -222,6 +222,27 @@ class TestMigrationSQLIdempotency:
             + "\n".join(violations)
         )
 
+    _DROP_COLUMN_ALLOWLIST = {
+        "20250918083359_drop_spec_version_column_from_mcp_table",
+        "20260213170952_access_group_change_to_model_name",
+        "20260224203854_add_agent_object_permissions_table",
+    }
+
+    def test_no_drop_column_statements(self, all_migrations):
+        """Migrations must not drop columns — dropping columns is destructive
+        and can break running application instances during rolling deploys."""
+        violations = []
+        for migration_name, sql in all_migrations:
+            if migration_name in self._DROP_COLUMN_ALLOWLIST:
+                continue
+            for line_num, line in enumerate(sql.splitlines(), 1):
+                if re.search(r"DROP\s+COLUMN", line, re.IGNORECASE):
+                    violations.append(f"  {migration_name}:{line_num}: {line.strip()}")
+        assert not violations, (
+            "DROP COLUMN found in migrations (destructive, not allowed):\n"
+            + "\n".join(violations)
+        )
+
     def test_drop_index_uses_if_exists(self, all_migrations):
         """DROP INDEX statements must use IF EXISTS"""
         violations = []

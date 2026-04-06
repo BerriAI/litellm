@@ -125,4 +125,4 @@ curl -X DELETE "https://your-proxy-url/schedule/anthropic_beta_headers_reload" \
 ## Related
 
 - [Model Cost Map Sync](./sync_models_github.md) - Auto-sync model pricing data
-- [Anthropic Beta Headers](../completion/anthropic.md#beta-features) - Using Anthropic beta features
+- [Anthropic Beta Headers](../providers/anthropic.md) - Using Anthropic beta features

@@ -90,7 +90,7 @@
     "tar-fs": ">=2.1.4",
     "webpack-dev-middleware": ">=5.3.4",
     "braces": ">=3.0.3",
-    "axios": ">=0.30.2",
+    "axios": "1.13.6",
     "webpack": ">=5.94.0",
     "serve-static": ">=1.16.0",
     "path-to-regexp": ">=0.1.12",

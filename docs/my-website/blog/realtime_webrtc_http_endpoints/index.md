@@ -3,18 +3,9 @@ slug: realtime_webrtc_http_endpoints
 title: "Realtime WebRTC HTTP Endpoints"
 date: 2026-03-12T10:00:00
 authors:
-  - name: Sameer Kankute
-    title: SWE @ LiteLLM (LLM Translation)
-    url: https://www.linkedin.com/in/sameer-kankute/
-    image_url: https://pbs.twimg.com/profile_images/2001352686994907136/ONgNuSk5_400x400.jpg
-  - name: Krrish Dholakia
-    title: "CEO, LiteLLM"
-    url: https://www.linkedin.com/in/krish-d/
-    image_url: https://pbs.twimg.com/profile_images/1298587542745358340/DZv3Oj-h_400x400.jpg
-  - name: Ishaan Jaff
-    title: "CTO, LiteLLM"
-    url: https://www.linkedin.com/in/reffajnaahsi/
-    image_url: https://pbs.twimg.com/profile_images/1613813310264340481/lz54oEiB_400x400.jpg
+  - sameer
+  - krrish
+  - ishaan-alt
 description: "Use the LiteLLM proxy to route OpenAI-style WebRTC realtime via HTTP: client_secrets and SDP exchange."
 tags: [realtime, webrtc, proxy, openai]
 hide_table_of_contents: false
@@ -23,6 +14,8 @@ hide_table_of_contents: false
 import WebRTCTester from '@site/src/components/WebRTCTester';
 
 Connect to the Realtime API via WebRTC from browser/mobile clients. LiteLLM handles auth and key management.
+
+{/* truncate */}
 
 ## How it works
 
@@ -116,4 +109,3 @@ A: Set the correct `api_version` in `litellm_params` (or via the `AZURE_API_VERS
 
 **Q: What if I get no audio?**  
 A: Make sure you grant microphone permission, ensure `pc.ontrack` assigns the audio element with `autoplay` enabled, check your network/firewall for WebRTC traffic, and inspect the browser console for ICE or SDP errors.
-
