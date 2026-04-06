@@ -201,6 +201,6 @@ class TestAzureAssistantCostTracking:
         azure_container_info = litellm.model_cost.get("azure/container", {})
         assert azure_container_info.get("code_interpreter_cost_per_session") == 0.03
         
-        assert AZURE_COMPUTER_USE_INPUT_COST_PER_1K_TOKENS == 3.0
-        assert AZURE_COMPUTER_USE_OUTPUT_COST_PER_1K_TOKENS == 12.0
+        assert AZURE_COMPUTER_USE_INPUT_COST_PER_1K_TOKENS == 0.003
+        assert AZURE_COMPUTER_USE_OUTPUT_COST_PER_1K_TOKENS == 0.012
         assert AZURE_VECTOR_STORE_COST_PER_GB_PER_DAY == 0.1
