@@ -66,6 +66,7 @@ export interface TeamMembership {
     rpm_limit: number | null;
     model_max_budget: Record<string, number> | null;
     budget_duration: string | null;
+    allowed_models?: string[] | null;
   };
 }
 
@@ -95,9 +96,13 @@ export interface TeamData {
     } | null;
     created_at: string;
     access_group_ids?: string[];
+<<<<<<< worktree-rustling-wishing-kite
+    default_team_member_models?: string[];
+=======
     access_group_models?: string[];
     access_group_mcp_server_ids?: string[];
     access_group_agent_ids?: string[];
+>>>>>>> main
     guardrails?: string[];
     policies?: string[];
     object_permission?: {
@@ -381,6 +386,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         max_budget_in_team: values.max_budget_in_team,
         tpm_limit: values.tpm_limit,
         rpm_limit: values.rpm_limit,
+        allowed_models: values.allowed_models,
       };
       MessageManager.destroy(); // Remove all existing toasts
 
@@ -586,6 +592,11 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       // Pass access_group_ids to the update request
       if (values.access_group_ids !== undefined) {
         updateData.access_group_ids = values.access_group_ids;
+      }
+
+      // Pass default_team_member_models to the update request
+      if (values.default_team_member_models !== undefined) {
+        updateData.default_team_member_models = values.default_team_member_models;
       }
 
       const response = await teamUpdateCall(accessToken, updateData);
@@ -899,6 +910,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                         accessGroups: info.object_permission?.agent_access_groups || [],
                       },
                       access_group_ids: info.access_group_ids || [],
+                      default_team_member_models: info.default_team_member_models || [],
                     }}
                     layout="vertical"
                   >
@@ -946,44 +958,76 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                       <Input placeholder="example1@test.com, example2@test.com" />
                     </Form.Item>
 
-                    <Form.Item
-                      label="Team Member Budget (USD)"
-                      name="team_member_budget"
-                      tooltip="This is the individual budget for a user in the team."
-                    >
-                      <NumericalInput step={0.01} precision={2} style={{ width: "100%" }} />
-                    </Form.Item>
-
-                    <Form.Item label="Team Member Budget Duration" name="team_member_budget_duration">
-                      <DurationSelect
-                        onChange={(value) => form.setFieldValue("team_member_budget_duration", value)}
-                        value={form.getFieldValue("team_member_budget_duration")}
-                      />
-                    </Form.Item>
-
-                    <Form.Item
-                      label="Team Member Key Duration (eg: 1d, 1mo)"
-                      name="team_member_key_duration"
-                      tooltip="Set a limit to the duration of a team member's key. Format: 30s (seconds), 30m (minutes), 30h (hours), 30d (days), 1mo (month)"
-                    >
-                      <TextInput placeholder="e.g., 30d" />
-                    </Form.Item>
-
-                    <Form.Item
-                      label="Team Member TPM Limit"
-                      name="team_member_tpm_limit"
-                      tooltip="Default tokens per minute limit for an individual team member. This limit applies to all requests the user makes within this team. Can be overridden per member."
-                    >
-                      <NumericalInput step={1} style={{ width: "100%" }} placeholder="e.g., 1000" />
-                    </Form.Item>
-
-                    <Form.Item
-                      label="Team Member RPM Limit"
-                      name="team_member_rpm_limit"
-                      tooltip="Default requests per minute limit for an individual team member. This limit applies to all requests the user makes within this team. Can be overridden per member."
-                    >
-                      <NumericalInput step={1} style={{ width: "100%" }} placeholder="e.g., 100" />
-                    </Form.Item>
+                    <Accordion className="mt-4 mb-4">
+                      <AccordionHeader>
+                        <b>Team Member Settings</b>
+                      </AccordionHeader>
+                      <AccordionBody>
+                        <Text className="text-xs text-gray-500 mb-4">
+                          Optional defaults applied when members join this team. All fields can be overridden per member.
+                        </Text>
+                        <Form.Item
+                          label={
+                            <span>
+                              Default Model Access{" "}
+                              <Tooltip title="Optional. If set, new members can only access these models by default. Must be a subset of the team's models above. Leave empty to give all members access to all team models.">
+                                <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                              </Tooltip>
+                            </span>
+                          }
+                          name="default_team_member_models"
+                        >
+                          <Form.Item noStyle shouldUpdate={(prev, cur) => prev.models !== cur.models}>
+                            {({ getFieldValue }) => {
+                              const teamModels = getFieldValue("models") || info.models || [];
+                              return (
+                                <Select
+                                  mode="multiple"
+                                  placeholder="Leave empty — all team models accessible to every member"
+                                  value={form.getFieldValue("default_team_member_models") || []}
+                                  onChange={(values) => form.setFieldValue("default_team_member_models", values)}
+                                  options={teamModels.map((m: string) => ({ label: m, value: m }))}
+                                />
+                              );
+                            }}
+                          </Form.Item>
+                        </Form.Item>
+                        <Form.Item
+                          label="Default Budget (USD)"
+                          name="team_member_budget"
+                          tooltip="Default spend budget for each member in this team."
+                        >
+                          <NumericalInput step={0.01} precision={2} style={{ width: "100%" }} />
+                        </Form.Item>
+                        <Form.Item label="Default Budget Duration" name="team_member_budget_duration">
+                          <DurationSelect
+                            onChange={(value) => form.setFieldValue("team_member_budget_duration", value)}
+                            value={form.getFieldValue("team_member_budget_duration")}
+                          />
+                        </Form.Item>
+                        <Form.Item
+                          label="Default Key Duration (eg: 1d, 1mo)"
+                          name="team_member_key_duration"
+                          tooltip="Set a limit to the duration of a team member's key. Format: 30s (seconds), 30m (minutes), 30h (hours), 30d (days), 1mo (month)"
+                        >
+                          <TextInput placeholder="e.g., 30d" />
+                        </Form.Item>
+                        <Form.Item
+                          label="Default TPM Limit"
+                          name="team_member_tpm_limit"
+                          tooltip="Default tokens per minute limit for each member. Can be overridden per member."
+                        >
+                          <NumericalInput step={1} style={{ width: "100%" }} placeholder="e.g., 1000" />
+                        </Form.Item>
+                        <Form.Item
+                          label="Default RPM Limit"
+                          name="team_member_rpm_limit"
+                          tooltip="Default requests per minute limit for each member. Can be overridden per member."
+                        >
+                          <NumericalInput step={1} style={{ width: "100%" }} placeholder="e.g., 100" />
+                        </Form.Item>
+                      </AccordionBody>
+                    </Accordion>
 
                     <Form.Item label="Reset Budget" name="budget_duration">
                       <Select placeholder="n/a">
@@ -1318,6 +1362,18 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                         ))}
                       </div>
                     </div>
+                    {info.default_team_member_models && info.default_team_member_models.length > 0 && (
+                      <div>
+                        <Text className="font-medium">Default Member Models</Text>
+                        <div className="flex flex-wrap gap-2 mt-1">
+                          {info.default_team_member_models.map((model, index) => (
+                            <Badge key={index} color="blue">
+                              {model}
+                            </Badge>
+                          ))}
+                        </div>
+                      </div>
+                    )}
                     <div>
                       <Text className="font-medium">Rate Limits</Text>
                       <div>TPM: {info.tpm_limit || "Unlimited"}</div>
@@ -1482,6 +1538,20 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
               step: 1,
               min: 0,
               placeholder: "Requests per minute limit for this member in this team",
+            },
+            {
+              name: "allowed_models",
+              label: (
+                <span>
+                  Allowed Models{" "}
+                  <Tooltip title="Models this member can access within this team. Leave empty to inherit all team models.">
+                    <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                  </Tooltip>
+                </span>
+              ),
+              type: "multi-select" as const,
+              options: (info.models || []).map((m: string) => ({ label: m, value: m })),
+              placeholder: "Leave empty to inherit all team models",
             },
           ],
         }}
