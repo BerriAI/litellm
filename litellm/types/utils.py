@@ -147,6 +147,7 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     supports_low_reasoning_effort: Optional[bool]
     supports_xhigh_reasoning_effort: Optional[bool]
     supports_max_reasoning_effort: Optional[bool]
+    supports_output_config: Optional[bool]
 
 
 class SearchContextCostPerQuery(TypedDict, total=False):

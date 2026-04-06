@@ -1011,6 +1011,7 @@
         "supports_vision": true,
         "tool_use_system_prompt_tokens": 346,
         "supports_native_structured_output": true,
+        "supports_output_config": true,
         "supports_max_reasoning_effort": true,
         "supports_minimal_reasoning_effort": true
     },
@@ -1041,6 +1042,7 @@
         "supports_vision": true,
         "tool_use_system_prompt_tokens": 346,
         "supports_native_structured_output": true,
+        "supports_output_config": true,
         "supports_max_reasoning_effort": true,
         "supports_minimal_reasoning_effort": true
     },
@@ -1071,6 +1073,7 @@
         "supports_vision": true,
         "tool_use_system_prompt_tokens": 346,
         "supports_native_structured_output": true,
+        "supports_output_config": true,
         "supports_max_reasoning_effort": true,
         "supports_minimal_reasoning_effort": true
     },
@@ -1100,6 +1103,7 @@
         "supports_vision": true,
         "tool_use_system_prompt_tokens": 346,
         "supports_native_structured_output": true,
+        "supports_output_config": true,
         "supports_max_reasoning_effort": true,
         "supports_minimal_reasoning_effort": true
     },
@@ -1129,6 +1133,7 @@
         "supports_vision": true,
         "tool_use_system_prompt_tokens": 346,
         "supports_native_structured_output": true,
+        "supports_output_config": true,
         "supports_max_reasoning_effort": true,
         "supports_minimal_reasoning_effort": true
     },
@@ -1328,6 +1333,7 @@
         "supports_vision": true,
         "tool_use_system_prompt_tokens": 346,
         "supports_native_structured_output": true,
+        "supports_output_config": true,
         "supports_minimal_reasoning_effort": true
     },
     "global.anthropic.claude-sonnet-4-6": {
@@ -1358,6 +1364,7 @@
         "supports_vision": true,
         "tool_use_system_prompt_tokens": 346,
         "supports_native_structured_output": true,
+        "supports_output_config": true,
         "supports_minimal_reasoning_effort": true
     },
     "us.anthropic.claude-sonnet-4-6": {
@@ -1388,6 +1395,7 @@
         "supports_vision": true,
         "tool_use_system_prompt_tokens": 346,
         "supports_native_structured_output": true,
+        "supports_output_config": true,
         "supports_minimal_reasoning_effort": true
     },
     "eu.anthropic.claude-sonnet-4-6": {
@@ -1417,6 +1425,7 @@
         "supports_vision": true,
         "tool_use_system_prompt_tokens": 346,
         "supports_native_structured_output": true,
+        "supports_output_config": true,
         "supports_minimal_reasoning_effort": true
     },
     "au.anthropic.claude-sonnet-4-6": {
@@ -1446,6 +1455,7 @@
         "supports_vision": true,
         "tool_use_system_prompt_tokens": 346,
         "supports_native_structured_output": true,
+        "supports_output_config": true,
         "supports_minimal_reasoning_effort": true
     },
     "jp.anthropic.claude-sonnet-4-6": {
@@ -1475,6 +1485,7 @@
         "supports_vision": true,
         "tool_use_system_prompt_tokens": 346,
         "supports_native_structured_output": true,
+        "supports_output_config": true,
         "supports_minimal_reasoning_effort": true
     },
     "anthropic.claude-sonnet-4-20250514-v1:0": {
@@ -1996,6 +2007,7 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "tool_use_system_prompt_tokens": 159,
+        "supports_output_config": true,
         "supports_max_reasoning_effort": true,
         "supports_minimal_reasoning_effort": true
     },
@@ -2093,6 +2105,7 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "tool_use_system_prompt_tokens": 346,
+        "supports_output_config": true,
         "supports_minimal_reasoning_effort": true
     },
     "azure/computer-use-preview": {
@@ -9643,6 +9656,7 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "tool_use_system_prompt_tokens": 346,
+        "supports_output_config": true,
         "supports_minimal_reasoning_effort": true
     },
     "claude-sonnet-4-5-20250929-v1:0": {
@@ -9840,6 +9854,7 @@
             "us": 1.1,
             "fast": 6.0
         },
+        "supports_output_config": true,
         "supports_max_reasoning_effort": true,
         "supports_minimal_reasoning_effort": true
     },
@@ -9875,7 +9890,8 @@
             "fast": 6.0
         },
         "supports_max_reasoning_effort": true,
-        "supports_minimal_reasoning_effort": true
+        "supports_minimal_reasoning_effort": true,
+        "supports_output_config": true
     },
     "claude-opus-4-7": {
         "cache_creation_input_token_cost": 6.25e-06,
@@ -9910,7 +9926,9 @@
             "us": 1.1,
             "fast": 6.0
         },
-        "supports_minimal_reasoning_effort": true
+        "supports_max_reasoning_effort": true,
+        "supports_minimal_reasoning_effort": true,
+        "supports_output_config": true
     },
     "claude-opus-4-7-20260416": {
         "cache_creation_input_token_cost": 6.25e-06,
@@ -9945,7 +9963,9 @@
             "us": 1.1,
             "fast": 6.0
         },
-        "supports_minimal_reasoning_effort": true
+        "supports_max_reasoning_effort": true,
+        "supports_minimal_reasoning_effort": true,
+        "supports_output_config": true
     },
     "claude-sonnet-4-20250514": {
         "deprecation_date": "2026-05-14",
@@ -28716,14 +28736,16 @@
         "mode": "responses",
         "supports_web_search": true,
         "supports_reasoning": false,
-        "supports_function_calling": true
+        "supports_function_calling": true,
+        "supports_output_config": true
     },
     "perplexity/anthropic/claude-opus-4-7": {
         "litellm_provider": "perplexity",
         "mode": "responses",
         "supports_web_search": true,
         "supports_reasoning": false,
-        "supports_function_calling": true
+        "supports_function_calling": true,
+        "supports_output_config": true
     },
     "perplexity/anthropic/claude-opus-4-5": {
         "litellm_provider": "perplexity",
@@ -33116,6 +33138,7 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "tool_use_system_prompt_tokens": 346,
+        "supports_output_config": true,
         "supports_max_reasoning_effort": true,
         "supports_minimal_reasoning_effort": true
     },
@@ -33144,6 +33167,7 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "tool_use_system_prompt_tokens": 346,
+        "supports_output_config": true,
         "supports_max_reasoning_effort": true,
         "supports_minimal_reasoning_effort": true
     },
@@ -33257,6 +33281,7 @@
             "search_context_size_low": 0.01,
             "search_context_size_medium": 0.01
         },
+        "supports_output_config": true,
         "supports_minimal_reasoning_effort": true
     },
     "vertex_ai/claude-sonnet-4-5@20250929": {
@@ -40311,6 +40336,7 @@
             "search_context_size_low": 0.01,
             "search_context_size_medium": 0.01
         },
+        "supports_output_config": true,
         "supports_minimal_reasoning_effort": true
     },
     "duckduckgo/search": {
