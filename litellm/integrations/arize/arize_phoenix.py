@@ -118,18 +118,32 @@ class ArizePhoenixLogger(OpenTelemetry):  # type: ignore
         """
         Retrieve dynamic Phoenix project name from request metadata.
 
-        Users can set `metadata.phoenix_project_name` in their request to route
-        traces to different Phoenix projects dynamically.
+        Priority order (highest to lowest):
+        1. Per-request metadata: ``metadata.phoenix_project_name``
+        2. Team / key metadata via ``metadata.user_api_key_auth_metadata.phoenix_project_name``
+           (the proxy merges both team and key metadata into ``user_api_key_auth_metadata``
+           inside the standard logging payload — this is where ``phoenix_project_name`` lands
+           when it is set on a team or API key via the management endpoints)
+        3. ``litellm_params.metadata.phoenix_project_name`` (SDK / non-proxy usage)
         """
         standard_logging_payload = kwargs.get("standard_logging_object")
         if isinstance(standard_logging_payload, dict):
             metadata = standard_logging_payload.get("metadata")
             if isinstance(metadata, dict):
+                # 1. Per-request metadata (highest priority)
                 project_name = metadata.get("phoenix_project_name")
                 if project_name:
                     return str(project_name)
 
-        # Also check litellm_params.metadata for SDK usage
+                # 2. Team / key metadata — the proxy stores merged team+key metadata
+                #    in user_api_key_auth_metadata inside StandardLoggingMetadata.
+                auth_metadata = metadata.get("user_api_key_auth_metadata")
+                if isinstance(auth_metadata, dict):
+                    project_name = auth_metadata.get("phoenix_project_name")
+                    if project_name:
+                        return str(project_name)
+
+        # 3. litellm_params.metadata for direct SDK usage (non-proxy)
         litellm_params = kwargs.get("litellm_params")
         if isinstance(litellm_params, dict):
             metadata = litellm_params.get("metadata") or {}
