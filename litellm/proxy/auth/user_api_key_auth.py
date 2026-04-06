@@ -691,12 +691,17 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
         ########## End of Route Checks Before Reading DB / Cache for "token" ########
 
         if general_settings.get("enable_oauth2_auth", False) is True:
-            # Only apply OAuth2 M2M authentication to LLM API routes and info routes, not UI/management routes
-            # This allows UI SSO to work separately from API M2M authentication
-            # Note: Info routes are already scoped to the user
-            if RouteChecks.is_llm_api_route(route=route) or RouteChecks.is_info_route(
-                route=route
-            ):
+            # By default, OAuth2 M2M auth is enforced only on LLM API routes.
+            # Info-route OAuth2 auth can be explicitly enabled via:
+            # general_settings.oauth2_auth_on_info_routes: true
+            should_apply_oauth2_on_info_routes = bool(
+                general_settings.get("oauth2_auth_on_info_routes", False)
+            )
+            should_apply_oauth2_auth = RouteChecks.is_llm_api_route(route=route) or (
+                should_apply_oauth2_on_info_routes
+                and RouteChecks.is_info_route(route=route)
+            )
+            if should_apply_oauth2_auth:
                 # When both OAuth2 and JWT auth are enabled, use token format to decide:
                 # - JWT tokens (3 dot-separated parts) -> skip OAuth2, fall through to JWT handler
                 # - Opaque tokens -> use OAuth2 handler

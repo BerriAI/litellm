@@ -975,6 +975,85 @@ class TestJWTOAuth2Coexistence:
             assert result.user_id == "machine-client-aud-list"
 
     @pytest.mark.asyncio
+    async def test_info_route_does_not_use_oauth2_by_default(self):
+        """
+        With both auth modes enabled, info routes should not force OAuth2 unless
+        explicitly configured.
+        """
+        ui_session_key = "sk-ui-session-token"
+
+        general_settings = {
+            "enable_oauth2_auth": True,
+            "enable_jwt_auth": True,
+        }
+
+        mock_request = MagicMock()
+        mock_request.url.path = "/team/list"
+        mock_request.headers = {"authorization": f"Bearer {ui_session_key}"}
+        mock_request.query_params = {}
+
+        with patch(
+            "litellm.proxy.proxy_server.general_settings", general_settings
+        ), patch("litellm.proxy.proxy_server.premium_user", True), patch(
+            "litellm.proxy.proxy_server.master_key", "sk-master"
+        ), patch(
+            "litellm.proxy.proxy_server.prisma_client", None
+        ), patch(
+            "litellm.proxy.auth.user_api_key_auth.Oauth2Handler.check_oauth2_token",
+            new_callable=AsyncMock,
+        ) as mock_oauth2:
+            with pytest.raises(Exception):
+                await user_api_key_auth(
+                    request=mock_request,
+                    api_key=f"Bearer {ui_session_key}",
+                )
+
+            mock_oauth2.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_info_route_can_use_oauth2_when_explicitly_enabled(self):
+        """
+        Setting oauth2_auth_on_info_routes enables OAuth2 auth on info routes.
+        """
+        opaque_token = "opaque-info-route-token"
+
+        general_settings = {
+            "enable_oauth2_auth": True,
+            "enable_jwt_auth": True,
+            "oauth2_auth_on_info_routes": True,
+        }
+
+        mock_oauth2_response = UserAPIKeyAuth(
+            api_key=opaque_token,
+            user_id="machine-client-info-route",
+            team_id="m2m-team",
+        )
+
+        mock_request = MagicMock()
+        mock_request.url.path = "/team/list"
+        mock_request.headers = {"authorization": f"Bearer {opaque_token}"}
+        mock_request.query_params = {}
+
+        with patch(
+            "litellm.proxy.proxy_server.general_settings", general_settings
+        ), patch("litellm.proxy.proxy_server.premium_user", True), patch(
+            "litellm.proxy.proxy_server.master_key", "sk-master"
+        ), patch(
+            "litellm.proxy.proxy_server.prisma_client", None
+        ), patch(
+            "litellm.proxy.auth.user_api_key_auth.Oauth2Handler.check_oauth2_token",
+            new_callable=AsyncMock,
+            return_value=mock_oauth2_response,
+        ) as mock_oauth2:
+            result = await user_api_key_auth(
+                request=mock_request,
+                api_key=f"Bearer {opaque_token}",
+            )
+
+            mock_oauth2.assert_called_once_with(token=opaque_token)
+            assert result.user_id == "machine-client-info-route"
+
+    @pytest.mark.asyncio
     async def test_only_oauth2_enabled_handles_all_tokens(self):
         """
         When only enable_oauth2_auth is True (no JWT), all LLM API tokens
