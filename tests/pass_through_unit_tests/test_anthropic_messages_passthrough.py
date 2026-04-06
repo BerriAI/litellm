@@ -634,7 +634,7 @@ async def test_anthropic_messages_with_extra_headers():
 #         # Call the handler with headers in kwargs
 #         try:
 #             await handler.async_anthropic_messages_handler(
-#                 model="bedrock/anthropic.claude-3-5-sonnet-20241022-v2:0",
+#                 model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
 #                 messages=[{"role": "user", "content": "Hello"}],
 #                 anthropic_messages_provider_config=mock_provider_config,
 #                 anthropic_messages_optional_request_params={"max_tokens": 100},

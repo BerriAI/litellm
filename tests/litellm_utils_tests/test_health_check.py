@@ -331,11 +331,11 @@ def test_update_litellm_params_for_health_check():
 
     # Test with Bedrock model without region routing - should just strip bedrock/ prefix
     litellm_params = {
-        "model": "bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+        "model": "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
         "api_key": "fake_key",
     }
     updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
-    assert updated_params["model"] == "anthropic.claude-3-5-sonnet-20240620-v1:0"
+    assert updated_params["model"] == "us.anthropic.claude-haiku-4-5-20251001-v1:0"
 
     # Test that non-Bedrock models are not affected by Bedrock-specific logic
     litellm_params = {
@@ -475,13 +475,13 @@ async def test_perform_health_check_filters_by_model_id():
         captured_list.append(m_list)
         return [
             {"model": "gpt-4", "api_key": m_list[0]["litellm_params"]["api_key"]}
-        ], []
+        ], [], {}
 
     with patch(
         "litellm.proxy.health_check._perform_health_check",
         side_effect=mock_perform_health_check,
     ):
-        healthy_endpoints, unhealthy_endpoints = await perform_health_check(
+        healthy_endpoints, unhealthy_endpoints, _ = await perform_health_check(
             model_list=model_list, model_id="deployment-id-2", details=True
         )
 
@@ -521,7 +521,7 @@ async def test_perform_health_check_with_health_check_model():
         return {"status": "healthy"}
 
     with patch("litellm.ahealth_check", side_effect=mock_health_check):
-        healthy_endpoints, unhealthy_endpoints = await _perform_health_check(model_list)
+        healthy_endpoints, unhealthy_endpoints, _ = await _perform_health_check(model_list)
         print("health check calls: ", health_check_calls)
 
         # Verify the health check used the override model
@@ -556,7 +556,7 @@ async def test_health_check_bad_model():
         },
     ]
     details = None
-    healthy_endpoints, unhealthy_endpoints = await _perform_health_check(
+    healthy_endpoints, unhealthy_endpoints, _ = await _perform_health_check(
         model_list, details
     )
     print(f"healthy_endpoints: {healthy_endpoints}")
@@ -574,7 +574,7 @@ async def test_health_check_bad_model():
         "litellm.ahealth_check", side_effect=mock_health_check
     ) as mock_health_check:
         start_time = time.time()
-        healthy_endpoints, unhealthy_endpoints = await _perform_health_check(model_list)
+        healthy_endpoints, unhealthy_endpoints, _ = await _perform_health_check(model_list)
         end_time = time.time()
         print("health check calls: ", health_check_calls)
         assert len(healthy_endpoints) == 0
@@ -667,7 +667,7 @@ async def test_timeout_does_not_cancel_other_health_checks():
         return {"status": "healthy"}
 
     with patch("litellm.ahealth_check", side_effect=mock_health_check):
-        healthy_endpoints, unhealthy_endpoints = await _perform_health_check(
+        healthy_endpoints, unhealthy_endpoints, _ = await _perform_health_check(
             model_list, max_concurrency=1
         )
 
