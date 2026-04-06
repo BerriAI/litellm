@@ -227,7 +227,14 @@ class AzureContentSafetyTextModerationGuardrail(AzureGuardrailBase, CustomGuardr
             "Azure Text Moderation: Running pre-call prompt scan, on call_type: %s",
             call_type,
         )
-        new_messages: Optional[List[AllMessageValues]] = data.get("messages") or data.get("input")
+        new_messages: Optional[List[AllMessageValues]] = data.get("messages")
+        if new_messages is None:
+            # Responses API uses "input" instead of "messages"
+            input_data = data.get("input")
+            if isinstance(input_data, str):
+                new_messages = [{"role": "user", "content": input_data}]
+            elif isinstance(input_data, list):
+                new_messages = input_data
         if new_messages is None:
             verbose_proxy_logger.warning(
                 "Azure Text Moderation: not running guardrail. No messages in data"
