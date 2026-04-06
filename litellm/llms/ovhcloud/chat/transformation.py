@@ -4,7 +4,6 @@ Support for OVHCloud AI Endpoints `/v1/chat/completions` endpoint.
 Our unified API follows the OpenAI standard.
 More information on our website: https://endpoints.ai.cloud.ovh.net
 """
-
 from typing import Optional, Union, List
 
 import httpx

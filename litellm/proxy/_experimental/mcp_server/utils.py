@@ -1,7 +1,6 @@
 """
 MCP Server Utilities
 """
-
 from typing import Any, Dict, Mapping, Optional, Tuple
 
 import os

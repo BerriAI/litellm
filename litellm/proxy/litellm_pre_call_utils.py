@@ -42,8 +42,6 @@ def _sanitize_for_log(value: Any) -> str:
         text = repr(value)
     # Strip CR/LF characters commonly used for log injection
     return text.replace("\r", "").replace("\n", "")
-
-
 from litellm.router import Router
 from litellm.secret_managers.main import get_secret_bool
 from litellm.types.llms.anthropic import ANTHROPIC_API_HEADERS
@@ -221,12 +219,12 @@ def _get_dynamic_logging_metadata(
     user_api_key_dict: UserAPIKeyAuth, proxy_config: ProxyConfig
 ) -> Optional[TeamCallbackMetadata]:
     callback_settings_obj: Optional[TeamCallbackMetadata] = None
-    key_dynamic_logging_settings: Optional[dict] = (
-        KeyAndTeamLoggingSettings.get_key_dynamic_logging_settings(user_api_key_dict)
-    )
-    team_dynamic_logging_settings: Optional[dict] = (
-        KeyAndTeamLoggingSettings.get_team_dynamic_logging_settings(user_api_key_dict)
-    )
+    key_dynamic_logging_settings: Optional[
+        dict
+    ] = KeyAndTeamLoggingSettings.get_key_dynamic_logging_settings(user_api_key_dict)
+    team_dynamic_logging_settings: Optional[
+        dict
+    ] = KeyAndTeamLoggingSettings.get_team_dynamic_logging_settings(user_api_key_dict)
     #########################################################################################
     # Key-based callbacks
     #########################################################################################
@@ -779,11 +777,11 @@ class LiteLLMProxyRequestSetup:
 
         ## KEY-LEVEL SPEND LOGS / TAGS
         if "tags" in key_metadata and key_metadata["tags"] is not None:
-            data[_metadata_variable_name]["tags"] = (
-                LiteLLMProxyRequestSetup._merge_tags(
-                    request_tags=data[_metadata_variable_name].get("tags"),
-                    tags_to_add=key_metadata["tags"],
-                )
+            data[_metadata_variable_name][
+                "tags"
+            ] = LiteLLMProxyRequestSetup._merge_tags(
+                request_tags=data[_metadata_variable_name].get("tags"),
+                tags_to_add=key_metadata["tags"],
             )
         if "disable_global_guardrails" in key_metadata and isinstance(
             key_metadata["disable_global_guardrails"], bool
@@ -1079,9 +1077,9 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
     data[_metadata_variable_name]["litellm_api_version"] = version
 
     if general_settings is not None:
-        data[_metadata_variable_name]["global_max_parallel_requests"] = (
-            general_settings.get("global_max_parallel_requests", None)
-        )
+        data[_metadata_variable_name][
+            "global_max_parallel_requests"
+        ] = general_settings.get("global_max_parallel_requests", None)
 
     ### KEY-LEVEL Controls
     key_metadata = user_api_key_dict.metadata
@@ -1695,9 +1693,7 @@ async def move_guardrails_to_metadata(
     )
 
     # Only check policy engine if no local config (avoid import + registry lookup)
-    if not (
-        has_key_config or has_team_config or has_project_config or has_request_config
-    ):
+    if not (has_key_config or has_team_config or has_project_config or has_request_config):
         from litellm.proxy.policy_engine.policy_registry import get_policy_registry
 
         if not get_policy_registry().is_initialized():

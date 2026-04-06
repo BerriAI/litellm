@@ -196,7 +196,9 @@ def _is_model_cost_zero(
     return True
 
 
-def _is_cost_explicitly_configured(model: str, llm_router: "Router") -> bool:
+def _is_cost_explicitly_configured(
+    model: str, llm_router: "Router"
+) -> bool:
     """
     Check if any deployment in the model group has cost fields explicitly
     set in its litellm.model_cost entry.
@@ -213,7 +215,10 @@ def _is_cost_explicitly_configured(model: str, llm_router: "Router") -> bool:
         if model_id is None:
             continue
         raw_entry = litellm.model_cost.get(model_id, {})
-        if "input_cost_per_token" in raw_entry or "output_cost_per_token" in raw_entry:
+        if (
+            "input_cost_per_token" in raw_entry
+            or "output_cost_per_token" in raw_entry
+        ):
             return True
     return False
 
@@ -451,9 +456,9 @@ async def common_checks(  # noqa: PLR0915
                 model=_model,
                 team_object=team_object,
                 llm_router=llm_router,
-                team_model_aliases=(
-                    valid_token.team_model_aliases if valid_token else None
-                ),
+                team_model_aliases=valid_token.team_model_aliases
+                if valid_token
+                else None,
             ):
                 raise ProxyException(
                     message=f"Team not allowed to access model. Team={team_object.team_id}, Model={_model}. Allowed team models = {team_object.models}",

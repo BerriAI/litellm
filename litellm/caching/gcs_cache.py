@@ -1,7 +1,6 @@
 """GCS Cache implementation
 Supports syncing responses to Google Cloud Storage Buckets using HTTP requests.
 """
-
 import json
 import asyncio
 from typing import Optional

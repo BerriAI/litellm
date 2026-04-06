@@ -165,10 +165,7 @@ def create_container(
     extra_query: Optional[Dict[str, Any]] = None,
     extra_body: Optional[Dict[str, Any]] = None,
     **kwargs,
-) -> Union[
-    ContainerObject,
-    Coroutine[Any, Any, ContainerObject],
-]:
+) -> Union[ContainerObject, Coroutine[Any, Any, ContainerObject],]:
     """Create a container using the OpenAI Container API.
 
     Currently supports OpenAI
@@ -208,10 +205,10 @@ def create_container(
             **kwargs,
         )
         # get provider config
-        container_provider_config: Optional[BaseContainerConfig] = (
-            ProviderConfigManager.get_provider_container_config(
-                provider=litellm.LlmProviders(custom_llm_provider),
-            )
+        container_provider_config: Optional[
+            BaseContainerConfig
+        ] = ProviderConfigManager.get_provider_container_config(
+            provider=litellm.LlmProviders(custom_llm_provider),
         )
 
         if container_provider_config is None:
@@ -394,10 +391,7 @@ def list_containers(
     extra_query: Optional[Dict[str, Any]] = None,
     extra_body: Optional[Dict[str, Any]] = None,
     **kwargs,
-) -> Union[
-    ContainerListResponse,
-    Coroutine[Any, Any, ContainerListResponse],
-]:
+) -> Union[ContainerListResponse, Coroutine[Any, Any, ContainerListResponse],]:
     """List containers using the OpenAI Container API.
 
     Currently supports OpenAI
@@ -426,10 +420,10 @@ def list_containers(
             **kwargs,
         )
         # get provider config
-        container_provider_config: Optional[BaseContainerConfig] = (
-            ProviderConfigManager.get_provider_container_config(
-                provider=litellm.LlmProviders(custom_llm_provider),
-            )
+        container_provider_config: Optional[
+            BaseContainerConfig
+        ] = ProviderConfigManager.get_provider_container_config(
+            provider=litellm.LlmProviders(custom_llm_provider),
         )
 
         if container_provider_config is None:
@@ -593,10 +587,7 @@ def retrieve_container(
     extra_query: Optional[Dict[str, Any]] = None,
     extra_body: Optional[Dict[str, Any]] = None,
     **kwargs,
-) -> Union[
-    ContainerObject,
-    Coroutine[Any, Any, ContainerObject],
-]:
+) -> Union[ContainerObject, Coroutine[Any, Any, ContainerObject],]:
     """Retrieve a container using the OpenAI Container API.
 
     Currently supports OpenAI
@@ -625,10 +616,10 @@ def retrieve_container(
             **kwargs,
         )
         # get provider config
-        container_provider_config: Optional[BaseContainerConfig] = (
-            ProviderConfigManager.get_provider_container_config(
-                provider=litellm.LlmProviders(custom_llm_provider),
-            )
+        container_provider_config: Optional[
+            BaseContainerConfig
+        ] = ProviderConfigManager.get_provider_container_config(
+            provider=litellm.LlmProviders(custom_llm_provider),
         )
 
         if container_provider_config is None:
@@ -782,10 +773,7 @@ def delete_container(
     extra_query: Optional[Dict[str, Any]] = None,
     extra_body: Optional[Dict[str, Any]] = None,
     **kwargs,
-) -> Union[
-    DeleteContainerResult,
-    Coroutine[Any, Any, DeleteContainerResult],
-]:
+) -> Union[DeleteContainerResult, Coroutine[Any, Any, DeleteContainerResult],]:
     """Delete a container using the OpenAI Container API.
 
     Currently supports OpenAI
@@ -814,10 +802,10 @@ def delete_container(
             **kwargs,
         )
         # get provider config
-        container_provider_config: Optional[BaseContainerConfig] = (
-            ProviderConfigManager.get_provider_container_config(
-                provider=litellm.LlmProviders(custom_llm_provider),
-            )
+        container_provider_config: Optional[
+            BaseContainerConfig
+        ] = ProviderConfigManager.get_provider_container_config(
+            provider=litellm.LlmProviders(custom_llm_provider),
         )
 
         if container_provider_config is None:
@@ -985,10 +973,7 @@ def list_container_files(
     extra_query: Optional[Dict[str, Any]] = None,
     extra_body: Optional[Dict[str, Any]] = None,
     **kwargs,
-) -> Union[
-    ContainerFileListResponse,
-    Coroutine[Any, Any, ContainerFileListResponse],
-]:
+) -> Union[ContainerFileListResponse, Coroutine[Any, Any, ContainerFileListResponse],]:
     """List files in a container using the OpenAI Container API.
 
     Currently supports OpenAI
@@ -1017,10 +1002,10 @@ def list_container_files(
             **kwargs,
         )
         # get provider config
-        container_provider_config: Optional[BaseContainerConfig] = (
-            ProviderConfigManager.get_provider_container_config(
-                provider=litellm.LlmProviders(custom_llm_provider),
-            )
+        container_provider_config: Optional[
+            BaseContainerConfig
+        ] = ProviderConfigManager.get_provider_container_config(
+            provider=litellm.LlmProviders(custom_llm_provider),
         )
 
         if container_provider_config is None:
@@ -1205,10 +1190,7 @@ def upload_container_file(
     extra_query: Optional[Dict[str, Any]] = None,
     extra_body: Optional[Dict[str, Any]] = None,
     **kwargs,
-) -> Union[
-    ContainerFileObject,
-    Coroutine[Any, Any, ContainerFileObject],
-]:
+) -> Union[ContainerFileObject, Coroutine[Any, Any, ContainerFileObject],]:
     """Upload a file to a container using the OpenAI Container API.
 
     This endpoint allows uploading files directly to a container session,
@@ -1266,10 +1248,10 @@ def upload_container_file(
             **kwargs,
         )
         # get provider config
-        container_provider_config: Optional[BaseContainerConfig] = (
-            ProviderConfigManager.get_provider_container_config(
-                provider=litellm.LlmProviders(custom_llm_provider),
-            )
+        container_provider_config: Optional[
+            BaseContainerConfig
+        ] = ProviderConfigManager.get_provider_container_config(
+            provider=litellm.LlmProviders(custom_llm_provider),
         )
 
         if container_provider_config is None:

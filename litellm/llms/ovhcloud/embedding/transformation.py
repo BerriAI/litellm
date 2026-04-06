@@ -2,7 +2,6 @@
 This is OpenAI compatible - no transformation is applied
 
 """
-
 from typing import List, Optional, Union
 
 import httpx

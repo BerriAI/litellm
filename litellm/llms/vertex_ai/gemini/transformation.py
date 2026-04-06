@@ -3,7 +3,6 @@ Transformation logic from OpenAI format to Gemini format.
 
 Why separate file? Make it easy to see how transformation works
 """
-
 import json
 import os
 from typing import TYPE_CHECKING, Dict, List, Literal, Optional, Tuple, Union, cast

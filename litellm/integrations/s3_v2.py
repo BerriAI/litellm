@@ -578,11 +578,9 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
             signed_headers = dict(aws_request.headers.items())
 
             httpx_client = _get_httpx_client(
-                params=(
-                    {"ssl_verify": self.s3_verify}
-                    if self.s3_verify is not None
-                    else None
-                )
+                params={"ssl_verify": self.s3_verify}
+                if self.s3_verify is not None
+                else None
             )
             # Make the request
             response = httpx_client.put(url, data=json_string, headers=signed_headers)

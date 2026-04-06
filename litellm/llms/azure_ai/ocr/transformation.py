@@ -1,7 +1,6 @@
 """
 Azure AI OCR transformation implementation.
 """
-
 from typing import Dict, Optional
 
 from litellm._logging import verbose_logger

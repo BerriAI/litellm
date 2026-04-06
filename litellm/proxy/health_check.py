@@ -242,9 +242,7 @@ async def _perform_health_check(
                 cleaned["model_id"] = _model_id
                 if isinstance(is_healthy, Exception):
                     exceptions_by_model_id[_model_id] = is_healthy
-                    cleaned["exception_status"] = getattr(
-                        is_healthy, "status_code", 500
-                    )
+                    cleaned["exception_status"] = getattr(is_healthy, "status_code", 500)
             unhealthy_endpoints.append(cleaned)
 
     return healthy_endpoints, unhealthy_endpoints, exceptions_by_model_id

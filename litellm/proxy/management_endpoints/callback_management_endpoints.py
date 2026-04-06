@@ -1,7 +1,6 @@
 """
 Endpoints for managing callbacks
 """
-
 import json
 import os
 

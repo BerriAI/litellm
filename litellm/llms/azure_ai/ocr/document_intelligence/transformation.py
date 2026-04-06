@@ -7,7 +7,6 @@ This implementation transforms between Mistral OCR format and Azure Document Int
 Note: Azure Document Intelligence API is async - POST returns 202 Accepted with Operation-Location header.
 The operation location must be polled until the analysis completes.
 """
-
 import asyncio
 import re
 import time

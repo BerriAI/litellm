@@ -3,7 +3,6 @@ Calls Serper's /search endpoint to search Google.
 
 Serper API Reference: https://serper.dev
 """
-
 from typing import Dict, List, Optional, TypedDict, Union
 
 import httpx

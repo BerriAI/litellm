@@ -3,7 +3,6 @@ Calls DuckDuckGo's Instant Answer API to search the web.
 
 DuckDuckGo API Reference: https://duckduckgo.com/api
 """
-
 from typing import Dict, List, Literal, Optional, TypedDict, Union
 from urllib.parse import urlencode
 

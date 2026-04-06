@@ -1,7 +1,6 @@
 """
 Constants for Copilot integration
 """
-
 from typing import Optional, Union
 from uuid import uuid4
 

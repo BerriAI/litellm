@@ -3,7 +3,6 @@ Calls Parallel AI's /search endpoint to search the web.
 
 Parallel AI API Reference: https://docs.parallel.ai/api-reference/search-and-extract-api-beta/search
 """
-
 from typing import Dict, List, Optional, TypedDict, Union
 
 import httpx

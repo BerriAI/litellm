@@ -1,7 +1,6 @@
 """
 Base class for in memory buffer for database transactions
 """
-
 import asyncio
 from typing import Optional
 
