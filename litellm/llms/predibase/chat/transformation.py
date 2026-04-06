@@ -13,7 +13,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
 )
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.types.llms.openai import AllMessageValues
-from litellm.utils import Choices, Message, ModelResponse, Usage
+from litellm.types.utils import Choices, Message, ModelResponse, Usage
 
 from ..common_utils import PredibaseError
 
@@ -139,7 +139,7 @@ class PredibaseConfig(BaseConfig):
         messages: List[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: str,
+        encoding: Any,
         api_key: Optional[str] = None,
         json_mode: Optional[bool] = None,
     ) -> ModelResponse:
@@ -219,6 +219,7 @@ class PredibaseConfig(BaseConfig):
         try:
             prompt_tokens = litellm.token_counter(messages=messages)
         except Exception:
+            # Keep usage calculation non-blocking if token counting fails.
             pass
         output_text = model_response["choices"][0]["message"].get("content", "")
         if output_text is not None and len(output_text) > 0:
@@ -230,6 +231,7 @@ class PredibaseConfig(BaseConfig):
                     )
                 )
             except Exception:
+                # Keep usage calculation non-blocking if encoding fails.
                 pass
         else:
             completion_tokens = 0

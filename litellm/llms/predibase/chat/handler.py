@@ -150,6 +150,7 @@ class PredibaseChatCompletion:
                     logger_fn=logger_fn,
                     headers=headers,
                     timeout=timeout,
+                    predibase_config=predibase_config,
                 )  # type: ignore
 
         ### SYNC STREAMING
@@ -206,7 +207,10 @@ class PredibaseChatCompletion:
         litellm_params=None,
         logger_fn=None,
         headers={},
+        predibase_config=None,
     ) -> ModelResponse:
+        if predibase_config is None:
+            predibase_config = litellm.PredibaseConfig()
         async_handler = get_async_httpx_client(
             llm_provider=litellm.LlmProviders.PREDIBASE,
             params={"timeout": timeout},
@@ -229,7 +233,7 @@ class PredibaseChatCompletion:
             raise PredibaseError(
                 status_code=500, message="{}".format(str(e))
             )  # don't use verbose_logger.exception, if exception is raised
-        return litellm.PredibaseConfig().transform_response(
+        return predibase_config.transform_response(
             model=model,
             raw_response=response,
             model_response=model_response,
