@@ -23,8 +23,10 @@ from litellm.utils import (
     ProviderConfigManager,
     TextCompletionStreamWrapper,
     _check_provider_match,
+    _invalidate_model_cost_lowercase_map,
     _is_streaming_request,
     get_llm_provider,
+    get_model_info,
     get_optional_params_image_gen,
     is_cached_message,
 )
@@ -461,8 +463,6 @@ def test_anthropic_web_search_in_model_info():
         "anthropic/claude-sonnet-4-5-20250929",
     ]
     for model in supported_models:
-        from litellm.utils import get_model_info
-
         model_info = get_model_info(model)
         assert model_info is not None
         assert (
@@ -471,6 +471,23 @@ def test_anthropic_web_search_in_model_info():
         assert (
             model_info["search_context_cost_per_query"] is not None
         ), f"Model {model} should have a search context cost per query"
+
+
+def test_anthropic_prefixed_dated_snapshot_uses_dated_model_cost_entry():
+    """
+    Regression: with explicit custom_llm_provider=anthropic, prefixed
+    anthropic/claude-...-YYYYMMDD must resolve to the dated model_cost key when
+    present, not the undated alias (snapshot-specific metadata differs).
+    """
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    _invalidate_model_cost_lowercase_map()
+
+    model_info = get_model_info(
+        model="anthropic/claude-sonnet-4-5-20250929",
+        custom_llm_provider="anthropic",
+    )
+    assert model_info["supports_web_search"] is True
 
 
 def test_cohere_embedding_optional_params():

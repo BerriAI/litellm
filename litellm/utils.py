@@ -5294,8 +5294,10 @@ def _strip_model_name(model: str, custom_llm_provider: Optional[str]) -> str:
     elif custom_llm_provider in ("anthropic", "azure_ai"):
         # Anthropic Messages API returns dated snapshot ids (e.g. claude-sonnet-4-6-20260219),
         # especially with betas like context-1m. model_cost keys are usually undated
-        # (claude-sonnet-4-6). Strip -YYYYMMDD only when the undated id exists in model_cost.
-        if re.search(r"-\d{8}$", model):
+        # (claude-sonnet-4-6). Strip -YYYYMMDD only when this dated id is not in model_cost
+        # but the undated id is — otherwise we would shadow explicit snapshot keys (e.g.
+        # claude-sonnet-4-5-20250929 vs claude-sonnet-4-5) and lose snapshot-specific metadata.
+        if re.search(r"-\d{8}$", model) and _get_model_cost_key(model) is None:
             stripped = re.sub(r"-\d{8}$", "", model)
             if custom_llm_provider == "anthropic":
                 if _get_model_cost_key(stripped) is not None:
