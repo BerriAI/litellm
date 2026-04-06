@@ -406,6 +406,36 @@
         "field_type": "password",
         "options": null,
         "default_value": null
+      },
+      {
+        "key": "tenant_id",
+        "label": "Tenant ID",
+        "placeholder": "Enter your Azure AD tenant ID",
+        "tooltip": "Entra ID (Service Principal) auth. Provide tenant id, client id, and client secret together as an alternative to api key.",
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "client_id",
+        "label": "Client ID",
+        "placeholder": "Enter your Service Principal client ID",
+        "tooltip": "Entra ID (Service Principal) auth. Provide tenant id, client id, and client secret together as an alternative to api key.",
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "client_secret",
+        "label": "Client Secret",
+        "placeholder": "Enter your Service Principal client secret",
+        "tooltip": "Entra ID (Service Principal) auth. Provide tenant id, client id, and client secret together as an alternative to api key.",
+        "required": false,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
       }
     ],
     "default_model_placeholder": "azure/my-deployment"

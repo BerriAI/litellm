@@ -144,7 +144,6 @@ const menuGroups: MenuGroup[] = [
         page: "guardrails",
         label: "Guardrails",
         icon: <SafetyOutlined />,
-        roles: all_admin_roles,
       },
       {
         key: "policies",

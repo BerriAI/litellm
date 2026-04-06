@@ -995,6 +995,70 @@ async def test_bedrock_handler_httpx_error_status_code_propagation():
 
 
 @pytest.mark.asyncio
+async def test_token_counter_httpx_status_error_raises_proxy_exception():
+    """
+    When provider_counter.count_tokens() raises httpx.HTTPStatusError,
+    the token_counter endpoint should catch it and raise a ProxyException
+    with the upstream status code and error message.
+    """
+
+    upstream_status = 429
+    upstream_message = "Rate limit exceeded"
+    response = httpx.Response(
+        status_code=upstream_status,
+        request=httpx.Request("POST", "https://provider.example.com/count"),
+    )
+    http_error = httpx.HTTPStatusError(
+        message=upstream_message,
+        request=response.request,
+        response=response,
+    )
+
+    mock_counter = MagicMock()
+    mock_counter.should_use_token_counting_api.return_value = True
+    mock_counter.count_tokens = AsyncMock(side_effect=http_error)
+
+    # Save originals
+    original_get_provider_token_counter = litellm.proxy.proxy_server._get_provider_token_counter
+    original_router = litellm.proxy.proxy_server.llm_router
+
+    try:
+        def mock_get_provider_token_counter(deployment, model_to_use):
+            return (mock_counter, "claude-4-6-sonnet", "vertex_ai")
+
+        litellm.proxy.proxy_server._get_provider_token_counter = mock_get_provider_token_counter
+
+        mock_router = MagicMock()
+        mock_router.async_get_available_deployment = AsyncMock(
+            return_value={
+                "litellm_params": {
+                    "model": "vertex_ai/claude-4-6-sonnet",
+                    "api_key": "fake-key",
+                },
+                "model_info": {},
+            }
+        )
+        litellm.proxy.proxy_server.llm_router = mock_router
+
+        with pytest.raises(ProxyException) as exc_info:
+            await token_counter(
+                request=TokenCountRequest(
+                    model="claude-4-6-sonnet",
+                    messages=[{"role": "user", "content": "hello"}],
+                ),
+                call_endpoint=True,
+            )
+
+        assert exc_info.value.code == str(upstream_status)
+        assert upstream_message in exc_info.value.message
+        assert exc_info.value.type == "token_counting_error"
+        assert exc_info.value.param == "model"
+    finally:
+        litellm.proxy.proxy_server._get_provider_token_counter = original_get_provider_token_counter
+        litellm.proxy.proxy_server.llm_router = original_router
+
+
+@pytest.mark.asyncio
 async def test_proxy_token_counter_error_raises_exception_when_disabled():
     """
     Test that proxy token_counter raises ProxyException when disable_token_counter=True

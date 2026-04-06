@@ -479,3 +479,67 @@ async def test_track_cost_callback_skips_for_falsy_model_and_no_slo(model_value)
         )
 
         mock_proxy_logging.failed_tracking_alert.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_async_post_call_failure_hook_uses_actual_start_time():
+    """
+    Verify that failed requests record the actual request start time
+    instead of datetime.now(), so the spend log shows the real duration.
+
+    Previously both start_time and end_time were set to datetime.now()
+    at failure-logging time, resulting in duration=0 for all failures.
+    """
+    from datetime import timedelta
+
+    logger = _ProxyDBLogger()
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test_api_key",
+        user_id="test_user_id",
+        team_id="test_team_id",
+        org_id="test_org_id",
+        end_user_id="test_end_user_id",
+    )
+
+    # Simulate a request that started 60 seconds ago
+    simulated_start = datetime.now() - timedelta(seconds=60)
+
+    mock_logging_obj = MagicMock()
+    mock_logging_obj.start_time = simulated_start
+    mock_logging_obj.model_call_details = {}
+    mock_logging_obj.litellm_trace_id = None
+
+    request_data = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "metadata": {},
+        "proxy_server_request": {},
+        "litellm_logging_obj": mock_logging_obj,
+    }
+
+    original_exception = Exception("Timeout error")
+
+    with patch(
+        "litellm.proxy.db.db_spend_update_writer.DBSpendUpdateWriter.update_database",
+        new_callable=AsyncMock,
+    ) as mock_update_database:
+        await logger.async_post_call_failure_hook(
+            request_data=request_data,
+            original_exception=original_exception,
+            user_api_key_dict=user_api_key_dict,
+        )
+
+        mock_update_database.assert_called_once()
+        call_args = mock_update_database.call_args[1]
+
+        # start_time should be the simulated start, not datetime.now()
+        assert call_args["start_time"] == simulated_start
+
+        # end_time should be close to now (within a few seconds)
+        time_diff = (datetime.now() - call_args["end_time"]).total_seconds()
+        assert time_diff < 5, f"end_time should be close to now, was {time_diff}s ago"
+
+        # Duration should be approximately 60 seconds, not 0
+        duration = (call_args["end_time"] - call_args["start_time"]).total_seconds()
+        assert duration >= 55, f"Duration should be ~60s, got {duration}s"

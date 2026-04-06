@@ -432,6 +432,7 @@ class LiteLLMRoutes(enum.Enum):
         "/mcp-rest/tools/list",
         "/mcp-rest/tools/call",
         "/v1/mcp/server",
+        "/v1/mcp/server/{path:path}",
     ]
 
     agent_routes = [
@@ -666,6 +667,9 @@ class LiteLLMRoutes(enum.Enum):
         "/invitation/delete",
         # Team guardrail submission - requires team-scoped key; endpoint enforces team_id
         "/guardrails/register",
+        # Team guardrail submissions - endpoint scopes results to caller's teams (non-admin)
+        "/guardrails/submissions",
+        "/guardrails/submissions/{guardrail_id}",
     ]  # routes that manage their own allowed/disallowed logic
 
     ## Org Admin Routes ##
@@ -857,6 +861,8 @@ class LiteLLM_ObjectPermissionBase(LiteLLMPydanticObjectBase):
     mcp_servers: Optional[List[str]] = None
     mcp_access_groups: Optional[List[str]] = None
     mcp_tool_permissions: Optional[Dict[str, List[str]]] = None
+    mcp_toolsets: Optional[List[str]] = None
+    blocked_tools: Optional[List[str]] = None
     vector_stores: Optional[List[str]] = None
     agents: Optional[List[str]] = None
     agent_access_groups: Optional[List[str]] = None
@@ -1659,6 +1665,9 @@ class TeamBase(LiteLLMPydanticObjectBase):
     blocked: bool = False
     router_settings: Optional[dict] = None
     access_group_ids: Optional[List[str]] = None
+    default_team_member_models: Optional[List[str]] = (
+        None  # default allowed_models seeded onto new team members
+    )
 
 
 class NewTeamRequest(TeamBase):
@@ -1754,6 +1763,8 @@ class UpdateTeamRequest(LiteLLMPydanticObjectBase):
     access_group_ids: Optional[List[str]] = None
     budget_limits: Optional[List[BudgetLimitEntry]] = (
         None  # multiple concurrent budget windows
+    default_team_member_models: Optional[List[str]] = (
+        None  # default allowed_models seeded onto new team members
     )
 
 
@@ -1866,6 +1877,8 @@ class LiteLLM_ObjectPermissionTable(LiteLLMPydanticObjectBase):
     vector_stores: Optional[List[str]] = []
     agents: Optional[List[str]] = []
     agent_access_groups: Optional[List[str]] = []
+    mcp_toolsets: Optional[List[str]] = None
+    blocked_tools: Optional[List[str]] = []
 
 
 class LiteLLM_TeamTable(TeamBase):
@@ -1955,6 +1968,9 @@ class LiteLLM_BudgetTable(LiteLLMPydanticObjectBase):
     rpm_limit: Optional[int] = None
     model_max_budget: Optional[dict] = None
     budget_duration: Optional[str] = None
+    allowed_models: Optional[List[str]] = (
+        None  # per-member model scope; empty = inherit team models
+    )
 
     model_config = ConfigDict(protected_namespaces=())
 
@@ -2774,6 +2790,8 @@ class NewProjectRequest(LiteLLM_BudgetTable):
     budget_id: Optional[str] = None
     metadata: Optional[dict] = None
     tags: Optional[List[str]] = None
+    guardrails: Optional[List[str]] = None
+    policies: Optional[List[str]] = None
     models: List[str] = []
     model_rpm_limit: Optional[dict] = None
     model_tpm_limit: Optional[dict] = None
@@ -2806,6 +2824,8 @@ class UpdateProjectRequest(LiteLLM_BudgetTable):
     team_id: Optional[str] = None
     metadata: Optional[dict] = None
     tags: Optional[List[str]] = None
+    guardrails: Optional[List[str]] = None
+    policies: Optional[List[str]] = None
     models: Optional[List[str]] = None
     model_rpm_limit: Optional[dict] = None
     model_tpm_limit: Optional[dict] = None
@@ -3744,6 +3764,10 @@ class TeamMemberAddRequest(MemberAddRequest):
         default=None,
         description="Maximum budget allocated to this user within the team. If not set, user has unlimited budget within team limits",
     )
+    allowed_models: Optional[List[str]] = Field(
+        default=None,
+        description="List of models this team member can access. If not set, inherits the team's default_team_member_models or all team models.",
+    )
 
 
 class TeamMemberDeleteRequest(MemberDeleteRequest):
@@ -3759,6 +3783,10 @@ class TeamMemberUpdateRequest(TeamMemberDeleteRequest):
     rpm_limit: Optional[int] = Field(
         default=None, description="Requests per minute limit for this team member"
     )
+    allowed_models: Optional[List[str]] = Field(
+        default=None,
+        description="List of models this team member can access. Pass an empty list to remove per-member model restrictions.",
+    )
 
 
 class TeamMemberUpdateResponse(MemberUpdateResponse):
@@ -3766,6 +3794,7 @@ class TeamMemberUpdateResponse(MemberUpdateResponse):
     max_budget_in_team: Optional[float] = None
     tpm_limit: Optional[int] = None
     rpm_limit: Optional[int] = None
+    allowed_models: Optional[List[str]] = None
 
 
 class TeamModelAddRequest(BaseModel):
@@ -3826,6 +3855,10 @@ class OrganizationMemberUpdateResponse(MemberUpdateResponse):
 
 class TeamInfoResponseObjectTeamTable(LiteLLM_TeamTable):
     team_member_budget_table: Optional[LiteLLM_BudgetTable] = None
+    # Resources inherited from access groups (separate from direct assignments)
+    access_group_models: Optional[List[str]] = None
+    access_group_mcp_server_ids: Optional[List[str]] = None
+    access_group_agent_ids: Optional[List[str]] = None
 
 
 class TeamInfoResponseObject(TypedDict):

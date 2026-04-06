@@ -468,6 +468,21 @@ async def common_checks(  # noqa: PLR0915
                     code=status.HTTP_401_UNAUTHORIZED,
                 )
 
+    # 2.2. If team member has per-member model scope, enforce it
+    if _model and team_object and valid_token and valid_token.user_id:
+        with tracer.trace(
+            "litellm.proxy.auth.common_checks.check_team_member_model_access"
+        ):
+            await _check_team_member_model_access(
+                model=_model,
+                team_object=team_object,
+                valid_token=valid_token,
+                llm_router=llm_router,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+
     # Require trace id for agent keys when agent has require_trace_id_on_calls_by_agent
     if valid_token is not None and valid_token.agent_id:
         from litellm.proxy.agent_endpoints.agent_registry import global_agent_registry
@@ -3155,6 +3170,58 @@ async def _check_team_member_budget(
                     max_budget=team_member_budget,
                     message=f"Budget has been exceeded! User={valid_token.user_id} in Team={team_object.team_id} Current cost: {team_member_spend}, Max budget: {team_member_budget}",
                 )
+
+
+async def _check_team_member_model_access(
+    model: Union[str, List[str]],
+    team_object: LiteLLM_TeamTable,
+    valid_token: UserAPIKeyAuth,
+    llm_router: Optional[Router],
+    prisma_client: Optional["PrismaClient"],
+    user_api_key_cache: DualCache,
+    proxy_logging_obj: ProxyLogging,
+) -> None:
+    """
+    Check if a team member's per-member model scope allows access to the requested model.
+
+    Only enforced when the member's budget table has a non-empty allowed_models list.
+    If allowed_models is empty or absent, the team-level models list applies (no extra restriction).
+    """
+    if valid_token.user_id is None or team_object.team_id is None:
+        return
+
+    team_membership = await get_team_membership(
+        user_id=valid_token.user_id,
+        team_id=team_object.team_id,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+
+    if (
+        team_membership is None
+        or team_membership.litellm_budget_table is None
+        or not team_membership.litellm_budget_table.allowed_models
+    ):
+        return  # no per-member restriction — inherit team-level check
+
+    member_allowed_models: List[str] = (
+        team_membership.litellm_budget_table.allowed_models
+    )
+    try:
+        _can_object_call_model(
+            model=model,
+            llm_router=llm_router,
+            models=member_allowed_models,
+            object_type="team",
+        )
+    except ProxyException:
+        raise ProxyException(
+            message=f"Team member not allowed to access model. User={valid_token.user_id}, Team={team_object.team_id}, Model={model}. Allowed member models = {member_allowed_models}",
+            type=ProxyErrorTypes.team_model_access_denied,
+            param="model",
+            code=status.HTTP_401_UNAUTHORIZED,
+        )
 
 
 async def _team_max_budget_check(

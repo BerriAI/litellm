@@ -98,4 +98,20 @@ describe("buildProjectApiParams", () => {
     });
     expect(result).not.toHaveProperty("metadata");
   });
+
+  it("should include guardrails as a top-level field when provided", () => {
+    const result = buildProjectApiParams({
+      ...baseValues,
+      guardrails: ["pii-check", "content-filter"],
+    });
+    expect(result.guardrails).toEqual(["pii-check", "content-filter"]);
+  });
+
+  it("should omit guardrails when the array is empty", () => {
+    const result = buildProjectApiParams({
+      ...baseValues,
+      guardrails: [],
+    });
+    expect(result).not.toHaveProperty("guardrails");
+  });
 });

@@ -189,6 +189,26 @@ async def test_tag_filtering_disabled_returns_all_deployments():
 
 
 @pytest.mark.asyncio
+async def test_empty_healthy_deployments_with_request_tags_returns_empty_list():
+    """
+    With an empty candidate list, return [] even when the request includes metadata tags.
+
+    Tag-based filtering runs only against non-empty healthy_deployments; an empty list is
+    returned unchanged for the router's standard handling.
+    """
+    router = _make_router_mock()
+    result = await get_deployments_for_tag(
+        llm_router_instance=router,
+        model="gpt-5.2",
+        healthy_deployments=[],
+        request_kwargs={
+            "metadata": {"tags": ["client_id:xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"]}
+        },
+    )
+    assert result == []
+
+
+@pytest.mark.asyncio
 async def test_explicit_tag_match_takes_precedence_over_regex():
     """A deployment with both tags and tag_regex: exact tag match fires first."""
     deployment_with_both = {
