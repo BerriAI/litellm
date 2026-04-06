@@ -817,6 +817,7 @@ async def get_guardrail_submission(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """Get a single guardrail submission by id (admin only)."""
+
     from litellm.proxy.proxy_server import prisma_client
 
     if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
