@@ -279,7 +279,7 @@ def create_container(
         # Set the correct call type for container creation
         litellm_logging_obj.call_type = CallTypes.create_container.value
 
-        return base_llm_http_handler.container_create_handler(
+        container_obj = base_llm_http_handler.container_create_handler(
             name=name,
             container_create_request_params=container_create_request_params,
             container_provider_config=container_provider_config,
@@ -289,6 +289,17 @@ def create_container(
             timeout=timeout or DEFAULT_REQUEST_TIMEOUT,
             _is_async=_is_async,
         )
+        
+        # Encode container_id with provider/model metadata for routing
+        if isinstance(container_obj, ContainerObject):
+            model_id = kwargs.get("litellm_metadata", {}).get("model_info", {}).get("id")
+            container_obj = ContainerRequestUtils.encode_container_id_in_response(
+                response_obj=container_obj,
+                custom_llm_provider=custom_llm_provider,
+                model_id=model_id,
+            )
+        
+        return container_obj
 
     except Exception as e:
         raise litellm.exception_type(
@@ -683,7 +694,7 @@ def retrieve_container(
         # Set the correct call type
         litellm_logging_obj.call_type = CallTypes.retrieve_container.value
 
-        return base_llm_http_handler.container_retrieve_handler(
+        container_obj = base_llm_http_handler.container_retrieve_handler(
             container_id=original_container_id,  # Use decoded original ID
             container_provider_config=container_provider_config,
             litellm_params=litellm_params,
@@ -693,6 +704,17 @@ def retrieve_container(
             timeout=timeout or DEFAULT_REQUEST_TIMEOUT,
             _is_async=_is_async,
         )
+        
+        # Encode container_id with provider/model metadata for routing
+        if isinstance(container_obj, ContainerObject):
+            model_id = kwargs.get("litellm_metadata", {}).get("model_info", {}).get("id")
+            container_obj = ContainerRequestUtils.encode_container_id_in_response(
+                response_obj=container_obj,
+                custom_llm_provider=custom_llm_provider,
+                model_id=model_id,
+            )
+        
+        return container_obj
 
     except Exception as e:
         raise litellm.exception_type(
@@ -879,7 +901,7 @@ def delete_container(
         # Set the correct call type
         litellm_logging_obj.call_type = CallTypes.delete_container.value
 
-        return base_llm_http_handler.container_delete_handler(
+        delete_result = base_llm_http_handler.container_delete_handler(
             container_id=original_container_id,  # Use decoded original ID
             container_provider_config=container_provider_config,
             litellm_params=litellm_params,
@@ -889,6 +911,17 @@ def delete_container(
             timeout=timeout or DEFAULT_REQUEST_TIMEOUT,
             _is_async=_is_async,
         )
+        
+        # Encode container_id in response with provider/model metadata for routing
+        if isinstance(delete_result, DeleteContainerResult):
+            model_id = kwargs.get("litellm_metadata", {}).get("model_info", {}).get("id")
+            delete_result = ContainerRequestUtils.encode_container_id_in_response(
+                response_obj=delete_result,
+                custom_llm_provider=custom_llm_provider,
+                model_id=model_id,
+            )
+        
+        return delete_result
 
     except Exception as e:
         raise litellm.exception_type(

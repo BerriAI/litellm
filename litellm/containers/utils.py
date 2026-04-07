@@ -1,10 +1,12 @@
-from typing import Dict
+from typing import Any, Dict, Optional, TypeVar
 
 from litellm.llms.base_llm.containers.transformation import BaseContainerConfig
 from litellm.types.containers.main import (
     ContainerCreateOptionalRequestParams,
     ContainerListOptionalRequestParams,
 )
+
+T = TypeVar("T")
 
 
 class ContainerRequestUtils:
@@ -68,3 +70,35 @@ class ContainerRequestUtils:
                 container_list_optional_params[param] = passed_params[param]  # type: ignore
 
         return container_list_optional_params
+
+    @staticmethod
+    def encode_container_id_in_response(
+        response_obj: T,
+        custom_llm_provider: Optional[str],
+        model_id: Optional[str],
+    ) -> T:
+        """
+        Encode container_id in response object with provider/model metadata for routing.
+        
+        This mirrors the responses API pattern where response IDs are encoded with
+        routing metadata so follow-up calls can route to the correct provider.
+        
+        Args:
+            response_obj: Response object with an `id` attribute (ContainerObject, DeleteContainerResult, etc.)
+            custom_llm_provider: Provider name (e.g., "azure", "openai")
+            model_id: Model ID from litellm_metadata
+            
+        Returns:
+            The same response object with encoded container_id
+        """
+        if response_obj and hasattr(response_obj, "id"):
+            from litellm.responses.utils import ResponsesAPIRequestUtils
+            
+            encoded_id = ResponsesAPIRequestUtils._build_container_id(
+                custom_llm_provider=custom_llm_provider,
+                model_id=model_id,
+                container_id=response_obj.id,
+            )
+            response_obj.id = encoded_id
+        
+        return response_obj
