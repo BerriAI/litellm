@@ -502,9 +502,7 @@ def _enforce_upperbound_key_params(
 
     for elem in data:
         key, value = elem
-        upperbound_value = getattr(
-            litellm.upperbound_key_generate_params, key, None
-        )
+        upperbound_value = getattr(litellm.upperbound_key_generate_params, key, None)
         if upperbound_value is not None:
             if value is None:
                 if fill_defaults:
@@ -524,9 +522,7 @@ def _enforce_upperbound_key_params(
                             },
                         )
                 elif key in ["budget_duration", "duration"]:
-                    upperbound_duration = duration_in_seconds(
-                        duration=upperbound_value
-                    )
+                    upperbound_duration = duration_in_seconds(duration=upperbound_value)
                     if value == "-1":
                         user_duration = float("inf")
                     else:
@@ -1759,9 +1755,7 @@ async def _process_single_key_update(
         decision = result.get("decision", True)
         message = result.get("message", "Authentication Failed - Custom Auth Rule")
         if not decision:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN, detail=message
-            )
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=message)
 
     # Enforce upperbound key params on update (don't fill defaults)
     _enforce_upperbound_key_params(update_key_request, fill_defaults=False)
@@ -2638,22 +2632,39 @@ async def info_key_fn_v2(
                 detail={"message": "Malformed request. No keys passed in."},
             )
 
-        key_info = await prisma_client.get_data(
-            token=data.keys, table_name="key", query_type="find_all"
-        )
-        if key_info is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail={"message": "No keys found"},
+        # Resolve key_aliases to tokens so we never pass token=None (unbounded query)
+        tokens_to_query = list(data.keys) if data.keys else []
+        if data.key_aliases:
+            alias_rows = await prisma_client.db.litellm_verificationtoken.find_many(
+                where={"key_alias": {"in": data.key_aliases}},
+                include={"litellm_budget_table": True},
             )
+            alias_tokens = [row.token for row in alias_rows if row.token]
+            tokens_to_query.extend(alias_tokens)
+
+        if not tokens_to_query:
+            return {"key": data.keys, "info": []}
+
+        key_info = await prisma_client.get_data(
+            token=tokens_to_query, table_name="key", query_type="find_all"
+        )
+        if not key_info:
+            return {"key": data.keys, "info": []}
+
         filtered_key_info = []
         for k in key_info:
+            if not await _can_user_query_key_info(
+                user_api_key_dict=user_api_key_dict,
+                key=k.token,
+                key_info=k,
+            ):
+                continue
             try:
-                k = k.model_dump()  # noqa
+                k_dict = k.model_dump()
             except Exception:
-                # if using pydantic v1
-                k = k.dict()
-            filtered_key_info.append(k)
+                k_dict = k.dict()
+            k_dict.pop("token", None)
+            filtered_key_info.append(k_dict)
         return {"key": data.keys, "info": filtered_key_info}
 
     except Exception as e:
