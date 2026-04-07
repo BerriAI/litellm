@@ -24,21 +24,21 @@ import { Button as Button2, Form, Input, Modal, Select, Typography } from "antd"
 import EmailSettings from "./email_settings";
 import NotificationsManager from "./molecules/notifications_manager";
 
-const { Title, Paragraph } = Typography;
+const { Title } = Typography;
 
 import FormItem from "antd/es/form/FormItem";
 import AlertingSettings from "./alerting/alerting_settings";
 import CloudZeroCostTracking from "./CloudZeroCostTracking/CloudZeroCostTracking";
 import DeleteResourceModal from "./common_components/DeleteResourceModal";
 import {
-  deleteCallback,
-  getCallbackConfigsCall,
-  getCallbacksCall,
   serviceHealthCheck,
   setCallbacksCall,
 } from "./networking";
-import { LoggingCallbacksTable } from "./Settings/LoggingAndAlerts/LoggingCallbacks/LoggingCallbacksTable";
-import { AlertingObject } from "./Settings/LoggingAndAlerts/LoggingCallbacks/types";
+import { useCallbacks, useCallbackConfigs } from "@/app/(dashboard)/hooks/callbacks/useCallbacks";
+import { useUpdateCallback } from "@/app/(dashboard)/hooks/callbacks/useUpdateCallback";
+import { useDeleteCallback } from "@/app/(dashboard)/hooks/callbacks/useDeleteCallback";
+import { CALLBACK_MODES, LoggingCallbacksTable } from "./Settings/LoggingAndAlerts/LoggingCallbacks/LoggingCallbacksTable";
+import { AlertingObject, CallbackConfig } from "./Settings/LoggingAndAlerts/LoggingCallbacks/types";
 import { parseErrorMessage } from "./shared/errorUtils";
 interface SettingsPageProps {
   accessToken: string | null;
@@ -47,17 +47,11 @@ interface SettingsPageProps {
   premiumUser: boolean;
 }
 
-interface genericCallbackParams {
-  litellm_callback_name: string; // what to send in request
-  ui_callback_name: string; // what to show on UI
-  litellm_callback_params: string[] | null; // known required params for this callback
-}
-
 const assetsLogoFolder = "../ui/assets/logos/";
 
 interface DynamicParamsFieldsProps {
   params: string[];
-  callbackConfigs: any[];
+  callbackConfigs: CallbackConfig[];
   selectedCallback: string | null;
 }
 
@@ -124,7 +118,7 @@ const DynamicParamsFields: React.FC<DynamicParamsFieldsProps> = ({ params, callb
 
 // Shared component for rendering callback selector
 interface CallbackSelectorProps {
-  callbackConfigs: any[];
+  callbackConfigs: CallbackConfig[];
   selectedCallback: string | null;
   onCallbackChange: (value: string) => void;
   disabled?: boolean;
@@ -188,8 +182,8 @@ const CallbackSelector: React.FC<CallbackSelectorProps> = ({
 // Shared helper function to get dynamic params for a callback
 const getDynamicParamsForCallback = (
   callbackName: string | null,
-  callbackConfigs: any[],
-  fallbackVariables?: Record<string, any>,
+  callbackConfigs: CallbackConfig[],
+  fallbackVariables?: Record<string, string | null>,
 ): string[] => {
   if (!callbackName) {
     return fallbackVariables ? Object.keys(fallbackVariables) : [];
@@ -204,19 +198,26 @@ const getDynamicParamsForCallback = (
 };
 
 // Shared helper function to build callback payload
-const buildCallbackPayload = (formValues: Record<string, any>, callbackName: string) => {
+const buildCallbackPayload = (formValues: Record<string, any>, callbackName: string, mode: string = "success") => {
+  const { callback_mode, callback, ...envVars } = formValues;
+  const litellm_settings: Record<string, string[]> = {};
+
+  if (mode === "success") {
+    litellm_settings.success_callback = [callbackName];
+  } else if (mode === "failure") {
+    litellm_settings.failure_callback = [callbackName];
+  } else if (mode === "success_and_failure") {
+    litellm_settings.success_callback = [callbackName];
+    litellm_settings.failure_callback = [callbackName];
+  }
+
   return {
-    environment_variables: formValues,
-    litellm_settings: {
-      success_callback: [callbackName],
-    },
+    environment_variables: envVars,
+    litellm_settings,
   };
 };
 
 const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, premiumUser }) => {
-  const [callbacks, setCallbacks] = useState<AlertingObject[]>([]);
-  const [alerts, setAlerts] = useState<any[]>([]);
-  const [isModalVisible, setIsModalVisible] = useState(false);
   const [addForm] = Form.useForm();
   const [editForm] = Form.useForm();
   const [selectedCallback, setSelectedCallback] = useState<string | null>(null);
@@ -225,40 +226,31 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
   const [activeAlerts, setActiveAlerts] = useState<string[]>([]);
 
   const [showAddCallbacksModal, setShowAddCallbacksModal] = useState(false);
-  const [callbackConfigs, setCallbackConfigs] = useState<any[]>([]);
-  const [allCallbacks, setAllCallbacks] = useState<
-    Record<
-      string,
-      {
-        litellm_callback_name: string;
-        litellm_callback_params: string[];
-        ui_callback_name: string;
-      }
-    >
-  >({});
-
   const [selectedCallbackParams, setSelectedCallbackParams] = useState<string[]>([]);
-
   const [showEditCallback, setShowEditCallback] = useState(false);
-  const [selectedEditCallback, setSelectedEditCallback] = useState<any | null>(null);
+  const [selectedEditCallback, setSelectedEditCallback] = useState<AlertingObject | null>(null);
   const [showDeleteConfirmModal, setShowDeleteConfirmModal] = useState(false);
-  const [callbackToDelete, setCallbackToDelete] = useState<any | null>(null);
-  const [isUpdatingCallback, setIsUpdatingCallback] = useState(false);
-  const [isAddingCallback, setIsAddingCallback] = useState(false);
-  const [isDeletingCallback, setIsDeletingCallback] = useState(false);
+  const [callbackToDelete, setCallbackToDelete] = useState<AlertingObject | null>(null);
 
+  // React Query hooks for callbacks
+  const { data: callbacksData } = useCallbacks();
+  const { data: callbackConfigs = [] } = useCallbackConfigs();
+  const updateCallbackMutation = useUpdateCallback();
+  const deleteCallbackMutation = useDeleteCallback();
+
+  const callbacks = callbacksData?.callbacks ?? [];
+  const allCallbacks = callbacksData?.availableCallbacks ?? {};
+  const alerts = callbacksData?.alerts ?? [];
+
+  // Derive alerting state from query data
   useEffect(() => {
-    if (!accessToken) {
-      return;
+    if (alerts.length > 0) {
+      const alertInfo = alerts[0];
+      setCatchAllWebhookURL(alertInfo.variables.SLACK_WEBHOOK_URL);
+      setActiveAlerts(alertInfo.active_alerts);
+      setAlertToWebhooks(alertInfo.alerts_to_webhook);
     }
-    getCallbackConfigsCall(accessToken)
-      .then((data) => {
-        setCallbackConfigs(data || []);
-      })
-      .catch((error) => {
-        NotificationsManager.fromBackend("Failed to load callback configs: " + parseErrorMessage(error));
-      });
-  }, [accessToken]);
+  }, [alerts]);
 
   useEffect(() => {
     if (showEditCallback && selectedEditCallback) {
@@ -268,6 +260,7 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
       editForm.setFieldsValue({
         ...normalized,
         callback: selectedEditCallback.name,
+        callback_mode: selectedEditCallback.type || "success",
       });
     }
   }, [showEditCallback, selectedEditCallback, editForm]);
@@ -290,88 +283,56 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
     region_outage_alerts: "Region Outage Alerts",
   };
 
-  useEffect(() => {
-    if (!accessToken || !userRole || !userID) {
-      return;
-    }
-    getCallbacksCall(accessToken, userID, userRole).then((data) => {
-      setCallbacks(data.callbacks);
-      setAllCallbacks(data.available_callbacks);
-      // setCallbacks(callbacks_data);
-
-      let alerts_data = data.alerts;
-      if (alerts_data) {
-        if (alerts_data.length > 0) {
-          let _alert_info = alerts_data[0];
-          let catch_all_webhook = _alert_info.variables.SLACK_WEBHOOK_URL;
-
-          let active_alerts = _alert_info.active_alerts;
-          setActiveAlerts(active_alerts);
-          setCatchAllWebhookURL(catch_all_webhook);
-          setAlertToWebhooks(_alert_info.alerts_to_webhook);
-        }
-      }
-
-      setAlerts(alerts_data);
-    });
-  }, [accessToken, userRole, userID]);
-
   const isAlertOn = (alertName: string) => {
     return activeAlerts && activeAlerts.includes(alertName);
   };
 
-  // Shared handler for callback form submission
-  const handleCallbackSubmit = async (formValues: Record<string, any>, callbackName: string, isEdit: boolean) => {
-    if (!accessToken) {
-      return;
-    }
+  const handleCallbackSubmit = async (formValues: Record<string, any>, callbackName: string, isEdit: boolean, mode: string = "success") => {
+    const payload = buildCallbackPayload(formValues, callbackName, mode);
 
-    if (isEdit) {
-      setIsUpdatingCallback(true);
-    } else {
-      setIsAddingCallback(true);
-    }
-
-    const payload = buildCallbackPayload(formValues, callbackName);
-
-    try {
-      await setCallbacksCall(accessToken, payload);
-      NotificationsManager.success(
-        isEdit ? "Callback updated successfully" : `Callback ${callbackName} added successfully`,
-      );
-
-      if (isEdit) {
-        setShowEditCallback(false);
-        editForm.resetFields();
-        setSelectedEditCallback(null);
-      } else {
-        setShowAddCallbacksModal(false);
-        addForm.resetFields();
-        setSelectedCallback(null);
-        setSelectedCallbackParams([]);
-      }
-
-      // Refresh the callbacks list
-      if (userID && userRole) {
-        const updatedData = await getCallbacksCall(accessToken, userID, userRole);
-        setCallbacks(updatedData.callbacks);
-      }
-    } catch (error) {
-      NotificationsManager.fromBackend(error);
-    } finally {
-      if (isEdit) {
-        setIsUpdatingCallback(false);
-      } else {
-        setIsAddingCallback(false);
-      }
-    }
+    updateCallbackMutation.mutate(
+      { payload },
+      {
+        onSuccess: () => {
+          NotificationsManager.success(
+            isEdit ? "Callback updated successfully" : `Callback ${callbackName} added successfully`,
+          );
+          if (isEdit) {
+            setShowEditCallback(false);
+            editForm.resetFields();
+            setSelectedEditCallback(null);
+          } else {
+            setShowAddCallbacksModal(false);
+            addForm.resetFields();
+            setSelectedCallback(null);
+            setSelectedCallbackParams([]);
+          }
+        },
+        onError: (error) => {
+          NotificationsManager.fromBackend(error);
+        },
+      },
+    );
   };
 
   const updateCallbackCall = async (formValues: Record<string, any>) => {
     if (!selectedEditCallback) {
       return;
     }
-    await handleCallbackSubmit(formValues, selectedEditCallback.name, true);
+    const newMode = formValues.callback_mode || selectedEditCallback.type || "success";
+    const oldMode = selectedEditCallback.type || "success";
+
+    // If mode changed, delete from old list(s) first, then add to new list
+    if (newMode !== oldMode) {
+      try {
+        await deleteCallbackMutation.mutateAsync(selectedEditCallback.name);
+      } catch {
+        NotificationsManager.fromBackend("Failed to remove callback from previous mode");
+        return;
+      }
+    }
+
+    await handleCallbackSubmit(formValues, selectedEditCallback.name, true, newMode);
   };
 
   const addNewCallbackCall = async (formValues: Record<string, any>) => {
@@ -379,7 +340,8 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
     if (!new_callback) {
       return;
     }
-    await handleCallbackSubmit(formValues, new_callback, false);
+    const mode = formValues.callback_mode || "success";
+    await handleCallbackSubmit(formValues, new_callback, false, mode);
   };
 
   const handleSelectedCallbackChange = (callbackName: string) => {
@@ -414,149 +376,27 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
     }
     NotificationsManager.success("Alerts updated successfully");
   };
-  const handleSaveChanges = (callback: any) => {
-    if (!accessToken) {
-      return;
-    }
-
-    const updatedVariables = Object.fromEntries(
-      Object.entries(callback.variables).map(([key, value]) => [
-        key,
-        (document.querySelector(`input[name="${key}"]`) as HTMLInputElement)?.value || value,
-      ]),
-    );
-
-    const payload = {
-      environment_variables: updatedVariables,
-      litellm_settings: {
-        success_callback: [callback.name],
-      },
-    };
-
-    try {
-      setCallbacksCall(accessToken, payload);
-    } catch (error) {
-      NotificationsManager.fromBackend(error);
-    }
-    NotificationsManager.success("Callback updated successfully");
-  };
-
-  const handleOk = () => {
-    if (!accessToken) {
-      return;
-    }
-    // Handle form submission
-    addForm.validateFields().then((values) => {
-      // Call API to add the callback
-      let payload;
-      if (values.callback === "langfuse" || values.callback === "langfuse_otel") {
-        payload = {
-          environment_variables: {
-            LANGFUSE_PUBLIC_KEY: values.langfusePublicKey,
-            LANGFUSE_SECRET_KEY: values.langfusePrivateKey,
-          },
-          litellm_settings: {
-            success_callback: [values.callback],
-          },
-        };
-        setCallbacksCall(accessToken, payload);
-        let newCallback: AlertingObject = {
-          name: values.callback,
-          variables: {
-            SLACK_WEBHOOK_URL: null,
-            LANGFUSE_HOST: null,
-            LANGFUSE_PUBLIC_KEY: values.langfusePublicKey,
-            LANGFUSE_SECRET_KEY: values.langfusePrivateKey,
-            OPENMETER_API_KEY: null,
-          },
-        };
-        // add langfuse to callbacks
-        setCallbacks(callbacks ? [...callbacks, newCallback] : [newCallback]);
-      } else if (values.callback === "slack") {
-        payload = {
-          general_settings: {
-            alerting: ["slack"],
-            alerting_threshold: 300,
-          },
-          environment_variables: {
-            SLACK_WEBHOOK_URL: values.slackWebhookUrl,
-          },
-        };
-        setCallbacksCall(accessToken, payload);
-
-        let newCallback: AlertingObject = {
-          name: values.callback,
-          variables: {
-            SLACK_WEBHOOK_URL: values.slackWebhookUrl,
-            LANGFUSE_HOST: null,
-            LANGFUSE_PUBLIC_KEY: null,
-            LANGFUSE_SECRET_KEY: null,
-            OPENMETER_API_KEY: null,
-          },
-        };
-        setCallbacks(callbacks ? [...callbacks, newCallback] : [newCallback]);
-      } else if (values.callback == "openmeter") {
-        payload = {
-          environment_variables: {
-            OPENMETER_API_KEY: values.openMeterApiKey,
-          },
-          litellm_settings: {
-            success_callback: [values.callback],
-          },
-        };
-        setCallbacksCall(accessToken, payload);
-        let newCallback: AlertingObject = {
-          name: values.callback,
-          variables: {
-            SLACK_WEBHOOK_URL: null,
-            LANGFUSE_HOST: null,
-            LANGFUSE_PUBLIC_KEY: null,
-            LANGFUSE_SECRET_KEY: null,
-            OPENMETER_API_KEY: values.openMeterAPIKey,
-          },
-        };
-        // add langfuse to callbacks
-        setCallbacks(callbacks ? [...callbacks, newCallback] : [newCallback]);
-      } else {
-        payload = {
-          error: "Invalid callback value",
-        };
-      }
-      setIsModalVisible(false);
-      addForm.resetFields();
-      setSelectedCallback(null);
-    });
-  };
 
   const handleDeleteCallback = (callback: any) => {
     setCallbackToDelete(callback);
     setShowDeleteConfirmModal(true);
   };
 
-  const confirmDeleteCallback = async () => {
-    if (!callbackToDelete || !accessToken) {
+  const confirmDeleteCallback = () => {
+    if (!callbackToDelete) {
       return;
     }
 
-    try {
-      setIsDeletingCallback(true);
-      await deleteCallback(accessToken, callbackToDelete.name);
-      NotificationsManager.success(`Callback ${callbackToDelete.name} deleted successfully`);
-
-      // Refresh the callbacks list
-      if (userID && userRole) {
-        const data = await getCallbacksCall(accessToken, userID, userRole);
-        setCallbacks(data.callbacks);
-      }
-
-      setShowDeleteConfirmModal(false);
-      setCallbackToDelete(null);
-    } catch (error) {
-      console.error("Failed to delete callback:", error);
-      NotificationsManager.fromBackend(error);
-    } finally {
-      setIsDeletingCallback(false);
-    }
+    deleteCallbackMutation.mutate(callbackToDelete.name, {
+      onSuccess: () => {
+        NotificationsManager.success(`Callback ${callbackToDelete.name} deleted successfully`);
+        setShowDeleteConfirmModal(false);
+        setCallbackToDelete(null);
+      },
+      onError: (error) => {
+        NotificationsManager.fromBackend(error);
+      },
+    });
   };
 
   if (!accessToken) {
@@ -728,6 +568,20 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
             onCallbackChange={handleSelectedCallbackChange}
           />
 
+          <FormItem
+            label="Callback Mode"
+            name="callback_mode"
+            initialValue="success"
+          >
+            <Select size="large" className="w-full">
+              {CALLBACK_MODES.map((m) => (
+                <SelectItem key={m.value} value={m.value}>
+                  {m.label}
+                </SelectItem>
+              ))}
+            </Select>
+          </FormItem>
+
           <DynamicParamsFields
             params={selectedCallbackParams}
             callbackConfigs={callbackConfigs}
@@ -742,12 +596,12 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
                 setSelectedCallbackParams([]);
                 addForm.resetFields();
               }}
-              disabled={isAddingCallback}
+              disabled={updateCallbackMutation.isPending}
             >
               Cancel
             </Button2>
-            <Button2 htmlType="submit" loading={isAddingCallback} disabled={isAddingCallback}>
-              {isAddingCallback ? "Adding..." : "Add Callback"}
+            <Button2 htmlType="submit" loading={updateCallbackMutation.isPending} disabled={updateCallbackMutation.isPending}>
+              {updateCallbackMutation.isPending ? "Adding..." : "Add Callback"}
             </Button2>
           </div>
         </Form>
@@ -780,6 +634,20 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
                 disabled={true}
               />
 
+              <FormItem
+                label="Callback Mode"
+                name="callback_mode"
+                initialValue={selectedEditCallback.type || "success"}
+              >
+                <Select size="large" className="w-full">
+                  {CALLBACK_MODES.map((m) => (
+                    <SelectItem key={m.value} value={m.value}>
+                      {m.label}
+                    </SelectItem>
+                  ))}
+                </Select>
+              </FormItem>
+
               <DynamicParamsFields
                 params={getDynamicParamsForCallback(
                   selectedEditCallback.name,
@@ -799,7 +667,7 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
                 setSelectedEditCallback(null);
                 editForm.resetFields();
               }}
-              disabled={isUpdatingCallback}
+              disabled={updateCallbackMutation.isPending}
             >
               Cancel
             </Button2>
@@ -807,10 +675,10 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
               onClick={() => {
                 editForm.submit();
               }}
-              loading={isUpdatingCallback}
-              disabled={isUpdatingCallback}
+              loading={updateCallbackMutation.isPending}
+              disabled={updateCallbackMutation.isPending}
             >
-              {isUpdatingCallback ? "Saving..." : "Save Changes"}
+              {updateCallbackMutation.isPending ? "Saving..." : "Save Changes"}
             </Button2>
           </div>
         </Form>
@@ -823,14 +691,14 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
         resourceInformationTitle="Callback Information"
         resourceInformation={[
           { label: "Callback Name", value: callbackToDelete?.name },
-          { label: "Mode", value: callbackToDelete?.mode || "success" },
+          { label: "Mode", value: callbackToDelete?.type || "success" },
         ]}
         onCancel={() => {
           setShowDeleteConfirmModal(false);
           setCallbackToDelete(null);
         }}
         onOk={confirmDeleteCallback}
-        confirmLoading={isDeletingCallback}
+        confirmLoading={deleteCallbackMutation.isPending}
       />
     </div>
   );
