@@ -4442,7 +4442,7 @@ class BaseLLMHTTPHandler:
                 "GET",
                 url,
                 headers=headers,
-                params=params,
+                # params=params, # Ignored to ensure backwards compatibility with v1. Fix Needed
                 timeout=timeout,
             )
             response = sync_httpx_handler.client.send(request, stream=True)
@@ -4514,7 +4514,7 @@ class BaseLLMHTTPHandler:
                 "GET",
                 url,
                 headers=headers,
-                params=params,
+                # params=params, # Ignored to ensure backwards compatibility with v1. Fix Needed
                 timeout=timeout,
             )
             response = await async_httpx_handler.client.send(request, stream=True)
