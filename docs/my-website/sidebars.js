@@ -932,6 +932,7 @@ const sidebars = {
         "providers/hyperbolic",
         "providers/infinity",
         "providers/jina_ai",
+        "providers/kelly_intelligence",
         "providers/lambda_ai",
         "providers/langgraph",
         "providers/lemonade",
