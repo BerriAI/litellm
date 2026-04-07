@@ -10,11 +10,17 @@ from fastapi import Request
 
 import litellm
 from litellm.proxy._types import TeamCallbackMetadata, UserAPIKeyAuth
-from unittest.mock import MagicMock
-from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 from litellm.proxy.litellm_pre_call_utils import (
     KeyAndTeamLoggingSettings,
     LiteLLMProxyRequestSetup,
+    _get_dynamic_logging_metadata,
+    _get_enforced_params,
+    _get_metadata_variable_name,
+    _update_model_if_key_alias_exists,
+    add_guardrails_from_policy_engine,
+    add_litellm_data_to_request,
+    check_if_token_is_service_account,
+)
     _get_dynamic_logging_metadata,
     _get_enforced_params,
     _get_metadata_variable_name,
