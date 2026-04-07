@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { ADMIN_STORAGE_PATH, Page } from "../../constants";
+import { ADMIN_STORAGE_PATH, Page, Role, users } from "../../constants";
 import { navigateToPage } from "../../helpers/navigation";
 
 test.describe("Proxy Admin Role", () => {
@@ -13,7 +13,7 @@ test.describe("Proxy Admin Role", () => {
   test("Can list teams via API", async ({ page }) => {
     const response = await page.request.get("/team/list", {
       headers: {
-        Authorization: `Bearer ${process.env.LITELLM_MASTER_KEY || "sk-1234"}`,
+        Authorization: `Bearer ${users[Role.ProxyAdmin].password}`,
       },
     });
     expect(response.status()).toBe(200);
