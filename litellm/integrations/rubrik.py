@@ -453,7 +453,8 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
         if len(allowed_tools) == len(all_tool_calls):
             return None
 
+        explanation = blocking_explanation or "Tool call blocked by policy."
         return BlockedToolsResult(
             allowed_tools=allowed_tools,
-            explanation=f"\n\n{blocking_explanation}",
+            explanation=f"\n\n{explanation}",
         )
