@@ -1136,7 +1136,8 @@ def completion(  # type: ignore # noqa: PLR0915
         LITELLM Specific Params
         mock_response (str, optional): If provided, return a mock completion response for testing or debugging purposes (default is None).
         custom_llm_provider (str, optional): Used for Non-OpenAI LLMs, Example usage for bedrock, set model="amazon.titan-tg1-large" and custom_llm_provider="bedrock"
-        max_retries (int, optional): The number of retries to attempt (default is 0).
+        max_retries (int, optional): The number of retries the underlying SDK client makes per request (default is 2, i.e. 3 total attempts). This is independent of ``num_retries``, which controls litellm's own retry loop. When both are set they multiply: e.g. ``num_retries=3`` with the default ``max_retries=2`` produces up to 12 HTTP requests (4 litellm attempts × 3 SDK attempts each). Set ``max_retries=0`` when using ``num_retries`` to avoid compounding retries.
+        num_retries (int, optional): The number of times litellm retries the call on transient errors (429, 5xx, timeout) with backoff. Unlike ``max_retries`` (which controls the SDK client), this wraps the entire completion call. See ``max_retries`` note above about interaction between the two.
     Returns:
         ModelResponse: A response object containing the generated completion and associated metadata.
 
@@ -1263,6 +1264,11 @@ def completion(  # type: ignore # noqa: PLR0915
     num_retries = kwargs.get(
         "num_retries", None
     )  ## alt. param for 'max_retries'. Use this to pass retries w/ instructor.
+    # NOTE: max_retries controls the *SDK-level* retry loop (default 2 in
+    # openai-python, i.e. 3 total attempts per request).  num_retries controls
+    # litellm's *own* retry loop.  When both are active they multiply — e.g.
+    # num_retries=3 + max_retries=2 → up to 12 HTTP requests.  If you rely on
+    # num_retries for retry logic, pass max_retries=0 to avoid compounding.
     max_retries = kwargs.get("max_retries", None)
     cooldown_time = kwargs.get("cooldown_time", None)
     context_window_fallback_dict = kwargs.get("context_window_fallback_dict", None)
