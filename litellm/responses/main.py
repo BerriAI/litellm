@@ -952,6 +952,7 @@ def responses(
                 **responses_api_request_params,
                 "aresponses": _is_async,
                 "litellm_call_id": litellm_call_id,
+                "custom_llm_provider": custom_llm_provider,
             },
             custom_llm_provider=custom_llm_provider,
         )
@@ -1138,6 +1139,7 @@ def delete_responses(
             },
             litellm_params={
                 "litellm_call_id": litellm_call_id,
+                "custom_llm_provider": custom_llm_provider,
             },
             custom_llm_provider=custom_llm_provider,
         )
@@ -1319,6 +1321,7 @@ def get_responses(
             },
             litellm_params={
                 "litellm_call_id": litellm_call_id,
+                "custom_llm_provider": custom_llm_provider,
             },
             custom_llm_provider=custom_llm_provider,
         )
@@ -1472,7 +1475,7 @@ def list_input_items(
             kwargs=local_vars,
             model=None,
             optional_params={"response_id": response_id},
-            litellm_params={"litellm_call_id": litellm_call_id},
+            litellm_params={"litellm_call_id": litellm_call_id, "custom_llm_provider": custom_llm_provider},
             custom_llm_provider=custom_llm_provider,
         )
 
@@ -1636,6 +1639,7 @@ def cancel_responses(
             },
             litellm_params={
                 "litellm_call_id": litellm_call_id,
+                "custom_llm_provider": custom_llm_provider,
             },
             custom_llm_provider=custom_llm_provider,
         )
@@ -1840,6 +1844,7 @@ def compact_responses(
             litellm_params={
                 **responses_api_request_params,
                 "litellm_call_id": litellm_call_id,
+                "custom_llm_provider": custom_llm_provider,
             },
             custom_llm_provider=custom_llm_provider,
         )
