@@ -6,6 +6,7 @@ from typing import (
     AsyncIterator,
     Coroutine,
     Dict,
+    Iterator,
     List,
     Literal,
     Optional,
@@ -4373,6 +4374,164 @@ class BaseLLMHTTPHandler:
             litellm_params=litellm_params,
         )
 
+    def retrieve_file_content_streaming(
+        self,
+        file_content_request: "FileContentRequest",
+        provider_config: BaseFilesConfig,
+        litellm_params: dict,
+        headers: dict,
+        logging_obj: LiteLLMLoggingObj,
+        _is_async: bool = False,
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        chunk_size: int = 1024 * 1024,
+    ) -> Union[
+        Iterator[bytes],
+        Coroutine[Any, Any, AsyncIterator[bytes]],
+    ]:
+        """
+        Retrieve file content by ID as a streaming iterator.
+        """
+        if _is_async:
+            return self.async_retrieve_file_content_streaming(
+                file_content_request=file_content_request,
+                provider_config=provider_config,
+                litellm_params=litellm_params,
+                headers=headers,
+                logging_obj=logging_obj,
+                client=client,
+                timeout=timeout,
+                chunk_size=chunk_size,
+            )
+
+        if client is None or not isinstance(client, HTTPHandler):
+            sync_httpx_handler = _get_httpx_client()
+        else:
+            sync_httpx_handler = client
+
+        # Get URL and params from provider config
+        url, params = provider_config.transform_file_content_request(
+            file_content_request=file_content_request,
+            optional_params={},
+            litellm_params=litellm_params,
+        )
+
+        # Validate environment and get headers
+        headers = provider_config.validate_environment(
+            api_key=litellm_params.get("api_key"),
+            headers=headers,
+            model="",
+            messages=[],
+            optional_params={},
+            litellm_params=litellm_params,
+        )
+
+        logging_obj.pre_call(
+            input="",
+            api_key="",
+            additional_args={
+                "api_base": url,
+                "headers": headers,
+                "file_id": file_content_request.get("file_id"),
+                "stream": True,
+            },
+        )
+
+        try:
+            request = sync_httpx_handler.client.build_request(
+                "GET",
+                url,
+                headers=headers,
+                params=params,
+                timeout=timeout,
+            )
+            response = sync_httpx_handler.client.send(request, stream=True)
+            response.raise_for_status()
+        except Exception as e:
+            raise self._handle_error(e=e, provider_config=provider_config)
+
+        def _sync_stream_iterator() -> Iterator[bytes]:
+            try:
+                for chunk in response.iter_bytes(chunk_size=chunk_size):
+                    if chunk:
+                        yield chunk
+            finally:
+                response.close()
+
+        return _sync_stream_iterator()
+
+    async def async_retrieve_file_content_streaming(
+        self,
+        file_content_request: "FileContentRequest",
+        provider_config: BaseFilesConfig,
+        litellm_params: dict,
+        headers: dict,
+        logging_obj: LiteLLMLoggingObj,
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        chunk_size: int = 1024 * 1024,
+    ) -> AsyncIterator[bytes]:
+        """
+        Async retrieve file content by ID as a streaming iterator.
+        """
+        if client is None or not isinstance(client, AsyncHTTPHandler):
+            async_httpx_handler = get_async_httpx_client(
+                llm_provider=provider_config.custom_llm_provider
+            )
+        else:
+            async_httpx_handler = client
+
+        # Get URL and params from provider config
+        url, params = provider_config.transform_file_content_request(
+            file_content_request=file_content_request,
+            optional_params={},
+            litellm_params=litellm_params,
+        )
+
+        # Validate environment and get headers
+        headers = provider_config.validate_environment(
+            api_key=litellm_params.get("api_key"),
+            headers=headers,
+            model="",
+            messages=[],
+            optional_params={},
+            litellm_params=litellm_params,
+        )
+
+        logging_obj.pre_call(
+            input="",
+            api_key="",
+            additional_args={
+                "api_base": url,
+                "headers": headers,
+                "file_id": file_content_request.get("file_id"),
+                "stream": True,
+            },
+        )
+
+        try:
+            request = async_httpx_handler.client.build_request(
+                "GET",
+                url,
+                headers=headers,
+                params=params,
+                timeout=timeout,
+            )
+            response = await async_httpx_handler.client.send(request, stream=True)
+            response.raise_for_status()
+        except Exception as e:
+            raise self._handle_error(e=e, provider_config=provider_config)
+
+        async def _async_stream_iterator() -> AsyncIterator[bytes]:
+            try:
+                async for chunk in response.aiter_bytes(chunk_size=chunk_size):
+                    if chunk:
+                        yield chunk
+            finally:
+                await response.aclose()
+
+        return _async_stream_iterator()
+
     async def async_retrieve_file_content(
         self,
         file_content_request: "FileContentRequest",
@@ -4691,18 +4850,30 @@ class BaseLLMHTTPHandler:
             BaseEvalsAPIConfig,
         ],
     ):
+        def _safe_response_text(response: httpx.Response) -> str:
+            try:
+                return response.text
+            except RuntimeError:
+                # Streamed responses require an explicit read before accessing .text.
+                try:
+                    return response.read().decode("utf-8", errors="replace")
+                except Exception:
+                    return ""
+
         status_code = getattr(e, "status_code", 500)
         error_headers = getattr(e, "headers", None)
         if isinstance(e, httpx.HTTPStatusError):
-            error_text = e.response.text
+            error_text = _safe_response_text(e.response) or str(e)
             status_code = e.response.status_code
         else:
             error_text = getattr(e, "text", str(e))
         error_response = getattr(e, "response", None)
         if error_headers is None and error_response:
             error_headers = getattr(error_response, "headers", None)
-        if error_response and hasattr(error_response, "text"):
-            error_text = getattr(error_response, "text", error_text)
+        if isinstance(error_response, httpx.Response):
+            safe_text = _safe_response_text(error_response)
+            if safe_text:
+                error_text = safe_text
         if error_headers:
             error_headers = dict(error_headers)
         else:

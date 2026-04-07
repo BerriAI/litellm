@@ -1041,10 +1041,12 @@ def file_content_streaming(
     """
     Prototype API: Returns a byte iterator for file contents.
 
-    Currently supports OpenAI provider only.
+    Supports OpenAI-compatible providers and Azure.
     """
     try:
         optional_params = GenericLiteLLMParams(**kwargs)
+        litellm_params_dict = get_litellm_params(**kwargs)
+        client = kwargs.get("client")
 
         try:
             if model is not None:
@@ -1054,26 +1056,11 @@ def file_content_streaming(
         except Exception:
             pass
 
-        resolved_provider = cast(Optional[str], custom_llm_provider) or "openai"
-        if resolved_provider != "openai":
-            raise litellm.exceptions.BadRequestError(
-                message="LiteLLM doesn't support {} for 'file_content_v2'. Supported providers are 'openai'.".format(
-                    resolved_provider
-                ),
-                model="n/a",
-                llm_provider=resolved_provider,
-                response=httpx.Response(
-                    status_code=400,
-                    content="Unsupported provider",
-                    request=httpx.Request(method="file_content_v2", url="https://github.com/BerriAI/litellm"),  # type: ignore
-                ),
-            )
-
         timeout = optional_params.timeout or kwargs.get("request_timeout", 600) or 600
         if (
             timeout is not None
             and isinstance(timeout, httpx.Timeout)
-            and supports_httpx_timeout(resolved_provider) is False
+            and supports_httpx_timeout(cast(str, custom_llm_provider)) is False
         ):
             timeout = timeout.read or 600
         elif timeout is not None and not isinstance(timeout, httpx.Timeout):
@@ -1081,16 +1068,66 @@ def file_content_streaming(
         elif timeout is None:
             timeout = 600.0
 
-        openai_creds = get_openai_credentials(
-            api_base=optional_params.api_base,
-            api_key=optional_params.api_key,
-            organization=optional_params.organization,
-        )
-
         _is_async = kwargs.pop("afile_content_streaming", False) is True
-        
+
         response = cast(Union[Iterator[bytes], AsyncIterator[bytes]], iter(()))
-        if custom_llm_provider in OPENAI_COMPATIBLE_BATCH_AND_FILES_PROVIDERS:
+        provider_config = ProviderConfigManager.get_provider_files_config(
+            model="",
+            provider=LlmProviders(custom_llm_provider),
+        )
+        if provider_config is not None:
+            litellm_params_dict["api_key"] = optional_params.api_key
+            litellm_params_dict["api_base"] = optional_params.api_base
+
+            logging_obj = cast(
+                Optional[LiteLLMLoggingObj], kwargs.get("litellm_logging_obj")
+            )
+            if logging_obj is None:
+                logging_obj = LiteLLMLoggingObj(
+                    model="",
+                    messages=[],
+                    stream=True,
+                    call_type=(
+                        "afile_content_streaming"
+                        if _is_async
+                        else "file_content_streaming"
+                    ),
+                    start_time=time.time(),
+                    litellm_call_id=kwargs.get(
+                        "litellm_call_id", str(uuid_module.uuid4())
+                    ),
+                    function_id=str(kwargs.get("id") or ""),
+                )
+
+            response = cast(
+                Union[Iterator[bytes], AsyncIterator[bytes]],
+                base_llm_http_handler.retrieve_file_content_streaming(
+                    file_content_request=FileContentRequest(
+                        file_id=file_id,
+                        extra_headers=extra_headers,
+                        extra_body=extra_body,
+                    ),
+                    provider_config=provider_config,
+                    litellm_params=litellm_params_dict,
+                    headers=extra_headers or {},
+                    logging_obj=logging_obj,
+                    _is_async=_is_async,
+                    client=(
+                        client
+                        if client is not None
+                        and isinstance(client, (HTTPHandler, AsyncHTTPHandler))
+                        else None
+                    ),
+                    timeout=timeout,
+                    chunk_size=chunk_size,
+                ),
+            )
+        elif custom_llm_provider in OPENAI_COMPATIBLE_BATCH_AND_FILES_PROVIDERS:
+            openai_creds = get_openai_credentials(
+                api_base=optional_params.api_base,
+                api_key=optional_params.api_key,
+                organization=optional_params.organization,
+            )
             response = openai_files_instance.file_content_streaming(
                 _is_async=_is_async,
                 file_content_request=FileContentRequest(
@@ -1105,6 +1142,28 @@ def file_content_streaming(
                 organization=openai_creds.organization,
                 chunk_size=chunk_size,
             )
+        elif custom_llm_provider == "azure":
+            azure_creds = get_azure_credentials(
+                api_base=optional_params.api_base,
+                api_key=optional_params.api_key,
+                api_version=optional_params.api_version,
+            )
+            response = azure_files_instance.file_content_streaming(
+                _is_async=_is_async,
+                file_content_request=FileContentRequest(
+                    file_id=file_id,
+                    extra_headers=extra_headers,
+                    extra_body=extra_body,
+                ),
+                api_base=azure_creds.api_base,
+                api_key=azure_creds.api_key,
+                timeout=timeout,
+                max_retries=optional_params.max_retries,
+                api_version=azure_creds.api_version,
+                chunk_size=chunk_size,
+                client=client,
+                litellm_params=litellm_params_dict,
+            )
         else:
             raise litellm.exceptions.BadRequestError(
                 message="LiteLLM doesn't support {} for 'file_content'. Supported providers are 'openai', 'azure', 'vertex_ai', 'bedrock', 'manus', 'anthropic'.".format(
@@ -1118,7 +1177,7 @@ def file_content_streaming(
                     request=httpx.Request(method="create_thread", url="https://github.com/BerriAI/litellm"),  # type: ignore
                 ),
             )
-            
+
         return response
     except Exception as e:
         raise e

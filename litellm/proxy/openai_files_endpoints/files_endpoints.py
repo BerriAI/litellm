@@ -22,7 +22,6 @@ from fastapi import (
     status,
 )
 from fastapi.responses import StreamingResponse
-from openai import OpenAI
 
 import litellm
 from litellm import CreateFileRequest, get_secret_str
@@ -57,7 +56,6 @@ from .common_utils import (
     handle_model_based_routing,
     prepare_data_with_credentials,
 )
-import os
 from .storage_backend_service import StorageBackendFileService
 
 router = APIRouter()
@@ -114,11 +112,6 @@ def get_model_from_json_obj(json_object: dict) -> Optional[str]:
     model = body.get("model")
 
     return model
-
-
-def _stream_openai_file_content(file_id: str, client: OpenAI):
-    with client.files.with_streaming_response.content(file_id) as response:
-        yield from response.iter_bytes(chunk_size=1024 * 1024)
 
 
 async def _deprecated_loadbalanced_create_file(
@@ -843,7 +836,7 @@ async def get_file_content(  # noqa: PLR0915
     dependencies=[Depends(user_api_key_auth)],
     tags=["files"],
 )
-async def get_file_content_v2(
+async def get_file_content_streaming(
     request: Request,
     fastapi_response: Response,
     file_id: str,
@@ -859,7 +852,6 @@ async def get_file_content_v2(
 
     data: Dict = {"file_id": file_id}
     try:
-        # Include original request and headers in the data (same as v1 flow)
         base_llm_response_processor = ProxyBaseLLMRequestProcessing(data=data)
         (
             data,
@@ -871,7 +863,7 @@ async def get_file_content_v2(
             version=version,
             proxy_logging_obj=proxy_logging_obj,
             proxy_config=proxy_config,
-            route_type="afile_content",
+            route_type="afile_content_streaming",
         )
 
         custom_llm_provider = (
@@ -881,15 +873,12 @@ async def get_file_content_v2(
             or await get_custom_llm_provider_from_request_body(request=request)
             or "openai"
         )
-        if custom_llm_provider != "openai":
-            raise HTTPException(
-                status_code=400,
-                detail={"error": "v2 files content currently only supports openai provider"},
-            )
 
-        client = OpenAI(
-            base_url=os.getenv("OPENAI_BASE_URL"),
-            api_key=os.getenv("OPENAI_API_KEY"),
+        data.pop("file_id", None)
+        stream_iterator = await litellm.afile_content_streaming(
+            file_id=file_id,
+            custom_llm_provider=custom_llm_provider, # type: ignore
+            **data,
         )
 
         asyncio.create_task(
@@ -910,7 +899,7 @@ async def get_file_content_v2(
         )
 
         return StreamingResponse(
-            _stream_openai_file_content(file_id, client),
+            content=stream_iterator,
             media_type="application/octet-stream",
             headers={
                 "content-disposition": f'attachment; filename="{file_id}.bin"',
