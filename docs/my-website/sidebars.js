@@ -987,6 +987,7 @@ const sidebars = {
             "providers/runwayml/videos",
           ]
         },
+        "providers/salad_cloud",
         "providers/sambanova",
         "providers/sap",
         "providers/scaleway",
