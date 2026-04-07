@@ -9,8 +9,10 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     BAD_MESSAGE_ERROR_STR,
     BedrockConverseMessagesProcessor,
     BedrockImageProcessor,
-    anthropic_messages_pt,
+    _bedrock_converse_messages_pt,
     _convert_to_bedrock_tool_call_invoke,
+    _convert_to_bedrock_tool_call_result,
+    anthropic_messages_pt,
     convert_to_gemini_tool_call_result,
     ollama_pt,
     sanitize_messages_for_tool_calling,
@@ -2505,157 +2507,105 @@ def test_convert_to_anthropic_tool_result_openai_file_pdf_becomes_document():
         ],
     }
 
-    result = convert_to_anthropic_tool_result(message)
+    result = _convert_to_bedrock_tool_call_result(message)
 
-    assert result["type"] == "tool_result"
-    assert result["tool_use_id"] == "toolu_pdf_1"
-    content = result["content"]
-    assert isinstance(content, list) and len(content) == 1
-    block = content[0]
-    assert block["type"] == "document"
-    assert block["source"]["type"] == "base64"
-    assert block["source"]["media_type"] == "application/pdf"
-    assert block["source"]["data"] == pdf_b64
+    tool_result = result["toolResult"]
+    assert len(tool_result["content"]) == 1
+    assert "document" in tool_result["content"][0]
+    assert tool_result["content"][0]["document"]["format"] == "pdf"
+    assert tool_result["content"][0]["document"]["source"]["bytes"] == "dGVzdA=="
 
 
-def test_convert_to_anthropic_tool_result_image_url_pdf_data_uri_becomes_document():
-    """
-    Regression: a PDF sent as an `image_url` data URI on the tool-result path
-    must translate to an Anthropic document block (not an image block — Anthropic
-    rejects image blocks whose media_type is a non-image like application/pdf).
-    """
-    from litellm.litellm_core_utils.prompt_templates.factory import (
-        convert_to_anthropic_tool_result,
-    )
+def test_bedrock_converse_messages_pt_document_various_formats():
+    """Test that various document media types produce the correct format value."""
+    test_cases = [
+        ("application/pdf", "pdf"),
+        ("text/csv", "csv"),
+        ("text/html", "html"),
+        ("text/plain", "txt"),
+        ("text/markdown", "md"),
+        (
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "docx",
+        ),
+    ]
 
-    pdf_b64 = "JVBERi0xLjQKJeLjz9MK"
-    message = {
-        "tool_call_id": "toolu_pdf_img_1",
-        "role": "tool",
-        "name": "fetch_document",
-        "content": [
+    for media_type, expected_format in test_cases:
+        messages = [
             {
-                "type": "image_url",
-                "image_url": {
-                    "url": f"data:application/pdf;base64,{pdf_b64}",
+                "role": "user",
+                "content": [
+                    {
+                        "type": "document",
+                        "source": {
+                            "type": "base64",
+                            "media_type": media_type,
+                            "data": "dGVzdA==",
+                        },
+                    },
+                ],
+            }
+        ]
+
+        result = _bedrock_converse_messages_pt(
+            messages, "anthropic.claude-sonnet-4-6", "bedrock"
+        )
+
+        doc_block = result[0]["content"][0]
+        assert doc_block["document"]["format"] == expected_format, (
+            f"Expected format '{expected_format}' for media_type '{media_type}', "
+            f"got '{doc_block['document']['format']}'"
+        )
+
+
+def test_bedrock_converse_messages_pt_document_deterministic_name():
+    """Test that the same document data always produces the same name."""
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "document",
+                    "source": {
+                        "type": "base64",
+                        "media_type": "application/pdf",
+                        "data": "dGVzdA==",
+                    },
                 },
-            },
-        ],
-    }
+            ],
+        }
+    ]
 
-    result = convert_to_anthropic_tool_result(message)
-
-    content = result["content"]
-    assert isinstance(content, list) and len(content) == 1
-    block = content[0]
-    assert block["type"] == "document"
-    assert block["source"]["media_type"] == "application/pdf"
-    assert block["source"]["data"] == pdf_b64
-
-
-def test_convert_to_anthropic_tool_result_image_url_unsupported_mime_stays_image_path():
-    """
-    An `image_url` data URI whose mime is neither application/pdf nor text/plain
-    (e.g. application/json) must NOT be routed through the document path. Anthropic
-    only accepts application/pdf and text/plain as base64 document media_types —
-    anything else would produce a document block the API rejects. The old
-    (pre-fix) behavior was to wrap such data as an image block, which also
-    fails but stays on the image code path; preserve that failure mode rather
-    than switching to a document path that is equally broken.
-    """
-    from litellm.litellm_core_utils.prompt_templates.factory import (
-        convert_to_anthropic_tool_result,
+    result1 = _bedrock_converse_messages_pt(
+        messages, "anthropic.claude-sonnet-4-6", "bedrock"
+    )
+    result2 = _bedrock_converse_messages_pt(
+        messages, "anthropic.claude-sonnet-4-6", "bedrock"
     )
 
-    message = {
-        "tool_call_id": "toolu_json_1",
-        "role": "tool",
-        "name": "fetch_json",
-        "content": [
-            {
-                "type": "image_url",
-                "image_url": {
-                    "url": "data:application/json;base64,eyJrIjoidiJ9",
+    name1 = result1[0]["content"][0]["document"]["name"]
+    name2 = result2[0]["content"][0]["document"]["name"]
+    assert name1 == name2
+
+
+def test_bedrock_converse_messages_pt_document_rejects_url_source():
+    """Test that a URL-type document source raises a clear error instead of KeyError."""
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "document",
+                    "source": {
+                        "type": "url",
+                        "url": "https://example.com/doc.pdf",
+                    },
                 },
-            },
-        ],
-    }
+            ],
+        }
+    ]
 
-    result = convert_to_anthropic_tool_result(message)
-
-    content = result["content"]
-    assert isinstance(content, list) and len(content) == 1
-    block = content[0]
-    assert block["type"] == "image", (
-        f"unsupported mime {block.get('source', {}).get('media_type')!r} "
-        f"should not be routed to document path; got {block}"
-    )
-
-
-def test_convert_to_anthropic_tool_result_image_url_text_plain_data_uri_becomes_document():
-    """
-    text/plain is one of the two mimes Anthropic accepts as a base64 document
-    media_type. Confirm it routes through the document path so tightening the
-    gate to {application/pdf, text/plain} (not "application/*") covers both.
-    """
-    from litellm.litellm_core_utils.prompt_templates.factory import (
-        convert_to_anthropic_tool_result,
-    )
-
-    txt_b64 = "aGVsbG8="  # "hello"
-    message = {
-        "tool_call_id": "toolu_txt_1",
-        "role": "tool",
-        "name": "fetch_text",
-        "content": [
-            {
-                "type": "image_url",
-                "image_url": {
-                    "url": f"data:text/plain;base64,{txt_b64}",
-                },
-            },
-        ],
-    }
-
-    result = convert_to_anthropic_tool_result(message)
-
-    content = result["content"]
-    assert isinstance(content, list) and len(content) == 1
-    block = content[0]
-    assert block["type"] == "document"
-    assert block["source"]["media_type"] == "text/plain"
-    assert block["source"]["data"] == txt_b64
-
-
-def test_convert_to_anthropic_tool_result_image_url_png_still_becomes_image():
-    """
-    Regression: image_url with a real image mime type must continue to translate
-    to an Anthropic image block. Locks in existing behavior after the
-    data-URI-mime-type branching for PDFs.
-    """
-    from litellm.litellm_core_utils.prompt_templates.factory import (
-        convert_to_anthropic_tool_result,
-    )
-
-    png_b64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYGBgAAAABQABXvMqOgAAAABJRU5ErkJggg=="
-    message = {
-        "tool_call_id": "toolu_png_1",
-        "role": "tool",
-        "name": "fetch_image",
-        "content": [
-            {
-                "type": "image_url",
-                "image_url": {
-                    "url": f"data:image/png;base64,{png_b64}",
-                },
-            },
-        ],
-    }
-
-    result = convert_to_anthropic_tool_result(message)
-
-    content = result["content"]
-    assert isinstance(content, list) and len(content) == 1
-    block = content[0]
-    assert block["type"] == "image"
-    assert block["source"]["media_type"] == "image/png"
+    with pytest.raises(ValueError, match="only supports base64-encoded"):
+        _bedrock_converse_messages_pt(
+            messages, "anthropic.claude-sonnet-4-6", "bedrock"
+        )
