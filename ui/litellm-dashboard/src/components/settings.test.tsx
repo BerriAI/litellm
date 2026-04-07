@@ -1,6 +1,7 @@
 import { act, fireEvent, render, waitFor } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { alertingSettingsCall, getCallbackConfigsCall, getCallbacksCall } from "./networking";
+import { alertingSettingsCall } from "./networking";
 import Settings from "./settings";
 
 vi.mock("./networking", () => ({
@@ -10,6 +11,45 @@ vi.mock("./networking", () => ({
   serviceHealthCheck: vi.fn(),
   deleteCallback: vi.fn(),
   alertingSettingsCall: vi.fn().mockResolvedValue([]),
+}));
+
+const mockCallbacksData = {
+  callbacks: [] as any[],
+  alerts: [] as any[],
+  availableCallbacks: {} as Record<string, any>,
+};
+
+const mockCallbackConfigs: any[] = [];
+
+vi.mock("@/app/(dashboard)/hooks/callbacks/useCallbacks", () => ({
+  useCallbacks: () => ({
+    data: mockCallbacksData,
+    isLoading: false,
+    isError: false,
+  }),
+  useCallbackConfigs: () => ({
+    data: mockCallbackConfigs,
+    isLoading: false,
+    isError: false,
+  }),
+  callbackKeys: { all: ["callbacks"], lists: () => ["callbacks", "list"], list: () => ["callbacks", "list", {}] },
+}));
+
+const mockUpdateMutate = vi.fn();
+const mockDeleteMutate = vi.fn();
+
+vi.mock("@/app/(dashboard)/hooks/callbacks/useUpdateCallback", () => ({
+  useUpdateCallback: () => ({
+    mutate: mockUpdateMutate,
+    isPending: false,
+  }),
+}));
+
+vi.mock("@/app/(dashboard)/hooks/callbacks/useDeleteCallback", () => ({
+  useDeleteCallback: () => ({
+    mutate: mockDeleteMutate,
+    isPending: false,
+  }),
 }));
 
 vi.mock("./molecules/notifications_manager", () => ({
@@ -63,6 +103,15 @@ beforeAll(() => {
   });
 });
 
+const createWrapper = () => {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  return ({ children }: { children: React.ReactNode }) => (
+    <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+  );
+};
+
 describe("Settings", () => {
   const defaultProps = {
     accessToken: "token",
@@ -70,23 +119,17 @@ describe("Settings", () => {
     userID: "user-123",
     premiumUser: false,
   };
-  const mockGetCallbacksCall = vi.mocked(getCallbacksCall);
-  const mockGetCallbackConfigsCall = vi.mocked(getCallbackConfigsCall);
-  const mockAlertingSettingsCall = vi.mocked(alertingSettingsCall);
 
   beforeEach(() => {
     vi.clearAllMocks();
-    mockGetCallbacksCall.mockResolvedValue({
-      callbacks: [],
-      available_callbacks: [],
-      alerts: [],
-    });
-    mockGetCallbackConfigsCall.mockResolvedValue([]);
-    mockAlertingSettingsCall.mockResolvedValue([]);
+    mockCallbacksData.callbacks = [];
+    mockCallbacksData.alerts = [];
+    mockCallbacksData.availableCallbacks = {};
+    mockCallbackConfigs.length = 0;
   });
 
   it("should render the logging callbacks tab when access token is provided", async () => {
-    const { getByText } = render(<Settings {...defaultProps} />);
+    const { getByText } = render(<Settings {...defaultProps} />, { wrapper: createWrapper() });
 
     await waitFor(() => {
       expect(getByText("Active Logging Callbacks")).toBeInTheDocument();
@@ -94,21 +137,13 @@ describe("Settings", () => {
   });
 
   it("should display additional settings tabs", async () => {
-    const { getByText } = render(<Settings {...defaultProps} />);
+    const { getByText } = render(<Settings {...defaultProps} />, { wrapper: createWrapper() });
 
     await waitFor(() => {
       expect(getByText("CloudZero Cost Tracking")).toBeInTheDocument();
       expect(getByText("Alerting Types")).toBeInTheDocument();
       expect(getByText("Alerting Settings")).toBeInTheDocument();
       expect(getByText("Email Alerts")).toBeInTheDocument();
-    });
-  });
-
-  it("should load callback configs from the backend when access token is provided", async () => {
-    render(<Settings {...defaultProps} />);
-
-    await waitFor(() => {
-      expect(mockGetCallbackConfigsCall).toHaveBeenCalledWith(defaultProps.accessToken);
     });
   });
 
@@ -146,21 +181,17 @@ describe("Settings", () => {
       },
     };
 
-    mockGetCallbacksCall.mockResolvedValue({
-      callbacks: [mockCallback],
-      available_callbacks: {
-        langfuse: {
-          litellm_callback_name: "langfuse",
-          litellm_callback_params: ["LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY", "LANGFUSE_HOST"],
-          ui_callback_name: "Langfuse",
-        },
+    mockCallbacksData.callbacks = [mockCallback];
+    mockCallbacksData.availableCallbacks = {
+      langfuse: {
+        litellm_callback_name: "langfuse",
+        litellm_callback_params: ["LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY", "LANGFUSE_HOST"],
+        ui_callback_name: "Langfuse",
       },
-      alerts: [],
-    });
+    };
+    mockCallbackConfigs.push(mockCallbackConfig);
 
-    mockGetCallbackConfigsCall.mockResolvedValue([mockCallbackConfig]);
-
-    const { getByText, container } = render(<Settings {...defaultProps} />);
+    const { getByText, container } = render(<Settings {...defaultProps} />, { wrapper: createWrapper() });
 
     await waitFor(() => {
       expect(getByText("Active Logging Callbacks")).toBeInTheDocument();
@@ -195,7 +226,7 @@ describe("Settings", () => {
   });
 
   it("should display CloudZero Cost Tracking tab", async () => {
-    const { getByText } = render(<Settings {...defaultProps} />);
+    const { getByText } = render(<Settings {...defaultProps} />, { wrapper: createWrapper() });
 
     await waitFor(() => {
       expect(getByText("Active Logging Callbacks")).toBeInTheDocument();
