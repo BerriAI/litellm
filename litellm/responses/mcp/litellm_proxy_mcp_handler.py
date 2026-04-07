@@ -162,7 +162,9 @@ class LiteLLM_Proxy_MCP_Handler:
                     mcp_servers=all_server_ids,
                     mcp_tool_permissions=tool_permissions,
                 )
-            return user_api_key_auth.model_copy(update={"object_permission": updated_op})
+            return user_api_key_auth.model_copy(
+                update={"object_permission": updated_op}
+            )
         except Exception as _e:
             verbose_logger.debug(f"Could not apply toolset permissions: {_e}")
             return user_api_key_auth
@@ -259,10 +261,12 @@ class LiteLLM_Proxy_MCP_Handler:
 
         # Apply all resolved toolsets at once (union), avoiding permission overwrite.
         if resolved_toolset_ids and user_api_key_auth is not None:
-            user_api_key_auth = await LiteLLM_Proxy_MCP_Handler._apply_toolset_permissions(
-                resolved_toolset_ids=resolved_toolset_ids,
-                resolved_mcp_servers=resolved_mcp_servers,
-                user_api_key_auth=user_api_key_auth,
+            user_api_key_auth = (
+                await LiteLLM_Proxy_MCP_Handler._apply_toolset_permissions(
+                    resolved_toolset_ids=resolved_toolset_ids,
+                    resolved_mcp_servers=resolved_mcp_servers,
+                    user_api_key_auth=user_api_key_auth,
+                )
             )
 
         # When toolsets were resolved we updated object_permission.mcp_servers to the

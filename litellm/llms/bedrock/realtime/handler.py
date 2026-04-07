@@ -235,7 +235,9 @@ class BedrockRealtime(BaseAWSLLM):
                     # Transform Bedrock format to OpenAI format
                     from litellm.types.realtime import RealtimeResponseTransformInput
 
-                    realtime_response_transform_input: RealtimeResponseTransformInput = {
+                    realtime_response_transform_input: (
+                        RealtimeResponseTransformInput
+                    ) = {
                         "current_output_item_id": session_state.get(
                             "current_output_item_id"
                         ),

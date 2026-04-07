@@ -1,6 +1,7 @@
 """
 Prometheus Auth Middleware - Pure ASGI implementation
 """
+
 import json
 
 from fastapi import Request
