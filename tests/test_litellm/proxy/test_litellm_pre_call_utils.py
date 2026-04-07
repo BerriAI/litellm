@@ -21,14 +21,6 @@ from litellm.proxy.litellm_pre_call_utils import (
     add_litellm_data_to_request,
     check_if_token_is_service_account,
 )
-    _get_dynamic_logging_metadata,
-    _get_enforced_params,
-    _get_metadata_variable_name,
-    _update_model_if_key_alias_exists,
-    add_guardrails_from_policy_engine,
-    add_litellm_data_to_request,
-    check_if_token_is_service_account,
-)
 
 sys.path.insert(
     0, os.path.abspath("../../..")
