@@ -100,6 +100,8 @@ from litellm.types.proxy.management_endpoints.common_daily_activity import (
 from litellm.types.proxy.management_endpoints.team_endpoints import (
     BulkTeamMemberAddRequest,
     BulkTeamMemberAddResponse,
+    BulkUpdateTeamMemberPermissionsRequest,
+    BulkUpdateTeamMemberPermissionsResponse,
     GetTeamMemberPermissionsResponse,
     TeamListItem,
     TeamListResponse,
@@ -4272,6 +4274,151 @@ async def update_team_member_permissions(
     )
 
     return updated_team
+
+
+@router.post(
+    "/team/permissions_bulk_update",
+    tags=["team management"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=BulkUpdateTeamMemberPermissionsResponse,
+)
+@management_endpoint_wrapper
+async def bulk_update_team_member_permissions(
+    data: BulkUpdateTeamMemberPermissionsRequest,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Append permissions to existing teams.
+
+    Either pass team_ids to target specific teams, or set
+    apply_to_all_teams=True to update every team. For each team,
+    the provided permissions are merged with the team's existing
+    permissions (duplicates are skipped).
+    """
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail={"error": "No db connected"})
+
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value:
+        raise HTTPException(
+            status_code=403,
+            detail={"error": "Only proxy admins can bulk-update team permissions"},
+        )
+
+    if not data.permissions:
+        return {
+            "message": "No permissions provided",
+            "teams_updated": 0,
+        }
+
+    if not data.apply_to_all_teams and not data.team_ids:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "Must provide team_ids or set apply_to_all_teams=true"
+            },
+        )
+
+    if data.apply_to_all_teams and data.team_ids:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "Cannot set both apply_to_all_teams=true and team_ids"
+            },
+        )
+
+    permissions_to_add = set(data.permissions)
+
+    if data.team_ids:
+        teams_updated = await _append_permissions_to_specific_teams(
+            prisma_client, data.team_ids, permissions_to_add
+        )
+    else:
+        teams_updated = await _append_permissions_to_all_teams(
+            prisma_client, permissions_to_add
+        )
+
+    return {
+        "message": "Team permissions updated successfully",
+        "teams_updated": teams_updated,
+        "permissions_appended": data.permissions,
+    }
+
+
+async def _compute_and_batch_updates(prisma_client, teams, permissions_to_add: set) -> int:
+    """Compute merged permissions and batch-write updates. Returns count of teams updated."""
+    updates = []
+    for team in teams:
+        existing = set(team.team_member_permissions or [])
+        if permissions_to_add <= existing:
+            continue
+        merged = sorted(existing | permissions_to_add)  # normalise to alphabetical order
+        updates.append((team.team_id, merged))
+
+    if updates:
+        batcher = prisma_client.db.batch_()
+        for team_id, merged_perms in updates:
+            batcher.litellm_teamtable.update(
+                where={"team_id": team_id},
+                data={"team_member_permissions": merged_perms},
+            )
+        await batcher.commit()
+
+    return len(updates)
+
+
+async def _append_permissions_to_specific_teams(
+    prisma_client, team_ids: List[str], permissions_to_add: set
+) -> int:
+    """Fetch specific teams by ID and append permissions."""
+    teams = await prisma_client.db.litellm_teamtable.find_many(
+        where={"team_id": {"in": team_ids}},
+    )
+
+    found_ids = {team.team_id for team in teams}
+    missing_ids = set(team_ids) - found_ids
+    if missing_ids:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": f"Team(s) not found: {sorted(missing_ids)}"},
+        )
+
+    return await _compute_and_batch_updates(prisma_client, teams, permissions_to_add)
+
+
+async def _append_permissions_to_all_teams(
+    prisma_client, permissions_to_add: set
+) -> int:
+    """Paginated read + batched write across all teams."""
+    teams_updated = 0
+    cursor = None
+    BATCH_SIZE = 500
+
+    while True:
+        find_args: dict = {
+            "take": BATCH_SIZE,
+            "order": {"team_id": "asc"},
+        }
+        if cursor is not None:
+            find_args["cursor"] = {"team_id": cursor}
+            find_args["skip"] = 1
+
+        teams = await prisma_client.db.litellm_teamtable.find_many(**find_args)
+
+        if not teams:
+            break
+
+        teams_updated += await _compute_and_batch_updates(
+            prisma_client, teams, permissions_to_add
+        )
+
+        cursor = teams[-1].team_id
+
+        if len(teams) < BATCH_SIZE:
+            break
+
+    return teams_updated
 
 
 @router.get(
