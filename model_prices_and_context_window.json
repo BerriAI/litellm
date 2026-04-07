@@ -25328,62 +25328,12 @@
         "supports_response_schema": false,
         "supports_streaming": true
     },
-    "oci/cohere.embed-english-v3.0": {
-        "input_cost_per_token": 1e-07,
-        "litellm_provider": "oci",
-        "max_input_tokens": 512,
-        "mode": "embedding",
-        "output_vector_size": 1024,
-        "source": "https://www.oracle.com/cloud/ai/generative-ai/pricing/"
-    },
-    "oci/cohere.embed-multilingual-v3.0": {
-        "input_cost_per_token": 1e-07,
-        "litellm_provider": "oci",
-        "max_input_tokens": 512,
-        "mode": "embedding",
-        "output_vector_size": 1024,
-        "source": "https://www.oracle.com/cloud/ai/generative-ai/pricing/"
-    },
-    "oci/cohere.embed-english-light-v3.0": {
-        "input_cost_per_token": 1e-07,
-        "litellm_provider": "oci",
-        "max_input_tokens": 512,
-        "mode": "embedding",
-        "output_vector_size": 384,
-        "source": "https://www.oracle.com/cloud/ai/generative-ai/pricing/"
-    },
-    "oci/cohere.embed-multilingual-light-v3.0": {
-        "input_cost_per_token": 1e-07,
-        "litellm_provider": "oci",
-        "max_input_tokens": 512,
-        "mode": "embedding",
-        "output_vector_size": 384,
-        "source": "https://www.oracle.com/cloud/ai/generative-ai/pricing/"
-    },
-    "oci/cohere.embed-english-image-v3.0": {
-        "input_cost_per_token": 1e-07,
-        "litellm_provider": "oci",
-        "max_input_tokens": 512,
-        "mode": "embedding",
-        "output_vector_size": 1024,
-        "source": "https://www.oracle.com/cloud/ai/generative-ai/pricing/",
-        "supports_vision": true
-    },
     "oci/cohere.embed-multilingual-image-v3.0": {
         "input_cost_per_token": 1e-07,
         "litellm_provider": "oci",
         "max_input_tokens": 512,
         "mode": "embedding",
         "output_vector_size": 1024,
-        "source": "https://www.oracle.com/cloud/ai/generative-ai/pricing/",
-        "supports_vision": true
-    },
-    "oci/cohere.embed-v4.0": {
-        "input_cost_per_token": 1e-07,
-        "litellm_provider": "oci",
-        "max_input_tokens": 128000,
-        "mode": "embedding",
-        "output_vector_size": 1536,
         "source": "https://www.oracle.com/cloud/ai/generative-ai/pricing/",
         "supports_vision": true
     },

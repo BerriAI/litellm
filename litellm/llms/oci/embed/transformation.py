@@ -29,8 +29,8 @@ import httpx
 import litellm
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
-from litellm.llms.oci.chat.transformation import OCI_API_VERSION
 from litellm.llms.oci.common_utils import (
+    OCI_API_VERSION,
     OCIError,
     get_oci_base_url,
     resolve_oci_credentials,
