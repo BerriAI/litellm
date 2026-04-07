@@ -643,12 +643,83 @@ class TestToolPermissionGuardrailMCPPreCall:
         assert isinstance(result, dict)
         assert "tools" in result
 
+    @pytest.mark.asyncio
+    async def test_mcp_allowed_tool_sets_applied_guardrails_header(self):
+        """Allowed MCP tool must call add_guardrail_to_applied_guardrails_header
+        so the guardrail appears in x-litellm-applied-guardrails."""
+        guardrail = self._make_guardrail(decision="allow", pattern=r"exa-.*")
+        data = {"mcp_tool_name": "exa-web_search_exa"}
+
+        await guardrail.async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(),
+            cache=DualCache(),
+            data=data,
+            call_type="call_mcp_tool",
+        )
+
+        applied = (data.get("metadata") or {}).get("applied_guardrails", [])
+        assert "test-mcp-guardrail" in applied
+
     def test_supported_event_hooks_includes_mcp(self):
         """ToolPermissionGuardrail must declare pre_mcp_call and during_mcp_call
         so that mode=['pre_mcp_call','during_mcp_call'] passes _validate_event_hook."""
         guardrail = self._make_guardrail(decision="deny", pattern=r".*")
         assert GuardrailEventHooks.pre_mcp_call in (guardrail.supported_event_hooks or [])
         assert GuardrailEventHooks.during_mcp_call in (guardrail.supported_event_hooks or [])
+
+    @pytest.mark.asyncio
+    async def test_during_mcp_call_denied_raises_http_exception(self):
+        """during_mcp_call: denied tool raises HTTPException(400) via async_moderation_hook."""
+        guardrail = self._make_guardrail(decision="deny", pattern=r"exa-.*")
+        data = {"mcp_tool_name": "exa-web_search_exa", "mcp_arguments": {"query": "test"}}
+
+        with pytest.raises(HTTPException) as exc_info:
+            await guardrail.async_moderation_hook(
+                data=data,
+                user_api_key_dict=UserAPIKeyAuth(),
+                call_type="call_mcp_tool",
+            )
+        assert exc_info.value.status_code == 400
+        assert "Violated guardrail policy" in exc_info.value.detail["error"]
+
+    @pytest.mark.asyncio
+    async def test_during_mcp_call_allowed_passes(self):
+        """during_mcp_call: allowed tool does not raise."""
+        guardrail = self._make_guardrail(decision="allow", pattern=r"exa-.*")
+        data = {"mcp_tool_name": "exa-web_search_exa", "mcp_arguments": {"query": "test"}}
+
+        await guardrail.async_moderation_hook(
+            data=data,
+            user_api_key_dict=UserAPIKeyAuth(),
+            call_type="call_mcp_tool",
+        )
+
+    @pytest.mark.asyncio
+    async def test_during_mcp_call_allowed_sets_applied_guardrails_header(self):
+        """during_mcp_call: allowed tool must appear in applied-guardrails header."""
+        guardrail = self._make_guardrail(decision="allow", pattern=r"exa-.*")
+        data = {"mcp_tool_name": "exa-web_search_exa"}
+
+        await guardrail.async_moderation_hook(
+            data=data,
+            user_api_key_dict=UserAPIKeyAuth(),
+            call_type="call_mcp_tool",
+        )
+
+        applied = (data.get("metadata") or {}).get("applied_guardrails", [])
+        assert "test-mcp-guardrail" in applied
+
+    @pytest.mark.asyncio
+    async def test_during_mcp_call_no_mcp_tool_name_is_noop(self):
+        """during_mcp_call: missing mcp_tool_name is a no-op (does not raise)."""
+        guardrail = self._make_guardrail(decision="deny", pattern=r".*")
+        data = {"mcp_arguments": {"query": "test"}}
+
+        await guardrail.async_moderation_hook(
+            data=data,
+            user_api_key_dict=UserAPIKeyAuth(),
+            call_type="call_mcp_tool",
+        )
 
 
 class TestToolPermissionGuardrailIntegration:
