@@ -849,6 +849,11 @@ class LiteLLM_Proxy_MCP_Handler:
                 )
 
             except BlockedPiiEntityError as e:
+                _guardrail_info = getattr(e, "_guardrail_logging_info", None)
+                if _guardrail_info:
+                    logging_request_data.setdefault("metadata", {})[
+                        "standard_logging_guardrail_information"
+                    ] = _guardrail_info
                 await LiteLLM_Proxy_MCP_Handler._log_mcp_tool_failure(
                     proxy_logging_obj=proxy_logging_obj,
                     user_api_key_auth=user_api_key_auth,
@@ -867,6 +872,11 @@ class LiteLLM_Proxy_MCP_Handler:
                     }
                 )
             except GuardrailRaisedException as e:
+                _guardrail_info = getattr(e, "_guardrail_logging_info", None)
+                if _guardrail_info:
+                    logging_request_data.setdefault("metadata", {})[
+                        "standard_logging_guardrail_information"
+                    ] = _guardrail_info
                 await LiteLLM_Proxy_MCP_Handler._log_mcp_tool_failure(
                     proxy_logging_obj=proxy_logging_obj,
                     user_api_key_auth=user_api_key_auth,
@@ -885,6 +895,11 @@ class LiteLLM_Proxy_MCP_Handler:
                     }
                 )
             except HTTPException as e:
+                _guardrail_info = getattr(e, "_guardrail_logging_info", None)
+                if _guardrail_info:
+                    logging_request_data.setdefault("metadata", {})[
+                        "standard_logging_guardrail_information"
+                    ] = _guardrail_info
                 await LiteLLM_Proxy_MCP_Handler._log_mcp_tool_failure(
                     proxy_logging_obj=proxy_logging_obj,
                     user_api_key_auth=user_api_key_auth,
