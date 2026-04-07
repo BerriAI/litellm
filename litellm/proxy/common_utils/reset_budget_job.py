@@ -590,7 +590,6 @@ class ResetBudgetJob:
         For keys and teams with budget_limits, reset any individual windows where
         reset_at <= now. Only the expired windows are reset; other windows are untouched.
         """
-        from litellm.proxy.proxy_server import spend_counter_cache
 
         now = datetime.utcnow()
 
@@ -608,7 +607,7 @@ class ResetBudgetJob:
                 for window in windows:
                     counter_key = f"spend:key:{key.token}:window:{window['budget_duration']}"
                     if await ResetBudgetJob._reset_expired_window(
-                        window, counter_key, spend_counter_cache, now
+                        window, counter_key, ProxyLogging.spend_counter_cache, now
                     ):
                         changed = True
                 if changed:
