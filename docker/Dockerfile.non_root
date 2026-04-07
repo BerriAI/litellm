@@ -41,11 +41,12 @@ COPY . .
 ENV LITELLM_NON_ROOT=true
 
 # Build Admin UI using the upstream command order while keeping a single RUN layer
-# NOTE: .npmrc (which has ignore-scripts=true and min-release-age=3d) is temporarily
-# renamed during npm install/ci. This is safe because npm ci installs from
+# NOTE: .npmrc files (which may set ignore-scripts=true and min-release-age=3d)
+# are temporarily renamed during npm install/ci so they don't block lifecycle
+# scripts needed by the build. This is safe because npm ci installs from
 # package-lock.json with pinned versions + integrity hashes.
 RUN mkdir -p /var/lib/litellm/ui && \
-    mv /app/.npmrc /app/.npmrc.bak && \
+    ([ -f /app/.npmrc ] && mv /app/.npmrc /app/.npmrc.bak || true) && \
     npm install -g npm@11.12.1 && \
     npm install -g node-gyp@12.2.0 && \
     ln -sf /usr/local/lib/node_modules/node-gyp /usr/lib/node_modules/npm/node_modules/node-gyp && \
@@ -54,9 +55,10 @@ RUN mkdir -p /var/lib/litellm/ui && \
     if [ -f "/app/enterprise/enterprise_ui/enterprise_colors.json" ]; then \
       cp /app/enterprise/enterprise_ui/enterprise_colors.json ./ui_colors.json; \
     fi && \
-    mv .npmrc .npmrc.bak && \
+    ([ -f .npmrc ] && mv .npmrc .npmrc.bak || true) && \
     npm ci && \
-    mv .npmrc.bak .npmrc && mv /app/.npmrc.bak /app/.npmrc && \
+    ([ -f .npmrc.bak ] && mv .npmrc.bak .npmrc || true) && \
+    ([ -f /app/.npmrc.bak ] && mv /app/.npmrc.bak /app/.npmrc || true) && \
     npm run build && \
     cp -r /app/ui/litellm-dashboard/out/* /var/lib/litellm/ui/ && \
     mkdir -p /var/lib/litellm/assets && \
