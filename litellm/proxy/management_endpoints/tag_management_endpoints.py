@@ -39,6 +39,16 @@ if TYPE_CHECKING:
 router = APIRouter()
 
 
+def _get_read_prisma_client():
+    """Get the read replica Prisma client, falling back to primary if not configured."""
+    from litellm.proxy.proxy_server import prisma_client, prisma_read_client
+
+    client = prisma_read_client if prisma_read_client is not None else prisma_client
+    if client is None:
+        raise HTTPException(status_code=500, detail="Database not connected")
+    return client
+
+
 async def _get_model_names(prisma_client, model_ids: list) -> Dict[str, str]:
     """Helper function to get model names from model IDs"""
     try:
@@ -340,10 +350,7 @@ async def info_tag(
     Parameters:
     - names: List[str] - List of tag names to get information for
     """
-    from litellm.proxy.proxy_server import prisma_client
-
-    if prisma_client is None:
-        raise HTTPException(status_code=500, detail="Database not connected")
+    prisma_client = _get_read_prisma_client()
 
     try:
         # Query tags from database with budget info
@@ -406,10 +413,7 @@ async def list_tags(
     """
     List all available tags with their budget information.
     """
-    from litellm.proxy.proxy_server import prisma_client
-
-    if prisma_client is None:
-        raise HTTPException(status_code=500, detail="Database not connected")
+    prisma_client = _get_read_prisma_client()
 
     try:
         ## QUERY STORED TAGS ##
@@ -543,7 +547,7 @@ async def get_tag_daily_activity(
     Returns:
         SpendAnalyticsPaginatedResponse: Paginated response containing daily activity data.
     """
-    from litellm.proxy.proxy_server import prisma_client
+    prisma_client = _get_read_prisma_client()
 
     # Convert comma-separated tags string to list if provided
     tag_list = tags.split(",") if tags else None

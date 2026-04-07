@@ -31,6 +31,21 @@ else:
 router = APIRouter()
 
 
+def _get_read_prisma_client():
+    """Get the read replica Prisma client, falling back to primary if not configured."""
+    from litellm.proxy.proxy_server import prisma_client, prisma_read_client
+
+    client = prisma_read_client if prisma_read_client is not None else prisma_client
+    if client is None:
+        raise ProxyException(
+            message="Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys",
+            type="internal_error",
+            param="None",
+            code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+    return client
+
+
 @router.get(
     "/spend/keys",
     tags=["Budget & Spend Tracking"],
@@ -48,14 +63,9 @@ async def spend_key_fn():
     ```
     """
 
-    from litellm.proxy.proxy_server import prisma_client
+    prisma_client = _get_read_prisma_client()
 
     try:
-        if prisma_client is None:
-            raise Exception(
-                "Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
-            )
-
         key_info = await prisma_client.get_data(table_name="key", query_type="find_all")
         return key_info
 
@@ -102,14 +112,9 @@ async def spend_user_fn(
 -H "Authorization: Bearer sk-1234"
     ```
     """
-    from litellm.proxy.proxy_server import prisma_client
+    prisma_client = _get_read_prisma_client()
 
     try:
-        if prisma_client is None:
-            raise Exception(
-                "Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
-            )
-
         if user_id is not None:
             user_info = await prisma_client.get_data(
                 table_name="user", query_type="find_unique", user_id=user_id
@@ -165,14 +170,9 @@ async def view_spend_tags(
     ```
     """
 
-    from litellm.proxy.proxy_server import prisma_client
+    prisma_client = _get_read_prisma_client()
 
     try:
-        if prisma_client is None:
-            raise Exception(
-                "Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
-            )
-
         # run the following SQL query on prisma
         """
         SELECT
@@ -208,10 +208,7 @@ async def view_spend_tags(
 async def get_global_activity_internal_user(
     user_api_key_dict: UserAPIKeyAuth, start_date: datetime, end_date: datetime
 ):
-    from litellm.proxy.proxy_server import prisma_client
-
-    if prisma_client is None:
-        raise HTTPException(status_code=500, detail={"error": "No db connected"})
+    prisma_client = _get_read_prisma_client()
 
     user_id = user_api_key_dict.user_id
     if user_id is None:
@@ -285,14 +282,9 @@ async def get_global_activity(
     start_date_obj = datetime.strptime(start_date, "%Y-%m-%d")
     end_date_obj = datetime.strptime(end_date, "%Y-%m-%d")
 
-    from litellm.proxy.proxy_server import prisma_client
+    prisma_client = _get_read_prisma_client()
 
     try:
-        if prisma_client is None:
-            raise Exception(
-                "Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
-            )
-
         if (
             user_api_key_dict.user_role == LitellmUserRoles.INTERNAL_USER
             or user_api_key_dict.user_role == LitellmUserRoles.INTERNAL_USER_VIEW_ONLY
@@ -350,10 +342,7 @@ async def get_global_activity(
 async def get_global_activity_model_internal_user(
     user_api_key_dict: UserAPIKeyAuth, start_date: datetime, end_date: datetime
 ):
-    from litellm.proxy.proxy_server import prisma_client
-
-    if prisma_client is None:
-        raise HTTPException(status_code=500, detail={"error": "No db connected"})
+    prisma_client = _get_read_prisma_client()
 
     user_id = user_api_key_dict.user_id
     if user_id is None:
@@ -451,14 +440,9 @@ async def get_global_activity_model(
     start_date_obj = datetime.strptime(start_date, "%Y-%m-%d")
     end_date_obj = datetime.strptime(end_date, "%Y-%m-%d")
 
-    from litellm.proxy.proxy_server import prisma_client
+    prisma_client = _get_read_prisma_client()
 
     try:
-        if prisma_client is None:
-            raise Exception(
-                "Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
-            )
-
         if (
             user_api_key_dict.user_role == LitellmUserRoles.INTERNAL_USER
             or user_api_key_dict.user_role == LitellmUserRoles.INTERNAL_USER_VIEW_ONLY
@@ -603,14 +587,9 @@ async def get_global_activity_exceptions_per_deployment(
     start_date_obj = datetime.strptime(start_date, "%Y-%m-%d")
     end_date_obj = datetime.strptime(end_date, "%Y-%m-%d")
 
-    from litellm.proxy.proxy_server import prisma_client
+    prisma_client = _get_read_prisma_client()
 
     try:
-        if prisma_client is None:
-            raise Exception(
-                "Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
-            )
-
         sql_query = """
         SELECT
             api_base,
@@ -735,14 +714,9 @@ async def get_global_activity_exceptions(
     start_date_obj = datetime.strptime(start_date, "%Y-%m-%d")
     end_date_obj = datetime.strptime(end_date, "%Y-%m-%d")
 
-    from litellm.proxy.proxy_server import prisma_client
+    prisma_client = _get_read_prisma_client()
 
     try:
-        if prisma_client is None:
-            raise Exception(
-                "Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
-            )
-
         sql_query = """
         SELECT
             date_trunc('day', "startTime")::date AS date,
@@ -840,14 +814,11 @@ async def get_global_spend_provider(
     start_date_obj = datetime.strptime(start_date, "%Y-%m-%d")
     end_date_obj = datetime.strptime(end_date, "%Y-%m-%d")
 
-    from litellm.proxy.proxy_server import llm_router, prisma_client
+    from litellm.proxy.proxy_server import llm_router
+
+    prisma_client = _get_read_prisma_client()
 
     try:
-        if prisma_client is None:
-            raise Exception(
-                "Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
-            )
-
         if (
             user_api_key_dict.user_role == LitellmUserRoles.INTERNAL_USER
             or user_api_key_dict.user_role == LitellmUserRoles.INTERNAL_USER_VIEW_ONLY
@@ -999,14 +970,11 @@ async def get_global_spend_report(
     start_date_obj = datetime.strptime(start_date, "%Y-%m-%d")
     end_date_obj = datetime.strptime(end_date, "%Y-%m-%d")
 
-    from litellm.proxy.proxy_server import premium_user, prisma_client
+    from litellm.proxy.proxy_server import premium_user
+
+    prisma_client = _get_read_prisma_client()
 
     try:
-        if prisma_client is None:
-            raise Exception(
-                "Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
-            )
-
         if premium_user is not True:
             verbose_proxy_logger.debug("accessing /spend/report but not a premium user")
             raise ValueError(
@@ -1293,12 +1261,7 @@ async def get_global_spend_report(
 )
 async def global_get_all_tag_names():
     try:
-        from litellm.proxy.proxy_server import prisma_client
-
-        if prisma_client is None:
-            raise Exception(
-                "Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
-            )
+        prisma_client = _get_read_prisma_client()
 
         sql_query = """
         SELECT DISTINCT
@@ -1373,14 +1336,9 @@ async def global_view_spend_tags(
     """
     import traceback
 
-    from litellm.proxy.proxy_server import prisma_client
+    prisma_client = _get_read_prisma_client()
 
     try:
-        if prisma_client is None:
-            raise Exception(
-                "Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
-            )
-
         if end_date is None or start_date is None:
             raise ProxyException(
                 message="Please provide start_date and end_date",
@@ -1420,9 +1378,9 @@ async def _get_spend_report_for_time_range(
     start_date: str,
     end_date: str,
 ):
-    from litellm.proxy.proxy_server import prisma_client
-
-    if prisma_client is None:
+    try:
+        prisma_client = _get_read_prisma_client()
+    except Exception:
         verbose_proxy_logger.error(
             "Database not connected. Connect a database to your proxy for weekly, monthly spend reports"
         )
@@ -1731,15 +1689,7 @@ async def ui_view_spend_logs(  # noqa: PLR0915
 -H "Authorization: Bearer sk-1234"
     ```
     """
-    from litellm.proxy.proxy_server import prisma_client
-
-    if prisma_client is None:
-        raise ProxyException(
-            message="Prisma Client is not initialized",
-            type="internal_error",
-            param="None",
-            code=status.HTTP_401_UNAUTHORIZED,
-        )
+    prisma_client = _get_read_prisma_client()
 
     if start_date is None or end_date is None:
         raise ProxyException(
@@ -2164,7 +2114,7 @@ async def view_spend_logs(  # noqa: PLR0915
 -H "Authorization: Bearer sk-1234"
     ```
     """
-    from litellm.proxy.proxy_server import prisma_client
+    prisma_client = _get_read_prisma_client()
 
     if (
         user_api_key_dict.user_role == LitellmUserRoles.INTERNAL_USER
@@ -2174,10 +2124,6 @@ async def view_spend_logs(  # noqa: PLR0915
 
     try:
         verbose_proxy_logger.debug("inside view_spend_logs")
-        if prisma_client is None:
-            raise Exception(
-                "Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
-            )
         spend_logs = []
         if (
             start_date is not None
@@ -2469,15 +2415,7 @@ async def global_spend_for_internal_user(
     api_key: Optional[str] = None,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
-    from litellm.proxy.proxy_server import prisma_client
-
-    if prisma_client is None:
-        raise ProxyException(
-            message="Prisma Client is not initialized",
-            type="internal_error",
-            param="None",
-            code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        )
+    prisma_client = _get_read_prisma_client()
     try:
         user_id = user_api_key_dict.user_id
         if user_id is None:
@@ -2529,17 +2467,10 @@ async def global_spend_logs(
         get_daily_spend_from_prometheus,
         is_prometheus_connected,
     )
-    from litellm.proxy.proxy_server import prisma_client
+
+    prisma_client = _get_read_prisma_client()
 
     try:
-        if prisma_client is None:
-            raise ProxyException(
-                message="Prisma Client is not initialized",
-                type="internal_error",
-                param="None",
-                code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            )
-
         if (
             user_api_key_dict.user_role == LitellmUserRoles.INTERNAL_USER
             or user_api_key_dict.user_role == LitellmUserRoles.INTERNAL_USER_VIEW_ONLY
@@ -2608,13 +2539,11 @@ async def global_spend():
     """
     import traceback
 
-    from litellm.proxy.proxy_server import prisma_client
+    prisma_client = _get_read_prisma_client()
 
     try:
         total_spend = 0.0
 
-        if prisma_client is None:
-            raise HTTPException(status_code=500, detail={"error": "No db connected"})
         sql_query = """SELECT SUM(spend) as total_spend FROM "MonthlyGlobalSpend";"""
         response = await prisma_client.db.query_raw(query=sql_query)
         if response is not None:
@@ -2645,10 +2574,7 @@ async def global_spend():
 async def global_spend_key_internal_user(
     user_api_key_dict: UserAPIKeyAuth, limit: int = 10
 ):
-    from litellm.proxy.proxy_server import prisma_client
-
-    if prisma_client is None:
-        raise HTTPException(status_code=500, detail={"error": "No db connected"})
+    prisma_client = _get_read_prisma_client()
 
     user_id = user_api_key_dict.user_id
     if user_id is None:
@@ -2706,7 +2632,7 @@ async def global_spend_keys(
 
     Use this to get the top 'n' keys with the highest spend, ordered by spend.
     """
-    from litellm.proxy.proxy_server import prisma_client
+    prisma_client = _get_read_prisma_client()
 
     if (
         user_api_key_dict.user_role == LitellmUserRoles.INTERNAL_USER
@@ -2717,8 +2643,6 @@ async def global_spend_keys(
         )
 
         return response
-    if prisma_client is None:
-        raise HTTPException(status_code=500, detail={"error": "No db connected"})
     sql_query = """SELECT * FROM "Last30dKeysBySpend";"""
 
     if limit is None:
@@ -2750,10 +2674,8 @@ async def global_spend_per_team():
 
     Use this to get daily spend, grouped by `team_id` and `date`
     """
-    from litellm.proxy.proxy_server import prisma_client
+    prisma_client = _get_read_prisma_client()
 
-    if prisma_client is None:
-        raise HTTPException(status_code=500, detail={"error": "No db connected"})
     sql_query = """
         SELECT
             t.team_alias as team_alias,
@@ -2843,10 +2765,7 @@ async def global_view_all_end_users():
 
     Use this to just get all the unique `end_users`
     """
-    from litellm.proxy.proxy_server import prisma_client
-
-    if prisma_client is None:
-        raise HTTPException(status_code=500, detail={"error": "No db connected"})
+    prisma_client = _get_read_prisma_client()
 
     sql_query = """
     SELECT DISTINCT end_user FROM "LiteLLM_SpendLogs"
@@ -2875,10 +2794,7 @@ async def global_spend_end_users(data: Optional[GlobalEndUsersSpend] = None):
 
     Use this to get the top 'n' keys with the highest spend, ordered by spend.
     """
-    from litellm.proxy.proxy_server import prisma_client
-
-    if prisma_client is None:
-        raise HTTPException(status_code=500, detail={"error": "No db connected"})
+    prisma_client = _get_read_prisma_client()
 
     """
     Gets the top 100 end-users for a given api key
@@ -2919,10 +2835,7 @@ LIMIT 100
 async def global_spend_models_internal_user(
     user_api_key_dict: UserAPIKeyAuth, limit: int = 10
 ):
-    from litellm.proxy.proxy_server import prisma_client
-
-    if prisma_client is None:
-        raise HTTPException(status_code=500, detail={"error": "No db connected"})
+    prisma_client = _get_read_prisma_client()
 
     user_id = user_api_key_dict.user_id
     if user_id is None:
@@ -2967,7 +2880,7 @@ async def global_spend_models(
 
     Use this to get the top 'n' models with the highest spend, ordered by spend.
     """
-    from litellm.proxy.proxy_server import prisma_client
+    prisma_client = _get_read_prisma_client()
 
     if (
         user_api_key_dict.user_role == LitellmUserRoles.INTERNAL_USER
@@ -2977,9 +2890,6 @@ async def global_spend_models(
             user_api_key_dict=user_api_key_dict, limit=limit
         )
         return response
-
-    if prisma_client is None:
-        raise HTTPException(status_code=500, detail={"error": "No db connected"})
 
     sql_query = """SELECT * FROM "Last30dModelsBySpend" LIMIT $1 ;"""
 
@@ -3231,15 +3141,9 @@ async def ui_view_session_spend_logs(
             "total_pages": int,
         }
     """
-    from litellm.proxy.proxy_server import prisma_client
+    prisma_client = _get_read_prisma_client()
 
     try:
-        if prisma_client is None:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Database not connected",
-            )
-
         # Build query conditions
         where_conditions = {"session_id": session_id}
 
@@ -3445,3 +3349,948 @@ def _can_user_view_spend_log(user_api_key_dict: UserAPIKeyAuth) -> bool:
         )
         and user_id is not None
     )
+
+class ErrorStatsResponse(BaseModel):
+    time_bucket_size: str
+    data: List[Dict[str, Any]]
+
+@router.get(
+    "/spend/logs/error_stats",
+    tags=["Budget & Spend Tracking"],
+    dependencies=[Depends(user_api_key_auth)],
+    include_in_schema=False,
+    responses={
+        200: {"model": ErrorStatsResponse},
+    },
+)
+async def ui_view_error_stats(
+    api_key: Optional[str] = fastapi.Query(
+        default=None,
+        description="Filter by api key",
+    ),
+    team_id: Optional[str] = fastapi.Query(
+        default=None,
+        description="Filter by team_id",
+    ),
+    request_id: Optional[str] = fastapi.Query(
+        default=None,
+        description="Filter by request_id",
+    ),
+    start_date: Optional[str] = fastapi.Query(
+        default=None,
+        description="Time from which to start viewing error stats",
+    ),
+    end_date: Optional[str] = fastapi.Query(
+        default=None,
+        description="Time till which to view error stats",
+    ),
+    user_id: Optional[str] = fastapi.Query(
+        default=None,
+        description="Filter by user_id",
+    ),
+    end_user: Optional[str] = fastapi.Query(
+        default=None,
+        description="Filter by end user",
+    ),
+    status_filter: Optional[str] = fastapi.Query(
+        default=None, description="Filter by status (e.g., success, failure)"
+    ),
+    model: Optional[str] = fastapi.Query(
+        default=None, description="Filter by model"
+    ),
+    key_alias: Optional[str] = fastapi.Query(
+        default=None, description="Filter by key alias"
+    ),
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Get error statistics grouped by error_class from spend logs
+
+    Returns:
+        [
+            {"extracted_error": "error_class_name", "count": 123},
+            ...
+        ]
+    """
+    prisma_read_client = _get_read_prisma_client()
+
+    if start_date is None or end_date is None:
+        raise ProxyException(
+            message="Start date and end date are required",
+            type="bad_request",
+            param="None",
+            code=status.HTTP_400_BAD_REQUEST,
+        )
+
+    try:
+        start_date_obj = datetime.strptime(start_date, "%Y-%m-%d %H:%M:%S").replace(
+            tzinfo=timezone.utc
+        )
+        end_date_obj = datetime.strptime(end_date, "%Y-%m-%d %H:%M:%S").replace(
+            tzinfo=timezone.utc
+        )
+
+        start_date_iso = start_date_obj.isoformat()
+        end_date_iso = end_date_obj.isoformat()
+
+        where_conditions: dict[str, Any] = {
+            "startTime": {"gte": start_date_iso, "lte": end_date_iso},
+        }
+
+        if team_id is not None:
+            where_conditions["team_id"] = team_id
+
+        if api_key is not None:
+            where_conditions["api_key"] = api_key
+
+        if request_id is not None:
+            where_conditions["request_id"] = request_id
+
+        if user_id is not None:
+            where_conditions["user"] = user_id
+
+        if model is not None:
+            where_conditions["model"] = model
+
+        if end_user is not None:
+            where_conditions["end_user"] = end_user
+
+        if key_alias is not None:
+            where_conditions["metadata"] = {
+                "path": ["user_api_key_alias"],
+                "string_contains": key_alias,
+            }
+
+        status_condition = _build_status_filter_condition(status_filter)
+        if status_condition:
+            where_conditions.update(status_condition)
+
+        is_admin_view = _is_admin_view_safe(user_api_key_dict=user_api_key_dict)
+        if not is_admin_view:
+            if team_id is not None:
+                can_view_team = await _can_team_member_view_log(
+                    prisma_client=prisma_read_client,
+                    user_api_key_dict=user_api_key_dict,
+                    team_id=team_id,
+                )
+                if not can_view_team:
+                    raise HTTPException(
+                        status_code=status.HTTP_403_FORBIDDEN,
+                        detail={
+                            "error": "Not authorized to view team spend for team_id={}".format(
+                                team_id
+                            )
+                        },
+                    )
+                where_conditions["team_id"] = team_id
+            else:
+                if _can_user_view_spend_log(user_api_key_dict=user_api_key_dict):
+                    where_conditions["user"] = user_api_key_dict.user_id
+                    where_conditions.pop("team_id", None)
+
+        time_diff_hours = (end_date_obj - start_date_obj).total_seconds() / 3600
+
+        # Validate time range doesn't exceed 10 days
+        if time_diff_hours > 240:
+            raise ProxyException(
+                message="Time range exceeds maximum allowed (10 days)",
+                type="bad_request",
+                param="start_date/end_date",
+                code=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Calculate bucket size dynamically to keep buckets < 700
+        # Formula: bucket_seconds = (time_diff_hours * 3600) / max_buckets
+        max_buckets = 700
+        total_seconds = time_diff_hours * 3600
+        min_bucket_seconds = total_seconds / max_buckets
+
+        # Define sensible bucket intervals in ascending order
+        bucket_intervals = [
+            (60, "1 minute"),
+            (120, "2 minutes"),
+            (300, "5 minutes"),
+            (600, "10 minutes"),
+            (900, "15 minutes"),
+            (1800, "30 minutes"),
+            (3600, "1 hour"),
+            (7200, "2 hours"),
+            (14400, "4 hours"),
+            (28800, "8 hours"),
+            (43200, "12 hours"),
+            (86400, "1 day"),
+            (172800, "2 days"),
+            (259200, "3 days"),
+            (604800, "1 week"),
+            (1209600, "2 weeks"),
+            (2592000, "1 month"),
+        ]
+
+        # Find the smallest bucket interval that satisfies the constraint
+        # Default to the largest interval (1 month)
+        bucket_seconds, time_bucket_display = bucket_intervals[-1]
+        for bucket_sec, display in bucket_intervals:
+            if bucket_sec >= min_bucket_seconds:
+                bucket_seconds, time_bucket_display = bucket_sec, display
+                break
+
+        sql_query = f"""
+        SELECT
+            to_timestamp(FLOOR(EXTRACT(EPOCH FROM "startTime") / {bucket_seconds}) * {bucket_seconds}) AS time_bucket,
+            (metadata::jsonb)->'error_information'->>'error_class' AS extracted_error,
+            COUNT(*) AS count
+        FROM "LiteLLM_SpendLogs"
+        WHERE (metadata::jsonb)->'error_information'->>'error_class' IS NOT NULL
+        """
+
+        params = []
+        param_index = 1
+
+        if "startTime" in where_conditions:
+            sql_query += f" AND \"startTime\" >= ${param_index}::timestamp"
+            params.append(where_conditions["startTime"]["gte"])
+            param_index += 1
+            sql_query += f" AND \"startTime\" <= ${param_index}::timestamp"
+            params.append(where_conditions["startTime"]["lte"])
+            param_index += 1
+
+        if "team_id" in where_conditions:
+            sql_query += f" AND team_id = ${param_index}"
+            params.append(where_conditions["team_id"])
+            param_index += 1
+
+        if "api_key" in where_conditions:
+            sql_query += f" AND api_key = ${param_index}"
+            params.append(where_conditions["api_key"])
+            param_index += 1
+
+        if "request_id" in where_conditions:
+            sql_query += f" AND request_id = ${param_index}"
+            params.append(where_conditions["request_id"])
+            param_index += 1
+
+        if "user" in where_conditions:
+            sql_query += f" AND \"user\" = ${param_index}"
+            params.append(where_conditions["user"])
+            param_index += 1
+
+        if "model" in where_conditions:
+            sql_query += f" AND model = ${param_index}"
+            params.append(where_conditions["model"])
+            param_index += 1
+
+        if "end_user" in where_conditions:
+            sql_query += f" AND end_user = ${param_index}"
+            params.append(where_conditions["end_user"])
+            param_index += 1
+
+        if "metadata" in where_conditions:
+            sql_query += f" AND metadata::text LIKE ${param_index}"
+            params.append(f'%{where_conditions["metadata"]["string_contains"]}%')
+            param_index += 1
+
+        sql_query += " GROUP BY 1, 2 ORDER BY 1 ASC, 3 DESC"
+
+        db_response = await asyncio.wait_for(
+            prisma_read_client.db.query_raw(sql_query, *params),
+            timeout=10.0
+        )
+
+        if db_response is None:
+            return {
+                "time_bucket_size": time_bucket_display,
+                "data": []
+            }
+
+        result = []
+        for row in db_response:
+            result.append({
+                "time_bucket": row.get("time_bucket"),
+                "extracted_error": row.get("extracted_error", "Unknown Error"),
+                "count": row.get("count", 0)
+            })
+
+        return {
+            "time_bucket_size": time_bucket_display,
+            "data": result
+        }
+
+    except Exception as e:
+        verbose_proxy_logger.exception(f"Error in ui_view_error_stats: {e}")
+        raise handle_exception_on_proxy(e)
+
+class FailureLogsAnalyticsPaginatedResponse(BaseModel):
+    data: List[Dict[str, Any]]
+    total: int
+    page: int
+    page_size: int
+    total_pages: int
+
+@router.get(
+    "/spend/logs/failure_logs_analytics_paginated",
+    tags=["Budget & Spend Tracking"],
+    dependencies=[Depends(user_api_key_auth)],
+    include_in_schema=False,
+    responses={
+        200: {"model": FailureLogsAnalyticsPaginatedResponse},
+    },
+)
+async def ui_view_failure_logs_analytics_paginated(
+    api_key: Optional[str] = fastapi.Query(
+        default=None,
+        description="Filter by api key",
+    ),
+    team_id: Optional[str] = fastapi.Query(
+        default=None,
+        description="Filter by team_id",
+    ),
+    request_id: Optional[str] = fastapi.Query(
+        default=None,
+        description="Filter by request_id",
+    ),
+    start_date: Optional[str] = fastapi.Query(
+        default=None,
+        description="Time from which to start viewing failure logs",
+    ),
+    end_date: Optional[str] = fastapi.Query(
+        default=None,
+        description="Time till which to view failure logs",
+    ),
+    user_id: Optional[str] = fastapi.Query(
+        default=None,
+        description="Filter by user_id",
+    ),
+    end_user: Optional[str] = fastapi.Query(
+        default=None,
+        description="Filter by end user",
+    ),
+    model: Optional[str] = fastapi.Query(
+        default=None, description="Filter by model"
+    ),
+    key_alias: Optional[str] = fastapi.Query(
+        default=None, description="Filter by key alias"
+    ),
+    error_classes: Optional[str] = fastapi.Query(
+        default=None,
+        description="Comma-separated list of error classes to filter by",
+    ),
+    page: int = fastapi.Query(
+        default=1,
+        ge=1,
+        description="Page number for pagination",
+    ),
+    page_size: int = fastapi.Query(
+        default=50,
+        ge=1,
+        le=500,
+        description="Number of items per page",
+    ),
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Get paginated failure logs filtered by error classes and other criteria.
+
+    Only returns logs where metadata.error_information.error_class is set.
+    """
+    prisma_read_client = _get_read_prisma_client()
+
+    if start_date is None or end_date is None:
+        raise ProxyException(
+            message="Start date and end date are required",
+            type="bad_request",
+            param="None",
+            code=status.HTTP_400_BAD_REQUEST,
+        )
+
+    try:
+        # Parse date strings - supports "YYYY-MM-DD HH:MM:SS" and "YYYY-MM-DDTHH:MM"
+        try:
+            start_date_obj = datetime.strptime(start_date, "%Y-%m-%d %H:%M:%S").replace(
+                tzinfo=timezone.utc
+            )
+        except ValueError:
+            start_date_obj = datetime.strptime(start_date, "%Y-%m-%dT%H:%M").replace(
+                tzinfo=timezone.utc
+            )
+
+        try:
+            end_date_obj = datetime.strptime(end_date, "%Y-%m-%d %H:%M:%S").replace(
+                tzinfo=timezone.utc
+            )
+        except ValueError:
+            end_date_obj = datetime.strptime(end_date, "%Y-%m-%dT%H:%M").replace(
+                tzinfo=timezone.utc
+            )
+
+        # Validate time range doesn't exceed 10 days
+        time_diff_hours = (end_date_obj - start_date_obj).total_seconds() / 3600
+        if time_diff_hours > 240:
+            raise ProxyException(
+                message="Time range exceeds maximum allowed (10 days)",
+                type="bad_request",
+                param="start_date/end_date",
+                code=status.HTTP_400_BAD_REQUEST,
+            )
+
+        start_date_iso = start_date_obj.isoformat()
+        end_date_iso = end_date_obj.isoformat()
+
+        where_conditions: dict[str, Any] = {
+            "startTime": {"gte": start_date_iso, "lte": end_date_iso},
+        }
+
+        if team_id is not None:
+            where_conditions["team_id"] = team_id
+
+        if api_key is not None:
+            where_conditions["api_key"] = api_key
+
+        if request_id is not None:
+            where_conditions["request_id"] = request_id
+
+        if user_id is not None:
+            where_conditions["user"] = user_id
+
+        if model is not None:
+            where_conditions["model"] = model
+
+        if end_user is not None:
+            where_conditions["end_user"] = end_user
+
+        if key_alias is not None:
+            where_conditions["metadata"] = {
+                "path": ["user_api_key_alias"],
+                "string_contains": key_alias,
+            }
+
+        # Parse error classes
+        error_class_list = []
+        if error_classes:
+            error_class_list = [ec.strip() for ec in error_classes.split(",") if ec.strip()]
+
+        is_admin_view = _is_admin_view_safe(user_api_key_dict=user_api_key_dict)
+        if not is_admin_view:
+            if team_id is not None:
+                can_view_team = await _can_team_member_view_log(
+                    prisma_client=prisma_read_client,
+                    user_api_key_dict=user_api_key_dict,
+                    team_id=team_id,
+                )
+                if not can_view_team:
+                    raise HTTPException(
+                        status_code=status.HTTP_403_FORBIDDEN,
+                        detail={
+                            "error": "Not authorized to view team spend for team_id={}".format(
+                                team_id
+                            )
+                        },
+                    )
+                where_conditions["team_id"] = team_id
+            else:
+                if _can_user_view_spend_log(user_api_key_dict=user_api_key_dict):
+                    where_conditions["user"] = user_api_key_dict.user_id
+                    where_conditions.pop("team_id", None)
+                else:
+                    raise HTTPException(
+                        status_code=status.HTTP_403_FORBIDDEN,
+                        detail={
+                            "error": "Not authorized to view spend logs"
+                        },
+                    )
+
+        # Build SQL query for failure logs with error class filter
+        sql_query = """
+        SELECT *
+        FROM "LiteLLM_SpendLogs"
+        WHERE (metadata::jsonb)->'error_information'->>'error_class' IS NOT NULL
+        AND status = 'failure'
+        """
+
+        params = []
+        param_index = 1
+
+        if "startTime" in where_conditions:
+            sql_query += f" AND \"startTime\" >= ${param_index}::timestamp"
+            params.append(where_conditions["startTime"]["gte"])
+            param_index += 1
+            sql_query += f" AND \"startTime\" <= ${param_index}::timestamp"
+            params.append(where_conditions["startTime"]["lte"])
+            param_index += 1
+
+        if "team_id" in where_conditions:
+            sql_query += f" AND team_id = ${param_index}"
+            params.append(where_conditions["team_id"])
+            param_index += 1
+
+        if "api_key" in where_conditions:
+            sql_query += f" AND api_key = ${param_index}"
+            params.append(where_conditions["api_key"])
+            param_index += 1
+
+        if "request_id" in where_conditions:
+            sql_query += f" AND request_id = ${param_index}"
+            params.append(where_conditions["request_id"])
+            param_index += 1
+
+        if "user" in where_conditions:
+            sql_query += f" AND \"user\" = ${param_index}"
+            params.append(where_conditions["user"])
+            param_index += 1
+
+        if "model" in where_conditions:
+            sql_query += f" AND model = ${param_index}"
+            params.append(where_conditions["model"])
+            param_index += 1
+
+        if "end_user" in where_conditions:
+            sql_query += f" AND end_user = ${param_index}"
+            params.append(where_conditions["end_user"])
+            param_index += 1
+
+        if "metadata" in where_conditions:
+            sql_query += f" AND metadata::text LIKE ${param_index}"
+            params.append(f'%{where_conditions["metadata"]["string_contains"]}%')
+            param_index += 1
+
+        # Filter by selected error classes
+        if error_class_list:
+            placeholders = []
+            for error_class in error_class_list:
+                placeholders.append(f"${param_index}")
+                params.append(error_class)
+                param_index += 1
+            sql_query += f" AND (metadata::jsonb)->'error_information'->>'error_class' IN ({', '.join(placeholders)})"
+
+        # Get total count
+        count_query = sql_query.replace("SELECT *", "SELECT COUNT(*) as total")
+        count_result = await asyncio.wait_for(
+            prisma_read_client.db.query_raw(count_query, *params),
+            timeout=10.0
+        )
+        total = count_result[0].get("total", 0) if count_result else 0
+
+        # Calculate pages
+        total_pages = (total + page_size - 1) // page_size if total > 0 else 0
+
+        # Add ordering and pagination
+        sql_query += f" ORDER BY \"startTime\" DESC LIMIT ${param_index} OFFSET ${param_index + 1}"
+        params.append(page_size)
+        param_index += 1
+        params.append((page - 1) * page_size)
+
+        # Execute paginated query
+        db_response = await asyncio.wait_for(
+            prisma_read_client.db.query_raw(sql_query, *params),
+            timeout=10.0
+        )
+
+        if db_response is None:
+            return {
+                "data": [],
+                "total": 0,
+                "page": page,
+                "page_size": page_size,
+                "total_pages": 0,
+            }
+
+        # Convert rows to dict
+        data = []
+        for row in db_response:
+            data.append(dict(row))
+
+        return {
+            "data": data,
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+            "total_pages": total_pages,
+        }
+
+    except Exception as e:
+        verbose_proxy_logger.exception(f"Error in ui_view_failure_logs_analytics_paginated: {e}")
+        raise handle_exception_on_proxy(e)
+    
+
+@router.get(
+    "/spend/logs/models",
+    tags=["Budget & Spend Tracking"],
+    dependencies=[Depends(user_api_key_auth)],
+    include_in_schema=False,
+)
+async def get_spend_logs_models(
+    start_date: Optional[str] = fastapi.Query(
+        default=None,
+        description="Start date in ISO format to filter models from logs",
+    ),
+    end_date: Optional[str] = fastapi.Query(
+        default=None,
+        description="End date in ISO format to filter models from logs",
+    ),
+):
+    """
+    Get distinct models from spend logs within a time range.
+
+    Example Request:
+    ```
+    curl -X GET "http://0.0.0.0:8000/spend/logs/models?start_date=2024-01-01T00:00:00&end_date=2024-01-31T23:59:59" \
+    -H "Authorization: Bearer sk-1234"
+    ```
+    """
+    prisma_read_client = _get_read_prisma_client()
+
+    # Validate date range is not more than 10 days
+    if start_date and end_date:
+        try:
+            start_dt = datetime.strptime(start_date, "%Y-%m-%d %H:%M:%S").replace(
+                tzinfo=timezone.utc
+            )
+        except ValueError:
+            start_dt = datetime.strptime(start_date, "%Y-%m-%dT%H:%M").replace(
+                tzinfo=timezone.utc
+            )
+
+        try:
+            end_dt = datetime.strptime(end_date, "%Y-%m-%d %H:%M:%S").replace(
+                tzinfo=timezone.utc
+            )
+        except ValueError:
+            end_dt = datetime.strptime(end_date, "%Y-%m-%dT%H:%M").replace(
+                tzinfo=timezone.utc
+            )
+
+        time_diff_hours = (end_dt - start_dt).total_seconds() / 3600
+        if time_diff_hours > 240:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"error": "Date range cannot exceed 10 days"},
+            )
+
+    try:
+        sql_query = """
+        SELECT DISTINCT model FROM "LiteLLM_SpendLogs"
+        WHERE model IS NOT NULL
+        """
+        params = []
+
+        if start_date:
+            sql_query += ' AND "startTime" >= $1::timestamptz'
+            params.append(start_date)
+        if end_date:
+            param_idx = len(params) + 1
+            sql_query += f' AND "startTime" <= ${param_idx}::timestamptz'
+            params.append(end_date)
+
+        sql_query += ' ORDER BY model ASC'
+
+        db_response = await asyncio.wait_for(
+            prisma_read_client.db.query_raw(sql_query, *params),
+            timeout=10.0
+        )
+        if db_response is None:
+            return {"models": []}
+
+        models = [row["model"] for row in db_response]
+
+        return {"models": models}
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"error": f"Failed to fetch models: {str(e)}"},
+        )
+
+
+@router.get(
+    "/concurrent_request_logs",
+    tags=["Budget & Spend Tracking"],
+    dependencies=[Depends(user_api_key_auth)],
+    include_in_schema=False,
+)
+async def concurrent_request_logs(
+    timestamp: str = fastapi.Query(
+        description="Target timestamp in ISO 8601 format (e.g., 2026-03-27T15:30:00.123Z)"
+    ),
+    api_key: Optional[str] = fastapi.Query(
+        default=None,
+        description="Optional API key filter (e.g., sk-...gQxg)"
+    ),
+    page: int = fastapi.Query(
+        default=1,
+        ge=1,
+        description="Page number (1-indexed)"
+    ),
+    page_size: int = fastapi.Query(
+        default=50,
+        ge=1,
+        le=100,
+        description="Number of items per page"
+    ),
+):
+    """
+    Get concurrent request logs by first querying Prometheus for metrics,
+    then fetching SpendLogs concurrency for those keys.
+
+    Query flow:
+    1. Query Prometheus /query_range with time range [timestamp-10s, timestamp+10s]
+    2. For each key found in Prometheus, query SpendLogs for concurrency count
+    3. Return combined data with both Prometheus metrics and SpendLogs data
+    """
+    from litellm.integrations.prometheus_helpers.prometheus_api import (
+        PROMETHEUS_URL,
+        async_http_handler,
+    )
+
+    prisma_client = _get_read_prisma_client()
+
+    try:
+
+        # Parse ISO timestamp and convert to Unix timestamp
+        try:
+            target_time = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+        except ValueError:
+            target_time = datetime.fromisoformat(timestamp)
+            target_time = target_time.replace(tzinfo=timezone.utc)
+
+        unix_timestamp = target_time.timestamp()  # Keep float for millisecond precision
+
+        # Step 1: Query Prometheus for metrics with timestamp
+        # Use companion timestamp metric to find the most recently updated value per key
+        if PROMETHEUS_URL is None:
+            verbose_proxy_logger.warning("[concurrent_request_logs] PROMETHEUS_URL is not configured. Set PROMETHEUS_URL environment variable.")
+            return {"data": [], "total": 0}
+
+        prometheus_url = PROMETHEUS_URL
+        query_url = f"{prometheus_url}/api/v1/query"
+
+        # Query at input_time + 10 seconds so 20s lookback covers [input_time - 10s, input_time + 10s]
+        query_time = unix_timestamp + 10
+
+        # Escape api_key for safe PromQL label value interpolation
+        # PromQL requires escaping backslashes, double quotes, and newlines
+        def escape_promql_label_value(value: str) -> str:
+            return value.replace('\\', '\\\\').replace('"', '\\"').replace('\n', '\\n')
+
+        # Build queries - range query with 20s lookback
+        if api_key:
+            escaped_key = escape_promql_label_value(api_key)
+            value_query = f'litellm_current_parallel_requests{{key_name="{escaped_key}"}}[20s]'
+            timestamp_query = f'litellm_current_parallel_requests_timestamp{{key_name="{escaped_key}"}}[20s]'
+        else:
+            value_query = 'litellm_current_parallel_requests[20s]'
+            timestamp_query = 'litellm_current_parallel_requests_timestamp[20s]'
+
+        # Query both metrics in parallel
+        try:
+            ts_response, value_response = await asyncio.gather(
+                async_http_handler.get(
+                    query_url,
+                    params={
+                        "query": timestamp_query,
+                        "time": query_time,
+                    }
+                ),
+                async_http_handler.get(
+                    query_url,
+                    params={
+                        "query": value_query,
+                        "time": query_time,
+                    }
+                ),
+            )
+            ts_data = ts_response.json()
+            value_data = value_response.json()
+        except Exception as http_err:
+            verbose_proxy_logger.warning(f"[concurrent_request_logs] Prometheus query failed: {http_err}")
+            return {"data": [], "total": 0}
+
+        # Step 2: Parse timestamp metric to find the latest update time per key
+        # The timestamp metric value IS the unix timestamp when the gauge was set
+        # key_key = (token, key_name, key_alias, team_alias)
+        # {key_key: {"max_update_ts": float, "instance": str}}
+        latest_update_info: Dict[tuple, Dict] = {}
+
+        if ts_data.get("data", {}).get("result"):
+            for result in ts_data["data"]["result"]:
+                metric = result.get("metric", {})
+                token = metric.get("token", "")
+                key_name_from_prom = metric.get("key_name", "")
+                key_alias = metric.get("key_alias", "")
+                team_alias = metric.get("team_alias", "")
+                instance = metric.get("instance", "")
+                key_key = (token, key_name_from_prom, key_alias or "", team_alias or "")
+
+                # Range query returns "values" array: [[scrape_ts, update_ts], ...]
+                values = result.get("values", [])
+
+                if values:
+                    # Find the sample closest to the target timestamp (input_time)
+                    closest_sample = None
+                    min_diff = float('inf')
+                    for sample in values:
+                        if isinstance(sample, list) and len(sample) >= 2:
+                            scrape_ts = float(sample[0])
+                            diff = abs(scrape_ts - unix_timestamp)
+                            if diff < min_diff:
+                                min_diff = diff
+                                closest_sample = sample
+
+                    if closest_sample:
+                        scrape_ts = float(closest_sample[0])
+                        update_ts = float(closest_sample[1])  # This is when the gauge was actually set
+
+                        # Keep track of the instance with the latest update time for this key
+                        if key_key not in latest_update_info or update_ts > latest_update_info[key_key]["max_update_ts"]:
+                            latest_update_info[key_key] = {
+                                "max_update_ts": update_ts,
+                                "scrape_ts": scrape_ts,
+                                "instance": instance,
+                            }
+
+        # Step 3: Parse value metric and match with latest update info
+        # {key_key: {"value": float, "scrape_ts": float, "update_ts": float, ...}}
+        key_values: Dict[tuple, Dict] = {}
+
+        if value_data.get("data", {}).get("result"):
+            for result in value_data["data"]["result"]:
+                metric = result.get("metric", {})
+                token = metric.get("token", "")
+                key_name_from_prom = metric.get("key_name", "")
+                key_alias = metric.get("key_alias", "")
+                team_alias = metric.get("team_alias", "")
+                instance = metric.get("instance", "")
+                key_key = (token, key_name_from_prom, key_alias or "", team_alias or "")
+
+                # Only process if this key has a latest update record
+                if key_key not in latest_update_info:
+                    continue
+
+                # Only take value from the instance that had the latest update
+                if instance != latest_update_info[key_key]["instance"]:
+                    continue
+
+                values = result.get("values", [])
+
+                if values:
+                    # Find the sample closest to the target timestamp (input_time)
+                    closest_sample = None
+                    min_diff = float('inf')
+                    for sample in values:
+                        if isinstance(sample, list) and len(sample) >= 2:
+                            scrape_ts = float(sample[0])
+                            diff = abs(scrape_ts - unix_timestamp)
+                            if diff < min_diff:
+                                min_diff = diff
+                                closest_sample = sample
+
+                    if closest_sample:
+                        scrape_ts = float(closest_sample[0])
+                        value = float(closest_sample[1])
+
+                        key_values[key_key] = {
+                            "value": value,
+                            "scrape_ts": scrape_ts,
+                            "update_ts": latest_update_info[key_key]["max_update_ts"],
+                            "key_alias": key_alias,
+                        }
+
+        # Build results (sorted for consistent pagination)
+        prom_results = []
+        for key_key in sorted(key_values.keys()):
+            data = key_values[key_key]
+            token, key_name_from_prom, key_alias, team_alias = key_key
+            prom_results.append({
+                "token": token,
+                "key_name": key_name_from_prom,
+                "key_alias": key_alias,
+                "metrics_concurrency": data["value"],
+                "scrape_timestamp": data["scrape_ts"],  # Prometheus scrape time
+                "update_timestamp": data["update_ts"],  # When gauge was actually set
+            })
+
+        # Apply pagination
+        total = len(prom_results)
+        offset = (page - 1) * page_size
+        paginated_results = prom_results[offset:offset + page_size]
+
+        if not paginated_results:
+            return {"data": [], "total": total}
+
+        # Step 2: Query SpendLogs for the keys from Prometheus
+        # Get unique tokens for the IN clause
+        tokens = [r["token"] for r in paginated_results if r["token"]]
+        if not tokens:
+            # Return Prometheus data only (no spend logs data available)
+            data = [
+                {
+                    "key_alias": r["key_alias"] or "—",
+                    "key_token": r["token"],
+                    "metrics_concurrency": r["metrics_concurrency"],
+                    "scrape_timestamp": r["scrape_timestamp"],
+                    "update_timestamp": r.get("update_timestamp"),
+                    "spend_logs_concurrency": "—",
+                }
+                for r in paginated_results
+            ]
+            return {"data": data, "total": total}
+
+        # Get the min scrape timestamp to use as reference for SpendLogs query
+        # Use the scrape timestamp from Prometheus as the reference time
+        min_scrape_ts = min(r["scrape_timestamp"] for r in paginated_results)
+        scrape_time = datetime.fromtimestamp(min_scrape_ts, tz=timezone.utc)
+        scrape_time_str = scrape_time.isoformat()
+
+        # Build token placeholders for SQL IN clause
+        token_placeholders = ", ".join([f"${i+2}" for i in range(len(tokens))])
+
+        sql_query = f"""
+        SELECT
+            vt.key_alias as key_alias,
+            l.api_key as key_token,
+            COUNT(l.api_key)::int AS spend_logs_concurrency
+        FROM "LiteLLM_SpendLogs" l
+        LEFT JOIN "LiteLLM_VerificationToken" vt
+            ON l.api_key = vt.token
+        WHERE l."startTime" >= ($1::timestamptz - INTERVAL '5 minutes')
+           AND l."startTime" <= $1::timestamptz
+           AND l."endTime" >= $1::timestamptz
+           AND l.api_key IN ({token_placeholders})
+        GROUP BY
+            vt.key_alias,
+            l.api_key
+        """
+
+        response = await prisma_client.db.query_raw(sql_query, scrape_time_str, *tokens)
+
+        # Build spend logs map
+        spend_logs_map = {}
+        if response and isinstance(response, list):
+            for row in response:
+                if isinstance(row, dict):
+                    token = row.get("key_token")
+                    spend_logs_map[token] = {
+                        "key_alias": row.get("key_alias") or "—",
+                        "spend_logs_concurrency": row.get("spend_logs_concurrency") or 0,
+                    }
+
+        # Combine Prometheus and SpendLogs data
+        data = []
+        for r in paginated_results:
+            token = r["token"]
+            spend_data = spend_logs_map.get(token, {})
+
+            data.append({
+                "key_alias": spend_data.get("key_alias") or r["key_alias"] or "—",
+                "key_token": token,
+                "metrics_concurrency": r["metrics_concurrency"],
+                "scrape_timestamp": r["scrape_timestamp"],
+                "update_timestamp": r.get("update_timestamp"),
+                "spend_logs_concurrency": spend_data.get("spend_logs_concurrency", 0),
+            })
+
+        return {"data": data, "total": total}
+
+    except Exception as e:
+        verbose_proxy_logger.error(f"[concurrent_request_logs] Error: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"error": str(e)},
+        )
