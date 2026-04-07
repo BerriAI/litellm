@@ -1,0 +1,48 @@
+services:
+  litellm:
+    build:
+      context: .
+      dockerfile: Dockerfile.mavvrik
+    image: litellm-mavvrik-test
+    volumes:
+      - ./config.test.yaml:/app/config.yaml
+    command:
+      - "--config=/app/config.yaml"
+    ports:
+      - "4000:4000"
+    environment:
+      DATABASE_URL: "postgresql://llmproxy:dbpassword9090@db:5432/litellm"
+      STORE_MODEL_IN_DB: "True"
+      UI_USERNAME: "admin"
+      UI_PASSWORD: "admin123"
+      LITELLM_MASTER_KEY: "sk-1234"
+      MAVVRIK_API_KEY: "bQG_hU1M5oDIkemM07zEBB2rMgMriK9GQelBoQN8IfJmgYgp61vqkq_aqA3YhLe7"
+      MAVVRIK_API_ENDPOINT: "https://api.mavvrik.dev/iymc3dzwr5_x9izj"
+      MAVVRIK_CONNECTION_ID: "litellm-test101"
+      MAVVRIK_EXPORT_INTERVAL_MINUTES: "1"
+      PYTHONPATH: "/app"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  db:
+    image: postgres:16
+    restart: always
+    container_name: litellm_test_db
+    environment:
+      POSTGRES_DB: litellm
+      POSTGRES_USER: llmproxy
+      POSTGRES_PASSWORD: dbpassword9090
+    ports:
+      - "5432:5432"
+    volumes:
+      - litellm_test_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -d litellm -U llmproxy"]
+      interval: 1s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  litellm_test_postgres_data:
+    name: litellm_test_postgres_data

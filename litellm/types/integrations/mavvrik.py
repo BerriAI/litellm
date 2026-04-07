@@ -54,8 +54,8 @@ MavvrikRecordDict = Dict[str, Any]
 class MavvrikSignedUrlResponse:
     """Parsed response from the Mavvrik signed URL endpoint.
 
-    GET {api_url}/{tenant}/k8s/agent/{instance_id}/upload-url
-        ?name={interval}&provider=gcp&type=metrics
+    GET {api_endpoint}/metrics/agent/ai/{connection_id}/upload-url
+        ?name={date_str}&type=metrics
     Response: { "url": "https://storage.googleapis.com/..." }
     """
 
@@ -71,8 +71,7 @@ class MavvrikSettings:
     __slots__ = (
         "api_key",
         "api_endpoint",
-        "tenant",
-        "instance_id",
+        "connection_id",
         "timezone",
         "marker",
     )
@@ -81,15 +80,13 @@ class MavvrikSettings:
         self,
         api_key: str,
         api_endpoint: str,
-        tenant: str,
-        instance_id: str,
+        connection_id: str,
         timezone: str = "UTC",
         marker: Optional[str] = None,
     ) -> None:
         self.api_key = api_key
         self.api_endpoint = api_endpoint
-        self.tenant = tenant
-        self.instance_id = instance_id
+        self.connection_id = connection_id
         self.timezone = timezone
         # ISO-8601 UTC timestamp of the last successfully uploaded interval.
         # None means no upload has occurred yet — first run will query all history.

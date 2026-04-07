@@ -1,31 +1,27 @@
 """Mavvrik API streaming layer.
 
-Implements the 3-step upload pattern used by the k8s-appliance:
+Implements the 3-step upload pattern via the generic MetricsAgentController:
 
   Step 1 — GET signed URL from Mavvrik API
-      GET {api_endpoint}/{tenant}/ai-account/agent/{instance_id}/upload-url
-          ?name={interval}&type=metrics
+      GET {api_endpoint}/metrics/agent/ai/{connection_id}/upload-url
+          ?name={date_str}&type=metrics
       Header: x-api-key: {api_key}
       Response: { "url": "https://storage.googleapis.com/..." }
 
   Step 2 — Initiate resumable GCS upload (POST to signed URL)
       POST {signed_url}
-      Headers: Content-Type: text/csv, x-goog-resumable: start
+      Headers: Content-Type: application/gzip, x-goog-resumable: start
       Response 201: Location header = session URI
 
   Step 3 — Upload CSV payload (PUT to session URI)
       PUT {session_uri}
-      Headers: Content-Type: text/csv
-      Body: raw CSV bytes (UTF-8, no compression)
+      Headers: Content-Type: application/gzip
+      Body: gzip-compressed CSV bytes
       Response 200/201: upload complete
-
-The interval name (used as the GCS object name) is the ISO-8601 UTC
-timestamp for the start of the export window, matching the k8s-appliance
-convention so Mavvrik can partition objects by time.
 
 Additionally implements the registration call:
 
-  Register — POST {api_endpoint}/{tenant}/ai-account/agent/{instance_id}
+  Register — POST {api_endpoint}/metrics/agent/ai/{connection_id}
       Header: x-api-key: {api_key}
       Body: { "name": instance_id, "version": <litellm version>, "arch": <system arch> }
       Response: { "id": "...", "metricsMarker": <epoch_seconds> }
@@ -34,9 +30,9 @@ Additionally implements the registration call:
   start sending cost data.  It is stored as the initial marker in
   LiteLLM_Config so Mavvrik controls the data ingestion window.
   If metricsMarker == 0 or is absent, defaults to the first day of
-  the current month (matching k8s-appliance behaviour).
+  the current month.
 
-  Advance marker — PATCH {api_endpoint}/{tenant}/ai-account/agent/{instance_id}
+  Advance marker — PATCH {api_endpoint}/metrics/agent/ai/{connection_id}
       Header: x-api-key: {api_key}
       Body: { "metricsMarker": <epoch_seconds> }
       Response: 204 No Content
@@ -49,8 +45,8 @@ import httpx
 
 from litellm._logging import verbose_proxy_logger
 
-AGENT_BASE_PATH = "/{tenant}/ai-account/agent/{instance_id}"
-UPLOAD_URL_PATH = "/{tenant}/ai-account/agent/{instance_id}/upload-url"
+AGENT_BASE_PATH = "/metrics/agent/ai/{connection_id}"
+UPLOAD_URL_PATH = "/metrics/agent/ai/{connection_id}/upload-url"
 
 _MAX_RETRIES = 3
 _RETRY_BACKOFF_BASE = 1.0  # seconds; doubles each retry
@@ -60,13 +56,12 @@ class MavvrikStreamer:
     """Upload NDJSON+gzip cost data to GCS via a Mavvrik-issued signed URL."""
 
     def __init__(
-        self, api_key: str, api_endpoint: str, tenant: str, instance_id: str
+        self, api_key: str, api_endpoint: str, connection_id: str
     ) -> None:
         self.api_key = api_key
         # Strip trailing slash for consistent URL construction
         self.api_endpoint = api_endpoint.rstrip("/")
-        self.tenant = tenant
-        self.instance_id = instance_id
+        self.connection_id = connection_id
 
     # ------------------------------------------------------------------
     # Public interface
@@ -109,7 +104,7 @@ class MavvrikStreamer:
     def register(self) -> str:
         """POST to Mavvrik agent endpoint and return the initial marker as an ISO-8601 string.
 
-          POST {api_endpoint}/{tenant}/ai-account/agent/{instance_id}
+          POST {api_endpoint}/metrics/agent/ai/{connection_id}
           Body: { "name": instance_id, "version": <litellm version>, "arch": <system arch> }
           Response: { "id": "...", "metricsMarker": <epoch_seconds> }
           metricsMarker == 0 → default to first day of current month
@@ -125,11 +120,11 @@ class MavvrikStreamer:
 
         import litellm as _litellm
 
-        path = AGENT_BASE_PATH.format(tenant=self.tenant, instance_id=self.instance_id)
+        path = AGENT_BASE_PATH.format(connection_id=self.connection_id)
         url = f"{self.api_endpoint}{path}"
         headers = {"Content-Type": "application/json", "x-api-key": self.api_key}
         body: dict = {
-            "name": self.instance_id,
+            "name": self.connection_id,
             "version": getattr(_litellm, "__version__", "0.0.0"),
             "arch": platform.machine(),
         }
@@ -167,14 +162,14 @@ class MavvrikStreamer:
     def advance_marker(self, epoch: int) -> None:
         """PATCH the Mavvrik agent endpoint to advance the metricsMarker.
 
-          PATCH {api_endpoint}/{tenant}/ai-account/agent/{instance_id}
+          PATCH {api_endpoint}/metrics/agent/ai/{connection_id}
           Body: { "metricsMarker": <epoch_seconds> }
           Response: 204 No Content
 
         Raises:
             Exception: if the PATCH fails.
         """
-        path = AGENT_BASE_PATH.format(tenant=self.tenant, instance_id=self.instance_id)
+        path = AGENT_BASE_PATH.format(connection_id=self.connection_id)
         url = f"{self.api_endpoint}{path}"
         headers = {"Content-Type": "application/json", "x-api-key": self.api_key}
         body = {"metricsMarker": epoch}
@@ -196,7 +191,7 @@ class MavvrikStreamer:
     # ------------------------------------------------------------------
 
     def _get_signed_url(self, date_str: str) -> str:
-        path = UPLOAD_URL_PATH.format(tenant=self.tenant, instance_id=self.instance_id)
+        path = UPLOAD_URL_PATH.format(connection_id=self.connection_id)
         url = f"{self.api_endpoint}{path}"
         params = {"name": date_str, "type": "metrics"}
         headers = {"Content-Type": "application/json", "x-api-key": self.api_key}

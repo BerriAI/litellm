@@ -17,9 +17,8 @@ Export flow (runs every MAVVRIK_EXPORT_INTERVAL_MINUTES, default 60):
 
 Environment variables (fallback when DB settings are absent):
     MAVVRIK_API_KEY          x-api-key sent to Mavvrik API
-    MAVVRIK_API_ENDPOINT     Mavvrik API base URL
-    MAVVRIK_TENANT           Mavvrik tenant slug
-    MAVVRIK_INSTANCE_ID      Instance/cluster ID (placeholder for k8s path)
+    MAVVRIK_API_ENDPOINT     Mavvrik API base URL (includes tenant)
+    MAVVRIK_CONNECTION_ID    Connection/instance ID
     MAVVRIK_TIMEZONE         Timezone for date handling (default: UTC)
 """
 
@@ -49,23 +48,20 @@ class MavvrikLogger(CustomLogger):
         self,
         api_key: Optional[str] = None,
         api_endpoint: Optional[str] = None,
-        tenant: Optional[str] = None,
-        instance_id: Optional[str] = None,
+        connection_id: Optional[str] = None,
         timezone: Optional[str] = None,
         **kwargs,
     ):
         super().__init__(**kwargs)
         self.api_key = api_key or os.getenv("MAVVRIK_API_KEY")
         self.api_endpoint = api_endpoint or os.getenv("MAVVRIK_API_ENDPOINT", "")
-        self.tenant = tenant or os.getenv("MAVVRIK_TENANT", "")
-        self.instance_id = instance_id or os.getenv("MAVVRIK_INSTANCE_ID", "")
+        self.connection_id = connection_id or os.getenv("MAVVRIK_CONNECTION_ID", "")
         self.timezone = timezone or os.getenv("MAVVRIK_TIMEZONE", "UTC")
 
         verbose_logger.debug(
-            "MavvrikLogger initialised: endpoint=%s tenant=%s instance=%s timezone=%s",
+            "MavvrikLogger initialised: endpoint=%s connection_id=%s timezone=%s",
             self.api_endpoint,
-            self.tenant,
-            self.instance_id,
+            self.connection_id,
             self.timezone,
         )
 
@@ -110,8 +106,7 @@ class MavvrikLogger(CustomLogger):
             _streamer = MavvrikStreamer(
                 api_key=self.api_key or "",
                 api_endpoint=self.api_endpoint or "",
-                tenant=self.tenant or "",
-                instance_id=self.instance_id or "",
+                connection_id=self.connection_id or "",
             )
             mavvrik_marker_iso = _streamer.register()
             mavvrik_date = date.fromisoformat(mavvrik_marker_iso[:10])
@@ -203,8 +198,7 @@ class MavvrikLogger(CustomLogger):
                 streamer = MavvrikStreamer(
                     api_key=self.api_key or "",
                     api_endpoint=self.api_endpoint or "",
-                    tenant=self.tenant or "",
-                    instance_id=self.instance_id or "",
+                    connection_id=self.connection_id or "",
                 )
                 streamer.advance_marker(export_epoch)
             except Exception as exc:
@@ -249,7 +243,7 @@ class MavvrikLogger(CustomLogger):
         verbose_logger.debug("MavvrikLogger: %d rows fetched, transforming…", len(df))
 
         transformer = MavvrikTransformer()
-        csv_payload = transformer.to_csv(df, instance_id=self.instance_id)
+        csv_payload = transformer.to_csv(df, connection_id=self.connection_id)
 
         if not csv_payload:
             verbose_logger.debug(
@@ -261,8 +255,7 @@ class MavvrikLogger(CustomLogger):
         streamer = MavvrikStreamer(
             api_key=self.api_key or "",
             api_endpoint=self.api_endpoint or "",
-            tenant=self.tenant or "",
-            instance_id=self.instance_id or "",
+            connection_id=self.connection_id or "",
         )
         streamer.upload(csv_payload, date_str=date_str)
 
@@ -350,8 +343,7 @@ class MavvrikLogger(CustomLogger):
             for name, val in [
                 ("api_key", self.api_key),
                 ("api_endpoint", self.api_endpoint),
-                ("tenant", self.tenant),
-                ("instance_id", self.instance_id),
+                ("connection_id", self.connection_id),
             ]
             if not val
         ]
@@ -374,6 +366,26 @@ class MavvrikLogger(CustomLogger):
             callback_type=MavvrikLogger
         )
         verbose_logger.debug("MavvrikLogger: found %d logger instance(s)", len(loggers))
+
+        # If no instance exists yet, auto-create from env vars.
+        # This covers two cases:
+        # 1. success_callback: ["mavvrik"] in config.yaml — string never gets instantiated by proxy
+        # 2. Container starts with MAVVRIK_* env vars but no config.yaml callback set
+        if not loggers and all(
+            os.getenv(v)
+            for v in ("MAVVRIK_API_KEY", "MAVVRIK_API_ENDPOINT", "MAVVRIK_CONNECTION_ID")
+        ):
+            verbose_logger.info(
+                "MavvrikLogger: env vars detected, auto-creating logger from environment"
+            )
+            mavvrik_logger = MavvrikLogger()
+            litellm.logging_callback_manager.add_litellm_success_callback(mavvrik_logger)
+            litellm.logging_callback_manager.add_litellm_async_success_callback(mavvrik_logger)
+            for cb_list in (litellm.success_callback, litellm._async_success_callback):
+                if "mavvrik" in cb_list:
+                    cb_list.remove("mavvrik")
+            loggers = [mavvrik_logger]
+
         if loggers:
             mavvrik_logger = cast(MavvrikLogger, loggers[0])
             verbose_logger.debug(
@@ -384,4 +396,6 @@ class MavvrikLogger(CustomLogger):
                 mavvrik_logger.initialize_mavvrik_export_job,
                 "interval",
                 minutes=MAVVRIK_EXPORT_INTERVAL_MINUTES,
+                id=MAVVRIK_EXPORT_USAGE_DATA_JOB_NAME,
+                replace_existing=True,
             )

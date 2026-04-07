@@ -36,6 +36,32 @@ router = APIRouter()
 _CONFIG_KEY = "mavvrik_settings"
 
 
+@router.get("/mavvrik/debug", tags=["Mavvrik"])
+async def debug_mavvrik():
+    """Temporary debug endpoint — inspect scheduler state from inside the live process."""
+    import litellm.proxy.proxy_server as _pserver
+
+    sched = getattr(_pserver, "scheduler", "ATTR_MISSING")
+    jobs = []
+    if sched and hasattr(sched, "get_jobs"):
+        jobs = [{"id": j.id, "next_run": str(j.next_run_time)} for j in sched.get_jobs()]
+
+    import litellm as _litellm
+    from litellm.integrations.mavvrik.mavvrik import MavvrikLogger
+
+    mavvrik_loggers = _litellm.logging_callback_manager.get_custom_loggers_for_type(
+        callback_type=MavvrikLogger
+    )
+
+    return {
+        "scheduler": str(sched),
+        "scheduler_running": getattr(sched, "running", False) if sched else False,
+        "jobs": jobs,
+        "mavvrik_loggers_count": len(mavvrik_loggers),
+        "success_callbacks": _litellm.success_callback,
+    }
+
+
 # ------------------------------------------------------------------
 # Internal settings helpers
 # ------------------------------------------------------------------
@@ -44,8 +70,7 @@ _CONFIG_KEY = "mavvrik_settings"
 async def _set_mavvrik_settings(
     api_key: str,
     api_endpoint: str,
-    tenant: str,
-    instance_id: str,
+    connection_id: str,
     timezone: str,
     marker: Optional[str] = None,
 ):
@@ -62,8 +87,7 @@ async def _set_mavvrik_settings(
     settings: dict = {
         "api_key": encrypted_api_key,
         "api_endpoint": api_endpoint,
-        "tenant": tenant,
-        "instance_id": instance_id,
+        "connection_id": connection_id,
         "timezone": timezone,
     }
     if marker is not None:
@@ -118,7 +142,21 @@ async def _get_mavvrik_settings() -> dict:
 
 
 async def is_mavvrik_setup() -> bool:
-    """Return True if Mavvrik settings exist in the database."""
+    """Return True if Mavvrik settings exist in the database OR are all present as env vars."""
+    import os
+
+    # Fast path: all four required credentials present in env (covers container boot
+    # before /mavvrik/init has been called and the DB has been populated).
+    if all(
+        os.getenv(v)
+        for v in (
+            "MAVVRIK_API_KEY",
+            "MAVVRIK_API_ENDPOINT",
+            "MAVVRIK_CONNECTION_ID",
+        )
+    ):
+        return True
+
     try:
         from litellm.proxy.proxy_server import prisma_client
 
@@ -173,30 +211,86 @@ async def init_mavvrik_settings(
             streamer = MavvrikStreamer(
                 api_key=request.api_key,
                 api_endpoint=request.api_endpoint,
-                tenant=request.tenant,
-                instance_id=request.instance_id,
+                connection_id=request.connection_id,
             )
             initial_marker = streamer.register()
             verbose_proxy_logger.info(
                 "Mavvrik register returned initial marker: %s", initial_marker
             )
         except Exception as reg_exc:
+            from datetime import datetime as _dt, timezone as _tz
+
+            now = _dt.now(_tz.utc)
+            initial_marker = now.replace(
+                day=1, hour=0, minute=0, second=0, microsecond=0
+            ).isoformat()
             verbose_proxy_logger.warning(
-                "Mavvrik register call failed (%s) — using first-of-month default as marker",
+                "Mavvrik register call failed (%s) — defaulting marker to first of month: %s",
                 reg_exc,
+                initial_marker,
             )
 
         await _set_mavvrik_settings(
             api_key=request.api_key,
             api_endpoint=request.api_endpoint,
-            tenant=request.tenant,
-            instance_id=request.instance_id,
+            connection_id=request.connection_id,
             timezone=request.timezone,
             marker=initial_marker,
         )
         verbose_proxy_logger.info(
             "Mavvrik settings initialized, marker=%s", initial_marker
         )
+
+        # At proxy startup the scheduler is skipped when the DB has no settings yet.
+        # After /mavvrik/init saves settings we must create the MavvrikLogger,
+        # add it to the callback manager, and directly schedule the background job.
+        try:
+            import litellm.proxy.proxy_server as _pserver
+            import litellm as _litellm
+            from litellm.constants import (
+                MAVVRIK_EXPORT_INTERVAL_MINUTES,
+                MAVVRIK_EXPORT_USAGE_DATA_JOB_NAME,
+            )
+            from litellm.integrations.mavvrik.mavvrik import MavvrikLogger
+
+            mavvrik_logger = MavvrikLogger(
+                api_key=request.api_key,
+                api_endpoint=request.api_endpoint,
+                connection_id=request.connection_id,
+                timezone=request.timezone,
+            )
+            _litellm.logging_callback_manager.add_litellm_success_callback(mavvrik_logger)
+            _litellm.logging_callback_manager.add_litellm_async_success_callback(mavvrik_logger)
+
+            # Remove the string placeholder now that the real logger is registered
+            if "mavvrik" in _litellm.success_callback:
+                _litellm.success_callback.remove("mavvrik")
+            if "mavvrik" in _litellm._async_success_callback:
+                _litellm._async_success_callback.remove("mavvrik")
+
+            # Access scheduler via module attribute at call time (not import-time binding)
+            _scheduler = getattr(_pserver, "scheduler", None)
+            if _scheduler is not None:
+                _scheduler.add_job(
+                    mavvrik_logger.initialize_mavvrik_export_job,
+                    "interval",
+                    minutes=MAVVRIK_EXPORT_INTERVAL_MINUTES,
+                    id=MAVVRIK_EXPORT_USAGE_DATA_JOB_NAME,
+                    replace_existing=True,
+                )
+                verbose_proxy_logger.info(
+                    "Mavvrik background export job scheduled every %d min via /mavvrik/init",
+                    MAVVRIK_EXPORT_INTERVAL_MINUTES,
+                )
+            else:
+                verbose_proxy_logger.warning(
+                    "Mavvrik: scheduler not available, background job not registered"
+                )
+        except Exception as sched_exc:
+            verbose_proxy_logger.warning(
+                "Mavvrik: could not register background job after init (%s)", sched_exc
+            )
+
         return MavvrikInitResponse(
             message="Mavvrik settings initialized successfully", status="success"
         )
@@ -237,8 +331,7 @@ async def get_mavvrik_settings(
         return MavvrikSettingsView(
             api_key_masked=_mask_key(settings.get("api_key", "")),
             api_endpoint=settings.get("api_endpoint"),
-            tenant=settings.get("tenant"),
-            instance_id=settings.get("instance_id"),
+            connection_id=settings.get("connection_id"),
             timezone=settings.get("timezone"),
             marker=settings.get("marker"),
             status="configured",
@@ -286,8 +379,7 @@ async def update_mavvrik_settings(
         await _set_mavvrik_settings(
             api_key=_pick(request.api_key, "api_key"),
             api_endpoint=_pick(request.api_endpoint, "api_endpoint"),
-            tenant=_pick(request.tenant, "tenant"),
-            instance_id=_pick(request.instance_id, "instance_id"),
+            connection_id=_pick(request.connection_id, "connection_id"),
             timezone=_pick(request.timezone, "timezone", "UTC"),
             # If request.marker is provided, honour it (e.g. Mavvrik reset their
             # metricsMarker and asked us to re-export from a specific date).
@@ -332,8 +424,7 @@ async def dry_run_mavvrik_export(
         logger = MavvrikLogger(
             api_key=settings.get("api_key"),
             api_endpoint=settings.get("api_endpoint"),
-            tenant=settings.get("tenant"),
-            instance_id=settings.get("instance_id"),
+            connection_id=settings.get("connection_id"),
             timezone=settings.get("timezone", "UTC"),
         )
         result = await logger.dry_run_export_usage_data(limit=request.limit)
@@ -399,8 +490,7 @@ async def export_mavvrik_data(
         logger = MavvrikLogger(
             api_key=settings.get("api_key"),
             api_endpoint=settings.get("api_endpoint"),
-            tenant=settings.get("tenant"),
-            instance_id=settings.get("instance_id"),
+            connection_id=settings.get("connection_id"),
             timezone=settings.get("timezone", "UTC"),
         )
         await logger.export_usage_data(

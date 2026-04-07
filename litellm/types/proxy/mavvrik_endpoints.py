@@ -12,12 +12,11 @@ class MavvrikInitRequest(BaseModel):
 
     api_key: str = Field(..., description="Mavvrik API key (x-api-key header value)")
     api_endpoint: str = Field(
-        ..., description="Mavvrik API base URL (e.g. https://api.mavvrik.dev)"
+        ..., description="Mavvrik API base URL (includes tenant, e.g. https://api.mavvrik.dev/tenant-slug)"
     )
-    tenant: str = Field(..., description="Mavvrik tenant slug used in upload-url path")
-    instance_id: str = Field(
+    connection_id: str = Field(
         ...,
-        description="Cluster/instance ID used in upload-url path (placeholder: any string for testing)",
+        description="Connection/instance ID used in the agent path",
     )
     timezone: str = Field(default="UTC", description="Timezone for date handling")
 
@@ -73,8 +72,7 @@ class MavvrikSettingsView(BaseModel):
         None, description="Masked API key (first 4 + last 4 chars)"
     )
     api_endpoint: Optional[str] = None
-    tenant: Optional[str] = None
-    instance_id: Optional[str] = None
+    connection_id: Optional[str] = None
     timezone: Optional[str] = None
     marker: Optional[str] = Field(
         None, description="Last successfully exported date (YYYY-MM-DD)"
@@ -86,9 +84,8 @@ class MavvrikSettingsUpdate(BaseModel):
     """Request body for PUT /mavvrik/settings — all fields optional."""
 
     api_key: Optional[str] = Field(None, description="New Mavvrik API key")
-    api_endpoint: Optional[str] = Field(None, description="New Mavvrik API base URL")
-    tenant: Optional[str] = None
-    instance_id: Optional[str] = None
+    api_endpoint: Optional[str] = Field(None, description="New Mavvrik API base URL (includes tenant)")
+    connection_id: Optional[str] = None
     timezone: Optional[str] = None
     marker: Optional[str] = Field(
         None,

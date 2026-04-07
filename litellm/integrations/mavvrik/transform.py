@@ -17,12 +17,12 @@ from litellm._logging import verbose_proxy_logger
 class MavvrikTransformer:
     """Transform LiteLLM spend data into a CSV string for upload."""
 
-    def to_csv(self, df: pl.DataFrame, instance_id: str | None = None) -> str:
-        """Return the DataFrame as a CSV string with instance_id added.
+    def to_csv(self, df: pl.DataFrame, connection_id: str | None = None) -> str:
+        """Return the DataFrame as a CSV string with connection_id added.
 
         Args:
             df: Polars DataFrame with all columns from the DB query.
-            instance_id: Optional instance identifier to add as a column.
+            connection_id: Optional instance identifier to add as a column.
 
         Returns:
             CSV string (header + data rows). Empty string if DataFrame is empty.
@@ -33,9 +33,9 @@ class MavvrikTransformer:
             )
             return ""
 
-        # Add instance_id column if provided
-        if instance_id:
-            df = df.with_columns(pl.lit(instance_id).alias("instance_id"))
+        # Add connection_id column if provided
+        if connection_id:
+            df = df.with_columns(pl.lit(connection_id).alias("connection_id"))
 
         buf = io.StringIO()
         df.write_csv(buf)
