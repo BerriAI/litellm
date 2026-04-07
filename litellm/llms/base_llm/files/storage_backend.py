@@ -6,7 +6,7 @@ This module defines the abstract base class that all file storage backends
 """
 
 from abc import ABC, abstractmethod
-from typing import Optional
+from typing import AsyncIterator, Optional
 
 
 class BaseFileStorageBackend(ABC):
@@ -59,6 +59,29 @@ class BaseFileStorageBackend(ABC):
             Exception: If download fails
         """
         pass
+
+    async def download_file_streaming(
+        self, storage_url: str, chunk_size: int = 1024 * 1024
+    ) -> AsyncIterator[bytes]:
+        """
+        Stream-download a file from the storage backend.
+
+        Backends can override this for true streaming. The default implementation
+        falls back to a buffered download and yields a single chunk.
+
+        Args:
+            storage_url: The storage URL returned from upload_file
+            chunk_size: Preferred chunk size in bytes
+
+        Yields:
+            bytes: File content chunks
+
+        Raises:
+            Exception: If download fails
+        """
+        file_content = await self.download_file(storage_url)
+        if file_content:
+            yield file_content
 
     async def delete_file(self, storage_url: str) -> None:
         """

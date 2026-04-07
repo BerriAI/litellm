@@ -845,6 +845,7 @@ async def get_file_content_streaming(
 ):
     from litellm.proxy.proxy_server import (
         general_settings,
+        llm_router,
         proxy_config,
         proxy_logging_obj,
         version,
@@ -874,12 +875,140 @@ async def get_file_content_streaming(
             or "openai"
         )
 
-        data.pop("file_id", None)
-        stream_iterator = await litellm.afile_content_streaming(
-            file_id=file_id,
-            custom_llm_provider=custom_llm_provider, # type: ignore
-            **data,
-        )
+        ## check if file_id is a litellm managed file (same top-level flow as v1)
+        is_base64_unified_file_id = _is_base64_encoded_unified_file_id(file_id)
+        if is_base64_unified_file_id:
+            managed_files_obj = proxy_logging_obj.get_proxy_hook("managed_files")
+            if managed_files_obj is None:
+                raise ProxyException(
+                    message="Managed files hook not found",
+                    type="None",
+                    param="None",
+                    code=500,
+                )
+            if llm_router is None:
+                raise ProxyException(
+                    message="LLM Router not found",
+                    type="None",
+                    param="None",
+                    code=500,
+                )
+            if not isinstance(managed_files_obj, BaseFileEndpoints):
+                raise ProxyException(
+                    message="Managed files hook is not a BaseFileEndpoints",
+                    type="None",
+                    param="None",
+                    code=500,
+                )
+
+            if hasattr(managed_files_obj, "prisma_client") and getattr(
+                managed_files_obj, "prisma_client", None
+            ):
+                prisma_client = getattr(managed_files_obj, "prisma_client")
+                db_file = await prisma_client.db.litellm_managedfiletable.find_first(
+                    where={"unified_file_id": file_id}
+                )
+                if db_file and db_file.storage_backend and db_file.storage_url:
+                    from litellm.llms.base_llm.files.storage_backend_factory import (
+                        get_storage_backend,
+                    )
+
+                    storage_backend_name = db_file.storage_backend
+                    storage_url = db_file.storage_url
+                    try:
+                        storage_backend = get_storage_backend(storage_backend_name)
+
+                        return StreamingResponse(
+                            content=storage_backend.download_file_streaming(storage_url),
+                            media_type="application/octet-stream",
+                            headers={
+                                "content-disposition": f'attachment; filename="{file_id}.bin"',
+                            },
+                        )
+                    except ValueError as e:
+                        raise ProxyException(
+                            message=f"Storage backend error: {str(e)}",
+                            type="invalid_request_error",
+                            param="file_id",
+                            code=400,
+                        )
+
+            model = cast(Optional[str], data.get("model"))
+            if model:
+                # TODO: Add Streaming version here
+                # response = await llm_router.afile_content(
+                #     **{
+                #         "model": model,
+                #         "file_id": file_id,
+                #         **data,
+                #     }
+                # )  # type: ignore
+                raise ProxyException(
+                    message="Managed files streaming path is pending implementation",
+                    type="None",
+                    param="file_id",
+                    code=501,
+                )
+
+            else:
+                # TODO: Add Streaming version here
+                # response = await managed_files_obj.afile_content(
+                #     **{
+                #         "file_id": file_id,
+                #         "litellm_parent_otel_span": user_api_key_dict.parent_otel_span,
+                #         "llm_router": llm_router,
+                #         **data,
+                #     }
+                # )
+                raise ProxyException(
+                    message="Managed files streaming path is pending implementation",
+                    type="None",
+                    param="file_id",
+                    code=501,
+                )
+        else:
+            # Check for model-based credential routing
+            (
+                should_route,
+                model_used,
+                original_file_id,
+                credentials,
+            ) = handle_model_based_routing(
+                file_id=file_id,
+                request=request,
+                llm_router=llm_router,
+                data=data,
+                check_file_id_encoding=True,
+            )
+
+            if should_route:
+                # Use model-based routing with credentials from config
+                prepare_data_with_credentials(
+                    data=data,
+                    credentials=credentials,  # type: ignore
+                    file_id=original_file_id,  # Use decoded file ID if from encoded ID
+                )
+
+                stream_iterator = await litellm.afile_content_streaming(
+                    custom_llm_provider=credentials["custom_llm_provider"],  # type: ignore
+                    **data,
+                )  # type: ignore
+
+                verbose_proxy_logger.debug(
+                    f"Retrieved file content stream using model: {model_used}"
+                    + (
+                        f", file_id: {file_id} -> {original_file_id}"
+                        if original_file_id
+                        else ""
+                    )
+                )
+            else:
+                data.pop("file_id", None)
+                stream_iterator = await litellm.afile_content_streaming(
+                    custom_llm_provider=custom_llm_provider,  # type: ignore
+                    file_id=file_id,
+                    **data,
+                )
 
         asyncio.create_task(
             proxy_logging_obj.update_request_status(
