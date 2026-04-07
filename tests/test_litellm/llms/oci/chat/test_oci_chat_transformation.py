@@ -1042,3 +1042,114 @@ class TestOCIStreamingSignedBody:
         assert posted_data["data"] == json.dumps(
             payload
         ), "Without signed_json_body, must fall back to json.dumps(data)"
+
+
+# ---------------------------------------------------------------------------
+# Additional coverage: error paths in validate_environment, transform_request,
+# transform_response, and map_openai_params
+# ---------------------------------------------------------------------------
+
+
+class TestOCIChatConfigErrorPaths:
+    def test_validate_environment_empty_messages_raises(self):
+        config = OCIChatConfig()
+        with pytest.raises(Exception, match="messages"):
+            config.validate_environment(
+                headers={},
+                model=TEST_MODEL_NAME,
+                messages=[],
+                optional_params={
+                    "oci_signer": MagicMock(),
+                    "oci_compartment_id": TEST_COMPARTMENT_ID,
+                },
+                litellm_params={},
+            )
+
+    def test_transform_request_missing_compartment_id_raises(self):
+        config = OCIChatConfig()
+        with pytest.raises(Exception, match="oci_compartment_id"):
+            config.transform_request(
+                model=TEST_MODEL_NAME,
+                messages=TEST_MESSAGES,  # type: ignore
+                optional_params={},
+                litellm_params={},
+                headers={},
+            )
+
+    def test_transform_request_cohere_no_user_message_raises(self):
+        config = OCIChatConfig()
+        with pytest.raises(Exception, match="user message"):
+            config.transform_request(
+                model="cohere.command-latest",
+                messages=[{"role": "system", "content": "You are helpful."}],  # type: ignore
+                optional_params={"oci_compartment_id": TEST_COMPARTMENT_ID},
+                litellm_params={},
+                headers={},
+            )
+
+    def test_transform_response_error_key_raises(self):
+        config = OCIChatConfig()
+        response = httpx.Response(
+            status_code=400,
+            json={"error": "model not found"},
+        )
+        with pytest.raises(Exception, match="model not found"):
+            config.transform_response(
+                model=TEST_MODEL_NAME,
+                raw_response=response,
+                model_response=ModelResponse(),
+                logging_obj={},  # type: ignore
+                request_data={},
+                messages=[],
+                optional_params={},
+                litellm_params={},
+                encoding={},
+            )
+
+    def test_map_openai_params_unsupported_param_raises_without_drop(self):
+        config = OCIChatConfig()
+        with pytest.raises(Exception, match="not supported on OCI"):
+            config.map_openai_params(
+                non_default_params={"audio": {"voice": "alloy"}},
+                optional_params={},
+                model=TEST_MODEL_NAME,
+                drop_params=False,
+            )
+
+    def test_map_openai_params_unsupported_param_dropped(self):
+        config = OCIChatConfig()
+        result = config.map_openai_params(
+            non_default_params={"audio": {"voice": "alloy"}},
+            optional_params={},
+            model=TEST_MODEL_NAME,
+            drop_params=True,
+        )
+        assert "audio" not in result
+
+    def test_transform_request_tool_choice_string_mapped(self):
+        config = OCIChatConfig()
+        result = config.transform_request(
+            model=TEST_MODEL_NAME,
+            messages=TEST_MESSAGES,  # type: ignore
+            optional_params={
+                "oci_compartment_id": TEST_COMPARTMENT_ID,
+                "tool_choice": "auto",
+                "tools": [
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "fn",
+                            "description": "d",
+                            "parameters": {"type": "object", "properties": {}},
+                        },
+                    }
+                ],
+            },
+            litellm_params={},
+            headers={},
+        )
+        assert result["chatRequest"]["toolChoice"] == {"type": "AUTO"}
+
+
+import pytest
+from unittest.mock import MagicMock
