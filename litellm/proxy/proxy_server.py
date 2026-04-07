@@ -9079,6 +9079,57 @@ def _get_provider_token_counter(
     return None, None, None
 
 
+async def _try_provider_token_count(
+    provider_counter: "BaseTokenCounter",
+    custom_llm_provider: Optional[str],
+    model_to_use: str,
+    messages: Optional[list],
+    contents: Optional[list],
+    deployment: Optional[Dict[str, Any]],
+    request_model: str,
+    tools: Optional[list] = None,
+    system: Optional[str] = None,
+) -> Optional["TokenCountResponse"]:
+    """Attempt provider-specific token counting. Returns result on success, None to fall through to local counting."""
+    if not provider_counter.should_use_token_counting_api(
+        custom_llm_provider=custom_llm_provider
+    ):
+        return None
+    try:
+        result = await provider_counter.count_tokens(
+            model_to_use=model_to_use or "",
+            messages=messages,  # type: ignore
+            contents=contents,
+            deployment=deployment,
+            request_model=request_model,
+            tools=tools,
+            system=system,
+        )
+    except httpx.HTTPStatusError as e:
+        error_message = getattr(e, "message", None) or str(e)
+        status_code = getattr(e, "status_code", None) or e.response.status_code
+        raise ProxyException(
+            message=error_message,
+            type="token_counting_error",
+            param="model",
+            code=status_code,
+        )
+    if result is not None and result.error is True:
+        if litellm.disable_token_counter is True:
+            raise ProxyException(
+                message=result.error_message or "Token counting failed",
+                type="token_counting_error",
+                param="model",
+                code=result.status_code or 500,
+            )
+        verbose_proxy_logger.warning(
+            f"Provider token counting failed ({result.status_code}): {result.error_message}. "
+            "Falling back to local tokenizer."
+        )
+        return None
+    return result
+
+
 @router.post(
     "/utils/token_counter",
     tags=["llm utils"],
@@ -9151,51 +9202,19 @@ async def token_counter(request: TokenCountRequest, call_endpoint: bool = False)
             model_to_use = _model
 
     if provider_counter is not None:
-        if (
-            provider_counter.should_use_token_counting_api(
-                custom_llm_provider=custom_llm_provider
-            )
-            is True
-        ):
-            try:
-                result = await provider_counter.count_tokens(
-                    model_to_use=model_to_use or "",
-                    messages=messages,  # type: ignore
-                    contents=contents,
-                    deployment=deployment,
-                    request_model=request.model,
-                    tools=tools,
-                    system=system,
-                )
-            except httpx.HTTPStatusError as e:
-                error_message = getattr(e, "message", None) or str(e)
-                status_code = getattr(e, "status_code", None) or e.response.status_code
-                raise ProxyException(
-                    message=error_message,
-                    type="token_counting_error",
-                    param="model",
-                    code=status_code
-                )
-            #########################################################
-            # Transfrom the Response to the well known format
-            #########################################################
-            if result is not None and result.error is True:
-                # If disable_token_counter is enabled, raise HTTP error
-                if litellm.disable_token_counter is True:
-                    raise ProxyException(
-                        message=result.error_message or "Token counting failed",
-                        type="token_counting_error",
-                        param="model",
-                        code=result.status_code or 500,
-                    )
-                # Otherwise, log warning and fall back to local counter
-                verbose_proxy_logger.warning(
-                    f"Provider token counting failed ({result.status_code}): {result.error_message}. "
-                    "Falling back to local tokenizer."
-                )
-            elif result is not None:
-                # Success - return the result (only if not None)
-                return result
+        result = await _try_provider_token_count(
+            provider_counter=provider_counter,
+            custom_llm_provider=custom_llm_provider,
+            model_to_use=model_to_use,
+            messages=messages,
+            contents=contents,
+            deployment=deployment,
+            request_model=request.model,
+            tools=tools,
+            system=system,
+        )
+        if result is not None:
+            return result
 
     # Check if token counter is disabled before fallback
     if litellm.disable_token_counter is True:
