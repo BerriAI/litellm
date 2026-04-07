@@ -6,6 +6,8 @@ on:
 
 permissions:
   contents: read
+  id-token: write
+  pull-requests: write
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -29,3 +31,4 @@ jobs:
         tests/test_litellm/test_*.py
       workers: 2
       reruns: 2
+      artifact-name: misc
