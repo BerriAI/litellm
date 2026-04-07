@@ -1192,6 +1192,36 @@ class TestDecisionHelpersEdgeCases:
             )
         assert "Policy violation detected" in exc_info.value.detail["error"]
 
+    def test_unexpected_decision_scan_treated_as_unsafe(self):
+        """Lines 364-367: unexpected decision in /scan is treated as UNSAFE."""
+        from fastapi import HTTPException
+
+        with pytest.raises(HTTPException) as exc_info:
+            XecGuardGuardrail._raise_if_unsafe_scan(
+                {
+                    "decision": "UNKNOWN_VALUE",
+                    "trace_id": "t6",
+                    "xecguard_result": [],
+                }
+            )
+        assert exc_info.value.status_code == 400
+        assert "XecGuard scan blocked" in exc_info.value.detail["error"]
+
+    def test_unexpected_decision_grounding_treated_as_unsafe(self):
+        """Lines 398-401: unexpected decision in /grounding is treated as UNSAFE."""
+        from fastapi import HTTPException
+
+        with pytest.raises(HTTPException) as exc_info:
+            XecGuardGuardrail._raise_if_unsafe_grounding(
+                {
+                    "decision": "UNKNOWN_VALUE",
+                    "trace_id": "t7",
+                    "xecguard_result": {},
+                }
+            )
+        assert exc_info.value.status_code == 400
+        assert "not grounded" in exc_info.value.detail["error"]
+
 
 class TestConvenienceExtractors:
     """Lines 427, 437: edge cases for _last_user_prompt and _response_text."""
