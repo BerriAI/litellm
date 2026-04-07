@@ -5,7 +5,7 @@ import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings"
 import PolicySelector from "@/components/policies/PolicySelector";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { TextInput, Button as TremorButton } from "@tremor/react";
-import { Button as AntButton, Form, Input, InputNumber, Select, Switch, Tooltip } from "antd";
+import { Form, Input, Select, Switch, Tooltip } from "antd";
 import { useEffect, useState } from "react";
 import { rolesWithWriteAccess } from "../../utils/roles";
 import AgentSelector from "../agent_management/AgentSelector";
