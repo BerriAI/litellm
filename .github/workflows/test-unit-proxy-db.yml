@@ -14,6 +14,10 @@ concurrency:
 
 jobs:
   proxy-db:
+    permissions:
+      contents: read
+      id-token: write
+      pull-requests: write
     strategy:
       fail-fast: false
       matrix:
@@ -39,6 +43,7 @@ jobs:
       timeout-minutes: ${{ matrix.timeout }}
       enable-redis: false
       enable-postgres: true
+      artifact-name: proxy-db-${{ matrix.test-group }}
     secrets:
       DATABASE_URL: ${{ secrets.DATABASE_URL }}
       POSTGRES_USER: ${{ secrets.POSTGRES_USER }}

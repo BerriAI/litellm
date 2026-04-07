@@ -65,7 +65,29 @@ docker compose up
 </TabItem>
 </Tabs>
 
-### Docker Run 
+### Verify Docker image signatures
+
+All LiteLLM Docker images are signed with [cosign](https://docs.sigstore.dev/cosign/overview/). You can verify the integrity of an image before deploying:
+
+```bash
+cosign verify \
+  --key https://raw.githubusercontent.com/BerriAI/litellm/<release-tag>/cosign.pub \
+  ghcr.io/berriai/litellm:<release-tag>
+```
+
+Replace `<release-tag>` with the version you are deploying (e.g. `v1.83.0-stable`).
+
+Expected output:
+
+```
+The following checks were performed on each of these signatures:
+  - The cosign claims were validated
+  - The signatures were verified against the specified public key
+```
+
+Learn more about LiteLLM's release signing in the [CI/CD v2 announcement](https://docs.litellm.ai/blog/ci-cd-v2-improvements#verify-docker-image-signatures).
+
+### Docker Run
 
 #### Step 1. CREATE config.yaml 
 

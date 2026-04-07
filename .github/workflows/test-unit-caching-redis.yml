@@ -8,6 +8,8 @@ on:
 
 permissions:
   contents: read
+  id-token: write
+  pull-requests: write
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -29,6 +31,7 @@ jobs:
       timeout-minutes: 20
       enable-redis: true
       enable-postgres: false
+      artifact-name: caching-redis
     secrets:
       REDIS_HOST: ${{ secrets.REDIS_HOST }}
       REDIS_PORT: ${{ secrets.REDIS_PORT }}

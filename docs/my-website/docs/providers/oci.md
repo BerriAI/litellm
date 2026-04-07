@@ -8,24 +8,54 @@ Check the [OCI Models List](https://docs.oracle.com/en-us/iaas/Content/generativ
 
 ## Supported Models
 
-### Meta Llama Models
+### Chat / Text Generation
+
+#### Meta Llama Models
 - `meta.llama-4-maverick-17b-128e-instruct-fp8`
 - `meta.llama-4-scout-17b-16e-instruct`
 - `meta.llama-3.3-70b-instruct`
+- `meta.llama-3.3-70b-instruct-fp8-dynamic`
 - `meta.llama-3.2-90b-vision-instruct`
+- `meta.llama-3.2-11b-vision-instruct`
 - `meta.llama-3.1-405b-instruct`
+- `meta.llama-3.1-70b-instruct`
 
-### xAI Grok Models
+#### xAI Grok Models
+- `xai.grok-4.20`
+- `xai.grok-4.20-multi-agent`
 - `xai.grok-4`
+- `xai.grok-4-fast`
+- `xai.grok-4.1-fast`
 - `xai.grok-3`
 - `xai.grok-3-fast`
 - `xai.grok-3-mini`
 - `xai.grok-3-mini-fast`
+- `xai.grok-code-fast-1`
 
-### Cohere Models
+#### Cohere Models
 - `cohere.command-latest`
 - `cohere.command-a-03-2025`
+- `cohere.command-a-reasoning-08-2025`
+- `cohere.command-a-vision-07-2025`
+- `cohere.command-a-translate-08-2025`
 - `cohere.command-plus-latest`
+- `cohere.command-r-08-2024`
+- `cohere.command-r-plus-08-2024`
+
+#### Google Gemini Models (via OCI)
+- `google.gemini-2.5-pro`
+- `google.gemini-2.5-flash`
+- `google.gemini-2.5-flash-lite`
+
+### Embedding Models
+- `cohere.embed-english-v3.0` (1024 dimensions)
+- `cohere.embed-english-light-v3.0` (384 dimensions)
+- `cohere.embed-multilingual-v3.0` (1024 dimensions)
+- `cohere.embed-multilingual-light-v3.0` (384 dimensions)
+- `cohere.embed-english-image-v3.0` (1024 dimensions, multimodal)
+- `cohere.embed-english-light-image-v3.0` (384 dimensions, multimodal)
+- `cohere.embed-multilingual-light-image-v3.0` (384 dimensions, multimodal)
+- `cohere.embed-v4.0` (1536 dimensions, multimodal)
 
 ## Authentication
 
@@ -395,3 +425,74 @@ response = completion(
 | `oci_key` | string | - | (Manual auth) The private key content as a string |
 | `oci_key_file` | string | - | (Manual auth) Path to the private key file |
 | `oci_signer` | object | - | (SDK auth) OCI SDK Signer object for authentication |
+
+## Embeddings
+
+LiteLLM supports OCI Generative AI embedding models. These models use the same authentication methods described above.
+
+<Tabs>
+<TabItem value="embed-manual" label="Manual Credentials" default>
+
+```python
+from litellm import embedding
+
+response = embedding(
+    model="oci/cohere.embed-english-v3.0",
+    input=["Hello world", "Goodbye world"],
+    oci_region="us-ashburn-1",
+    oci_user=<your_oci_user>,
+    oci_fingerprint=<your_oci_fingerprint>,
+    oci_tenancy=<your_oci_tenancy>,
+    oci_key=<string_with_content_of_oci_key>,
+    oci_compartment_id=<oci_compartment_id>,
+)
+print(response)
+```
+
+</TabItem>
+<TabItem value="embed-sdk" label="OCI SDK Signer">
+
+```python
+from litellm import embedding
+from oci.signer import Signer
+
+signer = Signer(
+    tenancy="ocid1.tenancy.oc1..",
+    user="ocid1.user.oc1..",
+    fingerprint="xx:xx:xx:xx:xx:xx:xx:xx:xx:xx:xx:xx:xx:xx:xx:xx",
+    private_key_file_location="~/.oci/key.pem",
+)
+
+response = embedding(
+    model="oci/cohere.embed-english-v3.0",
+    input=["Hello world", "Goodbye world"],
+    oci_signer=signer,
+    oci_region="us-ashburn-1",
+    oci_compartment_id="<oci_compartment_id>",
+)
+print(response)
+```
+
+</TabItem>
+</Tabs>
+
+### Embedding Optional Parameters
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `input_type` | string | - | The type of input: `search_document`, `search_query`, `classification`, `clustering` |
+| `truncate` | string | `END` | Truncation strategy when input exceeds max tokens: `END` or `START` |
+
+### Using Dedicated Embedding Endpoints
+
+```python
+response = embedding(
+    model="oci/cohere.embed-english-v3.0",
+    input=["Hello world"],
+    oci_serving_mode="DEDICATED",
+    oci_endpoint_id="ocid1.generativeaiendpoint.oc1...",
+    oci_region="us-ashburn-1",
+    oci_compartment_id="<oci_compartment_id>",
+    # ... auth params
+)
+```

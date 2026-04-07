@@ -6497,3 +6497,131 @@ async def test_create_team_member_budget_table_with_duration():
         assert budget_request.budget_duration == "30d"
         assert budget_request.max_budget == 20.0
         assert result["metadata"]["team_member_budget_id"] == "budget-abc"
+
+
+# ---------------------------------------------------------------------------
+# Tests for _batch_resolve_access_group_resources
+# ---------------------------------------------------------------------------
+
+
+class TestBatchResolveAccessGroupResources:
+    """Tests for the batch access group resource resolution helper."""
+
+    @pytest.mark.asyncio
+    async def test_returns_empty_when_no_ids(self):
+        """Empty list should return empty dict."""
+        from litellm.proxy.management_endpoints.team_endpoints import (
+            _batch_resolve_access_group_resources,
+        )
+
+        assert await _batch_resolve_access_group_resources([]) == {}
+
+    @pytest.mark.asyncio
+    async def test_single_access_group(self):
+        """Single access group should return its resources."""
+        from litellm.proxy.management_endpoints.team_endpoints import (
+            _batch_resolve_access_group_resources,
+        )
+
+        fake_row = MagicMock()
+        fake_row.access_group_id = "ag-1"
+        fake_row.access_model_names = ["gpt-4", "claude-3"]
+        fake_row.access_mcp_server_ids = ["mcp-1"]
+        fake_row.access_agent_ids = ["agent-1", "agent-2"]
+
+        fake_prisma = MagicMock()
+        fake_prisma.db.litellm_accessgrouptable.find_many = AsyncMock(return_value=[fake_row])
+
+        with patch("litellm.proxy.proxy_server.prisma_client", fake_prisma):
+            result = await _batch_resolve_access_group_resources(["ag-1"])
+
+        assert sorted(result["ag-1"]["models"]) == ["claude-3", "gpt-4"]
+        assert result["ag-1"]["mcp_server_ids"] == ["mcp-1"]
+        assert sorted(result["ag-1"]["agent_ids"]) == ["agent-1", "agent-2"]
+
+    @pytest.mark.asyncio
+    async def test_multiple_access_groups(self):
+        """Multiple access groups returned in a single query."""
+        from litellm.proxy.management_endpoints.team_endpoints import (
+            _batch_resolve_access_group_resources,
+        )
+
+        row1 = MagicMock()
+        row1.access_group_id = "ag-1"
+        row1.access_model_names = ["gpt-4"]
+        row1.access_mcp_server_ids = ["mcp-1"]
+        row1.access_agent_ids = ["agent-1"]
+
+        row2 = MagicMock()
+        row2.access_group_id = "ag-2"
+        row2.access_model_names = ["gemini"]
+        row2.access_mcp_server_ids = ["mcp-2"]
+        row2.access_agent_ids = ["agent-2"]
+
+        fake_prisma = MagicMock()
+        fake_prisma.db.litellm_accessgrouptable.find_many = AsyncMock(return_value=[row1, row2])
+
+        with patch("litellm.proxy.proxy_server.prisma_client", fake_prisma):
+            result = await _batch_resolve_access_group_resources(["ag-1", "ag-2"])
+
+        assert result["ag-1"]["models"] == ["gpt-4"]
+        assert result["ag-2"]["models"] == ["gemini"]
+
+    @pytest.mark.asyncio
+    async def test_missing_access_group_omitted(self):
+        """If an access group doesn't exist in DB, it's simply not in the result."""
+        from litellm.proxy.management_endpoints.team_endpoints import (
+            _batch_resolve_access_group_resources,
+        )
+
+        row1 = MagicMock()
+        row1.access_group_id = "ag-1"
+        row1.access_model_names = ["gpt-4"]
+        row1.access_mcp_server_ids = []
+        row1.access_agent_ids = []
+
+        fake_prisma = MagicMock()
+        fake_prisma.db.litellm_accessgrouptable.find_many = AsyncMock(return_value=[row1])
+
+        with patch("litellm.proxy.proxy_server.prisma_client", fake_prisma):
+            result = await _batch_resolve_access_group_resources(["ag-1", "ag-missing"])
+
+        assert "ag-1" in result
+        assert "ag-missing" not in result
+
+    @pytest.mark.asyncio
+    async def test_returns_empty_when_prisma_unavailable(self):
+        """If prisma_client is None, should return empty dict."""
+        from litellm.proxy.management_endpoints.team_endpoints import (
+            _batch_resolve_access_group_resources,
+        )
+
+        with patch("litellm.proxy.proxy_server.prisma_client", None):
+            result = await _batch_resolve_access_group_resources(["ag-1"])
+
+        assert result == {}
+
+    @pytest.mark.asyncio
+    async def test_deduplicates_input_ids(self):
+        """Duplicate IDs in input should result in a single DB lookup."""
+        from litellm.proxy.management_endpoints.team_endpoints import (
+            _batch_resolve_access_group_resources,
+        )
+
+        row1 = MagicMock()
+        row1.access_group_id = "ag-1"
+        row1.access_model_names = ["gpt-4"]
+        row1.access_mcp_server_ids = []
+        row1.access_agent_ids = []
+
+        fake_find_many = AsyncMock(return_value=[row1])
+        fake_prisma = MagicMock()
+        fake_prisma.db.litellm_accessgrouptable.find_many = fake_find_many
+
+        with patch("litellm.proxy.proxy_server.prisma_client", fake_prisma):
+            result = await _batch_resolve_access_group_resources(["ag-1", "ag-1", "ag-1"])
+
+        # Should have been called with deduplicated list
+        call_args = fake_find_many.call_args
+        assert len(call_args.kwargs["where"]["access_group_id"]["in"]) == 1
+        assert "ag-1" in result

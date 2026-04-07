@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "litellm"
-version = "1.83.2"
+version = "1.83.4"
 description = "Library to easily interface with LLM API providers"
 authors = ["BerriAI"]
 license = "MIT"
@@ -63,9 +63,9 @@ boto3 = { version = "1.42.80", optional = true }
 redisvl = {version = "0.4.1", optional = true, markers = "python_version >= '3.9' and python_version < '3.14'"}
 mcp = {version = "1.26.0", optional = true, python = ">=3.10"}
 a2a-sdk = {version = "0.3.25", optional = true, python = ">=3.10"}
-litellm-proxy-extras = {version = "0.4.64", optional = true}
+litellm-proxy-extras = {version = "0.4.65", optional = true}
 rich = {version = "13.9.4", optional = true}
-litellm-enterprise = {version = "0.1.35", optional = true}
+litellm-enterprise = {version = "0.1.37", optional = true}
 diskcache = {version = "5.6.3", optional = true}
 polars = {version = "1.39.3", optional = true, python = ">=3.10"}
 semantic-router = {version = "0.1.12", optional = true, python = ">=3.9,<3.14"}
@@ -181,7 +181,7 @@ requires = ["poetry-core", "wheel"]
 build-backend = "poetry.core.masonry.api"
 
 [tool.commitizen]
-version = "1.83.2"
+version = "1.83.4"
 version_files = [
     "pyproject.toml:^version"
 ]
