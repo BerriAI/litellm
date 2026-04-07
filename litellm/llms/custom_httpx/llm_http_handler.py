@@ -1,5 +1,7 @@
+import asyncio
 import json
 import ssl
+import tempfile
 from pathlib import Path
 from typing import (
     TYPE_CHECKING,
@@ -155,7 +157,14 @@ else:
 
 def _read_local_file_url(url: str) -> bytes:
     parsed = urlparse(url)
-    file_path = Path(url2pathname(f"{parsed.netloc}{parsed.path}"))
+    file_path = Path(url2pathname(f"{parsed.netloc}{parsed.path}")).resolve()
+    allowed_root = Path(tempfile.gettempdir()).resolve()
+    try:
+        file_path.relative_to(allowed_root)
+    except ValueError as exc:
+        raise ValueError(
+            f"file:// URL resolves to a path outside the allowed temp directory: {file_path}"
+        ) from exc
     return file_path.read_bytes()
 
 
@@ -5808,13 +5817,14 @@ class BaseLLMHTTPHandler:
         else:
             sync_httpx_client = client
 
-        headers = video_content_provider_config.validate_environment(
-            headers=extra_headers or {},
-            model="",
-            api_key=api_key,
-            litellm_params=litellm_params,
-        )
-
+        headers: Dict[str, Any] = {}
+        if video_content_provider_config.requires_authentication_for_video_content():
+            headers = video_content_provider_config.validate_environment(
+                headers=headers,
+                model="",
+                api_key=api_key,
+                litellm_params=litellm_params,
+            )
         if extra_headers:
             headers.update(extra_headers)
 
@@ -5889,13 +5899,14 @@ class BaseLLMHTTPHandler:
         else:
             async_httpx_client = client
 
-        headers = video_content_provider_config.validate_environment(
-            headers=extra_headers or {},
-            model="",
-            api_key=api_key,
-            litellm_params=litellm_params,
-        )
-
+        headers: Dict[str, Any] = {}
+        if video_content_provider_config.requires_authentication_for_video_content():
+            headers = video_content_provider_config.validate_environment(
+                headers=headers,
+                model="",
+                api_key=api_key,
+                litellm_params=litellm_params,
+            )
         if extra_headers:
             headers.update(extra_headers)
 
@@ -5916,8 +5927,6 @@ class BaseLLMHTTPHandler:
 
         try:
             if url.startswith("file://"):
-                import asyncio
-
                 return await asyncio.to_thread(_read_local_file_url, url)
 
             # Use POST if params contains data (e.g., Vertex AI fetchPredictOperation)

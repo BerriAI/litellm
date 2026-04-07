@@ -2,6 +2,7 @@
 Tests for LTX Video generation transformation.
 """
 
+import asyncio
 from unittest.mock import Mock
 
 import httpx
@@ -9,6 +10,7 @@ import pytest
 
 import litellm.llms.ltx.videos.transformation as ltx_video_transformation
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.llms.ltx.videos.transformation import LTXVideoConfig
 from litellm.types.router import GenericLiteLLMParams
@@ -96,6 +98,15 @@ class TestLTXVideoTransformation:
             self.config.validate_environment(
                 headers={},
                 model="ltx-2-3-fast",
+                api_key=None,
+            )
+
+    def test_validate_environment_empty_model_still_requires_key(self):
+        """Test that content retrieval no longer relies on a model='' sentinel."""
+        with pytest.raises(ValueError, match="LTX API key is required"):
+            self.config.validate_environment(
+                headers={},
+                model="",
                 api_key=None,
             )
 
@@ -301,6 +312,30 @@ class TestLTXVideoTransformation:
 
         assert result == expected_bytes
 
+    def test_async_video_content_handler_reads_local_file(self, monkeypatch, tmp_path):
+        """Test the async shared content handler can serve local LTX artifacts."""
+        monkeypatch.setattr(ltx_video_transformation, "LTX_VIDEO_STORAGE_DIR", tmp_path)
+        original_video_id = "ltx-local-video"
+        expected_bytes = b"fake-video-binary-data"
+        stored_video_path = tmp_path / f"{original_video_id}.mp4"
+        stored_video_path.write_bytes(expected_bytes)
+
+        result = asyncio.run(
+            BaseLLMHTTPHandler().async_video_content_handler(
+                video_id=encode_video_id_with_provider(
+                    original_video_id, "ltx", "ltx-2-3-fast"
+                ),
+                video_content_provider_config=self.config,
+                custom_llm_provider="ltx",
+                litellm_params=GenericLiteLLMParams(),
+                logging_obj=self.mock_logging_obj,
+                timeout=30,
+                client=Mock(spec=AsyncHTTPHandler),
+            )
+        )
+
+        assert result == expected_bytes
+
     def test_unsupported_operations(self, monkeypatch, tmp_path):
         """Test that unsupported operations raise NotImplementedError."""
         monkeypatch.setattr(ltx_video_transformation, "LTX_VIDEO_STORAGE_DIR", tmp_path)
@@ -356,8 +391,9 @@ class TestLTXVideoTransformation:
                 api_base="", litellm_params=GenericLiteLLMParams(), headers={}
             )
 
-    def test_full_text_to_video_workflow(self):
+    def test_full_text_to_video_workflow(self, monkeypatch, tmp_path):
         """Test complete text-to-video workflow."""
+        monkeypatch.setattr(ltx_video_transformation, "LTX_VIDEO_STORAGE_DIR", tmp_path)
         config = LTXVideoConfig()
         mock_logging_obj = Mock()
 
@@ -407,8 +443,9 @@ class TestLTXVideoTransformation:
         assert video_obj.model == "ltx-2-3-fast"
         assert video_obj.seconds == "5"
 
-    def test_full_image_to_video_workflow(self):
+    def test_full_image_to_video_workflow(self, monkeypatch, tmp_path):
         """Test complete image-to-video workflow."""
+        monkeypatch.setattr(ltx_video_transformation, "LTX_VIDEO_STORAGE_DIR", tmp_path)
         config = LTXVideoConfig()
         mock_logging_obj = Mock()
 
@@ -441,6 +478,8 @@ class TestLTXVideoTransformation:
         # Step 3: Parse response
         mock_response = Mock(spec=httpx.Response)
         mock_response.content = b"fake-video-binary-data"
+        mock_response.status_code = 200
+        mock_response.request = httpx.Request("POST", "https://api.ltx.video/v1")
 
         video_obj = config.transform_video_create_response(
             model="ltx-2-3-pro",

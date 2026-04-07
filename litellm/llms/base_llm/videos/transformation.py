@@ -31,6 +31,16 @@ class BaseVideoConfig(ABC):
     def __init__(self):
         pass
 
+    def requires_authentication_for_video_content(self) -> bool:
+        """
+        Whether the shared video content handler should call validate_environment()
+        before constructing the provider-specific content request.
+
+        Most providers need authenticated headers even for content retrieval.
+        Providers that serve locally persisted artifacts can override this.
+        """
+        return True
+
     @classmethod
     def get_config(cls):
         return {

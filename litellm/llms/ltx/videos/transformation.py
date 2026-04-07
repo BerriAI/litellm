@@ -55,6 +55,9 @@ class LTXVideoConfig(BaseVideoConfig):
     def __init__(self):
         super().__init__()
 
+    def requires_authentication_for_video_content(self) -> bool:
+        return False
+
     def get_supported_openai_params(self, model: str) -> list:
         return [
             "model",
@@ -118,8 +121,6 @@ class LTXVideoConfig(BaseVideoConfig):
         )
 
         if api_key is None:
-            if model == "":
-                return headers
             raise ValueError(
                 "LTX API key is required. Set LTX_API_KEY environment variable "
                 "or pass api_key parameter."
