@@ -19,6 +19,7 @@ from litellm.proxy.common_utils.openai_endpoint_utils import (
     get_custom_llm_provider_from_request_headers,
     get_custom_llm_provider_from_request_query,
 )
+from litellm.responses.utils import ResponsesAPIRequestUtils
 
 
 def _load_endpoints_config() -> Dict:
@@ -178,8 +179,6 @@ async def _process_binary_request(
     litellm_params = GenericLiteLLMParams()
 
     # Decode container ID and extract provider info
-    from litellm.responses.utils import ResponsesAPIRequestUtils
-    
     decoded = ResponsesAPIRequestUtils._decode_container_id(container_id)
     original_container_id = decoded.get("response_id", container_id)
     
@@ -288,8 +287,6 @@ async def _process_multipart_upload_request(
     )
     
     # Decode container ID and extract provider info
-    from litellm.responses.utils import ResponsesAPIRequestUtils
-    
     decoded = ResponsesAPIRequestUtils._decode_container_id(container_id)
     original_container_id = decoded.get("response_id", container_id)
     
@@ -366,8 +363,6 @@ async def _process_request(
     
     # Decode container_id if present in path_params
     if "container_id" in path_params:
-        from litellm.responses.utils import ResponsesAPIRequestUtils
-        
         decoded = ResponsesAPIRequestUtils._decode_container_id(
             path_params["container_id"]
         )

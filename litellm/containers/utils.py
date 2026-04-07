@@ -1,6 +1,7 @@
 from typing import Any, Dict, Optional, TypeVar
 
 from litellm.llms.base_llm.containers.transformation import BaseContainerConfig
+from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.containers.main import (
     ContainerCreateOptionalRequestParams,
     ContainerListOptionalRequestParams,
@@ -75,30 +76,61 @@ class ContainerRequestUtils:
     def encode_container_id_in_response(
         response_obj: T,
         custom_llm_provider: Optional[str],
-        model_id: Optional[str],
+        litellm_metadata: Optional[Dict[str, Any]] = None,
+        extra_body: Optional[Dict[str, Any]] = None,
     ) -> T:
         """
         Encode container_id in response object with provider/model metadata for routing.
-        
+
         This mirrors the responses API pattern where response IDs are encoded with
         routing metadata so follow-up calls can route to the correct provider.
-        
+
+        Encodes when:
+        1. litellm_metadata contains model_info.id (indicating router/proxy usage), OR
+        2. extra_body contains target_model_names (indicating model-specific routing)
+
+        Direct SDK calls with explicit custom_llm_provider and no routing hints return raw IDs.
+
         Args:
             response_obj: Response object with an `id` attribute (ContainerObject, DeleteContainerResult, etc.)
             custom_llm_provider: Provider name (e.g., "azure", "openai")
-            model_id: Model ID from litellm_metadata
-            
+            litellm_metadata: Optional litellm_metadata dict that may contain model_info.id
+            extra_body: Optional extra_body dict that may contain target_model_names
+
         Returns:
-            The same response object with encoded container_id
+            The same response object with encoded container_id (if routing metadata present)
         """
-        if response_obj and hasattr(response_obj, "id"):
-            from litellm.responses.utils import ResponsesAPIRequestUtils
-            
+        # Extract model_id from litellm_metadata
+        litellm_metadata = litellm_metadata or {}
+        model_info: Dict[str, Any] = litellm_metadata.get("model_info", {}) or {}
+        model_id = model_info.get("id")
+        
+        # Check if we should encode based on routing metadata
+        should_encode = False
+        
+        # Case 1: Router/proxy usage (model_id from router)
+        if model_id is not None:
+            should_encode = True
+        
+        # Case 2: target_model_names in extra_body (model-specific routing)
+        if extra_body and "target_model_names" in extra_body:
+            should_encode = True
+            # Extract model_id from target_model_names if not already set
+            if model_id is None:
+                target_models = extra_body["target_model_names"]
+                # Use first model as model_id for encoding
+                if isinstance(target_models, str):
+                    model_id = target_models.split(",")[0].strip()
+                elif isinstance(target_models, list) and len(target_models) > 0:
+                    model_id = str(target_models[0]).strip()
+        
+        # Only encode if we have routing metadata
+        if should_encode and response_obj and hasattr(response_obj, "id"):
             encoded_id = ResponsesAPIRequestUtils._build_container_id(
                 custom_llm_provider=custom_llm_provider,
                 model_id=model_id,
                 container_id=response_obj.id,
             )
             response_obj.id = encoded_id
-        
+
         return response_obj

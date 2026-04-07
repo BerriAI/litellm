@@ -7,6 +7,7 @@ from typing import Any, Coroutine, Dict, List, Literal, Optional, Union, overloa
 import litellm
 from litellm.constants import request_timeout as DEFAULT_REQUEST_TIMEOUT
 from litellm.containers.utils import ContainerRequestUtils
+from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.containers.transformation import BaseContainerConfig
 from litellm.main import base_llm_http_handler
@@ -50,8 +51,6 @@ def _decode_container_id_and_update_provider(
     Returns:
         tuple: (original_container_id, resolved_provider, updated_litellm_params)
     """
-    from litellm.responses.utils import ResponsesAPIRequestUtils
-    
     # Decode the container ID
     decoded = ResponsesAPIRequestUtils._decode_container_id(container_id)
     
@@ -292,11 +291,11 @@ def create_container(
         
         # Encode container_id with provider/model metadata for routing
         if isinstance(container_obj, ContainerObject):
-            model_id = kwargs.get("litellm_metadata", {}).get("model_info", {}).get("id")
             container_obj = ContainerRequestUtils.encode_container_id_in_response(
                 response_obj=container_obj,
                 custom_llm_provider=custom_llm_provider,
-                model_id=model_id,
+                litellm_metadata=kwargs.get("litellm_metadata"),
+                extra_body=extra_body,
             )
         
         return container_obj
@@ -660,6 +659,8 @@ def retrieve_container(
         )
         
         # Decode container ID and extract provider info
+        # Track if input was encoded so we can re-encode the output
+        was_encoded = container_id.startswith("cntr_") and len(container_id) > 100
         original_container_id, custom_llm_provider, litellm_params = (
             _decode_container_id_and_update_provider(
                 container_id=container_id,
@@ -706,12 +707,23 @@ def retrieve_container(
         )
         
         # Encode container_id with provider/model metadata for routing
+        # If input was encoded, preserve encoding in output using the decoded model_id
         if isinstance(container_obj, ContainerObject):
-            model_id = kwargs.get("litellm_metadata", {}).get("model_info", {}).get("id")
+            # If input was encoded, use model_id from decoded params
+            litellm_metadata = kwargs.get("litellm_metadata", {})
+            if was_encoded and litellm_params.get("model_id"):
+                # Inject model_id from decoded container_id into litellm_metadata
+                if not litellm_metadata:
+                    litellm_metadata = {}
+                if "model_info" not in litellm_metadata:
+                    litellm_metadata["model_info"] = {}
+                litellm_metadata["model_info"]["id"] = litellm_params["model_id"]
+            
             container_obj = ContainerRequestUtils.encode_container_id_in_response(
                 response_obj=container_obj,
                 custom_llm_provider=custom_llm_provider,
-                model_id=model_id,
+                litellm_metadata=litellm_metadata,
+                extra_body=None,
             )
         
         return container_obj
@@ -867,6 +879,8 @@ def delete_container(
         )
         
         # Decode container ID and extract provider info
+        # Track if input was encoded so we can re-encode the output
+        was_encoded = container_id.startswith("cntr_") and len(container_id) > 100
         original_container_id, custom_llm_provider, litellm_params = (
             _decode_container_id_and_update_provider(
                 container_id=container_id,
@@ -913,12 +927,23 @@ def delete_container(
         )
         
         # Encode container_id in response with provider/model metadata for routing
+        # If input was encoded, preserve encoding in output using the decoded model_id
         if isinstance(delete_result, DeleteContainerResult):
-            model_id = kwargs.get("litellm_metadata", {}).get("model_info", {}).get("id")
+            # If input was encoded, use model_id from decoded params
+            litellm_metadata = kwargs.get("litellm_metadata", {})
+            if was_encoded and litellm_params.get("model_id"):
+                # Inject model_id from decoded container_id into litellm_metadata
+                if not litellm_metadata:
+                    litellm_metadata = {}
+                if "model_info" not in litellm_metadata:
+                    litellm_metadata["model_info"] = {}
+                litellm_metadata["model_info"]["id"] = litellm_params["model_id"]
+            
             delete_result = ContainerRequestUtils.encode_container_id_in_response(
                 response_obj=delete_result,
                 custom_llm_provider=custom_llm_provider,
-                model_id=model_id,
+                litellm_metadata=litellm_metadata,
+                extra_body=None,
             )
         
         return delete_result

@@ -542,7 +542,10 @@ class ResponsesAPIRequestUtils:
         
         Format: cntr_{base64("litellm:custom_llm_provider:{provider};model_id:{model};container_id:{original}")}
         """
-        assembled_id = f"litellm:custom_llm_provider:{custom_llm_provider};model_id:{model_id};container_id:{container_id}"
+        # Avoid serializing Python None as the literal string "None" (breaks router affinity).
+        provider_part = "" if custom_llm_provider is None else custom_llm_provider
+        model_part = "" if model_id is None else model_id
+        assembled_id = f"litellm:custom_llm_provider:{provider_part};model_id:{model_part};container_id:{container_id}"
         base64_encoded_id = base64.b64encode(assembled_id.encode("utf-8")).decode("utf-8")
         return f"cntr_{base64_encoded_id}"
 
@@ -576,7 +579,8 @@ class ResponsesAPIRequestUtils:
             
             # Use regex to extract the three parts, allowing semicolons in container_id
             # Format: litellm:custom_llm_provider:{provider};model_id:{model};container_id:{container}
-            pattern = r"^litellm:custom_llm_provider:([^;]+);model_id:([^;]+);container_id:(.+)$"
+            # * for provider/model allows empty segments (missing router model_id).
+            pattern = r"^litellm:custom_llm_provider:([^;]*);model_id:([^;]*);container_id:(.+)$"
             match = re.match(pattern, decoded_id)
             
             if not match:
@@ -586,8 +590,12 @@ class ResponsesAPIRequestUtils:
                     response_id=container_id,
                 )
             
-            custom_llm_provider = match.group(1)
-            model_id = match.group(2)
+            raw_provider = match.group(1)
+            raw_model_id = match.group(2)
+            custom_llm_provider = (
+                None if raw_provider in ("", "None") else raw_provider
+            )
+            model_id = None if raw_model_id in ("", "None") else raw_model_id
             original_container_id = match.group(3)
             
             return DecodedResponseId(
