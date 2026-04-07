@@ -600,10 +600,6 @@ async def common_checks(  # noqa: PLR0915
 
         should_check_budget = any(route.endswith(ai_route) for ai_route in AI_RESOURCE_ROUTES)
 
-        # Debug: Log when budget check is skipped for metadata endpoints
-        if user_object is not None and user_object.max_budget is not None and not should_check_budget:
-            print(f"[METADATA_ENDPOINT] Budget check SKIPPED - Route: {route}, User: {user_object.user_id if user_object else 'unknown'}")
-
         if user_object is not None and user_object.max_budget is not None and should_check_budget:
             # Check if model is in free models list (bypass budget check for internal models)
             FREE_MODELS_ENV = os.getenv("FREE_MODELS", "")
@@ -612,7 +608,6 @@ async def common_checks(  # noqa: PLR0915
             # Skip budget check for free models
             if _model and FREE_MODELS and _model in FREE_MODELS:
                 user_email = user_object.user_email if user_object.user_email else user_object.user_id
-                # print(f"[FREE_MODELS] Budget check BYPASSED - Route: {route}, User: {user_email}, Model: {_model}, UserSpend: ${user_object.spend:.4f}, Budget: ${user_object.max_budget:.4f}")
                 verbose_proxy_logger.info(f"Free model usage - User: {user_email}, Model: {_model}")
             else:
                 user_budget = user_object.max_budget
@@ -635,8 +630,6 @@ async def common_checks(  # noqa: PLR0915
                     if len(FREE_MODELS) > 5:
                         free_models_list += f" and {len(FREE_MODELS) - 5} more"
 
-                    print(f"[BUDGET_EXCEEDED] Route: {route}, User: {user_email}, Model: {_model}, Spend: ${user_object.spend:.4f}, Budget: ${user_budget:.4f}")
-
                     error_message = (
                         f"You have exceeded your {period_text} limit for external paid models. "
                         f"Current spend: ${user_object.spend:.2f}, Limit: ${user_budget:.2f}. "
@@ -649,8 +642,6 @@ async def common_checks(  # noqa: PLR0915
                         max_budget=user_budget,
                         message=error_message,
                     )
-                else:
-                    print(f"[BUDGET_CHECK_PASSED] Route: {route}, User: {user_object.user_id}, Model: {_model}, Spend: ${user_object.spend:.4f}, Budget: ${user_budget:.4f}")
 
         ## 4.2 check team member budget, if team key
         with tracer.trace("litellm.proxy.auth.common_checks.check_team_member_budget"):

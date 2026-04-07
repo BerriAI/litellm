@@ -80,7 +80,8 @@ class LeastBusyLoggingHandler(CustomLogger):
 
     def log_success_event(self, kwargs, response_obj, start_time, end_time):
         try:
-            if kwargs["litellm_params"].get("metadata") is None:
+            litellm_params = kwargs.get("litellm_params")
+            if litellm_params is None or litellm_params.get("metadata") is None:
                 pass
             else:
                 model_group = kwargs["litellm_params"]["metadata"].get(
@@ -103,7 +104,8 @@ class LeastBusyLoggingHandler(CustomLogger):
 
     def log_failure_event(self, kwargs, response_obj, start_time, end_time):
         try:
-            if kwargs["litellm_params"].get("metadata") is None:
+            litellm_params = kwargs.get("litellm_params")
+            if litellm_params is None or litellm_params.get("metadata") is None:
                 pass
             else:
                 model_group = kwargs["litellm_params"]["metadata"].get(
@@ -125,7 +127,8 @@ class LeastBusyLoggingHandler(CustomLogger):
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         try:
-            if kwargs["litellm_params"].get("metadata") is None:
+            litellm_params = kwargs.get("litellm_params")
+            if litellm_params is None or litellm_params.get("metadata") is None:
                 pass
             else:
                 model_group = kwargs["litellm_params"]["metadata"].get(
@@ -148,7 +151,8 @@ class LeastBusyLoggingHandler(CustomLogger):
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
         try:
-            if kwargs["litellm_params"].get("metadata") is None:
+            litellm_params = kwargs.get("litellm_params")
+            if litellm_params is None or litellm_params.get("metadata") is None:
                 pass
             else:
                 model_group = kwargs["litellm_params"]["metadata"].get(
@@ -195,8 +199,6 @@ class LeastBusyLoggingHandler(CustomLogger):
             # Default to 0 if not in cache, ensure non-negative
             result[deployment_id] = max(0, int(count)) if count is not None else 0
 
-        if none_count == len(healthy_deployments) and none_count > 0:
-            print("[Least-Busy WARNING] Redis returned None for all deployments - Redis may be unavailable. Falling back to random routing.")
         return result
 
     async def _async_get_request_counts_for_deployments(
@@ -226,8 +228,6 @@ class LeastBusyLoggingHandler(CustomLogger):
             # Default to 0 if not in cache, ensure non-negative
             result[deployment_id] = max(0, int(count)) if count is not None else 0
 
-        if none_count == len(healthy_deployments) and none_count > 0:
-            print("[Least-Busy WARNING] Redis returned None for all deployments - Redis may be unavailable. Falling back to random routing.")
         return result
 
     def _get_available_deployments(
@@ -241,12 +241,6 @@ class LeastBusyLoggingHandler(CustomLogger):
         When multiple deployments have the same minimum traffic count,
         randomly select among them to ensure fair distribution.
         """
-        # Extract healthy deployment IDs for logging
-        healthy_ids = [d["model_info"]["id"] for d in healthy_deployments]
-
-        print(f"[Least-Busy DEBUG] Cached all_deployments: {all_deployments}")
-        print(f"[Least-Busy DEBUG] Healthy deployment IDs: {healthy_ids}")
-
         # First pass: find the minimum traffic count
         min_traffic = float("inf")
         for d in healthy_deployments:
@@ -270,12 +264,9 @@ class LeastBusyLoggingHandler(CustomLogger):
 
         # Randomly select among deployments with equal minimum traffic
         if min_deployments:
-            selected = random.choice(min_deployments)
-            print(f"[Least-Busy DEBUG] Selected deployment ID: {selected['model_info']['id']} with traffic={min_traffic} (from {len(min_deployments)} candidates)")
-            return selected
+            return random.choice(min_deployments)
         else:
             # Fallback: should not happen if healthy_deployments is non-empty
-            print("[Least-Busy DEBUG] WARNING: No deployment found, falling back to RANDOM choice")
             return random.choice(healthy_deployments)
 
     def get_available_deployments(
