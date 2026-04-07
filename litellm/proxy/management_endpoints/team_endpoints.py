@@ -231,7 +231,7 @@ class TeamMemberBudgetHandler:
                 updated_kv["metadata"] = {}
             updated_kv["metadata"]["team_member_budget_id"] = budget_row.budget_id
 
-        else:  # budget does not exist
+        else:  # budget does not exist — newly creating the template
             updated_kv = await TeamMemberBudgetHandler.create_team_member_budget_table(
                 data=team_table,
                 new_team_data_json=updated_kv,
@@ -241,6 +241,27 @@ class TeamMemberBudgetHandler:
                 team_member_tpm_limit=team_member_tpm_limit,
                 team_member_budget_duration=team_member_budget_duration,
             )
+
+            # Wire up existing members whose budget_id is null to the
+            # newly-created template budget so they immediately inherit the
+            # reset schedule. Only do this on creation (not on every update)
+            # to avoid silently constraining members who were intentionally
+            # left unlimited.
+            if team_table.team_id is not None:
+                new_budget_id: Optional[str] = (
+                    updated_kv.get("metadata", {}).get("team_member_budget_id")
+                )
+                if new_budget_id is not None:
+                    from litellm.proxy.proxy_server import prisma_client as _prisma_client
+
+                    if _prisma_client is not None:
+                        await _prisma_client.db.litellm_teammembership.update_many(
+                            where={
+                                "team_id": team_table.team_id,
+                                "budget_id": None,
+                            },
+                            data={"budget_id": new_budget_id},
+                        )
 
         # Remove team member fields from updated_kv
         TeamMemberBudgetHandler._clean_team_member_fields(updated_kv)
@@ -2427,6 +2448,11 @@ async def team_member_update(
             break
 
     ### upsert new budget
+    # budget_duration=None means "not supplied" by default; we need to distinguish
+    # that from the user explicitly sending null to clear a previously-set value.
+    clear_budget_duration = (
+        "budget_duration" in data.model_fields_set and data.budget_duration is None
+    )
     async with prisma_client.db.tx() as tx:
         await _upsert_budget_and_membership(
             tx=tx,
@@ -2437,6 +2463,8 @@ async def team_member_update(
             user_api_key_dict=user_api_key_dict,
             tpm_limit=data.tpm_limit,
             rpm_limit=data.rpm_limit,
+            budget_duration=data.budget_duration,
+            clear_budget_duration=clear_budget_duration,
         )
 
     ### update team member role

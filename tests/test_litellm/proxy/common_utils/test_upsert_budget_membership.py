@@ -316,3 +316,105 @@ async def test_upsert_rpm_only_creates_new_budget(mock_tx, fake_user):
             },
         },
     )
+
+
+# TEST: budget_duration sets budget_reset_at on the new budget
+@pytest.mark.asyncio
+async def test_upsert_with_budget_duration_sets_reset_at(mock_tx, fake_user):
+    """
+    When budget_duration is provided, the new individual member budget should
+    have both budget_duration and budget_reset_at written so that the
+    Next Budget Reset column shows a real future time instead of '-'.
+    """
+    from datetime import datetime, timezone
+    from unittest.mock import patch
+
+    fake_reset_time = datetime(2026, 5, 1, 0, 0, 0, tzinfo=timezone.utc)
+
+    with patch(
+        "litellm.proxy.common_utils.timezone_utils.get_budget_reset_time",
+        return_value=fake_reset_time,
+    ) as mock_get_reset:
+        await _upsert_budget_and_membership(
+            mock_tx,
+            team_id="team-dur",
+            user_id="user-dur",
+            max_budget=10.0,
+            existing_budget_id=None,
+            user_api_key_dict=fake_user,
+            budget_duration="24h",
+        )
+
+    mock_get_reset.assert_called_once_with(budget_duration="24h")
+
+    mock_tx.litellm_budgettable.create.assert_awaited_once_with(
+        data={
+            "max_budget": 10.0,
+            "budget_duration": "24h",
+            "budget_reset_at": fake_reset_time,
+            "created_by": fake_user.user_id,
+            "updated_by": fake_user.user_id,
+        },
+        include={"team_membership": True},
+    )
+
+
+# TEST: budget_duration=None alone does not create a budget (disconnect path)
+@pytest.mark.asyncio
+async def test_upsert_disconnect_when_only_budget_duration_none(mock_tx, fake_user):
+    """
+    Passing only None values (including budget_duration=None) should still
+    hit the disconnect path, not attempt to create a budget.
+    """
+    await _upsert_budget_and_membership(
+        mock_tx,
+        team_id="team-none",
+        user_id="user-none",
+        max_budget=None,
+        existing_budget_id=None,
+        user_api_key_dict=fake_user,
+        tpm_limit=None,
+        rpm_limit=None,
+        budget_duration=None,
+    )
+
+    mock_tx.litellm_teammembership.update.assert_awaited_once()
+    mock_tx.litellm_budgettable.create.assert_not_called()
+
+
+# TEST: budget_duration alone (no max_budget/limits) creates a budget
+@pytest.mark.asyncio
+async def test_upsert_budget_duration_only_creates_budget(mock_tx, fake_user):
+    """
+    Setting only budget_duration (no max_budget, tpm, rpm) should still create
+    a budget with the duration so that the member gets a reset schedule.
+    """
+    from datetime import datetime, timezone
+    from unittest.mock import patch
+
+    fake_reset_time = datetime(2026, 5, 8, 0, 0, 0, tzinfo=timezone.utc)
+
+    with patch(
+        "litellm.proxy.common_utils.timezone_utils.get_budget_reset_time",
+        return_value=fake_reset_time,
+    ):
+        await _upsert_budget_and_membership(
+            mock_tx,
+            team_id="team-dur-only",
+            user_id="user-dur-only",
+            max_budget=None,
+            existing_budget_id=None,
+            user_api_key_dict=fake_user,
+            budget_duration="7d",
+        )
+
+    mock_tx.litellm_budgettable.create.assert_awaited_once_with(
+        data={
+            "budget_duration": "7d",
+            "budget_reset_at": fake_reset_time,
+            "created_by": fake_user.user_id,
+            "updated_by": fake_user.user_id,
+        },
+        include={"team_membership": True},
+    )
+    mock_tx.litellm_teammembership.update.assert_not_called()
