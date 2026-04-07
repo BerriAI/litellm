@@ -1952,8 +1952,8 @@ def test_transform_request_adds_tool_code_execution_when_container_upload_in_mes
         {
             "role": "user",
             "content": [
-                {"type": "text", "text": "Analyse this file"},
-                {"type": "container_upload", "file_id": "file_abc123"},
+                {"type": "text", "text": "Analyse this file"},                
+                {"type": "file", "file": {"file_id": "file_abc123" }}
             ],
         }
     ]
