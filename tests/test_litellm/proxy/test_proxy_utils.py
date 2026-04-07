@@ -190,3 +190,26 @@ def test_get_projected_spend_over_limit_includes_current_spend(monkeypatch):
     projected_spend, projected_exceeded_date = result
     assert projected_spend == 290.0
     assert projected_exceeded_date == real_datetime.date(2026, 4, 21)
+
+
+def test_handle_exception_on_proxy_preserves_429_status_code():
+    """Exceptions with status_code=429 should not be mapped to 500."""
+    from litellm.proxy.utils import handle_exception_on_proxy
+
+    class FakeRateLimitError(Exception):
+        def __init__(self):
+            self.status_code = 429
+            self.message = "Rate limit exceeded"
+            self.param = None
+            super().__init__(self.message)
+
+    result = handle_exception_on_proxy(FakeRateLimitError())
+    assert result.code == "429"
+
+
+def test_handle_exception_on_proxy_defaults_to_500_without_status_code():
+    """Exceptions without status_code should map to 500."""
+    from litellm.proxy.utils import handle_exception_on_proxy
+
+    result = handle_exception_on_proxy(Exception("unknown error"))
+    assert result.code == "500"
