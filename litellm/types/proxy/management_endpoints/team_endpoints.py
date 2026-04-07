@@ -3,6 +3,7 @@ from typing import Any, Dict, List, Optional, Union
 from pydantic import BaseModel
 
 from litellm.proxy._types import (
+    KeyManagementRoutes,
     LiteLLM_DeletedTeamTable,
     LiteLLM_TeamMembership,
     LiteLLM_TeamTable,
@@ -41,6 +42,27 @@ class UpdateTeamMemberPermissionsRequest(BaseModel):
 
     team_id: str
     team_member_permissions: List[str]
+
+
+class BulkUpdateTeamMemberPermissionsRequest(BaseModel):
+    """Request to bulk-update team member permissions across teams."""
+
+    permissions: List[KeyManagementRoutes]
+    """Permissions to append to the target teams (duplicates are skipped)."""
+
+    team_ids: Optional[List[str]] = None
+    """Specific team IDs to update. Required unless apply_to_all_teams is True."""
+
+    apply_to_all_teams: bool = False
+    """When True, update all teams. Mutually exclusive with team_ids."""
+
+
+class BulkUpdateTeamMemberPermissionsResponse(BaseModel):
+    """Response for bulk team member permissions update."""
+
+    message: str
+    teams_updated: int
+    permissions_appended: Optional[List[str]] = None
 
 
 class TeamListItem(LiteLLM_TeamTable):
