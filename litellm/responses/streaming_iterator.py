@@ -140,6 +140,50 @@ class BaseResponsesAPIStreamingIterator:
                     )
                     setattr(openai_responses_api_chunk, "response", response)
 
+                # Encode container_id on streaming events so proxy/UI follow-ups route correctly
+                _event_type = getattr(openai_responses_api_chunk, "type", None)
+                _stream_model_id = (
+                    self.litellm_metadata.get("model_info", {}).get("id")
+                    if self.litellm_metadata
+                    else None
+                )
+                if _event_type in (
+                    ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
+                    ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
+                ):
+                    _item = getattr(openai_responses_api_chunk, "item", None)
+                    if _item is not None:
+                        ResponsesAPIRequestUtils._encode_container_id_on_output_item(
+                            item=_item,
+                            custom_llm_provider=self.custom_llm_provider,
+                            model_id=_stream_model_id,
+                        )
+                elif _event_type == ResponsesAPIStreamEvents.OUTPUT_TEXT_ANNOTATION_ADDED:
+                    _annotation = getattr(
+                        openai_responses_api_chunk, "annotation", None
+                    )
+                    if _annotation is not None:
+                        ResponsesAPIRequestUtils._encode_container_id_on_output_item(
+                            item=_annotation,
+                            custom_llm_provider=self.custom_llm_provider,
+                            model_id=_stream_model_id,
+                        )
+                elif _event_type == ResponsesAPIStreamEvents.CONTENT_PART_DONE:
+                    _part = getattr(openai_responses_api_chunk, "part", None)
+                    if _part is not None:
+                        if isinstance(_part, dict):
+                            ResponsesAPIRequestUtils._encode_container_ids_in_annotations(
+                                _part.get("annotations"),
+                                self.custom_llm_provider,
+                                _stream_model_id,
+                            )
+                        else:
+                            ResponsesAPIRequestUtils._encode_container_ids_in_annotations(
+                                getattr(_part, "annotations", None),
+                                self.custom_llm_provider,
+                                _stream_model_id,
+                            )
+
                 # Wrap encrypted_content in streaming events (output_item.added, output_item.done)
                 if self.litellm_metadata and self.litellm_metadata.get(
                     "encrypted_content_affinity_enabled"

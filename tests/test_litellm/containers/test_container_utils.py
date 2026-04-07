@@ -12,7 +12,8 @@ from litellm.containers.utils import ContainerRequestUtils
 from litellm.llms.openai.containers.transformation import OpenAIContainerConfig
 from litellm.types.containers.main import (
     ContainerCreateOptionalRequestParams,
-    ContainerListOptionalRequestParams
+    ContainerListOptionalRequestParams,
+    DeleteContainerFileResponse,
 )
 
 
@@ -228,3 +229,23 @@ class TestContainerRequestUtils:
         )
         
         assert result["expires_after"]["minutes"] == 15
+
+
+class TestDeleteContainerFileResponseWireFormat:
+    """OpenAI / Azure return ``container.file.deleted`` on DELETE file."""
+
+    def test_accepts_openai_dot_notation(self):
+        m = DeleteContainerFileResponse(
+            id="cfile_abc",
+            object="container.file.deleted",
+            deleted=True,
+        )
+        assert m.object == "container.file.deleted"
+
+    def test_accepts_legacy_underscore(self):
+        m = DeleteContainerFileResponse(
+            id="cfile_abc",
+            object="container_file.deleted",
+            deleted=True,
+        )
+        assert m.object == "container_file.deleted"

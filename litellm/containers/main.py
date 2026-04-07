@@ -40,6 +40,38 @@ __all__ = [
 ]
 
 
+def _decode_container_id_and_update_provider(
+    container_id: str,
+    custom_llm_provider: str,
+    litellm_params: GenericLiteLLMParams,
+) -> tuple[str, str, GenericLiteLLMParams]:
+    """Decode a managed container ID and extract provider/model info.
+    
+    Returns:
+        tuple: (original_container_id, resolved_provider, updated_litellm_params)
+    """
+    from litellm.responses.utils import ResponsesAPIRequestUtils
+    
+    # Decode the container ID
+    decoded = ResponsesAPIRequestUtils._decode_container_id(container_id)
+    
+    # Extract the original container ID (what the provider issued)
+    original_container_id = decoded.get("response_id", container_id)
+    
+    # If we decoded provider info, use it (unless explicitly overridden)
+    decoded_provider = decoded.get("custom_llm_provider")
+    if decoded_provider and custom_llm_provider == "openai":
+        # Only override if user didn't explicitly set a different provider
+        custom_llm_provider = decoded_provider
+    
+    # If we decoded model_id, add it to litellm_params for routing
+    decoded_model_id = decoded.get("model_id")
+    if decoded_model_id and not litellm_params.get("model_id"):
+        litellm_params["model_id"] = decoded_model_id
+    
+    return original_container_id, custom_llm_provider, litellm_params
+
+
 ##### Container Create #######################
 @client
 async def acreate_container(
@@ -48,7 +80,7 @@ async def acreate_container(
     file_ids: Optional[List[str]] = None,
     timeout=600,  # default to 10 minutes
     # LiteLLM specific params,
-    custom_llm_provider: Literal["openai"] = "openai",
+    custom_llm_provider: Literal["openai", "azure", "azure_text"] = "openai",
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
     extra_headers: Optional[Dict[str, Any]] = None,
@@ -122,7 +154,7 @@ def create_container(
     api_key: Optional[str] = None,
     api_base: Optional[str] = None,
     api_version: Optional[str] = None,
-    custom_llm_provider: Literal["openai"] = "openai",
+    custom_llm_provider: Literal["openai", "azure", "azure_text"] = "openai",
     *,
     acreate_container: Literal[True],
     **kwargs,
@@ -139,7 +171,7 @@ def create_container(
     api_key: Optional[str] = None,
     api_base: Optional[str] = None,
     api_version: Optional[str] = None,
-    custom_llm_provider: Literal["openai"] = "openai",
+    custom_llm_provider: Literal["openai", "azure", "azure_text"] = "openai",
     *,
     acreate_container: Literal[False] = False,
     **kwargs,
@@ -158,7 +190,7 @@ def create_container(
     api_key: Optional[str] = None,
     api_base: Optional[str] = None,
     api_version: Optional[str] = None,
-    custom_llm_provider: Literal["openai"] = "openai",
+    custom_llm_provider: Literal["openai", "azure", "azure_text"] = "openai",
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
     extra_headers: Optional[Dict[str, Any]] = None,
@@ -275,7 +307,7 @@ async def alist_containers(
     limit: Optional[int] = None,
     order: Optional[str] = None,
     timeout=600,  # default to 10 minutes
-    custom_llm_provider: Literal["openai"] = "openai",
+    custom_llm_provider: Literal["openai", "azure", "azure_text"] = "openai",
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
     extra_headers: Optional[Dict[str, Any]] = None,
@@ -348,7 +380,7 @@ def list_containers(
     api_key: Optional[str] = None,
     api_base: Optional[str] = None,
     api_version: Optional[str] = None,
-    custom_llm_provider: Literal["openai"] = "openai",
+    custom_llm_provider: Literal["openai", "azure", "azure_text"] = "openai",
     *,
     alist_containers: Literal[True],
     **kwargs,
@@ -365,7 +397,7 @@ def list_containers(
     api_key: Optional[str] = None,
     api_base: Optional[str] = None,
     api_version: Optional[str] = None,
-    custom_llm_provider: Literal["openai"] = "openai",
+    custom_llm_provider: Literal["openai", "azure", "azure_text"] = "openai",
     *,
     alist_containers: Literal[False] = False,
     **kwargs,
@@ -384,7 +416,7 @@ def list_containers(
     api_key: Optional[str] = None,
     api_base: Optional[str] = None,
     api_version: Optional[str] = None,
-    custom_llm_provider: Literal["openai"] = "openai",
+    custom_llm_provider: Literal["openai", "azure", "azure_text"] = "openai",
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
     extra_headers: Optional[Dict[str, Any]] = None,
@@ -481,7 +513,7 @@ def list_containers(
 async def aretrieve_container(
     container_id: str,
     timeout=600,  # default to 10 minutes
-    custom_llm_provider: Literal["openai"] = "openai",
+    custom_llm_provider: Literal["openai", "azure", "azure_text"] = "openai",
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
     extra_headers: Optional[Dict[str, Any]] = None,
@@ -548,7 +580,7 @@ def retrieve_container(
     api_key: Optional[str] = None,
     api_base: Optional[str] = None,
     api_version: Optional[str] = None,
-    custom_llm_provider: Literal["openai"] = "openai",
+    custom_llm_provider: Literal["openai", "azure", "azure_text"] = "openai",
     *,
     aretrieve_container: Literal[True],
     **kwargs,
@@ -563,7 +595,7 @@ def retrieve_container(
     api_key: Optional[str] = None,
     api_base: Optional[str] = None,
     api_version: Optional[str] = None,
-    custom_llm_provider: Literal["openai"] = "openai",
+    custom_llm_provider: Literal["openai", "azure", "azure_text"] = "openai",
     *,
     aretrieve_container: Literal[False] = False,
     **kwargs,
@@ -580,7 +612,7 @@ def retrieve_container(
     api_key: Optional[str] = None,
     api_base: Optional[str] = None,
     api_version: Optional[str] = None,
-    custom_llm_provider: Literal["openai"] = "openai",
+    custom_llm_provider: Literal["openai", "azure", "azure_text"] = "openai",
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
     extra_headers: Optional[Dict[str, Any]] = None,
@@ -615,6 +647,16 @@ def retrieve_container(
             api_version=api_version,
             **kwargs,
         )
+        
+        # Decode container ID and extract provider info
+        original_container_id, custom_llm_provider, litellm_params = (
+            _decode_container_id_and_update_provider(
+                container_id=container_id,
+                custom_llm_provider=custom_llm_provider,
+                litellm_params=litellm_params,
+            )
+        )
+        
         # get provider config
         container_provider_config: Optional[
             BaseContainerConfig
@@ -642,7 +684,7 @@ def retrieve_container(
         litellm_logging_obj.call_type = CallTypes.retrieve_container.value
 
         return base_llm_http_handler.container_retrieve_handler(
-            container_id=container_id,
+            container_id=original_container_id,  # Use decoded original ID
             container_provider_config=container_provider_config,
             litellm_params=litellm_params,
             logging_obj=litellm_logging_obj,
@@ -667,7 +709,7 @@ def retrieve_container(
 async def adelete_container(
     container_id: str,
     timeout=600,  # default to 10 minutes
-    custom_llm_provider: Literal["openai"] = "openai",
+    custom_llm_provider: Literal["openai", "azure", "azure_text"] = "openai",
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
     extra_headers: Optional[Dict[str, Any]] = None,
@@ -734,7 +776,7 @@ def delete_container(
     api_key: Optional[str] = None,
     api_base: Optional[str] = None,
     api_version: Optional[str] = None,
-    custom_llm_provider: Literal["openai"] = "openai",
+    custom_llm_provider: Literal["openai", "azure", "azure_text"] = "openai",
     *,
     adelete_container: Literal[True],
     **kwargs,
@@ -749,7 +791,7 @@ def delete_container(
     api_key: Optional[str] = None,
     api_base: Optional[str] = None,
     api_version: Optional[str] = None,
-    custom_llm_provider: Literal["openai"] = "openai",
+    custom_llm_provider: Literal["openai", "azure", "azure_text"] = "openai",
     *,
     adelete_container: Literal[False] = False,
     **kwargs,
@@ -766,7 +808,7 @@ def delete_container(
     api_key: Optional[str] = None,
     api_base: Optional[str] = None,
     api_version: Optional[str] = None,
-    custom_llm_provider: Literal["openai"] = "openai",
+    custom_llm_provider: Literal["openai", "azure", "azure_text"] = "openai",
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
     extra_headers: Optional[Dict[str, Any]] = None,
@@ -801,6 +843,16 @@ def delete_container(
             api_version=api_version,
             **kwargs,
         )
+        
+        # Decode container ID and extract provider info
+        original_container_id, custom_llm_provider, litellm_params = (
+            _decode_container_id_and_update_provider(
+                container_id=container_id,
+                custom_llm_provider=custom_llm_provider,
+                litellm_params=litellm_params,
+            )
+        )
+        
         # get provider config
         container_provider_config: Optional[
             BaseContainerConfig
@@ -828,7 +880,7 @@ def delete_container(
         litellm_logging_obj.call_type = CallTypes.delete_container.value
 
         return base_llm_http_handler.container_delete_handler(
-            container_id=container_id,
+            container_id=original_container_id,  # Use decoded original ID
             container_provider_config=container_provider_config,
             litellm_params=litellm_params,
             logging_obj=litellm_logging_obj,
@@ -856,7 +908,7 @@ async def alist_container_files(
     limit: Optional[int] = None,
     order: Optional[str] = None,
     timeout=600,  # default to 10 minutes
-    custom_llm_provider: Literal["openai"] = "openai",
+    custom_llm_provider: Literal["openai", "azure", "azure_text"] = "openai",
     extra_headers: Optional[Dict[str, Any]] = None,
     extra_query: Optional[Dict[str, Any]] = None,
     extra_body: Optional[Dict[str, Any]] = None,
@@ -930,7 +982,7 @@ def list_container_files(
     api_key: Optional[str] = None,
     api_base: Optional[str] = None,
     api_version: Optional[str] = None,
-    custom_llm_provider: Literal["openai"] = "openai",
+    custom_llm_provider: Literal["openai", "azure", "azure_text"] = "openai",
     *,
     alist_container_files: Literal[True],
     **kwargs,
@@ -948,7 +1000,7 @@ def list_container_files(
     api_key: Optional[str] = None,
     api_base: Optional[str] = None,
     api_version: Optional[str] = None,
-    custom_llm_provider: Literal["openai"] = "openai",
+    custom_llm_provider: Literal["openai", "azure", "azure_text"] = "openai",
     *,
     alist_container_files: Literal[False] = False,
     **kwargs,
@@ -968,7 +1020,7 @@ def list_container_files(
     api_key: Optional[str] = None,
     api_base: Optional[str] = None,
     api_version: Optional[str] = None,
-    custom_llm_provider: Literal["openai"] = "openai",
+    custom_llm_provider: Literal["openai", "azure", "azure_text"] = "openai",
     extra_headers: Optional[Dict[str, Any]] = None,
     extra_query: Optional[Dict[str, Any]] = None,
     extra_body: Optional[Dict[str, Any]] = None,
@@ -1001,6 +1053,16 @@ def list_container_files(
             api_version=api_version,
             **kwargs,
         )
+        
+        # Decode container ID and extract provider info
+        original_container_id, custom_llm_provider, litellm_params = (
+            _decode_container_id_and_update_provider(
+                container_id=container_id,
+                custom_llm_provider=custom_llm_provider,
+                litellm_params=litellm_params,
+            )
+        )
+        
         # get provider config
         container_provider_config: Optional[
             BaseContainerConfig
@@ -1033,7 +1095,7 @@ def list_container_files(
         litellm_logging_obj.call_type = CallTypes.list_container_files.value
 
         return base_llm_http_handler.container_file_list_handler(
-            container_id=container_id,
+            container_id=original_container_id,  # Use decoded original ID
             container_provider_config=container_provider_config,
             litellm_params=litellm_params,
             logging_obj=litellm_logging_obj,
@@ -1062,7 +1124,7 @@ async def aupload_container_file(
     container_id: str,
     file: FileTypes,
     timeout=600,  # default to 10 minutes
-    custom_llm_provider: Literal["openai"] = "openai",
+    custom_llm_provider: Literal["openai", "azure", "azure_text"] = "openai",
     extra_headers: Optional[Dict[str, Any]] = None,
     extra_query: Optional[Dict[str, Any]] = None,
     extra_body: Optional[Dict[str, Any]] = None,
@@ -1151,7 +1213,7 @@ def upload_container_file(
     api_key: Optional[str] = None,
     api_base: Optional[str] = None,
     api_version: Optional[str] = None,
-    custom_llm_provider: Literal["openai"] = "openai",
+    custom_llm_provider: Literal["openai", "azure", "azure_text"] = "openai",
     *,
     aupload_container_file: Literal[True],
     **kwargs,
@@ -1167,7 +1229,7 @@ def upload_container_file(
     api_key: Optional[str] = None,
     api_base: Optional[str] = None,
     api_version: Optional[str] = None,
-    custom_llm_provider: Literal["openai"] = "openai",
+    custom_llm_provider: Literal["openai", "azure", "azure_text"] = "openai",
     *,
     aupload_container_file: Literal[False] = False,
     **kwargs,
@@ -1185,7 +1247,7 @@ def upload_container_file(
     api_key: Optional[str] = None,
     api_base: Optional[str] = None,
     api_version: Optional[str] = None,
-    custom_llm_provider: Literal["openai"] = "openai",
+    custom_llm_provider: Literal["openai", "azure", "azure_text"] = "openai",
     extra_headers: Optional[Dict[str, Any]] = None,
     extra_query: Optional[Dict[str, Any]] = None,
     extra_body: Optional[Dict[str, Any]] = None,
@@ -1247,6 +1309,16 @@ def upload_container_file(
             api_version=api_version,
             **kwargs,
         )
+        
+        # Decode container ID and extract provider info
+        original_container_id, custom_llm_provider, litellm_params = (
+            _decode_container_id_and_update_provider(
+                container_id=container_id,
+                custom_llm_provider=custom_llm_provider,
+                litellm_params=litellm_params,
+            )
+        )
+        
         # get provider config
         container_provider_config: Optional[
             BaseContainerConfig
@@ -1282,7 +1354,7 @@ def upload_container_file(
             extra_query=extra_query,
             timeout=timeout or DEFAULT_REQUEST_TIMEOUT,
             _is_async=_is_async,
-            container_id=container_id,
+            container_id=original_container_id,  # Use decoded original ID
             file=file,
         )
 

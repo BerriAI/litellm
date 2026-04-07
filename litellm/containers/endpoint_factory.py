@@ -53,7 +53,7 @@ def create_sync_endpoint_function(endpoint_config: Dict) -> Callable:
     @client
     def endpoint_func(
         timeout: int = 600,
-        custom_llm_provider: Literal["openai"] = "openai",
+        custom_llm_provider: Literal["openai", "azure", "azure_text"] = "openai",
         extra_headers: Optional[Dict[str, Any]] = None,
         extra_query: Optional[Dict[str, Any]] = None,
         extra_body: Optional[Dict[str, Any]] = None,
@@ -133,7 +133,7 @@ def create_async_endpoint_function(
     @client
     async def async_endpoint_func(
         timeout: int = 600,
-        custom_llm_provider: Literal["openai"] = "openai",
+        custom_llm_provider: Literal["openai", "azure", "azure_text"] = "openai",
         extra_headers: Optional[Dict[str, Any]] = None,
         extra_query: Optional[Dict[str, Any]] = None,
         extra_body: Optional[Dict[str, Any]] = None,
