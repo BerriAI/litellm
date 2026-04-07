@@ -130,15 +130,20 @@ class BaseResponsesAPIStreamingIterator:
                     )
                 )
 
-                # if "response" in parsed_chunk, then encode litellm specific information like custom_llm_provider
-                response_object = getattr(openai_responses_api_chunk, "response", None)
-                if response_object:
-                    response = ResponsesAPIRequestUtils._update_responses_api_response_id_with_model_id(
-                        responses_api_response=response_object,
-                        litellm_metadata=self.litellm_metadata,
-                        custom_llm_provider=self.custom_llm_provider,
+                # Only when the SSE JSON carries a response body (delta events do not).
+                # Using getattr(..., "response") alone is unsafe with Mocks: they synthesize a
+                # truthy child Mock for any attribute, which breaks tests and is wrong on stream.
+                if "response" in parsed_chunk:
+                    response_object = getattr(
+                        openai_responses_api_chunk, "response", None
                     )
-                    setattr(openai_responses_api_chunk, "response", response)
+                    if response_object is not None:
+                        response = ResponsesAPIRequestUtils._update_responses_api_response_id_with_model_id(
+                            responses_api_response=response_object,
+                            litellm_metadata=self.litellm_metadata,
+                            custom_llm_provider=self.custom_llm_provider,
+                        )
+                        setattr(openai_responses_api_chunk, "response", response)
 
                 # Encode container_id on streaming events so proxy/UI follow-ups route correctly
                 _event_type = getattr(openai_responses_api_chunk, "type", None)
