@@ -1,5 +1,7 @@
+import tempfile
 import time
 import uuid
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
 import httpx
@@ -11,7 +13,10 @@ from litellm.llms.base_llm.videos.transformation import BaseVideoConfig
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.videos.main import VideoCreateOptionalRequestParams, VideoObject
-from litellm.types.videos.utils import encode_video_id_with_provider
+from litellm.types.videos.utils import (
+    encode_video_id_with_provider,
+    extract_original_video_id,
+)
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -19,6 +24,20 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+
+LTX_VIDEO_STORAGE_DIR = Path(tempfile.gettempdir()) / "litellm_ltx_videos"
+
+
+def _get_ltx_video_storage_path(video_id: str) -> Path:
+    return LTX_VIDEO_STORAGE_DIR / f"{video_id}.mp4"
+
+
+def _persist_ltx_video_bytes(video_id: str, video_bytes: bytes) -> Path:
+    LTX_VIDEO_STORAGE_DIR.mkdir(parents=True, exist_ok=True)
+    video_path = _get_ltx_video_storage_path(video_id)
+    video_path.write_bytes(video_bytes)
+    return video_path
 
 
 class LTXVideoConfig(BaseVideoConfig):
@@ -73,6 +92,7 @@ class LTXVideoConfig(BaseVideoConfig):
                         else int(seconds)
                     )
                 except (ValueError, TypeError):
+                    # Ignore invalid seconds values and let the provider fall back to defaults.
                     pass
 
         # Pass through LTX-specific parameters
@@ -90,12 +110,16 @@ class LTXVideoConfig(BaseVideoConfig):
         api_key: Optional[str] = None,
         litellm_params: Optional[GenericLiteLLMParams] = None,
     ) -> dict:
-        if litellm_params and litellm_params.api_key:
-            api_key = api_key or litellm_params.api_key
-
-        api_key = api_key or litellm.api_key or get_secret_str("LTX_API_KEY")
+        api_key = (
+            api_key
+            or (litellm_params.api_key if litellm_params else None)
+            or litellm.api_key
+            or get_secret_str("LTX_API_KEY")
+        )
 
         if api_key is None:
+            if model == "":
+                return headers
             raise ValueError(
                 "LTX API key is required. Set LTX_API_KEY environment variable "
                 "or pass api_key parameter."
@@ -115,6 +139,13 @@ class LTXVideoConfig(BaseVideoConfig):
         api_base: Optional[str],
         litellm_params: dict,
     ) -> str:
+        """
+        Return the shared LTX API base URL.
+
+        The final create endpoint depends on whether the request includes
+        an input image, so `transform_video_create_request()` appends the
+        `/text-to-video` or `/image-to-video` suffix.
+        """
         if api_base is None:
             api_base = "https://api.ltx.video/v1"
 
@@ -161,8 +192,19 @@ class LTXVideoConfig(BaseVideoConfig):
         LTX returns binary video data directly (application/octet-stream).
         We generate a UUID for the video ID and set status to "completed".
         """
+        if not raw_response.content:
+            raise BaseLLMException(
+                status_code=raw_response.status_code or 502,
+                message="LTX returned an empty video response body.",
+                request=raw_response.request,
+                response=raw_response,
+            )
+
         video_id = str(uuid.uuid4())
         created_at = int(time.time())
+        stored_video_path = _persist_ltx_video_bytes(
+            video_id=video_id, video_bytes=raw_response.content
+        )
 
         video_data: Dict[str, Any] = {
             "id": video_id,
@@ -192,8 +234,13 @@ class LTXVideoConfig(BaseVideoConfig):
             try:
                 usage_data["duration_seconds"] = float(request_data["duration"])
             except (ValueError, TypeError):
+                # Duration is used only for cost accounting, so skip invalid values.
                 pass
         video_obj.usage = usage_data
+        video_obj._hidden_params = {
+            "video_content_path": str(stored_video_path),
+            "video_content_url": stored_video_path.resolve().as_uri(),
+        }
 
         return video_obj
 
@@ -205,20 +252,31 @@ class LTXVideoConfig(BaseVideoConfig):
         headers: dict,
         variant: Optional[str] = None,
     ) -> Tuple[str, Dict]:
-        raise NotImplementedError(
-            "Video content retrieval is not supported for LTX. "
-            "LTX returns video binary directly in the creation response."
-        )
+        if variant is not None:
+            raise NotImplementedError(
+                "LTX video content variants are not supported. "
+                "Only the generated MP4 can be retrieved."
+            )
+
+        original_video_id = extract_original_video_id(video_id)
+        stored_video_path = _get_ltx_video_storage_path(original_video_id)
+        if not stored_video_path.exists():
+            raise BaseLLMException(
+                status_code=404,
+                message=(
+                    "No locally stored LTX video content was found for this video_id. "
+                    "Recreate the video before calling video_content()."
+                ),
+            )
+
+        return stored_video_path.resolve().as_uri(), {}
 
     def transform_video_content_response(
         self,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
     ) -> bytes:
-        raise NotImplementedError(
-            "Video content retrieval is not supported for LTX. "
-            "LTX returns video binary directly in the creation response."
-        )
+        return raw_response.content
 
     def transform_video_remix_request(
         self,

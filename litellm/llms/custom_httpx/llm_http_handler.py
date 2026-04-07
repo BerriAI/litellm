@@ -1,5 +1,6 @@
 import json
 import ssl
+from pathlib import Path
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -13,6 +14,8 @@ from typing import (
     Union,
     cast,
 )
+from urllib.parse import urlparse
+from urllib.request import url2pathname
 
 import httpx  # type: ignore
 from openai.types.file_deleted import FileDeleted
@@ -148,6 +151,12 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+
+def _read_local_file_url(url: str) -> bytes:
+    parsed = urlparse(url)
+    file_path = Path(url2pathname(f"{parsed.netloc}{parsed.path}"))
+    return file_path.read_bytes()
 
 
 class BaseLLMHTTPHandler:
@@ -5825,6 +5834,9 @@ class BaseLLMHTTPHandler:
         )
 
         try:
+            if url.startswith("file://"):
+                return _read_local_file_url(url)
+
             # Use POST if params contains data (e.g., Vertex AI fetchPredictOperation)
             # Otherwise use GET (e.g., OpenAI video content download)
             if data:
@@ -5903,6 +5915,11 @@ class BaseLLMHTTPHandler:
         )
 
         try:
+            if url.startswith("file://"):
+                import asyncio
+
+                return await asyncio.to_thread(_read_local_file_url, url)
+
             # Use POST if params contains data (e.g., Vertex AI fetchPredictOperation)
             # Otherwise use GET (e.g., OpenAI video content download)
             if data:
