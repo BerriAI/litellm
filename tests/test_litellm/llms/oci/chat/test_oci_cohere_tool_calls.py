@@ -741,6 +741,88 @@ class TestOCICoherePreambleOverride:
         assert roles == ["USER", "CHATBOT"]
 
 
+class TestCohereStreamChunkEdgeCases:
+    """Additional coverage for handle_cohere_stream_chunk error/edge paths."""
+
+    def _wrapper(self):
+        from litellm.llms.oci.chat.transformation import OCIStreamWrapper
+
+        return OCIStreamWrapper(
+            completion_stream=MagicMock(),
+            model="cohere.command-latest",
+            logging_obj=MagicMock(),
+        )
+
+    def test_stream_chunk_tool_call_finish_reason(self):
+        wrapper = self._wrapper()
+        chunk = {
+            "apiFormat": "COHERE",
+            "text": "",
+            "index": 0,
+            "finishReason": "TOOL_CALL",
+        }
+        result = wrapper.chunk_creator(f"data: {json.dumps(chunk)}")
+        assert result.choices[0].finish_reason == "tool_calls"
+
+    def test_stream_chunk_max_tokens_finish_reason(self):
+        wrapper = self._wrapper()
+        chunk = {"apiFormat": "COHERE", "text": "truncated", "index": 0, "finishReason": "MAX_TOKENS"}
+        result = wrapper.chunk_creator(f"data: {json.dumps(chunk)}")
+        assert result.choices[0].finish_reason == "length"
+
+    def test_stream_chunk_unknown_finish_reason_does_not_raise(self):
+        from litellm.llms.oci.chat.cohere import handle_cohere_stream_chunk
+
+        chunk = {"apiFormat": "COHERE", "text": "", "index": 0, "finishReason": "FUTURE_REASON"}
+        # Should not raise — unknown reasons fall through the elif chain unchanged
+        result = handle_cohere_stream_chunk(chunk)
+        assert result.choices[0] is not None
+
+    def test_stream_chunk_null_index_defaults_to_zero(self):
+        wrapper = self._wrapper()
+        chunk = {"apiFormat": "COHERE", "text": "hi", "index": None}
+        result = wrapper.chunk_creator(f"data: {json.dumps(chunk)}")
+        assert result.choices[0].index == 0
+
+
+class TestCohereMessageAdaptationEdgeCases:
+    """Coverage for adapt_messages_to_cohere_standard error paths."""
+
+    def test_json_decode_error_in_tool_args_defaults_to_empty(self):
+        from litellm.llms.oci.chat.cohere import adapt_messages_to_cohere_standard
+
+        messages = [
+            {
+                "role": "assistant",
+                "content": "calling",
+                "tool_calls": [
+                    {
+                        "id": "c1",
+                        "type": "function",
+                        "function": {"name": "fn", "arguments": "NOT JSON {{{"},
+                    }
+                ],
+            },
+            {"role": "user", "content": "follow up"},
+        ]
+        # Should not raise — bad JSON defaults to empty params {}
+        history = adapt_messages_to_cohere_standard(messages)
+        assert history[0].toolCalls[0].parameters == {}
+
+    def test_extract_text_content_list_with_non_dict_items(self):
+        from litellm.llms.oci.chat.cohere import _extract_text_content
+
+        # List with a non-dict item — should be silently skipped
+        result = _extract_text_content([{"type": "text", "text": "hello"}, "bad_item"])
+        assert result == "hello"
+
+    def test_extract_text_content_non_string_non_list(self):
+        from litellm.llms.oci.chat.cohere import _extract_text_content
+
+        result = _extract_text_content(12345)
+        assert result == "12345"
+
+
 class TestOCICohereStreaming:
     """Test Cohere streaming functionality"""
 
