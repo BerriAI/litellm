@@ -171,6 +171,59 @@ def _truncate_base64_in_value(value: Any) -> Any:
     return root
 
 
+def release_base64_from_request_data_inplace(data: dict) -> None:
+    """Truncate base64 payloads in a request data dict **in-place** to free memory.
+
+    Unlike ``truncate_base64_in_messages`` (which returns a shallow copy for
+    logging), this function mutates the dict so that **every** reference to it —
+    local variables, closure captures, ``self.data``, etc. — immediately sees
+    smaller data, allowing the GC to collect the original large strings.
+
+    To avoid false positives on regular text, bare base64 detection is only
+    applied to dict values under keys known to carry raw base64 payloads
+    (``data``, ``b64_json``, ``image_data``).  For all other strings, only
+    data-URI patterns (``data:<mime>;base64,<payload>``) are truncated.
+
+    Call this after the HTTP request body has been sent to the provider and the
+    response has been transformed, i.e. when the original base64 payloads are
+    no longer needed.  (Fix 13)
+    """
+    # Dict keys whose string values may be raw base64 (no data-URI wrapper).
+    # e.g. Anthropic source.data, Vertex inline_data.data, OpenAI b64_json.
+    _bare_base64_keys = frozenset({"data", "b64_json", "image_data"})
+
+    if MAX_BASE64_LENGTH_FOR_LOGGING <= 0:
+        return
+    try:
+        stack: list = [(data, 0)]
+        while stack:
+            obj, depth = stack.pop()
+            if depth > _MAX_TRUNCATION_DEPTH:
+                continue
+            if isinstance(obj, dict):
+                for k, v in obj.items():
+                    if isinstance(v, str):
+                        if k in _bare_base64_keys:
+                            # Full truncation: data URI + JSON field + bare base64
+                            obj[k] = _truncate_base64_in_string(v)
+                        else:
+                            # Only truncate data-URI patterns, not bare strings
+                            obj[k] = _DATA_URI_RE.sub(
+                                _base64_data_uri_replacer, v
+                            )
+                    elif isinstance(v, (dict, list)):
+                        stack.append((v, depth + 1))
+            elif isinstance(obj, list):
+                for i, v in enumerate(obj):
+                    if isinstance(v, str):
+                        # In lists, only truncate data-URI patterns
+                        obj[i] = _DATA_URI_RE.sub(_base64_data_uri_replacer, v)
+                    elif isinstance(v, (dict, list)):
+                        stack.append((v, depth + 1))
+    except Exception:
+        pass
+
+
 def strip_large_base64_from_result(result: Any) -> Any:
     """Truncate large base64 image data URIs inside a ModelResponse in-place.
 

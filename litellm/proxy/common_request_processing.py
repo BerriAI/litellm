@@ -35,6 +35,9 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.litellm_core_utils.llm_response_utils.get_headers import (
     get_response_headers,
 )
+from litellm.litellm_core_utils.logging_utils import (
+    release_base64_from_request_data_inplace,
+)
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.auth.auth_utils import check_response_size_is_safe
@@ -953,6 +956,13 @@ class ProxyBaseLLMRequestProcessing:
         responses = await llm_responses
 
         response = responses[1]
+
+        # Fix 13: Release base64 payloads from request data now that the API
+        # call is done.  self.data is the long-lived reference to the parsed
+        # request body (_read_request_body); truncating in-place frees the
+        # large image strings for GC while keeping the dict usable for
+        # streaming generators and error handling.
+        release_base64_from_request_data_inplace(self.data)
 
         hidden_params = getattr(response, "_hidden_params", {}) or {}
         model_id = self._get_model_id_from_response(hidden_params, self.data)

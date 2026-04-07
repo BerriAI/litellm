@@ -7,6 +7,7 @@ import pytest
 from litellm.litellm_core_utils.logging_utils import (
     _format_base64_size,
     _truncate_base64_in_string,
+    release_base64_from_request_data_inplace,
     truncate_base64_in_messages,
 )
 
@@ -154,3 +155,173 @@ class TestTruncateBase64InMessages:
         ]
         result = truncate_base64_in_messages(messages)
         assert result[0]["content"][0]["image_url"]["url"] == f"data:image/png;base64,{short}"
+
+
+# ---------------------------------------------------------------------------
+# release_base64_from_request_data_inplace  (Fix 13)
+# ---------------------------------------------------------------------------
+
+
+class TestReleaseBase64FromRequestDataInplace:
+    """Verify in-place base64 truncation for memory cleanup."""
+
+    def test_openai_vision_format_mutated_inplace(self):
+        """OpenAI multimodal message: base64 should be truncated in the original dict."""
+        payload = "D" * 500
+        data = {
+            "model": "gpt-4o",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "What is in this image?"},
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:image/png;base64,{payload}",
+                                "detail": "auto",
+                            },
+                        },
+                    ],
+                }
+            ],
+        }
+        release_base64_from_request_data_inplace(data)
+        url = data["messages"][0]["content"][1]["image_url"]["url"]
+        assert "base64_data truncated" in url
+        assert payload not in url
+        # Non-base64 parts preserved
+        assert data["messages"][0]["content"][0]["text"] == "What is in this image?"
+        assert data["model"] == "gpt-4o"
+
+    def test_vertex_gemini_format(self):
+        """Vertex AI / Gemini format: inline_data.data should be truncated."""
+        payload = "A" * 500
+        data = {
+            "contents": [
+                {
+                    "role": "user",
+                    "parts": [
+                        {
+                            "inline_data": {
+                                "mime_type": "image/jpeg",
+                                "data": payload,
+                            }
+                        }
+                    ],
+                }
+            ]
+        }
+        release_base64_from_request_data_inplace(data)
+        result_data = data["contents"][0]["parts"][0]["inline_data"]["data"]
+        assert "base64_data truncated" in result_data
+        assert payload not in result_data
+
+    def test_anthropic_format(self):
+        """Anthropic format: source.data should be truncated."""
+        payload = "B" * 500
+        data = {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": "image/jpeg",
+                                "data": payload,
+                            },
+                        }
+                    ],
+                }
+            ]
+        }
+        release_base64_from_request_data_inplace(data)
+        result_data = data["messages"][0]["content"][0]["source"]["data"]
+        assert "base64_data truncated" in result_data
+        assert payload not in result_data
+
+    def test_preserves_short_strings(self):
+        """Short strings should not be modified."""
+        data = {
+            "model": "gpt-4o",
+            "messages": [{"role": "user", "content": "Hello world"}],
+        }
+        release_base64_from_request_data_inplace(data)
+        assert data["messages"][0]["content"] == "Hello world"
+        assert data["model"] == "gpt-4o"
+
+    def test_mutates_same_object(self):
+        """The dict should be mutated in-place — same identity."""
+        payload = "C" * 500
+        data = {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": f"data:image/png;base64,{payload}",
+                }
+            ]
+        }
+        original_id = id(data)
+        original_messages_id = id(data["messages"])
+        release_base64_from_request_data_inplace(data)
+        assert id(data) == original_id
+        assert id(data["messages"]) == original_messages_id
+        assert "base64_data truncated" in data["messages"][0]["content"]
+
+    def test_multiple_images(self):
+        """Multiple base64 images should all be truncated."""
+        p1 = "E" * 300
+        p2 = "F" * 400
+        data = {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": f"data:image/png;base64,{p1}"},
+                        },
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": f"data:image/jpeg;base64,{p2}"},
+                        },
+                    ],
+                }
+            ]
+        }
+        release_base64_from_request_data_inplace(data)
+        for part in data["messages"][0]["content"]:
+            assert "base64_data truncated" in part["image_url"]["url"]
+
+    def test_empty_dict(self):
+        """Should handle empty dict without error."""
+        data = {}
+        release_base64_from_request_data_inplace(data)
+        assert data == {}
+
+    def test_long_text_not_truncated(self):
+        """Long regular text content should NOT be truncated as base64."""
+        long_text = "hi" * 5000  # 10000 chars, matches bare base64 regex
+        data = {
+            "messages": [
+                {"role": "user", "content": long_text},
+            ]
+        }
+        release_base64_from_request_data_inplace(data)
+        assert data["messages"][0]["content"] == long_text
+
+    def test_data_uri_in_content_string_truncated(self):
+        """Data URI embedded in a content string should be truncated."""
+        payload = "D" * 500
+        text = f"Check this image: data:image/png;base64,{payload}"
+        data = {
+            "messages": [
+                {"role": "user", "content": text},
+            ]
+        }
+        release_base64_from_request_data_inplace(data)
+        assert "base64_data truncated" in data["messages"][0]["content"]
+        assert payload not in data["messages"][0]["content"]
+        assert "Check this image:" in data["messages"][0]["content"]

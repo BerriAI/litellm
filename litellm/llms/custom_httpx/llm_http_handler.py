@@ -24,6 +24,9 @@ import litellm.types.utils
 from litellm._logging import verbose_logger
 from litellm.anthropic_beta_headers_manager import update_headers_with_filtered_beta
 from litellm.constants import REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
+from litellm.litellm_core_utils.logging_utils import (
+    release_base64_from_request_data_inplace,
+)
 from litellm.litellm_core_utils.realtime_streaming import RealTimeStreaming
 from litellm.llms.base_llm.anthropic_messages.transformation import (
     BaseAnthropicMessagesConfig,
@@ -329,6 +332,11 @@ class BaseLLMHTTPHandler:
             encoding=encoding,
             json_mode=json_mode,
         )
+
+        # Fix 13: Release base64 payloads from provider-specific request data
+        # now that transform_response is done.  The data dict (e.g. Vertex AI
+        # contents with inline_data) is no longer needed.
+        release_base64_from_request_data_inplace(data)
 
         # Call agentic chat completion hooks
         final_response = await self._call_agentic_chat_completion_hooks(
@@ -656,6 +664,9 @@ class BaseLLMHTTPHandler:
             additional_args={"complete_input_dict": data},
         )
 
+        # Fix 13: Release base64 payloads from provider-specific request data
+        release_base64_from_request_data_inplace(data)
+
         return completion_stream, dict(response.headers)
 
     async def acompletion_stream_function(
@@ -790,6 +801,9 @@ class BaseLLMHTTPHandler:
             original_response="first stream response received",
             additional_args={"complete_input_dict": data},
         )
+
+        # Fix 13: Release base64 payloads from provider-specific request data
+        release_base64_from_request_data_inplace(data)
 
         return completion_stream, response.headers
 
