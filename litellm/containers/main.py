@@ -632,8 +632,6 @@ def retrieve_container(
         )
         
         # Decode container ID and extract provider info
-        # Track if input was encoded so we can re-encode the output
-        was_encoded = container_id.startswith("cntr_") and len(container_id) > 100
         original_container_id, resolved_custom_llm_provider, litellm_params = (
             decode_managed_container_id_for_request(
                 container_id=container_id,
@@ -641,7 +639,9 @@ def retrieve_container(
                 litellm_params=litellm_params,
             )
         )
-        
+        # True when input was a LiteLLM-managed ID (any length); needed to re-encode output for routing affinity
+        was_encoded = original_container_id != container_id
+
         # get provider config
         container_provider_config: Optional[
             BaseContainerConfig
@@ -853,8 +853,6 @@ def delete_container(
         )
         
         # Decode container ID and extract provider info
-        # Track if input was encoded so we can re-encode the output
-        was_encoded = container_id.startswith("cntr_") and len(container_id) > 100
         original_container_id, resolved_custom_llm_provider, litellm_params = (
             decode_managed_container_id_for_request(
                 container_id=container_id,
@@ -862,7 +860,9 @@ def delete_container(
                 litellm_params=litellm_params,
             )
         )
-        
+        # True when input was a LiteLLM-managed ID (any length); needed to re-encode output for routing affinity
+        was_encoded = original_container_id != container_id
+
         # get provider config
         container_provider_config: Optional[
             BaseContainerConfig
