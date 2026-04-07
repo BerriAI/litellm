@@ -8,7 +8,12 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 import litellm
-from litellm.containers.utils import ContainerRequestUtils
+from litellm.containers.utils import (
+    ContainerRequestUtils,
+    decode_managed_container_id_for_request,
+)
+from litellm.responses.utils import ResponsesAPIRequestUtils
+from litellm.types.router import GenericLiteLLMParams
 from litellm.llms.openai.containers.transformation import OpenAIContainerConfig
 from litellm.types.containers.main import (
     ContainerCreateOptionalRequestParams,
@@ -229,6 +234,23 @@ class TestContainerRequestUtils:
         )
         
         assert result["expires_after"]["minutes"] == 15
+
+    def test_decode_managed_container_id_returns_provider_container_id(self):
+        """Managed IDs must decode to the short ID sent on upstream requests."""
+        inner = "cntr_69d4ff00deadbeef"
+        managed = ResponsesAPIRequestUtils._build_container_id(
+            custom_llm_provider="openai",
+            model_id=None,
+            container_id=inner,
+        )
+        assert len(managed) > len(inner)
+        litellm_params: GenericLiteLLMParams = GenericLiteLLMParams()
+        original_id, provider, updated = decode_managed_container_id_for_request(
+            managed, "openai", litellm_params
+        )
+        assert original_id == inner
+        assert provider == "openai"
+        assert updated is litellm_params
 
 
 class TestDeleteContainerFileResponseWireFormat:

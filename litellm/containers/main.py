@@ -6,8 +6,10 @@ from typing import Any, Coroutine, Dict, List, Literal, Optional, Union, overloa
 
 import litellm
 from litellm.constants import request_timeout as DEFAULT_REQUEST_TIMEOUT
-from litellm.containers.utils import ContainerRequestUtils
-from litellm.responses.utils import ResponsesAPIRequestUtils
+from litellm.containers.utils import (
+    ContainerRequestUtils,
+    decode_managed_container_id_for_request,
+)
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.containers.transformation import BaseContainerConfig
 from litellm.main import base_llm_http_handler
@@ -39,36 +41,6 @@ __all__ = [
     "retrieve_container",
     "upload_container_file",
 ]
-
-
-def _decode_container_id_and_update_provider(
-    container_id: str,
-    custom_llm_provider: str,
-    litellm_params: GenericLiteLLMParams,
-) -> tuple[str, str, GenericLiteLLMParams]:
-    """Decode a managed container ID and extract provider/model info.
-    
-    Returns:
-        tuple: (original_container_id, resolved_provider, updated_litellm_params)
-    """
-    # Decode the container ID
-    decoded = ResponsesAPIRequestUtils._decode_container_id(container_id)
-    
-    # Extract the original container ID (what the provider issued)
-    original_container_id = decoded.get("response_id", container_id)
-    
-    # If we decoded provider info, use it (unless explicitly overridden)
-    decoded_provider = decoded.get("custom_llm_provider")
-    if decoded_provider and custom_llm_provider == "openai":
-        # Only override if user didn't explicitly set a different provider
-        custom_llm_provider = decoded_provider
-    
-    # If we decoded model_id, add it to litellm_params for routing
-    decoded_model_id = decoded.get("model_id")
-    if decoded_model_id and not litellm_params.get("model_id"):
-        litellm_params["model_id"] = decoded_model_id
-    
-    return original_container_id, custom_llm_provider, litellm_params
 
 
 ##### Container Create #######################
@@ -636,6 +608,7 @@ def retrieve_container(
     """
     local_vars = locals()
     try:
+        resolved_custom_llm_provider: str = custom_llm_provider
         litellm_logging_obj: LiteLLMLoggingObj = kwargs.pop("litellm_logging_obj")  # type: ignore
         litellm_call_id: Optional[str] = kwargs.get("litellm_call_id")
         _is_async = kwargs.pop("async_call", False) is True
@@ -661,8 +634,8 @@ def retrieve_container(
         # Decode container ID and extract provider info
         # Track if input was encoded so we can re-encode the output
         was_encoded = container_id.startswith("cntr_") and len(container_id) > 100
-        original_container_id, custom_llm_provider, litellm_params = (
-            _decode_container_id_and_update_provider(
+        original_container_id, resolved_custom_llm_provider, litellm_params = (
+            decode_managed_container_id_for_request(
                 container_id=container_id,
                 custom_llm_provider=custom_llm_provider,
                 litellm_params=litellm_params,
@@ -673,12 +646,12 @@ def retrieve_container(
         container_provider_config: Optional[
             BaseContainerConfig
         ] = ProviderConfigManager.get_provider_container_config(
-            provider=litellm.LlmProviders(custom_llm_provider),
+            provider=litellm.LlmProviders(resolved_custom_llm_provider),
         )
 
         if container_provider_config is None:
             raise ValueError(
-                f"Container provider config not found for provider: {custom_llm_provider}"
+                f"Container provider config not found for provider: {resolved_custom_llm_provider}"
             )
 
         # Pre Call logging
@@ -689,7 +662,7 @@ def retrieve_container(
             litellm_params={
                 "litellm_call_id": litellm_call_id,
             },
-            custom_llm_provider=custom_llm_provider,
+            custom_llm_provider=resolved_custom_llm_provider,
         )
 
         # Set the correct call type
@@ -721,7 +694,7 @@ def retrieve_container(
             
             container_obj = ContainerRequestUtils.encode_container_id_in_response(
                 response_obj=container_obj,
-                custom_llm_provider=custom_llm_provider,
+                custom_llm_provider=resolved_custom_llm_provider,
                 litellm_metadata=litellm_metadata,
                 extra_body=None,
             )
@@ -731,7 +704,7 @@ def retrieve_container(
     except Exception as e:
         raise litellm.exception_type(
             model="",
-            custom_llm_provider=custom_llm_provider,
+            custom_llm_provider=resolved_custom_llm_provider,
             original_exception=e,
             completion_kwargs=local_vars,
             extra_kwargs=kwargs,
@@ -856,6 +829,7 @@ def delete_container(
     """
     local_vars = locals()
     try:
+        resolved_custom_llm_provider: str = custom_llm_provider
         litellm_logging_obj: LiteLLMLoggingObj = kwargs.pop("litellm_logging_obj")  # type: ignore
         litellm_call_id: Optional[str] = kwargs.get("litellm_call_id")
         _is_async = kwargs.pop("async_call", False) is True
@@ -881,8 +855,8 @@ def delete_container(
         # Decode container ID and extract provider info
         # Track if input was encoded so we can re-encode the output
         was_encoded = container_id.startswith("cntr_") and len(container_id) > 100
-        original_container_id, custom_llm_provider, litellm_params = (
-            _decode_container_id_and_update_provider(
+        original_container_id, resolved_custom_llm_provider, litellm_params = (
+            decode_managed_container_id_for_request(
                 container_id=container_id,
                 custom_llm_provider=custom_llm_provider,
                 litellm_params=litellm_params,
@@ -893,12 +867,12 @@ def delete_container(
         container_provider_config: Optional[
             BaseContainerConfig
         ] = ProviderConfigManager.get_provider_container_config(
-            provider=litellm.LlmProviders(custom_llm_provider),
+            provider=litellm.LlmProviders(resolved_custom_llm_provider),
         )
 
         if container_provider_config is None:
             raise ValueError(
-                f"Container provider config not found for provider: {custom_llm_provider}"
+                f"Container provider config not found for provider: {resolved_custom_llm_provider}"
             )
 
         # Pre Call logging
@@ -909,7 +883,7 @@ def delete_container(
             litellm_params={
                 "litellm_call_id": litellm_call_id,
             },
-            custom_llm_provider=custom_llm_provider,
+            custom_llm_provider=resolved_custom_llm_provider,
         )
 
         # Set the correct call type
@@ -941,7 +915,7 @@ def delete_container(
             
             delete_result = ContainerRequestUtils.encode_container_id_in_response(
                 response_obj=delete_result,
-                custom_llm_provider=custom_llm_provider,
+                custom_llm_provider=resolved_custom_llm_provider,
                 litellm_metadata=litellm_metadata,
                 extra_body=None,
             )
@@ -951,7 +925,7 @@ def delete_container(
     except Exception as e:
         raise litellm.exception_type(
             model="",
-            custom_llm_provider=custom_llm_provider,
+            custom_llm_provider=resolved_custom_llm_provider,
             original_exception=e,
             completion_kwargs=local_vars,
             extra_kwargs=kwargs,
@@ -1090,6 +1064,7 @@ def list_container_files(
     """
     local_vars = locals()
     try:
+        resolved_custom_llm_provider: str = custom_llm_provider
         litellm_logging_obj: LiteLLMLoggingObj = kwargs.pop("litellm_logging_obj")  # type: ignore
         litellm_call_id: Optional[str] = kwargs.get("litellm_call_id")
         _is_async = kwargs.pop("async_call", False) is True
@@ -1113,8 +1088,8 @@ def list_container_files(
         )
         
         # Decode container ID and extract provider info
-        original_container_id, custom_llm_provider, litellm_params = (
-            _decode_container_id_and_update_provider(
+        original_container_id, resolved_custom_llm_provider, litellm_params = (
+            decode_managed_container_id_for_request(
                 container_id=container_id,
                 custom_llm_provider=custom_llm_provider,
                 litellm_params=litellm_params,
@@ -1125,12 +1100,12 @@ def list_container_files(
         container_provider_config: Optional[
             BaseContainerConfig
         ] = ProviderConfigManager.get_provider_container_config(
-            provider=litellm.LlmProviders(custom_llm_provider),
+            provider=litellm.LlmProviders(resolved_custom_llm_provider),
         )
 
         if container_provider_config is None:
             raise ValueError(
-                f"Container provider config not found for provider: {custom_llm_provider}"
+                f"Container provider config not found for provider: {resolved_custom_llm_provider}"
             )
 
         # Pre Call logging
@@ -1146,7 +1121,7 @@ def list_container_files(
             litellm_params={
                 "litellm_call_id": litellm_call_id,
             },
-            custom_llm_provider=custom_llm_provider,
+            custom_llm_provider=resolved_custom_llm_provider,
         )
 
         # Set the correct call type
@@ -1169,7 +1144,7 @@ def list_container_files(
     except Exception as e:
         raise litellm.exception_type(
             model="",
-            custom_llm_provider=custom_llm_provider,
+            custom_llm_provider=resolved_custom_llm_provider,
             original_exception=e,
             completion_kwargs=local_vars,
             extra_kwargs=kwargs,
@@ -1346,6 +1321,7 @@ def upload_container_file(
 
     local_vars = locals()
     try:
+        resolved_custom_llm_provider: str = custom_llm_provider
         litellm_logging_obj: LiteLLMLoggingObj = kwargs.pop("litellm_logging_obj")  # type: ignore
         litellm_call_id: Optional[str] = kwargs.get("litellm_call_id")
         _is_async = kwargs.pop("async_call", False) is True
@@ -1369,8 +1345,8 @@ def upload_container_file(
         )
         
         # Decode container ID and extract provider info
-        original_container_id, custom_llm_provider, litellm_params = (
-            _decode_container_id_and_update_provider(
+        original_container_id, resolved_custom_llm_provider, litellm_params = (
+            decode_managed_container_id_for_request(
                 container_id=container_id,
                 custom_llm_provider=custom_llm_provider,
                 litellm_params=litellm_params,
@@ -1381,12 +1357,12 @@ def upload_container_file(
         container_provider_config: Optional[
             BaseContainerConfig
         ] = ProviderConfigManager.get_provider_container_config(
-            provider=litellm.LlmProviders(custom_llm_provider),
+            provider=litellm.LlmProviders(resolved_custom_llm_provider),
         )
 
         if container_provider_config is None:
             raise ValueError(
-                f"Container provider config not found for provider: {custom_llm_provider}"
+                f"Container provider config not found for provider: {resolved_custom_llm_provider}"
             )
 
         # Pre Call logging
@@ -1397,7 +1373,7 @@ def upload_container_file(
             litellm_params={
                 "litellm_call_id": litellm_call_id,
             },
-            custom_llm_provider=custom_llm_provider,
+            custom_llm_provider=resolved_custom_llm_provider,
         )
 
         # Set the correct call type
@@ -1419,7 +1395,7 @@ def upload_container_file(
     except Exception as e:
         raise litellm.exception_type(
             model="",
-            custom_llm_provider=custom_llm_provider,
+            custom_llm_provider=resolved_custom_llm_provider,
             original_exception=e,
             completion_kwargs=local_vars,
             extra_kwargs=kwargs,
