@@ -12919,11 +12919,16 @@ async def delete_callback(
                 },
             )
 
-        config.setdefault("litellm_settings", {})[
-            "success_callback"
-        ] = success_callbacks
-        config["litellm_settings"]["failure_callback"] = failure_callbacks
-        config["litellm_settings"]["callbacks"] = both_callbacks
+        # Only write back keys that were originally present to avoid
+        # creating empty lists that would reset callbacks on restart
+        if "success_callback" in litellm_settings:
+            config.setdefault("litellm_settings", {})[
+                "success_callback"
+            ] = success_callbacks
+        if "failure_callback" in litellm_settings:
+            config["litellm_settings"]["failure_callback"] = failure_callbacks
+        if "callbacks" in litellm_settings:
+            config["litellm_settings"]["callbacks"] = both_callbacks
 
         # Save the updated configuration
         await proxy_config.save_config(new_config=config)

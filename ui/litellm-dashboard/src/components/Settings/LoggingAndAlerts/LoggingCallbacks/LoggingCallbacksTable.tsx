@@ -43,7 +43,6 @@ export const LoggingCallbacksTable: React.FC<LoggingCallbacksProps> = ({
       key: "name",
       render: (_: string, record: AlertingObject) => {
         const id = record.name;
-        console.log("availableCallbacks", availableCallbacks);
         const displayName = availableCallbacks[id]?.ui_callback_name || id;
         return <div className="font-medium text-gray-800">{displayName}</div>;
       },
