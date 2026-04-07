@@ -3,7 +3,7 @@ CyCraft XecGuard guardrail integration for LiteLLM proxy.
 
 Covers:
   - /xecguard/v1/scan   – input & response scanning
-  - /xecguard/v1/grounding – RAG context-grounding verification
+  - /xecguard/v1/grounding – context-grounding (configure via config.yaml)
 
 All three LiteLLM hook points are wired:
   pre_call   -> scan INPUT before the LLM call
