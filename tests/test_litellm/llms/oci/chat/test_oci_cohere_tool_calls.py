@@ -507,6 +507,52 @@ class TestOCICohereToolCalls:
         assert "topP" not in chat_request
         assert "frequencyPenalty" not in chat_request
 
+    def test_cohere_response_finish_reason_tool_call(self):
+        """Test that finishReason='TOOL_CALL' is accepted by Pydantic and mapped to 'tool_calls'."""
+        config = OCIChatConfig()
+
+        mock_cohere_response = {
+            "modelId": "cohere.command-latest",
+            "modelVersion": "1.0",
+            "chatResponse": {
+                "apiFormat": "COHERE",
+                "text": "",
+                "finishReason": "TOOL_CALL",
+                "toolCalls": [
+                    {"name": "get_weather", "parameters": {"location": "London"}}
+                ],
+                "usage": {
+                    "promptTokens": 20,
+                    "completionTokens": 10,
+                    "totalTokens": 30,
+                },
+            },
+        }
+
+        response = httpx.Response(
+            status_code=200,
+            json=mock_cohere_response,
+            headers={"Content-Type": "application/json"},
+        )
+
+        result = config.transform_response(
+            model="cohere.command-latest",
+            raw_response=response,
+            model_response=ModelResponse(),
+            logging_obj={},  # type: ignore
+            request_data={},
+            messages=[],
+            optional_params={},
+            litellm_params={},
+            encoding={},
+        )
+
+        assert isinstance(result, ModelResponse)
+        assert result.choices[0].finish_reason == "tool_calls"
+        assert result.choices[0].message.tool_calls is not None
+        assert len(result.choices[0].message.tool_calls) == 1
+        assert result.choices[0].message.tool_calls[0].function.name == "get_weather"
+
     def test_cohere_vendor_detection(self):
         """Test that Cohere models are correctly identified"""
         assert get_vendor_from_model("cohere.command-latest") == OCIVendors.COHERE

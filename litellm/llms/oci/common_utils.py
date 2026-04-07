@@ -25,6 +25,10 @@ except ImportError:
     _litellm_version = "0.0.0"
 
 
+# OCI GenAI REST API version — stable since service launch, unlikely to change
+OCI_API_VERSION = "20231130"
+
+
 def _require_cryptography() -> None:
     if not _CRYPTOGRAPHY_AVAILABLE:
         raise ImportError(
@@ -62,7 +66,8 @@ class OCISignerProtocol(Protocol):
 
     def do_request_sign(
         self, request: Any, *, enforce_content_headers: bool = False
-    ) -> None: ...
+    ) -> None:
+        pass
 
 
 @dataclass
@@ -87,6 +92,10 @@ class OCIRequestWrapper:
 
 
 def sha256_base64(data: bytes) -> str:
+    # SHA-256 is used here to compute the x-content-sha256 header required by the
+    # OCI HTTP signing specification (RSA-SHA256 request signing), not for password
+    # or secret hashing.  This is the correct and mandated algorithm for this purpose.
+    # See: https://docs.oracle.com/en-us/iaas/Content/API/Concepts/signingrequests.htm
     digest = hashlib.sha256(data).digest()
     return base64.b64encode(digest).decode()
 

@@ -379,7 +379,13 @@ class CohereChatResponse(BaseModel):
     text: str
     apiFormat: Literal["COHERE"] = "COHERE"
     finishReason: Literal[
-        "COMPLETE", "ERROR_TOXIC", "ERROR_LIMIT", "ERROR", "USER_CANCEL", "MAX_TOKENS"
+        "COMPLETE",
+        "ERROR_TOXIC",
+        "ERROR_LIMIT",
+        "ERROR",
+        "USER_CANCEL",
+        "MAX_TOKENS",
+        "TOOL_CALL",
     ]
 
     # Optional fields
