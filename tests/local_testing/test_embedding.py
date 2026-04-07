@@ -376,7 +376,7 @@ def test_openai_azure_embedding_optional_arg():
 @pytest.mark.parametrize(
     "model, api_base",
     [
-        ("embed-english-v2.0", None),
+        ("embed-english-v3.0", None),
     ],
 )
 @pytest.mark.parametrize("sync_mode", [True, False])
