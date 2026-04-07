@@ -3585,15 +3585,15 @@ files = [
 
 [[package]]
 name = "litellm-enterprise"
-version = "0.1.36"
+version = "0.1.37"
 description = "Package for LiteLLM Enterprise features"
 optional = true
 python-versions = "!=2.7.*,!=3.0.*,!=3.1.*,!=3.2.*,!=3.3.*,!=3.4.*,!=3.5.*,!=3.6.*,!=3.7.*,>=3.8"
 groups = ["main"]
 markers = "extra == \"proxy\""
 files = [
-    {file = "litellm_enterprise-0.1.36-py3-none-any.whl", hash = "sha256:beb2a45d33e0e103e20cad305b548d911118e48370c795bf4206f79f1fbb10e5"},
-    {file = "litellm_enterprise-0.1.36.tar.gz", hash = "sha256:d171bd761447540f1fd3123b028bda44a8bc8f6466e9fe1124aba9b91b293738"},
+    {file = "litellm_enterprise-0.1.37-py3-none-any.whl", hash = "sha256:c1c231d21df6ab0fe77e2c1e10c14764a726a8eea9c328803ca872e5256afc10"},
+    {file = "litellm_enterprise-0.1.37.tar.gz", hash = "sha256:f1616f36fe66c3ddb0cd9d4a70aba2c777feb6d822475ddab1022a9ae8284122"},
 ]
 
 [[package]]
@@ -8309,4 +8309,4 @@ utils = ["numpydoc"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.9,<4.0"
-content-hash = "aa154d5d88c1578218aae8884e65653d1879d03005ed77d7fe085ca4bc01aa62"
+content-hash = "52550fa85d5f42463574ad126eab67bacac96b881af6b0de980cb4cd5ba20e28"
