@@ -25652,7 +25652,7 @@
         "source": "https://www.oracle.com/artificial-intelligence/generative-ai/generative-ai-service/pricing",
         "supports_function_calling": true,
         "supports_response_schema": false,
-        "supports_streaming": true
+        "supports_native_streaming": true
     },
     "oci/meta.llama-3.1-70b-instruct": {
         "input_cost_per_token": 7.2e-07,
@@ -25665,7 +25665,7 @@
         "source": "https://www.oracle.com/artificial-intelligence/generative-ai/generative-ai-service/pricing",
         "supports_function_calling": true,
         "supports_response_schema": false,
-        "supports_streaming": true
+        "supports_native_streaming": true
     },
     "oci/meta.llama-3.1-405b-instruct": {
         "input_cost_per_token": 1.068e-05,
@@ -25678,7 +25678,7 @@
         "source": "https://www.oracle.com/artificial-intelligence/generative-ai/generative-ai-service/pricing",
         "supports_function_calling": true,
         "supports_response_schema": false,
-        "supports_streaming": true
+        "supports_native_streaming": true
     },
     "oci/meta.llama-3.2-90b-vision-instruct": {
         "input_cost_per_token": 2e-06,
@@ -25691,7 +25691,7 @@
         "source": "https://www.oracle.com/artificial-intelligence/generative-ai/generative-ai-service/pricing",
         "supports_function_calling": true,
         "supports_response_schema": false,
-        "supports_streaming": true,
+        "supports_native_streaming": true,
         "supports_vision": true
     },
     "oci/meta.llama-3.3-70b-instruct": {
@@ -25705,7 +25705,7 @@
         "source": "https://www.oracle.com/artificial-intelligence/generative-ai/generative-ai-service/pricing",
         "supports_function_calling": true,
         "supports_response_schema": false,
-        "supports_streaming": true
+        "supports_native_streaming": true
     },
     "oci/meta.llama-4-maverick-17b-128e-instruct-fp8": {
         "input_cost_per_token": 7.2e-07,
@@ -25718,7 +25718,7 @@
         "source": "https://www.oracle.com/artificial-intelligence/generative-ai/generative-ai-service/pricing",
         "supports_function_calling": true,
         "supports_response_schema": false,
-        "supports_streaming": true
+        "supports_native_streaming": true
     },
     "oci/meta.llama-4-scout-17b-16e-instruct": {
         "input_cost_per_token": 7.2e-07,
@@ -25731,7 +25731,7 @@
         "source": "https://www.oracle.com/artificial-intelligence/generative-ai/generative-ai-service/pricing",
         "supports_function_calling": true,
         "supports_response_schema": false,
-        "supports_streaming": true
+        "supports_native_streaming": true
     },
     "oci/xai.grok-3": {
         "input_cost_per_token": 3e-06,
@@ -25744,7 +25744,7 @@
         "source": "https://www.oracle.com/artificial-intelligence/generative-ai/generative-ai-service/pricing",
         "supports_function_calling": true,
         "supports_response_schema": false,
-        "supports_streaming": true
+        "supports_native_streaming": true
     },
     "oci/xai.grok-3-fast": {
         "input_cost_per_token": 5e-06,
@@ -25757,7 +25757,7 @@
         "source": "https://www.oracle.com/artificial-intelligence/generative-ai/generative-ai-service/pricing",
         "supports_function_calling": true,
         "supports_response_schema": false,
-        "supports_streaming": true
+        "supports_native_streaming": true
     },
     "oci/xai.grok-3-mini": {
         "input_cost_per_token": 3e-07,
@@ -25770,7 +25770,7 @@
         "source": "https://www.oracle.com/artificial-intelligence/generative-ai/generative-ai-service/pricing",
         "supports_function_calling": true,
         "supports_response_schema": false,
-        "supports_streaming": true
+        "supports_native_streaming": true
     },
     "oci/xai.grok-3-mini-fast": {
         "input_cost_per_token": 6e-07,
@@ -25783,7 +25783,7 @@
         "source": "https://www.oracle.com/artificial-intelligence/generative-ai/generative-ai-service/pricing",
         "supports_function_calling": true,
         "supports_response_schema": false,
-        "supports_streaming": true
+        "supports_native_streaming": true
     },
     "oci/xai.grok-4": {
         "input_cost_per_token": 3e-06,
@@ -25796,7 +25796,7 @@
         "source": "https://www.oracle.com/artificial-intelligence/generative-ai/generative-ai-service/pricing",
         "supports_function_calling": true,
         "supports_response_schema": false,
-        "supports_streaming": true
+        "supports_native_streaming": true
     },
     "oci/cohere.command-latest": {
         "input_cost_per_token": 1.56e-06,
@@ -25809,7 +25809,7 @@
         "source": "https://www.oracle.com/cloud/ai/generative-ai/pricing/",
         "supports_function_calling": true,
         "supports_response_schema": false,
-        "supports_streaming": true
+        "supports_native_streaming": true
     },
     "oci/cohere.command-a-03-2025": {
         "input_cost_per_token": 1.56e-06,
@@ -25822,7 +25822,7 @@
         "source": "https://www.oracle.com/cloud/ai/generative-ai/pricing/",
         "supports_function_calling": true,
         "supports_response_schema": false,
-        "supports_streaming": true
+        "supports_native_streaming": true
     },
     "oci/cohere.command-plus-latest": {
         "input_cost_per_token": 1.56e-06,
@@ -25835,7 +25835,7 @@
         "source": "https://www.oracle.com/cloud/ai/generative-ai/pricing/",
         "supports_function_calling": true,
         "supports_response_schema": false,
-        "supports_streaming": true
+        "supports_native_streaming": true
     },
     "oci/google.gemini-2.5-flash": {
         "input_cost_per_token": 1.875e-07,
@@ -25848,7 +25848,7 @@
         "source": "https://www.oracle.com/cloud/ai/generative-ai/pricing/",
         "supports_function_calling": true,
         "supports_response_schema": true,
-        "supports_streaming": true,
+        "supports_native_streaming": true,
         "supports_vision": true
     },
     "oci/google.gemini-2.5-pro": {
@@ -25862,7 +25862,7 @@
         "source": "https://www.oracle.com/cloud/ai/generative-ai/pricing/",
         "supports_function_calling": true,
         "supports_response_schema": true,
-        "supports_streaming": true,
+        "supports_native_streaming": true,
         "supports_vision": true
     },
     "oci/google.gemini-2.5-flash-lite": {
@@ -25876,7 +25876,7 @@
         "source": "https://www.oracle.com/cloud/ai/generative-ai/pricing/",
         "supports_function_calling": true,
         "supports_response_schema": true,
-        "supports_streaming": true,
+        "supports_native_streaming": true,
         "supports_vision": true
     },
     "oci/openai.gpt-oss-120b": {
@@ -25890,7 +25890,7 @@
         "source": "https://www.oracle.com/cloud/ai/generative-ai/pricing/",
         "supports_function_calling": true,
         "supports_response_schema": false,
-        "supports_streaming": true
+        "supports_native_streaming": true
     },
     "oci/openai.gpt-oss-20b": {
         "input_cost_per_token": 0.0,
@@ -25903,7 +25903,7 @@
         "source": "https://www.oracle.com/cloud/ai/generative-ai/pricing/",
         "supports_function_calling": true,
         "supports_response_schema": false,
-        "supports_streaming": true
+        "supports_native_streaming": true
     },
     "oci/cohere.command-a-vision": {
         "input_cost_per_token": 1.56e-06,
@@ -25916,7 +25916,7 @@
         "source": "https://www.oracle.com/cloud/ai/generative-ai/pricing/",
         "supports_function_calling": true,
         "supports_response_schema": false,
-        "supports_streaming": true,
+        "supports_native_streaming": true,
         "supports_vision": true
     },
     "oci/cohere.command-a-reasoning": {
@@ -25930,7 +25930,7 @@
         "source": "https://www.oracle.com/cloud/ai/generative-ai/pricing/",
         "supports_function_calling": false,
         "supports_response_schema": false,
-        "supports_streaming": true
+        "supports_native_streaming": true
     },
     "oci/meta.llama-4-maverick-17b-128e-instruct-fp8": {
         "input_cost_per_token": 0.0,
@@ -25943,7 +25943,7 @@
         "source": "https://www.oracle.com/cloud/ai/generative-ai/pricing/",
         "supports_function_calling": true,
         "supports_response_schema": false,
-        "supports_streaming": true,
+        "supports_native_streaming": true,
         "supports_vision": true
     },
     "oci/meta.llama-4-scout-17b-16e-instruct": {
@@ -25957,7 +25957,7 @@
         "source": "https://www.oracle.com/cloud/ai/generative-ai/pricing/",
         "supports_function_calling": true,
         "supports_response_schema": false,
-        "supports_streaming": true
+        "supports_native_streaming": true
     },
     "oci/cohere.embed-multilingual-image-v3.0": {
         "input_cost_per_token": 1e-07,
