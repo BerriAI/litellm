@@ -19,6 +19,13 @@ import litellm
 class TestSaladCloudProviderConfig:
     """Test SaladCloud provider configuration"""
 
+    def test_salad_cloud_in_provider_list(self):
+        """Test that salad_cloud is in the provider list via LlmProviders enum"""
+        from litellm import LlmProviders
+
+        assert LlmProviders.SALAD_CLOUD.value == "salad_cloud"
+        assert "salad_cloud" in litellm.provider_list
+
     def test_salad_cloud_json_config_exists(self):
         """Test that salad_cloud is configured in providers.json"""
         from litellm.llms.openai_like.json_loader import JSONProviderRegistry
