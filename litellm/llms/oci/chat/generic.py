@@ -38,7 +38,7 @@ from litellm.types.utils import (
     ModelResponseStream,
     StreamingChoices,
 )
-from litellm.utils import ChatCompletionMessageToolCall, Usage
+from litellm.types.utils import ChatCompletionMessageToolCall, Usage
 
 # Maps OpenAI role names to OCI GENERIC role names.
 open_ai_to_generic_oci_role_map: Dict[str, OCIRoles] = {

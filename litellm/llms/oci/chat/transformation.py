@@ -48,6 +48,7 @@ from litellm.llms.oci.chat.generic import (
     handle_generic_stream_chunk,
 )
 from litellm.llms.oci.common_utils import (
+    OCI_API_VERSION,
     OCIError,
     OCIRequestWrapper,  # re-exported for backwards compatibility
     get_oci_base_url,
@@ -68,7 +69,7 @@ from litellm.types.utils import (
     ModelResponse,
     ModelResponseStream,
 )
-from litellm.utils import CustomStreamWrapper
+from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -77,9 +78,6 @@ if TYPE_CHECKING:
 else:
     LiteLLMLoggingObj = Any
 
-
-# OCI GenAI REST API version — stable since service launch, unlikely to change
-OCI_API_VERSION = "20231130"
 
 # Streaming timeout — generous because OCI models may need to warm up on first request
 STREAMING_TIMEOUT = 60 * 5
