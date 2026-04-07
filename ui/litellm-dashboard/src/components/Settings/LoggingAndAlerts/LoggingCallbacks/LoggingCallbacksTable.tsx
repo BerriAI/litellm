@@ -4,7 +4,7 @@ import { Table } from "antd";
 import Title from "antd/es/typography/Title";
 import React from "react";
 import TableIconActionButton from "../../../common_components/IconActionButton/TableIconActionButtons/TableIconActionButton";
-import { AlertingObject } from "./types";
+import { AlertingObject, CallbackMode } from "./types";
 
 type LoggingCallbacksProps = {
   callbacks: AlertingObject[];
@@ -22,12 +22,7 @@ type LoggingCallbacksProps = {
   onAdd?: () => void;
 };
 
-type CallbackRow = AlertingObject & {
-  id?: string;
-  mode?: "success" | "failure" | "info" | string;
-};
-
-const CALLBACK_MODES: { value: string; label: string }[] = [
+export const CALLBACK_MODES: { value: CallbackMode; label: string }[] = [
   { value: "success", label: "Success" },
   { value: "failure", label: "Failure" },
   { value: "success_and_failure", label: "Success & Failure" },
@@ -41,12 +36,12 @@ export const LoggingCallbacksTable: React.FC<LoggingCallbacksProps> = ({
   onDelete = () => {},
   onAdd = () => {},
 }) => {
-  const columns: TableProps<CallbackRow>["columns"] = [
+  const columns: TableProps<AlertingObject>["columns"] = [
     {
       title: <span className="font-medium text-gray-700">Callback Name</span>,
       dataIndex: "name",
       key: "name",
-      render: (_: string, record: CallbackRow) => {
+      render: (_: string, record: AlertingObject) => {
         const id = record.name;
         console.log("availableCallbacks", availableCallbacks);
         const displayName = availableCallbacks[id]?.ui_callback_name || id;
@@ -55,9 +50,9 @@ export const LoggingCallbacksTable: React.FC<LoggingCallbacksProps> = ({
     },
     {
       title: <span className="font-medium text-gray-700">Mode</span>,
-      key: "mode",
-      render: (_: unknown, record: CallbackRow) => {
-        const mode = record.mode || "success";
+      key: "type",
+      render: (_: unknown, record: AlertingObject) => {
+        const mode = record.type || "success";
         const label = CALLBACK_MODES.find((m) => m.value === mode)?.label || mode;
         const badgeClass =
           mode === "success"
@@ -77,7 +72,7 @@ export const LoggingCallbacksTable: React.FC<LoggingCallbacksProps> = ({
       title: <span className="font-medium text-gray-700 text-right w-full block">Actions</span>,
       key: "actions",
       align: "right",
-      render: (_: unknown, record: CallbackRow) => (
+      render: (_: unknown, record: AlertingObject) => (
         <div className="flex justify-end gap-2">
           <TableIconActionButton variant="Test" tooltipText="Test Callback" onClick={() => onTest(record)} />
           <TableIconActionButton variant="Edit" tooltipText="Edit Callback" onClick={() => onEdit(record)} />
@@ -108,8 +103,8 @@ export const LoggingCallbacksTable: React.FC<LoggingCallbacksProps> = ({
           <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
             <Table
               columns={columns}
-              dataSource={callbacks as CallbackRow[]}
-              rowKey={(record) => record.name}
+              dataSource={callbacks}
+              rowKey={(record) => `${record.name}-${record.type || "success"}`}
               pagination={false}
               rowClassName={() => "hover:bg-gray-50"}
             />

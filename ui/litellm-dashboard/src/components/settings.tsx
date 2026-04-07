@@ -37,7 +37,7 @@ import {
   serviceHealthCheck,
   setCallbacksCall,
 } from "./networking";
-import { LoggingCallbacksTable } from "./Settings/LoggingAndAlerts/LoggingCallbacks/LoggingCallbacksTable";
+import { CALLBACK_MODES, LoggingCallbacksTable } from "./Settings/LoggingAndAlerts/LoggingCallbacks/LoggingCallbacksTable";
 import { AlertingObject } from "./Settings/LoggingAndAlerts/LoggingCallbacks/types";
 import { parseErrorMessage } from "./shared/errorUtils";
 interface SettingsPageProps {
@@ -204,12 +204,22 @@ const getDynamicParamsForCallback = (
 };
 
 // Shared helper function to build callback payload
-const buildCallbackPayload = (formValues: Record<string, any>, callbackName: string) => {
+const buildCallbackPayload = (formValues: Record<string, any>, callbackName: string, mode: string = "success") => {
+  const { callback_mode, callback, ...envVars } = formValues;
+  const litellm_settings: Record<string, string[]> = {};
+
+  if (mode === "success") {
+    litellm_settings.success_callback = [callbackName];
+  } else if (mode === "failure") {
+    litellm_settings.failure_callback = [callbackName];
+  } else if (mode === "success_and_failure") {
+    litellm_settings.success_callback = [callbackName];
+    litellm_settings.failure_callback = [callbackName];
+  }
+
   return {
-    environment_variables: formValues,
-    litellm_settings: {
-      success_callback: [callbackName],
-    },
+    environment_variables: envVars,
+    litellm_settings,
   };
 };
 
@@ -268,6 +278,7 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
       editForm.setFieldsValue({
         ...normalized,
         callback: selectedEditCallback.name,
+        callback_mode: selectedEditCallback.type || "success",
       });
     }
   }, [showEditCallback, selectedEditCallback, editForm]);
@@ -321,7 +332,7 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
   };
 
   // Shared handler for callback form submission
-  const handleCallbackSubmit = async (formValues: Record<string, any>, callbackName: string, isEdit: boolean) => {
+  const handleCallbackSubmit = async (formValues: Record<string, any>, callbackName: string, isEdit: boolean, mode: string = "success") => {
     if (!accessToken) {
       return;
     }
@@ -332,7 +343,7 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
       setIsAddingCallback(true);
     }
 
-    const payload = buildCallbackPayload(formValues, callbackName);
+    const payload = buildCallbackPayload(formValues, callbackName, mode);
 
     try {
       await setCallbacksCall(accessToken, payload);
@@ -371,7 +382,8 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
     if (!selectedEditCallback) {
       return;
     }
-    await handleCallbackSubmit(formValues, selectedEditCallback.name, true);
+    const mode = formValues.callback_mode || selectedEditCallback.type || "success";
+    await handleCallbackSubmit(formValues, selectedEditCallback.name, true, mode);
   };
 
   const addNewCallbackCall = async (formValues: Record<string, any>) => {
@@ -379,7 +391,8 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
     if (!new_callback) {
       return;
     }
-    await handleCallbackSubmit(formValues, new_callback, false);
+    const mode = formValues.callback_mode || "success";
+    await handleCallbackSubmit(formValues, new_callback, false, mode);
   };
 
   const handleSelectedCallbackChange = (callbackName: string) => {
@@ -728,6 +741,20 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
             onCallbackChange={handleSelectedCallbackChange}
           />
 
+          <FormItem
+            label="Callback Mode"
+            name="callback_mode"
+            initialValue="success"
+          >
+            <Select size="large" className="w-full">
+              {CALLBACK_MODES.map((m) => (
+                <SelectItem key={m.value} value={m.value}>
+                  {m.label}
+                </SelectItem>
+              ))}
+            </Select>
+          </FormItem>
+
           <DynamicParamsFields
             params={selectedCallbackParams}
             callbackConfigs={callbackConfigs}
@@ -779,6 +806,20 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
                 onCallbackChange={() => {}}
                 disabled={true}
               />
+
+              <FormItem
+                label="Callback Mode"
+                name="callback_mode"
+                initialValue={selectedEditCallback.type || "success"}
+              >
+                <Select size="large" className="w-full">
+                  {CALLBACK_MODES.map((m) => (
+                    <SelectItem key={m.value} value={m.value}>
+                      {m.label}
+                    </SelectItem>
+                  ))}
+                </Select>
+              </FormItem>
 
               <DynamicParamsFields
                 params={getDynamicParamsForCallback(

@@ -1,6 +1,9 @@
+export type CallbackMode = "success" | "failure" | "success_and_failure";
+
 export interface AlertingObject {
   name: string;
   variables: AlertingVariables;
+  type?: CallbackMode;
 }
 
 export interface AlertingVariables {
