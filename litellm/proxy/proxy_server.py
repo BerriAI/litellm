@@ -9164,6 +9164,8 @@ async def token_counter(request: TokenCountRequest, call_endpoint: bool = False)
                     contents=contents,
                     deployment=deployment,
                     request_model=request.model,
+                    tools=tools,
+                    system=system,
                 )
             except httpx.HTTPStatusError as e:
                 error_message = getattr(e, "message", None) or str(e)
