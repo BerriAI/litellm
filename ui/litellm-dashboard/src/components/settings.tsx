@@ -319,8 +319,20 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
     if (!selectedEditCallback) {
       return;
     }
-    const mode = formValues.callback_mode || selectedEditCallback.type || "success";
-    await handleCallbackSubmit(formValues, selectedEditCallback.name, true, mode);
+    const newMode = formValues.callback_mode || selectedEditCallback.type || "success";
+    const oldMode = selectedEditCallback.type || "success";
+
+    // If mode changed, delete from old list(s) first, then add to new list
+    if (newMode !== oldMode) {
+      try {
+        await deleteCallbackMutation.mutateAsync(selectedEditCallback.name);
+      } catch {
+        NotificationsManager.fromBackend("Failed to remove callback from previous mode");
+        return;
+      }
+    }
+
+    await handleCallbackSubmit(formValues, selectedEditCallback.name, true, newMode);
   };
 
   const addNewCallbackCall = async (formValues: Record<string, any>) => {
