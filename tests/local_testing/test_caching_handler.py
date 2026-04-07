@@ -19,9 +19,14 @@ import pytest
 import litellm
 from litellm import aembedding, completion, embedding, aresponses, responses
 from litellm.caching.caching import Cache
+from litellm.responses.streaming_iterator import CachedResponsesAPIStreamingIterator
 
 from unittest.mock import AsyncMock, patch, MagicMock
-from litellm.caching.caching_handler import LLMCachingHandler, CachingHandlerResponse
+from litellm.caching.caching_handler import (
+    LLMCachingHandler,
+    CachingHandlerResponse,
+    _should_defer_streaming_cache_hit_callbacks,
+)
 from litellm.caching.caching import LiteLLMCacheType
 from litellm.types.utils import CallTypes
 from litellm.types.rerank import RerankResponse
@@ -627,6 +632,55 @@ async def test_async_responses_api_caching():
     assert cached_response.cached_result._hidden_params["cache_hit"] == True
 
 
+@pytest.mark.asyncio
+async def test_async_get_cache_updates_request_kwargs_for_streaming_responses():
+    """
+    Ensure streamed responses retain the normalized lookup kwargs so a later
+    cache write can reuse the exact cache key from the read path.
+    """
+    setup_cache()
+
+    caching_handler = LLMCachingHandler(
+        original_function=aresponses,
+        request_kwargs={"stale": True},
+        start_time=datetime.now(),
+    )
+
+    logging_obj = LiteLLMLogging(
+        litellm_call_id=str(datetime.now()),
+        call_type=CallTypes.aresponses.value,
+        model="gpt-4o",
+        messages=[],
+        function_id=str(uuid.uuid4()),
+        stream=True,
+        start_time=datetime.now(),
+    )
+
+    kwargs = {
+        "model": "gpt-4o",
+        "input": "hello",
+        "stream": True,
+        "caching": True,
+    }
+
+    await caching_handler._async_get_cache(
+        model="gpt-4o",
+        original_function=aresponses,
+        logging_obj=logging_obj,
+        start_time=datetime.now(),
+        call_type=CallTypes.aresponses.value,
+        kwargs=kwargs,
+    )
+
+    assert "stale" not in caching_handler.request_kwargs
+    assert caching_handler.request_kwargs["model"] == "gpt-4o"
+    assert caching_handler.request_kwargs["input"] == "hello"
+    assert caching_handler.request_kwargs["stream"] is True
+    assert caching_handler.request_kwargs["cache_key"] == litellm.cache.get_cache_key(
+        **caching_handler.request_kwargs
+    )
+
+
 def test_sync_responses_api_caching():
     """
     Test that synchronous responses API calls are properly cached and retrieved.
@@ -767,6 +821,349 @@ def test_convert_cached_responses_api_result_to_model_response():
     assert result.model == "gpt-4o"
     assert result.status == "completed"
     assert len(result.output) == 1
+
+
+def test_sync_get_cache_does_not_eagerly_log_streaming_responses_hits():
+    litellm.set_verbose = True
+    setup_cache()
+    caching_handler = LLMCachingHandler(
+        original_function=responses, request_kwargs={}, start_time=datetime.now()
+    )
+
+    original_model = "gpt-4o"
+    responses_api_response = ResponsesAPIResponse(
+        id="resp_stream_sync_hit",
+        created_at=int(time.time()),
+        status="completed",
+        model=original_model,
+        object="response",
+        output=[
+            {
+                "type": "message",
+                "id": "msg_stream_sync_hit",
+                "status": "completed",
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "output_text",
+                        "text": "Sync streamed cache hit response.",
+                        "annotations": [],
+                    }
+                ],
+            }
+        ],
+    )
+
+    logging_obj = LiteLLMLogging(
+        litellm_call_id=str(datetime.now()),
+        call_type=CallTypes.responses.value,
+        model=original_model,
+        messages=[],
+        function_id=str(uuid.uuid4()),
+        stream=True,
+        start_time=datetime.now(),
+    )
+    logging_obj.handle_sync_success_callbacks_for_async_calls = MagicMock()
+
+    kwargs = {
+        "model": original_model,
+        "input": "Tell me a cached story",
+        "stream": True,
+        "caching": True,
+    }
+
+    caching_handler.sync_set_cache(result=responses_api_response, kwargs=kwargs)
+    time.sleep(0.2)
+
+    cached_response = caching_handler._sync_get_cache(
+        model=original_model,
+        original_function=responses,
+        logging_obj=logging_obj,
+        start_time=datetime.now(),
+        call_type=CallTypes.responses.value,
+        kwargs=kwargs,
+    )
+
+    assert cached_response.cached_result is not None
+    assert isinstance(
+        cached_response.cached_result, CachedResponsesAPIStreamingIterator
+    )
+    logging_obj.handle_sync_success_callbacks_for_async_calls.assert_not_called()
+
+
+def test_sync_get_cache_still_eagerly_logs_streaming_completion_hits():
+    litellm.set_verbose = True
+    setup_cache()
+    caching_handler = LLMCachingHandler(
+        original_function=completion, request_kwargs={}, start_time=datetime.now()
+    )
+
+    original_model = "gpt-4o"
+    logging_obj = LiteLLMLogging(
+        litellm_call_id=str(datetime.now()),
+        call_type=CallTypes.completion.value,
+        model=original_model,
+        messages=[],
+        function_id=str(uuid.uuid4()),
+        stream=True,
+        start_time=datetime.now(),
+    )
+    logging_obj.handle_sync_success_callbacks_for_async_calls = MagicMock()
+
+    kwargs = {
+        "model": original_model,
+        "messages": [{"role": "user", "content": "Tell me a cached joke"}],
+        "stream": True,
+        "caching": True,
+    }
+
+    caching_handler.sync_set_cache(result=chat_completion_response, kwargs=kwargs)
+    time.sleep(0.2)
+
+    cached_response = caching_handler._sync_get_cache(
+        model=original_model,
+        original_function=completion,
+        logging_obj=logging_obj,
+        start_time=datetime.now(),
+        call_type=CallTypes.completion.value,
+        kwargs=kwargs,
+    )
+
+    assert cached_response.cached_result is not None
+    logging_obj.handle_sync_success_callbacks_for_async_calls.assert_called_once()
+
+
+def test_should_defer_streaming_cache_hit_callbacks_only_for_responses_streams():
+    assert (
+        _should_defer_streaming_cache_hit_callbacks(
+            call_type=CallTypes.responses.value,
+            kwargs={"stream": True},
+        )
+        is True
+    )
+    assert (
+        _should_defer_streaming_cache_hit_callbacks(
+            call_type=CallTypes.aresponses.value,
+            kwargs={"stream": True},
+        )
+        is True
+    )
+    assert (
+        _should_defer_streaming_cache_hit_callbacks(
+            call_type=CallTypes.completion.value,
+            kwargs={"stream": True},
+        )
+        is False
+    )
+    assert (
+        _should_defer_streaming_cache_hit_callbacks(
+            call_type=CallTypes.responses.value,
+            kwargs={"stream": False},
+        )
+        is False
+    )
+
+
+@pytest.mark.asyncio
+async def test_async_get_cache_still_eagerly_logs_streaming_completion_hits():
+    litellm.set_verbose = True
+    setup_cache()
+    caching_handler = LLMCachingHandler(
+        original_function=completion, request_kwargs={}, start_time=datetime.now()
+    )
+
+    original_model = "gpt-4o"
+    kwargs = {
+        "model": original_model,
+        "messages": [{"role": "user", "content": "Tell me a cached joke"}],
+        "stream": True,
+        "caching": True,
+    }
+
+    await caching_handler.async_set_cache(
+        result=chat_completion_response,
+        original_function=litellm.acompletion,
+        kwargs=kwargs,
+    )
+    await asyncio.sleep(0.2)
+
+    logging_obj = LiteLLMLogging(
+        litellm_call_id=str(datetime.now()),
+        call_type=CallTypes.acompletion.value,
+        model=original_model,
+        messages=[],
+        function_id=str(uuid.uuid4()),
+        stream=True,
+        start_time=datetime.now(),
+    )
+    caching_handler._async_log_cache_hit_on_callbacks = MagicMock()
+
+    cached_response = await caching_handler._async_get_cache(
+        model=original_model,
+        original_function=litellm.acompletion,
+        logging_obj=logging_obj,
+        start_time=datetime.now(),
+        call_type=CallTypes.acompletion.value,
+        kwargs=kwargs,
+    )
+
+    assert cached_response is not None
+    assert cached_response.cached_result is not None
+    caching_handler._async_log_cache_hit_on_callbacks.assert_called_once()
+
+
+def test_convert_cached_streaming_responses_result_to_iterator():
+    """
+    Test that cached streaming Responses results are replayed through a synthetic
+    streaming iterator instead of being returned as a full response object.
+    """
+    caching_handler = LLMCachingHandler(
+        original_function=responses, request_kwargs={}, start_time=datetime.now()
+    )
+
+    logging_obj = LiteLLMLogging(
+        litellm_call_id=str(datetime.now()),
+        call_type=CallTypes.responses.value,
+        model="gpt-4o",
+        messages=[],
+        function_id=str(uuid.uuid4()),
+        stream=True,
+        start_time=datetime.now(),
+    )
+
+    cached_result = {
+        "id": "resp_stream_cache_test",
+        "created_at": int(time.time()),
+        "status": "completed",
+        "model": "gpt-4o",
+        "object": "response",
+        "output": [
+            {
+                "type": "message",
+                "id": "msg_stream_cache_test",
+                "status": "completed",
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "output_text",
+                        "text": "Streaming cache replay test.",
+                        "annotations": [],
+                    }
+                ],
+            }
+        ],
+    }
+
+    result = caching_handler._convert_cached_result_to_model_response(
+        cached_result=cached_result,
+        call_type=CallTypes.responses.value,
+        kwargs={"model": "gpt-4o", "input": "test", "stream": True},
+        logging_obj=logging_obj,
+        model="gpt-4o",
+        args=(),
+    )
+
+    assert isinstance(result, CachedResponsesAPIStreamingIterator)
+    assert result.completed_response is not None
+    assert result.completed_response.response.id == cached_result["id"]
+
+    streamed_events = list(result)
+    assert streamed_events[0].type == "response.created"
+    assert streamed_events[1].type == "response.in_progress"
+    assert streamed_events[2].type == "response.output_item.added"
+    assert streamed_events[3].type == "response.content_part.added"
+    assert streamed_events[-4].type == "response.output_text.done"
+    assert streamed_events[-3].type == "response.content_part.done"
+    assert streamed_events[-2].type == "response.output_item.done"
+    assert streamed_events[-1].type == "response.completed"
+    assert streamed_events[-1].response.id == cached_result["id"]
+    assert streamed_events[-1].response.output[0].content[0].text == (
+        "Streaming cache replay test."
+    )
+
+
+def test_convert_cached_streaming_reasoning_result_to_iterator():
+    caching_handler = LLMCachingHandler(
+        original_function=responses, request_kwargs={}, start_time=datetime.now()
+    )
+
+    logging_obj = LiteLLMLogging(
+        litellm_call_id=str(datetime.now()),
+        call_type=CallTypes.responses.value,
+        model="gpt-4o",
+        messages=[],
+        function_id=str(uuid.uuid4()),
+        stream=True,
+        start_time=datetime.now(),
+    )
+
+    cached_result = {
+        "id": "resp_stream_reasoning_cache_test",
+        "created_at": int(time.time()),
+        "status": "completed",
+        "model": "gpt-4o",
+        "object": "response",
+        "output": [
+            {
+                "type": "reasoning",
+                "id": "rs_stream_cache_test",
+                "summary": [
+                    {
+                        "type": "summary_text",
+                        "text": "Cached reasoning summary.",
+                    }
+                ],
+            }
+        ],
+    }
+
+    result = caching_handler._convert_cached_result_to_model_response(
+        cached_result=cached_result,
+        call_type=CallTypes.responses.value,
+        kwargs={"model": "gpt-4o", "input": "test", "stream": True},
+        logging_obj=logging_obj,
+        model="gpt-4o",
+        args=(),
+    )
+
+    assert isinstance(result, CachedResponsesAPIStreamingIterator)
+
+    streamed_events = list(result)
+    streamed_event_types = [
+        event.type.value if hasattr(event.type, "value") else str(event.type)
+        for event in streamed_events
+    ]
+
+    assert streamed_event_types[:3] == [
+        "response.created",
+        "response.in_progress",
+        "response.output_item.added",
+    ]
+    assert streamed_event_types[-4:] == [
+        "response.reasoning_summary_text.done",
+        "response.reasoning_summary_part.done",
+        "response.output_item.done",
+        "response.completed",
+    ]
+    assert streamed_event_types.count("response.reasoning_summary_text.delta") >= 1
+
+    delta_events = [
+        event
+        for event in streamed_events
+        if (event.type.value if hasattr(event.type, "value") else str(event.type))
+        == "response.reasoning_summary_text.delta"
+    ]
+    text_done_event = streamed_events[-4]
+    part_done_event = streamed_events[-3]
+    output_item_done_event = streamed_events[-2]
+
+    assert all(delta_event.summary_index == 0 for delta_event in delta_events)
+    assert text_done_event.text == "Cached reasoning summary."
+    assert text_done_event.summary_index == 0
+    assert part_done_event.part.type == "summary_text"
+    assert part_done_event.part.text == "Cached reasoning summary."
+    assert output_item_done_event.item.type == "reasoning"
+    assert output_item_done_event.item.summary[0]["text"] == "Cached reasoning summary."
 
 
 @pytest.mark.asyncio
