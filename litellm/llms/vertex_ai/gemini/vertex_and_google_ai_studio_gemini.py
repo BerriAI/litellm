@@ -3055,6 +3055,115 @@ class ModelResponseIterator:
         self.cumulative_tool_call_index: int = 0
         self.has_seen_tool_calls: bool = False
 
+    def _apply_stream_candidates(
+        self,
+        _candidates: List[Candidates],
+        model_response: Any,
+    ) -> Tuple[List[dict], List[dict], List[dict], List[dict]]:
+        (
+            grounding_metadata,
+            url_context_metadata,
+            safety_ratings,
+            citation_metadata,
+            self.cumulative_tool_call_index,
+        ) = VertexGeminiConfig._process_candidates(
+            _candidates,
+            model_response,
+            self.logging_obj.optional_params,
+            cumulative_tool_call_index=self.cumulative_tool_call_index,
+        )
+
+        # Track whether tool_calls have been seen across streaming chunks.
+        # Gemini sends tool_calls and finishReason in separate chunks,
+        # so we need to remember if earlier chunks contained tool_calls
+        # to correctly set finish_reason="tool_calls" per the OpenAI spec.
+        if not self.has_seen_tool_calls:
+            for choice in model_response.choices:
+                if (
+                    hasattr(choice, "delta")
+                    and choice.delta
+                    and choice.delta.tool_calls
+                ):
+                    self.has_seen_tool_calls = True
+                    break
+
+        # Handle final chunk with finishReason but no content.
+        # _process_candidates skips candidates without "content",
+        # so the finish_reason from the final chunk is lost.
+        if not model_response.choices and _candidates:
+            from litellm.types.utils import Delta, StreamingChoices
+
+            for candidate in _candidates:
+                finish_reason_str = candidate.get("finishReason")
+                if finish_reason_str is not None:
+                    if self.has_seen_tool_calls:
+                        mapped_finish_reason = "tool_calls"
+                    else:
+                        mapped_finish_reason = VertexGeminiConfig._check_finish_reason(
+                            None, finish_reason_str
+                        )
+                    choice = StreamingChoices(
+                        finish_reason=mapped_finish_reason,
+                        index=candidate.get("index", 0),
+                        delta=Delta(content=None, role=None),
+                        logprobs=None,
+                        enhancements=None,
+                    )
+                    model_response.choices.append(choice)
+
+        # Also handle the case where the final chunk has empty
+        # content (e.g. text:"") WITH finishReason. In this case
+        # _process_candidates DOES create a choice, but maps
+        # finishReason="STOP" to "stop" because the current chunk
+        # has no tool_calls. Override if we saw tool_calls earlier.
+        if self.has_seen_tool_calls:
+            for choice in model_response.choices:
+                if choice.finish_reason == "stop":
+                    choice.finish_reason = "tool_calls"
+
+        setattr(model_response, "vertex_ai_grounding_metadata", grounding_metadata)  # type: ignore
+        setattr(model_response, "vertex_ai_url_context_metadata", url_context_metadata)  # type: ignore
+        setattr(model_response, "vertex_ai_safety_ratings", safety_ratings)  # type: ignore
+        setattr(model_response, "vertex_ai_citation_metadata", citation_metadata)  # type: ignore
+
+        return grounding_metadata, url_context_metadata, safety_ratings, citation_metadata
+
+    def _apply_stream_usage_metadata(
+        self,
+        processed_chunk: Any,
+        model_response: Any,
+        grounding_metadata: List[dict],
+    ) -> Optional[Usage]:
+        if "usageMetadata" not in processed_chunk:
+            return None
+
+        usage = VertexGeminiConfig._calculate_usage(
+            completion_response=processed_chunk,
+        )
+
+        web_search_requests = VertexGeminiConfig._calculate_web_search_requests(
+            grounding_metadata
+        )
+        if web_search_requests is not None:
+            cast(
+                PromptTokensDetailsWrapper, usage.prompt_tokens_details
+            ).web_search_requests = web_search_requests
+
+        traffic_type = processed_chunk.get("usageMetadata", {}).get("trafficType")
+        if traffic_type:
+            model_response._hidden_params.setdefault(
+                "provider_specific_fields", {}
+            )["traffic_type"] = traffic_type
+
+        service_tier = self.response_headers.get("x-gemini-service-tier")
+        if service_tier:
+            if service_tier.lower() == "standard":
+                setattr(model_response, "service_tier", "default")
+            else:
+                setattr(model_response, "service_tier", service_tier.lower())
+
+        return usage
+
     def chunk_parser(self, chunk: dict) -> Optional["ModelResponseStream"]:
         try:
             verbose_logger.debug(f"RAW GEMINI CHUNK: {chunk}")
@@ -3072,108 +3181,23 @@ class ModelResponseIterator:
             if blocked_response is not None:
                 model_response = blocked_response
 
-            usage: Optional[Usage] = None
-            _candidates: Optional[List[Candidates]] = processed_chunk.get("candidates")
             grounding_metadata: List[dict] = []
             url_context_metadata: List[dict] = []
             safety_ratings: List[dict] = []
             citation_metadata: List[dict] = []
+
+            _candidates: Optional[List[Candidates]] = processed_chunk.get("candidates")
             if _candidates:
                 (
                     grounding_metadata,
                     url_context_metadata,
                     safety_ratings,
                     citation_metadata,
-                    self.cumulative_tool_call_index,
-                ) = VertexGeminiConfig._process_candidates(
-                    _candidates,
-                    model_response,
-                    self.logging_obj.optional_params,
-                    cumulative_tool_call_index=self.cumulative_tool_call_index,
-                )
+                ) = self._apply_stream_candidates(_candidates, model_response)
 
-                # Track whether tool_calls have been seen across streaming chunks.
-                # Gemini sends tool_calls and finishReason in separate chunks,
-                # so we need to remember if earlier chunks contained tool_calls
-                # to correctly set finish_reason="tool_calls" per the OpenAI spec.
-                if not self.has_seen_tool_calls:
-                    for choice in model_response.choices:
-                        if (
-                            hasattr(choice, "delta")
-                            and choice.delta
-                            and choice.delta.tool_calls
-                        ):
-                            self.has_seen_tool_calls = True
-                            break
-
-                # Handle final chunk with finishReason but no content.
-                # _process_candidates skips candidates without "content",
-                # so the finish_reason from the final chunk is lost.
-                if not model_response.choices and _candidates:
-                    from litellm.types.utils import Delta, StreamingChoices
-
-                    for candidate in _candidates:
-                        finish_reason_str = candidate.get("finishReason")
-                        if finish_reason_str is not None:
-                            if self.has_seen_tool_calls:
-                                mapped_finish_reason = "tool_calls"
-                            else:
-                                mapped_finish_reason = (
-                                    VertexGeminiConfig._check_finish_reason(
-                                        None, finish_reason_str
-                                    )
-                                )
-                            choice = StreamingChoices(
-                                finish_reason=mapped_finish_reason,
-                                index=candidate.get("index", 0),
-                                delta=Delta(content=None, role=None),
-                                logprobs=None,
-                                enhancements=None,
-                            )
-                            model_response.choices.append(choice)
-
-                # Also handle the case where the final chunk has empty
-                # content (e.g. text:"") WITH finishReason. In this case
-                # _process_candidates DOES create a choice, but maps
-                # finishReason="STOP" to "stop" because the current chunk
-                # has no tool_calls. Override if we saw tool_calls earlier.
-                if self.has_seen_tool_calls:
-                    for choice in model_response.choices:
-                        if choice.finish_reason == "stop":
-                            choice.finish_reason = "tool_calls"
-
-                setattr(model_response, "vertex_ai_grounding_metadata", grounding_metadata)  # type: ignore
-                setattr(model_response, "vertex_ai_url_context_metadata", url_context_metadata)  # type: ignore
-                setattr(model_response, "vertex_ai_safety_ratings", safety_ratings)  # type: ignore
-                setattr(model_response, "vertex_ai_citation_metadata", citation_metadata)  # type: ignore
-
-            if "usageMetadata" in processed_chunk:
-                usage = VertexGeminiConfig._calculate_usage(
-                    completion_response=processed_chunk,
-                )
-
-                web_search_requests = VertexGeminiConfig._calculate_web_search_requests(
-                    grounding_metadata
-                )
-                if web_search_requests is not None:
-                    cast(
-                        PromptTokensDetailsWrapper, usage.prompt_tokens_details
-                    ).web_search_requests = web_search_requests
-
-                traffic_type = processed_chunk.get("usageMetadata", {}).get(
-                    "trafficType"
-                )
-                if traffic_type:
-                    model_response._hidden_params.setdefault(
-                        "provider_specific_fields", {}
-                    )["traffic_type"] = traffic_type
-
-                service_tier = self.response_headers.get("x-gemini-service-tier")
-                if service_tier:
-                    if service_tier.lower() == "standard":
-                        setattr(model_response, "service_tier", "default")
-                    else:
-                        setattr(model_response, "service_tier", service_tier.lower())
+            usage = self._apply_stream_usage_metadata(
+                processed_chunk, model_response, grounding_metadata
+            )
 
             setattr(model_response, "usage", usage)  # type: ignore
 
