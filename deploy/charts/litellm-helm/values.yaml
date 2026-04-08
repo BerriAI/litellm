@@ -54,8 +54,8 @@ topologySpreadConstraints:
   #   whenUnsatisfiable: DoNotSchedule
   #   labelSelector:
   #     matchLabels:
-  # Adjust to match `.Values.nameOverride` if you override it (default: "litellm"):
-  #       app.kubernetes.io/name: litellm
+  # Adjust to match name passed to `helm install`:
+  #       app.kubernetes.io/instance: litellm
 
 # At the time of writing, the litellm docker image requires write access to the
 #  filesystem on startup so that prisma can install some dependencies.
