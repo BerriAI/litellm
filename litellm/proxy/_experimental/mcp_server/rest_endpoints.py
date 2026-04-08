@@ -704,6 +704,45 @@ if MCP_AVAILABLE:
                 "message": f"An unexpected error occurred: {str(e)}",
             }
 
+    async def _execute_mcp_tool_rest_with_post_hooks(
+        tool_name: str,
+        tool_arguments: Any,
+        allowed_mcp_servers: List[MCPServer],
+        data: Dict[str, Any],
+        user_oauth_extra_headers: Optional[Dict[str, str]],
+        logging_obj: Any,
+    ) -> Any:
+        """Run execute_mcp_tool and mirror call_mcp_tool logging callbacks for REST."""
+        mcp_tool_start_time = datetime.now()
+        result = await execute_mcp_tool(
+            name=tool_name,
+            arguments=tool_arguments,
+            allowed_mcp_servers=allowed_mcp_servers,
+            start_time=mcp_tool_start_time,
+            user_api_key_auth=data.get("user_api_key_auth"),
+            mcp_auth_header=data.get("mcp_auth_header"),
+            mcp_server_auth_headers=data.get("mcp_server_auth_headers"),
+            oauth2_headers=user_oauth_extra_headers or data.get("oauth2_headers"),
+            raw_headers=data.get("raw_headers"),
+            litellm_logging_obj=logging_obj,
+        )
+        if logging_obj:
+            logging_obj.post_call(original_response=result)
+            mcp_tool_end_time = datetime.now()
+            await logging_obj.async_post_mcp_tool_call_hook(
+                kwargs=logging_obj.model_call_details,
+                response_obj=result,
+                start_time=mcp_tool_start_time,
+                end_time=mcp_tool_end_time,
+            )
+            logging_obj.call_type = CallTypes.call_mcp_tool.value
+            await logging_obj.async_success_handler(
+                result=result,
+                start_time=mcp_tool_start_time,
+                end_time=mcp_tool_end_time,
+            )
+        return result
+
     @router.post("/tools/call", dependencies=[Depends(user_api_key_auth)])
     async def call_tool_rest_api(
         request: Request,
@@ -798,38 +837,14 @@ if MCP_AVAILABLE:
                     target_server, user_api_key_dict
                 )
 
-            # Call execute_mcp_tool directly (permission checks already done).
-            # Use logging_obj from pre-call logic (not JSON body); mirror call_mcp_tool
-            # post-hooks so litellm success/MCP callbacks run for REST tool calls.
-            mcp_tool_start_time = datetime.now()
-            result = await execute_mcp_tool(
-                name=tool_name,
-                arguments=tool_arguments,
+            return await _execute_mcp_tool_rest_with_post_hooks(
+                tool_name=tool_name,
+                tool_arguments=tool_arguments,
                 allowed_mcp_servers=allowed_mcp_servers,
-                start_time=mcp_tool_start_time,
-                user_api_key_auth=data.get("user_api_key_auth"),
-                mcp_auth_header=data.get("mcp_auth_header"),
-                mcp_server_auth_headers=data.get("mcp_server_auth_headers"),
-                oauth2_headers=user_oauth_extra_headers or data.get("oauth2_headers"),
-                raw_headers=data.get("raw_headers"),
-                litellm_logging_obj=logging_obj,
+                data=data,
+                user_oauth_extra_headers=user_oauth_extra_headers,
+                logging_obj=logging_obj,
             )
-            if logging_obj:
-                logging_obj.post_call(original_response=result)
-                mcp_tool_end_time = datetime.now()
-                await logging_obj.async_post_mcp_tool_call_hook(
-                    kwargs=logging_obj.model_call_details,
-                    response_obj=result,
-                    start_time=mcp_tool_start_time,
-                    end_time=mcp_tool_end_time,
-                )
-                logging_obj.call_type = CallTypes.call_mcp_tool.value
-                await logging_obj.async_success_handler(
-                    result=result,
-                    start_time=mcp_tool_start_time,
-                    end_time=mcp_tool_end_time,
-                )
-            return result
         except BlockedPiiEntityError as e:
             verbose_logger.error(f"BlockedPiiEntityError in MCP tool call: {str(e)}")
             raise HTTPException(
