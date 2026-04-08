@@ -32,7 +32,7 @@ class VertexAIGeminiImageEditConfig(BaseImageEditConfig, VertexLLM):
     Uses generateContent API for Gemini models on Vertex AI
     """
 
-    SUPPORTED_PARAMS: List[str] = ["size"]
+    SUPPORTED_PARAMS: List[str] = ["size", "quality"]
 
     def __init__(self) -> None:
         BaseImageEditConfig.__init__(self)
@@ -57,9 +57,22 @@ class VertexAIGeminiImageEditConfig(BaseImageEditConfig, VertexLLM):
         mapped_params: Dict[str, Any] = {}
 
         if "size" in filtered_params:
-            mapped_params["aspectRatio"] = self._map_size_to_aspect_ratio(
-                filtered_params["size"]  # type: ignore[arg-type]
-            )
+            size_value = filtered_params["size"]
+            if isinstance(size_value, str) and "x" in size_value:
+                # OpenAI format like "1024x1024" -> map to aspect ratio
+                mapped_params["aspectRatio"] = self._map_size_to_aspect_ratio(
+                    size_value
+                )
+            else:
+                # Gemini image_size format like "1K", "2K", "4K"
+                mapped_params["imageSize"] = size_value
+
+        if "quality" in filtered_params:
+            # Map OpenAI quality to Gemini imageSize
+            # "hd" -> "2K", "standard" -> "1K"
+            quality = filtered_params["quality"]
+            if quality == "hd" and "imageSize" not in mapped_params:
+                mapped_params["imageSize"] = "2K"
 
         return mapped_params
 
@@ -194,6 +207,10 @@ class VertexAIGeminiImageEditConfig(BaseImageEditConfig, VertexLLM):
         if "aspectRatio" in image_edit_optional_request_params:
             image_config["aspect_ratio"] = image_edit_optional_request_params[
                 "aspectRatio"
+            ]
+        if "imageSize" in image_edit_optional_request_params:
+            image_config["image_size"] = image_edit_optional_request_params[
+                "imageSize"
             ]
 
         if image_config:
