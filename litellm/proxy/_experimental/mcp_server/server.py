@@ -2026,9 +2026,6 @@ if MCP_AVAILABLE:
         Call a specific tool with the provided arguments (handles prefixed tool names).
         """
         start_time = datetime.now()
-        litellm_logging_obj: Optional[LiteLLMLoggingObj] = kwargs.get(
-            "litellm_logging_obj", None
-        )
 
         try:
             if arguments is None:
