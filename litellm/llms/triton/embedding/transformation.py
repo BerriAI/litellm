@@ -120,12 +120,13 @@ class TritonEmbeddingConfig(BaseEmbeddingConfig):
                 break
 
         prompt_tokens = 0
-        input_text = "\n".join(input_text_values)
-        if len(input_text) > 0:
+        for text in input_text_values:
+            if not text:
+                continue
             try:
-                prompt_tokens = token_counter(model=model, text=input_text)
+                prompt_tokens += token_counter(model=model, text=text)
             except Exception:
-                prompt_tokens = len(input_text.split())
+                prompt_tokens += len(text.split())
 
         return Usage(
             prompt_tokens=prompt_tokens,
