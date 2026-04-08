@@ -15,7 +15,6 @@ dependencies = [
     "openai==2.24.0",
     "python-dotenv==1.0.1",
     "tiktoken==0.12.0",
-    "tenacity==8.5.0",
     "importlib-metadata==8.5.0",
     "tokenizers==0.22.2",
     "click==8.1.8",
@@ -23,9 +22,6 @@ dependencies = [
     "aiohttp==3.13.3",
     "pydantic==2.12.5",
     "jsonschema==4.23.0",
-    "google-generativeai==0.8.6",
-    "Pillow==11.3.0; python_version < '3.10'",
-    "Pillow==12.1.1; python_version >= '3.10'",
 ]
 
 [project.urls]
@@ -66,7 +62,6 @@ proxy = [
 ]
 extra_proxy = [
     "prisma==0.11.0",
-    "nodejs-wheel-binaries==24.13.1",
     "azure-identity==1.25.2; python_version >= '3.9'",
     "azure-keyvault-secrets==4.10.0",
     # Not in PyPI proxy extra.
@@ -166,9 +161,15 @@ proxy-dev = [
     "opentelemetry-exporter-otlp==1.28.0",
     "azure-identity==1.25.2; python_version >= '3.9'",
     "a2a-sdk==0.3.24; python_version >= '3.10'",
-    "nodejs-wheel-binaries==24.13.1",
 ]
 ci = [
+    # These are lazily imported at call sites; keep them out of core deps to
+    # avoid bloating the base SDK install (google-generativeai pulls grpcio +
+    # protobuf, Pillow is a compiled C extension).
+    "tenacity==8.5.0",
+    "google-generativeai==0.8.6",
+    "Pillow==11.3.0; python_version < '3.10'",
+    "Pillow==12.1.1; python_version >= '3.10'",
     # Azure batch E2E tests still import psycopg2 directly.
     "psycopg2-binary==2.9.11",
     "pytest-codspeed==4.3.0",

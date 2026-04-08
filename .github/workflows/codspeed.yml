@@ -45,12 +45,10 @@ jobs:
           mode: simulation
           run: >
             env PYTEST_DISABLE_PLUGIN_AUTOLOAD=1
-            uv run --frozen
+            uv run --frozen --no-default-groups
             --with pytest==8.3.5
-            --with pytest-asyncio==1.2.0
             --with pytest-codspeed==4.3.0
             pytest
-            -p pytest_asyncio.plugin
             -p pytest_codspeed.plugin
             tests/benchmarks/
             --codspeed
