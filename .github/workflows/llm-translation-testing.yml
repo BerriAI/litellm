@@ -36,8 +36,8 @@ jobs:
         with:
           version: "0.10.9"
 
-      - name: Cache uv dependencies
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+      - name: Restore uv dependencies cache
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: |
             ~/.cache/uv
