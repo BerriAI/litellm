@@ -1842,6 +1842,10 @@ if MCP_AVAILABLE:
 
         Returns:
             CallToolResult: Tool execution result
+
+        With ``litellm_logging_obj``, runs MCP post-call and success logging once
+        before returning (the ``@client`` wrapper skips duplicate async success
+        logging for ``call_mcp_tool``).
         """
         # Track resolved MCP server for both permission checks and dispatch
         mcp_server: Optional[MCPServer] = None
@@ -1988,6 +1992,22 @@ if MCP_AVAILABLE:
             local_content = await _handle_local_mcp_tool(original_tool_name, arguments)
             response = CallToolResult(content=cast(Any, local_content), isError=False)
 
+        if litellm_logging_obj:
+            litellm_logging_obj.post_call(original_response=response)
+            end_time = datetime.now()
+            await litellm_logging_obj.async_post_mcp_tool_call_hook(
+                kwargs=litellm_logging_obj.model_call_details,
+                response_obj=response,
+                start_time=start_time,
+                end_time=end_time,
+            )
+            litellm_logging_obj.call_type = CallTypes.call_mcp_tool.value
+            await litellm_logging_obj.async_success_handler(
+                result=response,
+                start_time=start_time,
+                end_time=end_time,
+            )
+
         return response
 
     @client
@@ -2068,19 +2088,6 @@ if MCP_AVAILABLE:
                 )
             raise
 
-        if litellm_logging_obj:
-            litellm_logging_obj.post_call(original_response=response)
-            end_time = datetime.now()
-            await litellm_logging_obj.async_post_mcp_tool_call_hook(
-                kwargs=litellm_logging_obj.model_call_details,
-                response_obj=response,
-                start_time=start_time,
-                end_time=end_time,
-            )
-            litellm_logging_obj.call_type = CallTypes.call_mcp_tool.value
-            await litellm_logging_obj.async_success_handler(
-                result=response, start_time=start_time, end_time=end_time
-            )
         return response
 
     async def mcp_get_prompt(

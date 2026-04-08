@@ -1945,7 +1945,10 @@ def client(original_function):  # noqa: PLR0915
             # parent's logging obj; skip async logging here so only the outer call bills once.
             # NOTE: streaming requests return early (before this point) via
             # CustomStreamWrapper, so this block is non-streaming only.
-            if not _is_litellm_internal_call:
+            # call_mcp_tool: execute_mcp_tool already runs post_call,
+            # async_post_mcp_tool_call_hook, and async_success_handler; skip the
+            # wrapper worker to avoid duplicate spend logs.
+            if not _is_litellm_internal_call and call_type != CallTypes.call_mcp_tool.value:
                 if getattr(logging_obj, "_defer_async_logging", False):
 
                     def _enqueue_deferred_logging() -> None:
