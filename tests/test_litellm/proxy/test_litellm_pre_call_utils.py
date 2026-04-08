@@ -1912,3 +1912,124 @@ async def test_bearer_token_not_in_debug_logs():
         f"Bearer token leaked in debug logs. "
         f"Found token in log output:\n{log_output[:500]}"
     )
+
+
+class TestAddLitellmMetadataFromRequestHeaders:
+    """Tests for fix: https://github.com/BerriAI/litellm/issues/24945
+
+    On /v1/messages, user-supplied litellm_metadata values (e.g. trace_id) were
+    silently overwritten by proxy-injected header values. Body values should win.
+    """
+
+    def test_should_preserve_body_trace_id_over_header_on_messages_route(self):
+        """Body trace_id must not be overwritten by x-litellm-trace-id header."""
+        data = {
+            "model": "anthropic/claude-3-5-sonnet",
+            "messages": [{"role": "user", "content": "hi"}],
+            "litellm_metadata": {"trace_id": "from-body"},
+        }
+        headers = {"x-litellm-trace-id": "from-header", "content-type": "application/json"}
+
+        result = LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+            headers=headers,
+            data=data,
+            _metadata_variable_name="litellm_metadata",
+        )
+
+        assert result["litellm_metadata"]["trace_id"] == "from-body"
+
+    def test_should_use_header_trace_id_as_fallback_when_body_has_no_trace_id(self):
+        """When body doesn't set trace_id, the header value should still be injected."""
+        data = {
+            "model": "anthropic/claude-3-5-sonnet",
+            "messages": [{"role": "user", "content": "hi"}],
+            "litellm_metadata": {},
+        }
+        headers = {"x-litellm-trace-id": "from-header", "content-type": "application/json"}
+
+        result = LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+            headers=headers,
+            data=data,
+            _metadata_variable_name="litellm_metadata",
+        )
+
+        assert result["litellm_metadata"]["trace_id"] == "from-header"
+        assert result["litellm_metadata"]["session_id"] == "from-header"
+
+    def test_should_keep_top_level_ids_consistent_with_body_trace_id(self):
+        """litellm_session_id and litellm_trace_id should also reflect the body trace_id."""
+        data = {
+            "model": "anthropic/claude-3-5-sonnet",
+            "messages": [{"role": "user", "content": "hi"}],
+            "litellm_metadata": {"trace_id": "from-body"},
+        }
+        headers = {"x-litellm-trace-id": "from-header", "content-type": "application/json"}
+
+        result = LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+            headers=headers,
+            data=data,
+            _metadata_variable_name="litellm_metadata",
+        )
+
+        assert result["litellm_metadata"]["trace_id"] == "from-body"
+        assert result["litellm_metadata"]["session_id"] == "from-body"  # must mirror trace_id
+        assert result["litellm_session_id"] == "from-body"
+        assert result["litellm_trace_id"] == "from-body"
+
+    def test_should_not_bleed_metadata_trace_id_into_chain_ids_on_chat_completions_route(self):
+        """On /chat/completions, metadata["trace_id"] (e.g. LangFuse) must not override the header chain ID."""
+        data = {
+            "model": "gpt-4o",
+            "messages": [{"role": "user", "content": "hi"}],
+            "metadata": {"trace_id": "langfuse-id"},
+        }
+        headers = {"x-litellm-trace-id": "chain-id", "content-type": "application/json"}
+
+        result = LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+            headers=headers,
+            data=data,
+            _metadata_variable_name="metadata",
+        )
+
+        # Header chain ID must win for top-level fields on this route.
+        assert result["litellm_session_id"] == "chain-id"
+        assert result["litellm_trace_id"] == "chain-id"
+        # The observability trace_id in the metadata dict must be untouched.
+        assert result["metadata"]["trace_id"] == "langfuse-id"
+
+
+    @pytest.mark.asyncio
+    async def test_should_preserve_body_trace_id_in_full_pipeline_on_messages_route(self):
+        """Body trace_id must survive the full add_litellm_data_to_request pipeline."""
+        from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+
+        mock_request = MagicMock(spec=Request)
+        mock_request.url.path = "/v1/messages"
+        mock_request.url.__str__ = lambda self: "http://localhost:4000/v1/messages"
+        mock_request.method = "POST"
+        mock_request.query_params = {}
+        mock_request.headers = {
+            "Content-Type": "application/json",
+            "Authorization": "Bearer sk-1234",
+            "x-litellm-trace-id": "from-header",
+        }
+        mock_request.client = MagicMock()
+        mock_request.client.host = "127.0.0.1"
+
+        data = {
+            "model": "anthropic/claude-3-5-sonnet",
+            "messages": [{"role": "user", "content": "hi"}],
+            "litellm_metadata": {"trace_id": "from-body"},
+        }
+
+        result = await add_litellm_data_to_request(
+            data=data,
+            request=mock_request,
+            user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key", metadata={}, team_metadata={}),
+            proxy_config=MagicMock(),
+            general_settings={},
+            version="test-version",
+        )
+
+        assert result.get("litellm_metadata", {}).get("trace_id") == "from-body"
+
