@@ -3074,7 +3074,7 @@ jobs:
             CI=true npm run test -- --run \
               --pool forks --poolOptions.forks.maxForks=8
 
-  ui_e2e_tests:
+  e2e_ui_testing:
     docker:
       - image: cimg/python:3.12-browsers
         auth:

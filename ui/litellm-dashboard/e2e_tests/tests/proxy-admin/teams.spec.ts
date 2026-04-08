@@ -15,8 +15,6 @@ import { navigateToPage, dismissFeedbackPopup } from "../../helpers/navigation";
  * clickable span (OldTeams Typography.Text).
  */
 async function clickTeamId(page: import("@playwright/test").Page, teamId: string) {
-  const idPrefix = teamId.slice(0, 7);
-  // The team ID is either a Button or a clickable span containing the first 7 chars
   const cell = page.locator("td").filter({ hasText: teamId }).first();
   await expect(cell).toBeVisible({ timeout: 10_000 });
   await cell.click();
