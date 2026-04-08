@@ -667,7 +667,9 @@ class LiteLLMProxyRequestSetup:
             )
 
         if isinstance(data[_metadata_variable_name], dict):
-            data[_metadata_variable_name].update(metadata_from_headers)
+            for key, value in metadata_from_headers.items():
+                if key not in data[_metadata_variable_name]:
+                    data[_metadata_variable_name][key] = value
         return data
 
     @staticmethod
@@ -1063,8 +1065,11 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
                 )
             else:
                 data["litellm_metadata"] = parsed_litellm_metadata
-        # Merge litellm_metadata into the metadata variable (preserving existing values)
-        if isinstance(data["litellm_metadata"], dict):
+        # Merge litellm_metadata into the metadata variable (preserving existing values).
+        # Skip when both sides are the same dict (LITELLM_METADATA_ROUTES like /v1/messages
+        # where _metadata_variable_name == "litellm_metadata") — merging a dict with itself
+        # is a no-op and would mask the self-reference bug.
+        if isinstance(data["litellm_metadata"], dict) and data["litellm_metadata"] is not data[_metadata_variable_name]:
             for key, value in data["litellm_metadata"].items():
                 if key not in data[_metadata_variable_name]:
                     data[_metadata_variable_name][key] = value

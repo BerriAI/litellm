@@ -1912,3 +1912,61 @@ async def test_bearer_token_not_in_debug_logs():
         f"Bearer token leaked in debug logs. "
         f"Found token in log output:\n{log_output[:500]}"
     )
+
+
+def test_litellm_metadata_not_overridden_by_headers_on_messages_endpoint():
+    """
+    Regression test for https://github.com/BerriAI/litellm/issues/24945
+
+    User-supplied values in litellm_metadata (e.g. trace_id, tags) should NOT be
+    overwritten by proxy-injected header values on /v1/messages (and other
+    LITELLM_METADATA_ROUTES). Body values take priority over header values.
+    """
+    # Simulate /v1/messages — _metadata_variable_name == "litellm_metadata"
+    _metadata_variable_name = "litellm_metadata"
+    # User supplied trace_id and tags in the request body
+    data: dict = {
+        _metadata_variable_name: {
+            "trace_id": "from-body",
+            "tags": ["user-tag"],
+        }
+    }
+    # Proxy receives x-litellm-trace-id and x-litellm-tags via headers
+    headers = {
+        "x-litellm-trace-id": "from-header",
+        "x-litellm-tags": '["proxy-tag"]',
+    }
+    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+        headers=headers,
+        data=data,
+        _metadata_variable_name=_metadata_variable_name,
+    )
+    # Body values must NOT be overwritten by header values
+    assert data[_metadata_variable_name]["trace_id"] == "from-body", (
+        "trace_id from request body was overridden by x-litellm-trace-id header"
+    )
+    assert data[_metadata_variable_name]["tags"] == ["user-tag"], (
+        "tags from request body were overridden by x-litellm-tags header"
+    )
+
+
+def test_header_metadata_added_when_not_in_body_on_messages_endpoint():
+    """
+    Companion to the regression test above: header-supplied metadata fields that
+    the user did NOT provide in the body should still be injected by the proxy.
+    """
+    _metadata_variable_name = "litellm_metadata"
+    # User sends no trace_id in the body
+    data: dict = {_metadata_variable_name: {}}
+    headers = {
+        "x-litellm-trace-id": "from-header",
+    }
+    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+        headers=headers,
+        data=data,
+        _metadata_variable_name=_metadata_variable_name,
+    )
+    # Header value should be set since user did not supply it
+    assert data[_metadata_variable_name]["trace_id"] == "from-header", (
+        "trace_id from header was not injected when body did not supply it"
+    )
