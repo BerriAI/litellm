@@ -16,6 +16,7 @@ from pydantic import (
 from typing_extensions import Required, TypedDict
 
 from litellm._uuid import uuid
+from litellm.constants import MCP_STDIO_ALLOWED_COMMANDS
 from litellm.types.integrations.slack_alerting import AlertType
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -1164,8 +1165,6 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
                 if not values.get("args"):
                     raise ValueError("args is required for stdio transport")
                 # Validate command against allowlist to prevent arbitrary execution
-                from litellm.constants import MCP_STDIO_ALLOWED_COMMANDS
-
                 base_command = os.path.basename(values["command"])
                 if base_command not in MCP_STDIO_ALLOWED_COMMANDS:
                     raise ValueError(
@@ -1233,8 +1232,6 @@ class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
                 if not values.get("args"):
                     raise ValueError("args is required for stdio transport")
                 # Validate command against allowlist to prevent arbitrary execution
-                from litellm.constants import MCP_STDIO_ALLOWED_COMMANDS
-
                 base_command = os.path.basename(values["command"])
                 if base_command not in MCP_STDIO_ALLOWED_COMMANDS:
                     raise ValueError(
