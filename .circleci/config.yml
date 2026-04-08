@@ -3127,6 +3127,10 @@ jobs:
             cd ui/litellm-dashboard
             npm run build
             cp -r out/ ../../litellm/proxy/_experimental/out/
+            # Restructure HTML so extensionless routes work (login.html -> login/index.html)
+            find ../../litellm/proxy/_experimental/out -name '*.html' ! -name 'index.html' | while read -r f; do
+              d="${f%.html}"; mkdir -p "$d"; mv "$f" "$d/index.html"
+            done
       - run:
           name: Wait for PostgreSQL
           command: dockerize -wait tcp://localhost:5432 -timeout 30s
