@@ -14,6 +14,13 @@ query-filters:
       id: py/clear-text-logging-sensitive-data  # CWE-312
   - exclude:
       id: py/polynomial-redos                   # CWE-730
+  # SHA-256 is used for OCI HTTP request signing (x-content-sha256 header) and
+  # other content-integrity operations, not for password or secret storage.
+  # LiteLLM is an API gateway that never stores passwords — this query produces
+  # only false positives here.  See CWE-328 / OCI signing spec:
+  # https://docs.oracle.com/en-us/iaas/Content/API/Concepts/signingrequests.htm
+  - exclude:
+      id: py/weak-sensitive-data-hashing        # CWE-328
 
 paths-ignore:
   - tests
