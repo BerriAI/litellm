@@ -266,6 +266,7 @@ class LiteLLMCompletionResponsesConfig:
             "web_search_options": web_search_options,
             "response_format": response_format,
             "reasoning_effort": reasoning_effort,
+            "context_management": responses_api_request.get("context_management"),
             # litellm specific params
             "custom_llm_provider": custom_llm_provider,
             "extra_headers": extra_headers,
