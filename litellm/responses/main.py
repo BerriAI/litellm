@@ -1910,6 +1910,7 @@ async def _aresponses_websocket(
     api_base: Optional[str] = None,
     api_key: Optional[str] = None,
     timeout: Optional[float] = None,
+    llm_router: Optional[Any] = None,
     **kwargs,
 ):
     """
@@ -1926,16 +1927,21 @@ async def _aresponses_websocket(
     litellm_params = GenericLiteLLMParams(**kwargs)
     litellm_params_dict = get_litellm_params(**kwargs)
 
-    (
-        model,
-        _custom_llm_provider,
-        dynamic_api_key,
-        dynamic_api_base,
-    ) = litellm.get_llm_provider(
-        model=model,
-        api_base=api_base,
-        api_key=api_key,
-    )
+    if model:
+        (
+            model,
+            _custom_llm_provider,
+            dynamic_api_key,
+            dynamic_api_base,
+        ) = litellm.get_llm_provider(
+            model=model,
+            api_base=api_base,
+            api_key=api_key,
+        )
+    else:
+        _custom_llm_provider = None
+        dynamic_api_key = api_key
+        dynamic_api_base = api_base
 
     litellm_logging_obj.update_from_kwargs(
         kwargs=kwargs,
@@ -1947,7 +1953,7 @@ async def _aresponses_websocket(
     )
 
     responses_api_provider_config: Optional[BaseResponsesAPIConfig] = None
-    if _custom_llm_provider is not None:
+    if model and _custom_llm_provider is not None:
         responses_api_provider_config = (
             ProviderConfigManager.get_provider_responses_api_config(
                 model=model,
@@ -1984,5 +1990,6 @@ async def _aresponses_websocket(
         user_api_key_dict=kwargs.get("user_api_key_dict"),
         litellm_metadata=_build_litellm_metadata_for_ws(kwargs),
         custom_llm_provider=_custom_llm_provider,
+        llm_router=llm_router,
         **remaining_kwargs,
     )

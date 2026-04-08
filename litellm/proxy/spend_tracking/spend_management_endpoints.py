@@ -1795,6 +1795,8 @@ async def ui_view_spend_logs(  # noqa: PLR0915
 
         start_date_obj = parse_date(start_date)
         end_date_obj = parse_date(end_date)
+        start_date_sql = start_date_obj.replace(tzinfo=None)
+        end_date_sql = end_date_obj.replace(tzinfo=None)
 
         # Convert to ISO format strings for Prisma
         start_date_iso = start_date_obj.isoformat()  # Already in UTC, no need to add Z
@@ -1911,11 +1913,11 @@ async def ui_view_spend_logs(  # noqa: PLR0915
         p = 1  # parameter index counter
 
         # Date range (always present)
-        sql_conditions.append(f'"startTime" >= ${p}::timestamptz')
-        sql_params.append(start_date_obj)
+        sql_conditions.append(f'"startTime" >= ${p}::timestamp')
+        sql_params.append(start_date_sql)
         p += 1
-        sql_conditions.append(f'"startTime" <= ${p}::timestamptz')
-        sql_params.append(end_date_obj)
+        sql_conditions.append(f'"startTime" <= ${p}::timestamp')
+        sql_params.append(end_date_sql)
         p += 1
 
         # Equality filters - read effective values from where_conditions (post-authorization)

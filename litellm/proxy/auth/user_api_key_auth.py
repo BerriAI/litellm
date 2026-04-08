@@ -260,7 +260,9 @@ async def user_api_key_auth_websocket(websocket: WebSocket):
     model = query_params.get("model")
 
     async def return_body():
-        return _realtime_request_body(model)
+        if model:
+            return _realtime_request_body(model)
+        return b"{}"
 
     request.body = return_body  # type: ignore
 

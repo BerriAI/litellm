@@ -4,6 +4,7 @@ import time
 import traceback
 from datetime import datetime
 from typing import Any, Dict, List, Optional
+from uuid import uuid4
 
 import httpx
 
@@ -26,6 +27,8 @@ from litellm.types.llms.openai import (
     OutputTextDeltaEvent,
     ResponseAPIUsage,
     ResponseCompletedEvent,
+    ResponseCreatedEvent,
+    ResponseInProgressEvent,
     ResponsesAPIRequestParams,
     ResponsesAPIResponse,
     ResponsesAPIStreamEvents,
@@ -943,6 +946,7 @@ class ManagedResponsesWebSocketHandler:
         api_base: Optional[str] = None,
         timeout: Optional[float] = None,
         custom_llm_provider: Optional[str] = None,
+        llm_router: Optional[Any] = None,
         **kwargs: Any,
     ) -> None:
         self.websocket = websocket
@@ -954,6 +958,7 @@ class ManagedResponsesWebSocketHandler:
         self.api_base = api_base
         self.timeout = timeout
         self.custom_llm_provider = custom_llm_provider
+        self.llm_router = llm_router
         # Carry through safe pass-through kwargs (e.g. extra_headers)
         self.extra_kwargs: Dict[str, Any] = {
             k: v for k, v in kwargs.items() if k not in _MANAGED_WS_SKIP_KWARGS
@@ -1106,18 +1111,22 @@ class ManagedResponsesWebSocketHandler:
         return msg_obj
 
     @staticmethod
-    def _build_base_call_kwargs(msg_obj: Dict[str, Any]) -> Dict[str, Any]:
+    def _get_response_params(msg_obj: Dict[str, Any]) -> Dict[str, Any]:
+        nested = msg_obj.get("response")
+        return (
+            nested
+            if isinstance(nested, dict) and nested
+            else {k: v for k, v in msg_obj.items() if k != "type"}
+        )
+
+    @classmethod
+    def _build_base_call_kwargs(cls, msg_obj: Dict[str, Any]) -> Dict[str, Any]:
         """
         Extract Responses API params from the event, handling both wire formats:
           Nested: {"type": "response.create", "response": {"input": [...], ...}}
           Flat:   {"type": "response.create", "input": [...], "model": "...", ...}
         """
-        nested = msg_obj.get("response")
-        response_params: Dict[str, Any] = (
-            nested
-            if isinstance(nested, dict) and nested
-            else {k: v for k, v in msg_obj.items() if k != "type"}
-        )
+        response_params = cls._get_response_params(msg_obj)
         return {
             param: response_params[param]
             for param in _RESPONSE_CREATE_PARAMS
@@ -1144,12 +1153,104 @@ class ManagedResponsesWebSocketHandler:
         else:
             verbose_logger.debug(
                 "ManagedResponsesWS: no in-memory history for previous_response_id=%s; "
-                "falling back to DB-based session reconstruction",
+                "skipping backend previous_response_id passthrough",
                 previous_response_id,
             )
-            # Fall back to DB-based session reconstruction (may work for
-            # cross-connection multi-turn when spend logs are committed)
-            call_kwargs["previous_response_id"] = previous_response_id
+
+    @classmethod
+    def _is_warmup_request(
+        cls, msg_obj: Dict[str, Any], call_kwargs: Dict[str, Any]
+    ) -> bool:
+        """
+        Codex CLI opens a startup websocket and may send a response.create used only
+        to warm the connection. Those events do not include any actual request
+        payload, but they do set `generate: false` and expect an immediate empty
+        response lifecycle back from the server.
+        """
+        for key in ("input", "previous_response_id", "prompt", "conversation_id"):
+            value = call_kwargs.get(key)
+            if value not in (None, "", []):
+                return False
+        response_params = cls._get_response_params(msg_obj)
+        return response_params.get("generate") is False
+
+    @classmethod
+    def _build_warmup_response(
+        cls,
+        response_params: Dict[str, Any],
+        model: str,
+        response_id: str,
+        created_at: int,
+        status: str,
+    ) -> ResponsesAPIResponse:
+        payload: Dict[str, Any] = {
+            "id": response_id,
+            "object": "response",
+            "created_at": created_at,
+            "status": status,
+            "model": model,
+            "output": [],
+            "parallel_tool_calls": response_params.get("parallel_tool_calls", True),
+            "store": response_params.get("store"),
+            "instructions": response_params.get("instructions"),
+            "metadata": response_params.get("metadata"),
+            "text": response_params.get("text"),
+            "tool_choice": response_params.get("tool_choice"),
+            "tools": response_params.get("tools", []),
+            "top_p": response_params.get("top_p", 1.0),
+            "truncation": response_params.get("truncation", "disabled"),
+            "reasoning": response_params.get("reasoning"),
+            "previous_response_id": response_params.get("previous_response_id"),
+            "temperature": response_params.get("temperature"),
+            "max_output_tokens": response_params.get("max_output_tokens"),
+        }
+        if status == "completed":
+            payload["usage"] = ResponseAPIUsage(
+                input_tokens=0,
+                output_tokens=0,
+                total_tokens=0,
+            )
+        return ResponsesAPIResponse(**payload)
+
+    async def _send_warmup_ack(self, msg_obj: Dict[str, Any], model: str) -> None:
+        response_params = self._get_response_params(msg_obj)
+        response_id = f"resp_{uuid4().hex}"
+        created_at = int(time.time())
+        self._store_history(response_id, [])
+        events = [
+            ResponseCreatedEvent(
+                type=ResponsesAPIStreamEvents.RESPONSE_CREATED,
+                response=self._build_warmup_response(
+                    response_params=response_params,
+                    model=model,
+                    response_id=response_id,
+                    created_at=created_at,
+                    status="in_progress",
+                ),
+            ),
+            ResponseInProgressEvent(
+                type=ResponsesAPIStreamEvents.RESPONSE_IN_PROGRESS,
+                response=self._build_warmup_response(
+                    response_params=response_params,
+                    model=model,
+                    response_id=response_id,
+                    created_at=created_at,
+                    status="in_progress",
+                ),
+            ),
+            ResponseCompletedEvent(
+                type=ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+                response=self._build_warmup_response(
+                    response_params=response_params,
+                    model=model,
+                    response_id=response_id,
+                    created_at=created_at,
+                    status="completed",
+                ),
+            ),
+        ]
+        for event in events:
+            await self.websocket.send_text(event.model_dump_json(exclude_none=True))
 
     def _inject_credentials(
         self, call_kwargs: Dict[str, Any], event_model: Optional[str]
@@ -1202,7 +1303,12 @@ class ManagedResponsesWebSocketHandler:
         every chunk.  Returns the completed event dict, or ``None``.
         """
         completed_event: Optional[Dict[str, Any]] = None
-        stream_response = await litellm.aresponses(model=model, **call_kwargs)
+        if self.llm_router is not None:
+            stream_response = await self.llm_router.aresponses(
+                model=model, **call_kwargs
+            )
+        else:
+            stream_response = await litellm.aresponses(model=model, **call_kwargs)
         async for chunk in stream_response:  # type: ignore[union-attr]
             if chunk is None:
                 continue
@@ -1277,10 +1383,16 @@ class ManagedResponsesWebSocketHandler:
             return
 
         call_kwargs = self._build_base_call_kwargs(msg_obj)
-        call_kwargs["stream"] = True
-
         event_model: Optional[str] = call_kwargs.pop("model", None)
         model = event_model or self.model
+
+        if self._is_warmup_request(msg_obj, call_kwargs):
+            verbose_logger.debug(
+                "ManagedResponsesWS: responding to generate=false warmup event"
+            )
+            await self._send_warmup_ack(msg_obj, model)
+            return
+        call_kwargs["stream"] = True
 
         previous_response_id: Optional[str] = call_kwargs.pop(
             "previous_response_id", None

@@ -939,8 +939,8 @@ async def cancel_response(
 @router.websocket("/responses")
 async def responses_websocket_endpoint(
     websocket: WebSocket,
-    model: str = fastapi.Query(
-        ..., description="The model to use for the responses WebSocket session."
+    model: Optional[str] = fastapi.Query(
+        None, description="The model to use for the responses WebSocket session."
     ),
     user_api_key_dict=Depends(user_api_key_auth_websocket),
 ):
@@ -981,6 +981,8 @@ async def responses_websocket_endpoint(
         "model": model,
         "websocket": websocket,
     }
+    if not model:
+        data["llm_router"] = llm_router
 
     # Construct a synthetic Request for pre-call processing
     headers_list = list(websocket.scope.get("headers") or [])
@@ -994,7 +996,9 @@ async def responses_websocket_endpoint(
     request._url = websocket.url
 
     async def return_body():
-        return f'{{"model": "{model}"}}'.encode()
+        if model:
+            return f'{{"model": "{model}"}}'.encode()
+        return b"{}"
 
     request.body = return_body  # type: ignore
 
