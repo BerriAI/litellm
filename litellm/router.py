@@ -566,9 +566,7 @@ class Router:
         self.success_calls: defaultdict = defaultdict(
             int
         )  # dict to store success_calls  made to each model
-        self.previous_models: List = (
-            []
-        )  # list to store failed calls (passed in as metadata to next call)
+
 
         # make Router.chat.completions.create compatible for openai.chat.completions.create
         default_litellm_params = default_litellm_params or {}
@@ -6294,11 +6292,13 @@ class Router:
         """
         Update RPM usage for a deployment
         """
-        deployment_name = kwargs["litellm_params"]["metadata"].get(
+        litellm_params = kwargs.get("litellm_params", {}) or {}
+        metadata = litellm_params.get("metadata", {}) or {}
+        deployment_name = metadata.get(
             "deployment", None
         )  # handles wildcard routes - by giving the original name sent to `litellm.completion`
-        model_group = kwargs["litellm_params"]["metadata"].get("model_group", None)
-        model_info = kwargs["litellm_params"].get("model_info", {}) or {}
+        model_group = metadata.get("model_group", None)
+        model_info = litellm_params.get("model_info", {}) or {}
         id = model_info.get("id", None)
         if model_group is None or id is None:
             return
@@ -6348,29 +6348,27 @@ class Router:
             )
             # Log failed model as the previous model
             previous_model = {
+                "litellm_call_id": kwargs.get("litellm_call_id"),
+                "litellm_trace_id": kwargs.get("litellm_trace_id"),
+                "model": kwargs.get("model"),
                 "exception_type": type(e).__name__,
-                "exception_string": str(e),
+                "exception_string": str(e)[:200],
             }
-            for (
-                k,
-                v,
-            ) in (
-                kwargs.items()
-            ):  # log everything in kwargs except the old previous_models value - prevent nesting
-                if k not in [_metadata_var, "messages", "original_function"]:
-                    previous_model[k] = v
-                elif k == _metadata_var and isinstance(v, dict):
-                    previous_model[_metadata_var] = {}  # type: ignore
-                    for metadata_k, metadata_v in kwargs[_metadata_var].items():
-                        if metadata_k != "previous_models":
-                            previous_model[k][metadata_k] = metadata_v  # type: ignore
 
-            # check current size of self.previous_models, if it's larger than 3, remove the first element
-            if len(self.previous_models) > 3:
-                self.previous_models.pop(0)
+            if _metadata_var not in kwargs or not isinstance(kwargs[_metadata_var], dict):
+                kwargs[_metadata_var] = {}
 
-            self.previous_models.append(previous_model)
-            kwargs[_metadata_var]["previous_models"] = self.previous_models
+            previous_models = kwargs[_metadata_var].get("previous_models", [])
+            if not isinstance(previous_models, list):
+                previous_models = []
+            else:
+                previous_models = list(previous_models)
+
+            if len(previous_models) > 3:
+                previous_models.pop(0)
+
+            previous_models.append(previous_model)
+            kwargs[_metadata_var]["previous_models"] = previous_models
             return kwargs
         except Exception as e:
             raise e
