@@ -126,6 +126,12 @@ def encrypt_credentials(
             new_encryption_key=encryption_key,
         )
     # aws_region_name and aws_service_name are NOT secrets — stored as-is
+    refresh_token = credentials.get("refresh_token")
+    if refresh_token is not None:
+        credentials["refresh_token"] = encrypt_value_helper(
+            value=refresh_token,
+            new_encryption_key=encryption_key,
+        )
     return credentials
 
 
@@ -137,6 +143,7 @@ def decrypt_credentials(
         "auth_value",
         "client_id",
         "client_secret",
+        "refresh_token",
         "aws_access_key_id",
         "aws_secret_access_key",
         "aws_session_token",
