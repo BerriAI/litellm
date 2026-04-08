@@ -54,7 +54,7 @@ topologySpreadConstraints:
   #   whenUnsatisfiable: DoNotSchedule
   #   labelSelector:
   #     matchLabels:
-  # Adjust to match the name passed to `helm install`:
+  # Adjust to match `.Values.nameOverride` if you override it (default: "litellm"):
   #       app.kubernetes.io/name: litellm
 
 # At the time of writing, the litellm docker image requires write access to the
