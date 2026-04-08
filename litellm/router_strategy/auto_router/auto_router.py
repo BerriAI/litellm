@@ -120,7 +120,15 @@ class AutoRouter(CustomLogger):
             )
 
         user_message: Dict[str, str] = messages[-1]
-        message_content: str = user_message.get("content", "")
+        message_content: Union[str, list] = user_message.get("content", "")
+        # Handle content as a list of content blocks (OpenAI multi-modal format).
+        # Embedding models expect a plain string; extract text parts when needed.
+        if isinstance(message_content, list):
+            message_content = " ".join(
+                block.get("text", "")
+                for block in message_content
+                if isinstance(block, dict) and block.get("type") == "text"
+            )
         route_choice: Optional[Union[RouteChoice, List[RouteChoice]]] = self.routelayer(
             text=message_content
         )
