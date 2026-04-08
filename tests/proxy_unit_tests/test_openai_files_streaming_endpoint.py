@@ -71,7 +71,7 @@ def request_obj() -> Request:
     scope = {
         "type": "http",
         "method": "GET",
-        "path": "/v2/files/file-123/content",
+        "path": "/v1/files/file-123/content",
         "headers": [],
         "query_string": b"",
     }
