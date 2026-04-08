@@ -82,6 +82,40 @@ def test_get_litellm_internal_health_check_user_api_key_auth():
     assert result.team_alias == LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME
 
 
+def test_get_responses_health_check_input_wraps_prompt_in_responses_message():
+    result = HealthCheckHelpers._get_responses_health_check_input(prompt="ping")
+
+    assert result == [
+        {
+            "role": "user",
+            "content": [{"type": "input_text", "text": "ping"}],
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_get_mode_handlers_responses_uses_structured_responses_input():
+    with patch("litellm.aresponses", new_callable=AsyncMock) as mock_aresponses:
+        mock_aresponses.return_value = {"status": "ok"}
+
+        handler = HealthCheckHelpers.get_mode_handlers(
+            model="chatgpt/gpt-5.4",
+            custom_llm_provider="chatgpt",
+            model_params={"model": "chatgpt/gpt-5.4"},
+            prompt="health test",
+        )["responses"]
+
+        await handler()
+
+        mock_aresponses.assert_awaited_once()
+        assert mock_aresponses.await_args.kwargs["input"] == [
+            {
+                "role": "user",
+                "content": [{"type": "input_text", "text": "health test"}],
+            }
+        ]
+
+
 @pytest.mark.asyncio
 async def test_ahealth_check_failure_masks_raw_request_headers():
     """

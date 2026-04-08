@@ -107,6 +107,21 @@ class HealthCheckHelpers:
             return await litellm.acompletion(**model_params)
 
     @staticmethod
+    def _get_responses_health_check_input(
+        prompt: Optional[str] = None,
+        input: Optional[list] = None,
+    ) -> list:
+        if input is not None:
+            return input
+
+        return [
+            {
+                "role": "user",
+                "content": [{"type": "input_text", "text": prompt or "test"}],
+            }
+        ]
+
+    @staticmethod
     def get_mode_handlers(
         model: str,
         custom_llm_provider: str,
@@ -207,7 +222,10 @@ class HealthCheckHelpers:
             ),
             "responses": lambda: litellm.aresponses(
                 **_filter_model_params(model_params=model_params),
-                input=prompt or "test",
+                input=HealthCheckHelpers._get_responses_health_check_input(
+                    prompt=prompt,
+                    input=input,
+                ),
             ),
             "ocr": lambda: litellm.aocr(
                 **_filter_model_params(model_params=model_params),
