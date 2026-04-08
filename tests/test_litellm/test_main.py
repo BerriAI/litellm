@@ -811,12 +811,13 @@ def test_responses_api_bridge_check_global_flag_default_false():
     """By default, route_all_chat_openai_to_responses is False and doesn't affect routing."""
     from litellm.main import responses_api_bridge_check
 
-    with patch("litellm.main._get_model_info_helper") as mock_get_model_info:
-        mock_get_model_info.return_value = {"max_tokens": 4096}
-        model_info, model = responses_api_bridge_check(
-            model="gpt-4o",
-            custom_llm_provider="openai",
-        )
+    with patch.object(litellm, "route_all_chat_openai_to_responses", False):
+        with patch("litellm.main._get_model_info_helper") as mock_get_model_info:
+            mock_get_model_info.return_value = {"max_tokens": 4096}
+            model_info, model = responses_api_bridge_check(
+                model="gpt-4o",
+                custom_llm_provider="openai",
+            )
 
     assert model_info.get("mode") != "responses"
 
