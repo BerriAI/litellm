@@ -11,6 +11,7 @@ from fastapi import HTTPException
 
 sys.path.insert(0, os.path.abspath("../../../../../.."))
 
+import litellm
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails import (
     BedrockGuardrail,
@@ -1188,4 +1189,124 @@ async def test_bedrock_guardrail_blocked_content_with_masking_enabled():
         assert "Violated guardrail policy" in str(exc_info.value.detail)
         
         print("✅ BLOCKED content with masking enabled raises exception correctly")
+
+
+def test_create_bedrock_input_content_request_skips_non_user_when_flag_enabled():
+    """When experimental_use_latest_role_message_only is True,
+    _create_bedrock_input_content_request should skip non-user messages."""
+    guardrail = BedrockGuardrail(
+        guardrailIdentifier="test-id",
+        guardrailVersion="DRAFT",
+        experimental_use_latest_role_message_only=True,
+    )
+
+    messages = [
+        {"role": "user", "content": "hello"},
+        {"role": "assistant", "content": "hi there"},
+        {"role": "tool", "content": "tool result"},
+    ]
+
+    result = guardrail._create_bedrock_input_content_request(messages=messages)
+    content_items = result.get("content", [])
+
+    # Only the user message content should be included
+    assert len(content_items) == 1
+    assert content_items[0]["text"]["text"] == "hello"
+
+
+def test_create_bedrock_input_content_request_includes_all_when_flag_disabled():
+    """When experimental_use_latest_role_message_only is False,
+    _create_bedrock_input_content_request should include all messages."""
+    guardrail = BedrockGuardrail(
+        guardrailIdentifier="test-id",
+        guardrailVersion="DRAFT",
+    )
+
+    messages = [
+        {"role": "user", "content": "hello"},
+        {"role": "assistant", "content": "hi there"},
+    ]
+
+    result = guardrail._create_bedrock_input_content_request(messages=messages)
+    content_items = result.get("content", [])
+
+    # Both messages should be included
+    assert len(content_items) == 2
+
+
+def test_prepare_guardrail_messages_no_user_messages_returns_none():
+    """When experimental_use_latest_role_message_only is True and there are no
+    user messages, payload_messages should be None."""
+    guardrail = BedrockGuardrail(
+        guardrailIdentifier="test-id",
+        guardrailVersion="DRAFT",
+        experimental_use_latest_role_message_only=True,
+    )
+
+    messages = [
+        {"role": "assistant", "content": "response"},
+        {"role": "tool", "content": "tool result"},
+    ]
+
+    result = guardrail._prepare_guardrail_messages_for_role(messages=messages)
+    assert result.payload_messages is None
+
+
+@pytest.mark.asyncio
+async def test_post_call_success_hook_skips_input_when_no_user_messages_and_flag_enabled():
+    """When experimental_use_latest_role_message_only is True and there are no
+    user messages, async_post_call_success_hook should skip INPUT validation
+    and only run OUTPUT validation."""
+    guardrail = BedrockGuardrail(
+        guardrailIdentifier="test-id",
+        guardrailVersion="DRAFT",
+        experimental_use_latest_role_message_only=True,
+    )
+
+    mock_user_api_key_dict = UserAPIKeyAuth()
+
+    mock_response = litellm.ModelResponse(
+        id="test-id",
+        choices=[
+            litellm.Choices(
+                index=0,
+                message=litellm.Message(role="assistant", content="safe response"),
+                finish_reason="stop",
+            )
+        ],
+        created=1234567890,
+        model="gpt-4o",
+        object="chat.completion",
+    )
+
+    request_data = {
+        "model": "gpt-4o",
+        "messages": [
+            {"role": "assistant", "content": "previous response"},
+            {"role": "tool", "content": "tool result"},
+        ],
+    }
+
+    call_sources = []
+
+    async def mock_make_bedrock_api_request(source=None, **kwargs):
+        call_sources.append(source)
+        mock_bedrock = MagicMock()
+        mock_bedrock.get.return_value = None
+        return mock_bedrock
+
+    with patch.object(
+        guardrail,
+        "make_bedrock_api_request",
+        side_effect=mock_make_bedrock_api_request,
+    ):
+        await guardrail.async_post_call_success_hook(
+            data=request_data,
+            user_api_key_dict=mock_user_api_key_dict,
+            response=mock_response,
+        )
+
+    # Only OUTPUT should have been validated, not INPUT
+    assert "OUTPUT" in call_sources
+    assert "INPUT" not in call_sources
 
