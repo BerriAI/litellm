@@ -676,6 +676,7 @@ class ChatCompletionDocumentObject(TypedDict):
 class ChatCompletionFileObjectFile(TypedDict, total=False):
     file_data: str
     file_id: str
+    file_url: str
     filename: str
     format: str
     detail: str  # For video/image resolution control (low, medium, high, ultra_high)

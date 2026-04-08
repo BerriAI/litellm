@@ -785,9 +785,13 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                             file_data = item.get("file", {})
                             converted = {"type": "input_file"}
                             if isinstance(file_data, dict):
-                                for key in ["file_id", "file_data", "filename"]:
-                                    if key in file_data:
-                                        converted[key] = file_data[key]
+                                if "file_url" in file_data:
+                                    # file_url is mutually exclusive with file_id/file_data/filename
+                                    converted["file_url"] = file_data["file_url"]
+                                else:
+                                    for key in ["file_id", "file_data", "filename"]:
+                                        if key in file_data:
+                                            converted[key] = file_data[key]
                             result.append(converted)
                             verbose_logger.debug(
                                 f"Chat provider:   file -> {converted}"

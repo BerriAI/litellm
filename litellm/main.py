@@ -937,7 +937,14 @@ def responses_api_bridge_check(
     web_search_options: Optional[OpenAIWebSearchOptions] = None,
     tools: Optional[List[Any]] = None,
     reasoning_effort: Optional[Any] = None,
+    caller_model_info: Optional[Dict[str, Any]] = None,
 ) -> Tuple[dict, str]:
+    # If the proxy DB (or caller) has already set mode="responses" on this model,
+    # honour it immediately — the static litellm model list may say "chat".
+    if (caller_model_info or {}).get("mode") == "responses":
+        return {**(caller_model_info or {}), "mode": "responses"}, model.replace(
+            "responses/", ""
+        )
     model_info: Dict[str, Any] = {}
     try:
         model_info = cast(
@@ -1378,6 +1385,7 @@ def completion(  # type: ignore # noqa: PLR0915
             model=model,
             custom_llm_provider=custom_llm_provider,
             web_search_options=web_search_options,
+            caller_model_info=model_info,
         )
 
         if not _should_allow_input_examples(
@@ -1627,6 +1635,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 web_search_options=web_search_options,
                 tools=tools,
                 reasoning_effort=reasoning_effort,
+                caller_model_info=model_info,
             )
 
         if responses_api_model_info.get("mode") == "responses":

@@ -2188,6 +2188,54 @@ def test_convert_chat_completion_file_type_with_file_id():
     assert "file_data" not in content[1]
 
 
+def test_convert_chat_completion_file_type_with_file_url():
+    """
+    Test that Chat Completion content with type 'file' using file_url is correctly
+    passed through to Responses API input_file format.
+
+    file_url allows callers to reference a remote file by URL instead of uploading
+    the raw bytes (file_data) or a pre-uploaded file ID (file_id). The Responses API
+    accepts file_url so LiteLLM should forward it without stripping it.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/25304
+    """
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    handler = LiteLLMResponsesTransformationHandler()
+
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Analyze this document."},
+                {
+                    "type": "file",
+                    "file": {
+                        "file_url": "https://example.com/documents/report.pdf",
+                        "filename": "report.pdf",
+                    },
+                },
+            ],
+        }
+    ]
+
+    (
+        input_items,
+        instructions,
+    ) = handler.convert_chat_completion_messages_to_responses_api(messages)
+
+    content = input_items[0]["content"]
+    assert content[1]["type"] == "input_file"
+    assert content[1]["file_url"] == "https://example.com/documents/report.pdf"
+    # filename is dropped when file_url is present: the Responses API treats them as
+    # mutually exclusive and rejects the request if both are sent.
+    assert "filename" not in content[1]
+    assert "file_id" not in content[1]
+    assert "file_data" not in content[1]
+
+
 # =============================================================================
 # Tests for reasoning_items round-trip (encrypted_content preservation)
 # =============================================================================
