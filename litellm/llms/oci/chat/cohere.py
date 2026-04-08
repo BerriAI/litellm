@@ -227,11 +227,18 @@ def handle_cohere_response(
     ]
 
     usage_info = cohere_response.chatResponse.usage
-    model_response.usage = Usage(  # type: ignore[attr-defined]
-        prompt_tokens=usage_info.promptTokens,  # type: ignore[union-attr]
-        completion_tokens=usage_info.completionTokens,  # type: ignore[union-attr]
-        total_tokens=usage_info.totalTokens,  # type: ignore[union-attr]
-    )
+    if usage_info is not None:
+        model_response.usage = Usage(  # type: ignore[attr-defined]
+            prompt_tokens=usage_info.promptTokens,
+            completion_tokens=usage_info.completionTokens,
+            total_tokens=usage_info.totalTokens,
+        )
+    else:
+        model_response.usage = Usage(  # type: ignore[attr-defined]
+            prompt_tokens=0,
+            completion_tokens=0,
+            total_tokens=0,
+        )
 
     return model_response
 
