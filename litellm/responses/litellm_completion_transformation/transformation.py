@@ -152,6 +152,60 @@ class LiteLLMCompletionResponsesConfig:
 
         # Return as-is for unknown formats
         return tool_choice
+    
+    @staticmethod
+    async def _compact_input(
+        model: str,
+        input: Union[str, ResponseInputParam],
+    ) -> Union[str, ResponseInputParam]:
+        """
+        Make a 2nd LLM call to compact/summarize the conversation history.
+        Returns the compacted input as a single user message list.
+        """
+        import litellm
+
+
+        return [
+            {
+                "type": "message",
+                "role": "user",
+                "content": "",
+            }
+        ]
+
+    @staticmethod
+    def _cheap_token_counter(input: Union[str, ResponseInputParam]) -> int:
+        """
+        Cheaply estimate the token count of the input.
+        ~4 chars per token for strings; for message lists, stringify first.
+        """
+        pass
+
+    @staticmethod
+    async def _transform_context_management(
+        model: str,
+        input: Union[str, ResponseInputParam],
+        context_management: Optional[List[Dict[str, Any]]],
+    ) -> Union[str, ResponseInputParam]:
+        """
+        Handle context_management compaction for the Responses API -> Chat Completion path.
+
+        1. Check if at compaction threshold. Early exit if no need to do compaction.
+        2. If reached threshold, make a 2nd LLM call to compact the input.
+
+        Returns the (possibly compacted) input.
+        """
+        pass
+
+    @staticmethod
+    def should_execute_compaction(
+        input_token_size: int,
+        context_management: Optional[List[Dict[str, Any]]],
+    ) -> bool:
+        """
+        Check if compaction should be executed
+        """
+        pass
 
     @staticmethod
     def transform_responses_api_request_to_chat_completion_request(
@@ -190,7 +244,7 @@ class LiteLLMCompletionResponsesConfig:
             elif isinstance(reasoning_param, str):
                 # reasoning could be a string directly
                 reasoning_effort = reasoning_param
-
+        
         litellm_completion_request: dict = {
             "messages": LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
                 input=input,
@@ -212,7 +266,6 @@ class LiteLLMCompletionResponsesConfig:
             "web_search_options": web_search_options,
             "response_format": response_format,
             "reasoning_effort": reasoning_effort,
-            "context_management": responses_api_request.get("context_management"),
             # litellm specific params
             "custom_llm_provider": custom_llm_provider,
             "extra_headers": extra_headers,
