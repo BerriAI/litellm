@@ -1,3 +1,14 @@
+"""
+Volcengine video billing module.
+
+This module provides the VolcengineVideoBillingManager class for accurate
+async token-based billing for Volcengine video generation. It handles:
+- Pending video task registration
+- Status polling and final cost reconciliation
+- Async billing delta application
+- Spend log management with provider pricing currency conversion
+"""
+
 import hashlib
 import json
 import os
@@ -250,7 +261,9 @@ class VolcengineVideoBillingManager:
         if not self.should_handle_success_event(kwargs):
             return None
 
-        self._force_zero_cost_response(kwargs=kwargs, completion_response=completion_response)
+        self._force_zero_cost_response(
+            kwargs=kwargs, completion_response=completion_response
+        )
 
         call_type = kwargs.get("call_type")
         video_response = self._coerce_video_object(completion_response)
@@ -455,7 +468,9 @@ class VolcengineVideoBillingManager:
                     or None,
                     "custom_llm_provider": kwargs.get("custom_llm_provider") or "",
                     "model": kwargs.get("model") or "",
-                    "model_group": metadata.get("model_group") or kwargs.get("model") or "",
+                    "model_group": metadata.get("model_group")
+                    or kwargs.get("model")
+                    or "",
                     "model_id": model_info.get("id") or "",
                     "provider_model": completion_response.model or "",
                     "pricing_model": pricing_model,
@@ -491,7 +506,9 @@ class VolcengineVideoBillingManager:
                     or None,
                     "custom_llm_provider": kwargs.get("custom_llm_provider") or "",
                     "model": kwargs.get("model") or "",
-                    "model_group": metadata.get("model_group") or kwargs.get("model") or "",
+                    "model_group": metadata.get("model_group")
+                    or kwargs.get("model")
+                    or "",
                     "model_id": model_info.get("id") or "",
                     "provider_model": completion_response.model or "",
                     "pricing_model": pricing_model,
@@ -541,7 +558,9 @@ class VolcengineVideoBillingManager:
             litellm_params=litellm_params,
             headers=headers,
         )
-        async_httpx_client = get_async_httpx_client(llm_provider=LlmProviders.VOLCENGINE)
+        async_httpx_client = get_async_httpx_client(
+            llm_provider=LlmProviders.VOLCENGINE
+        )
         response = await async_httpx_client.client.get(
             status_url,
             headers=headers,
@@ -571,9 +590,7 @@ class VolcengineVideoBillingManager:
         if not video_id:
             return
 
-        task = await video_task_table.find_unique(
-            where={"video_id": video_id}
-        )
+        task = await video_task_table.find_unique(where={"video_id": video_id})
         if task is None:
             if kwargs is not None:
                 await self._register_pending_video_task(
@@ -595,7 +612,9 @@ class VolcengineVideoBillingManager:
         now = _now_utc()
 
         if terminal_completed:
-            await self._finalize_completed_task(task=task, video_response=video_response)
+            await self._finalize_completed_task(
+                task=task, video_response=video_response
+            )
             return
 
         if terminal_no_charge:
@@ -646,7 +665,8 @@ class VolcengineVideoBillingManager:
             where={"video_id": task.video_id, "billing_state": "pending"},
             data={
                 "billing_state": "settling",
-                "provider_status": video_response.status or VOLCENGINE_VIDEO_COMPLETED_STATUS,
+                "provider_status": video_response.status
+                or VOLCENGINE_VIDEO_COMPLETED_STATUS,
                 "last_checked_at": _now_utc(),
                 "next_check_at": None,
                 "last_error": None,
@@ -672,7 +692,9 @@ class VolcengineVideoBillingManager:
         )
 
         provider_final_spend = (
-            float(task.price_per_million_tokens or 0.0) * float(total_tokens) / 1_000_000.0
+            float(task.price_per_million_tokens or 0.0)
+            * float(total_tokens)
+            / 1_000_000.0
         )
         final_spend_usd = _convert_provider_spend_to_usd(
             amount=provider_final_spend,
@@ -686,7 +708,11 @@ class VolcengineVideoBillingManager:
         )
 
         try:
-            if delta_spend > 0 or delta_prompt_tokens > 0 or delta_completion_tokens > 0:
+            if (
+                delta_spend > 0
+                or delta_prompt_tokens > 0
+                or delta_completion_tokens > 0
+            ):
                 await self._apply_async_billing_delta(
                     task=task,
                     delta_spend=delta_spend,
@@ -709,7 +735,8 @@ class VolcengineVideoBillingManager:
             await video_task_table.update(
                 where={"video_id": task.video_id},
                 data={
-                    "provider_status": video_response.status or VOLCENGINE_VIDEO_COMPLETED_STATUS,
+                    "provider_status": video_response.status
+                    or VOLCENGINE_VIDEO_COMPLETED_STATUS,
                     "billing_state": "billed",
                     "spend": final_spend_usd,
                     "total_tokens": total_tokens,
@@ -771,9 +798,11 @@ class VolcengineVideoBillingManager:
                 "provider_spend_amount": provider_delta_spend,
                 "billing_spend_currency": "USD",
                 "billing_spend_amount": delta_spend,
-                "provider_to_usd_fx_rate": _get_cny_per_usd_rate()
-                if (task.pricing_currency or "").upper() == "CNY"
-                else None,
+                "provider_to_usd_fx_rate": (
+                    _get_cny_per_usd_rate()
+                    if (task.pricing_currency or "").upper() == "CNY"
+                    else None
+                ),
                 "video_billing_task_id": task.video_id,
             },
         )
@@ -1043,12 +1072,9 @@ class VolcengineVideoBillingManager:
         standard_logging_object: Optional[StandardLoggingPayload],
     ) -> str:
         if standard_logging_object is not None:
-            api_key_hash = (
-                (standard_logging_object.get("metadata", {}) or {}).get(
-                    "user_api_key_hash"
-                )
-                or ""
-            )
+            api_key_hash = (standard_logging_object.get("metadata", {}) or {}).get(
+                "user_api_key_hash"
+            ) or ""
             if api_key_hash:
                 return str(api_key_hash)
         return _hash_token_if_needed(cast(Optional[str], metadata.get("user_api_key")))
@@ -1058,9 +1084,10 @@ class VolcengineVideoBillingManager:
         metadata: dict,
         standard_logging_object: Optional[StandardLoggingPayload],
     ) -> List[str]:
-        if standard_logging_object is not None and standard_logging_object.get(
-            "request_tags"
-        ) is not None:
+        if (
+            standard_logging_object is not None
+            and standard_logging_object.get("request_tags") is not None
+        ):
             return _parse_request_tags(standard_logging_object.get("request_tags"))
         return _parse_request_tags(metadata.get("tags"))
 
@@ -1097,7 +1124,9 @@ class VolcengineVideoBillingManager:
                 break
 
         if pricing_entry is None or pricing_key is None:
-            raise ValueError(f"No pricing config found for Volcengine video model={pricing_model}")
+            raise ValueError(
+                f"No pricing config found for Volcengine video model={pricing_model}"
+            )
 
         price_key = (
             "volcengine_video_output_cost_per_million_tokens_with_input_video"

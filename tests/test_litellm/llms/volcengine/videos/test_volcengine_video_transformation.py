@@ -71,8 +71,7 @@ class TestVolcEngineVideoTransformation:
         }
         assert files == []
         assert (
-            url
-            == "https://ark.cn-beijing.volces.com/api/v3/contents/generations/tasks"
+            url == "https://ark.cn-beijing.volces.com/api/v3/contents/generations/tasks"
         )
 
     def test_transform_video_create_response_encodes_id_and_usage(self):
@@ -237,8 +236,7 @@ class TestVolcEngineVideoTransformation:
         )
 
         assert (
-            url
-            == "https://ark.cn-beijing.volces.com/api/v3/contents/generations/tasks"
+            url == "https://ark.cn-beijing.volces.com/api/v3/contents/generations/tasks"
         )
         assert params["page_size"] == "20"
         assert params["filter.task_ids"] == "cgt-20260402175225-7g6f9"

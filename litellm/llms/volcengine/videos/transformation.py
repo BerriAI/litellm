@@ -1,3 +1,11 @@
+"""
+Volcengine video generation API transformation.
+
+This module provides the VolcEngineVideoConfig class for transforming
+video generation requests and responses between OpenAI format and
+Volcengine API format.
+"""
+
 import base64
 import mimetypes
 from copy import deepcopy
@@ -194,7 +202,9 @@ class VolcEngineVideoConfig(BaseVideoConfig):
 
         if request_data is not None:
             if video_obj.model is None:
-                video_obj.model = request_data.get("model") or self._normalize_model(model)
+                video_obj.model = request_data.get("model") or self._normalize_model(
+                    model
+                )
             if video_obj.seconds is None and request_data.get("duration") is not None:
                 video_obj.seconds = str(request_data["duration"])
             if video_obj.size is None and request_data.get("ratio") is not None:
@@ -367,7 +377,9 @@ class VolcEngineVideoConfig(BaseVideoConfig):
         except Exception:
             response_data = {}
 
-        task_id = response_data.get("id") or self._extract_task_id_from_request(raw_response)
+        task_id = response_data.get("id") or self._extract_task_id_from_request(
+            raw_response
+        )
         status = self._map_status(response_data.get("status") or "deleted")
 
         video_obj = VideoObject(
@@ -407,7 +419,9 @@ class VolcEngineVideoConfig(BaseVideoConfig):
         self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
     ) -> VolcEngineError:
         typed_headers = (
-            headers if isinstance(headers, httpx.Headers) else httpx.Headers(headers or {})
+            headers
+            if isinstance(headers, httpx.Headers)
+            else httpx.Headers(headers or {})
         )
         return VolcEngineError(
             status_code=status_code,
@@ -418,10 +432,14 @@ class VolcEngineVideoConfig(BaseVideoConfig):
     def transform_video_create_character_request(
         self, name, video, api_base, litellm_params, headers
     ):
-        raise NotImplementedError("video create character is not supported for Volcengine")
+        raise NotImplementedError(
+            "video create character is not supported for Volcengine"
+        )
 
     def transform_video_create_character_response(self, raw_response, logging_obj):
-        raise NotImplementedError("video create character is not supported for Volcengine")
+        raise NotImplementedError(
+            "video create character is not supported for Volcengine"
+        )
 
     def transform_video_get_character_request(
         self, character_id, api_base, litellm_params, headers
@@ -526,7 +544,9 @@ class VolcEngineVideoConfig(BaseVideoConfig):
             if reference.get("type") in {"image_url", "video_url", "audio_url"}:
                 return deepcopy(reference)
             if "url" in reference:
-                media_type, role = self._infer_media_type_and_role(str(reference["url"]))
+                media_type, role = self._infer_media_type_and_role(
+                    str(reference["url"])
+                )
                 return {
                     "type": media_type,
                     media_type: {"url": reference["url"]},
@@ -543,7 +563,9 @@ class VolcEngineVideoConfig(BaseVideoConfig):
             }
 
         if isinstance(reference, bytes):
-            data_uri = self._bytes_to_data_uri(reference, self._DEFAULT_DOWNLOAD_MIME_TYPE)
+            data_uri = self._bytes_to_data_uri(
+                reference, self._DEFAULT_DOWNLOAD_MIME_TYPE
+            )
             return {
                 "type": "video_url",
                 "video_url": {"url": data_uri},
@@ -555,8 +577,7 @@ class VolcEngineVideoConfig(BaseVideoConfig):
             if hasattr(reference, "seek"):
                 reference.seek(0)
             mime_type = (
-                mimetypes.guess_type(getattr(reference, "name", ""))[0]
-                or "image/png"
+                mimetypes.guess_type(getattr(reference, "name", ""))[0] or "image/png"
             )
             media_type, role = self._infer_media_type_and_role(
                 getattr(reference, "name", ""), mime_type=mime_type
@@ -670,7 +691,9 @@ class VolcEngineVideoConfig(BaseVideoConfig):
             )
         raise ValueError("Volcengine response did not include `content.video_url`.")
 
-    def _extract_task_id_from_request(self, raw_response: httpx.Response) -> Optional[str]:
+    def _extract_task_id_from_request(
+        self, raw_response: httpx.Response
+    ) -> Optional[str]:
         request = getattr(raw_response, "request", None)
         request_url = getattr(request, "url", None)
         if request_url is None:
@@ -694,14 +717,21 @@ class VolcEngineVideoConfig(BaseVideoConfig):
             "expired": "expired",
             "deleted": "deleted",
         }
-        return status_map.get(str(provider_status).lower(), str(provider_status).lower())
+        return status_map.get(
+            str(provider_status).lower(), str(provider_status).lower()
+        )
 
     def _infer_completed_at(
         self, provider_status: Optional[str], updated_at: Optional[int]
     ) -> Optional[int]:
         if updated_at is None:
             return None
-        if str(provider_status).lower() in {"succeeded", "failed", "cancelled", "expired"}:
+        if str(provider_status).lower() in {
+            "succeeded",
+            "failed",
+            "cancelled",
+            "expired",
+        }:
             return updated_at
         return None
 
