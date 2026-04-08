@@ -9,11 +9,8 @@ others starve.
 Regression test for https://github.com/BerriAI/litellm/issues/25323
 """
 
-from unittest.mock import MagicMock
-
 import pytest
 
-from litellm.caching.caching import DualCache
 from litellm.router_strategy.least_busy import LeastBusyLoggingHandler
 
 
@@ -37,6 +34,12 @@ class FakeCache:
         return self.store.get(key)
 
     def set_cache(self, key, value, **kwargs):
+        self.store[key] = value
+
+    async def async_get_cache(self, key, **kwargs):
+        return self.store.get(key)
+
+    async def async_set_cache(self, key, value, **kwargs):
         self.store[key] = value
 
 
@@ -79,26 +82,35 @@ def test_sync_failure_counter_never_goes_negative():
 @pytest.mark.asyncio
 async def test_async_success_counter_never_goes_negative():
     """async_log_success_event should clamp the counter at 0."""
-    cache = MagicMock()
-    cache.async_get_cache = pytest.importorskip("asyncio").coroutine(
-        lambda *a, **kw: None
-    )
+    cache = FakeCache()
+    handler = LeastBusyLoggingHandler(router_cache=cache)
 
-    # Use a real FakeCache but wrap async methods
-    real_cache = FakeCache()
     model_group = "test-group"
     deploy_id = "deploy-1"
     cache_key = f"{model_group}_request_count"
-    real_cache.store[cache_key] = {deploy_id: 0}
+    cache.store[cache_key] = {deploy_id: 0}
 
-    handler = LeastBusyLoggingHandler(router_cache=real_cache)
-
-    # Patch sync cache methods to work (async methods call sync internally)
     kwargs = _make_kwargs(model_group, deploy_id)
+    await handler.async_log_success_event(kwargs, None, None, None)
 
-    # Test the sync path which is equivalent
-    handler.log_success_event(kwargs, None, None, None)
-    assert real_cache.store[cache_key][deploy_id] == 0
+    assert cache.store[cache_key][deploy_id] == 0, "Async success counter went negative"
+
+
+@pytest.mark.asyncio
+async def test_async_failure_counter_never_goes_negative():
+    """async_log_failure_event should clamp the counter at 0."""
+    cache = FakeCache()
+    handler = LeastBusyLoggingHandler(router_cache=cache)
+
+    model_group = "test-group"
+    deploy_id = "deploy-1"
+    cache_key = f"{model_group}_request_count"
+    cache.store[cache_key] = {deploy_id: 0}
+
+    kwargs = _make_kwargs(model_group, deploy_id)
+    await handler.async_log_failure_event(kwargs, None, None, None)
+
+    assert cache.store[cache_key][deploy_id] == 0, "Async failure counter went negative"
 
 
 def test_counter_clamp_with_multiple_decrements():
