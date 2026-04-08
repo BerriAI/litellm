@@ -798,19 +798,37 @@ if MCP_AVAILABLE:
                     target_server, user_api_key_dict
                 )
 
-            # Call execute_mcp_tool directly (permission checks already done)
+            # Call execute_mcp_tool directly (permission checks already done).
+            # Use logging_obj from pre-call logic (not JSON body); mirror call_mcp_tool
+            # post-hooks so litellm success/MCP callbacks run for REST tool calls.
+            mcp_tool_start_time = datetime.now()
             result = await execute_mcp_tool(
                 name=tool_name,
                 arguments=tool_arguments,
                 allowed_mcp_servers=allowed_mcp_servers,
-                start_time=datetime.now(),
+                start_time=mcp_tool_start_time,
                 user_api_key_auth=data.get("user_api_key_auth"),
                 mcp_auth_header=data.get("mcp_auth_header"),
                 mcp_server_auth_headers=data.get("mcp_server_auth_headers"),
                 oauth2_headers=user_oauth_extra_headers or data.get("oauth2_headers"),
                 raw_headers=data.get("raw_headers"),
-                litellm_logging_obj=data.get("litellm_logging_obj"),
+                litellm_logging_obj=logging_obj,
             )
+            if logging_obj:
+                logging_obj.post_call(original_response=result)
+                mcp_tool_end_time = datetime.now()
+                await logging_obj.async_post_mcp_tool_call_hook(
+                    kwargs=logging_obj.model_call_details,
+                    response_obj=result,
+                    start_time=mcp_tool_start_time,
+                    end_time=mcp_tool_end_time,
+                )
+                logging_obj.call_type = CallTypes.call_mcp_tool.value
+                await logging_obj.async_success_handler(
+                    result=result,
+                    start_time=mcp_tool_start_time,
+                    end_time=mcp_tool_end_time,
+                )
             return result
         except BlockedPiiEntityError as e:
             verbose_logger.error(f"BlockedPiiEntityError in MCP tool call: {str(e)}")
