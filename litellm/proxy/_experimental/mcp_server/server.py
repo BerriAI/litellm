@@ -1893,12 +1893,9 @@ if MCP_AVAILABLE:
             litellm_logging_obj.model = f"MCP: {name}"
             # Populate requester_custom_headers in metadata so it flows into
             # StandardLoggingMetadata via _STANDARD_LOGGING_METADATA_KEYS
-            if custom_headers:
-                _lp = litellm_logging_obj.model_call_details.get("litellm_params")
-                if isinstance(_lp, dict):
-                    _meta = _lp.get("metadata")
-                    if isinstance(_meta, dict):
-                        _meta["requester_custom_headers"] = custom_headers
+            _apply_requester_custom_headers_for_mcp_logging(
+                litellm_logging_obj, custom_headers
+            )
         # Resolve the MCP server early so BYOK checks and credential injection
         # apply to ALL dispatch paths (local tool registry AND managed MCP server).
         if mcp_server is None:
@@ -2186,6 +2183,31 @@ if MCP_AVAILABLE:
             raw_headers=raw_headers,
         )
 
+    def _apply_requester_custom_headers_for_mcp_logging(
+        litellm_logging_obj: LiteLLMLoggingObj,
+        custom_headers: Optional[Dict[str, str]],
+    ) -> None:
+        """Copy MCP custom headers into litellm_params.metadata for standard logging."""
+        if not custom_headers:
+            return
+        _lp = litellm_logging_obj.model_call_details.get("litellm_params")
+        if isinstance(_lp, dict):
+            _meta = _lp.get("metadata")
+            if isinstance(_meta, dict):
+                _meta["requester_custom_headers"] = custom_headers
+            else:
+                verbose_logger.debug(
+                    "execute_mcp_tool: skipping requester_custom_headers "
+                    "— metadata is not a dict (type=%s)",
+                    type(_meta).__name__,
+                )
+        else:
+            verbose_logger.debug(
+                "execute_mcp_tool: skipping requester_custom_headers "
+                "— litellm_params is not a dict (type=%s)",
+                type(_lp).__name__,
+            )
+
     _SENSITIVE_CUSTOM_HEADER_PREFIXES = frozenset(
         {
             "x-mcp-server-auth-",
@@ -2196,13 +2218,24 @@ if MCP_AVAILABLE:
     _SENSITIVE_CUSTOM_HEADERS = frozenset(
         {
             "x-api-key",
+            "x-auth-token",
+            "x-access-token",
+            "x-goog-api-key",
+            "x-forwarded-authorization",
         }
     )
 
     def _extract_custom_headers(
         raw_headers: Optional[Dict[str, str]],
     ) -> Optional[Dict[str, str]]:
-        """Extract x-* custom headers from raw HTTP headers, excluding sensitive ones."""
+        """Extract ``x-*`` headers for MCP logging (non-secrets only).
+
+        Only names starting with ``x-`` are included. Exclusions are a
+        **non-exhaustive** deny-list: fixed sensitive names, plus ``x-litellm-``
+        and ``x-mcp-server-auth-`` prefixes. Other ``x-*`` headers may still
+        carry secrets; operators should audit what clients send and extend
+        ``_SENSITIVE_CUSTOM_HEADERS`` / prefixes if needed.
+        """
         if not raw_headers:
             return None
         custom: Dict[str, str] = {}

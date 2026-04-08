@@ -1,13 +1,25 @@
 """
 Tests for custom MCP headers flowing into logging callbacks.
 
-Validates that:
-1. _extract_custom_headers correctly filters raw HTTP headers
-2. Custom headers are stored in StandardLoggingMCPToolCall.custom_headers
-3. Custom headers populate requester_custom_headers in StandardLoggingMetadata
+Covers:
+- ``_extract_custom_headers`` deny-list and inclusion rules for ``x-*`` headers.
+- ``_apply_requester_custom_headers_for_mcp_logging`` wiring into
+  ``litellm_params.metadata`` (the path used by ``execute_mcp_tool``).
 """
 
-from litellm.proxy._experimental.mcp_server.server import _extract_custom_headers
+import logging
+
+from litellm.proxy._experimental.mcp_server.server import (
+    _apply_requester_custom_headers_for_mcp_logging,
+    _extract_custom_headers,
+)
+
+
+class _FakeLiteLLMLogging:
+    __slots__ = ("model_call_details",)
+
+    def __init__(self, model_call_details: dict):
+        self.model_call_details = model_call_details
 
 
 class TestExtractCustomHeaders:
@@ -39,6 +51,17 @@ class TestExtractCustomHeaders:
         }
         result = _extract_custom_headers(raw)
         assert result == {"x-custom-foo": "bar"}
+
+    def test_excludes_common_auth_style_x_headers(self):
+        raw = {
+            "x-auth-token": "secret",
+            "x-access-token": "secret",
+            "x-goog-api-key": "secret",
+            "x-forwarded-authorization": "secret",
+            "x-safe-correlation": "ok",
+        }
+        result = _extract_custom_headers(raw)
+        assert result == {"x-safe-correlation": "ok"}
 
     def test_excludes_x_litellm_prefixed(self):
         raw = {
@@ -87,3 +110,35 @@ class TestExtractCustomHeaders:
         }
         result = _extract_custom_headers(raw)
         assert result == {"X-Custom-Foo": "visible"}
+
+
+class TestApplyRequesterCustomHeadersForMcpLogging:
+    """Unit tests for metadata wiring used by execute_mcp_tool."""
+
+    def test_sets_requester_custom_headers_when_metadata_is_dict(self):
+        meta: dict = {}
+        fake = _FakeLiteLLMLogging({"litellm_params": {"metadata": meta}})
+        headers = {"x-correlation-id": "abc"}
+        _apply_requester_custom_headers_for_mcp_logging(fake, headers)
+        assert meta["requester_custom_headers"] == headers
+
+    def test_noop_when_custom_headers_empty(self):
+        meta = {"before": True}
+        fake = _FakeLiteLLMLogging({"litellm_params": {"metadata": meta}})
+        _apply_requester_custom_headers_for_mcp_logging(fake, None)
+        _apply_requester_custom_headers_for_mcp_logging(fake, {})
+        assert "requester_custom_headers" not in meta
+
+    def test_skips_when_litellm_params_not_dict(self, caplog):
+        fake = _FakeLiteLLMLogging({"litellm_params": None})
+        with caplog.at_level(logging.DEBUG, logger="LiteLLM"):
+            _apply_requester_custom_headers_for_mcp_logging(fake, {"x": "y"})
+        assert "skipping requester_custom_headers" in caplog.text
+        assert "litellm_params is not a dict" in caplog.text
+
+    def test_skips_when_metadata_not_dict(self, caplog):
+        fake = _FakeLiteLLMLogging({"litellm_params": {"metadata": object()}})
+        with caplog.at_level(logging.DEBUG, logger="LiteLLM"):
+            _apply_requester_custom_headers_for_mcp_logging(fake, {"x": "y"})
+        assert "skipping requester_custom_headers" in caplog.text
+        assert "metadata is not a dict" in caplog.text
