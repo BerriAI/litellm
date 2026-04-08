@@ -1282,9 +1282,12 @@ class CustomStreamWrapper:
                             and chunk.candidates[0].finish_reason.name  # type: ignore
                             != "FINISH_REASON_UNSPECIFIED"
                         ):  # every non-final chunk in vertex ai has this
-                            self.received_finish_reason = chunk.candidates[  # type: ignore
-                                0
-                            ].finish_reason.name
+                            from litellm.litellm_core_utils.core_helpers import (
+                                map_finish_reason,
+                            )
+                            self.received_finish_reason = map_finish_reason(  # type: ignore
+                                chunk.candidates[0].finish_reason.name
+                            )
                     except Exception:
                         if chunk.candidates[0].finish_reason.name == "SAFETY":  # type: ignore
                             raise Exception(
