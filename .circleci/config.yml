@@ -3206,80 +3206,6 @@ jobs:
           paths:
             - litellm-docker-database.tar.zst
 
-  e2e_ui_testing:
-    machine:
-      image: ubuntu-2204:2023.10.1
-    resource_class: large
-    working_directory: ~/project
-    parameters:
-      browser:
-        type: string
-    steps:
-      - checkout
-      - setup_google_dns
-      - attach_workspace:
-          at: ~/project
-      - run:
-          name: Load Docker Database Image
-          command: |
-            zstd -d litellm-docker-database.tar.zst --stdout | docker load
-            docker images | grep litellm-docker-database
-      - run:
-          name: Install Dependencies
-          command: |
-            npm install -D @playwright/test
-      - run:
-          name: Install Playwright Browsers
-          command: |
-            npx playwright install
-      - run:
-          name: Run Docker container
-          command: |
-            docker run -d \
-              -p 4000:4000 \
-              -e DATABASE_URL=$E2E_UI_TEST_DATABASE_URL \
-              -e LITELLM_MASTER_KEY="sk-1234" \
-              -e OPENAI_API_KEY=$OPENAI_API_KEY \
-              -e UI_USERNAME="admin" \
-              -e UI_PASSWORD="gm" \
-              -e LITELLM_LICENSE=$LITELLM_LICENSE \
-              --name litellm-docker-database-<< parameters.browser >> \
-              -v $(pwd)/litellm/proxy/example_config_yaml/simple_config.yaml:/app/config.yaml \
-              litellm-docker-database:ci \
-              --config /app/config.yaml \
-              --port 4000 \
-              --detailed_debug
-      - run:
-          name: Install curl and dockerize
-          command: |
-            sudo apt-get update
-            sudo apt-get install -y curl
-            sudo wget https://github.com/jwilder/dockerize/releases/download/v0.6.1/dockerize-linux-amd64-v0.6.1.tar.gz
-            sudo tar -C /usr/local/bin -xzvf dockerize-linux-amd64-v0.6.1.tar.gz
-            sudo rm dockerize-linux-amd64-v0.6.1.tar.gz
-      - run:
-          name: Start outputting logs
-          command: docker logs -f litellm-docker-database-<< parameters.browser >>
-          background: true
-      - run:
-          name: Wait for app to be ready
-          command: dockerize -wait http://localhost:4000 -timeout 5m
-      - run:
-          name: Run Playwright Tests
-          command: |
-            npx playwright test \
-              --project << parameters.browser >> \
-              --config ui/litellm-dashboard/e2e_tests/playwright.config.ts \
-              --reporter=html \
-              --output=test-results
-          no_output_timeout: 15m
-      - store_artifacts:
-          path: test-results
-          destination: playwright-results
-
-      - store_artifacts:
-          path: playwright-report
-          destination: playwright-report
 
   prisma_schema_sync:
     machine:
@@ -3508,7 +3434,7 @@ workflows:
               only:
                 - main
                 - /litellm_.*/
-      - ui_e2e_tests:
+      - e2e_ui_testing:
           filters:
             branches:
               only:
