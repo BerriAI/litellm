@@ -1585,12 +1585,14 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
     ]:
         function: Optional[ChatCompletionToolCallFunctionChunk] = None
         _tools: List[ChatCompletionToolCallChunk] = []
-        # Collect all thoughtSignature values from any part (Gemini may place
-        # the signature on a separate thought part, not the functionCall part)
-        _all_signatures = [
+        # Collect thoughtSignature values only from thought parts (thought: true).
+        # Gemini may place thoughtSignature on a separate thought part rather than
+        # the functionCall part. We exclude functionCall parts to avoid bleeding
+        # signatures across parallel function calls.
+        _thought_signatures = [
             p.get("thoughtSignature")
             for p in parts
-            if p.get("thoughtSignature")
+            if p.get("thought") and p.get("thoughtSignature")
         ]
         for part in parts:
             if "functionCall" in part:
@@ -1603,7 +1605,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 # Extract thought signature: prefer this part's own, fallback to
                 # a signature from a sibling thought part
                 thought_signature = part.get("thoughtSignature") or (
-                    _all_signatures[0] if _all_signatures else None
+                    _thought_signatures[0] if _thought_signatures else None
                 )
 
                 if is_function_call is True:
