@@ -907,6 +907,7 @@ def responses(
                 "extra_body": extra_body,
                 "timeout": timeout,
                 "custom_llm_provider": custom_llm_provider,
+                **({"use_responses_api_bridge": True} if use_responses_api_bridge else {}),
                 **{k: v for k, v in kwargs.items() if k not in _internal_skip},
             }
             if _is_async:
