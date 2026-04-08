@@ -11,6 +11,7 @@ from typing import (
     TYPE_CHECKING,
     Iterator,
     AsyncIterator,
+    FrozenSet,
 )
 from functools import cached_property
 import litellm
@@ -31,15 +32,31 @@ else:
 
 from ..credentials import get_token_creator
 from .models import (
-    ResponseFormatJSONSchema,
-    ResponseFormat,
-    OrchestrationRequest,
     ChatCompletionTool,
+    OrchestrationRequest,
+    ResponseFormat,
+    ResponseFormatJSONSchema,
+    SAPAssistantMessage,
+    SAPMessage,
+    SAPToolChatMessage,
+    SAPUserMessage,
 )
 from .handler import (
     GenAIHubOrchestrationError,
     AsyncSAPStreamIterator,
     SAPStreamIterator,
+)
+
+# Keys routed outside SAP orchestration `model.params` (prompt, stream, fallbacks, etc.)
+_SAP_MODEL_PARAMS_EXCLUDED_KEYS: FrozenSet[str] = frozenset(
+    {
+        "tools",
+        "tool_choice",
+        "stream_options",
+        "fallback_sap_modules",
+        "placeholder_values",
+        "model_version",
+    }
 )
 
 
@@ -277,6 +294,7 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
 
         template = messages
 
+        excluded_params = _SAP_MODEL_PARAMS_EXCLUDED_KEYS
         model_params = {
             k: v for k, v in optional_params.items() if k not in excluded_params
         }

@@ -124,6 +124,9 @@ class SAPToolChatMessage(BaseModel):
     )
 
 
+ChatMessage = Union[SAPMessage, SAPUserMessage, SAPAssistantMessage, SAPToolChatMessage]
+
+
 class ResponseFormat(BaseModel):
     type_: Literal["text", "json_object"] = Field(default="text", alias="type")
 
