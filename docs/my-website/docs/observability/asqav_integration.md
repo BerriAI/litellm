@@ -77,9 +77,12 @@ litellm_settings:
 
 general_settings:
   master_key: "sk-1234"
+```
 
-environment_variables:
-  ASQAV_API_KEY: "your-asqav-api-key"
+Set your Asqav API key in the environment before starting the proxy:
+
+```bash
+export ASQAV_API_KEY="your-asqav-api-key"
 ```
 
 ### 3. Start the proxy
