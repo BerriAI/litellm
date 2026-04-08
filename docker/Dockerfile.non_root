@@ -49,7 +49,7 @@ RUN mkdir -p /var/lib/litellm/ui && \
     ([ -f /app/.npmrc ] && mv /app/.npmrc /app/.npmrc.bak || true) && \
     npm install -g npm@11.12.1 && \
     npm install -g node-gyp@12.2.0 && \
-    ln -sf /usr/local/lib/node_modules/node-gyp /usr/lib/node_modules/npm/node_modules/node-gyp && \
+    ln -sf "$(npm root -g)/node-gyp" "$(npm root -g)/npm/node_modules/node-gyp" && \
     npm cache clean --force && \
     cd /app/ui/litellm-dashboard && \
     if [ -f "/app/enterprise/enterprise_ui/enterprise_colors.json" ]; then \
