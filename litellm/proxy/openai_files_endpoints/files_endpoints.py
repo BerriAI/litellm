@@ -568,12 +568,17 @@ async def create_file(  # noqa: PLR0915
 
 
 @router.get(
-    "/{provider}/v0/files/{file_id:path}/content",
+    "/{provider}/v1/files/{file_id:path}/content",
     dependencies=[Depends(user_api_key_auth)],
     tags=["files"],
 )
 @router.get(
-    "/v0/files/{file_id:path}/content",
+    "/v1/files/{file_id:path}/content",
+    dependencies=[Depends(user_api_key_auth)],
+    tags=["files"],
+)
+@router.get(
+    "/files/{file_id:path}/content",
     dependencies=[Depends(user_api_key_auth)],
     tags=["files"],
 )
@@ -821,17 +826,12 @@ async def get_file_content(  # noqa: PLR0915
 
 
 @router.get(
-    "/{provider}/v1/files/{file_id:path}/content",
+    "/{provider}/v2/files/{file_id:path}/content",
     dependencies=[Depends(user_api_key_auth)],
     tags=["files"],
 )
 @router.get(
-    "/v1/files/{file_id:path}/content",
-    dependencies=[Depends(user_api_key_auth)],
-    tags=["files"],
-)
-@router.get(
-    "/files/{file_id:path}/content",
+    "/v2/files/{file_id:path}/content",
     dependencies=[Depends(user_api_key_auth)],
     tags=["files"],
 )
@@ -995,11 +995,35 @@ async def get_file_content_streaming(
                     **data,
                 )
 
-        asyncio.create_task(
-            proxy_logging_obj.update_request_status(
-                litellm_call_id=data.get("litellm_call_id", ""), status="success"
-            )
-        )
+        async def _stream_with_logging():
+            try:
+                # Handle both async and sync iterators
+                if hasattr(stream_iterator, '__aiter__'):
+                    async for chunk in stream_iterator: # type: ignore
+                        yield chunk
+                else:
+                    for chunk in stream_iterator:# type: ignore
+                        yield chunk
+                asyncio.create_task(
+                    proxy_logging_obj.update_request_status(
+                        litellm_call_id=data.get("litellm_call_id", ""), status="success"
+                    )
+                )
+            except Exception as e:
+                verbose_proxy_logger.exception(
+                    "File streaming failed mid-transfer - {}".format(str(e))
+                )
+                await proxy_logging_obj.post_call_failure_hook(
+                    user_api_key_dict=user_api_key_dict,
+                    original_exception=e,
+                    request_data=data,
+                )
+                asyncio.create_task(
+                    proxy_logging_obj.update_request_status(
+                        litellm_call_id=data.get("litellm_call_id", ""), status="fail"
+                    )
+                )
+                raise
 
         fastapi_response.headers.update(
             ProxyBaseLLMRequestProcessing.get_custom_headers(
@@ -1013,7 +1037,7 @@ async def get_file_content_streaming(
         )
 
         return StreamingResponse(
-            content=stream_iterator,
+            content=_stream_with_logging(),
             media_type="application/octet-stream",
             headers={
                 "content-disposition": f'attachment; filename="{file_id}.bin"',

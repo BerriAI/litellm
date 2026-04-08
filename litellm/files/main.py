@@ -13,7 +13,6 @@ from functools import partial
 from typing import Any, AsyncIterator, Coroutine, Dict, Iterator, Literal, Optional, Union, cast
 
 import httpx
-from openai import AsyncOpenAI, OpenAI
 
 # Type aliases for provider parameters
 FileCreateProvider = Literal[
@@ -998,7 +997,7 @@ async def afile_content_streaming(
     Async wrapper for file_content_streaming.
     """
     try:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         kwargs["afile_content_streaming"] = True
         model = kwargs.pop("model", None)
 

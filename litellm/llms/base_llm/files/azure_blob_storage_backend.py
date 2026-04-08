@@ -349,14 +349,25 @@ class AzureBlobStorageBackend(BaseFileStorageBackend, AzureBlobStorageLogger):
         file_client = file_system_client.get_file_client(file_path)
         download_response = await file_client.download_file()
 
-        if not hasattr(download_response, "chunks"):
+        chunks_method = getattr(download_response, "chunks", None)
+        if chunks_method is None or not callable(chunks_method):
             raise RuntimeError(
                 "Azure SDK download response does not support chunk streaming"
             )
 
-        async for chunk in download_response.chunks():
-            if chunk:
-                yield chunk
+        chunks_iterable = chunks_method()
+        if hasattr(chunks_iterable, "__aiter__"):
+            async for chunk in chunks_iterable: #type: ignore
+                if chunk:
+                    yield chunk
+        elif hasattr(chunks_iterable, "__iter__"):
+            for chunk in chunks_iterable: #type: ignore
+                if chunk:
+                    yield chunk
+        else:
+            raise RuntimeError(
+                "Azure SDK download response chunks() did not return an iterable"
+            )
 
     async def _download_file_with_azure_ad(self, file_path: str) -> bytes:
         """Download file using REST API with Azure AD token."""
