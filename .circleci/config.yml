@@ -3074,6 +3074,113 @@ jobs:
             CI=true npm run test -- --run \
               --pool forks --poolOptions.forks.maxForks=8
 
+  ui_e2e_tests:
+    docker:
+      - image: cimg/python:3.12-browsers
+        auth:
+          username: ${DOCKERHUB_USERNAME}
+          password: ${DOCKERHUB_PASSWORD}
+      - image: cimg/postgres:16.0
+        environment:
+          POSTGRES_USER: e2euser
+          POSTGRES_PASSWORD: e2epassword
+          POSTGRES_DB: litellm_e2e
+    resource_class: large
+    working_directory: ~/project
+    environment:
+      DATABASE_URL: "postgresql://e2euser:e2epassword@localhost:5432/litellm_e2e"
+      CI: "true"
+    steps:
+      - checkout
+      - setup_google_dns
+      - restore_cache:
+          keys:
+            - ui-e2e-py-deps-v1-{{ checksum "requirements.txt" }}
+      - run:
+          name: Install Python dependencies
+          command: |
+            python -m pip install --upgrade pip uv
+            uv pip install --system -r requirements.txt
+            pip install "prisma==0.11.0"
+            prisma generate --schema litellm/proxy/schema.prisma
+      - save_cache:
+          key: ui-e2e-py-deps-v1-{{ checksum "requirements.txt" }}
+          paths:
+            - ~/.local/lib
+            - ~/.local/bin
+      - restore_cache:
+          keys:
+            - ui-e2e-node-deps-v1-{{ checksum "ui/litellm-dashboard/package-lock.json" }}
+      - run:
+          name: Install Node dependencies and Playwright
+          command: |
+            cd ui/litellm-dashboard
+            npm ci
+            npx playwright install chromium --with-deps
+      - save_cache:
+          key: ui-e2e-node-deps-v1-{{ checksum "ui/litellm-dashboard/package-lock.json" }}
+          paths:
+            - ui/litellm-dashboard/node_modules
+      - run:
+          name: Build UI from source
+          command: |
+            cd ui/litellm-dashboard
+            npm run build
+            cp -r out/ ../../litellm/proxy/_experimental/out/
+      - run:
+          name: Wait for PostgreSQL
+          command: dockerize -wait tcp://localhost:5432 -timeout 30s
+      - run:
+          name: Push Prisma schema
+          command: prisma db push --schema litellm/proxy/schema.prisma --accept-data-loss
+      - run:
+          name: Seed database
+          command: |
+            PGPASSWORD=e2epassword psql -h localhost -p 5432 -U e2euser -d litellm_e2e \
+              -f ui/litellm-dashboard/e2e_tests/fixtures/seed.sql
+      - run:
+          name: Start mock LLM server
+          command: python ui/litellm-dashboard/e2e_tests/fixtures/mock_llm_server/server.py
+          background: true
+      - run:
+          name: Start LiteLLM proxy
+          environment:
+            LITELLM_MASTER_KEY: "sk-1234"
+            MOCK_LLM_URL: "http://127.0.0.1:8090/v1"
+            DISABLE_SCHEMA_UPDATE: "true"
+            SERVER_ROOT_PATH: ""
+            PROXY_LOGOUT_URL: ""
+          command: |
+            python -m litellm.proxy.proxy_cli \
+              --config ui/litellm-dashboard/e2e_tests/fixtures/config.yml \
+              --port 4000
+          background: true
+      - run:
+          name: Wait for proxy to be ready
+          command: |
+            for i in $(seq 1 60); do
+              HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:4000/health -H "Authorization: Bearer sk-1234" 2>/dev/null || true)
+              if [ "$HTTP_CODE" = "200" ]; then
+                echo "Proxy is ready"
+                exit 0
+              fi
+              sleep 2
+            done
+            echo "Proxy failed to start"
+            exit 1
+      - run:
+          name: Run Playwright E2E tests
+          command: |
+            cd ui/litellm-dashboard
+            npx playwright test --config e2e_tests/playwright.config.ts
+          no_output_timeout: 10m
+      - store_artifacts:
+          path: ui/litellm-dashboard/test-results
+          destination: e2e-test-results
+      - store_artifacts:
+          path: ui/litellm-dashboard/playwright-report
+          destination: e2e-playwright-report
+
   build_docker_database_image:
     machine:
       image: ubuntu-2204:2024.04.1
@@ -3401,32 +3508,12 @@ workflows:
               only:
                 - main
                 - /litellm_.*/
-      # - e2e_ui_testing:
-      #     name: e2e_ui_testing_chromium
-      #     browser: chromium
-      #     context: e2e_ui_tests
-      #     requires:
-      #       - ui_build
-      #       - build_docker_database_image
-      #       - prisma_schema_sync
-      #     filters:
-      #       branches:
-      #         only:
-      #           - main
-      #           - /litellm_.*/
-      # - e2e_ui_testing:
-      #     name: e2e_ui_testing_firefox
-      #     browser: firefox
-      #     context: e2e_ui_tests
-      #     requires:
-      #       - ui_build
-      #       - build_docker_database_image
-      #       - prisma_schema_sync
-      #     filters:
-      #       branches:
-      #         only:
-      #           - main
-      #           - /litellm_.*/
+      - ui_e2e_tests:
+          filters:
+            branches:
+              only:
+                - main
+                - /litellm_.*/
       - build_and_test:
           requires:
             - build_docker_database_image
