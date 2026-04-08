@@ -9,7 +9,7 @@ import TabItem from '@theme/TabItem';
 
 - **Signed audit logs** - Every call produces a cryptographically signed record, verifiable offline
 - **Governance callbacks** - Hook into LiteLLM's callback system with zero changes to your inference code
-- **Compliance-ready exports** - Structured logs compatible with SOC 2, ISO 27001, and EU AI Act requirements
+- **Compliance-ready exports** - Structured logs providing compliance-ready audit trails
 - **Model and cost tracking** - Token usage, latency, and cost captured per request
 
 :::tip
@@ -25,7 +25,7 @@ https://github.com/BerriAI/litellm
 pip install "asqav[litellm]"
 ```
 
-Get your API key from [app.asqav.com](https://app.asqav.com/).
+Get your API key from [asqav.com](https://asqav.com/).
 
 ## Quick Start
 
@@ -100,7 +100,7 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
   -d '{"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "Hello"}]}'
 ```
 
-Signed audit records appear immediately in your [Asqav dashboard](https://app.asqav.com/).
+Signed audit records appear immediately in your [Asqav dashboard](https://asqav.com/).
 
 </TabItem>
 </Tabs>
@@ -125,5 +125,5 @@ Records are retrievable and verifiable via the Asqav API or dashboard.
 
 ## Support
 
-- Docs: [docs.asqav.com](https://docs.asqav.com/)
-- Issues: [github.com/asqav/asqav-sdk](https://github.com/asqav/asqav-sdk/issues)
+- Docs: [asqav.com](https://asqav.com/)
+- Issues: [github.com/jagmarques/asqav-sdk](https://github.com/jagmarques/asqav-sdk/issues)
