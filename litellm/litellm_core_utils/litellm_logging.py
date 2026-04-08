@@ -4920,13 +4920,13 @@ class StandardLoggingPayloadSetup:
             cached = getattr(prompt_details, "cached_tokens", None)
             creation = getattr(prompt_details, "cache_creation_tokens", None)
 
+        extra: dict = {}
         if cached and not usage_dict.get("cache_read_input_tokens"):
-            usage_dict["cache_read_input_tokens"] = cached
-
+            extra["cache_read_input_tokens"] = cached
         if creation and not usage_dict.get("cache_creation_input_tokens"):
-            usage_dict["cache_creation_input_tokens"] = creation
+            extra["cache_creation_input_tokens"] = creation
 
-        return usage_dict
+        return {**usage_dict, **extra} if extra else usage_dict
 
     @staticmethod
     def get_model_cost_information(
