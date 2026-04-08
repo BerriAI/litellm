@@ -363,7 +363,7 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
             id=video_id, object="video", status="processing", model=model
         )
 
-        usage_data = {}
+        usage_data: Dict[str, Any] = {}
         if request_data:
             parameters = request_data.get("parameters", {})
             duration = (
