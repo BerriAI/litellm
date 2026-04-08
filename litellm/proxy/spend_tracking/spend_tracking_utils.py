@@ -90,7 +90,6 @@ def _get_spend_logs_metadata(
             user_api_key_alias=None,
             user_api_key_team_id=None,
             user_api_key_project_id=None,
-            user_api_key_project_alias=None,
             user_api_key_org_id=None,
             user_api_key_user_id=None,
             user_api_key_team_alias=None,
@@ -112,6 +111,10 @@ def _get_spend_logs_metadata(
             attempted_retries=None,
             max_retries=None,
             cost_breakdown=None,
+            provider_spend_currency=None,
+            provider_spend_amount=None,
+            async_billing_only=None,
+            video_billing_task_id=None,
         )
     verbose_proxy_logger.debug(
         "getting payload for SpendLogs, available keys in metadata: "
@@ -127,9 +130,9 @@ def _get_spend_logs_metadata(
     clean_metadata["applied_guardrails"] = applied_guardrails
     clean_metadata["batch_models"] = batch_models
     clean_metadata["mcp_tool_call_metadata"] = mcp_tool_call_metadata
-    clean_metadata[
-        "vector_store_request_metadata"
-    ] = _get_vector_store_request_for_spend_logs_payload(vector_store_request_metadata)
+    clean_metadata["vector_store_request_metadata"] = (
+        _get_vector_store_request_for_spend_logs_payload(vector_store_request_metadata)
+    )
     clean_metadata["guardrail_information"] = guardrail_information
     clean_metadata["usage_object"] = usage_object
     clean_metadata["model_map_information"] = model_map_information

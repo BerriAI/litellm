@@ -54,7 +54,7 @@ from litellm.constants import (
     LITELLM_SETTINGS_SAFE_DB_OVERRIDES,
     LITELLM_UI_ALLOW_HEADERS,
     LITELLM_UI_SESSION_DURATION,
-    DAILY_TAG_SPEND_BATCH_MULTIPLIER
+    DAILY_TAG_SPEND_BATCH_MULTIPLIER,
 )
 from litellm.litellm_core_utils.litellm_logging import (
     _init_custom_logger_compatible_class,
@@ -703,6 +703,7 @@ def cleanup_router_config_variables():
     health_check_interval = None
     health_check_concurrency = None
     prisma_client = None
+    volcengine_video_billing_manager = None
 
 
 async def proxy_shutdown_event():
@@ -2161,9 +2162,11 @@ def run_ollama_serve():
         with open(os.devnull, "w") as devnull:
             subprocess.Popen(command, stdout=devnull, stderr=devnull)
     except Exception as e:
-        verbose_proxy_logger.debug(f"""
+        verbose_proxy_logger.debug(
+            f"""
             LiteLLM Warning: proxy started with `ollama` model\n`ollama serve` failed with Exception{e}. \nEnsure you run `ollama serve`
-        """)
+        """
+        )
 
 
 def _get_process_rss_mb() -> Optional[float]:
@@ -2316,9 +2319,13 @@ def _write_health_state_to_router_cache(
 
             exception_status = getattr(original_exception, "status_code", 500)
 
-            if llm_router.health_check_ignore_transient_errors and exception_status in (
-                429,
-                408,
+            if (
+                llm_router.health_check_ignore_transient_errors
+                and exception_status
+                in (
+                    429,
+                    408,
+                )
             ):
                 continue
 
@@ -6287,7 +6294,9 @@ class ProxyStartupEvent:
 
         ### UPDATE DAILY TAG SPEND (separate scheduler job with longer interval) ###
         ## Reduces QPS as there are more tags for a single request
-        tag_spend_update_interval = int(batch_writing_interval * DAILY_TAG_SPEND_BATCH_MULTIPLIER)
+        tag_spend_update_interval = int(
+            batch_writing_interval * DAILY_TAG_SPEND_BATCH_MULTIPLIER
+        )
         from litellm.proxy.utils import update_daily_tag_spend
 
         scheduler.add_job(
@@ -6497,6 +6506,35 @@ class ProxyStartupEvent:
                     "Checking responses cost for LiteLLM Managed Files is an Enterprise Feature. Skipping..."
                 )
                 pass
+
+        if llm_router is not None and prisma_client is not None:
+            try:
+                from litellm.proxy.spend_tracking.volcengine_video_billing import (
+                    VolcengineVideoBillingManager,
+                )
+
+                global volcengine_video_billing_manager
+                volcengine_video_billing_manager = VolcengineVideoBillingManager(
+                    prisma_client=prisma_client,
+                    llm_router=llm_router,
+                    db_spend_update_writer=proxy_logging_obj.db_spend_update_writer,
+                    proxy_logging_obj=proxy_logging_obj,
+                )
+                scheduler.add_job(
+                    volcengine_video_billing_manager.poll_pending_video_tasks,
+                    "interval",
+                    seconds=max(15, min(proxy_batch_polling_interval, 60)),
+                    id="volcengine_video_billing_job",
+                    replace_existing=True,
+                    misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
+                )
+                verbose_proxy_logger.info(
+                    "Volcengine video billing job scheduled successfully"
+                )
+            except Exception as e:
+                verbose_proxy_logger.warning(
+                    "Failed to setup Volcengine video billing job: %s", e
+                )
 
         # MEMORY LEAK FIX: Start scheduler with paused=False to avoid backlog processing
         # Do NOT reset job times to "now" as this can trigger the memory leak
