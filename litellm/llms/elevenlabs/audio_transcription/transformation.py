@@ -2,6 +2,7 @@
 Translates from OpenAI's `/v1/audio/transcriptions` to ElevenLabs's `/v1/speech-to-text`
 """
 
+import json
 from typing import List, Optional, Union
 
 from httpx import Headers, Response
@@ -31,7 +32,7 @@ class ElevenLabsAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
     def get_supported_openai_params(
         self, model: str
     ) -> List[OpenAIAudioTranscriptionOptionalParams]:
-        return ["language", "temperature"]
+        return ["language", "prompt", "temperature"]
 
     def map_openai_params(
         self,
@@ -46,6 +47,10 @@ class ElevenLabsAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
                 if k == "language":
                     # Map OpenAI language format to ElevenLabs language_code
                     optional_params["language_code"] = v
+                elif k == "prompt":
+                    # Pass prompt through — ElevenLabs Scribe accepts it
+                    # as vocabulary context
+                    optional_params["prompt"] = v
                 else:
                     optional_params[k] = v
         return optional_params
@@ -56,6 +61,20 @@ class ElevenLabsAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         return ElevenLabsException(
             message=error_message, status_code=status_code, headers=headers
         )
+
+    @staticmethod
+    def _serialize_form_value(value) -> str:
+        """Serialize a value for multipart form data.
+
+        - bool  → lowercase "true"/"false"
+        - list/dict → JSON string
+        - other → str()
+        """
+        if isinstance(value, bool):
+            return str(value).lower()
+        if isinstance(value, (list, dict)):
+            return json.dumps(value)
+        return str(value)
 
     def transform_audio_transcription_request(
         self,
@@ -84,8 +103,7 @@ class ElevenLabsAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         #########################################################
         for key, value in optional_params.items():
             if key in self.get_supported_openai_params(model) and value is not None:
-                # Convert values to strings for form data, but skip None values
-                form_data[key] = str(value)
+                form_data[key] = self._serialize_form_value(value)
 
         #########################################################
         # Add Provider Specific Parameters
@@ -97,7 +115,7 @@ class ElevenLabsAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         )
 
         for key, value in provider_specific_params.items():
-            form_data[key] = str(value)
+            form_data[key] = self._serialize_form_value(value)
         #########################################################
         #########################################################
 
