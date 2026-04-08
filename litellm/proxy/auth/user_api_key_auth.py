@@ -247,6 +247,50 @@ def _apply_budget_limits_to_end_user_params(
     verbose_proxy_logger.debug(f"Applied budget limits to end user {end_user_id}")
 
 
+async def _check_end_user_budget(
+    end_user_object: Optional[Any],
+    request_data: dict,
+    route: str,
+    llm_router: Optional[Any],
+) -> None:
+    """
+    Check if end user has exceeded their budget. Raises BudgetExceededError if so.
+    Skips check for zero-cost models.
+
+    Args:
+        end_user_object: The end user object from DB
+        request_data: Request body data
+        route: Current route
+        llm_router: LLM router instance
+
+    Raises:
+        BudgetExceededError: If end user has exceeded their max_budget
+    """
+    if end_user_object is None:
+        return
+
+    # Check if model has zero cost - if so, skip budget check
+    model = get_model_from_request(request_data, route)
+    if model is not None and llm_router is not None:
+        from litellm.proxy.auth.auth_checks import _is_model_cost_zero
+
+        if _is_model_cost_zero(model=model, llm_router=llm_router):
+            verbose_proxy_logger.info(
+                f"Skipping all budget checks for zero-cost model: {model}"
+            )
+            return
+
+    # Check end-user budget
+    if end_user_object.litellm_budget_table is not None:
+        end_user_budget = end_user_object.litellm_budget_table.max_budget
+        if end_user_budget is not None and end_user_object.spend > end_user_budget:
+            raise litellm.BudgetExceededError(
+                current_cost=end_user_object.spend,
+                max_budget=end_user_budget,
+                message=f"ExceededBudget: End User={end_user_object.user_id} over budget. Spend={end_user_object.spend}, Budget={end_user_budget}",
+            )
+
+
 async def user_api_key_auth_websocket(websocket: WebSocket):
     # Accept the WebSocket connection
 
@@ -314,6 +358,8 @@ def update_valid_token_with_end_user_params(
         valid_token.end_user_rpm_limit = end_user_params["end_user_rpm_limit"]
     if end_user_params.get("allowed_model_region") is not None:
         valid_token.allowed_model_region = end_user_params["allowed_model_region"]
+    if end_user_params.get("end_user_max_budget") is not None:
+        valid_token.end_user_max_budget = end_user_params["end_user_max_budget"]
     if end_user_params.get("end_user_model_max_budget") is not None:
         valid_token.end_user_model_max_budget = end_user_params[
             "end_user_model_max_budget"
@@ -696,11 +742,8 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
 
         # Routing uses unverified JWT claims only to choose auth path.
         # Final authentication is enforced by the selected validator.
-        route_jwt_to_oauth2 = (
-            is_jwt
-            and _should_route_jwt_to_oauth2_override(
-                token=api_key, jwt_handler=jwt_handler
-            )
+        route_jwt_to_oauth2 = is_jwt and _should_route_jwt_to_oauth2_override(
+            token=api_key, jwt_handler=jwt_handler
         )
 
         # OAuth2 applies for:
@@ -716,6 +759,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
         )
         if (should_apply_global_oauth2 and not is_jwt) or should_apply_override_oauth2:
             from litellm.proxy.proxy_server import premium_user
+
             if premium_user is not True:
                 raise ValueError(
                     "Oauth2 token validation is only available for premium users"
@@ -743,10 +787,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                 if jwt_handler.litellm_jwtauth.virtual_key_claim_field is not None:
                     # Decode JWT to get claims without running full auth_builder
                     jwt_claims: Optional[dict]
-                    if (
-                        jwt_handler.litellm_jwtauth.oidc_userinfo_enabled
-                        and not is_jwt
-                    ):
+                    if jwt_handler.litellm_jwtauth.oidc_userinfo_enabled and not is_jwt:
                         jwt_claims = await jwt_handler.get_oidc_userinfo(token=api_key)
                     else:
                         jwt_claims = await jwt_handler.auth_jwt(token=api_key)
@@ -981,9 +1022,9 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                         route=route,
                     )
                 if _end_user_object is not None:
-                    end_user_params[
-                        "allowed_model_region"
-                    ] = _end_user_object.allowed_model_region
+                    end_user_params["allowed_model_region"] = (
+                        _end_user_object.allowed_model_region
+                    )
                     if _end_user_object.litellm_budget_table is not None:
                         _apply_budget_limits_to_end_user_params(
                             end_user_params=end_user_params,
@@ -1078,6 +1119,14 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                     _end_user_object.object_permission
                 )
 
+            # Check end-user budget before returning
+            await _check_end_user_budget(
+                end_user_object=_end_user_object,
+                request_data=request_data,
+                route=route,
+                llm_router=llm_router,
+            )
+
             return valid_token
 
         if (
@@ -1154,6 +1203,14 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
 
             _user_api_key_obj = update_valid_token_with_end_user_params(
                 valid_token=_user_api_key_obj, end_user_params=end_user_params
+            )
+
+            # Check end-user budget before returning
+            await _check_end_user_budget(
+                end_user_object=_end_user_object,
+                request_data=request_data,
+                route=route,
+                llm_router=llm_router,
             )
 
             return _user_api_key_obj
@@ -1537,9 +1594,9 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
 
             if _end_user_object is not None:
                 valid_token_dict.update(end_user_params)
-                valid_token_dict[
-                    "end_user_object_permission"
-                ] = _end_user_object.object_permission
+                valid_token_dict["end_user_object_permission"] = (
+                    _end_user_object.object_permission
+                )
 
         # check if token is from litellm-ui, litellm ui makes keys to allow users to login with sso. These keys can only be used for LiteLLM UI functions
         # sso/login, ui/login, /key functions and /user functions
@@ -1802,12 +1859,9 @@ async def _enforce_key_and_fallback_model_access(
     if config != {}:
         model_list = config.get("model_list", [])
         new_model_list = model_list
-        verbose_proxy_logger.debug(
-            f"\n new llm router model list {new_model_list}"
-        )
+        verbose_proxy_logger.debug(f"\n new llm router model list {new_model_list}")
     elif (
-        isinstance(valid_token.models, list)
-        and "all-team-models" in valid_token.models
+        isinstance(valid_token.models, list) and "all-team-models" in valid_token.models
     ):
         pass
     else:

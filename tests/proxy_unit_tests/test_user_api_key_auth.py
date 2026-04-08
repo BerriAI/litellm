@@ -7,9 +7,7 @@ import sys
 import litellm.proxy
 import litellm.proxy.proxy_server
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 from typing import Dict, List, Optional
 from unittest.mock import MagicMock, patch, AsyncMock
 
@@ -50,9 +48,7 @@ class Request:
         ),  # Request with no client IP should not be allowed
     ],
 )
-def test_check_valid_ip(
-    allowed_ips: Optional[List[str]], client_ip: Optional[str], expected_result: bool
-):
+def test_check_valid_ip(allowed_ips: Optional[List[str]], client_ip: Optional[str], expected_result: bool):
     from litellm.proxy.auth.auth_utils import _check_valid_ip
 
     request = Request(client_ip)
@@ -121,9 +117,7 @@ async def test_check_blocked_team():
         last_refreshed_at=time.time(),
     )
     await asyncio.sleep(1)
-    team_obj = LiteLLM_TeamTableCachedObj(
-        team_id=_team_id, blocked=False, last_refreshed_at=time.time()
-    )
+    team_obj = LiteLLM_TeamTableCachedObj(team_id=_team_id, blocked=False, last_refreshed_at=time.time())
     hashed_token = hash_token(user_key)
     print(f"STORING TOKEN UNDER KEY={hashed_token}")
     user_api_key_cache.set_cache(key=hashed_token, value=valid_token)
@@ -173,9 +167,7 @@ async def test_team_object_has_object_permission_id():
     request = Request(scope={"type": "http"})
     request._url = URL(url="/chat/completions")
 
-    with patch(
-        "litellm.proxy.auth.user_api_key_auth.common_checks", new_callable=AsyncMock
-    ) as mock_common_checks:
+    with patch("litellm.proxy.auth.user_api_key_auth.common_checks", new_callable=AsyncMock) as mock_common_checks:
         mock_common_checks.return_value = True
         await user_api_key_auth(request=request, api_key="Bearer " + user_key)
 
@@ -200,9 +192,7 @@ async def test_returned_user_api_key_auth(user_role, expected_role):
     from datetime import datetime
 
     new_obj = await _return_user_api_key_auth_obj(
-        user_obj=LiteLLM_UserTable(
-            user_role=user_role, user_id="", max_budget=None, user_email=""
-        ),
+        user_obj=LiteLLM_UserTable(user_role=user_role, user_id="", max_budget=None, user_email=""),
         api_key="hello-world",
         parent_otel_span=None,
         valid_token_dict={},
@@ -253,9 +243,7 @@ async def test_aaauser_personal_budgets(key_ownership):
             spend=20,
         )
 
-    user_obj = LiteLLM_UserTable(
-        user_id=_user_id, spend=11, max_budget=10, user_email=""
-    )
+    user_obj = LiteLLM_UserTable(user_id=_user_id, spend=11, max_budget=10, user_email="")
     user_api_key_cache.set_cache(key=hash_token(user_key), value=valid_token)
     user_api_key_cache.set_cache(key="{}".format(_user_id), value=user_obj)
 
@@ -305,9 +293,7 @@ async def test_user_api_key_auth_fails_with_prohibited_params(prohibited_param):
 
     request.body = return_body
     try:
-        response = await user_api_key_auth(
-            request=request, api_key="Bearer " + user_key
-        )
+        response = await user_api_key_auth(request=request, api_key="Bearer " + user_key)
     except Exception as e:
         print("error str=", str(e))
         error_message = str(e.message)
@@ -502,9 +488,7 @@ def test_get_api_key_from_custom_header(headers, custom_header_name, expected_ap
 
     # Call the function and verify it doesn't raise an exception
 
-    api_key = get_api_key_from_custom_header(
-        request=request, custom_litellm_key_header_name=custom_header_name
-    )
+    api_key = get_api_key_from_custom_header(request=request, custom_litellm_key_header_name=custom_header_name)
     assert api_key == expected_api_key
 
 
@@ -521,9 +505,7 @@ from litellm.proxy._types import LitellmUserRoles
         (LitellmUserRoles.TEAM, "1234", "1234", True),
     ],
 )
-def test_allowed_route_inside_route(
-    user_role, auth_user_id, requested_user_id, expected_result
-):
+def test_allowed_route_inside_route(user_role, auth_user_id, requested_user_id, expected_result):
     from litellm.proxy.auth.auth_checks import allowed_route_check_inside_route
     from litellm.proxy._types import UserAPIKeyAuth, LitellmUserRoles
 
@@ -664,9 +646,7 @@ async def test_soft_budget_alert():
 
     try:
         # Call user_api_key_auth
-        response = await user_api_key_auth(
-            request=request, api_key="Bearer " + user_key
-        )
+        response = await user_api_key_auth(request=request, api_key="Bearer " + user_key)
 
         # Assert the request was allowed (no exception raised)
         assert response is not None
@@ -833,10 +813,7 @@ async def test_user_api_key_auth_websocket():
     mock_websocket.url = URL(url="/ws")
 
     # Mock the return value of `user_api_key_auth` when it's called within the `user_api_key_auth_websocket` function
-    with patch(
-        "litellm.proxy.auth.user_api_key_auth.user_api_key_auth", autospec=True
-    ) as mock_user_api_key_auth:
-
+    with patch("litellm.proxy.auth.user_api_key_auth.user_api_key_auth", autospec=True) as mock_user_api_key_auth:
         # Make the call to the WebSocket function
         await user_api_key_auth_websocket(mock_websocket)
 
@@ -845,15 +822,13 @@ async def test_user_api_key_auth_websocket():
 
         # Get the request object that was passed to user_api_key_auth
         request_arg = mock_user_api_key_auth.call_args.kwargs["request"]
-        
+
         # Verify that the request has headers set
         assert hasattr(request_arg, "headers"), "Request object should have headers attribute"
         assert "authorization" in request_arg.headers, "Request headers should contain authorization"
         assert request_arg.headers["authorization"] == "Bearer some_api_key"
 
-        assert (
-            mock_user_api_key_auth.call_args.kwargs["api_key"] == "Bearer some_api_key"
-        )
+        assert mock_user_api_key_auth.call_args.kwargs["api_key"] == "Bearer some_api_key"
 
 
 @pytest.mark.parametrize("enforce_rbac", [True, False])
@@ -1035,14 +1010,10 @@ async def test_jwt_non_admin_team_route_access(monkeypatch):
     }
 
     # Create request
-    request = Request(
-        scope={"type": "http", "headers": [(b"authorization", b"Bearer fake.jwt.token")]}
-    )
+    request = Request(scope={"type": "http", "headers": [(b"authorization", b"Bearer fake.jwt.token")]})
     request._url = URL(url="/team/new")
 
-    monkeypatch.setattr(
-        litellm.proxy.proxy_server, "general_settings", {"enable_jwt_auth": True}
-    )
+    monkeypatch.setattr(litellm.proxy.proxy_server, "general_settings", {"enable_jwt_auth": True})
 
     # Initialize jwt_handler with a default LiteLLM_JWTAuth so that the
     # virtual_key_claim_field check in user_api_key_auth doesn't fail with
@@ -1059,18 +1030,19 @@ async def test_jwt_non_admin_team_route_access(monkeypatch):
     # Mock enterprise license check and JWTAuthManager.auth_builder
     # License check must be mocked to avoid environment variable pollution
     # in parallel test execution
-    with patch(
-        "litellm.proxy.proxy_server.premium_user",
-        True,
-    ), patch(
-        "litellm.proxy.auth.handle_jwt.JWTAuthManager.auth_builder",
-        return_value=mock_jwt_response,
+    with (
+        patch(
+            "litellm.proxy.proxy_server.premium_user",
+            True,
+        ),
+        patch(
+            "litellm.proxy.auth.handle_jwt.JWTAuthManager.auth_builder",
+            return_value=mock_jwt_response,
+        ),
     ):
         try:
             await user_api_key_auth(request=request, api_key="Bearer fake.jwt.token")
-            pytest.fail(
-                "Expected this call to fail. Non-admin user should not access team routes."
-            )
+            pytest.fail("Expected this call to fail. Non-admin user should not access team routes.")
         except ProxyException as e:
             print("e", e)
             assert "Only proxy admin can be used to generate" in str(e.message)
@@ -1101,14 +1073,12 @@ async def test_x_litellm_api_key():
     ignored_key = "aj12445"
 
     # Create request with headers as bytes
-    request = Request(
-        scope={
-            "type": "http"
-        }
-    )
+    request = Request(scope={"type": "http"})
     request._url = URL(url="/chat/completions")
 
-    valid_token = await user_api_key_auth(request=request, api_key="Bearer " + ignored_key, custom_litellm_key_header=master_key)
+    valid_token = await user_api_key_auth(
+        request=request, api_key="Bearer " + ignored_key, custom_litellm_key_header=master_key
+    )
     assert valid_token.token == hash_token(master_key)
 
 
@@ -1146,3 +1116,216 @@ async def test_user_api_key_from_query_param():
     valid_token = await user_api_key_auth(request=request, api_key="")
     assert valid_token.token == hash_token(user_key)
 
+
+class TestEndUserBudgetWithVirtualKey:
+    """Tests for end user budget enforcement with virtual key authentication."""
+
+    @pytest.mark.asyncio
+    async def test_over_budget_end_user_can_access_zero_cost_model_with_virtual_key(self):
+        """
+        Test that an over-budget end user can still access zero-cost models
+        when authenticating with a virtual key.
+
+        This verifies that budget checks properly skip for zero-cost models
+        regardless of authentication method.
+        """
+        import time
+        from fastapi import Request
+        from starlette.datastructures import URL
+        from litellm.proxy._types import (
+            LiteLLM_BudgetTable,
+            LiteLLM_EndUserTable,
+            UserAPIKeyAuth,
+        )
+        from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+        from litellm.proxy.proxy_server import hash_token, user_api_key_cache
+        from litellm.router import Router
+
+        master_key = "sk-master-1234"
+        user_key = "sk-virtual-key-1234"
+        hashed_key = hash_token(user_key)
+        end_user_id = "over-budget-end-user"
+
+        # Create a valid virtual key token
+        valid_token = UserAPIKeyAuth(
+            token=hashed_key,
+            user_id="test-user",
+            last_refreshed_at=time.time(),
+        )
+        user_api_key_cache.set_cache(key=hashed_key, value=valid_token)
+
+        # Create an over-budget end user
+        end_user_budget = LiteLLM_BudgetTable(
+            budget_id="test-budget",
+            max_budget=10.0,
+        )
+        over_budget_end_user = LiteLLM_EndUserTable(
+            user_id=end_user_id,
+            spend=50.0,  # Over budget of 10.0
+            litellm_budget_table=end_user_budget,
+            blocked=False,
+        )
+
+        # Create a router with zero-cost model
+        mock_router = Router(
+            model_list=[
+                {
+                    "model_name": "free-model",
+                    "litellm_params": {
+                        "model": "ollama/llama2",
+                        "api_base": "http://localhost:11434",
+                    },
+                    "model_info": {
+                        "id": "free-model-id",
+                        "input_cost_per_token": 0.0,
+                        "output_cost_per_token": 0.0,
+                    },
+                },
+            ]
+        )
+
+        # Set up the proxy server state
+        setattr(litellm.proxy.proxy_server, "user_api_key_cache", user_api_key_cache)
+        setattr(litellm.proxy.proxy_server, "master_key", master_key)
+        setattr(litellm.proxy.proxy_server, "prisma_client", "mock-prisma")
+        setattr(litellm.proxy.proxy_server, "llm_router", mock_router)
+
+        # Mock get_end_user_object to return our over-budget user
+        with patch(
+            "litellm.proxy.auth.user_api_key_auth.get_end_user_object",
+            new_callable=AsyncMock,
+            return_value=over_budget_end_user,
+        ):
+            request = Request(
+                scope={
+                    "type": "http",
+                    "headers": [(b"x-litellm-end-user-id", end_user_id.encode())],
+                }
+            )
+            request._url = URL(url="/v1/chat/completions")
+
+            async def return_body():
+                return b'{"model": "free-model", "user": "' + end_user_id.encode() + b'"}'
+
+            request.body = return_body
+
+            # Should NOT raise BudgetExceededError for zero-cost model
+            result = await user_api_key_auth(
+                request=request,
+                api_key="Bearer " + user_key,
+            )
+
+            assert result is not None
+
+        # Cleanup
+        setattr(litellm.proxy.proxy_server, "llm_router", None)
+
+    @pytest.mark.asyncio
+    async def test_over_budget_end_user_blocked_from_paid_model_with_virtual_key(self):
+        """
+        Test that an over-budget end user is blocked from paid models
+        when authenticating with a virtual key.
+
+        This verifies the budget enforcement works correctly with virtual keys.
+        """
+        import time
+        from fastapi import Request
+        from starlette.datastructures import URL
+        from litellm.proxy._types import (
+            LiteLLM_BudgetTable,
+            LiteLLM_EndUserTable,
+            UserAPIKeyAuth,
+        )
+        from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+        from litellm.proxy.proxy_server import hash_token, user_api_key_cache
+        from litellm.router import Router
+
+        master_key = "sk-master-1234"
+        user_key = "sk-virtual-key-5678"
+        hashed_key = hash_token(user_key)
+        end_user_id = "over-budget-end-user-2"
+
+        # Create a valid virtual key token
+        valid_token = UserAPIKeyAuth(
+            token=hashed_key,
+            user_id="test-user-2",
+            last_refreshed_at=time.time(),
+        )
+        user_api_key_cache.set_cache(key=hashed_key, value=valid_token)
+
+        # Create an over-budget end user
+        end_user_budget = LiteLLM_BudgetTable(
+            budget_id="test-budget-2",
+            max_budget=10.0,
+        )
+        over_budget_end_user = LiteLLM_EndUserTable(
+            user_id=end_user_id,
+            spend=50.0,  # Over budget of 10.0
+            litellm_budget_table=end_user_budget,
+            blocked=False,
+        )
+
+        # Create a router with a paid model
+        mock_router = Router(
+            model_list=[
+                {
+                    "model_name": "paid-model",
+                    "litellm_params": {
+                        "model": "gpt-3.5-turbo",
+                        "api_key": "sk-test",
+                    },
+                    "model_info": {
+                        "id": "paid-model-id",
+                    },
+                },
+            ]
+        )
+
+        # Set up the proxy server state
+        setattr(litellm.proxy.proxy_server, "user_api_key_cache", user_api_key_cache)
+        setattr(litellm.proxy.proxy_server, "master_key", master_key)
+        setattr(litellm.proxy.proxy_server, "prisma_client", "mock-prisma")
+        setattr(litellm.proxy.proxy_server, "llm_router", mock_router)
+
+        # Mock get_end_user_object and get_model_info
+        with (
+            patch(
+                "litellm.proxy.auth.user_api_key_auth.get_end_user_object",
+                new_callable=AsyncMock,
+                return_value=over_budget_end_user,
+            ),
+            patch("litellm.get_model_info") as mock_get_model_info,
+        ):
+            # Mock paid model cost
+            mock_get_model_info.return_value = {
+                "input_cost_per_token": 0.0000015,
+                "output_cost_per_token": 0.000002,
+            }
+
+            request = Request(
+                scope={
+                    "type": "http",
+                    "headers": [(b"x-litellm-end-user-id", end_user_id.encode())],
+                }
+            )
+            request._url = URL(url="/v1/chat/completions")
+
+            async def return_body():
+                return b'{"model": "paid-model", "user": "' + end_user_id.encode() + b'"}'
+
+            request.body = return_body
+
+            # Should raise ProxyException for paid model (budget exceeded)
+            from litellm.proxy._types import ProxyException
+
+            with pytest.raises(ProxyException) as exc_info:
+                await user_api_key_auth(
+                    request=request,
+                    api_key="Bearer " + user_key,
+                )
+
+            assert "ExceededBudget" in exc_info.value.message
+            assert end_user_id in exc_info.value.message
+
+        # Cleanup
+        setattr(litellm.proxy.proxy_server, "llm_router", None)

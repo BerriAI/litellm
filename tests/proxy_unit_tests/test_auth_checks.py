@@ -8,9 +8,7 @@ from dotenv import load_dotenv
 load_dotenv()
 import os
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 import pytest, litellm
 import httpx
 from litellm.proxy._types import UserAPIKeyAuth
@@ -38,7 +36,10 @@ from litellm.proxy.utils import CallInfo
 async def test_get_end_user_object(customer_spend, customer_budget):
     """
     Scenario 1: normal
-    Scenario 2: user over budget
+    Scenario 2: user over budget - budget check moved to user_api_key_auth.py after model resolution
+
+    get_end_user_object() should return the user object regardless of budget status.
+    Budget enforcement happens later in user_api_key_auth.py to allow zero-cost model access.
     """
     end_user_id = "my-test-customer"
     _budget = LiteLLM_BudgetTable(max_budget=customer_budget)
@@ -51,31 +52,15 @@ async def test_get_end_user_object(customer_spend, customer_budget):
     _cache = DualCache()
     _key = "end_user_id:{}".format(end_user_id)
     _cache.set_cache(key=_key, value=end_user_obj.model_dump())
-    try:
-        await get_end_user_object(
-            end_user_id=end_user_id,
-            prisma_client="RANDOM VALUE",  # type: ignore
-            user_api_key_cache=_cache,
-            route="/v1/chat/completions",
-        )
-        if customer_spend > customer_budget:
-            pytest.fail(
-                "Expected call to fail. Customer Spend={}, Customer Budget={}".format(
-                    customer_spend, customer_budget
-                )
-            )
-    except Exception as e:
-        if (
-            isinstance(e, litellm.BudgetExceededError)
-            and customer_spend > customer_budget
-        ):
-            pass
-        else:
-            pytest.fail(
-                "Expected call to work. Customer Spend={}, Customer Budget={}, Error={}".format(
-                    customer_spend, customer_budget, str(e)
-                )
-            )
+    result = await get_end_user_object(
+        end_user_id=end_user_id,
+        prisma_client="RANDOM VALUE",
+        user_api_key_cache=_cache,
+        route="/v1/chat/completions",
+    )
+    assert result is not None
+    assert result.user_id == end_user_id
+    assert result.spend == customer_spend
 
 
 @pytest.mark.parametrize(
@@ -402,16 +387,12 @@ async def test_is_valid_fallback_model():
     )
 
     try:
-        await is_valid_fallback_model(
-            model="gpt-3.5-turbo", llm_router=router, user_model=None
-        )
+        await is_valid_fallback_model(model="gpt-3.5-turbo", llm_router=router, user_model=None)
     except Exception as e:
         pytest.fail(f"Expected is_valid_fallback_model to work, got exception: {e}")
 
     try:
-        await is_valid_fallback_model(
-            model="gpt-4o", llm_router=router, user_model=None
-        )
+        await is_valid_fallback_model(model="gpt-4o", llm_router=router, user_model=None)
         pytest.fail("Expected is_valid_fallback_model to fail")
     except Exception as e:
         assert "Invalid" in str(e)
@@ -426,9 +407,7 @@ async def test_is_valid_fallback_model():
     ],
 )
 @pytest.mark.asyncio
-async def test_virtual_key_max_budget_check(
-    token_spend, max_budget, expect_budget_error
-):
+async def test_virtual_key_max_budget_check(token_spend, max_budget, expect_budget_error):
     """
     Test if virtual key budget checks work as expected:
     1. Triggers budget alert for all cases
@@ -472,14 +451,10 @@ async def test_virtual_key_max_budget_check(
             user_obj=user_obj,
         )
         if expect_budget_error:
-            pytest.fail(
-                f"Expected BudgetExceededError for spend={token_spend}, max_budget={max_budget}"
-            )
+            pytest.fail(f"Expected BudgetExceededError for spend={token_spend}, max_budget={max_budget}")
     except litellm.BudgetExceededError as e:
         if not expect_budget_error:
-            pytest.fail(
-                f"Unexpected BudgetExceededError for spend={token_spend}, max_budget={max_budget}"
-            )
+            pytest.fail(f"Unexpected BudgetExceededError for spend={token_spend}, max_budget={max_budget}")
         assert e.current_cost == token_spend
         assert e.max_budget == max_budget
 
@@ -546,9 +521,7 @@ async def test_can_team_access_model(model, team_models, expect_to_work):
             team_model_aliases=None,
         )
         if not expect_to_work:
-            pytest.fail(
-                f"Expected model access check to fail for model={model}, team_models={team_models}"
-            )
+            pytest.fail(f"Expected model access check to fail for model={model}, team_models={team_models}")
     except Exception as e:
         if expect_to_work:
             pytest.fail(
@@ -601,9 +574,9 @@ async def test_virtual_key_soft_budget_check(spend, soft_budget, expect_alert):
 
     await asyncio.sleep(0.1)  # Allow time for the alert task to complete
 
-    assert (
-        alert_triggered == expect_alert
-    ), f"Expected alert_triggered to be {expect_alert} for spend={spend}, soft_budget={soft_budget}"
+    assert alert_triggered == expect_alert, (
+        f"Expected alert_triggered to be {expect_alert} for spend={spend}, soft_budget={soft_budget}"
+    )
 
 
 @pytest.mark.parametrize(
@@ -613,9 +586,27 @@ async def test_virtual_key_soft_budget_check(spend, soft_budget, expect_alert):
         (50, 50, False, None, None),  # At soft budget, no metadata - no alert_emails configured, so no alert
         (25, 50, False, None, None),  # Under soft budget
         (100, None, False, None, None),  # No soft budget set
-        (100, 50, True, {"soft_budget_alerting_emails": ["team1@example.com", "team2@example.com"]}, ["team1@example.com", "team2@example.com"]),  # Over soft budget with list of emails
-        (100, 50, True, {"soft_budget_alerting_emails": "team1@example.com,team2@example.com"}, ["team1@example.com", "team2@example.com"]),  # Over soft budget with comma-separated emails
-        (100, 50, True, {"soft_budget_alerting_emails": ["team1@example.com", "", "  ", "team2@example.com"]}, ["team1@example.com", "team2@example.com"]),  # Over soft budget with empty strings filtered
+        (
+            100,
+            50,
+            True,
+            {"soft_budget_alerting_emails": ["team1@example.com", "team2@example.com"]},
+            ["team1@example.com", "team2@example.com"],
+        ),  # Over soft budget with list of emails
+        (
+            100,
+            50,
+            True,
+            {"soft_budget_alerting_emails": "team1@example.com,team2@example.com"},
+            ["team1@example.com", "team2@example.com"],
+        ),  # Over soft budget with comma-separated emails
+        (
+            100,
+            50,
+            True,
+            {"soft_budget_alerting_emails": ["team1@example.com", "", "  ", "team2@example.com"]},
+            ["team1@example.com", "team2@example.com"],
+        ),  # Over soft budget with empty strings filtered
     ],
 )
 @pytest.mark.asyncio
@@ -667,9 +658,9 @@ async def test_team_soft_budget_check(spend, soft_budget, expect_alert, metadata
 
     await asyncio.sleep(0.1)  # Allow time for the alert task to complete
 
-    assert (
-        alert_triggered == expect_alert
-    ), f"Expected alert_triggered to be {expect_alert} for spend={spend}, soft_budget={soft_budget}"
+    assert alert_triggered == expect_alert, (
+        f"Expected alert_triggered to be {expect_alert} for spend={spend}, soft_budget={soft_budget}"
+    )
 
     if expect_alert:
         assert captured_call_info is not None
@@ -813,9 +804,7 @@ async def test_get_fuzzy_user_object():
 
     # Test 5: Only email provided (no SSO ID)
     mock_prisma.db.litellm_usertable.find_first = AsyncMock(return_value=test_user)
-    result = await _get_fuzzy_user_object(
-        prisma_client=mock_prisma, user_email="test@example.com"
-    )
+    result = await _get_fuzzy_user_object(prisma_client=mock_prisma, user_email="test@example.com")
     assert result == test_user
     mock_prisma.db.litellm_usertable.find_first.assert_called_with(
         where={"user_email": {"equals": "test@example.com", "mode": "insensitive"}},
@@ -824,9 +813,7 @@ async def test_get_fuzzy_user_object():
 
     # Test 6: Only SSO ID provided (no email)
     mock_prisma.db.litellm_usertable.find_unique = AsyncMock(return_value=test_user)
-    result = await _get_fuzzy_user_object(
-        prisma_client=mock_prisma, sso_user_id="sso_123"
-    )
+    result = await _get_fuzzy_user_object(prisma_client=mock_prisma, sso_user_id="sso_123")
     assert result == test_user
     mock_prisma.db.litellm_usertable.find_unique.assert_called_with(
         where={"sso_user_id": "sso_123"}, include={"organization_memberships": True}

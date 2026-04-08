@@ -8,6 +8,7 @@ Run checks for:
 2. If user is in budget
 3. If end_user ('user' passed to /chat/completions, /embeddings endpoint) is in budget
 """
+
 import asyncio
 import re
 import time
@@ -196,9 +197,7 @@ def _is_model_cost_zero(
     return True
 
 
-def _is_cost_explicitly_configured(
-    model: str, llm_router: "Router"
-) -> bool:
+def _is_cost_explicitly_configured(model: str, llm_router: "Router") -> bool:
     """
     Check if any deployment in the model group has cost fields explicitly
     set in its litellm.model_cost entry.
@@ -215,10 +214,7 @@ def _is_cost_explicitly_configured(
         if model_id is None:
             continue
         raw_entry = litellm.model_cost.get(model_id, {})
-        if (
-            "input_cost_per_token" in raw_entry
-            or "output_cost_per_token" in raw_entry
-        ):
+        if "input_cost_per_token" in raw_entry or "output_cost_per_token" in raw_entry:
             return True
     return False
 
@@ -456,9 +452,9 @@ async def common_checks(  # noqa: PLR0915
                 model=_model,
                 team_object=team_object,
                 llm_router=llm_router,
-                team_model_aliases=valid_token.team_model_aliases
-                if valid_token
-                else None,
+                team_model_aliases=(
+                    valid_token.team_model_aliases if valid_token else None
+                ),
             ):
                 raise ProxyException(
                     message=f"Team not allowed to access model. Team={team_object.team_id}, Model={_model}. Allowed team models = {team_object.models}",
@@ -925,35 +921,6 @@ async def _apply_default_budget_to_end_user(
     return end_user_obj
 
 
-def _check_end_user_budget(
-    end_user_obj: LiteLLM_EndUserTable,
-    route: str,
-) -> None:
-    """
-    Check if end user is within their budget limit.
-
-    Args:
-        end_user_obj: The end user object to check
-        route: The request route
-
-    Raises:
-        litellm.BudgetExceededError: If end user has exceeded their budget
-    """
-    if RouteChecks.is_info_route(route):
-        return
-
-    if end_user_obj.litellm_budget_table is None:
-        return
-
-    end_user_budget = end_user_obj.litellm_budget_table.max_budget
-    if end_user_budget is not None and end_user_obj.spend > end_user_budget:
-        raise litellm.BudgetExceededError(
-            current_cost=end_user_obj.spend,
-            max_budget=end_user_budget,
-            message=f"ExceededBudget: End User={end_user_obj.user_id} over budget. Spend={end_user_obj.spend}, Budget={end_user_budget}",
-        )
-
-
 @log_db_metrics
 async def get_end_user_object(
     end_user_id: Optional[str],
@@ -969,11 +936,14 @@ async def get_end_user_object(
     If end user exists but has no budget_id, applies the default budget
     (if configured via litellm.max_end_user_budget_id).
 
+    Note: Budget checks are handled in common_checks(), not here.
+    This allows zero-cost models to skip budget checks properly.
+
     Args:
         end_user_id: The ID of the end user
         prisma_client: Database client instance
         user_api_key_cache: Cache for storing/retrieving data
-        route: The request route
+        route: The request route (unused, kept for API compatibility)
         parent_otel_span: Optional OpenTelemetry span for tracing
         proxy_logging_obj: Optional proxy logging object
 
@@ -1000,9 +970,6 @@ async def get_end_user_object(
             user_api_key_cache=user_api_key_cache,
             parent_otel_span=parent_otel_span,
         )
-
-        # Check budget limits
-        _check_end_user_budget(end_user_obj=return_obj, route=route)
 
         return return_obj
 
@@ -1031,9 +998,6 @@ async def get_end_user_object(
         await user_api_key_cache.async_set_cache(
             key="end_user_id:{}".format(end_user_id), value=_response.dict()
         )
-
-        # Check budget limits
-        _check_end_user_budget(end_user_obj=_response, route=route)
 
         return _response
 
