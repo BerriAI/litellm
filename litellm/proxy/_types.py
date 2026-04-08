@@ -1,6 +1,6 @@
 import enum
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Literal, Optional, Union
 
 import httpx
@@ -1406,10 +1406,25 @@ class NewUserRequestTeam(LiteLLMPydanticObjectBase):
     user_role: Literal["user", "admin"] = "user"
 
 
+def _assert_initial_budget_reset_at_valid(value: Optional[datetime]) -> None:
+    """Assert that initial_budget_reset_at is not in the past. Raises ValueError if invalid."""
+    if value is not None:
+        reset_at = value
+        if reset_at.tzinfo is None:
+            reset_at = reset_at.replace(tzinfo=timezone.utc)
+        current_time = datetime.now(timezone.utc)
+        if reset_at < current_time:
+            raise ValueError(
+                f"initial_budget_reset_at cannot be in the past. "
+                f"Provided: {reset_at.isoformat()}, Current time: {current_time.isoformat()}"
+            )
+
+
 class NewUserRequest(GenerateRequestBase):
     max_budget: Optional[float] = None
     user_email: Optional[str] = None
     user_alias: Optional[str] = None
+    initial_budget_reset_at: Optional[datetime] = None
     user_role: Optional[
         Literal[
             LitellmUserRoles.PROXY_ADMIN,
@@ -1425,6 +1440,11 @@ class NewUserRequest(GenerateRequestBase):
     send_invite_email: Optional[bool] = None
     sso_user_id: Optional[str] = None
     organizations: Optional[List[str]] = None
+
+    @model_validator(mode="after")
+    def validate_initial_budget_reset_at(self) -> "NewUserRequest":
+        _assert_initial_budget_reset_at_valid(self.initial_budget_reset_at)
+        return self
 
 
 class NewUserResponse(GenerateKeyResponse):
@@ -1443,6 +1463,7 @@ class NewUserResponse(GenerateKeyResponse):
     model_max_budget: Optional[dict] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
+    initial_budget_reset_at: Optional[datetime] = None
 
 
 class UpdateUserRequestNoUserIDorEmail(
@@ -1461,6 +1482,12 @@ class UpdateUserRequestNoUserIDorEmail(
         ]
     ] = None
     max_budget: Optional[float] = None
+    initial_budget_reset_at: Optional[datetime] = None
+
+    @model_validator(mode="after")
+    def validate_initial_budget_reset_at(self) -> "UpdateUserRequestNoUserIDorEmail":
+        _assert_initial_budget_reset_at_valid(self.initial_budget_reset_at)
+        return self
 
 
 class UpdateUserRequest(UpdateUserRequestNoUserIDorEmail):
