@@ -344,17 +344,39 @@ async def _persist_oauth_credentials(
             ).isoformat()
         new_credentials["type"] = "oauth2"
 
-        # Merge with existing credentials to preserve fields not in this update
+        # Resolve the persistent DB record for this server.
+        # During an OAuth PKCE session flow the MCPServer object carries an
+        # ephemeral session UUID as server_id (not the real DB row id).  Try
+        # the exact server_id first; if not found, fall back to server_name /
+        # alias so the credentials land on the correct persistent row.
         existing_record = await prisma_client.db.litellm_mcpservertable.find_unique(
             where={"server_id": mcp_server.server_id}
         )
-        if existing_record and existing_record.credentials:
+        if existing_record is None and mcp_server.name:
+            existing_record = await prisma_client.db.litellm_mcpservertable.find_first(
+                where={
+                    "OR": [
+                        {"server_name": mcp_server.name},
+                        {"alias": mcp_server.name},
+                    ]
+                }
+            )
+
+        if existing_record is None:
+            verbose_logger.warning(
+                "Cannot persist OAuth credentials: no DB record found for MCP server %s (%s)",
+                mcp_server.name,
+                mcp_server.server_id,
+            )
+            return
+
+        # Merge new credentials on top of existing to preserve unrelated fields
+        if existing_record.credentials:
             existing_creds = (
                 json.loads(existing_record.credentials)
                 if isinstance(existing_record.credentials, str)
                 else dict(existing_record.credentials)
             )
-            # New values override existing; existing keys not in update are preserved
             merged = {**existing_creds, **new_credentials}
         else:
             merged = new_credentials
@@ -380,13 +402,14 @@ async def _persist_oauth_credentials(
             update_data["registration_url"] = mcp_server.registration_url
 
         await prisma_client.db.litellm_mcpservertable.update(
-            where={"server_id": mcp_server.server_id},
+            where={"server_id": existing_record.server_id},
             data=update_data,
         )
 
         verbose_logger.info(
-            "Persisted OAuth credentials for MCP server %s (%s)",
+            "Persisted OAuth credentials for MCP server %s (db_id=%s, session_id=%s)",
             mcp_server.name,
+            existing_record.server_id,
             mcp_server.server_id,
         )
     except Exception as e:
