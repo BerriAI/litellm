@@ -36,6 +36,8 @@ LiteLLM's `aws_sigv4` auth type handles this automatically: every outgoing MCP r
 | **AWS Access Key ID** | No | Falls back to boto3 credential chain if blank |
 | **AWS Secret Access Key** | No | Required if Access Key ID is provided |
 | **AWS Session Token** | No | Only needed for temporary STS credentials |
+| **AWS Role ARN** | No | IAM role ARN for STS AssumeRole (e.g., `arn:aws:iam::123456789012:role/MyRole`). If set, LiteLLM assumes this role before signing |
+| **AWS Session Name** | No | Session name for the AssumeRole call — appears in CloudTrail. Auto-generated if omitted |
 
 Once created, LiteLLM will sign every outgoing MCP request with SigV4. The server's tools appear automatically in the MCP Tools list.
 
@@ -66,8 +68,8 @@ mcp_servers:
     url: "https://bedrock-agentcore.us-east-1.amazonaws.com/runtimes/<url-encoded-ARN>/invocations"
     transport: "http"
     auth_type: "aws_sigv4"
-    aws_access_key_id: os.environ/AWS_ACCESS_KEY_ID
-    aws_secret_access_key: os.environ/AWS_SECRET_ACCESS_KEY
+    aws_role_name: os.environ/AWS_ROLE_ARN          # IAM role to assume (recommended)
+    aws_session_name: "litellm-prod"                 # optional — for CloudTrail auditing
     aws_region_name: "us-east-1"
     aws_service_name: "bedrock-agentcore"
 ```
@@ -128,6 +130,8 @@ curl http://localhost:4000/mcp-rest/tools/call \
 | `aws_region_name` | Yes | AWS region (e.g., `us-east-1`) |
 | `aws_service_name` | No | AWS service name for signing. Defaults to `bedrock-agentcore` |
 | `aws_session_token` | No | AWS session token for temporary credentials. Supports `os.environ/VAR_NAME` |
+| `aws_role_name` | No | IAM role ARN for STS AssumeRole. Supports `os.environ/VAR_NAME`. When set, LiteLLM calls `sts:AssumeRole` to get temporary credentials before signing |
+| `aws_session_name` | No | Session name for the AssumeRole call (appears in CloudTrail). Auto-generated if omitted. Supports `os.environ/VAR_NAME` |
 
 ## How It Works
 
@@ -157,6 +161,42 @@ mcp_servers:
     aws_service_name: "bedrock-agentcore"
 ```
 
+## Using IAM Role Assumption (AssumeRole)
+
+For production environments where your LiteLLM instance authenticates via an IAM role (e.g., EKS pod role, EC2 instance profile), you can configure `aws_role_name` to have LiteLLM call `sts:AssumeRole` before signing MCP requests:
+
+```yaml title="config.yaml with AssumeRole" showLineNumbers
+mcp_servers:
+  my_agentcore_mcp:
+    url: "https://bedrock-agentcore.us-east-1.amazonaws.com/runtimes/<url-encoded-ARN>/invocations"
+    transport: "http"
+    auth_type: "aws_sigv4"
+    aws_role_name: "arn:aws:iam::123456789012:role/BedrockAgentCoreRole"
+    aws_session_name: "litellm-prod"    # optional
+    aws_region_name: "us-east-1"
+    aws_service_name: "bedrock-agentcore"
+```
+
+LiteLLM uses the ambient credentials (pod role, instance profile, or env vars) to call `sts:AssumeRole`, then signs MCP requests with the assumed role's temporary credentials.
+
+You can also combine `aws_role_name` with explicit access keys — the keys are then used as the source identity for the AssumeRole call:
+
+```yaml title="config.yaml with AssumeRole + explicit source keys" showLineNumbers
+mcp_servers:
+  my_agentcore_mcp:
+    url: "https://bedrock-agentcore.us-east-1.amazonaws.com/runtimes/<url-encoded-ARN>/invocations"
+    transport: "http"
+    auth_type: "aws_sigv4"
+    aws_role_name: os.environ/AWS_ROLE_ARN
+    aws_access_key_id: os.environ/AWS_ACCESS_KEY_ID
+    aws_secret_access_key: os.environ/AWS_SECRET_ACCESS_KEY
+    aws_region_name: "us-east-1"
+```
+
+:::tip
+For most Kubernetes deployments, you only need `aws_role_name` and `aws_region_name` — the pod's IAM role provides the source credentials automatically.
+:::
+
 ## Troubleshooting
 
 ### 403 Forbidden from AWS
@@ -165,6 +205,15 @@ mcp_servers:
 - Check that `aws_region_name` matches the region in your AgentCore URL
 - Ensure `aws_service_name` is set to `bedrock-agentcore`
 - If using STS credentials, confirm `aws_session_token` is set and not expired
+
+### AssumeRole AccessDenied
+
+If you get `AccessDenied` when using `aws_role_name`:
+
+- Verify the role ARN is correct
+- Check that the trust policy on the target role allows your source identity to assume it
+- If running on EKS, ensure the pod's service account is annotated with the correct IAM role
+- Check CloudTrail for the failed `sts:AssumeRole` call to see the exact error
 
 ### Health check errors on startup
 

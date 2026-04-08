@@ -253,7 +253,7 @@ See `CLAUDE.md` and the `Makefile` for standard commands. Key notes:
 - `uv sync --group proxy-dev --extra proxy` installs the Prisma and proxy-side test dependencies used by the standard local workflow.
 - The `--timeout` pytest flag is NOT available; don't pass it.
 - Unit tests: `uv run pytest tests/test_litellm/ -x -vv -n 4`
-- Black `--check` may report pre-existing formatting issues; this does not block test runs.
+- **Before committing, always run `uv run black .` to format your code.** Black formatting is enforced in CI.
 - If `uv sync` fails because the lockfile is outdated, run `uv lock` and retry.
 
 ### Lint

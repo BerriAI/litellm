@@ -5,7 +5,6 @@ import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from fastapi.testclient import TestClient
 
 sys.path.insert(
     0, os.path.abspath("../../..")
@@ -13,7 +12,6 @@ sys.path.insert(
 
 
 import litellm
-from litellm.router_utils.fallback_event_handlers import run_async_fallback
 
 
 def test_update_kwargs_does_not_mutate_defaults_and_merges_metadata():
@@ -127,7 +125,7 @@ async def test_async_router_acreate_file():
     """
     Write to all deployments of a model
     """
-    from unittest.mock import MagicMock, call, patch
+    from unittest.mock import MagicMock, patch
 
     router = litellm.Router(
         model_list=[
@@ -747,7 +745,7 @@ async def test_router_ageneric_api_call_with_fallbacks_helper():
     """
     Test the _ageneric_api_call_with_fallbacks_helper method with various scenarios
     """
-    from unittest.mock import AsyncMock, MagicMock, patch
+    from unittest.mock import patch
 
     router = litellm.Router(
         model_list=[
@@ -1134,10 +1132,9 @@ def test_get_model_access_groups_cache_invalidation_upsert_deployment():
 @pytest.mark.asyncio
 async def test_acompletion_streaming_iterator():
     """Test _acompletion_streaming_iterator for normal streaming and fallback behavior."""
-    from unittest.mock import AsyncMock, MagicMock
+    from unittest.mock import MagicMock
 
     from litellm.exceptions import MidStreamFallbackError
-    from litellm.types.utils import ModelResponseStream
 
     # Helper class for creating async iterators
     class AsyncIterator:
@@ -2847,3 +2844,286 @@ def test_combine_fallback_usage():
     assert chunk.usage.prompt_tokens == 10
     assert chunk.usage.completion_tokens == 5
     assert chunk.usage.total_tokens == 15
+
+
+@pytest.mark.asyncio
+async def test_team_scoped_model_fallback():
+    """
+    Test that fallback works correctly for team-scoped models.
+
+    When a team-scoped model fails and the fallback model is also team-scoped,
+    the router should find the fallback deployment by matching team_public_model_name.
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "team-a-primary-internal",
+                "litellm_params": {"model": "gpt-3.5-turbo", "api_key": "fake"},
+                "model_info": {
+                    "team_id": "team-a",
+                    "team_public_model_name": "primary-model",
+                },
+            },
+            {
+                "model_name": "team-a-fallback-internal",
+                "litellm_params": {
+                    "model": "gpt-4",
+                    "api_key": "fake",
+                    "mock_response": "fallback success from team-a",
+                },
+                "model_info": {
+                    "team_id": "team-a",
+                    "team_public_model_name": "fallback-model",
+                },
+            },
+        ],
+        fallbacks=[{"primary-model": ["fallback-model"]}],
+    )
+
+    response = await router.acompletion(
+        model="primary-model",
+        messages=[{"role": "user", "content": "Hello"}],
+        metadata={"user_api_key_team_id": "team-a"},
+        mock_testing_fallbacks=True,
+    )
+    assert response is not None
+    assert response.choices[0].message.content == "fallback success from team-a"
+
+
+@pytest.mark.asyncio
+async def test_team_scoped_model_fallback_to_global():
+    """
+    Test that a team-scoped model can fall back to a global (non-team) model.
+
+    Global models (no team_id on deployment) should be accessible as fallback
+    targets for team-scoped requests.
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "team-a-primary-internal",
+                "litellm_params": {"model": "gpt-3.5-turbo", "api_key": "fake"},
+                "model_info": {
+                    "team_id": "team-a",
+                    "team_public_model_name": "primary-model",
+                },
+            },
+            {
+                "model_name": "global-fallback",
+                "litellm_params": {
+                    "model": "gpt-4",
+                    "api_key": "fake",
+                    "mock_response": "global fallback success",
+                },
+            },
+        ],
+        fallbacks=[{"primary-model": ["global-fallback"]}],
+    )
+
+    response = await router.acompletion(
+        model="primary-model",
+        messages=[{"role": "user", "content": "Hello"}],
+        metadata={"user_api_key_team_id": "team-a"},
+        mock_testing_fallbacks=True,
+    )
+    assert response is not None
+    assert response.choices[0].message.content == "global fallback success"
+
+
+@pytest.mark.asyncio
+async def test_team_scoped_model_fallback_cross_team_blocked():
+    """
+    Test that cross-team fallback is correctly blocked.
+
+    When team-a's model fails and the fallback target is scoped to team-b,
+    the router should NOT use it (team isolation).
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "team-a-primary-internal",
+                "litellm_params": {"model": "gpt-3.5-turbo", "api_key": "fake"},
+                "model_info": {
+                    "team_id": "team-a",
+                    "team_public_model_name": "primary-model",
+                },
+            },
+            {
+                "model_name": "team-b-fallback-internal",
+                "litellm_params": {
+                    "model": "gpt-4",
+                    "api_key": "fake",
+                    "mock_response": "team-b response - should not reach here",
+                },
+                "model_info": {
+                    "team_id": "team-b",
+                    "team_public_model_name": "fallback-model",
+                },
+            },
+        ],
+        fallbacks=[{"primary-model": ["fallback-model"]}],
+    )
+
+    with pytest.raises(Exception):
+        await router.acompletion(
+            model="primary-model",
+            messages=[{"role": "user", "content": "Hello"}],
+            metadata={"user_api_key_team_id": "team-a"},
+            mock_testing_fallbacks=True,
+        )
+
+
+def test_get_all_deployments_with_team_id():
+    """
+    Test that _get_all_deployments with team_id can find deployments
+    by team_public_model_name when the model_name is not in the index.
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "internal-team-deployment",
+                "litellm_params": {"model": "gpt-4", "api_key": "fake"},
+                "model_info": {
+                    "team_id": "team-x",
+                    "team_public_model_name": "gpt-4",
+                },
+            },
+        ],
+    )
+
+    # Without team_id: "gpt-4" is not in the model_name index (internal name is different)
+    deployments = router._get_all_deployments(model_name="gpt-4")
+    assert len(deployments) == 0
+
+    # With correct team_id: should find via O(n) scan matching team_public_model_name
+    deployments = router._get_all_deployments(model_name="gpt-4", team_id="team-x")
+    assert len(deployments) == 1
+    assert deployments[0]["model_name"] == "internal-team-deployment"
+
+    # With wrong team_id: should find nothing
+    deployments = router._get_all_deployments(model_name="gpt-4", team_id="team-y")
+    assert len(deployments) == 0
+
+
+def test_multiregion_team_deployments_unique_model_names():
+    """
+    Simulates athenahealth's exact setup: unique model_names per deployment,
+    same team_public_model_name, multiple regions.
+
+    Verifies that _get_all_deployments returns ALL regional deployments
+    for a team when queried by team_public_model_name.
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "metis-claude-us-east-1",
+                "litellm_params": {
+                    "model": "bedrock/anthropic.claude-3-sonnet",
+                    "aws_region_name": "us-east-1",
+                    "api_key": "fake",
+                },
+                "model_info": {
+                    "team_id": "metis-team",
+                    "team_public_model_name": "claude-sonnet",
+                },
+            },
+            {
+                "model_name": "metis-claude-us-west-2",
+                "litellm_params": {
+                    "model": "bedrock/anthropic.claude-3-sonnet",
+                    "aws_region_name": "us-west-2",
+                    "api_key": "fake",
+                },
+                "model_info": {
+                    "team_id": "metis-team",
+                    "team_public_model_name": "claude-sonnet",
+                },
+            },
+        ],
+    )
+
+    # "claude-sonnet" is NOT in the model_name index
+    assert "claude-sonnet" not in router.model_names
+
+    # Without team_id: returns nothing (no model_name="claude-sonnet" in index, no O(n) scan)
+    deployments = router._get_all_deployments(model_name="claude-sonnet")
+    assert len(deployments) == 0
+
+    # With team_id: O(n) scan finds BOTH regional deployments
+    deployments = router._get_all_deployments(
+        model_name="claude-sonnet", team_id="metis-team"
+    )
+    assert len(deployments) == 2
+    deployment_names = {d["model_name"] for d in deployments}
+    assert deployment_names == {"metis-claude-us-east-1", "metis-claude-us-west-2"}
+
+    # Each deployment has a unique ID (critical for cooldown/retry to work)
+    deployment_ids = {d["model_info"]["id"] for d in deployments}
+    assert len(deployment_ids) == 2, "Each deployment must have a unique ID for cooldown tracking"
+
+    # Wrong team: returns nothing
+    deployments = router._get_all_deployments(
+        model_name="claude-sonnet", team_id="other-team"
+    )
+    assert len(deployments) == 0
+
+
+@pytest.mark.asyncio
+async def test_multiregion_team_failover_between_regions():
+    """
+    Simulates athenahealth's multiregion failover scenario:
+    - Two Bedrock deployments (us-east-1 and us-west-2) with unique model_names
+    - Same team_public_model_name ("claude-sonnet")
+    - Primary region fails → router should failover to second region
+
+    This is the exact scenario Sean Glover from athenahealth will demonstrate.
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "metis-claude-us-east-1",
+                "litellm_params": {
+                    "model": "bedrock/anthropic.claude-3-sonnet",
+                    "api_key": "fake",
+                    "mock_response": "response from us-east-1",
+                },
+                "model_info": {
+                    "team_id": "metis-team",
+                    "team_public_model_name": "claude-sonnet",
+                },
+            },
+            {
+                "model_name": "metis-claude-us-west-2",
+                "litellm_params": {
+                    "model": "bedrock/anthropic.claude-3-sonnet",
+                    "api_key": "fake",
+                    "mock_response": "response from us-west-2",
+                },
+                "model_info": {
+                    "team_id": "metis-team",
+                    "team_public_model_name": "claude-sonnet",
+                },
+            },
+        ],
+        num_retries=1,
+    )
+
+    # Verify the router finds both deployments for the team
+    deployments = router._get_all_deployments(
+        model_name="claude-sonnet", team_id="metis-team"
+    )
+    assert len(deployments) == 2, (
+        "Router must find both regional deployments by team_public_model_name"
+    )
+
+    # Make a normal request — should succeed from one of the regions
+    response = await router.acompletion(
+        model="claude-sonnet",
+        messages=[{"role": "user", "content": "Hello"}],
+        metadata={"user_api_key_team_id": "metis-team"},
+    )
+    assert response is not None
+    assert response.choices[0].message.content in [
+        "response from us-east-1",
+        "response from us-west-2",
+    ]
