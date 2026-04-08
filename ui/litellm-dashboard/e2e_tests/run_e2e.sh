@@ -103,7 +103,16 @@ npm install --silent 2>/dev/null || true
 npm run build
 # Copy the fresh build to the proxy's static UI directory
 cp -r "$DASHBOARD_DIR/out/" "$REPO_ROOT/litellm/proxy/_experimental/out/"
-echo "UI build copied to proxy static directory"
+
+# Restructure HTML files so extensionless routes work (e.g. /ui/login)
+# Next.js export produces login.html; the proxy expects login/index.html
+find "$REPO_ROOT/litellm/proxy/_experimental/out" -name '*.html' ! -name 'index.html' | while read -r htmlfile; do
+  target_dir="${htmlfile%.html}"
+  target_path="$target_dir/index.html"
+  mkdir -p "$target_dir"
+  mv "$htmlfile" "$target_path"
+done
+echo "UI build copied and restructured"
 
 # --- Python environment ---
 echo "=== Setting up Python environment ==="
