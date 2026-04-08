@@ -5516,9 +5516,8 @@ async def get_available_models_for_user(
     """
     from litellm.proxy.auth.auth_checks import get_team_object
     from litellm.proxy.auth.model_checks import (
-        ACCESS_GROUP_NO_MODELS_SENTINEL,
         get_complete_model_list,
-        get_key_models_with_db_access_groups,
+        get_key_models,
         get_team_models,
     )
     from litellm.proxy.management_endpoints.team_endpoints import validate_membership
@@ -5531,14 +5530,23 @@ async def get_available_models_for_user(
         proxy_model_list = llm_router.get_model_names()
         model_access_groups = llm_router.get_model_access_groups()
 
-    # Get key models — resolves DB-backed access_group_ids so they restrict the
-    # model list instead of falling back to team models (fix for issue #23850)
-    key_models = await get_key_models_with_db_access_groups(
+    # Get key models
+    key_models = get_key_models(
         user_api_key_dict=user_api_key_dict,
         proxy_model_list=proxy_model_list,
         model_access_groups=model_access_groups,
         include_model_access_groups=include_model_access_groups,
     )
+
+    # If key has access_group_ids but no native models, resolve from DB so the
+    # model list reflects the access group restriction instead of falling back
+    # to team models (issue #23850).
+    if not key_models and user_api_key_dict.access_group_ids:
+        from litellm.proxy.auth.auth_checks import _get_models_from_access_groups
+
+        key_models = await _get_models_from_access_groups(
+            access_group_ids=user_api_key_dict.access_group_ids,
+        )
 
     # Get team models
     team_models: List[str] = user_api_key_dict.team_models
@@ -5581,10 +5589,6 @@ async def get_available_models_for_user(
         include_model_access_groups=include_model_access_groups,
         only_model_access_groups=only_model_access_groups,
     )
-
-    # Strip the fail-closed sentinel before returning to callers — it must never
-    # appear in a model listing response (e.g. GET /v1/models).
-    all_models = [m for m in all_models if m != ACCESS_GROUP_NO_MODELS_SENTINEL]
 
     return all_models
 

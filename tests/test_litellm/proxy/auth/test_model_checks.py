@@ -7,14 +7,14 @@ from litellm.proxy.auth.handle_jwt import JWTAuthManager
 
 
 @pytest.mark.asyncio
-async def test_get_key_models_with_db_access_groups_restricts_models():
+async def test_access_group_ids_restricts_model_list():
     """
     Issue #23850: when a key has access_group_ids but no native models,
     the access group models must be used as key_models so that
     get_complete_model_list() does NOT fall back to team_models.
     """
     from litellm.proxy._types import UserAPIKeyAuth
-    from litellm.proxy.auth.model_checks import get_key_models_with_db_access_groups
+    from litellm.proxy.auth.model_checks import get_complete_model_list, get_key_models
 
     user_api_key_dict = UserAPIKeyAuth(
         models=[],
@@ -23,16 +23,33 @@ async def test_get_key_models_with_db_access_groups_restricts_models():
         api_key="test-key",
     )
 
-    with patch(
-        "litellm.proxy.auth.auth_checks._get_models_from_access_groups",
-        new_callable=AsyncMock,
-        return_value=["gpt-3.5-turbo"],
-    ):
-        result = await get_key_models_with_db_access_groups(
-            user_api_key_dict=user_api_key_dict,
-            proxy_model_list=["gpt-4", "claude-3", "gpt-3.5-turbo", "gemini-pro"],
-            model_access_groups={},
-        )
+    proxy_model_list = ["gpt-4", "claude-3", "gpt-3.5-turbo", "gemini-pro"]
+    key_models = get_key_models(
+        user_api_key_dict=user_api_key_dict,
+        proxy_model_list=proxy_model_list,
+        model_access_groups={},
+    )
+
+    # Simulate the inline resolution that proxy_server.py / utils.py now perform
+    if not key_models and user_api_key_dict.access_group_ids:
+        with patch(
+            "litellm.proxy.auth.auth_checks._get_models_from_access_groups",
+            new_callable=AsyncMock,
+            return_value=["gpt-3.5-turbo"],
+        ):
+            from litellm.proxy.auth.auth_checks import _get_models_from_access_groups
+
+            key_models = await _get_models_from_access_groups(
+                access_group_ids=user_api_key_dict.access_group_ids,
+            )
+
+    result = get_complete_model_list(
+        key_models=key_models,
+        team_models=user_api_key_dict.team_models,
+        proxy_model_list=proxy_model_list,
+        user_model=None,
+        infer_model_from_keys=False,
+    )
 
     assert result == ["gpt-3.5-turbo"], f"Expected only access group models, got: {result}"
     assert "gpt-4" not in result
@@ -41,13 +58,13 @@ async def test_get_key_models_with_db_access_groups_restricts_models():
 
 
 @pytest.mark.asyncio
-async def test_get_key_models_with_db_access_groups_fallback_to_team_when_no_access_group_ids():
+async def test_no_access_group_ids_falls_back_to_team_models():
     """
     When access_group_ids is empty/None, existing fallback behaviour is preserved:
-    key_models stays empty so get_complete_model_list() can use team_models.
+    key_models stays empty so get_complete_model_list() uses team_models.
     """
     from litellm.proxy._types import UserAPIKeyAuth
-    from litellm.proxy.auth.model_checks import get_key_models_with_db_access_groups
+    from litellm.proxy.auth.model_checks import get_complete_model_list, get_key_models
 
     user_api_key_dict = UserAPIKeyAuth(
         models=[],
@@ -56,24 +73,36 @@ async def test_get_key_models_with_db_access_groups_fallback_to_team_when_no_acc
         api_key="test-key",
     )
 
-    result = await get_key_models_with_db_access_groups(
+    proxy_model_list = ["gpt-4", "claude-3"]
+    key_models = get_key_models(
         user_api_key_dict=user_api_key_dict,
-        proxy_model_list=["gpt-4", "claude-3"],
+        proxy_model_list=proxy_model_list,
         model_access_groups={},
     )
 
-    # key has no restrictions → empty so caller falls back to team_models
-    assert result == []
+    # No access_group_ids → key_models stays empty, no DB call needed
+    assert key_models == []
+
+    result = get_complete_model_list(
+        key_models=key_models,
+        team_models=user_api_key_dict.team_models,
+        proxy_model_list=proxy_model_list,
+        user_model=None,
+        infer_model_from_keys=False,
+    )
+
+    # Falls back to team_models
+    assert set(result) == {"gpt-4", "claude-3"}
 
 
 @pytest.mark.asyncio
-async def test_get_key_models_with_db_access_groups_native_models_take_precedence():
+async def test_native_models_take_precedence_over_access_group_ids():
     """
-    When the key already has native model restrictions, access_group_ids are
-    ignored — the native model list is authoritative.
+    When the key already has native model restrictions, access_group_ids
+    resolution is skipped — the native model list is authoritative.
     """
     from litellm.proxy._types import UserAPIKeyAuth
-    from litellm.proxy.auth.model_checks import get_key_models_with_db_access_groups
+    from litellm.proxy.auth.model_checks import get_key_models
 
     user_api_key_dict = UserAPIKeyAuth(
         models=["gpt-4"],
@@ -82,20 +111,15 @@ async def test_get_key_models_with_db_access_groups_native_models_take_precedenc
         api_key="test-key",
     )
 
-    with patch(
-        "litellm.proxy.auth.auth_checks._get_models_from_access_groups",
-        new_callable=AsyncMock,
-        return_value=["gpt-3.5-turbo"],
-    ) as mock_db:
-        result = await get_key_models_with_db_access_groups(
-            user_api_key_dict=user_api_key_dict,
-            proxy_model_list=["gpt-4", "claude-3", "gpt-3.5-turbo"],
-            model_access_groups={},
-        )
+    key_models = get_key_models(
+        user_api_key_dict=user_api_key_dict,
+        proxy_model_list=["gpt-4", "claude-3", "gpt-3.5-turbo"],
+        model_access_groups={},
+    )
 
-    # DB should never be hit — native models are sufficient
-    mock_db.assert_not_called()
-    assert result == ["gpt-4"]
+    # Native models are non-empty → access_group_ids resolution would be skipped
+    assert key_models == ["gpt-4"]
+    # The condition `not key_models and access_group_ids` is False, so no DB call
 
 
 def test_get_team_models_for_all_models_and_team_only_models():

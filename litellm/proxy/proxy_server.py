@@ -275,11 +275,9 @@ from litellm.proxy.auth.auth_utils import check_response_size_is_safe
 from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy.auth.litellm_license import LicenseCheck
 from litellm.proxy.auth.model_checks import (
-    ACCESS_GROUP_NO_MODELS_SENTINEL,
     get_all_fallbacks,
     get_complete_model_list,
     get_key_models,
-    get_key_models_with_db_access_groups,
     get_mcp_server_ids,
     get_team_models,
 )
@@ -10854,11 +10852,20 @@ async def model_info_v1(  # noqa: PLR0915
     else:
         proxy_model_list = llm_router.get_model_names()
         model_access_groups = llm_router.get_model_access_groups()
-    key_models = await get_key_models_with_db_access_groups(
+    key_models = get_key_models(
         user_api_key_dict=user_api_key_dict,
         proxy_model_list=proxy_model_list,
         model_access_groups=model_access_groups,
     )
+    # If key has access_group_ids but no native models, resolve from DB so the
+    # model list reflects the access group restriction instead of falling back
+    # to team models (issue #23850).
+    if not key_models and user_api_key_dict.access_group_ids:
+        from litellm.proxy.auth.auth_checks import _get_models_from_access_groups
+
+        key_models = await _get_models_from_access_groups(
+            access_group_ids=user_api_key_dict.access_group_ids,
+        )
     team_models = get_team_models(
         team_models=user_api_key_dict.team_models,
         proxy_model_list=proxy_model_list,
@@ -10872,8 +10879,6 @@ async def model_info_v1(  # noqa: PLR0915
         infer_model_from_keys=general_settings.get("infer_model_from_keys", False),
         llm_router=llm_router,
     )
-    # Strip the fail-closed sentinel — it must never appear in the /v1/models response.
-    all_models_str = [m for m in all_models_str if m != ACCESS_GROUP_NO_MODELS_SENTINEL]
 
     if len(all_models_str) > 0:
         _relevant_models = []

@@ -132,54 +132,6 @@ def get_key_models(
     return all_models
 
 
-# Sentinel used by get_key_models_with_db_access_groups to signal "key has
-# access_group_ids but none resolved to any model" so that get_complete_model_list()
-# does not fall through to team_models (fail-closed).  Callers that return model
-# lists to end-users MUST strip this value before responding.
-ACCESS_GROUP_NO_MODELS_SENTINEL = "__access_group_no_models__"
-
-
-async def get_key_models_with_db_access_groups(
-    user_api_key_dict: UserAPIKeyAuth,
-    proxy_model_list: List[str],
-    model_access_groups: Dict[str, List[str]],
-    include_model_access_groups: Optional[bool] = False,
-    only_model_access_groups: Optional[bool] = False,
-) -> List[str]:
-    """
-    Like get_key_models, but also resolves access_group_ids from the DB when the
-    key has no native model restrictions.
-
-    When a key has models=[] and access_group_ids set, the access groups define the
-    key's allowed model set. Without this step get_complete_model_list() would fall
-    back to team_models, giving the key unrestricted team access (issue #23850).
-    """
-    key_models = get_key_models(
-        user_api_key_dict=user_api_key_dict,
-        proxy_model_list=proxy_model_list,
-        model_access_groups=model_access_groups,
-        include_model_access_groups=include_model_access_groups,
-        only_model_access_groups=only_model_access_groups,
-    )
-
-    if not key_models and user_api_key_dict.access_group_ids:
-        # Inline import to avoid a circular dependency:
-        # model_checks → auth_checks → proxy utils → model_checks
-        from litellm.proxy.auth.auth_checks import (
-            _get_models_from_access_groups as _get_models_from_db_access_groups,
-        )
-
-        db_models = await _get_models_from_db_access_groups(
-            access_group_ids=user_api_key_dict.access_group_ids,
-        )
-        # Fail-closed: if the access group is configured but resolves to nothing
-        # (deleted group, DB unavailable, or empty group), use a sentinel so
-        # get_complete_model_list() does NOT fall through to team_models.
-        key_models = db_models if db_models else [ACCESS_GROUP_NO_MODELS_SENTINEL]
-
-    return key_models
-
-
 def get_team_models(
     team_models: List[str],
     proxy_model_list: List[str],
