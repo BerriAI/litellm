@@ -336,21 +336,21 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         optional_params = dict(optional_params)
         optional_params.pop("deployment_url", None)
 
-        excluded_params = _SAP_MODEL_PARAMS_EXCLUDED_KEYS
-        model_params = {
-            k: v for k, v in optional_params.items() if k not in excluded_params
-        }
-
-        model_version = optional_params.pop("model_version", "latest")
         template = _messages_to_sap_template(messages)
 
-        tools, response_format, stream_config = _tools_response_format_and_stream(
-            optional_params, model_params
-        )
-
         placeholder_values = optional_params.pop("placeholder_values", None)
-
         fallback_modules = optional_params.pop("fallback_sap_modules", [])
+
+        optional_params.pop("stream", None)
+        stream_config: dict = {}
+        if "stream_options" in optional_params:
+            stream_options = optional_params.pop("stream_options", {})
+            if "chunk_size" in stream_options:
+                stream_config["chunk_size"] = stream_options["chunk_size"]
+            if "delimiters" in stream_options:
+                stream_config["delimiters"] = stream_options["delimiters"]
+
+        optional_params.pop("tool_choice", None)
 
         modules = [
             self._build_prompt_module(
@@ -380,16 +380,7 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
             )
 
         config_payload: Dict[str, Any] = {
-            "modules": {
-                "prompt_templating": {
-                    "prompt": {"template": template, **tools, **response_format},
-                    "model": {
-                        "name": model,
-                        "params": model_params,
-                        "version": model_version,
-                    },
-                },
-            },
+            "modules": modules if len(modules) > 1 else modules[0],
         }
         if stream_config:
             config_payload["stream"] = stream_config
