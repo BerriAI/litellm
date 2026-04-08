@@ -5174,15 +5174,25 @@ def _bedrock_tools_pt(tools: List) -> List[BedrockToolBlock]:
         # with circular references (see issue #19098). unpack_defs handles nested
         # refs recursively and correctly detects/skips circular references.
         unpack_defs(parameters, defs_copy)
+        _additional_properties = parameters.get("additionalProperties", None)
         tool_input_schema = BedrockToolInputSchemaBlock(
             json=BedrockToolJsonSchemaBlock(
                 type=parameters.get("type", ""),
                 properties=parameters.get("properties", {}),
                 required=parameters.get("required", []),
+                **(
+                    {"additionalProperties": _additional_properties}
+                    if _additional_properties is not None
+                    else {}
+                ),
             )
         )
+        _strict = tool.get("function", {}).get("strict", None)
         tool_spec = BedrockToolSpecBlock(
-            inputSchema=tool_input_schema, name=name, description=description
+            inputSchema=tool_input_schema,
+            name=name,
+            description=description,
+            **({"strict": _strict} if _strict is not None else {}),
         )
         tool_block = BedrockToolBlock(toolSpec=tool_spec)
         tool_block_list.append(tool_block)
