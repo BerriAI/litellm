@@ -1330,6 +1330,56 @@ jobs:
           paths:
             - audio_coverage.xml
             - audio_coverage
+  redis_caching_unit_tests:
+    docker:
+      - image: cimg/python:3.11
+        auth:
+          username: ${DOCKERHUB_USERNAME}
+          password: ${DOCKERHUB_PASSWORD}
+    working_directory: ~/project
+
+    steps:
+      - checkout
+      - setup_google_dns
+      - run:
+          name: Install Dependencies
+          command: |
+            python -m pip install --upgrade pip uv
+            uv pip install --system -r requirements.txt
+            pip install "pytest==7.3.1"
+            pip install "pytest-retry==1.6.3"
+            pip install "pytest-cov==5.0.0"
+            pip install "pytest-asyncio==0.21.1"
+            pip install "pytest-xdist==3.6.1"
+      # Run pytest and generate JUnit XML report
+      - run:
+          name: Run tests
+          command: |
+            pwd
+            ls
+            python -m pytest -vv \
+              tests/local_testing/test_dual_cache.py \
+              tests/local_testing/test_redis_batch_optimizations.py \
+              tests/local_testing/test_router_utils.py \
+              --cov=litellm --cov-report=xml \
+              -x -s -v --junitxml=test-results/junit.xml \
+              --durations=5 -n 2 \
+              --reruns 2 --reruns-delay 1
+          no_output_timeout: 20m
+      - run:
+          name: Rename the coverage files
+          command: |
+            mv coverage.xml redis_caching_coverage.xml
+            mv .coverage redis_caching_coverage
+
+      # Store test results
+      - store_test_results:
+          path: test-results
+      - persist_to_workspace:
+          root: .
+          paths:
+            - redis_caching_coverage.xml
+            - redis_caching_coverage
   installing_litellm_on_python:
     docker:
       - image: cimg/python:3.11
@@ -3615,6 +3665,12 @@ workflows:
               only:
                 - main
                 - /litellm_.*/
+      - redis_caching_unit_tests:
+          filters:
+            branches:
+              only:
+                - main
+                - /litellm_.*/
       - upload-coverage:
           requires:
             - realtime_translation_testing
@@ -3633,6 +3689,7 @@ workflows:
             - image_gen_testing
             - logging_testing
             - audio_testing
+            - redis_caching_unit_tests
             - langfuse_logging_unit_tests
             - local_testing_part1
             - local_testing_part2
