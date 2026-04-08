@@ -255,7 +255,13 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
             return
 
         response_cost: float = standard_logging_payload.get("response_cost", 0)
-        model = standard_logging_payload.get("model")
+        # Use model_group (public/router name, e.g. "gpt-4") rather than
+        # model (deployment name, e.g. "azure/gpt-4-deployment").  Budget
+        # configs and the read path both use the public model name, so the
+        # write path must match to produce cache hits.
+        model = standard_logging_payload.get(
+            "model_group"
+        ) or standard_logging_payload.get("model")
         virtual_key = standard_logging_payload.get("metadata", {}).get(
             "user_api_key_hash"
         )
