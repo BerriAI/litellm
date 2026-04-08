@@ -1658,7 +1658,7 @@ def test_get_file_content_streaming_uses_storage_backend(
 
     try:
         response = client.get(
-            f"/v2/files/{encoded_file_id}/content",
+            f"/v1/files/{encoded_file_id}/content",
             headers={"Authorization": "Bearer test-key"},
         )
 
@@ -1696,7 +1696,7 @@ def test_get_file_content_streaming_uses_managed_files_hook(
 
     try:
         response = client.get(
-            f"/v2/files/{encoded_file_id}/content",
+            f"/v1/files/{encoded_file_id}/content",
             headers={"Authorization": "Bearer test-key"},
         )
 
@@ -1732,7 +1732,7 @@ def test_get_file_content_streaming_uses_litellm_for_managed_model_branch(
 
     try:
         response = client.get(
-            f"/v2/files/{encoded_file_id}/content",
+            f"/v1/files/{encoded_file_id}/content",
             headers={"Authorization": "Bearer test-key"},
         )
 
@@ -1783,7 +1783,7 @@ def test_get_file_content_streaming_routes_model_request(
 
     try:
         response = client.get(
-            "/v2/files/file-plain-123/content",
+            "/v1/files/file-plain-123/content",
             headers={"Authorization": "Bearer test-key"},
         )
 
@@ -1820,7 +1820,7 @@ def test_get_file_content_streaming_falls_back_to_provider(
 
     try:
         response = client.get(
-            "/v2/files/file-plain-456/content",
+            "/v1/files/file-plain-456/content",
             headers={"Authorization": "Bearer test-key"},
         )
 
@@ -1846,7 +1846,7 @@ def test_get_file_content_streaming_errors_when_managed_files_hook_missing(
 
     try:
         response = client.get(
-            f"/v2/files/{encoded_file_id}/content",
+            f"/v1/files/{encoded_file_id}/content",
             headers={"Authorization": "Bearer test-key"},
         )
 
@@ -1868,7 +1868,7 @@ def test_get_file_content_streaming_errors_when_managed_files_hook_is_wrong_type
 
     try:
         response = client.get(
-            f"/v2/files/{encoded_file_id}/content",
+            f"/v1/files/{encoded_file_id}/content",
             headers={"Authorization": "Bearer test-key"},
         )
 
@@ -1892,7 +1892,7 @@ def test_get_file_content_streaming_errors_when_router_is_missing(
 
     try:
         response = client.get(
-            f"/v2/files/{encoded_file_id}/content",
+            f"/v1/files/{encoded_file_id}/content",
             headers={"Authorization": "Bearer test-key"},
         )
 
@@ -1933,7 +1933,7 @@ def test_get_file_content_streaming_errors_when_storage_backend_is_invalid(
 
     try:
         response = client.get(
-            f"/v2/files/{encoded_file_id}/content",
+            f"/v1/files/{encoded_file_id}/content",
             headers={"Authorization": "Bearer test-key"},
         )
 
