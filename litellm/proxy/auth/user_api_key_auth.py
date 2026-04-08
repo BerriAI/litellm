@@ -1084,6 +1084,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                 request_data=request_data,
                 route=route,
                 model_max_budget_limiter=model_max_budget_limiter,
+                prisma_client=prisma_client,
             )
 
             return valid_token
@@ -1170,6 +1171,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                 request_data=request_data,
                 route=route,
                 model_max_budget_limiter=model_max_budget_limiter,
+                prisma_client=prisma_client,
             )
 
             return _user_api_key_obj
@@ -1806,6 +1808,7 @@ async def _check_model_max_budget(
     request_data: dict,
     route: str,
     model_max_budget_limiter: "litellm.proxy.hooks.model_max_budget_limiter._PROXY_VirtualKeyModelMaxBudgetLimiter",
+    prisma_client: Optional["PrismaClient"] = None,
 ) -> None:
     """
     Run per-model budget checks for both key-level and end-user-level budgets.
@@ -1826,6 +1829,7 @@ async def _check_model_max_budget(
         max_budget_per_model is not None
         and isinstance(max_budget_per_model, dict)
         and len(max_budget_per_model) > 0
+        and prisma_client is not None
         and valid_token.token is not None
     ):
         await model_max_budget_limiter.is_key_within_model_budget(

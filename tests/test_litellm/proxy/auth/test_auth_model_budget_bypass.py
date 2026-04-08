@@ -156,6 +156,7 @@ class TestCheckModelMaxBudget:
             request_data={"model": "gpt-4"},
             route="/chat/completions",
             model_max_budget_limiter=limiter,
+            prisma_client=MagicMock(),
         )
         limiter.is_key_within_model_budget.assert_awaited_once_with(
             user_api_key_dict=token,
@@ -238,6 +239,7 @@ class TestCheckModelMaxBudget:
                 request_data={"model": "gpt-4"},
                 route="/chat/completions",
                 model_max_budget_limiter=limiter,
+                prisma_client=MagicMock(),
             )
 
     @pytest.mark.asyncio
@@ -258,9 +260,27 @@ class TestCheckModelMaxBudget:
             request_data={"model": "gpt-4"},
             route="/chat/completions",
             model_max_budget_limiter=limiter,
+            prisma_client=MagicMock(),
         )
         limiter.is_key_within_model_budget.assert_awaited_once()
         limiter.is_end_user_within_model_budget.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_should_skip_key_budget_when_prisma_client_is_none(self):
+        """Key-level check requires prisma_client to be non-None."""
+        limiter = MagicMock(spec=_PROXY_VirtualKeyModelMaxBudgetLimiter)
+        token = UserAPIKeyAuth(
+            token="hashed-key",
+            model_max_budget={"gpt-4": {"budget_limit": 10.0, "time_period": "1d"}},
+        )
+        await _check_model_max_budget(
+            valid_token=token,
+            request_data={"model": "gpt-4"},
+            route="/chat/completions",
+            model_max_budget_limiter=limiter,
+            prisma_client=None,
+        )
+        limiter.is_key_within_model_budget.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_should_skip_when_model_max_budget_empty(self):
