@@ -64,6 +64,50 @@ def validate_dict(data: dict, model) -> dict:
     return model(**data).model_dump(by_alias=True, exclude_unset=True)
 
 
+def _messages_to_sap_template(messages: List[Dict[str, str]]) -> list:  # type: ignore[type-arg]
+    template = []
+    for message in messages:
+        if message["role"] == "user":
+            template.append(validate_dict(message, SAPUserMessage))
+        elif message["role"] == "assistant":
+            template.append(validate_dict(message, SAPAssistantMessage))
+        elif message["role"] == "tool":
+            template.append(validate_dict(message, SAPToolChatMessage))
+        else:
+            template.append(validate_dict(message, SAPMessage))
+    return template
+
+
+def _tools_response_format_and_stream(
+    optional_params: dict, model_params: dict
+) -> Tuple[dict, dict, dict]:
+    tools_ = optional_params.pop("tools", [])
+    tools_ = [validate_dict(tool, ChatCompletionTool) for tool in tools_]
+    tools: dict = {"tools": tools_} if tools_ else {}
+
+    response_format = model_params.pop("response_format", {})
+    resp_type = response_format.get("type", None)
+    if resp_type:
+        if resp_type == "json_schema":
+            response_format = validate_dict(
+                response_format, ResponseFormatJSONSchema
+            )
+        else:
+            response_format = validate_dict(response_format, ResponseFormat)
+        response_format = {"response_format": response_format}
+
+    model_params.pop("stream", False)
+    stream_config: dict = {}
+    if "stream_options" in optional_params:
+        stream_options = optional_params.pop("stream_options", {})
+        if "chunk_size" in stream_options:
+            stream_config["chunk_size"] = stream_options.get("chunk_size")
+        if "delimiters" in stream_options:
+            stream_config["delimiters"] = stream_options.get("delimiters")
+
+    return tools, response_format, stream_config
+
+
 class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
     frequency_penalty: Optional[int] = None
     function_call: Optional[Union[str, dict]] = None
@@ -292,57 +336,19 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         optional_params = dict(optional_params)
         optional_params.pop("deployment_url", None)
 
-        template = messages
-
         excluded_params = _SAP_MODEL_PARAMS_EXCLUDED_KEYS
         model_params = {
             k: v for k, v in optional_params.items() if k not in excluded_params
         }
 
         model_version = optional_params.pop("model_version", "latest")
-        template = []
-        for message in messages:
-            if message["role"] == "user":
-                template.append(validate_dict(message, SAPUserMessage))
-            elif message["role"] == "assistant":
-                template.append(validate_dict(message, SAPAssistantMessage))
-            elif message["role"] == "tool":
-                template.append(validate_dict(message, SAPToolChatMessage))
-            else:
-                template.append(validate_dict(message, SAPMessage))
+        template = _messages_to_sap_template(messages)
 
-        tools_ = optional_params.pop("tools", [])
-        tools_ = [validate_dict(tool, ChatCompletionTool) for tool in tools_]
-        if tools_ != []:
-            tools = {"tools": tools_}
-        else:
-            tools = {}
-
-        response_format = model_params.pop("response_format", {})
-        resp_type = response_format.get("type", None)
-        if resp_type:
-            if resp_type == "json_schema":
-                response_format = validate_dict(
-                    response_format, ResponseFormatJSONSchema
-                )
-            else:
-                response_format = validate_dict(response_format, ResponseFormat)
-            response_format = {"response_format": response_format}
-        model_params.pop("stream", False)
-        stream_config = {}
-        if "stream_options" in optional_params:
-            stream_options = optional_params.pop("stream_options", {})
-            if "chunk_size" in stream_options:
-                stream_config["chunk_size"] = stream_options.get("chunk_size")
-            if "delimiters" in stream_options:
-                stream_config["delimiters"] = stream_options.get("delimiters")
+        tools, response_format, stream_config = _tools_response_format_and_stream(
+            optional_params, model_params
+        )
 
         placeholder_values = optional_params.pop("placeholder_values", None)
-        placeholder_values = (
-            {"placeholder_values": placeholder_values}
-            if placeholder_values is not None
-            else {}
-        )
 
         fallback_modules = optional_params.pop("fallback_sap_modules", [])
 
@@ -373,26 +379,24 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
                 )
             )
 
-        if fallback_modules:
-            modules_payload = modules
-        else:
-            modules_payload = modules[0]  # type: ignore
-
-        request_body = {
-            "config": {
-                "modules": {
-                    "prompt_templating": {
-                        "prompt": {"template": template, **tools, **response_format},
-                        "model": {
-                            "name": model,
-                            "params": model_params,
-                            "version": model_version,
-                        },
+        config_payload: Dict[str, Any] = {
+            "modules": {
+                "prompt_templating": {
+                    "prompt": {"template": template, **tools, **response_format},
+                    "model": {
+                        "name": model,
+                        "params": model_params,
+                        "version": model_version,
                     },
                 },
-                "stream": stream_config,
-            }
+            },
         }
+        if stream_config:
+            config_payload["stream"] = stream_config
+
+        request_body: Dict[str, Any] = {"config": config_payload}
+        if placeholder_values is not None:
+            request_body["placeholder_values"] = placeholder_values
 
         body = validate_dict(request_body, OrchestrationRequest)
 
