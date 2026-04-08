@@ -108,19 +108,20 @@ class VertexAIPartnerModelsTokenCounter(VertexBase):
         vertex_project = self.get_vertex_ai_project(litellm_params)
         vertex_location = self.get_vertex_ai_location(litellm_params)
 
-        # common_utils.py already resolves vertex_count_tokens_location and
-        # passes it as vertex_location through the call chain.
-        # Only override to us-central1 when the user did NOT explicitly set
-        # vertex_count_tokens_location -- this preserves backwards compat for
-        # users whose vertex_location is "global" or another unsupported region.
+        # Resolve the location used for the count-tokens endpoint with the
+        # following precedence:
+        #   1. vertex_count_tokens_location (explicit override) wins
+        #   2. vertex_location (if explicitly set) is respected
+        #   3. Claude models with no location set default to us-east5
+        # Supported Claude regions: us-east5, europe-west1, asia-southeast1
         # https://docs.cloud.google.com/vertex-ai/generative-ai/docs/partner-models/claude/count-tokens
         explicit_count_tokens_location = litellm_params.get(
             "vertex_count_tokens_location"
         )
         if explicit_count_tokens_location:
             vertex_location = explicit_count_tokens_location
-        elif not vertex_location or "claude" in model.lower():
-            vertex_location = "us-central1"
+        elif not vertex_location and "claude" in model.lower():
+            vertex_location = "us-east5"
 
         # Get access token and resolved project ID
         access_token, project_id = await self._ensure_access_token_async(
