@@ -20,7 +20,7 @@ from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import ModelResponse, ProviderField
-from litellm.utils import _add_path_to_api_base, supports_tool_choice
+from litellm.utils import _add_path_to_api_base, _is_explicitly_disabled_factory
 
 
 class AzureFoundryErrorStrings(str, enum.Enum):
@@ -29,9 +29,15 @@ class AzureFoundryErrorStrings(str, enum.Enum):
 
 class AzureAIStudioConfig(OpenAIConfig):
     def get_supported_openai_params(self, model: str) -> List:
-        model_supports_tool_choice = True  # azure ai supports this by default
-        if not supports_tool_choice(model=f"azure_ai/{model}"):
-            model_supports_tool_choice = False
+        # azure ai supports tool_choice by default; only drop it when the
+        # model cost map explicitly sets supports_tool_choice=false. A missing
+        # capability flag must be treated as supported so new or custom
+        # deployments don't lose tool_choice unexpectedly.
+        model_supports_tool_choice = not _is_explicitly_disabled_factory(
+            model=f"azure_ai/{model}",
+            custom_llm_provider=None,
+            key="supports_tool_choice",
+        )
         supported_params = super().get_supported_openai_params(model)
         if not model_supports_tool_choice:
             filtered_supported_params = []
