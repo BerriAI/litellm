@@ -101,3 +101,13 @@ STABILIZATION_TODO.md
 **/playwright-report
 **/*.storageState.json
 **/coverage
+# Mavvrik local dev files
+config/mavvrik-dev.yaml
+config/cloudzero-dev.yaml
+config/focus-s3-dev.yaml
+config/*.bak
+docs/mavvrik-*.md
+docs/mavvrik-*.pdf
+docs/plans/
+.env.dev
+config.test.yaml
