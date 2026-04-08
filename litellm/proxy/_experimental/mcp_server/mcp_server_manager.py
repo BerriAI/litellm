@@ -10,6 +10,7 @@ import asyncio
 import datetime
 import hashlib
 import json
+import os
 import re
 from typing import Any, Callable, Dict, List, Literal, Optional, Set, Tuple, Union, cast
 from urllib.parse import urlparse
@@ -35,6 +36,8 @@ from litellm.constants import (
     MCP_CLIENT_TIMEOUT,
     MCP_HEALTH_CHECK_TIMEOUT,
     MCP_METADATA_TIMEOUT,
+    MCP_NPM_CACHE_DIR,
+    MCP_STDIO_ALLOWED_COMMANDS,
     MCP_TOOL_LISTING_TIMEOUT,
 )
 from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
@@ -1119,25 +1122,17 @@ class MCPServerManager:
             # In containers the default (~/.npm or /app/.npm) may not exist
             # or be read-only, causing npx to fail with ENOENT.
             if "NPM_CONFIG_CACHE" not in resolved_env:
-                from litellm.constants import MCP_NPM_CACHE_DIR
-
                 resolved_env["NPM_CONFIG_CACHE"] = MCP_NPM_CACHE_DIR
-            # Defense-in-depth: warn for commands not in the allowlist.
+            # Defense-in-depth: block commands not in the allowlist.
             # The Pydantic validator blocks new servers; this catches legacy
             # config/DB records predating the allowlist.
             if server.command:
-                import os as _os
-
-                from litellm.constants import MCP_STDIO_ALLOWED_COMMANDS
-
-                base_command = _os.path.basename(server.command)
+                base_command = os.path.basename(server.command)
                 if base_command not in MCP_STDIO_ALLOWED_COMMANDS:
-                    verbose_logger.warning(
-                        "MCP stdio command '%s' is not in the allowlist (%s). "
-                        "Add it to LITELLM_MCP_STDIO_EXTRA_COMMANDS to suppress this warning. "
-                        "A future release may block non-allowlisted commands.",
-                        server.command,
-                        sorted(MCP_STDIO_ALLOWED_COMMANDS),
+                    raise HTTPException(
+                        status_code=403,
+                        detail=f"MCP stdio command '{server.command}' is not in the allowlist ({sorted(MCP_STDIO_ALLOWED_COMMANDS)}). "
+                        f"Add it to LITELLM_MCP_STDIO_EXTRA_COMMANDS to allow this command.",
                     )
 
             stdio_config: Optional[MCPStdioConfig] = None
