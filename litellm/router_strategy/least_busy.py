@@ -76,7 +76,7 @@ class LeastBusyLoggingHandler(CustomLogger):
                 request_count_value: Optional[int] = request_count_dict.get(id, 0)
                 if request_count_value is None:
                     return
-                request_count_dict[id] = request_count_value - 1
+                request_count_dict[id] = max(request_count_value - 1, 0)
                 self.router_cache.set_cache(
                     key=request_count_api_key, value=request_count_dict
                 )
@@ -109,7 +109,7 @@ class LeastBusyLoggingHandler(CustomLogger):
                 request_count_value: Optional[int] = request_count_dict.get(id, 0)
                 if request_count_value is None:
                     return
-                request_count_dict[id] = request_count_value - 1
+                request_count_dict[id] = max(request_count_value - 1, 0)
                 self.router_cache.set_cache(
                     key=request_count_api_key, value=request_count_dict
                 )
@@ -144,7 +144,7 @@ class LeastBusyLoggingHandler(CustomLogger):
                 request_count_value: Optional[int] = request_count_dict.get(id, 0)
                 if request_count_value is None:
                     return
-                request_count_dict[id] = request_count_value - 1
+                request_count_dict[id] = max(request_count_value - 1, 0)
                 await self.router_cache.async_set_cache(
                     key=request_count_api_key, value=request_count_dict
                 )
@@ -178,7 +178,7 @@ class LeastBusyLoggingHandler(CustomLogger):
                 request_count_value: Optional[int] = request_count_dict.get(id, 0)
                 if request_count_value is None:
                     return
-                request_count_dict[id] = request_count_value - 1
+                request_count_dict[id] = max(request_count_value - 1, 0)
                 await self.router_cache.async_set_cache(
                     key=request_count_api_key, value=request_count_dict
                 )
