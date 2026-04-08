@@ -30,7 +30,7 @@ class PromptTemplate:
         self.output_format = self.metadata.get("output", {}).get("format")
         self.output_schema = self.metadata.get("output", {}).get("schema", {})
         self.optional_params = {}
-        for key in self.metadata.keys():
+        for key in self.metadata:
             if key not in restricted_keys:
                 self.optional_params[key] = self.metadata[key]
 

@@ -37,7 +37,7 @@ def _load_jsonl(filename: str) -> List[dict]:
     """Load eval cases from a JSONL file. One JSON object per line."""
     cases = []
     path = os.path.join(EVAL_DIR, filename)
-    with open(path, "r") as f:
+    with open(path) as f:
         for line in f:
             line = line.strip()
             if not line:

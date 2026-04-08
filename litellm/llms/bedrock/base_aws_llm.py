@@ -744,7 +744,7 @@ class BaseAWSLLM:
         verbose_logger.debug("Cross-account role assumption detected")
 
         # Read the web identity token
-        with open(web_identity_token_file, "r") as f:
+        with open(web_identity_token_file) as f:
             web_identity_token = f.read().strip()
 
         irsa_sts_kwargs: dict = {

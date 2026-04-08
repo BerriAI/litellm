@@ -640,7 +640,7 @@ async def update_project(  # noqa: PLR0915
                 },
             )
             # Remove budget fields from project update
-            for field in budget_updates.keys():
+            for field in budget_updates:
                 update_data.pop(field, None)
 
         # Handle object permissions

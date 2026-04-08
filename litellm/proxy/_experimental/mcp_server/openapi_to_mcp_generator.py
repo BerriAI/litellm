@@ -85,7 +85,7 @@ async def load_openapi_spec_async(filepath: str) -> Dict[str, Any]:
     # Local filesystem path
     if not os.path.exists(filepath):
         raise FileNotFoundError(f"OpenAPI spec not found at {filepath}")
-    with open(filepath, "r", encoding="utf-8") as f:
+    with open(filepath, encoding="utf-8") as f:
         return json.load(f)
 
 

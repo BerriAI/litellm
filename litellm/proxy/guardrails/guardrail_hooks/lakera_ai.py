@@ -168,9 +168,7 @@ class lakeraAI_Moderation(CustomGuardrail):
                         stringified_roles.append(role.value)
                     elif isinstance(role, str):
                         stringified_roles.append(role)
-            lakera_input_dict: Dict = {
-                role: None for role in INPUT_POSITIONING_MAP.keys()
-            }
+            lakera_input_dict: Dict = dict.fromkeys(INPUT_POSITIONING_MAP.keys())
             system_message = None
             tool_call_messages: List = []
             for message in data["messages"]:

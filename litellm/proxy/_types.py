@@ -3672,7 +3672,7 @@ class OrgMemberAddRequest(LiteLLMPydanticObjectBase):
             if all(isinstance(item, dict) for item in member_data):
                 members = [OrgMember(**item) for item in member_data]
             else:
-                members = [item for item in member_data]
+                members = list(member_data)
             # Replace member_data with the list of Member objects
             data["member"] = members
         elif isinstance(member_data, dict):

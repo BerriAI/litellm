@@ -41,8 +41,8 @@ class RecraftImageGenerationConfig(BaseImageGenerationConfig):
         drop_params: bool,
     ) -> dict:
         supported_params = self.get_supported_openai_params(model)
-        for k in non_default_params.keys():
-            if k not in optional_params.keys():
+        for k in non_default_params:
+            if k not in optional_params:
                 if k in supported_params:
                     optional_params[k] = non_default_params[k]
                 elif drop_params:

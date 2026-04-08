@@ -155,7 +155,7 @@ def get_audio_file_content_hash(file_obj: FileTypes) -> str:
                     file_content = f.read()
                 if fallback_filename is None:
                     fallback_filename = str(file_content_obj)
-            except (OSError, IOError):
+            except OSError:
                 fallback_filename = str(file_content_obj)
                 file_content = None
         elif hasattr(file_content_obj, "read"):
@@ -170,7 +170,7 @@ def get_audio_file_content_hash(file_obj: FileTypes) -> str:
                 file_content = file_content_obj.read()  # type: ignore
                 if current_position is not None and hasattr(file_content_obj, "seek"):
                     file_content_obj.seek(current_position)  # type: ignore
-            except (OSError, IOError, AttributeError):
+            except (OSError, AttributeError):
                 file_content = None
         else:
             file_content = None

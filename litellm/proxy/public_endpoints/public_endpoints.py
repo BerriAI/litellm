@@ -301,7 +301,7 @@ async def get_provider_fields() -> List[ProviderCreateInfo]:
         "provider_create_fields.json",
     )
 
-    with open(provider_create_fields_path, "r") as f:
+    with open(provider_create_fields_path) as f:
         provider_create_fields = json.load(f)
 
     return provider_create_fields
@@ -391,10 +391,10 @@ async def get_agent_fields() -> List[AgentCreateInfo]:
     agent_create_fields_path = os.path.join(base_path, "agent_create_fields.json")
     provider_create_fields_path = os.path.join(base_path, "provider_create_fields.json")
 
-    with open(agent_create_fields_path, "r") as f:
+    with open(agent_create_fields_path) as f:
         agent_create_fields = json.load(f)
 
-    with open(provider_create_fields_path, "r") as f:
+    with open(provider_create_fields_path) as f:
         provider_create_fields = json.load(f)
 
     # Build a lookup map for providers by name

@@ -161,10 +161,10 @@ class BedrockVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
                 aws_filters: Optional[Dict] = None
 
                 if isinstance(value, dict):
-                    if "operator" in value.keys():
+                    if "operator" in value:
                         # Single operator - map directly (no wrapping needed)
                         aws_filters = self._map_operator_filter(value)
-                    elif "and" in value.keys() or "or" in value.keys():
+                    elif "and" in value or "or" in value:
                         aws_filters = self._map_and_or_filters(value)
                     else:
                         # Assume it's already in AWS KB format

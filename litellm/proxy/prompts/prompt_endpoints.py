@@ -149,7 +149,7 @@ def get_latest_version_prompt_id(prompt_id: str, all_prompt_ids: Dict[str, Any])
 
     # Find all versions of this prompt
     matching_versions = []
-    for stored_prompt_id in all_prompt_ids.keys():
+    for stored_prompt_id in all_prompt_ids:
         if get_base_prompt_id(prompt_id=stored_prompt_id) == base_id:
             version_num = get_version_number(prompt_id=stored_prompt_id)
             matching_versions.append((version_num, stored_prompt_id))

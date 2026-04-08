@@ -23,7 +23,7 @@ from .v1_transformation import CohereEmbeddingConfig
 def validate_environment(api_key, headers: dict):
     # Create a lowercase key lookup to avoid duplicate headers with different cases
     # This is important when headers come from AWS signed requests (which use Title-Case)
-    existing_keys_lower = {k.lower(): k for k in headers.keys()}
+    existing_keys_lower = {k.lower(): k for k in headers}
 
     # Only add headers if they don't already exist (case-insensitive check)
     if "request-source" not in existing_keys_lower:
