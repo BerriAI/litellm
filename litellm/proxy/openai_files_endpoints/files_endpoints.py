@@ -577,11 +577,6 @@ async def create_file(  # noqa: PLR0915
     dependencies=[Depends(user_api_key_auth)],
     tags=["files"],
 )
-# @router.get(
-#     "/files/{file_id:path}/content",
-#     dependencies=[Depends(user_api_key_auth)],
-#     tags=["files"],
-# )
 async def get_file_content(  # noqa: PLR0915
     request: Request,
     fastapi_response: Response,
@@ -832,6 +827,11 @@ async def get_file_content(  # noqa: PLR0915
 )
 @router.get(
     "/v1/files/{file_id:path}/content",
+    dependencies=[Depends(user_api_key_auth)],
+    tags=["files"],
+)
+@router.get(
+    "/files/{file_id:path}/content",
     dependencies=[Depends(user_api_key_auth)],
     tags=["files"],
 )
