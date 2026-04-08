@@ -15,15 +15,9 @@ These tests verify:
 - End-to-end: budget enforcement with DB fallback
 """
 
-import os
-import sys
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
-
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)
 
 import pytest
 
@@ -39,7 +33,6 @@ from litellm.proxy.hooks.model_max_budget_limiter import (
     _strip_provider_prefix,
 )
 from litellm.types.utils import BudgetConfig
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -149,9 +142,7 @@ class TestQueryDbAndCache:
         )
 
         # Now verify the cache was populated
-        cached = await budget_limiter.dual_cache.async_get_cache(
-            key="populate-key"
-        )
+        cached = await budget_limiter.dual_cache.async_get_cache(key="populate-key")
         assert cached == 25.0
 
     @pytest.mark.asyncio
@@ -169,9 +160,7 @@ class TestQueryDbAndCache:
         )
         assert result is None
 
-        cached = await budget_limiter.dual_cache.async_get_cache(
-            key="none-key"
-        )
+        cached = await budget_limiter.dual_cache.async_get_cache(key="none-key")
         assert cached is None
 
     @pytest.mark.asyncio
@@ -203,9 +192,7 @@ class TestQueryDbAndCache:
         assert result == 0.0
 
         # 0.0 should be cached
-        cached = await budget_limiter.dual_cache.async_get_cache(
-            key="zero-key"
-        )
+        cached = await budget_limiter.dual_cache.async_get_cache(key="zero-key")
         assert cached == 0.0
 
 
@@ -222,12 +209,10 @@ class TestQueryEndUserModelSpend:
             "litellm.proxy.proxy_server.prisma_client",
             None,
         ):
-            result = (
-                await _PROXY_VirtualKeyModelMaxBudgetLimiter._query_end_user_model_spend(
-                    entity_id="user-1",
-                    model="gpt-4",
-                    budget_duration="1d",
-                )
+            result = await _PROXY_VirtualKeyModelMaxBudgetLimiter._query_end_user_model_spend(
+                entity_id="user-1",
+                model="gpt-4",
+                budget_duration="1d",
             )
             assert result is None
 
@@ -245,12 +230,10 @@ class TestQueryEndUserModelSpend:
             "litellm.proxy.proxy_server.prisma_client",
             mock_prisma,
         ):
-            result = (
-                await _PROXY_VirtualKeyModelMaxBudgetLimiter._query_end_user_model_spend(
-                    entity_id="user-1",
-                    model="gpt-4",
-                    budget_duration="1d",
-                )
+            result = await _PROXY_VirtualKeyModelMaxBudgetLimiter._query_end_user_model_spend(
+                entity_id="user-1",
+                model="gpt-4",
+                budget_duration="1d",
             )
             assert result == 15.5
 
@@ -258,20 +241,16 @@ class TestQueryEndUserModelSpend:
     async def test_should_return_zero_when_no_rows(self):
         """No rows means zero spend."""
         mock_prisma = MagicMock()
-        mock_prisma.db.litellm_dailyenduserspend.find_many = AsyncMock(
-            return_value=[]
-        )
+        mock_prisma.db.litellm_dailyenduserspend.find_many = AsyncMock(return_value=[])
 
         with patch(
             "litellm.proxy.proxy_server.prisma_client",
             mock_prisma,
         ):
-            result = (
-                await _PROXY_VirtualKeyModelMaxBudgetLimiter._query_end_user_model_spend(
-                    entity_id="user-1",
-                    model="gpt-4",
-                    budget_duration="1d",
-                )
+            result = await _PROXY_VirtualKeyModelMaxBudgetLimiter._query_end_user_model_spend(
+                entity_id="user-1",
+                model="gpt-4",
+                budget_duration="1d",
             )
             assert result == 0.0
 
@@ -371,13 +350,9 @@ class TestTwoKeyCacheLookup:
         with provider prefix, the stripped-key fallback should find it."""
         # Write path uses bare model name
         bare_key = f"{VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX}:key-hash:gpt-4:1d"
-        await budget_limiter.dual_cache.async_set_cache(
-            key=bare_key, value=30.0
-        )
+        await budget_limiter.dual_cache.async_set_cache(key=bare_key, value=30.0)
 
-        with patch.object(
-            budget_limiter, "_query_virtual_key_model_spend"
-        ) as mock_db:
+        with patch.object(budget_limiter, "_query_virtual_key_model_spend") as mock_db:
             result = await budget_limiter._get_virtual_key_spend_for_model(
                 user_api_key_hash="key-hash",
                 model="openai/gpt-4",  # request uses provider prefix
@@ -393,12 +368,8 @@ class TestTwoKeyCacheLookup:
         """If cache has BOTH keys, the primary (with prefix) should win."""
         primary_key = f"{VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX}:key-hash:openai/gpt-4:1d"
         bare_key = f"{VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX}:key-hash:gpt-4:1d"
-        await budget_limiter.dual_cache.async_set_cache(
-            key=primary_key, value=10.0
-        )
-        await budget_limiter.dual_cache.async_set_cache(
-            key=bare_key, value=99.0
-        )
+        await budget_limiter.dual_cache.async_set_cache(key=primary_key, value=10.0)
+        await budget_limiter.dual_cache.async_set_cache(key=bare_key, value=99.0)
 
         result = await budget_limiter._get_virtual_key_spend_for_model(
             user_api_key_hash="key-hash",
@@ -437,13 +408,9 @@ class TestTwoKeyCacheLookup:
     ):
         """End-user path should also support the two-key lookup."""
         bare_key = f"{END_USER_SPEND_CACHE_KEY_PREFIX}:eu-1:gpt-4:1d"
-        await budget_limiter.dual_cache.async_set_cache(
-            key=bare_key, value=7.5
-        )
+        await budget_limiter.dual_cache.async_set_cache(key=bare_key, value=7.5)
 
-        with patch.object(
-            budget_limiter, "_query_end_user_model_spend"
-        ) as mock_db:
+        with patch.object(budget_limiter, "_query_end_user_model_spend") as mock_db:
             result = await budget_limiter._get_end_user_spend_for_model(
                 end_user_id="eu-1",
                 model="openai/gpt-4",
@@ -460,16 +427,14 @@ class TestTwoKeyCacheLookup:
 
 class TestVirtualKeySpendWithDbFallback:
     @pytest.mark.asyncio
-    async def test_should_use_cache_when_available(self, budget_limiter, budget_config_1d):
+    async def test_should_use_cache_when_available(
+        self, budget_limiter, budget_config_1d
+    ):
         """Cache hit should return without querying DB."""
         cache_key = f"{VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX}:key-hash:gpt-4:1d"
-        await budget_limiter.dual_cache.async_set_cache(
-            key=cache_key, value=42.0
-        )
+        await budget_limiter.dual_cache.async_set_cache(key=cache_key, value=42.0)
 
-        with patch.object(
-            budget_limiter, "_query_virtual_key_model_spend"
-        ) as mock_db:
+        with patch.object(budget_limiter, "_query_virtual_key_model_spend") as mock_db:
             result = await budget_limiter._get_virtual_key_spend_for_model(
                 user_api_key_hash="key-hash",
                 model="gpt-4",
@@ -512,9 +477,7 @@ class TestVirtualKeySpendWithDbFallback:
             return_value=75.0,
         ):
             with pytest.raises(litellm.BudgetExceededError):
-                await budget_limiter.is_key_within_model_budget(
-                    user_api_key, "gpt-4"
-                )
+                await budget_limiter.is_key_within_model_budget(user_api_key, "gpt-4")
 
     @pytest.mark.asyncio
     async def test_should_pass_when_db_spend_within_budget(self, budget_limiter):
@@ -539,15 +502,13 @@ class TestVirtualKeySpendWithDbFallback:
 
 class TestEndUserSpendWithDbFallback:
     @pytest.mark.asyncio
-    async def test_should_use_cache_when_available(self, budget_limiter, budget_config_1d):
+    async def test_should_use_cache_when_available(
+        self, budget_limiter, budget_config_1d
+    ):
         cache_key = f"{END_USER_SPEND_CACHE_KEY_PREFIX}:eu-1:gpt-4:1d"
-        await budget_limiter.dual_cache.async_set_cache(
-            key=cache_key, value=18.0
-        )
+        await budget_limiter.dual_cache.async_set_cache(key=cache_key, value=18.0)
 
-        with patch.object(
-            budget_limiter, "_query_end_user_model_spend"
-        ) as mock_db:
+        with patch.object(budget_limiter, "_query_end_user_model_spend") as mock_db:
             result = await budget_limiter._get_end_user_spend_for_model(
                 end_user_id="eu-1",
                 model="gpt-4",
@@ -714,4 +675,53 @@ class TestWritePathPreserved:
             mock_increment.assert_awaited_once()
             call_kwargs = mock_increment.call_args.kwargs
             assert call_kwargs["response_cost"] == 0.05
-            assert f"{VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX}:{virtual_key}:{model}:{budget_duration}" in call_kwargs["spend_key"]
+            assert (
+                f"{VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX}:{virtual_key}:{model}:{budget_duration}"
+                in call_kwargs["spend_key"]
+            )
+
+
+# ---------------------------------------------------------------------------
+# Tests: None budget_duration skips DB fallback
+# ---------------------------------------------------------------------------
+
+
+class TestNoneBudgetDurationSkipsDb:
+    @pytest.mark.asyncio
+    async def test_should_return_none_for_virtual_key_when_no_duration(
+        self, budget_limiter
+    ):
+        """When budget_duration is None the DB fallback should be skipped
+        entirely and the method should return None."""
+        config = BudgetConfig(budget_limit=100.0)  # no time_period
+        with patch.object(
+            budget_limiter,
+            "_query_db_and_cache",
+            new_callable=AsyncMock,
+        ) as mock_db:
+            result = await budget_limiter._get_virtual_key_spend_for_model(
+                user_api_key_hash="key-hash",
+                model="gpt-4",
+                key_budget_config=config,
+            )
+            assert result is None
+            mock_db.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_should_return_none_for_end_user_when_no_duration(
+        self, budget_limiter
+    ):
+        """Same as above but for the end-user path."""
+        config = BudgetConfig(budget_limit=100.0)  # no time_period
+        with patch.object(
+            budget_limiter,
+            "_query_db_and_cache",
+            new_callable=AsyncMock,
+        ) as mock_db:
+            result = await budget_limiter._get_end_user_spend_for_model(
+                end_user_id="eu-1",
+                model="gpt-4",
+                key_budget_config=config,
+            )
+            assert result is None
+            mock_db.assert_not_called()

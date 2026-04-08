@@ -195,25 +195,33 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
         """
         duration = key_budget_config.budget_duration
         # Try cache with model as-is, then with provider prefix stripped
-        primary_key = f"{END_USER_SPEND_CACHE_KEY_PREFIX}:{end_user_id}:{model}:{duration}"
+        primary_key = (
+            f"{END_USER_SPEND_CACHE_KEY_PREFIX}:{end_user_id}:{model}:{duration}"
+        )
         cached = await self.dual_cache.async_get_cache(key=primary_key)
         if cached is not None:
             return float(cached)
 
         stripped = self._get_model_without_custom_llm_provider(model)
         if stripped != model:
-            alt_key = f"{END_USER_SPEND_CACHE_KEY_PREFIX}:{end_user_id}:{stripped}:{duration}"
+            alt_key = (
+                f"{END_USER_SPEND_CACHE_KEY_PREFIX}:{end_user_id}:{stripped}:{duration}"
+            )
             cached = await self.dual_cache.async_get_cache(key=alt_key)
             if cached is not None:
                 return float(cached)
 
-        # Cache miss — fall back to Postgres
+        # No budget window configured -- skip DB fallback
+        if not duration:
+            return None
+
+        # Cache miss -- fall back to Postgres
         return await self._query_db_and_cache(
             cache_key=primary_key,
             db_lookup=self._query_end_user_model_spend,
             entity_id=end_user_id,
             model=model,
-            budget_duration=duration or "",
+            budget_duration=duration,
         )
 
     async def _get_virtual_key_spend_for_model(
@@ -244,13 +252,17 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
             if cached is not None:
                 return float(cached)
 
-        # Cache miss — fall back to Postgres
+        # No budget window configured -- skip DB fallback
+        if not duration:
+            return None
+
+        # Cache miss -- fall back to Postgres
         return await self._query_db_and_cache(
             cache_key=primary_key,
             db_lookup=self._query_virtual_key_model_spend,
             entity_id=user_api_key_hash or "",
             model=model,
-            budget_duration=duration or "",
+            budget_duration=duration,
         )
 
     async def _query_db_and_cache(
@@ -270,9 +282,8 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
             )
         except Exception:
             verbose_proxy_logger.debug(
-                "model_max_budget_limiter: failed to query DB for spend, "
-                "cache_key=%s — returning None (will not block request)",
-                cache_key,
+                "model_max_budget_limiter: failed to query DB for spend "
+                "-- returning None (will not block request)",
                 exc_info=True,
             )
             return None
