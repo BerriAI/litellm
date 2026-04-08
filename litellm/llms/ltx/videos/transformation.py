@@ -27,13 +27,28 @@ else:
 
 
 LTX_VIDEO_STORAGE_DIR = Path(tempfile.gettempdir()) / "litellm_ltx_videos"
+LTX_VIDEO_STORAGE_MAX_AGE_SECONDS = 24 * 60 * 60
 
 
 def _get_ltx_video_storage_path(video_id: str) -> Path:
     return LTX_VIDEO_STORAGE_DIR / f"{video_id}.mp4"
 
 
+def _cleanup_old_ltx_videos() -> None:
+    if not LTX_VIDEO_STORAGE_DIR.exists():
+        return
+
+    cutoff = time.time() - LTX_VIDEO_STORAGE_MAX_AGE_SECONDS
+    for video_path in LTX_VIDEO_STORAGE_DIR.glob("*.mp4"):
+        try:
+            if video_path.stat().st_mtime < cutoff:
+                video_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
 def _persist_ltx_video_bytes(video_id: str, video_bytes: bytes) -> Path:
+    _cleanup_old_ltx_videos()
     LTX_VIDEO_STORAGE_DIR.mkdir(parents=True, exist_ok=True)
     video_path = _get_ltx_video_storage_path(video_id)
     video_path.write_bytes(video_bytes)
@@ -65,7 +80,6 @@ class LTXVideoConfig(BaseVideoConfig):
             "input_reference",
             "seconds",
             "size",
-            "user",
             "extra_headers",
         ]
 
@@ -98,10 +112,19 @@ class LTXVideoConfig(BaseVideoConfig):
                     # Ignore invalid seconds values and let the provider fall back to defaults.
                     pass
 
+        if "user" in video_create_optional_params:
+            if drop_params:
+                pass
+            else:
+                raise ValueError(
+                    f"Parameter user is not supported for model {model}. "
+                    "Set drop_params=True to drop unsupported parameters."
+                )
+
         # Pass through LTX-specific parameters
         supported_openai_params = self.get_supported_openai_params(model)
         for key, value in video_create_optional_params.items():
-            if key not in supported_openai_params:
+            if key != "user" and key not in supported_openai_params:
                 mapped_params[key] = value
 
         return mapped_params
@@ -266,7 +289,10 @@ class LTXVideoConfig(BaseVideoConfig):
                 status_code=404,
                 message=(
                     "No locally stored LTX video content was found for this video_id. "
-                    "Recreate the video before calling video_content()."
+                    "LTX stores generated video content in the local temp directory of "
+                    "the process that created it, so retrieval will fail from a different "
+                    "instance or after a process restart. Recreate the video before "
+                    "calling video_content()."
                 ),
             )
 

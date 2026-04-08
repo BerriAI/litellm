@@ -3,11 +3,13 @@ Tests for LTX Video generation transformation.
 """
 
 import asyncio
+import os
 from unittest.mock import Mock
 
 import httpx
 import pytest
 
+import litellm
 import litellm.llms.ltx.videos.transformation as ltx_video_transformation
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
@@ -37,7 +39,7 @@ class TestLTXVideoTransformation:
         assert "input_reference" in params
         assert "seconds" in params
         assert "size" in params
-        assert "user" in params
+        assert "user" not in params
         assert "extra_headers" in params
 
     def test_map_openai_params_basic(self):
@@ -80,6 +82,25 @@ class TestLTXVideoTransformation:
             drop_params=False,
         )
         assert mapped["duration"] == 10
+
+    def test_map_openai_params_user_raises_when_not_dropping(self):
+        """Test unsupported OpenAI user param fails loudly for LTX."""
+        with pytest.raises(ValueError, match="Parameter user is not supported"):
+            self.config.map_openai_params(
+                video_create_optional_params={"user": "end-user-123"},
+                model="ltx-2-3-fast",
+                drop_params=False,
+            )
+
+    def test_map_openai_params_user_is_dropped_when_requested(self):
+        """Test unsupported user param can be dropped explicitly."""
+        mapped = self.config.map_openai_params(
+            video_create_optional_params={"user": "end-user-123"},
+            model="ltx-2-3-fast",
+            drop_params=True,
+        )
+
+        assert mapped == {}
 
     def test_validate_environment(self):
         """Test authentication header setup."""
@@ -254,6 +275,37 @@ class TestLTXVideoTransformation:
         assert result.status == "completed"
         assert result.id  # should have a UUID
 
+    def test_transform_video_create_response_cleans_up_expired_files(
+        self, monkeypatch, tmp_path
+    ):
+        """Test stale locally persisted LTX videos are pruned on write."""
+        monkeypatch.setattr(ltx_video_transformation, "LTX_VIDEO_STORAGE_DIR", tmp_path)
+        monkeypatch.setattr(
+            ltx_video_transformation, "LTX_VIDEO_STORAGE_MAX_AGE_SECONDS", 1
+        )
+
+        stale_video_path = tmp_path / "stale-video.mp4"
+        stale_video_path.parent.mkdir(parents=True, exist_ok=True)
+        stale_video_path.write_bytes(b"old-bytes")
+        old_timestamp = ltx_video_transformation.time.time() - 10
+        os.utime(stale_video_path, (old_timestamp, old_timestamp))
+
+        mock_response = Mock(spec=httpx.Response)
+        mock_response.content = b"new-video-bytes"
+        mock_response.status_code = 200
+        mock_response.request = httpx.Request("POST", "https://api.ltx.video/v1")
+
+        result = self.config.transform_video_create_response(
+            model="ltx-2-3-fast",
+            raw_response=mock_response,
+            logging_obj=self.mock_logging_obj,
+            custom_llm_provider=None,
+            request_data={"model": "ltx-2-3-fast"},
+        )
+
+        assert stale_video_path.exists() is False
+        assert (tmp_path / f"{result.id}.mp4").read_bytes() == b"new-video-bytes"
+
     def test_transform_video_create_response_empty_binary_raises(self):
         """Test that empty create responses fail loudly."""
         mock_response = Mock(spec=httpx.Response)
@@ -354,6 +406,16 @@ class TestLTXVideoTransformation:
             )
 
         with pytest.raises(BaseLLMException, match="No locally stored LTX video"):
+            self.config.transform_video_content_request(
+                video_id="missing-video",
+                api_base="",
+                litellm_params=GenericLiteLLMParams(),
+                headers={},
+            )
+
+        with pytest.raises(
+            BaseLLMException, match="different instance or after a process restart"
+        ):
             self.config.transform_video_content_request(
                 video_id="missing-video",
                 api_base="",
@@ -491,6 +553,12 @@ class TestLTXVideoTransformation:
 
         assert video_obj.status == "completed"
         assert video_obj.size == "1280x720"
+
+    def test_ltx_models_are_registered_globally(self):
+        """Test LTX models are exposed through LiteLLM's global model registries."""
+        assert hasattr(litellm, "ltx_models")
+        assert "ltx" in litellm.models_by_provider
+        assert litellm.models_by_provider["ltx"] is litellm.ltx_models
 
 
 if __name__ == "__main__":

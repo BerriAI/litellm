@@ -540,6 +540,7 @@ xai_models: Set = set()
 zai_models: Set = set()
 deepseek_models: Set = set()
 runwayml_models: Set = set()
+ltx_models: Set = set()
 azure_ai_models: Set = set()
 jina_ai_models: Set = set()
 voyage_models: Set = set()
@@ -751,6 +752,8 @@ def add_known_models(model_cost_map: Optional[Dict] = None):
             deepseek_models.add(key)
         elif value.get("litellm_provider") == "runwayml":
             runwayml_models.add(key)
+        elif value.get("litellm_provider") == "ltx":
+            ltx_models.add(key)
         elif value.get("litellm_provider") == "meta_llama":
             llama_models.add(key)
         elif value.get("litellm_provider") == "nscale":
@@ -921,6 +924,7 @@ model_list = list(
     | perplexity_models
     | set(maritalk_models)
     | runwayml_models
+    | ltx_models
     | vertex_language_models
     | watsonx_models
     | gemini_models
@@ -1022,6 +1026,7 @@ models_by_provider: dict = {
     "fal_ai": fal_ai_models,
     "deepseek": deepseek_models,
     "runwayml": runwayml_models,
+    "ltx": ltx_models,
     "mistral": mistral_chat_models,
     "azure_ai": azure_ai_models,
     "voyage": voyage_models,
