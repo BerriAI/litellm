@@ -48,8 +48,6 @@ class LiteLLMCompletionTransformationHandler:
             **kwargs,
         )
 
-        kwargs.pop("context_management", None)
-
         if _is_async:
             return self.async_response_api_handler(
                 litellm_completion_request=litellm_completion_request,
@@ -105,28 +103,6 @@ class LiteLLMCompletionTransformationHandler:
             litellm_completion_request = await LiteLLMCompletionResponsesConfig.async_responses_api_session_handler(
                 previous_response_id=previous_response_id,
                 litellm_completion_request=litellm_completion_request,
-            )
-
-        kwargs.pop("context_management", None)
-
-        context_management = responses_api_request.get("context_management")
-        if context_management:
-            compaction_model = litellm_completion_request.get("model", "")
-            compaction_provider = litellm_completion_request.get(
-                "custom_llm_provider"
-            )
-            if compaction_provider:
-                compaction_model = f"{compaction_provider}/{compaction_model}"
-            request_input = await LiteLLMCompletionResponsesConfig._transform_context_management(
-                model=compaction_model,
-                input=request_input,
-                context_management=context_management,
-            )
-            litellm_completion_request["messages"] = (
-                LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
-                    input=request_input,
-                    responses_api_request=responses_api_request,
-                )
             )
 
         acompletion_args = {}
