@@ -38,6 +38,11 @@ def test_get_file_ids_from_messages():
     ]
 
 
+async def _fake_stream_iterator():
+    yield b"stream-1"
+    yield b"stream-2"
+
+
 @pytest.mark.asyncio
 async def test_async_pre_call_hook_batch_retrieve():
     from litellm.proxy._types import UserAPIKeyAuth
@@ -165,6 +170,40 @@ async def test_async_pre_call_deployment_hook_no_model_info_leaves_file_id_uncha
     assert result["input_file_id"] == managed_file_id, (
         "File ID should remain unchanged when model_info is not available"
     )
+
+
+@pytest.mark.asyncio
+async def test_afile_content_streaming_delegates_to_litellm(monkeypatch):
+    proxy_managed_files = _PROXY_LiteLLMManagedFiles(
+        DualCache(), prisma_client=MagicMock()
+    )
+    proxy_managed_files.get_model_file_id_mapping = AsyncMock(
+        return_value={"managed-file-abc": {"gpt-4o": "provider-file-xyz"}}
+    )
+
+    mock_afile_content_streaming = AsyncMock(return_value=_fake_stream_iterator())
+    monkeypatch.setattr("litellm.afile_content_streaming", mock_afile_content_streaming)
+
+    response = await proxy_managed_files.afile_content_streaming(
+        file_id="managed-file-abc",
+        litellm_parent_otel_span=MagicMock(),
+        llm_router=MagicMock(),
+        chunk_size=4096,
+        request_timeout=30,
+        model="ignored",
+    )
+
+    chunks = []
+    async for chunk in response:
+        chunks.append(chunk)
+
+    assert chunks == [b"stream-1", b"stream-2"]
+    mock_afile_content_streaming.assert_awaited_once()
+    call_kwargs = mock_afile_content_streaming.call_args.kwargs
+    assert call_kwargs["model"] == "gpt-4o"
+    assert call_kwargs["file_id"] == "provider-file-xyz"
+    assert call_kwargs["chunk_size"] == 4096
+    assert call_kwargs["request_timeout"] == 30
 
 
 # def test_list_managed_files():

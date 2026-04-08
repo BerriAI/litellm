@@ -4,7 +4,7 @@
 import asyncio
 import base64
 import json
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, AsyncIterator, Dict, Iterator, List, Literal, Optional, Union, cast
 
 from fastapi import HTTPException
 
@@ -1464,6 +1464,47 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             for model_id, file_id in specific_model_file_id_mapping.items():
                 try:
                     return await llm_router.afile_content(model=model_id, file_id=file_id, **data)  # type: ignore
+                except Exception as e:
+                    exception_dict[model_id] = str(e)
+            raise Exception(
+                f"LiteLLM Managed File object with id={file_id} not found. Checked model id's: {specific_model_file_id_mapping.keys()}. Errors: {exception_dict}"
+            )
+        else:
+            raise Exception(f"LiteLLM Managed File object with id={file_id} not found")
+
+    async def afile_content_streaming(
+        self,
+        file_id: str,
+        litellm_parent_otel_span: Optional[Span],
+        llm_router: Router,
+        chunk_size: int = 1024 * 1024,
+        **data: Dict,
+    ) -> Union[Iterator[bytes], AsyncIterator[bytes]]:
+        """
+        Stream the content of a file from the first model that has it.
+        """
+        data.pop("llm_router", None)
+        data.pop("litellm_parent_otel_span", None)
+        data.pop("model", None)
+
+        model_file_id_mapping = data.pop("model_file_id_mapping", None)
+        model_file_id_mapping = (
+            model_file_id_mapping
+            or await self.get_model_file_id_mapping([file_id], litellm_parent_otel_span)
+        )
+
+        specific_model_file_id_mapping = model_file_id_mapping.get(file_id)
+
+        if specific_model_file_id_mapping:
+            exception_dict = {}
+            for model_id, provider_file_id in specific_model_file_id_mapping.items():
+                try:
+                    return await litellm.afile_content_streaming(
+                        model=model_id,
+                        file_id=provider_file_id,
+                        chunk_size=chunk_size,
+                        **data, #type: ignore
+                    )
                 except Exception as e:
                     exception_dict[model_id] = str(e)
             raise Exception(

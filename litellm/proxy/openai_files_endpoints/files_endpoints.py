@@ -568,20 +568,20 @@ async def create_file(  # noqa: PLR0915
 
 
 @router.get(
-    "/{provider}/v1/files/{file_id:path}/content",
+    "/{provider}/v0/files/{file_id:path}/content",
     dependencies=[Depends(user_api_key_auth)],
     tags=["files"],
 )
 @router.get(
-    "/v1/files/{file_id:path}/content",
+    "/v0/files/{file_id:path}/content",
     dependencies=[Depends(user_api_key_auth)],
     tags=["files"],
 )
-@router.get(
-    "/files/{file_id:path}/content",
-    dependencies=[Depends(user_api_key_auth)],
-    tags=["files"],
-)
+# @router.get(
+#     "/files/{file_id:path}/content",
+#     dependencies=[Depends(user_api_key_auth)],
+#     tags=["files"],
+# )
 async def get_file_content(  # noqa: PLR0915
     request: Request,
     fastapi_response: Response,
@@ -825,14 +825,13 @@ async def get_file_content(  # noqa: PLR0915
             )
 
 
-# NOTE: Rough Prototype to check memory usage
 @router.get(
-    "/{provider}/v2/files/{file_id:path}/content",
+    "/{provider}/v1/files/{file_id:path}/content",
     dependencies=[Depends(user_api_key_auth)],
     tags=["files"],
 )
 @router.get(
-    "/v2/files/{file_id:path}/content",
+    "/v1/files/{file_id:path}/content",
     dependencies=[Depends(user_api_key_auth)],
     tags=["files"],
 )
@@ -856,7 +855,7 @@ async def get_file_content_streaming(
         base_llm_response_processor = ProxyBaseLLMRequestProcessing(data=data)
         (
             data,
-            litellm_logging_obj,
+            _,
         ) = await base_llm_response_processor.common_processing_pre_call_logic(
             request=request,
             general_settings=general_settings,
@@ -935,36 +934,21 @@ async def get_file_content_streaming(
 
             model = cast(Optional[str], data.get("model"))
             if model:
-                # TODO: Add Streaming version here
-                # response = await llm_router.afile_content(
-                #     **{
-                #         "model": model,
-                #         "file_id": file_id,
-                #         **data,
-                #     }
-                # )  # type: ignore
-                raise ProxyException(
-                    message="Managed files streaming path is pending implementation",
-                    type="None",
-                    param="file_id",
-                    code=501,
-                )
-
+                stream_iterator = await litellm.afile_content_streaming(
+                    **{
+                        "model": model,
+                        "file_id": file_id,
+                        **data,
+                    }
+                )  # type: ignore
             else:
-                # TODO: Add Streaming version here
-                # response = await managed_files_obj.afile_content(
-                #     **{
-                #         "file_id": file_id,
-                #         "litellm_parent_otel_span": user_api_key_dict.parent_otel_span,
-                #         "llm_router": llm_router,
-                #         **data,
-                #     }
-                # )
-                raise ProxyException(
-                    message="Managed files streaming path is pending implementation",
-                    type="None",
-                    param="file_id",
-                    code=501,
+                stream_iterator = await managed_files_obj.afile_content_streaming(
+                    **{
+                        "file_id": file_id,
+                        "litellm_parent_otel_span": user_api_key_dict.parent_otel_span,
+                        "llm_router": llm_router,
+                        **data,
+                    }
                 )
         else:
             # Check for model-based credential routing
@@ -989,6 +973,7 @@ async def get_file_content_streaming(
                     file_id=original_file_id,  # Use decoded file ID if from encoded ID
                 )
 
+                data.pop("custom_llm_provider", None)
                 stream_iterator = await litellm.afile_content_streaming(
                     custom_llm_provider=credentials["custom_llm_provider"],  # type: ignore
                     **data,
@@ -1035,6 +1020,8 @@ async def get_file_content_streaming(
             },
         )
     except Exception as e:
+        if isinstance(e, ProxyException):
+            raise e
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
         )
