@@ -40,6 +40,18 @@ def multiply(a: int, b: int) -> int:
     return a * b
 
 
+@mcp.prompt()
+def code_review(code: str) -> str:
+    """Ask the LLM to review code quality and suggest improvements"""
+    return f"Please review this code:\n{code}"
+
+
+@mcp.prompt()
+def summarize(text: str, style: str = "concise") -> str:
+    """Summarize text in the requested style"""
+    return f"Please provide a {style} summary of the following text:\n{text}"
+
+
 def main() -> None:
     args = _parse_args()
     transport = (args.transport or "stdio").lower()
