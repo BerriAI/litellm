@@ -169,7 +169,7 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({
     setPolicyToDelete(null);
   };
 
-  const handleDeleteAttachmentClick = (attachmentId: string, policyName?: string) => {
+  const handleDeleteAttachmentClick = (attachmentId: string) => {
     const attachment = attachmentsList.find((a) => a.attachment_id === attachmentId) || null;
     setAttachmentToDelete(attachment);
     setIsDeleteAttachmentModalOpen(true);
