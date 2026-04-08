@@ -58,9 +58,10 @@ from litellm.llms.lemonade.cost_calculator import (
     cost_per_token as lemonade_cost_per_token,
 )
 from litellm.llms.openai.cost_calculation import (
+    _video_output_cost_per_second,
     cost_per_second as openai_cost_per_second,
+    cost_per_token as openai_cost_per_token,
 )
-from litellm.llms.openai.cost_calculation import cost_per_token as openai_cost_per_token
 from litellm.llms.perplexity.cost_calculator import (
     cost_per_token as perplexity_cost_per_token,
 )
@@ -2037,8 +2038,6 @@ def default_video_cost_calculator(
     video_cost_per_second = cost_info.get("output_cost_per_video_per_second")
     if video_cost_per_second is not None:
         return video_cost_per_second * duration_seconds
-
-    from litellm.llms.openai.cost_calculation import _video_output_cost_per_second
 
     output_cost_per_second = _video_output_cost_per_second(cost_info, video_resolution)
     if output_cost_per_second is not None:
