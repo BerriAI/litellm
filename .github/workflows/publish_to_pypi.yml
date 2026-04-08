@@ -28,6 +28,7 @@ jobs:
         uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
         with:
           version: "0.10.9"
+          enable-cache: false
 
       - name: Check litellm version on PyPI
         id: check-litellm
@@ -118,6 +119,7 @@ jobs:
         uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
         with:
           version: "0.10.9"
+          enable-cache: false
 
       - name: Copy model prices backup
         run: cp model_prices_and_context_window.json litellm/model_prices_and_context_window_backup.json
