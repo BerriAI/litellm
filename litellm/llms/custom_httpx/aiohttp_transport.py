@@ -339,9 +339,11 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
                 # Re-raise if it's a different RuntimeError
                 raise
 
+        response_headers: Any = getattr(response, "raw_headers", None) or response.headers
+
         return httpx.Response(
             status_code=response.status,
-            headers=response.headers,
+            headers=response_headers,
             stream=AiohttpResponseStream(response),
             request=request,
         )

@@ -38107,5 +38107,45 @@
         "tool_use_system_prompt_tokens": 346,
         "supports_native_structured_output": true,
         "supports_pdf_input": true
+    },
+    "volcengine/doubao-seedance-2.0": {
+        "litellm_provider": "volcengine",
+        "max_input_tokens": 1024,
+        "max_output_tokens": 1024,
+        "max_tokens": 1024,
+        "mode": "video_generation",
+        "provider_pricing_currency": "CNY",
+        "source": "https://www.volcengine.com/docs/82379/1544106?lang=zh",
+        "supported_modalities": [
+            "text",
+            "image",
+            "video",
+            "audio"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ],
+        "volcengine_video_output_cost_per_million_tokens_without_input_video": 46.0,
+        "volcengine_video_output_cost_per_million_tokens_with_input_video": 28.0
+    },
+    "volcengine/doubao-seedance-2.0-fast": {
+        "litellm_provider": "volcengine",
+        "max_input_tokens": 1024,
+        "max_output_tokens": 1024,
+        "max_tokens": 1024,
+        "mode": "video_generation",
+        "provider_pricing_currency": "CNY",
+        "source": "https://www.volcengine.com/docs/82379/1544106?lang=zh",
+        "supported_modalities": [
+            "text",
+            "image",
+            "video",
+            "audio"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ],
+        "volcengine_video_output_cost_per_million_tokens_without_input_video": 37.0,
+        "volcengine_video_output_cost_per_million_tokens_with_input_video": 22.0
     }
 }

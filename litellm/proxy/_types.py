@@ -3264,6 +3264,7 @@ class SpendLogsMetadata(TypedDict):
         str
     ]  # S3/GCS object key for cold storage retrieval
     litellm_overhead_time_ms: Optional[float]  # LiteLLM overhead time in milliseconds
+    video_billing_task_id: Optional[str]  # Volcengine video billing task ID for async billing
     attempted_retries: Optional[
         int
     ]  # Number of retries attempted (0 = first attempt succeeded)

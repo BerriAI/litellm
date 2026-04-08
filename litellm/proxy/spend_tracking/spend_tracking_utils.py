@@ -90,7 +90,6 @@ def _get_spend_logs_metadata(
             user_api_key_alias=None,
             user_api_key_team_id=None,
             user_api_key_project_id=None,
-            user_api_key_project_alias=None,
             user_api_key_org_id=None,
             user_api_key_user_id=None,
             user_api_key_team_alias=None,
@@ -112,6 +111,10 @@ def _get_spend_logs_metadata(
             attempted_retries=None,
             max_retries=None,
             cost_breakdown=None,
+            provider_spend_currency=None,
+            provider_spend_amount=None,
+            async_billing_only=None,
+            video_billing_task_id=None,
         )
     verbose_proxy_logger.debug(
         "getting payload for SpendLogs, available keys in metadata: "

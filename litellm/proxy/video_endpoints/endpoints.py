@@ -20,6 +20,7 @@ from litellm.proxy.video_endpoints.utils import (
     encode_character_id_in_response,
     extract_model_from_target_model_names,
     get_custom_provider_from_data,
+    preserve_video_id_in_response,
 )
 from litellm.types.videos.utils import (
     decode_character_id_with_provider,
@@ -244,6 +245,8 @@ async def video_status(
         version,
     )
 
+    original_requested_video_id = video_id
+
     # Create data with video_id
     data: Dict[str, Any] = {"video_id": video_id}
 
@@ -273,7 +276,7 @@ async def video_status(
     # Process request using ProxyBaseLLMRequestProcessing
     processor = ProxyBaseLLMRequestProcessing(data=data)
     try:
-        return await processor.base_process_llm_request(
+        response = await processor.base_process_llm_request(
             request=request,
             fastapi_response=fastapi_response,
             user_api_key_dict=user_api_key_dict,
@@ -291,6 +294,12 @@ async def video_status(
             user_api_base=user_api_base,
             version=version,
         )
+        if original_requested_video_id.startswith("video_"):
+            response = preserve_video_id_in_response(
+                response=response,
+                requested_video_id=original_requested_video_id,
+            )
+        return response
     except Exception as e:
         raise await processor._handle_llm_api_exception(
             e=e,

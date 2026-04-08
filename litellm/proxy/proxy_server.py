@@ -703,6 +703,7 @@ def cleanup_router_config_variables():
     health_check_interval = None
     health_check_concurrency = None
     prisma_client = None
+    volcengine_video_billing_manager = None
 
 
 async def proxy_shutdown_event():
@@ -6497,6 +6498,35 @@ class ProxyStartupEvent:
                     "Checking responses cost for LiteLLM Managed Files is an Enterprise Feature. Skipping..."
                 )
                 pass
+
+        if llm_router is not None and prisma_client is not None:
+            try:
+                from litellm.proxy.spend_tracking.volcengine_video_billing import (
+                    VolcengineVideoBillingManager,
+                )
+
+                global volcengine_video_billing_manager
+                volcengine_video_billing_manager = VolcengineVideoBillingManager(
+                    prisma_client=prisma_client,
+                    llm_router=llm_router,
+                    db_spend_update_writer=proxy_logging_obj.db_spend_update_writer,
+                    proxy_logging_obj=proxy_logging_obj,
+                )
+                scheduler.add_job(
+                    volcengine_video_billing_manager.poll_pending_video_tasks,
+                    "interval",
+                    seconds=max(15, min(proxy_batch_polling_interval, 60)),
+                    id="volcengine_video_billing_job",
+                    replace_existing=True,
+                    misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
+                )
+                verbose_proxy_logger.info(
+                    "Volcengine video billing job scheduled successfully"
+                )
+            except Exception as e:
+                verbose_proxy_logger.warning(
+                    "Failed to setup Volcengine video billing job: %s", e
+                )
 
         # MEMORY LEAK FIX: Start scheduler with paused=False to avoid backlog processing
         # Do NOT reset job times to "now" as this can trigger the memory leak
