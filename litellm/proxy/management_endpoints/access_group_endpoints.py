@@ -1,4 +1,4 @@
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Dict, List, Optional, Set
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
@@ -156,12 +156,15 @@ async def _upsert_mcp_agents_in_object_permission(
     existing_op_id: Optional[str],
     ag_mcp_servers: List[str],
     ag_agents: List[str],
+    existing_op=None,
 ) -> Optional[str]:
     """
     Upsert LiteLLM_ObjectPermissionTable to add MCP servers and agents.
 
     Merges ``ag_mcp_servers`` / ``ag_agents`` into the existing record (if any),
     creating a new record when ``existing_op_id`` is None.
+
+    ``existing_op``: optional pre-fetched record to avoid an extra DB round-trip.
 
     Returns the ``object_permission_id`` of the upserted row, or ``None`` when
     both lists are empty (nothing to do).
@@ -174,9 +177,10 @@ async def _upsert_mcp_agents_in_object_permission(
     existing_data: Dict = {}
 
     if existing_op_id:
-        existing_op = await tx.litellm_objectpermissiontable.find_unique(
-            where={"object_permission_id": existing_op_id}
-        )
+        if existing_op is None:
+            existing_op = await tx.litellm_objectpermissiontable.find_unique(
+                where={"object_permission_id": existing_op_id}
+            )
         if existing_op is not None:
             try:
                 existing_data = existing_op.model_dump(exclude_none=True)
@@ -194,9 +198,10 @@ async def _upsert_mcp_agents_in_object_permission(
         upsert_data["agents"] = list(set(existing_agents + ag_agents))
 
     op_id_to_use: str = existing_op_id or str(uuid.uuid4())
+    create_data: Dict = {**upsert_data, "object_permission_id": op_id_to_use}
     created_row = await tx.litellm_objectpermissiontable.upsert(
         where={"object_permission_id": op_id_to_use},
-        data={"create": upsert_data, "update": upsert_data},
+        data={"create": create_data, "update": upsert_data},
     )
     return created_row.object_permission_id
 
@@ -206,18 +211,22 @@ async def _remove_mcp_agents_from_object_permission(
     existing_op_id: Optional[str],
     mcp_servers_to_remove: List[str],
     agents_to_remove: List[str],
+    existing_op=None,
 ) -> None:
     """
     Remove specific MCP server IDs and agent IDs from an existing
     LiteLLM_ObjectPermissionTable row.  No-ops when the record does not exist
     or the removal sets are empty.
+
+    ``existing_op``: optional pre-fetched record to avoid an extra DB round-trip.
     """
     if not existing_op_id or (not mcp_servers_to_remove and not agents_to_remove):
         return
 
-    existing_op = await tx.litellm_objectpermissiontable.find_unique(
-        where={"object_permission_id": existing_op_id}
-    )
+    if existing_op is None:
+        existing_op = await tx.litellm_objectpermissiontable.find_unique(
+            where={"object_permission_id": existing_op_id}
+        )
     if existing_op is None:
         return
 
@@ -268,8 +277,32 @@ async def _sync_add_access_group_to_teams(
         getattr(access_group_record, "access_agent_ids", None) or []
     )
 
+    if not team_ids:
+        return
+
+    # Batch-fetch all teams to avoid N+1 queries.
+    teams = await tx.litellm_teamtable.find_many(
+        where={"team_id": {"in": team_ids}}
+    )
+    team_map: Dict = {t.team_id: t for t in teams}
+
+    # Batch-fetch object permissions for teams that need MCP/agent merging.
+    op_map: Dict = {}
+    if ag_mcp_servers or ag_agents:
+        op_ids = [
+            t.object_permission_id
+            for t in teams
+            if getattr(t, "object_permission_id", None)
+            and access_group_id not in (t.access_group_ids or [])
+        ]
+        if op_ids:
+            op_records = await tx.litellm_objectpermissiontable.find_many(
+                where={"object_permission_id": {"in": op_ids}}
+            )
+            op_map = {r.object_permission_id: r for r in op_records}
+
     for team_id in team_ids:
-        team = await tx.litellm_teamtable.find_unique(where={"team_id": team_id})
+        team = team_map.get(team_id)
         if team is None or access_group_id in (team.access_group_ids or []):
             continue
 
@@ -292,6 +325,7 @@ async def _sync_add_access_group_to_teams(
                 existing_op_id=existing_op_id,
                 ag_mcp_servers=ag_mcp_servers,
                 ag_agents=ag_agents,
+                existing_op=op_map.get(existing_op_id) if existing_op_id else None,
             )
             # Link the (possibly newly created) object_permission row to the team
             if new_op_id is not None and new_op_id != existing_op_id:
@@ -336,19 +370,53 @@ async def _sync_remove_access_group_from_teams(
         getattr(ag_record, "access_agent_ids", None) or []
     )
 
-    for team_id in team_ids:
-        team = await tx.litellm_teamtable.find_unique(where={"team_id": team_id})
-        if team is None or access_group_id not in (team.access_group_ids or []):
-            continue
+    if not team_ids:
+        return
 
+    # Batch-fetch all teams to avoid N+1 queries.
+    teams = await tx.litellm_teamtable.find_many(
+        where={"team_id": {"in": team_ids}}
+    )
+    relevant_teams = [
+        t for t in teams if access_group_id in (t.access_group_ids or [])
+    ]
+
+    # Collect all unique remaining AG IDs across affected teams so we can
+    # batch-fetch their records in one query instead of one per team.
+    all_remaining_ag_ids: Set[str] = set()
+    for team in relevant_teams:
+        for ag in (team.access_group_ids or []):
+            if ag != access_group_id:
+                all_remaining_ag_ids.add(ag)
+
+    remaining_ag_map: Dict = {}
+    if all_remaining_ag_ids:
+        remaining_ag_records = await tx.litellm_accessgrouptable.find_many(
+            where={"access_group_id": {"in": list(all_remaining_ag_ids)}}
+        )
+        remaining_ag_map = {r.access_group_id: r for r in remaining_ag_records}
+
+    # Batch-fetch object permissions for affected teams.
+    all_op_ids = [
+        t.object_permission_id
+        for t in relevant_teams
+        if getattr(t, "object_permission_id", None)
+    ]
+    op_map: Dict = {}
+    if all_op_ids:
+        op_records = await tx.litellm_objectpermissiontable.find_many(
+            where={"object_permission_id": {"in": all_op_ids}}
+        )
+        op_map = {r.object_permission_id: r for r in op_records}
+
+    for team in relevant_teams:
         remaining_ag_ids = [
             ag for ag in (team.access_group_ids or []) if ag != access_group_id
         ]
+        remaining_records = [
+            remaining_ag_map[ag] for ag in remaining_ag_ids if ag in remaining_ag_map
+        ]
 
-        # Batch-fetch remaining AGs to compute what resources they still provide
-        remaining_records = await tx.litellm_accessgrouptable.find_many(
-            where={"access_group_id": {"in": remaining_ag_ids}}
-        )
         models_in_remaining: Set[str] = {
             m for r in remaining_records for m in (r.access_model_names or [])
         }
@@ -378,10 +446,11 @@ async def _sync_remove_access_group_from_teams(
             existing_op_id=existing_op_id,
             mcp_servers_to_remove=mcp_to_remove,
             agents_to_remove=agents_to_remove,
+            existing_op=op_map.get(existing_op_id) if existing_op_id else None,
         )
 
         await tx.litellm_teamtable.update(
-            where={"team_id": team_id},
+            where={"team_id": team.team_id},
             data=update_data,
         )
 
@@ -402,8 +471,32 @@ async def _sync_add_access_group_to_keys(
         getattr(access_group_record, "access_agent_ids", None) or []
     )
 
+    if not key_tokens:
+        return
+
+    # Batch-fetch all keys to avoid N+1 queries.
+    keys = await tx.litellm_verificationtoken.find_many(
+        where={"token": {"in": key_tokens}}
+    )
+    key_map: Dict = {k.token: k for k in keys}
+
+    # Batch-fetch object permissions for keys that need MCP/agent merging.
+    op_map: Dict = {}
+    if ag_mcp_servers or ag_agents:
+        op_ids = [
+            k.object_permission_id
+            for k in keys
+            if getattr(k, "object_permission_id", None)
+            and access_group_id not in (k.access_group_ids or [])
+        ]
+        if op_ids:
+            op_records = await tx.litellm_objectpermissiontable.find_many(
+                where={"object_permission_id": {"in": op_ids}}
+            )
+            op_map = {r.object_permission_id: r for r in op_records}
+
     for token in key_tokens:
-        key = await tx.litellm_verificationtoken.find_unique(where={"token": token})
+        key = key_map.get(token)
         if key is None or access_group_id in (key.access_group_ids or []):
             continue
 
@@ -425,6 +518,7 @@ async def _sync_add_access_group_to_keys(
                 existing_op_id=existing_op_id,
                 ag_mcp_servers=ag_mcp_servers,
                 ag_agents=ag_agents,
+                existing_op=op_map.get(existing_op_id) if existing_op_id else None,
             )
             # Link the (possibly newly created) object_permission row to the key
             if new_op_id is not None and new_op_id != existing_op_id:
@@ -469,19 +563,53 @@ async def _sync_remove_access_group_from_keys(
         getattr(ag_record, "access_agent_ids", None) or []
     )
 
-    for token in key_tokens:
-        key = await tx.litellm_verificationtoken.find_unique(where={"token": token})
-        if key is None or access_group_id not in (key.access_group_ids or []):
-            continue
+    if not key_tokens:
+        return
 
+    # Batch-fetch all keys to avoid N+1 queries.
+    keys = await tx.litellm_verificationtoken.find_many(
+        where={"token": {"in": key_tokens}}
+    )
+    relevant_keys = [
+        k for k in keys if access_group_id in (k.access_group_ids or [])
+    ]
+
+    # Collect all unique remaining AG IDs across affected keys so we can
+    # batch-fetch their records in one query instead of one per key.
+    all_remaining_ag_ids: Set[str] = set()
+    for key in relevant_keys:
+        for ag in (key.access_group_ids or []):
+            if ag != access_group_id:
+                all_remaining_ag_ids.add(ag)
+
+    remaining_ag_map: Dict = {}
+    if all_remaining_ag_ids:
+        remaining_ag_records = await tx.litellm_accessgrouptable.find_many(
+            where={"access_group_id": {"in": list(all_remaining_ag_ids)}}
+        )
+        remaining_ag_map = {r.access_group_id: r for r in remaining_ag_records}
+
+    # Batch-fetch object permissions for affected keys.
+    all_op_ids = [
+        k.object_permission_id
+        for k in relevant_keys
+        if getattr(k, "object_permission_id", None)
+    ]
+    op_map: Dict = {}
+    if all_op_ids:
+        op_records = await tx.litellm_objectpermissiontable.find_many(
+            where={"object_permission_id": {"in": all_op_ids}}
+        )
+        op_map = {r.object_permission_id: r for r in op_records}
+
+    for key in relevant_keys:
         remaining_ag_ids = [
             ag for ag in (key.access_group_ids or []) if ag != access_group_id
         ]
+        remaining_records = [
+            remaining_ag_map[ag] for ag in remaining_ag_ids if ag in remaining_ag_map
+        ]
 
-        # Batch-fetch remaining AGs to compute what resources they still provide
-        remaining_records = await tx.litellm_accessgrouptable.find_many(
-            where={"access_group_id": {"in": remaining_ag_ids}}
-        )
         models_in_remaining: Set[str] = {
             m for r in remaining_records for m in (r.access_model_names or [])
         }
@@ -506,10 +634,11 @@ async def _sync_remove_access_group_from_keys(
             existing_op_id=existing_op_id,
             mcp_servers_to_remove=mcp_to_remove,
             agents_to_remove=agents_to_remove,
+            existing_op=op_map.get(existing_op_id) if existing_op_id else None,
         )
 
         await tx.litellm_verificationtoken.update(
-            where={"token": token},
+            where={"token": key.token},
             data={
                 "access_group_ids": remaining_ag_ids,
                 "models": updated_models,

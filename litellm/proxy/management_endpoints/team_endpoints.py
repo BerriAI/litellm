@@ -78,9 +78,6 @@ from litellm.proxy.management_endpoints.common_utils import (
     _upsert_budget_and_membership,
     _user_has_admin_view,
 )
-from litellm.proxy.management_endpoints.access_group_endpoints import (
-    _merge_access_group_resources_into_data_json,
-)
 from litellm.proxy.management_endpoints.tag_management_endpoints import (
     get_daily_activity,
 )
@@ -933,6 +930,10 @@ async def new_team(  # noqa: PLR0915
         ## so they appear in model lists and MCP validation at key-generation time.
         ## Only runs when access_group_ids is explicitly provided in this request.
         if data.access_group_ids:
+            from litellm.proxy.management_endpoints.access_group_endpoints import (
+                _merge_access_group_resources_into_data_json,
+            )
+
             data_json = await _merge_access_group_resources_into_data_json(
                 data_json=data_json,
                 access_group_ids=data.access_group_ids,
@@ -1534,6 +1535,10 @@ async def update_team(  # noqa: PLR0915
         if "access_group_ids" in updated_kv:
             new_access_group_ids = updated_kv.get("access_group_ids") or []
             if new_access_group_ids:
+                from litellm.proxy.management_endpoints.access_group_endpoints import (
+                    _merge_access_group_resources_into_data_json,
+                )
+
                 updated_kv = await _merge_access_group_resources_into_data_json(
                     data_json=updated_kv,
                     access_group_ids=new_access_group_ids,
