@@ -56,6 +56,9 @@ from litellm.proxy.management_endpoints.common_utils import (
     _is_user_team_admin,
     _set_object_metadata_field,
 )
+from litellm.proxy.management_endpoints.access_group_endpoints import (
+    _merge_access_group_resources_into_data_json,
+)
 from litellm.proxy.management_endpoints.model_management_endpoints import (
     _add_model_to_db,
 )
@@ -671,6 +674,15 @@ async def _common_key_generation_helper(  # noqa: PLR0915
             data_json["metadata"]["tags"] = data_json["tags"]
 
         data_json.pop("tags")
+
+    # Populate models/MCP servers/agents from key-level access groups (if provided).
+    # Only runs when access_group_ids is explicitly included in the request.
+    if data_json.get("access_group_ids"):
+        data_json = await _merge_access_group_resources_into_data_json(
+            data_json=data_json,
+            access_group_ids=data_json["access_group_ids"],
+            prisma_client=prisma_client,
+        )
 
     # Validate MCP servers in object_permission are within team scope
     await validate_key_mcp_servers_against_team(
@@ -1558,6 +1570,20 @@ async def prepare_key_update_data(
             key_reset_at = get_budget_reset_time(budget_duration=budget_duration)
             non_default_values["budget_reset_at"] = key_reset_at
             non_default_values["budget_duration"] = budget_duration
+
+    # Populate models/MCP servers/agents from key-level access groups when
+    # access_group_ids is explicitly provided in the update request.
+    if "access_group_ids" in non_default_values:
+        new_access_group_ids = non_default_values.get("access_group_ids") or []
+        if new_access_group_ids:
+            from litellm.proxy.proxy_server import prisma_client as _prisma_client
+
+            if _prisma_client is not None:
+                non_default_values = await _merge_access_group_resources_into_data_json(
+                    data_json=non_default_values,
+                    access_group_ids=new_access_group_ids,
+                    prisma_client=_prisma_client,
+                )
 
     if "object_permission" in non_default_values:
         non_default_values = await _handle_update_object_permission(

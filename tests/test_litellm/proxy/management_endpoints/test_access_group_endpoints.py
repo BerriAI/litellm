@@ -107,12 +107,19 @@ def client_and_mocks(monkeypatch):
     mock_key_table.find_unique = AsyncMock(return_value=None)
     mock_key_table.update = AsyncMock(return_value=None)
 
+    # Object-permission table: needed by _sync_add/remove helpers
+    mock_op_table = MagicMock()
+    mock_op_table.find_unique = AsyncMock(return_value=None)
+    mock_op_table.upsert = AsyncMock(return_value=MagicMock(object_permission_id="op-new"))
+    mock_op_table.update = AsyncMock(return_value=None)
+
     @asynccontextmanager
     async def mock_tx():
         tx = types.SimpleNamespace(
             litellm_accessgrouptable=mock_access_group_table,
             litellm_teamtable=mock_team_table,
             litellm_verificationtoken=mock_key_table,
+            litellm_objectpermissiontable=mock_op_table,
         )
         yield tx
 
@@ -120,6 +127,7 @@ def client_and_mocks(monkeypatch):
         litellm_accessgrouptable=mock_access_group_table,
         litellm_teamtable=mock_team_table,
         litellm_verificationtoken=mock_key_table,
+        litellm_objectpermissiontable=mock_op_table,
         tx=mock_tx,
     )
     mock_prisma.db = mock_db
@@ -560,37 +568,50 @@ def test_delete_access_group_forbidden_non_admin(client_and_mocks, user_role):
 
 
 def test_delete_access_group_cleans_up_teams_and_keys(client_and_mocks):
-    """Delete removes access_group_id from teams and keys before deleting the group."""
+    """Delete removes access_group_id and access-group-sourced models/MCP/agents
+    from teams and keys before deleting the group."""
     client, mock_prisma, mock_access_group_table, mock_cache, mock_proxy_logging = client_and_mocks
     mock_team_table = mock_prisma.db.litellm_teamtable
     mock_key_table = mock_prisma.db.litellm_verificationtoken
 
-    existing = _make_access_group_record(access_group_id="ag-to-delete")
+    existing = _make_access_group_record(
+        access_group_id="ag-to-delete",
+        access_model_names=["model-from-ag"],
+    )
     mock_access_group_table.find_unique = AsyncMock(return_value=existing)
 
     team_with_group = MagicMock()
     team_with_group.team_id = "team-1"
     team_with_group.access_group_ids = ["ag-to-delete", "ag-other"]
+    team_with_group.models = ["model-from-ag", "direct-model"]
+    team_with_group.object_permission_id = None
     mock_team_table.find_many = AsyncMock(return_value=[team_with_group])
     mock_team_table.find_unique = AsyncMock(return_value=team_with_group)
 
     key_with_group = MagicMock()
     key_with_group.token = "key-token-1"
     key_with_group.access_group_ids = ["ag-to-delete"]
+    key_with_group.models = ["model-from-ag"]
+    key_with_group.object_permission_id = None
     mock_key_table.find_many = AsyncMock(return_value=[key_with_group])
     mock_key_table.find_unique = AsyncMock(return_value=key_with_group)
 
     resp = client.delete("/v1/access_group/ag-to-delete")
     assert resp.status_code == 204
 
-    mock_team_table.update.assert_awaited_once_with(
-        where={"team_id": "team-1"},
-        data={"access_group_ids": ["ag-other"]},
-    )
-    mock_key_table.update.assert_awaited_once_with(
-        where={"token": "key-token-1"},
-        data={"access_group_ids": []},
-    )
+    # Team update: access_group_id removed and model-from-ag removed; direct-model kept
+    mock_team_table.update.assert_awaited_once()
+    team_update_data = mock_team_table.update.call_args.kwargs["data"]
+    assert team_update_data["access_group_ids"] == ["ag-other"]
+    assert "model-from-ag" not in team_update_data.get("models", [])
+    assert "direct-model" in team_update_data.get("models", [])
+
+    # Key update: access_group_id removed and model-from-ag removed
+    mock_key_table.update.assert_awaited_once()
+    key_update_data = mock_key_table.update.call_args.kwargs["data"]
+    assert key_update_data["access_group_ids"] == []
+    assert "model-from-ag" not in key_update_data.get("models", [])
+
     mock_access_group_table.delete.assert_awaited_once_with(
         where={"access_group_id": "ag-to-delete"}
     )
@@ -672,12 +693,16 @@ def test_delete_access_group_patches_cached_team_and_key(
     team_with_group = MagicMock()
     team_with_group.team_id = "team-1"
     team_with_group.access_group_ids = ["ag-to-delete", "ag-keep"]
+    team_with_group.models = []
+    team_with_group.object_permission_id = None  # no object_permission to clean up
     mock_team_table.find_many = AsyncMock(return_value=[team_with_group])
     mock_team_table.find_unique = AsyncMock(return_value=team_with_group)
 
     key_with_group = MagicMock()
     key_with_group.token = "hashed-key-1"
     key_with_group.access_group_ids = ["ag-to-delete"]
+    key_with_group.models = []
+    key_with_group.object_permission_id = None  # no object_permission to clean up
     mock_key_table.find_many = AsyncMock(return_value=[key_with_group])
     mock_key_table.find_unique = AsyncMock(return_value=key_with_group)
 
@@ -1190,3 +1215,948 @@ def test_update_access_group_null_assigned_ids_treated_as_empty(client_and_mocks
     update_call_kwargs = mock_table.update.call_args.kwargs
     assert update_call_kwargs["data"]["assigned_team_ids"] == []
     assert update_call_kwargs["data"]["assigned_key_ids"] == []
+
+
+# ---------------------------------------------------------------------------
+# _merge_access_group_resources_into_data_json unit tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_merge_access_group_resources_empty_ids():
+    """Empty access_group_ids returns data_json unchanged."""
+    from litellm.proxy.management_endpoints.access_group_endpoints import (
+        _merge_access_group_resources_into_data_json,
+    )
+
+    mock_prisma = MagicMock()
+    data_json = {"models": ["existing-model"]}
+    result = await _merge_access_group_resources_into_data_json(
+        data_json=data_json, access_group_ids=[], prisma_client=mock_prisma
+    )
+    assert result == {"models": ["existing-model"]}
+    mock_prisma.db.litellm_accessgrouptable.find_many.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_merge_access_group_resources_merges_models():
+    """Models from access groups are merged into data_json['models']."""
+    from litellm.proxy.management_endpoints.access_group_endpoints import (
+        _merge_access_group_resources_into_data_json,
+    )
+
+    ag_record = MagicMock()
+    ag_record.access_model_names = ["gpt-4", "gpt-3.5-turbo"]
+    ag_record.access_mcp_server_ids = []
+    ag_record.access_agent_ids = []
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_accessgrouptable.find_many = AsyncMock(
+        return_value=[ag_record]
+    )
+
+    data_json = {"models": ["claude-3"]}
+    result = await _merge_access_group_resources_into_data_json(
+        data_json=data_json,
+        access_group_ids=["ag-1"],
+        prisma_client=mock_prisma,
+    )
+
+    assert set(result["models"]) == {"claude-3", "gpt-4", "gpt-3.5-turbo"}
+    mock_prisma.db.litellm_accessgrouptable.find_many.assert_awaited_once_with(
+        where={"access_group_id": {"in": ["ag-1"]}}
+    )
+
+
+@pytest.mark.asyncio
+async def test_merge_access_group_resources_merges_mcp_servers():
+    """MCP server IDs from access groups are merged into object_permission.mcp_servers."""
+    from litellm.proxy.management_endpoints.access_group_endpoints import (
+        _merge_access_group_resources_into_data_json,
+    )
+
+    ag_record = MagicMock()
+    ag_record.access_model_names = []
+    ag_record.access_mcp_server_ids = ["mcp-server-1", "mcp-server-2"]
+    ag_record.access_agent_ids = []
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_accessgrouptable.find_many = AsyncMock(
+        return_value=[ag_record]
+    )
+
+    data_json: dict = {}
+    result = await _merge_access_group_resources_into_data_json(
+        data_json=data_json,
+        access_group_ids=["ag-1"],
+        prisma_client=mock_prisma,
+    )
+
+    assert "object_permission" in result
+    assert set(result["object_permission"]["mcp_servers"]) == {
+        "mcp-server-1",
+        "mcp-server-2",
+    }
+
+
+@pytest.mark.asyncio
+async def test_merge_access_group_resources_merges_agents():
+    """Agent IDs from access groups are merged into object_permission.agents."""
+    from litellm.proxy.management_endpoints.access_group_endpoints import (
+        _merge_access_group_resources_into_data_json,
+    )
+
+    ag_record = MagicMock()
+    ag_record.access_model_names = []
+    ag_record.access_mcp_server_ids = []
+    ag_record.access_agent_ids = ["agent-1"]
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_accessgrouptable.find_many = AsyncMock(
+        return_value=[ag_record]
+    )
+
+    data_json: dict = {}
+    result = await _merge_access_group_resources_into_data_json(
+        data_json=data_json,
+        access_group_ids=["ag-1"],
+        prisma_client=mock_prisma,
+    )
+
+    assert "object_permission" in result
+    assert result["object_permission"]["agents"] == ["agent-1"]
+
+
+@pytest.mark.asyncio
+async def test_merge_access_group_resources_preserves_existing():
+    """Existing models/MCP servers in data_json are preserved when merging."""
+    from litellm.proxy.management_endpoints.access_group_endpoints import (
+        _merge_access_group_resources_into_data_json,
+    )
+
+    ag_record = MagicMock()
+    ag_record.access_model_names = ["gpt-4"]
+    ag_record.access_mcp_server_ids = ["new-mcp"]
+    ag_record.access_agent_ids = []
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_accessgrouptable.find_many = AsyncMock(
+        return_value=[ag_record]
+    )
+
+    data_json = {
+        "models": ["existing-model"],
+        "object_permission": {"mcp_servers": ["existing-mcp"]},
+    }
+    result = await _merge_access_group_resources_into_data_json(
+        data_json=data_json,
+        access_group_ids=["ag-1"],
+        prisma_client=mock_prisma,
+    )
+
+    assert "existing-model" in result["models"]
+    assert "gpt-4" in result["models"]
+    assert "existing-mcp" in result["object_permission"]["mcp_servers"]
+    assert "new-mcp" in result["object_permission"]["mcp_servers"]
+
+
+@pytest.mark.asyncio
+async def test_merge_access_group_resources_deduplicates():
+    """Models/MCP servers that appear in multiple access groups are deduplicated."""
+    from litellm.proxy.management_endpoints.access_group_endpoints import (
+        _merge_access_group_resources_into_data_json,
+    )
+
+    ag1 = MagicMock()
+    ag1.access_model_names = ["gpt-4", "gpt-3.5"]
+    ag1.access_mcp_server_ids = ["mcp-1"]
+    ag1.access_agent_ids = []
+
+    ag2 = MagicMock()
+    ag2.access_model_names = ["gpt-4", "claude-3"]  # gpt-4 duplicated
+    ag2.access_mcp_server_ids = ["mcp-1", "mcp-2"]  # mcp-1 duplicated
+    ag2.access_agent_ids = []
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_accessgrouptable.find_many = AsyncMock(
+        return_value=[ag1, ag2]
+    )
+
+    data_json: dict = {}
+    result = await _merge_access_group_resources_into_data_json(
+        data_json=data_json,
+        access_group_ids=["ag-1", "ag-2"],
+        prisma_client=mock_prisma,
+    )
+
+    assert result["models"].count("gpt-4") == 1
+    assert result["object_permission"]["mcp_servers"].count("mcp-1") == 1
+
+
+# ---------------------------------------------------------------------------
+# _sync_add_access_group_to_teams resource propagation tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_sync_add_access_group_to_teams_merges_models():
+    """Adding an access group to a team also merges the group's models into team.models."""
+    from litellm.proxy.management_endpoints.access_group_endpoints import (
+        _sync_add_access_group_to_teams,
+    )
+
+    team_record = MagicMock()
+    team_record.access_group_ids = []
+    team_record.models = ["existing-model"]
+
+    mock_team_table = MagicMock()
+    mock_team_table.find_unique = AsyncMock(return_value=team_record)
+    mock_team_table.update = AsyncMock(return_value=None)
+
+    tx = types.SimpleNamespace(litellm_teamtable=mock_team_table)
+
+    ag_record = MagicMock()
+    ag_record.access_model_names = ["gpt-4", "claude-3"]
+    ag_record.access_mcp_server_ids = []
+    ag_record.access_agent_ids = []
+
+    await _sync_add_access_group_to_teams(
+        tx=tx,
+        team_ids=["team-1"],
+        access_group_id="ag-1",
+        access_group_record=ag_record,
+    )
+
+    mock_team_table.update.assert_awaited_once()
+    call_data = mock_team_table.update.call_args.kwargs["data"]
+    assert "ag-1" in call_data["access_group_ids"]
+    assert set(call_data["models"]) == {"existing-model", "gpt-4", "claude-3"}
+
+
+@pytest.mark.asyncio
+async def test_sync_add_access_group_to_teams_no_models():
+    """Adding an access group with no models does not set models key."""
+    from litellm.proxy.management_endpoints.access_group_endpoints import (
+        _sync_add_access_group_to_teams,
+    )
+
+    team_record = MagicMock()
+    team_record.access_group_ids = []
+    team_record.models = []
+
+    mock_team_table = MagicMock()
+    mock_team_table.find_unique = AsyncMock(return_value=team_record)
+    mock_team_table.update = AsyncMock(return_value=None)
+
+    tx = types.SimpleNamespace(litellm_teamtable=mock_team_table)
+
+    ag_record = MagicMock()
+    ag_record.access_model_names = []
+    ag_record.access_mcp_server_ids = []
+    ag_record.access_agent_ids = []
+
+    await _sync_add_access_group_to_teams(
+        tx=tx,
+        team_ids=["team-1"],
+        access_group_id="ag-1",
+        access_group_record=ag_record,
+    )
+
+    call_data = mock_team_table.update.call_args.kwargs["data"]
+    assert "models" not in call_data
+
+
+@pytest.mark.asyncio
+async def test_sync_remove_access_group_from_teams_recomputes_models():
+    """Removing an access group from a team removes models exclusive to that group.
+
+    - ``gpt-4`` is only in ag-1 (being removed) → removed from team
+    - ``claude-3`` is in ag-2 (remaining) → kept
+    - ``direct-model`` is not in any AG → preserved (was directly assigned)
+    """
+    from litellm.proxy.management_endpoints.access_group_endpoints import (
+        _sync_remove_access_group_from_teams,
+    )
+
+    team_record = MagicMock()
+    team_record.access_group_ids = ["ag-1", "ag-2"]
+    # direct-model is a model directly assigned to the team (not from any AG)
+    team_record.models = ["gpt-4", "claude-3", "direct-model"]
+    team_record.object_permission_id = None
+
+    removed_ag = MagicMock()
+    removed_ag.access_model_names = ["gpt-4"]   # ag-1 contributes gpt-4
+    removed_ag.access_mcp_server_ids = []
+    removed_ag.access_agent_ids = []
+
+    remaining_ag = MagicMock()
+    remaining_ag.access_model_names = ["claude-3"]  # ag-2 only has claude-3
+    remaining_ag.access_mcp_server_ids = []
+    remaining_ag.access_agent_ids = []
+
+    mock_team_table = MagicMock()
+    mock_team_table.find_unique = AsyncMock(return_value=team_record)
+    mock_team_table.update = AsyncMock(return_value=None)
+
+    mock_ag_table = MagicMock()
+    mock_ag_table.find_many = AsyncMock(return_value=[remaining_ag])
+
+    tx = types.SimpleNamespace(
+        litellm_teamtable=mock_team_table,
+        litellm_accessgrouptable=mock_ag_table,
+    )
+
+    await _sync_remove_access_group_from_teams(
+        tx=tx,
+        team_ids=["team-1"],
+        access_group_id="ag-1",  # removing ag-1
+        removed_access_group_record=removed_ag,
+    )
+
+    mock_team_table.update.assert_awaited_once()
+    call_data = mock_team_table.update.call_args.kwargs["data"]
+    assert call_data["access_group_ids"] == ["ag-2"]
+    # gpt-4 (exclusive to removed ag-1) gone; claude-3 and direct-model preserved
+    assert set(call_data["models"]) == {"claude-3", "direct-model"}
+
+
+@pytest.mark.asyncio
+async def test_sync_add_access_group_to_keys_merges_models():
+    """Adding an access group to a key also merges the group's models into key.models."""
+    from litellm.proxy.management_endpoints.access_group_endpoints import (
+        _sync_add_access_group_to_keys,
+    )
+
+    key_record = MagicMock()
+    key_record.access_group_ids = []
+    key_record.models = ["existing-model"]
+
+    mock_key_table = MagicMock()
+    mock_key_table.find_unique = AsyncMock(return_value=key_record)
+    mock_key_table.update = AsyncMock(return_value=None)
+
+    tx = types.SimpleNamespace(litellm_verificationtoken=mock_key_table)
+
+    ag_record = MagicMock()
+    ag_record.access_model_names = ["gpt-4"]
+    ag_record.access_mcp_server_ids = []
+    ag_record.access_agent_ids = []
+
+    await _sync_add_access_group_to_keys(
+        tx=tx,
+        key_tokens=["sk-token-1"],
+        access_group_id="ag-1",
+        access_group_record=ag_record,
+    )
+
+    mock_key_table.update.assert_awaited_once()
+    call_data = mock_key_table.update.call_args.kwargs["data"]
+    assert "ag-1" in call_data["access_group_ids"]
+    assert set(call_data["models"]) == {"existing-model", "gpt-4"}
+
+
+@pytest.mark.asyncio
+async def test_sync_remove_access_group_from_keys_recomputes_models():
+    """Removing an access group from a key removes models exclusive to that group.
+
+    - ``gpt-4`` is only in ag-1 (being removed) → removed from key
+    - ``claude-3`` is in ag-2 (remaining) → kept
+    - ``direct-model`` is not in any AG → preserved (was directly assigned)
+    """
+    from litellm.proxy.management_endpoints.access_group_endpoints import (
+        _sync_remove_access_group_from_keys,
+    )
+
+    key_record = MagicMock()
+    key_record.access_group_ids = ["ag-1", "ag-2"]
+    key_record.models = ["gpt-4", "claude-3", "direct-model"]
+    key_record.object_permission_id = None
+
+    removed_ag = MagicMock()
+    removed_ag.access_model_names = ["gpt-4"]
+    removed_ag.access_mcp_server_ids = []
+    removed_ag.access_agent_ids = []
+
+    remaining_ag = MagicMock()
+    remaining_ag.access_model_names = ["claude-3"]
+    remaining_ag.access_mcp_server_ids = []
+    remaining_ag.access_agent_ids = []
+
+    mock_key_table = MagicMock()
+    mock_key_table.find_unique = AsyncMock(return_value=key_record)
+    mock_key_table.update = AsyncMock(return_value=None)
+
+    mock_ag_table = MagicMock()
+    mock_ag_table.find_many = AsyncMock(return_value=[remaining_ag])
+
+    tx = types.SimpleNamespace(
+        litellm_verificationtoken=mock_key_table,
+        litellm_accessgrouptable=mock_ag_table,
+    )
+
+    await _sync_remove_access_group_from_keys(
+        tx=tx,
+        key_tokens=["sk-token-1"],
+        access_group_id="ag-1",
+        removed_access_group_record=removed_ag,
+    )
+
+    mock_key_table.update.assert_awaited_once()
+    call_data = mock_key_table.update.call_args.kwargs["data"]
+    assert call_data["access_group_ids"] == ["ag-2"]
+    # gpt-4 (exclusive to removed ag-1) gone; claude-3 and direct-model preserved
+    assert set(call_data["models"]) == {"claude-3", "direct-model"}
+
+
+# ---------------------------------------------------------------------------
+# New tests: MCP/agent propagation and direct-model preservation
+# ---------------------------------------------------------------------------
+
+
+def _make_op_record(
+    op_id: str = "op-123",
+    mcp_servers: list | None = None,
+    agents: list | None = None,
+):
+    """Create a minimal mock LiteLLM_ObjectPermissionTable record."""
+    record = MagicMock()
+    record.object_permission_id = op_id
+    record.mcp_servers = mcp_servers or []
+    record.agents = agents or []
+    record.mcp_access_groups = []
+    record.mcp_tool_permissions = {}
+    record.vector_stores = []
+    record.agent_access_groups = []
+    try:
+        record.model_dump = lambda exclude_none=False: {
+            "object_permission_id": op_id,
+            "mcp_servers": mcp_servers or [],
+            "agents": agents or [],
+        }
+    except Exception:
+        pass
+    return record
+
+
+# ---------------------------------------------------------------------------
+# _upsert_mcp_agents_in_object_permission
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_upsert_mcp_agents_creates_new_record_when_no_existing():
+    """When no existing object_permission exists, a new row is created and its
+    id is returned."""
+    from litellm.proxy.management_endpoints.access_group_endpoints import (
+        _upsert_mcp_agents_in_object_permission,
+    )
+
+    new_op_record = _make_op_record(op_id="new-op-id")
+    mock_op_table = MagicMock()
+    mock_op_table.find_unique = AsyncMock(return_value=None)
+    mock_op_table.upsert = AsyncMock(return_value=new_op_record)
+
+    tx = types.SimpleNamespace(litellm_objectpermissiontable=mock_op_table)
+
+    result_id = await _upsert_mcp_agents_in_object_permission(
+        tx=tx,
+        existing_op_id=None,
+        ag_mcp_servers=["mcp-server-1"],
+        ag_agents=["agent-1"],
+    )
+
+    assert result_id == "new-op-id"
+    mock_op_table.upsert.assert_awaited_once()
+    upsert_call = mock_op_table.upsert.call_args
+    create_data = upsert_call.kwargs["data"]["create"]
+    assert "mcp-server-1" in create_data["mcp_servers"]
+    assert "agent-1" in create_data["agents"]
+
+
+@pytest.mark.asyncio
+async def test_upsert_mcp_agents_merges_into_existing_record():
+    """When an existing object_permission exists, the new MCP/agents are merged."""
+    from litellm.proxy.management_endpoints.access_group_endpoints import (
+        _upsert_mcp_agents_in_object_permission,
+    )
+
+    existing_op = _make_op_record(
+        op_id="existing-op",
+        mcp_servers=["already-there"],
+        agents=["existing-agent"],
+    )
+    updated_op = _make_op_record(op_id="existing-op")
+    mock_op_table = MagicMock()
+    mock_op_table.find_unique = AsyncMock(return_value=existing_op)
+    mock_op_table.upsert = AsyncMock(return_value=updated_op)
+
+    tx = types.SimpleNamespace(litellm_objectpermissiontable=mock_op_table)
+
+    result_id = await _upsert_mcp_agents_in_object_permission(
+        tx=tx,
+        existing_op_id="existing-op",
+        ag_mcp_servers=["new-mcp"],
+        ag_agents=["new-agent"],
+    )
+
+    assert result_id == "existing-op"
+    upsert_call = mock_op_table.upsert.call_args
+    update_data = upsert_call.kwargs["data"]["update"]
+    assert set(update_data["mcp_servers"]) == {"already-there", "new-mcp"}
+    assert set(update_data["agents"]) == {"existing-agent", "new-agent"}
+
+
+@pytest.mark.asyncio
+async def test_upsert_mcp_agents_returns_none_when_both_lists_empty():
+    """No DB call is made when both MCP and agent lists are empty."""
+    from litellm.proxy.management_endpoints.access_group_endpoints import (
+        _upsert_mcp_agents_in_object_permission,
+    )
+
+    mock_op_table = MagicMock()
+    tx = types.SimpleNamespace(litellm_objectpermissiontable=mock_op_table)
+
+    result = await _upsert_mcp_agents_in_object_permission(
+        tx=tx,
+        existing_op_id=None,
+        ag_mcp_servers=[],
+        ag_agents=[],
+    )
+
+    assert result is None
+    mock_op_table.upsert.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# _remove_mcp_agents_from_object_permission
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_remove_mcp_agents_removes_specified_servers_and_agents():
+    """Specified MCP servers and agents are removed from the object_permission."""
+    from litellm.proxy.management_endpoints.access_group_endpoints import (
+        _remove_mcp_agents_from_object_permission,
+    )
+
+    existing_op = _make_op_record(
+        op_id="op-1",
+        mcp_servers=["keep-mcp", "remove-mcp"],
+        agents=["keep-agent", "remove-agent"],
+    )
+    mock_op_table = MagicMock()
+    mock_op_table.find_unique = AsyncMock(return_value=existing_op)
+    mock_op_table.update = AsyncMock(return_value=None)
+
+    tx = types.SimpleNamespace(litellm_objectpermissiontable=mock_op_table)
+
+    await _remove_mcp_agents_from_object_permission(
+        tx=tx,
+        existing_op_id="op-1",
+        mcp_servers_to_remove=["remove-mcp"],
+        agents_to_remove=["remove-agent"],
+    )
+
+    mock_op_table.update.assert_awaited_once()
+    update_data = mock_op_table.update.call_args.kwargs["data"]
+    assert update_data["mcp_servers"] == ["keep-mcp"]
+    assert update_data["agents"] == ["keep-agent"]
+
+
+@pytest.mark.asyncio
+async def test_remove_mcp_agents_noop_when_no_existing_op_id():
+    """No DB call when existing_op_id is None."""
+    from litellm.proxy.management_endpoints.access_group_endpoints import (
+        _remove_mcp_agents_from_object_permission,
+    )
+
+    mock_op_table = MagicMock()
+    tx = types.SimpleNamespace(litellm_objectpermissiontable=mock_op_table)
+
+    await _remove_mcp_agents_from_object_permission(
+        tx=tx,
+        existing_op_id=None,
+        mcp_servers_to_remove=["mcp-1"],
+        agents_to_remove=[],
+    )
+
+    mock_op_table.find_unique.assert_not_called()
+    mock_op_table.update.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# _sync_add_access_group_to_teams — MCP/agent merging
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_sync_add_access_group_to_teams_creates_object_permission_for_mcp():
+    """When access group has MCP servers, a new object_permission row is created
+    and linked to the team."""
+    from litellm.proxy.management_endpoints.access_group_endpoints import (
+        _sync_add_access_group_to_teams,
+    )
+
+    team_record = MagicMock()
+    team_record.access_group_ids = []
+    team_record.models = []
+    team_record.object_permission_id = None  # no existing object_permission
+
+    new_op = _make_op_record(op_id="created-op-id")
+    mock_op_table = MagicMock()
+    mock_op_table.find_unique = AsyncMock(return_value=None)
+    mock_op_table.upsert = AsyncMock(return_value=new_op)
+
+    mock_team_table = MagicMock()
+    mock_team_table.find_unique = AsyncMock(return_value=team_record)
+    mock_team_table.update = AsyncMock(return_value=None)
+
+    tx = types.SimpleNamespace(
+        litellm_teamtable=mock_team_table,
+        litellm_objectpermissiontable=mock_op_table,
+    )
+
+    ag_record = MagicMock()
+    ag_record.access_model_names = []
+    ag_record.access_mcp_server_ids = ["mcp-server-1", "mcp-server-2"]
+    ag_record.access_agent_ids = []
+
+    await _sync_add_access_group_to_teams(
+        tx=tx,
+        team_ids=["team-1"],
+        access_group_id="ag-1",
+        access_group_record=ag_record,
+    )
+
+    # object_permission upsert was called
+    mock_op_table.upsert.assert_awaited_once()
+    # team update links the new op id
+    mock_team_table.update.assert_awaited_once()
+    team_update_data = mock_team_table.update.call_args.kwargs["data"]
+    assert team_update_data["object_permission_id"] == "created-op-id"
+
+
+@pytest.mark.asyncio
+async def test_sync_add_access_group_to_teams_merges_agents_into_existing_op():
+    """When team already has an object_permission, agents are merged in."""
+    from litellm.proxy.management_endpoints.access_group_endpoints import (
+        _sync_add_access_group_to_teams,
+    )
+
+    existing_op = _make_op_record(
+        op_id="team-op-id",
+        mcp_servers=["existing-mcp"],
+        agents=["existing-agent"],
+    )
+    updated_op = _make_op_record(op_id="team-op-id")
+
+    team_record = MagicMock()
+    team_record.access_group_ids = []
+    team_record.models = []
+    team_record.object_permission_id = "team-op-id"
+
+    mock_op_table = MagicMock()
+    mock_op_table.find_unique = AsyncMock(return_value=existing_op)
+    mock_op_table.upsert = AsyncMock(return_value=updated_op)
+
+    mock_team_table = MagicMock()
+    mock_team_table.find_unique = AsyncMock(return_value=team_record)
+    mock_team_table.update = AsyncMock(return_value=None)
+
+    tx = types.SimpleNamespace(
+        litellm_teamtable=mock_team_table,
+        litellm_objectpermissiontable=mock_op_table,
+    )
+
+    ag_record = MagicMock()
+    ag_record.access_model_names = []
+    ag_record.access_mcp_server_ids = []
+    ag_record.access_agent_ids = ["new-agent"]
+
+    await _sync_add_access_group_to_teams(
+        tx=tx,
+        team_ids=["team-1"],
+        access_group_id="ag-1",
+        access_group_record=ag_record,
+    )
+
+    upsert_call = mock_op_table.upsert.call_args
+    update_data = upsert_call.kwargs["data"]["update"]
+    assert "new-agent" in update_data["agents"]
+    # Existing agent preserved
+    assert "existing-agent" in update_data["agents"]
+
+    # No new op id link needed (existing op id unchanged)
+    team_update_data = mock_team_table.update.call_args.kwargs["data"]
+    assert "object_permission_id" not in team_update_data
+
+
+# ---------------------------------------------------------------------------
+# _sync_add_access_group_to_keys — MCP/agent merging
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_sync_add_access_group_to_keys_creates_object_permission_for_mcp():
+    """When access group has MCP servers, a new object_permission row is created
+    and linked to the key."""
+    from litellm.proxy.management_endpoints.access_group_endpoints import (
+        _sync_add_access_group_to_keys,
+    )
+
+    key_record = MagicMock()
+    key_record.access_group_ids = []
+    key_record.models = []
+    key_record.object_permission_id = None
+
+    new_op = _make_op_record(op_id="key-op-id")
+    mock_op_table = MagicMock()
+    mock_op_table.find_unique = AsyncMock(return_value=None)
+    mock_op_table.upsert = AsyncMock(return_value=new_op)
+
+    mock_key_table = MagicMock()
+    mock_key_table.find_unique = AsyncMock(return_value=key_record)
+    mock_key_table.update = AsyncMock(return_value=None)
+
+    tx = types.SimpleNamespace(
+        litellm_verificationtoken=mock_key_table,
+        litellm_objectpermissiontable=mock_op_table,
+    )
+
+    ag_record = MagicMock()
+    ag_record.access_model_names = ["model-x"]
+    ag_record.access_mcp_server_ids = ["mcp-1"]
+    ag_record.access_agent_ids = ["agent-1"]
+
+    await _sync_add_access_group_to_keys(
+        tx=tx,
+        key_tokens=["sk-token-1"],
+        access_group_id="ag-1",
+        access_group_record=ag_record,
+    )
+
+    # MCP upsert was called
+    mock_op_table.upsert.assert_awaited_once()
+    # Key update includes both model merge and new op id
+    mock_key_table.update.assert_awaited_once()
+    key_update_data = mock_key_table.update.call_args.kwargs["data"]
+    assert "model-x" in key_update_data["models"]
+    assert key_update_data["object_permission_id"] == "key-op-id"
+
+
+# ---------------------------------------------------------------------------
+# _sync_remove_access_group_from_teams — MCP cleanup
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_sync_remove_access_group_from_teams_cleans_up_exclusive_mcp():
+    """MCP servers exclusively from the removed AG are cleaned up from object_permission."""
+    from litellm.proxy.management_endpoints.access_group_endpoints import (
+        _sync_remove_access_group_from_teams,
+    )
+
+    existing_op = _make_op_record(
+        op_id="team-op",
+        mcp_servers=["shared-mcp", "exclusive-mcp"],
+        agents=[],
+    )
+
+    team_record = MagicMock()
+    team_record.access_group_ids = ["ag-1", "ag-2"]
+    team_record.models = []
+    team_record.object_permission_id = "team-op"
+
+    removed_ag = MagicMock()
+    removed_ag.access_model_names = []
+    removed_ag.access_mcp_server_ids = ["exclusive-mcp", "shared-mcp"]
+    removed_ag.access_agent_ids = []
+
+    remaining_ag = MagicMock()
+    remaining_ag.access_model_names = []
+    remaining_ag.access_mcp_server_ids = ["shared-mcp"]  # still in ag-2
+    remaining_ag.access_agent_ids = []
+
+    mock_team_table = MagicMock()
+    mock_team_table.find_unique = AsyncMock(return_value=team_record)
+    mock_team_table.update = AsyncMock(return_value=None)
+
+    mock_op_table = MagicMock()
+    mock_op_table.find_unique = AsyncMock(return_value=existing_op)
+    mock_op_table.update = AsyncMock(return_value=None)
+
+    mock_ag_table = MagicMock()
+    mock_ag_table.find_many = AsyncMock(return_value=[remaining_ag])
+
+    tx = types.SimpleNamespace(
+        litellm_teamtable=mock_team_table,
+        litellm_accessgrouptable=mock_ag_table,
+        litellm_objectpermissiontable=mock_op_table,
+    )
+
+    await _sync_remove_access_group_from_teams(
+        tx=tx,
+        team_ids=["team-1"],
+        access_group_id="ag-1",
+        removed_access_group_record=removed_ag,
+    )
+
+    # object_permission updated to remove exclusive-mcp but keep shared-mcp
+    mock_op_table.update.assert_awaited_once()
+    op_update_data = mock_op_table.update.call_args.kwargs["data"]
+    assert op_update_data["mcp_servers"] == ["shared-mcp"]
+
+
+@pytest.mark.asyncio
+async def test_sync_remove_access_group_from_teams_preserves_direct_models():
+    """Models assigned directly to the team (not via any AG) are preserved
+    when an access group is removed."""
+    from litellm.proxy.management_endpoints.access_group_endpoints import (
+        _sync_remove_access_group_from_teams,
+    )
+
+    team_record = MagicMock()
+    team_record.access_group_ids = ["ag-1"]
+    # "direct-model" is not in any AG; "ag-model" is in ag-1
+    team_record.models = ["ag-model", "direct-model"]
+    team_record.object_permission_id = None
+
+    removed_ag = MagicMock()
+    removed_ag.access_model_names = ["ag-model"]
+    removed_ag.access_mcp_server_ids = []
+    removed_ag.access_agent_ids = []
+
+    mock_team_table = MagicMock()
+    mock_team_table.find_unique = AsyncMock(return_value=team_record)
+    mock_team_table.update = AsyncMock(return_value=None)
+
+    mock_ag_table = MagicMock()
+    mock_ag_table.find_many = AsyncMock(return_value=[])  # no remaining AGs
+
+    tx = types.SimpleNamespace(
+        litellm_teamtable=mock_team_table,
+        litellm_accessgrouptable=mock_ag_table,
+    )
+
+    await _sync_remove_access_group_from_teams(
+        tx=tx,
+        team_ids=["team-1"],
+        access_group_id="ag-1",
+        removed_access_group_record=removed_ag,
+    )
+
+    mock_team_table.update.assert_awaited_once()
+    call_data = mock_team_table.update.call_args.kwargs["data"]
+    # ag-model removed (was exclusively from ag-1); direct-model preserved
+    assert call_data["models"] == ["direct-model"]
+    assert call_data["access_group_ids"] == []
+
+
+@pytest.mark.asyncio
+async def test_sync_remove_access_group_from_teams_keeps_model_shared_with_remaining_ag():
+    """A model that appears in both the removed AG and a remaining AG is NOT removed."""
+    from litellm.proxy.management_endpoints.access_group_endpoints import (
+        _sync_remove_access_group_from_teams,
+    )
+
+    team_record = MagicMock()
+    team_record.access_group_ids = ["ag-1", "ag-2"]
+    team_record.models = ["shared-model"]
+    team_record.object_permission_id = None
+
+    removed_ag = MagicMock()
+    removed_ag.access_model_names = ["shared-model"]
+    removed_ag.access_mcp_server_ids = []
+    removed_ag.access_agent_ids = []
+
+    remaining_ag = MagicMock()
+    remaining_ag.access_model_names = ["shared-model"]  # also in ag-2
+    remaining_ag.access_mcp_server_ids = []
+    remaining_ag.access_agent_ids = []
+
+    mock_team_table = MagicMock()
+    mock_team_table.find_unique = AsyncMock(return_value=team_record)
+    mock_team_table.update = AsyncMock(return_value=None)
+
+    mock_ag_table = MagicMock()
+    mock_ag_table.find_many = AsyncMock(return_value=[remaining_ag])
+
+    tx = types.SimpleNamespace(
+        litellm_teamtable=mock_team_table,
+        litellm_accessgrouptable=mock_ag_table,
+    )
+
+    await _sync_remove_access_group_from_teams(
+        tx=tx,
+        team_ids=["team-1"],
+        access_group_id="ag-1",
+        removed_access_group_record=removed_ag,
+    )
+
+    call_data = mock_team_table.update.call_args.kwargs["data"]
+    # shared-model still in ag-2, so it's not removed
+    assert "shared-model" in call_data["models"]
+
+
+# ---------------------------------------------------------------------------
+# _sync_remove_access_group_from_keys — MCP cleanup
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_sync_remove_access_group_from_keys_cleans_up_exclusive_mcp():
+    """MCP servers exclusively from the removed AG are removed from object_permission."""
+    from litellm.proxy.management_endpoints.access_group_endpoints import (
+        _sync_remove_access_group_from_keys,
+    )
+
+    existing_op = _make_op_record(
+        op_id="key-op",
+        mcp_servers=["exclusive-mcp", "shared-mcp"],
+        agents=["exclusive-agent"],
+    )
+
+    key_record = MagicMock()
+    key_record.access_group_ids = ["ag-1", "ag-2"]
+    key_record.models = []
+    key_record.object_permission_id = "key-op"
+
+    removed_ag = MagicMock()
+    removed_ag.access_model_names = []
+    removed_ag.access_mcp_server_ids = ["exclusive-mcp", "shared-mcp"]
+    removed_ag.access_agent_ids = ["exclusive-agent"]
+
+    remaining_ag = MagicMock()
+    remaining_ag.access_model_names = []
+    remaining_ag.access_mcp_server_ids = ["shared-mcp"]
+    remaining_ag.access_agent_ids = []
+
+    mock_key_table = MagicMock()
+    mock_key_table.find_unique = AsyncMock(return_value=key_record)
+    mock_key_table.update = AsyncMock(return_value=None)
+
+    mock_op_table = MagicMock()
+    mock_op_table.find_unique = AsyncMock(return_value=existing_op)
+    mock_op_table.update = AsyncMock(return_value=None)
+
+    mock_ag_table = MagicMock()
+    mock_ag_table.find_many = AsyncMock(return_value=[remaining_ag])
+
+    tx = types.SimpleNamespace(
+        litellm_verificationtoken=mock_key_table,
+        litellm_accessgrouptable=mock_ag_table,
+        litellm_objectpermissiontable=mock_op_table,
+    )
+
+    await _sync_remove_access_group_from_keys(
+        tx=tx,
+        key_tokens=["sk-token-1"],
+        access_group_id="ag-1",
+        removed_access_group_record=removed_ag,
+    )
+
+    mock_op_table.update.assert_awaited_once()
+    op_update = mock_op_table.update.call_args.kwargs["data"]
+    # exclusive-mcp removed; shared-mcp kept; exclusive-agent removed
+    assert op_update["mcp_servers"] == ["shared-mcp"]
+    assert op_update["agents"] == []

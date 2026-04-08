@@ -1,8 +1,9 @@
-from typing import List, Set
+from typing import Dict, List, Optional, Set, Tuple
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from litellm._logging import verbose_proxy_logger
+from litellm._uuid import uuid
 from litellm.proxy._types import (
     CommonProxyErrors,
     LiteLLM_AccessGroupTable,
@@ -36,6 +37,57 @@ def _require_proxy_admin(user_api_key_dict: UserAPIKeyAuth) -> None:
             status_code=status.HTTP_403_FORBIDDEN,
             detail={"error": CommonProxyErrors.not_allowed_access.value},
         )
+
+
+async def _merge_access_group_resources_into_data_json(
+    data_json: dict,
+    access_group_ids: List[str],
+    prisma_client,
+) -> dict:
+    """
+    Batch-fetch access groups and merge their models/mcp_servers/agents into data_json.
+
+    - Models are merged into data_json["models"]
+    - MCP server IDs are merged into data_json["object_permission"]["mcp_servers"]
+    - Agent IDs are merged into data_json["object_permission"]["agents"]
+
+    This ensures that resources defined on an access group are propagated directly
+    to any team or key that references those access groups.
+    """
+    if not access_group_ids:
+        return data_json
+
+    records = await prisma_client.db.litellm_accessgrouptable.find_many(
+        where={"access_group_id": {"in": access_group_ids}}
+    )
+
+    ag_models: List[str] = list(
+        {m for r in records for m in (r.access_model_names or [])}
+    )
+    ag_mcp_servers: List[str] = list(
+        {s for r in records for s in (r.access_mcp_server_ids or [])}
+    )
+    ag_agents: List[str] = list(
+        {a for r in records for a in (r.access_agent_ids or [])}
+    )
+
+    if ag_models:
+        existing_models: List[str] = list(data_json.get("models") or [])
+        data_json["models"] = list(set(existing_models + ag_models))
+
+    if ag_mcp_servers or ag_agents:
+        obj_perm: Dict = data_json.get("object_permission") or {}
+        if not isinstance(obj_perm, dict):
+            obj_perm = {}
+        if ag_mcp_servers:
+            existing_mcp: List[str] = list(obj_perm.get("mcp_servers") or [])
+            obj_perm["mcp_servers"] = list(set(existing_mcp + ag_mcp_servers))
+        if ag_agents:
+            existing_agents: List[str] = list(obj_perm.get("agents") or [])
+            obj_perm["agents"] = list(set(existing_agents + ag_agents))
+        data_json["object_permission"] = obj_perm
+
+    return data_json
 
 
 def _record_to_response(record) -> AccessGroupResponse:
@@ -95,74 +147,374 @@ async def _invalidate_cache_access_group(access_group_id: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Object-permission helpers (called inside a Prisma transaction)
+# ---------------------------------------------------------------------------
+
+
+async def _upsert_mcp_agents_in_object_permission(
+    tx,
+    existing_op_id: Optional[str],
+    ag_mcp_servers: List[str],
+    ag_agents: List[str],
+) -> Optional[str]:
+    """
+    Upsert LiteLLM_ObjectPermissionTable to add MCP servers and agents.
+
+    Merges ``ag_mcp_servers`` / ``ag_agents`` into the existing record (if any),
+    creating a new record when ``existing_op_id`` is None.
+
+    Returns the ``object_permission_id`` of the upserted row, or ``None`` when
+    both lists are empty (nothing to do).
+    """
+    if not ag_mcp_servers and not ag_agents:
+        return None
+
+    existing_mcp: List[str] = []
+    existing_agents: List[str] = []
+    existing_data: Dict = {}
+
+    if existing_op_id:
+        existing_op = await tx.litellm_objectpermissiontable.find_unique(
+            where={"object_permission_id": existing_op_id}
+        )
+        if existing_op is not None:
+            try:
+                existing_data = existing_op.model_dump(exclude_none=True)
+            except Exception:
+                existing_data = existing_op.dict(exclude_none=True)
+            existing_mcp = list(existing_data.get("mcp_servers") or [])
+            existing_agents = list(existing_data.get("agents") or [])
+
+    upsert_data: Dict = {
+        k: v for k, v in existing_data.items() if k != "object_permission_id"
+    }
+    if ag_mcp_servers:
+        upsert_data["mcp_servers"] = list(set(existing_mcp + ag_mcp_servers))
+    if ag_agents:
+        upsert_data["agents"] = list(set(existing_agents + ag_agents))
+
+    op_id_to_use: str = existing_op_id or str(uuid.uuid4())
+    created_row = await tx.litellm_objectpermissiontable.upsert(
+        where={"object_permission_id": op_id_to_use},
+        data={"create": upsert_data, "update": upsert_data},
+    )
+    return created_row.object_permission_id
+
+
+async def _remove_mcp_agents_from_object_permission(
+    tx,
+    existing_op_id: Optional[str],
+    mcp_servers_to_remove: List[str],
+    agents_to_remove: List[str],
+) -> None:
+    """
+    Remove specific MCP server IDs and agent IDs from an existing
+    LiteLLM_ObjectPermissionTable row.  No-ops when the record does not exist
+    or the removal sets are empty.
+    """
+    if not existing_op_id or (not mcp_servers_to_remove and not agents_to_remove):
+        return
+
+    existing_op = await tx.litellm_objectpermissiontable.find_unique(
+        where={"object_permission_id": existing_op_id}
+    )
+    if existing_op is None:
+        return
+
+    op_update: Dict = {}
+    if mcp_servers_to_remove:
+        remove_set: Set[str] = set(mcp_servers_to_remove)
+        op_update["mcp_servers"] = [
+            s for s in (existing_op.mcp_servers or []) if s not in remove_set
+        ]
+    if agents_to_remove:
+        remove_set = set(agents_to_remove)
+        op_update["agents"] = [
+            a for a in (existing_op.agents or []) if a not in remove_set
+        ]
+
+    if op_update:
+        await tx.litellm_objectpermissiontable.update(
+            where={"object_permission_id": existing_op_id},
+            data=op_update,
+        )
+
+
+# ---------------------------------------------------------------------------
 # DB sync helpers (called inside a Prisma transaction)
 # ---------------------------------------------------------------------------
 
 
 async def _sync_add_access_group_to_teams(
-    tx, team_ids: List[str], access_group_id: str
+    tx,
+    team_ids: List[str],
+    access_group_id: str,
+    access_group_record=None,
 ) -> None:
-    """Add access_group_id to each team's access_group_ids (idempotent)."""
+    """Add access_group_id to each team's access_group_ids and merge the group's
+    models/mcp_servers/agents into the team's direct resource lists (idempotent).
+
+    access_group_record: the Prisma record for the access group being added (optional).
+        When provided, its resources are merged directly into the team rather than
+        making an extra DB round-trip.
+    """
+    ag_models: List[str] = list(
+        getattr(access_group_record, "access_model_names", None) or []
+    )
+    ag_mcp_servers: List[str] = list(
+        getattr(access_group_record, "access_mcp_server_ids", None) or []
+    )
+    ag_agents: List[str] = list(
+        getattr(access_group_record, "access_agent_ids", None) or []
+    )
+
     for team_id in team_ids:
         team = await tx.litellm_teamtable.find_unique(where={"team_id": team_id})
-        if team is not None and access_group_id not in (team.access_group_ids or []):
-            await tx.litellm_teamtable.update(
-                where={"team_id": team_id},
-                data={
-                    "access_group_ids": list(team.access_group_ids or [])
-                    + [access_group_id]
-                },
+        if team is None or access_group_id in (team.access_group_ids or []):
+            continue
+
+        update_data: Dict = {
+            "access_group_ids": list(team.access_group_ids or []) + [access_group_id]
+        }
+
+        # Merge models from the access group into the team's model list
+        if ag_models:
+            merged_models = list(set(list(team.models or []) + ag_models))
+            update_data["models"] = merged_models
+
+        # Merge MCP servers and agents into the team's object_permission
+        if ag_mcp_servers or ag_agents:
+            existing_op_id: Optional[str] = getattr(
+                team, "object_permission_id", None
             )
+            new_op_id = await _upsert_mcp_agents_in_object_permission(
+                tx,
+                existing_op_id=existing_op_id,
+                ag_mcp_servers=ag_mcp_servers,
+                ag_agents=ag_agents,
+            )
+            # Link the (possibly newly created) object_permission row to the team
+            if new_op_id is not None and new_op_id != existing_op_id:
+                update_data["object_permission_id"] = new_op_id
+
+        await tx.litellm_teamtable.update(
+            where={"team_id": team_id},
+            data=update_data,
+        )
 
 
 async def _sync_remove_access_group_from_teams(
-    tx, team_ids: List[str], access_group_id: str
+    tx,
+    team_ids: List[str],
+    access_group_id: str,
+    removed_access_group_record=None,
 ) -> None:
-    """Remove access_group_id from each team's access_group_ids (idempotent)."""
+    """Remove access_group_id from each team's access_group_ids and clean up
+    models / object_permission resources that were exclusively contributed by
+    the removed access group (idempotent).
+
+    removed_access_group_record: the Prisma record for the access group being
+        removed (optional).  Pass the *pre-update* snapshot when calling from
+        ``update_access_group`` so that stale post-update data is not used to
+        compute the removal delta.  When ``None`` the record is fetched from
+        the DB (safe for the delete path where the row still exists).
+    """
+    # Resolve removed AG's resources once outside the per-team loop.
+    ag_record = removed_access_group_record
+    if ag_record is None:
+        ag_record = await tx.litellm_accessgrouptable.find_unique(
+            where={"access_group_id": access_group_id}
+        )
+
+    removed_ag_models: Set[str] = set(
+        getattr(ag_record, "access_model_names", None) or []
+    )
+    removed_ag_mcp: Set[str] = set(
+        getattr(ag_record, "access_mcp_server_ids", None) or []
+    )
+    removed_ag_agents: Set[str] = set(
+        getattr(ag_record, "access_agent_ids", None) or []
+    )
+
     for team_id in team_ids:
         team = await tx.litellm_teamtable.find_unique(where={"team_id": team_id})
-        if team is not None and access_group_id in (team.access_group_ids or []):
-            await tx.litellm_teamtable.update(
-                where={"team_id": team_id},
-                data={
-                    "access_group_ids": [
-                        ag for ag in team.access_group_ids if ag != access_group_id
-                    ]
-                },
-            )
+        if team is None or access_group_id not in (team.access_group_ids or []):
+            continue
+
+        remaining_ag_ids = [
+            ag for ag in (team.access_group_ids or []) if ag != access_group_id
+        ]
+
+        # Batch-fetch remaining AGs to compute what resources they still provide
+        remaining_records = await tx.litellm_accessgrouptable.find_many(
+            where={"access_group_id": {"in": remaining_ag_ids}}
+        )
+        models_in_remaining: Set[str] = {
+            m for r in remaining_records for m in (r.access_model_names or [])
+        }
+        mcp_in_remaining: Set[str] = {
+            s for r in remaining_records for s in (r.access_mcp_server_ids or [])
+        }
+        agents_in_remaining: Set[str] = {
+            a for r in remaining_records for a in (r.access_agent_ids or [])
+        }
+
+        # Only remove models/MCP/agents that were *exclusively* from the removed AG
+        models_to_remove = removed_ag_models - models_in_remaining
+        current_models = set(team.models or [])
+        updated_models = list(current_models - models_to_remove)
+
+        update_data: Dict = {
+            "access_group_ids": remaining_ag_ids,
+            "models": updated_models,
+        }
+
+        # Clean up MCP servers / agents in object_permission
+        mcp_to_remove = list(removed_ag_mcp - mcp_in_remaining)
+        agents_to_remove = list(removed_ag_agents - agents_in_remaining)
+        existing_op_id: Optional[str] = getattr(team, "object_permission_id", None)
+        await _remove_mcp_agents_from_object_permission(
+            tx,
+            existing_op_id=existing_op_id,
+            mcp_servers_to_remove=mcp_to_remove,
+            agents_to_remove=agents_to_remove,
+        )
+
+        await tx.litellm_teamtable.update(
+            where={"team_id": team_id},
+            data=update_data,
+        )
 
 
 async def _sync_add_access_group_to_keys(
-    tx, key_tokens: List[str], access_group_id: str
+    tx, key_tokens: List[str], access_group_id: str, access_group_record=None
 ) -> None:
-    """Add access_group_id to each key's access_group_ids (idempotent)."""
+    """Add access_group_id to each key's access_group_ids and merge the group's
+    models/mcp_servers/agents into the key's direct resource lists (idempotent).
+    """
+    ag_models: List[str] = list(
+        getattr(access_group_record, "access_model_names", None) or []
+    )
+    ag_mcp_servers: List[str] = list(
+        getattr(access_group_record, "access_mcp_server_ids", None) or []
+    )
+    ag_agents: List[str] = list(
+        getattr(access_group_record, "access_agent_ids", None) or []
+    )
+
     for token in key_tokens:
         key = await tx.litellm_verificationtoken.find_unique(where={"token": token})
-        if key is not None and access_group_id not in (key.access_group_ids or []):
-            await tx.litellm_verificationtoken.update(
-                where={"token": token},
-                data={
-                    "access_group_ids": list(key.access_group_ids or [])
-                    + [access_group_id]
-                },
+        if key is None or access_group_id in (key.access_group_ids or []):
+            continue
+
+        update_data: Dict = {
+            "access_group_ids": list(key.access_group_ids or []) + [access_group_id]
+        }
+
+        if ag_models:
+            merged_models = list(set(list(key.models or []) + ag_models))
+            update_data["models"] = merged_models
+
+        # Merge MCP servers and agents into the key's object_permission
+        if ag_mcp_servers or ag_agents:
+            existing_op_id: Optional[str] = getattr(
+                key, "object_permission_id", None
             )
+            new_op_id = await _upsert_mcp_agents_in_object_permission(
+                tx,
+                existing_op_id=existing_op_id,
+                ag_mcp_servers=ag_mcp_servers,
+                ag_agents=ag_agents,
+            )
+            # Link the (possibly newly created) object_permission row to the key
+            if new_op_id is not None and new_op_id != existing_op_id:
+                update_data["object_permission_id"] = new_op_id
+
+        await tx.litellm_verificationtoken.update(
+            where={"token": token},
+            data=update_data,
+        )
 
 
 async def _sync_remove_access_group_from_keys(
-    tx, key_tokens: List[str], access_group_id: str
+    tx,
+    key_tokens: List[str],
+    access_group_id: str,
+    removed_access_group_record=None,
 ) -> None:
-    """Remove access_group_id from each key's access_group_ids (idempotent)."""
+    """Remove access_group_id from each key's access_group_ids and clean up
+    models / object_permission resources that were exclusively contributed by
+    the removed access group (idempotent).
+
+    removed_access_group_record: the Prisma record for the access group being
+        removed (optional).  Pass the *pre-update* snapshot when calling from
+        ``update_access_group`` so that stale post-update data is not used to
+        compute the removal delta.  When ``None`` the record is fetched from
+        the DB (safe for the delete path where the row still exists).
+    """
+    # Resolve removed AG's resources once outside the per-key loop.
+    ag_record = removed_access_group_record
+    if ag_record is None:
+        ag_record = await tx.litellm_accessgrouptable.find_unique(
+            where={"access_group_id": access_group_id}
+        )
+
+    removed_ag_models: Set[str] = set(
+        getattr(ag_record, "access_model_names", None) or []
+    )
+    removed_ag_mcp: Set[str] = set(
+        getattr(ag_record, "access_mcp_server_ids", None) or []
+    )
+    removed_ag_agents: Set[str] = set(
+        getattr(ag_record, "access_agent_ids", None) or []
+    )
+
     for token in key_tokens:
         key = await tx.litellm_verificationtoken.find_unique(where={"token": token})
-        if key is not None and access_group_id in (key.access_group_ids or []):
-            await tx.litellm_verificationtoken.update(
-                where={"token": token},
-                data={
-                    "access_group_ids": [
-                        ag for ag in key.access_group_ids if ag != access_group_id
-                    ]
-                },
-            )
+        if key is None or access_group_id not in (key.access_group_ids or []):
+            continue
+
+        remaining_ag_ids = [
+            ag for ag in (key.access_group_ids or []) if ag != access_group_id
+        ]
+
+        # Batch-fetch remaining AGs to compute what resources they still provide
+        remaining_records = await tx.litellm_accessgrouptable.find_many(
+            where={"access_group_id": {"in": remaining_ag_ids}}
+        )
+        models_in_remaining: Set[str] = {
+            m for r in remaining_records for m in (r.access_model_names or [])
+        }
+        mcp_in_remaining: Set[str] = {
+            s for r in remaining_records for s in (r.access_mcp_server_ids or [])
+        }
+        agents_in_remaining: Set[str] = {
+            a for r in remaining_records for a in (r.access_agent_ids or [])
+        }
+
+        # Only remove models/MCP/agents that were *exclusively* from the removed AG
+        models_to_remove = removed_ag_models - models_in_remaining
+        current_models = set(key.models or [])
+        updated_models = list(current_models - models_to_remove)
+
+        # Clean up MCP servers / agents in object_permission
+        mcp_to_remove = list(removed_ag_mcp - mcp_in_remaining)
+        agents_to_remove = list(removed_ag_agents - agents_in_remaining)
+        existing_op_id: Optional[str] = getattr(key, "object_permission_id", None)
+        await _remove_mcp_agents_from_object_permission(
+            tx,
+            existing_op_id=existing_op_id,
+            mcp_servers_to_remove=mcp_to_remove,
+            agents_to_remove=agents_to_remove,
+        )
+
+        await tx.litellm_verificationtoken.update(
+            where={"token": token},
+            data={
+                "access_group_ids": remaining_ag_ids,
+                "models": updated_models,
+            },
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -329,11 +681,18 @@ async def create_access_group(
             )
 
             # Sync team and key tables to reference the new access group
+            # Pass the created record so sync can merge models/MCP/agents directly.
             await _sync_add_access_group_to_teams(
-                tx, data.assigned_team_ids or [], record.access_group_id
+                tx,
+                data.assigned_team_ids or [],
+                record.access_group_id,
+                access_group_record=record,
             )
             await _sync_add_access_group_to_keys(
-                tx, data.assigned_key_ids or [], record.access_group_id
+                tx,
+                data.assigned_key_ids or [],
+                record.access_group_id,
+                access_group_record=record,
             )
     except HTTPException:
         raise
@@ -481,13 +840,26 @@ async def update_access_group(
                 data=update_data,
             )
 
-            await _sync_add_access_group_to_teams(tx, teams_to_add, access_group_id)
-            await _sync_remove_access_group_from_teams(
-                tx, teams_to_remove, access_group_id
+            await _sync_add_access_group_to_teams(
+                tx, teams_to_add, access_group_id, access_group_record=record
             )
-            await _sync_add_access_group_to_keys(tx, keys_to_add, access_group_id)
+            # Pass `existing` (pre-update snapshot) so remove logic uses the
+            # OLD resource lists when computing the removal delta, not the
+            # post-update ones.
+            await _sync_remove_access_group_from_teams(
+                tx,
+                teams_to_remove,
+                access_group_id,
+                removed_access_group_record=existing,
+            )
+            await _sync_add_access_group_to_keys(
+                tx, keys_to_add, access_group_id, access_group_record=record
+            )
             await _sync_remove_access_group_from_keys(
-                tx, keys_to_remove, access_group_id
+                tx,
+                keys_to_remove,
+                access_group_id,
+                removed_access_group_record=existing,
             )
     except HTTPException:
         raise
@@ -566,44 +938,21 @@ async def delete_access_group(
             } | set(existing.assigned_key_ids or [])
             affected_key_tokens = list(all_affected_key_tokens)
 
-            # Update teams returned by find_many directly — we already have their data.
-            for team in teams_with_group:
-                await tx.litellm_teamtable.update(
-                    where={"team_id": team.team_id},
-                    data={
-                        "access_group_ids": [
-                            ag
-                            for ag in (team.access_group_ids or [])
-                            if ag != access_group_id
-                        ]
-                    },
-                )
-            # Use _sync_remove only for out-of-sync teams not found by the hasSome query.
-            out_of_sync_team_ids = set(existing.assigned_team_ids or []) - {
-                t.team_id for t in teams_with_group
-            }
+            # Use _sync_remove for ALL affected teams — it correctly handles
+            # model/MCP/agent cleanup and is idempotent.  The `existing` record
+            # is passed as the pre-delete snapshot so that removal deltas are
+            # computed from the right resource lists before the row is deleted.
             await _sync_remove_access_group_from_teams(
-                tx, list(out_of_sync_team_ids), access_group_id
+                tx,
+                affected_team_ids,
+                access_group_id,
+                removed_access_group_record=existing,
             )
-
-            # Update keys returned by find_many directly — we already have their data.
-            for key in keys_with_group:
-                await tx.litellm_verificationtoken.update(
-                    where={"token": key.token},
-                    data={
-                        "access_group_ids": [
-                            ag
-                            for ag in (key.access_group_ids or [])
-                            if ag != access_group_id
-                        ]
-                    },
-                )
-            # Use _sync_remove only for out-of-sync keys not found by the hasSome query.
-            out_of_sync_key_tokens = set(existing.assigned_key_ids or []) - {
-                k.token for k in keys_with_group
-            }
             await _sync_remove_access_group_from_keys(
-                tx, list(out_of_sync_key_tokens), access_group_id
+                tx,
+                affected_key_tokens,
+                access_group_id,
+                removed_access_group_record=existing,
             )
 
             await tx.litellm_accessgrouptable.delete(
