@@ -36,7 +36,7 @@ class GoogleImageGenConfig(BaseImageGenerationConfig):
         Google AI Imagen API supported parameters
         https://ai.google.dev/gemini-api/docs/imagen
         """
-        return ["n", "size"]
+        return ["n", "size", "quality"]
 
     def map_openai_params(
         self,
@@ -55,8 +55,17 @@ class GoogleImageGenConfig(BaseImageGenerationConfig):
                     if k == "n":
                         mapped_params["sampleCount"] = v
                     elif k == "size":
-                        # Map OpenAI size format to Google aspectRatio
-                        mapped_params["aspectRatio"] = self._map_size_to_aspect_ratio(v)
+                        if isinstance(v, str) and "x" in v:
+                            # OpenAI format like "1024x1024" -> map to aspect ratio
+                            mapped_params["aspectRatio"] = self._map_size_to_aspect_ratio(v)
+                        else:
+                            # Gemini image_size format like "1K", "2K", "4K"
+                            mapped_params["imageSize"] = v
+                    elif k == "quality":
+                        # Map OpenAI quality to Gemini imageSize
+                        # "hd" -> "2K", "standard" -> "1K"
+                        if v == "hd" and "imageSize" not in mapped_params:
+                            mapped_params["imageSize"] = "2K"
                     else:
                         mapped_params[k] = v
         return mapped_params
@@ -180,9 +189,20 @@ class GoogleImageGenConfig(BaseImageGenerationConfig):
         """
         # For Gemini Flash Image Preview models, use standard Gemini format
         if "gemini" in model:
+            generation_config: dict = {"response_modalities": ["IMAGE", "TEXT"]}
+
+            # Build image_config from mapped params (aspectRatio, imageSize)
+            image_config: dict = {}
+            if "aspectRatio" in optional_params:
+                image_config["aspect_ratio"] = optional_params["aspectRatio"]
+            if "imageSize" in optional_params:
+                image_config["image_size"] = optional_params["imageSize"]
+            if image_config:
+                generation_config["image_config"] = image_config
+
             request_body: dict = {
                 "contents": [{"parts": [{"text": prompt}]}],
-                "generationConfig": {"response_modalities": ["IMAGE", "TEXT"]},
+                "generationConfig": generation_config,
             }
             return request_body
         else:
