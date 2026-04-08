@@ -73,6 +73,7 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
             litellm_params,
             headers,
         )
+        request["input"] = self._normalize_chatgpt_input(request.get("input"))
         base_instructions = get_chatgpt_default_instructions()
         existing_instructions = request.get("instructions")
         if existing_instructions:
@@ -104,6 +105,18 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
         }
 
         return {k: v for k, v in request.items() if k in allowed_keys}
+
+    @staticmethod
+    def _normalize_chatgpt_input(input_value: Any) -> Any:
+        if isinstance(input_value, str):
+            return [
+                {
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": input_value}],
+                }
+            ]
+
+        return input_value
 
     def transform_response_api_response(
         self,

@@ -107,6 +107,24 @@ class TestChatGPTResponsesAPITransformation:
             "You are Codex, based on GPT-5."
         )
 
+    def test_chatgpt_normalizes_string_input_for_responses_api(self):
+        config = ChatGPTResponsesAPIConfig()
+
+        request = config.transform_responses_api_request(
+            model="chatgpt/gpt-5.4",
+            input="hi",
+            response_api_optional_request_params={},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        assert request["input"] == [
+            {
+                "role": "user",
+                "content": [{"type": "input_text", "text": "hi"}],
+            }
+        ]
+
     @pytest.mark.parametrize(
         "model_name",
         [
