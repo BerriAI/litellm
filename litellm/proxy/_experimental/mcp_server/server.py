@@ -1842,6 +1842,10 @@ if MCP_AVAILABLE:
 
         Returns:
             CallToolResult: Tool execution result
+
+        With ``litellm_logging_obj``, runs MCP post-call and success logging once
+        before returning (the ``@client`` wrapper skips duplicate async success
+        logging for ``call_mcp_tool``).
         """
         # Track resolved MCP server for both permission checks and dispatch
         mcp_server: Optional[MCPServer] = None
@@ -1877,6 +1881,12 @@ if MCP_AVAILABLE:
                 server_name=server_name,
             )
         )
+
+        # Extract custom headers for logging callbacks
+        custom_headers = _extract_custom_headers(raw_headers)
+        if custom_headers:
+            standard_logging_mcp_tool_call["custom_headers"] = custom_headers
+
         litellm_logging_obj: Optional[LiteLLMLoggingObj] = kwargs.get(
             "litellm_logging_obj", None
         )
@@ -1885,6 +1895,11 @@ if MCP_AVAILABLE:
                 standard_logging_mcp_tool_call
             )
             litellm_logging_obj.model = f"MCP: {name}"
+            # Populate requester_custom_headers in metadata so it flows into
+            # StandardLoggingMetadata via _STANDARD_LOGGING_METADATA_KEYS
+            _apply_requester_custom_headers_for_mcp_logging(
+                litellm_logging_obj, custom_headers
+            )
         # Resolve the MCP server early so BYOK checks and credential injection
         # apply to ALL dispatch paths (local tool registry AND managed MCP server).
         if mcp_server is None:
@@ -1977,6 +1992,22 @@ if MCP_AVAILABLE:
             local_content = await _handle_local_mcp_tool(original_tool_name, arguments)
             response = CallToolResult(content=cast(Any, local_content), isError=False)
 
+        if litellm_logging_obj:
+            litellm_logging_obj.post_call(original_response=response)
+            end_time = datetime.now()
+            await litellm_logging_obj.async_post_mcp_tool_call_hook(
+                kwargs=litellm_logging_obj.model_call_details,
+                response_obj=response,
+                start_time=start_time,
+                end_time=end_time,
+            )
+            litellm_logging_obj.call_type = CallTypes.call_mcp_tool.value
+            await litellm_logging_obj.async_success_handler(
+                result=response,
+                start_time=start_time,
+                end_time=end_time,
+            )
+
         return response
 
     @client
@@ -1995,9 +2026,6 @@ if MCP_AVAILABLE:
         Call a specific tool with the provided arguments (handles prefixed tool names).
         """
         start_time = datetime.now()
-        litellm_logging_obj: Optional[LiteLLMLoggingObj] = kwargs.get(
-            "litellm_logging_obj", None
-        )
 
         try:
             if arguments is None:
@@ -2057,19 +2085,6 @@ if MCP_AVAILABLE:
                 )
             raise
 
-        if litellm_logging_obj:
-            litellm_logging_obj.post_call(original_response=response)
-            end_time = datetime.now()
-            await litellm_logging_obj.async_post_mcp_tool_call_hook(
-                kwargs=litellm_logging_obj.model_call_details,
-                response_obj=response,
-                start_time=start_time,
-                end_time=end_time,
-            )
-            litellm_logging_obj.call_type = CallTypes.call_mcp_tool.value
-            await litellm_logging_obj.async_success_handler(
-                result=response, start_time=start_time, end_time=end_time
-            )
         return response
 
     async def mcp_get_prompt(
@@ -2171,6 +2186,77 @@ if MCP_AVAILABLE:
             extra_headers=extra_headers,
             raw_headers=raw_headers,
         )
+
+    def _apply_requester_custom_headers_for_mcp_logging(
+        litellm_logging_obj: LiteLLMLoggingObj,
+        custom_headers: Optional[Dict[str, str]],
+    ) -> None:
+        """Copy MCP custom headers into litellm_params.metadata for standard logging."""
+        if not custom_headers:
+            return
+        _lp = litellm_logging_obj.model_call_details.get("litellm_params")
+        if isinstance(_lp, dict):
+            _meta = _lp.get("metadata")
+            if isinstance(_meta, dict):
+                _meta["requester_custom_headers"] = custom_headers
+            else:
+                verbose_logger.debug(
+                    "execute_mcp_tool: skipping requester_custom_headers "
+                    "— metadata is not a dict (type=%s)",
+                    type(_meta).__name__,
+                )
+        else:
+            verbose_logger.debug(
+                "execute_mcp_tool: skipping requester_custom_headers "
+                "— litellm_params is not a dict (type=%s)",
+                type(_lp).__name__,
+            )
+
+    _SENSITIVE_CUSTOM_HEADER_PREFIXES = frozenset(
+        {
+            "x-mcp-server-auth-",
+            "x-litellm-",
+        }
+    )
+
+    _SENSITIVE_CUSTOM_HEADERS = frozenset(
+        {
+            "x-api-key",
+            "x-auth-token",
+            "x-access-token",
+            "x-goog-api-key",
+            "x-forwarded-authorization",
+        }
+    )
+
+    def _extract_custom_headers(
+        raw_headers: Optional[Dict[str, str]],
+    ) -> Optional[Dict[str, str]]:
+        """Extract ``x-*`` headers for MCP logging (non-secrets only).
+
+        Only names starting with ``x-`` are included. Exclusions are a
+        **non-exhaustive** deny-list: fixed sensitive names, plus ``x-litellm-``
+        and ``x-mcp-server-auth-`` prefixes. Other ``x-*`` headers may still
+        carry secrets; operators should audit what clients send and extend
+        ``_SENSITIVE_CUSTOM_HEADERS`` / prefixes if needed.
+        """
+        if not raw_headers:
+            return None
+        custom: Dict[str, str] = {}
+        for k, v in raw_headers.items():
+            key_lower = k.lower()
+            if not key_lower.startswith("x-"):
+                continue
+            if key_lower in _SENSITIVE_CUSTOM_HEADERS:
+                continue
+            if any(
+                key_lower.startswith(prefix)
+                for prefix in _SENSITIVE_CUSTOM_HEADER_PREFIXES
+            ):
+                continue
+            if v is not None and isinstance(v, str):
+                custom[k] = v
+        return custom if custom else None
 
     def _get_standard_logging_mcp_tool_call(
         name: str,
