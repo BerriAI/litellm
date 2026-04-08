@@ -1585,6 +1585,13 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
     ]:
         function: Optional[ChatCompletionToolCallFunctionChunk] = None
         _tools: List[ChatCompletionToolCallChunk] = []
+        # Collect all thoughtSignature values from any part (Gemini may place
+        # the signature on a separate thought part, not the functionCall part)
+        _all_signatures = [
+            p.get("thoughtSignature")
+            for p in parts
+            if p.get("thoughtSignature")
+        ]
         for part in parts:
             if "functionCall" in part:
                 _function_chunk: ChatCompletionToolCallFunctionChunk = {
@@ -1593,8 +1600,11 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                         part["functionCall"]["args"], ensure_ascii=False
                     ),
                 }
-                # Extract thought signature if present
-                thought_signature = part.get("thoughtSignature")
+                # Extract thought signature: prefer this part's own, fallback to
+                # a signature from a sibling thought part
+                thought_signature = part.get("thoughtSignature") or (
+                    _all_signatures[0] if _all_signatures else None
+                )
 
                 if is_function_call is True:
                     function_dict: Dict[str, Any] = dict(_function_chunk)
