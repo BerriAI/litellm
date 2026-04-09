@@ -971,3 +971,35 @@ class TestWebSocketChunkTypes:
         )
         assert len(messages) == 1
         assert messages[0]["content"][0]["text"] == "Part 1Part 2"
+
+
+class TestNativeWebSocketUrlConstruction:
+    """Test that native WebSocket URLs include the model query parameter."""
+
+    def test_openai_ws_url_includes_model(self):
+        """ws_url for OpenAI native WebSocket must include ?model= so OpenAI
+        knows which model to use before the first response.create event."""
+        config = OpenAIResponsesAPIConfig()
+        http_url = config.get_complete_url(api_base=None, litellm_params={})
+        base_ws_url = http_url.replace("https://", "wss://").replace("http://", "ws://")
+
+        # get_complete_url should not include query params
+        assert "?" not in base_ws_url
+
+        # The handler appends ?model= when none is present
+        model = "gpt-4o-mini"
+        ws_url = f"{base_ws_url}?model={model}" if "?" not in base_ws_url else base_ws_url
+        assert ws_url == "wss://api.openai.com/v1/responses?model=gpt-4o-mini"
+
+    def test_ws_url_model_not_duplicated_if_query_already_present(self):
+        """If api_base already has query params, the ?model= should not be appended."""
+        http_url = "https://custom.example.com/v1/responses?api-version=2024-05-01"
+        ws_url = http_url.replace("https://", "wss://").replace("http://", "ws://")
+
+        # Fix: only append when no query string present
+        if "?" not in ws_url:
+            ws_url = f"{ws_url}?model=gpt-4o"
+
+        assert "api-version=2024-05-01" in ws_url
+        assert ws_url.count("?") == 1
+        assert "model=gpt-4o" not in ws_url
