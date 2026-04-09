@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { Button, TabGroup, TabList, Tab, TabPanels, TabPanel } from "@tremor/react";
 import { Alert } from "antd";
+import { useMutation } from "@tanstack/react-query";
 import MessageManager from "@/components/molecules/message_manager";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { isAdminRole } from "@/utils/roles";
@@ -57,7 +58,6 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({
   const [isDeleting, setIsDeleting] = useState(false);
   const [policyToDelete, setPolicyToDelete] = useState<Policy | null>(null);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
-  const [isDeletingAttachment, setIsDeletingAttachment] = useState(false);
   const [attachmentToDelete, setAttachmentToDelete] = useState<PolicyAttachment | null>(null);
   const [isDeleteAttachmentModalOpen, setIsDeleteAttachmentModalOpen] = useState(false);
   const [isGuardrailSelectionModalOpen, setIsGuardrailSelectionModalOpen] = useState(false);
@@ -169,6 +169,22 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({
     setPolicyToDelete(null);
   };
 
+  const deleteAttachmentMutation = useMutation({
+    mutationFn: async (attachmentId: string) => {
+      if (!accessToken) {
+        throw new Error("Access token is required");
+      }
+      return deletePolicyAttachmentCall(accessToken, attachmentId);
+    },
+    onSuccess: async () => {
+      MessageManager.success("Attachment deleted successfully");
+      await fetchAttachments();
+    },
+    onError: (error) => {
+      console.error("Error deleting attachment:", error);
+      MessageManager.error("Failed to delete attachment");
+    },
+  });
   const handleDeleteAttachmentClick = (attachmentId: string) => {
     const attachment = attachmentsList.find((a) => a.attachment_id === attachmentId) || null;
     setAttachmentToDelete(attachment);
@@ -181,17 +197,10 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({
   };
 
   const handleAttachmentDeleteConfirm = async () => {
-    if (!attachmentToDelete || !accessToken) return;
-    setIsDeletingAttachment(true);
+    if (!attachmentToDelete) return;
     try {
-      await deletePolicyAttachmentCall(accessToken, attachmentToDelete.attachment_id);
-      MessageManager.success("Attachment deleted successfully");
-      await fetchAttachments();
-    } catch (error) {
-      console.error("Error deleting attachment:", error);
-      MessageManager.error("Failed to delete attachment");
+      await deleteAttachmentMutation.mutateAsync(attachmentToDelete.attachment_id);
     } finally {
-      setIsDeletingAttachment(false);
       setIsDeleteAttachmentModalOpen(false);
       setAttachmentToDelete(null);
     }
@@ -621,7 +630,7 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({
         ]}
         onCancel={handleAttachmentDeleteCancel}
         onOk={handleAttachmentDeleteConfirm}
-        confirmLoading={isDeletingAttachment}
+        confirmLoading={deleteAttachmentMutation.isPending}
       />
 
       <AiSuggestionModal
