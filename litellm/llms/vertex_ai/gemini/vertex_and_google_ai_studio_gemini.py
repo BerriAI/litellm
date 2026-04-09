@@ -650,7 +650,12 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 urlContext,
             ]
         )
-        if gtool_func_declarations and has_search_tools:
+        # Skip this check when include_server_side_tool_invocations is enabled
+        # (Gemini 3+ supports tool combination natively via PR #24073).
+        server_side_tool_invocations = optional_params.get(
+            "include_server_side_tool_invocations", False
+        )
+        if gtool_func_declarations and has_search_tools and not server_side_tool_invocations:
             verbose_logger.warning(
                 "Vertex AI does not support mixing function declarations with "
                 "search tools (googleSearch, enterpriseWebSearch, urlContext, "
