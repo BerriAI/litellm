@@ -105,13 +105,50 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
 
             if self.sent_content_block_start is False:
                 self.sent_content_block_start = True
-                self.chunk_queue.append(
-                    {
-                        "type": "content_block_start",
-                        "index": self.current_content_block_index,
-                        "content_block": {"type": "text", "text": ""},
-                    }
-                )
+                # Peek at the first chunk to determine the correct initial
+                # content block type.  Models that use reasoning_content
+                # (e.g. GLM-5) start with a thinking block, not text.
+                first_chunk = None
+                for chunk in self.completion_stream:
+                    if chunk == "None" or chunk is None:
+                        continue
+                    first_chunk = chunk
+                    break
+                if first_chunk is not None:
+                    (
+                        block_type,
+                        content_block_start,
+                    ) = LiteLLMAnthropicMessagesAdapter()._translate_streaming_openai_chunk_to_anthropic_content_block(
+                        choices=first_chunk.choices
+                    )
+                    self.current_content_block_type = block_type
+                    self.current_content_block_start = content_block_start
+                    if block_type == "thinking":
+                        initial_block: dict = {"type": "thinking", "thinking": ""}
+                    elif block_type == "tool_use":
+                        initial_block = dict(content_block_start)
+                    else:
+                        initial_block = {"type": "text", "text": ""}
+                    self.chunk_queue.append(
+                        {
+                            "type": "content_block_start",
+                            "index": self.current_content_block_index,
+                            "content_block": initial_block,
+                        }
+                    )
+                    processed_first = LiteLLMAnthropicMessagesAdapter().translate_streaming_openai_response_to_anthropic(
+                        response=first_chunk,
+                        current_content_block_index=self.current_content_block_index,
+                    )
+                    self.chunk_queue.append(processed_first)
+                else:
+                    self.chunk_queue.append(
+                        {
+                            "type": "content_block_start",
+                            "index": self.current_content_block_index,
+                            "content_block": {"type": "text", "text": ""},
+                        }
+                    )
                 return self.chunk_queue.popleft()
 
             for chunk in self.completion_stream:
@@ -128,9 +165,6 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 )
 
                 if should_start_new_block and not self.sent_content_block_finish:
-                    # Queue the sequence: content_block_stop -> content_block_start
-                    # The trigger chunk itself is not emitted as a delta since the
-                    # content_block_start already carries the relevant information.
                     self.chunk_queue.append(
                         {
                             "type": "content_block_stop",
@@ -144,6 +178,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                             "content_block": self.current_content_block_start,
                         }
                     )
+                    self.chunk_queue.append(processed_chunk)
                     self.sent_content_block_finish = False
                     return self.chunk_queue.popleft()
 
@@ -226,13 +261,47 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
 
             if self.sent_content_block_start is False:
                 self.sent_content_block_start = True
-                self.chunk_queue.append(
-                    {
-                        "type": "content_block_start",
-                        "index": self.current_content_block_index,
-                        "content_block": {"type": "text", "text": ""},
-                    }
-                )
+                first_chunk = None
+                async for chunk in self.completion_stream:
+                    if chunk == "None" or chunk is None:
+                        continue
+                    first_chunk = chunk
+                    break
+                if first_chunk is not None:
+                    (
+                        block_type,
+                        content_block_start,
+                    ) = LiteLLMAnthropicMessagesAdapter()._translate_streaming_openai_chunk_to_anthropic_content_block(
+                        choices=first_chunk.choices
+                    )
+                    self.current_content_block_type = block_type
+                    self.current_content_block_start = content_block_start
+                    if block_type == "thinking":
+                        initial_block = {"type": "thinking", "thinking": ""}
+                    elif block_type == "tool_use":
+                        initial_block = dict(content_block_start)
+                    else:
+                        initial_block = {"type": "text", "text": ""}
+                    self.chunk_queue.append(
+                        {
+                            "type": "content_block_start",
+                            "index": self.current_content_block_index,
+                            "content_block": initial_block,
+                        }
+                    )
+                    processed_first = LiteLLMAnthropicMessagesAdapter().translate_streaming_openai_response_to_anthropic(
+                        response=first_chunk,
+                        current_content_block_index=self.current_content_block_index,
+                    )
+                    self.chunk_queue.append(processed_first)
+                else:
+                    self.chunk_queue.append(
+                        {
+                            "type": "content_block_start",
+                            "index": self.current_content_block_index,
+                            "content_block": {"type": "text", "text": ""},
+                        }
+                    )
                 return self.chunk_queue.popleft()
 
             async for chunk in self.completion_stream:
@@ -304,19 +373,12 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
 
                 if not self.queued_usage_chunk:
                     if should_start_new_block and not self.sent_content_block_finish:
-                        # Queue the sequence: content_block_stop -> content_block_start
-                        # The trigger chunk itself is not emitted as a delta since the
-                        # content_block_start already carries the relevant information.
-
-                        # 1. Stop current content block
                         self.chunk_queue.append(
                             {
                                 "type": "content_block_stop",
                                 "index": max(self.current_content_block_index - 1, 0),
                             }
                         )
-
-                        # 2. Start new content block
                         self.chunk_queue.append(
                             {
                                 "type": "content_block_start",
@@ -324,11 +386,8 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                                 "content_block": self.current_content_block_start,
                             }
                         )
-
-                        # Reset state for new block
+                        self.chunk_queue.append(processed_chunk)
                         self.sent_content_block_finish = False
-
-                        # Return the first queued item
                         return self.chunk_queue.popleft()
 
                     if (

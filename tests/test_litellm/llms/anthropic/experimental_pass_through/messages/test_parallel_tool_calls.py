@@ -131,22 +131,19 @@ def test_anthropic_stream_wrapper_single_tool_call():
         chunks.append(chunk)
         chunk_types.append(chunk.get("type"))
 
-    # Verify the expected sequence of chunk types
+    # Verify the expected sequence of chunk types.
+    # The initial content_block_start now peeks at the first upstream chunk
+    # to determine the correct block type, so we get tool_use directly
+    # instead of a spurious empty text block.
     expected_types = [
-        "message_start",  # Initial message start
-        # TODO: for future contributors: if the initial content_block_start
-        # respects the upstream's starting chunk, the initial empty text block
-        # should be removed (and this test should be updated accordingly)
-        # ---------------------------------------------------------------------
-        "content_block_start",  # Initial empty text block start
-        "content_block_stop",  # End of empty text block
-        # ---------------------------------------------------------------------
-        "content_block_start",  # Start of first tool_use content block
+        "message_start",
+        "content_block_start",  # tool_use (from peek)
+        "content_block_delta",  # first tool chunk (empty args)
         "content_block_delta",  # {"city":
         "content_block_delta",  # "NY"}
-        "content_block_stop",  # End of first tool_use content block
-        "message_delta",  # Stop reason with merged usage
-        "message_stop",  # Final message stop
+        "content_block_stop",
+        "message_delta",
+        "message_stop",
     ]
 
     assert expected_types == chunk_types
@@ -193,26 +190,21 @@ def test_anthropic_stream_wrapper_back_to_back_tool_calls():
         chunks.append(chunk)
         chunk_types.append(chunk.get("type"))
 
-    # Verify the expected sequence of chunk types
+    # Verify the expected sequence of chunk types.
     expected_types = [
-        "message_start",  # Initial message start
-        # TODO: for future contributors: if the initial content_block_start
-        # respects the upstream's starting chunk, the initial empty text block
-        # should be removed (and this test should be updated accordingly)
-        # ---------------------------------------------------------------------
-        "content_block_start",  # Initial empty text block start
-        "content_block_stop",  # End of empty text block
-        # ---------------------------------------------------------------------
-        "content_block_start",  # Start of first tool_use content block
+        "message_start",
+        "content_block_start",  # tool_use (from peek)
+        "content_block_delta",  # first tool chunk (empty args)
         "content_block_delta",  # {"city":
         "content_block_delta",  # "NY"}
-        "content_block_stop",  # End of first tool_use content block
-        "content_block_start",  # Start of second tool_use content block
+        "content_block_stop",
+        "content_block_start",  # second tool_use
+        "content_block_delta",  # first chunk of second tool
         "content_block_delta",  # {"city":
         "content_block_delta",  # " SF"}
-        "content_block_stop",  # End of second tool_use content block
-        "message_delta",  # Stop reason with merged usage
-        "message_stop",  # Final message stop
+        "content_block_stop",
+        "message_delta",
+        "message_stop",
     ]
 
     assert expected_types == chunk_types
@@ -264,34 +256,32 @@ def test_anthropic_stream_wrapper_interleaved_tool_calls_and_text():
         chunks.append(chunk)
         chunk_types.append(chunk.get("type"))
 
-    # Verify the expected sequence of chunk types
+    # Verify the expected sequence of chunk types.
     expected_types = [
-        "message_start",  # Initial message start
-        # TODO: for future contributors: if the initial content_block_start
-        # respects the upstream's starting chunk, the initial empty text block
-        # should be removed (and this test should be updated accordingly)
-        # ---------------------------------------------------------------------
-        "content_block_start",  # Initial empty text block start
-        "content_block_stop",  # End of empty text block
-        # ---------------------------------------------------------------------
-        "content_block_start",  # Start of first tool_use content block
+        "message_start",
+        "content_block_start",  # tool_use (from peek)
+        "content_block_delta",  # first tool chunk (empty args)
         "content_block_delta",  # {"city":
         "content_block_delta",  # "NY"}
-        "content_block_stop",  # End of first tool_use content block
-        "content_block_start",  # "The weather is nice today"
         "content_block_stop",
-        "content_block_start",  # Start of second tool_use content block
+        "content_block_start",  # text
+        "content_block_delta",  # "The weather is nice today."
+        "content_block_stop",
+        "content_block_start",  # second tool_use
+        "content_block_delta",  # first chunk of second tool
         "content_block_delta",  # {"city":
         "content_block_delta",  # " SF"}
-        "content_block_stop",  # End of second tool_use content block
-        "content_block_start",  # Start of third tool_use content block
+        "content_block_stop",
+        "content_block_start",  # third tool_use
+        "content_block_delta",  # first chunk of third tool
         "content_block_delta",  # {"city":
         "content_block_delta",  # " CHI"}
-        "content_block_stop",  # End of third tool_use content block
-        "content_block_start",  # "The weather is not so nice today"
         "content_block_stop",
-        "message_delta",  # Stop reason with merged usage
-        "message_stop",  # Final message stop
+        "content_block_start",  # text
+        "content_block_delta",  # "The weather is not so nice today."
+        "content_block_stop",
+        "message_delta",
+        "message_stop",
     ]
 
     assert expected_types == chunk_types
