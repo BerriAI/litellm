@@ -110,4 +110,12 @@ describe("UsageViewSelect", () => {
 
     expect(mockOnChange).toHaveBeenCalledWith("team");
   });
+
+  it("should show team-level usage label and description", () => {
+    render(<UsageViewSelect value="global" onChange={mockOnChange} isAdmin={true} />);
+
+    expect(screen.getByText("Team-level Usage")).toBeInTheDocument();
+    const teamOptionRender = screen.getByTestId("option-render-team");
+    expect(teamOptionRender).toHaveTextContent("shows team spend separately from global usage");
+  });
 });
