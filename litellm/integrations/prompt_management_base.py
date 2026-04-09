@@ -178,8 +178,6 @@ class PromptManagementBase(ABC):
         ignore_prompt_manager_model: Optional[bool] = False,
         ignore_prompt_manager_optional_params: Optional[bool] = False,
     ) -> Tuple[str, List[AllMessageValues], dict]:
-        if prompt_id is None:
-            raise ValueError("prompt_id is required for Prompt Management Base class")
         if not self.should_run_prompt_management(
             prompt_id=prompt_id,
             prompt_spec=prompt_spec,
