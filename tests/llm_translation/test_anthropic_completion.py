@@ -447,6 +447,44 @@ def test_anthropic_tool_helper(cache_control_location):
     assert tool["cache_control"] == {"type": "ephemeral"}
 
 
+def test_haiku_4_5_uses_native_structured_output():
+    """
+    Haiku 4.5 supports native structured output via output_format.
+    It should NOT fall back to json_tool_call synthesis.
+    Regression test for https://github.com/BerriAI/litellm/issues/25308
+    """
+    from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+
+    config = AnthropicConfig()
+    response_format = {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "MovieReview",
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string"},
+                    "rating": {"type": "number"},
+                },
+                "required": ["title", "rating"],
+            },
+        },
+    }
+    optional_params = config.map_openai_params(
+        non_default_params={"response_format": response_format},
+        optional_params={},
+        model="claude-haiku-4-5-20251001",
+        drop_params=False,
+    )
+    # Should use native output_format, not json_tool_call
+    assert "output_format" in optional_params, (
+        "haiku-4-5 should use native output_format, not json_tool_call"
+    )
+    assert "tools" not in optional_params or not any(
+        t.get("name") == "json_tool_call" for t in optional_params.get("tools", [])
+    ), "haiku-4-5 should not synthesize a json_tool_call"
+
+
 def test_create_json_tool_call_for_response_format():
     """
     tests using response_format=json with anthropic

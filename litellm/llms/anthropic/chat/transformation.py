@@ -989,6 +989,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 if any(
                     substring in model
                     for substring in {
+                        "haiku-4-5",
+                        "haiku-4.5",
+                        "haiku_4_5",
                         "sonnet-4.5",
                         "sonnet-4-5",
                         "opus-4.1",
