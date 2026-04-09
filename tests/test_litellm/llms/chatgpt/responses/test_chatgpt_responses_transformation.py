@@ -13,6 +13,7 @@ import pytest
 
 sys.path.insert(0, os.path.abspath("../../../../.."))
 
+from litellm.llms.openai.common_utils import OpenAIError
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
 from litellm.utils import ProviderConfigManager
@@ -242,3 +243,40 @@ class TestChatGPTResponsesAPITransformation:
         )
 
         assert parsed.output_text == "Hello from stream!"
+
+    @pytest.mark.parametrize(
+        "error_chunk",
+        [
+            {
+                "type": "response.failed",
+                "response": {"error": {"message": "ChatGPT upstream failed"}},
+            },
+            {
+                "type": "error",
+                "error": {"message": "ChatGPT upstream failed"},
+            },
+        ],
+    )
+    def test_chatgpt_non_stream_sse_response_raises_openai_error(self, error_chunk):
+        config = ChatGPTResponsesAPIConfig()
+        sse_body = "\n".join(
+            [
+                f"data: {json.dumps(error_chunk)}",
+                "data: [DONE]",
+                "",
+            ]
+        )
+        raw_response = httpx.Response(
+            502, headers={"content-type": "text/event-stream"}, text=sse_body
+        )
+        logging_obj = MagicMock()
+
+        with pytest.raises(OpenAIError) as exc_info:
+            config.transform_response_api_response(
+                model="chatgpt/gpt-5.4",
+                raw_response=raw_response,
+                logging_obj=logging_obj,
+            )
+
+        assert "ChatGPT upstream failed" in str(exc_info.value)
+        assert exc_info.value.status_code == 502
