@@ -485,7 +485,7 @@ class AsyncHTTPHandler:
             response = await self.client.send(req, stream=stream)
             response.raise_for_status()
             return response
-        except (httpx.RemoteProtocolError, httpx.ConnectError, httpx.ReadError):
+        except (httpx.RemoteProtocolError, httpx.ConnectError):
             # Retry the request with a new session if there is a connection error
             new_client = self.create_client(
                 timeout=timeout, event_hooks=self.event_hooks
@@ -590,7 +590,7 @@ class AsyncHTTPHandler:
             response = await self.client.send(req)
             response.raise_for_status()
             return response
-        except (httpx.RemoteProtocolError, httpx.ConnectError, httpx.ReadError):
+        except (httpx.RemoteProtocolError, httpx.ConnectError):
             # Retry the request with a new session if there is a connection error
             new_client = self.create_client(
                 timeout=timeout, event_hooks=self.event_hooks
@@ -656,7 +656,7 @@ class AsyncHTTPHandler:
             response = await self.client.send(req)
             response.raise_for_status()
             return response
-        except (httpx.RemoteProtocolError, httpx.ConnectError, httpx.ReadError):
+        except (httpx.RemoteProtocolError, httpx.ConnectError):
             # Retry the request with a new session if there is a connection error
             new_client = self.create_client(
                 timeout=timeout, event_hooks=self.event_hooks
@@ -722,7 +722,7 @@ class AsyncHTTPHandler:
             response = await self.client.send(req, stream=stream)
             response.raise_for_status()
             return response
-        except (httpx.RemoteProtocolError, httpx.ConnectError, httpx.ReadError):
+        except (httpx.RemoteProtocolError, httpx.ConnectError):
             # Retry the request with a new session if there is a connection error
             new_client = self.create_client(
                 timeout=timeout, event_hooks=self.event_hooks
