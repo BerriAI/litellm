@@ -10,7 +10,7 @@ import contextvars
 import time
 import uuid as uuid_module
 from functools import partial
-from typing import Any, Coroutine, Dict, Literal, Optional, Union, cast
+from typing import Any, AsyncIterator, Coroutine, Dict, Iterator, Literal, Optional, Union, cast
 
 import httpx
 
@@ -36,6 +36,7 @@ FileContentProvider = Literal[
 
 import litellm
 from litellm import get_secret_str
+from litellm.files.streaming import FileContentStreamingResponse
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.azure.common_utils import get_azure_credentials
@@ -55,10 +56,7 @@ from litellm.types.llms.openai import (
     OpenAIFileObject,
 )
 from litellm.types.router import *
-from litellm.types.utils import (
-    OPENAI_COMPATIBLE_BATCH_AND_FILES_PROVIDERS,
-    LlmProviders,
-)
+from litellm.types.utils import OPENAI_COMPATIBLE_BATCH_AND_FILES_PROVIDERS, LlmProviders
 from litellm.utils import (
     ProviderConfigManager,
     client,
@@ -980,5 +978,149 @@ def file_content(
                 ),
             )
         return response
+    except Exception as e:
+        raise e
+
+
+@client
+async def afile_content_streaming(
+    file_id: str,
+    custom_llm_provider: FileContentProvider = "openai",
+    extra_headers: Optional[Dict[str, str]] = None,
+    extra_body: Optional[Dict[str, str]] = None,
+    chunk_size: int = 1024 * 1024,
+    **kwargs,
+) -> Union[Iterator[bytes], AsyncIterator[bytes]]:
+    """
+    Async wrapper for file_content_streaming.
+    """
+    try:
+        loop = asyncio.get_running_loop()
+        kwargs["afile_content_streaming"] = True
+        model = kwargs.pop("model", None)
+
+        # Use a partial function to pass your keyword arguments
+        func = partial(
+            file_content_streaming,
+            file_id,
+            model,
+            custom_llm_provider,
+            extra_headers,
+            extra_body,
+            chunk_size,
+            **kwargs,
+        )
+
+        # Add the context to the function
+        ctx = contextvars.copy_context()
+        func_with_context = partial(ctx.run, func)
+        init_response = await loop.run_in_executor(None, func_with_context)
+        if asyncio.iscoroutine(init_response):
+            response = await init_response
+        else:
+            response = init_response  # type: ignore
+
+        return response
+    except Exception as e:
+        raise e
+
+
+@client
+def file_content_streaming(
+    file_id: str,
+    model: Optional[str] = None,
+    custom_llm_provider: Optional[Union[FileContentProvider, str]] = None,
+    extra_headers: Optional[Dict[str, str]] = None,
+    extra_body: Optional[Dict[str, str]] = None,
+    chunk_size: int = 1024 * 1024,
+    **kwargs,
+) -> Union[Iterator[bytes], AsyncIterator[bytes]]:
+    """
+    Prototype API: Returns a byte iterator for file contents.
+
+    Supports OpenAI-compatible providers and Azure.
+    """
+    try:
+        optional_params = GenericLiteLLMParams(**kwargs)
+        litellm_params_dict = get_litellm_params(**kwargs)
+        client = kwargs.get("client")
+        logging_obj = cast(
+            Optional[LiteLLMLoggingObj], kwargs.get("litellm_logging_obj")
+        )
+
+        try:
+            if model is not None:
+                _, custom_llm_provider, _, _ = get_llm_provider(
+                    model, custom_llm_provider
+                )
+        except Exception:
+            pass
+
+        timeout = optional_params.timeout or kwargs.get("request_timeout", 600) or 600
+        if (
+            timeout is not None
+            and isinstance(timeout, httpx.Timeout)
+            and supports_httpx_timeout(cast(str, custom_llm_provider)) is False
+        ):
+            timeout = timeout.read or 600
+        elif timeout is not None and not isinstance(timeout, httpx.Timeout):
+            timeout = float(timeout)  # type: ignore
+        elif timeout is None:
+            timeout = 600.0
+
+        _is_async = kwargs.pop("afile_content_streaming", False) is True
+
+        if logging_obj is not None:
+            logging_obj.model = model or ""
+            logging_obj.model_call_details["model"] = model or ""
+            logging_obj.model_call_details["custom_llm_provider"] = custom_llm_provider
+
+            litellm_params = logging_obj.model_call_details.get("litellm_params", {}) or {}
+            if optional_params.api_base is not None:
+                litellm_params["api_base"] = optional_params.api_base
+            logging_obj.model_call_details["litellm_params"] = litellm_params
+
+        response = cast(Union[Iterator[bytes], AsyncIterator[bytes]], iter(()))
+        if custom_llm_provider in OPENAI_COMPATIBLE_BATCH_AND_FILES_PROVIDERS:
+            openai_creds = get_openai_credentials(
+                api_base=optional_params.api_base,
+                api_key=optional_params.api_key,
+                organization=optional_params.organization,
+            )
+            response = openai_files_instance.file_content_streaming(
+                _is_async=_is_async,
+                file_content_request=FileContentRequest(
+                    file_id=file_id,
+                    extra_headers=extra_headers,
+                    extra_body=extra_body,
+                ),
+                api_base=openai_creds.api_base,
+                api_key=openai_creds.api_key,
+                timeout=timeout,
+                max_retries=optional_params.max_retries,
+                organization=openai_creds.organization,
+                chunk_size=chunk_size,
+            )
+        else:
+            raise litellm.exceptions.BadRequestError(
+                message="LiteLLM doesn't support {} for 'file_content'. Supported providers are 'openai', 'azure', 'vertex_ai', 'bedrock', 'manus', 'anthropic'.".format(
+                    custom_llm_provider
+                ),
+                model="n/a",
+                llm_provider=custom_llm_provider,
+                response=httpx.Response(
+                    status_code=400,
+                    content="Unsupported provider",
+                    request=httpx.Request(method="create_thread", url="https://github.com/BerriAI/litellm"),  # type: ignore
+                ),
+            )
+
+        return FileContentStreamingResponse(
+            stream_iterator=response,
+            file_id=file_id,
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            logging_obj=logging_obj,
+        )
     except Exception as e:
         raise e
