@@ -2516,3 +2516,100 @@ class TestGetUserIdFromRequestValidation:
         request = self._make_request(f"user_id={exact_id}")
         result = get_user_id_from_request(request)
         assert result == exact_id
+
+
+@pytest.mark.asyncio
+async def test_new_user_password_is_hashed_and_stored(mocker):
+    """
+    /user/new with a password field must:
+    1. Hash the password (not store plaintext).
+    2. Actually persist the hashed password on the user row.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/25328
+    """
+    from litellm.proxy._types import NewUserRequest, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.internal_user_endpoints import new_user
+    from litellm.proxy.utils import verify_password
+
+    mock_prisma_client = mocker.MagicMock()
+
+    async def mock_count(*args, **kwargs):
+        return 5
+
+    mock_prisma_client.db.litellm_usertable.count = mock_count
+
+    async def mock_no_duplicate(*args, **kwargs):
+        return None
+
+    mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints._check_duplicate_user_email",
+        mock_no_duplicate,
+    )
+    mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints._check_duplicate_user_id",
+        mock_no_duplicate,
+    )
+
+    mock_license_check = mocker.MagicMock()
+    mock_license_check.is_over_limit.return_value = False
+
+    created_user_id = "test-user-password-123"
+
+    mock_generate_key = mocker.AsyncMock(
+        return_value={
+            "user_id": created_user_id,
+            "token": "sk-test-token",
+            "expires": None,
+            "max_budget": None,
+        }
+    )
+
+    # Capture the data passed to litellm_usertable.update
+    update_calls: list = []
+
+    async def mock_update(where, data):
+        update_calls.append({"where": where, "data": data})
+
+    mock_prisma_client.db.litellm_usertable.update = mock_update
+
+    mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints.UserManagementEventHooks.async_user_created_hook",
+        mocker.AsyncMock(),
+    )
+
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    mocker.patch("litellm.proxy.proxy_server._license_check", mock_license_check)
+    mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints.generate_key_helper_fn",
+        mock_generate_key,
+    )
+
+    plaintext_password = "super_secret_pass"
+    user_request = NewUserRequest(
+        user_id=created_user_id,
+        user_email="newuser@example.com",
+        password=plaintext_password,
+    )
+    mock_user_key = UserAPIKeyAuth(user_id="admin", user_role="proxy_admin")
+
+    await new_user(data=user_request, user_api_key_dict=mock_user_key)
+
+    # Password must NOT be passed to generate_key_helper_fn
+    call_kwargs = mock_generate_key.call_args.kwargs
+    assert "password" not in call_kwargs, (
+        "password should be popped before calling generate_key_helper_fn"
+    )
+
+    # Password must be stored via a separate update call
+    assert len(update_calls) == 1, (
+        f"Expected exactly 1 usertable.update call for password, got {len(update_calls)}"
+    )
+    stored_password = update_calls[0]["data"]["password"]
+
+    # Must NOT be stored as plaintext
+    assert stored_password != plaintext_password, "Password must not be stored as plaintext"
+
+    # Must be verifiable
+    assert verify_password(plaintext_password, stored_password), (
+        "Stored password hash must verify against the original plaintext"
+    )
