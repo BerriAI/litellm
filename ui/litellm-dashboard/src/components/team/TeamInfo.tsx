@@ -41,7 +41,7 @@ import ObjectPermissionsView from "../object_permissions_view";
 import NumericalInput from "../shared/numerical_input";
 import VectorStoreSelector from "../vector_store_management/VectorStoreSelector";
 import EditLoggingSettings from "./EditLoggingSettings";
-import RouterSettingsAccordion, { RouterSettingsAccordionValue } from "../common_components/RouterSettingsAccordion";
+import RouterSettingsAccordion, { RouterSettingsAccordionRef, RouterSettingsAccordionValue } from "../common_components/RouterSettingsAccordion";
 import MemberModal from "./EditMembership";
 import MemberPermissions from "./member_permissions";
 import {
@@ -190,6 +190,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   const [isDeleting, setIsDeleting] = useState(false);
   const [isTeamSaving, setIsTeamSaving] = useState(false);
   const [routerSettings, setRouterSettings] = useState<RouterSettingsAccordionValue | null>(null);
+  const routerSettingsRef = React.useRef<RouterSettingsAccordionRef>(null);
   const [organization, setOrganization] = useState<Organization | null>(null);
   const { userRole, userId } = useAuthorized();
   const { data: userOrganizations = [] } = useOrganizations();
@@ -591,13 +592,14 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         updateData.access_group_ids = values.access_group_ids;
       }
 
-      // Handle router_settings
-      if (routerSettings?.router_settings) {
-        const hasValues = Object.values(routerSettings.router_settings).some(
+      // Handle router_settings - use ref to get fresh values from DOM at save time
+      const currentRouterSettings = routerSettingsRef.current?.getValue() ?? routerSettings;
+      if (currentRouterSettings?.router_settings) {
+        const hasValues = Object.values(currentRouterSettings.router_settings).some(
           (value) => value !== null && value !== undefined && value !== "",
         );
         if (hasValues) {
-          updateData.router_settings = routerSettings.router_settings;
+          updateData.router_settings = currentRouterSettings.router_settings;
         }
       }
 
@@ -1102,6 +1104,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
 
                     <Form.Item label="Router Settings">
                       <RouterSettingsAccordion
+                        ref={routerSettingsRef}
                         accessToken={accessToken || ""}
                         value={routerSettings || (info.router_settings ? { router_settings: info.router_settings } : undefined)}
                         onChange={setRouterSettings}
