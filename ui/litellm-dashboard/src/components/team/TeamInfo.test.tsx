@@ -17,6 +17,7 @@ vi.mock("@/components/networking", () => ({
   fetchMCPAccessGroups: vi.fn(),
   getTeamPermissionsCall: vi.fn(),
   organizationInfoCall: vi.fn(),
+  getRouterSettingsCall: vi.fn().mockResolvedValue({ fields: [] }),
 }));
 
 vi.mock("@/components/utils/dataUtils", () => ({
