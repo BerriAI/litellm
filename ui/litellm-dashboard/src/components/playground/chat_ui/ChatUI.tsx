@@ -348,8 +348,12 @@ const ChatUI: React.FC<ChatUIProps> = ({
   ]);
 
   useEffect(() => {
-    setSecureItem("apiKeySource", JSON.stringify(apiKeySource));
-    setSecureItem("apiKey", apiKey);
+    try {
+      setSecureItem("apiKeySource", JSON.stringify(apiKeySource));
+      setSecureItem("apiKey", apiKey);
+    } catch {
+      // Storage full or unavailable — non-critical, skip persisting.
+    }
     sessionStorage.setItem("endpointType", endpointType);
     sessionStorage.setItem("selectedTags", JSON.stringify(selectedTags));
     sessionStorage.setItem("selectedVectorStores", JSON.stringify(selectedVectorStores));

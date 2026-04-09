@@ -18,11 +18,7 @@ function decode(encoded: string): string {
 }
 
 export function setSecureItem(key: string, value: string): void {
-  try {
-    window.sessionStorage.setItem(key, encode(value));
-  } catch {
-    // Storage full or unavailable — silently ignore.
-  }
+  window.sessionStorage.setItem(key, encode(value));
 }
 
 export function getSecureItem(key: string): string | null {
