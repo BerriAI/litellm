@@ -1826,3 +1826,73 @@ async def test_custom_stream_wrapper_anext_exhaustion_raises_stop_async_iteratio
         pass  # expected clean termination
     except RuntimeError as e:
         pytest.fail(f"PEP 479 regression: StopIteration leaked as RuntimeError: {e}")
+
+
+def test_gemini_legacy_vertex_stop_finish_reason_normalised():
+    """
+    The legacy vertex_ai SDK streaming path sets finish_reason from a proto enum
+    whose .name attribute is an uppercase string (e.g. "STOP", "MAX_TOKENS").
+    Before the fix, received_finish_reason was stored as "STOP" which never
+    matched "stop" in finish_reason_handler, silently breaking the tool_calls
+    override.  After the fix, map_finish_reason() is applied so the value is
+    always an OpenAI-normalised lowercase string.
+    """
+    wrapper = CustomStreamWrapper(
+        completion_stream=None,
+        model="gemini-1.5-pro",
+        logging_obj=MagicMock(),
+        custom_llm_provider="vertex_ai",
+    )
+
+    # Simulate a proto-like chunk: .candidates[0].finish_reason.name == "STOP"
+    mock_finish_reason = MagicMock()
+    mock_finish_reason.name = "STOP"
+    mock_candidate = MagicMock()
+    mock_candidate.finish_reason = mock_finish_reason
+    mock_chunk = MagicMock()
+    mock_chunk.candidates = [mock_candidate]
+    # Ensure the chunk is not treated as a ModelResponseStream
+    mock_chunk.__class__ = type("FakeProtoChunk", (), {})
+
+    with patch("litellm.litellm_core_utils.streaming_handler.proto", create=True):
+        wrapper.chunk_creator(chunk=mock_chunk)
+
+    assert wrapper.received_finish_reason == "stop", (
+        f"Expected 'stop' but got {wrapper.received_finish_reason!r}. "
+        "map_finish_reason() was not applied to the Gemini enum name."
+    )
+
+
+def test_gemini_legacy_vertex_tool_calls_finish_reason_with_stop_enum():
+    """
+    When Gemini emits finish_reason STOP alongside tool-call content, the final
+    chunk must report finish_reason='tool_calls'.  This requires that the raw
+    "STOP" enum name is first normalised to lowercase "stop" by map_finish_reason()
+    so that finish_reason_handler's equality check fires correctly.
+    """
+    wrapper = CustomStreamWrapper(
+        completion_stream=None,
+        model="gemini-1.5-pro",
+        logging_obj=MagicMock(),
+        custom_llm_provider="vertex_ai",
+    )
+
+    mock_finish_reason = MagicMock()
+    mock_finish_reason.name = "STOP"
+    mock_candidate = MagicMock()
+    mock_candidate.finish_reason = mock_finish_reason
+    mock_chunk = MagicMock()
+    mock_chunk.candidates = [mock_candidate]
+    mock_chunk.__class__ = type("FakeProtoChunk", (), {})
+
+    with patch("litellm.litellm_core_utils.streaming_handler.proto", create=True):
+        wrapper.chunk_creator(chunk=mock_chunk)
+
+    # Signal that tool_calls were present in the stream
+    wrapper.tool_call = True
+
+    final = wrapper.finish_reason_handler()
+    assert final.choices[0].finish_reason == "tool_calls", (
+        f"Expected 'tool_calls' but got {final.choices[0].finish_reason!r}. "
+        "STOP enum was not normalised through map_finish_reason()."
+    )
