@@ -4,7 +4,7 @@ Mavvrik endpoint Pydantic models for LiteLLM Proxy admin API.
 
 from typing import Any, Dict, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class MavvrikInitRequest(BaseModel):
@@ -12,7 +12,8 @@ class MavvrikInitRequest(BaseModel):
 
     api_key: str = Field(..., description="Mavvrik API key (x-api-key header value)")
     api_endpoint: str = Field(
-        ..., description="Mavvrik API base URL (includes tenant, e.g. https://api.mavvrik.dev/tenant-slug)"
+        ...,
+        description="Mavvrik API base URL including tenant (e.g. https://api.mavvrik.dev/my-tenant)",
     )
     connection_id: str = Field(
         ...,
@@ -20,9 +21,23 @@ class MavvrikInitRequest(BaseModel):
     )
     timezone: str = Field(default="UTC", description="Timezone for date handling")
 
+    @field_validator("api_key", "api_endpoint", "connection_id")
+    @classmethod
+    def must_not_be_empty(cls, v: str) -> str:
+        if not v or not v.strip():
+            raise ValueError("must not be empty")
+        return v
+
 
 class MavvrikInitResponse(BaseModel):
     """Response for POST /mavvrik/init."""
+
+    message: str
+    status: str
+
+
+class MavvrikDeleteResponse(BaseModel):
+    """Response for DELETE /mavvrik/delete."""
 
     message: str
     status: str
@@ -33,8 +48,8 @@ class MavvrikExportRequest(BaseModel):
 
     date_str: Optional[str] = Field(
         None,
-        description='Date to export in YYYY-MM-DD format (default: yesterday). '
-        'Re-uploading the same date overwrites the GCS file — idempotent.',
+        description="Date to export in YYYY-MM-DD format (default: yesterday). "
+        "Re-uploading the same date overwrites the GCS file — idempotent.",
     )
     limit: Optional[int] = Field(
         None,
@@ -69,7 +84,7 @@ class MavvrikSettingsView(BaseModel):
     """Response for GET /mavvrik/settings — API key is masked."""
 
     api_key_masked: Optional[str] = Field(
-        None, description="Masked API key (first 4 + last 4 chars)"
+        None, description="Masked API key"
     )
     api_endpoint: Optional[str] = None
     connection_id: Optional[str] = None
@@ -84,7 +99,9 @@ class MavvrikSettingsUpdate(BaseModel):
     """Request body for PUT /mavvrik/settings — all fields optional."""
 
     api_key: Optional[str] = Field(None, description="New Mavvrik API key")
-    api_endpoint: Optional[str] = Field(None, description="New Mavvrik API base URL (includes tenant)")
+    api_endpoint: Optional[str] = Field(
+        None, description="New Mavvrik API base URL (includes tenant)"
+    )
     connection_id: Optional[str] = None
     timezone: Optional[str] = None
     marker: Optional[str] = Field(

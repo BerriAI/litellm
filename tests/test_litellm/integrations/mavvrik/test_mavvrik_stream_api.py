@@ -13,40 +13,39 @@ sys.path.insert(0, os.path.abspath("../../../.."))
 from litellm.integrations.mavvrik.mavvrik_stream_api import MavvrikStreamer
 
 
+def _make_streamer(**kwargs) -> MavvrikStreamer:
+    defaults = dict(
+        api_key="test-key",
+        api_endpoint="https://api.mavvrik.dev/acme",
+        connection_id="litellm-001",
+    )
+    defaults.update(kwargs)
+    return MavvrikStreamer(**defaults)
+
+
 class TestMavvrikStreamerInit:
     def test_init_strips_trailing_slash(self):
         streamer = MavvrikStreamer(
             api_key="key",
-            api_endpoint="https://api.mavvrik.dev/",
-            tenant="acme",
-            instance_id="litellm-001",
+            api_endpoint="https://api.mavvrik.dev/acme/",
+            connection_id="litellm-001",
         )
         assert not streamer.api_endpoint.endswith("/")
-        assert streamer.api_endpoint == "https://api.mavvrik.dev"
+        assert streamer.api_endpoint == "https://api.mavvrik.dev/acme"
 
     def test_init_stores_attributes(self):
         streamer = MavvrikStreamer(
             api_key="mvk-key",
-            api_endpoint="https://api.mavvrik.dev",
-            tenant="my-tenant",
-            instance_id="inst-123",
+            api_endpoint="https://api.mavvrik.dev/my-tenant",
+            connection_id="inst-123",
         )
         assert streamer.api_key == "mvk-key"
-        assert streamer.tenant == "my-tenant"
-        assert streamer.instance_id == "inst-123"
+        assert streamer.connection_id == "inst-123"
 
 
 class TestMavvrikStreamerGetSignedUrl:
-    def _make_streamer(self):
-        return MavvrikStreamer(
-            api_key="test-key",
-            api_endpoint="https://api.mavvrik.dev",
-            tenant="acme",
-            instance_id="litellm-001",
-        )
-
     def test_returns_signed_url_on_200(self):
-        streamer = self._make_streamer()
+        streamer = _make_streamer()
         mock_resp = MagicMock()
         mock_resp.status_code = 200
         mock_resp.json.return_value = {
@@ -60,7 +59,7 @@ class TestMavvrikStreamerGetSignedUrl:
         assert url == "https://storage.googleapis.com/signed?token=abc"
 
     def test_raises_on_missing_url_field(self):
-        streamer = self._make_streamer()
+        streamer = _make_streamer()
         mock_resp = MagicMock()
         mock_resp.status_code = 200
         mock_resp.json.return_value = {}  # no 'url' key
@@ -71,7 +70,7 @@ class TestMavvrikStreamerGetSignedUrl:
                 streamer._get_signed_url("2025-01-15")
 
     def test_raises_immediately_on_4xx(self):
-        streamer = self._make_streamer()
+        streamer = _make_streamer()
         mock_resp = MagicMock()
         mock_resp.status_code = 401
         mock_resp.text = "Unauthorized"
@@ -80,11 +79,10 @@ class TestMavvrikStreamerGetSignedUrl:
             MockClient.return_value.__enter__.return_value.get.return_value = mock_resp
             with pytest.raises(Exception, match="401"):
                 streamer._get_signed_url("2025-01-15")
-        # No sleep on 4xx (no retries)
         mock_sleep.assert_not_called()
 
     def test_retries_on_5xx_then_raises(self):
-        streamer = self._make_streamer()
+        streamer = _make_streamer()
         mock_resp = MagicMock()
         mock_resp.status_code = 503
         mock_resp.text = "Service Unavailable"
@@ -94,12 +92,11 @@ class TestMavvrikStreamerGetSignedUrl:
             with pytest.raises(Exception, match="503|failed after"):
                 streamer._get_signed_url("2025-01-15")
 
-    def test_builds_correct_url_with_tenant_and_instance(self):
+    def test_builds_correct_url_with_connection_id(self):
         streamer = MavvrikStreamer(
             api_key="key",
-            api_endpoint="https://api.example.com",
-            tenant="my-org",
-            instance_id="prod-001",
+            api_endpoint="https://api.example.com/my-org",
+            connection_id="prod-001",
         )
         mock_resp = MagicMock()
         mock_resp.status_code = 200
@@ -115,11 +112,10 @@ class TestMavvrikStreamerGetSignedUrl:
             MockClient.return_value.__enter__.return_value.get.side_effect = fake_get
             streamer._get_signed_url("2025-01-15")
 
-        assert "my-org" in captured_url[0]
         assert "prod-001" in captured_url[0]
 
     def test_sends_x_api_key_header(self):
-        streamer = self._make_streamer()
+        streamer = _make_streamer()
         mock_resp = MagicMock()
         mock_resp.status_code = 200
         mock_resp.json.return_value = {"url": "https://gcs.example.com/signed"}
@@ -138,16 +134,8 @@ class TestMavvrikStreamerGetSignedUrl:
 
 
 class TestMavvrikStreamerInitiateResumable:
-    def _make_streamer(self):
-        return MavvrikStreamer(
-            api_key="key",
-            api_endpoint="https://api.mavvrik.dev",
-            tenant="acme",
-            instance_id="litellm-001",
-        )
-
     def test_returns_location_header_on_201(self):
-        streamer = self._make_streamer()
+        streamer = _make_streamer()
         mock_resp = MagicMock()
         mock_resp.status_code = 201
         mock_resp.headers = {"Location": "https://storage.googleapis.com/session-uri"}
@@ -159,7 +147,7 @@ class TestMavvrikStreamerInitiateResumable:
         assert session_uri == "https://storage.googleapis.com/session-uri"
 
     def test_raises_on_non_201(self):
-        streamer = self._make_streamer()
+        streamer = _make_streamer()
         mock_resp = MagicMock()
         mock_resp.status_code = 403
         mock_resp.text = "Forbidden"
@@ -170,7 +158,7 @@ class TestMavvrikStreamerInitiateResumable:
                 streamer._initiate_resumable_upload("https://signed-url")
 
     def test_raises_on_missing_location_header(self):
-        streamer = self._make_streamer()
+        streamer = _make_streamer()
         mock_resp = MagicMock()
         mock_resp.status_code = 201
         mock_resp.headers = {}  # no Location
@@ -182,26 +170,17 @@ class TestMavvrikStreamerInitiateResumable:
 
 
 class TestMavvrikStreamerFinalizeUpload:
-    def _make_streamer(self):
-        return MavvrikStreamer(
-            api_key="key",
-            api_endpoint="https://api.mavvrik.dev",
-            tenant="acme",
-            instance_id="litellm-001",
-        )
-
     def test_accepts_200(self):
-        streamer = self._make_streamer()
+        streamer = _make_streamer()
         mock_resp = MagicMock()
         mock_resp.status_code = 200
 
         with patch("httpx.Client") as MockClient:
             MockClient.return_value.__enter__.return_value.put.return_value = mock_resp
-            # Should not raise
             streamer._finalize_upload("https://session-uri", b"gzip-bytes")
 
     def test_accepts_201(self):
-        streamer = self._make_streamer()
+        streamer = _make_streamer()
         mock_resp = MagicMock()
         mock_resp.status_code = 201
 
@@ -210,7 +189,7 @@ class TestMavvrikStreamerFinalizeUpload:
             streamer._finalize_upload("https://session-uri", b"gzip-bytes")
 
     def test_raises_on_error_status(self):
-        streamer = self._make_streamer()
+        streamer = _make_streamer()
         mock_resp = MagicMock()
         mock_resp.status_code = 500
         mock_resp.text = "Internal Server Error"
@@ -222,16 +201,8 @@ class TestMavvrikStreamerFinalizeUpload:
 
 
 class TestMavvrikStreamerUpload:
-    def _make_streamer(self):
-        return MavvrikStreamer(
-            api_key="key",
-            api_endpoint="https://api.mavvrik.dev",
-            tenant="acme",
-            instance_id="litellm-001",
-        )
-
     def test_upload_empty_payload_skips_all_steps(self):
-        streamer = self._make_streamer()
+        streamer = _make_streamer()
         with patch.object(streamer, "_get_signed_url") as mock_url, patch.object(
             streamer, "_initiate_resumable_upload"
         ) as mock_init, patch.object(streamer, "_finalize_upload") as mock_fin:
@@ -241,7 +212,7 @@ class TestMavvrikStreamerUpload:
         mock_fin.assert_not_called()
 
     def test_upload_calls_all_three_steps(self):
-        streamer = self._make_streamer()
+        streamer = _make_streamer()
         csv_payload = "date,model,spend\n2025-01-15,gpt-4o,1.5"
         with patch.object(
             streamer, "_get_signed_url", return_value="https://signed"
@@ -255,33 +226,23 @@ class TestMavvrikStreamerUpload:
         mock_url.assert_called_once_with("2025-01-15")
         mock_init.assert_called_once_with("https://signed")
         mock_fin.assert_called_once()
-        # Second arg to _finalize_upload is gzip-compressed CSV bytes
         upload_bytes = mock_fin.call_args[0][1]
         assert isinstance(upload_bytes, bytes)
         assert gzip.decompress(upload_bytes) == csv_payload.encode("utf-8")
 
 
 class TestMavvrikStreamerAdvanceMarker:
-    def _make_streamer(self):
-        return MavvrikStreamer(
-            api_key="test-key",
-            api_endpoint="https://api.mavvrik.dev",
-            tenant="acme",
-            instance_id="litellm-001",
-        )
-
     def test_accepts_204(self):
-        streamer = self._make_streamer()
+        streamer = _make_streamer()
         mock_resp = MagicMock()
         mock_resp.status_code = 204
 
         with patch("httpx.Client") as MockClient:
             MockClient.return_value.__enter__.return_value.patch.return_value = mock_resp
-            # Should not raise
             streamer.advance_marker(1737000000)
 
     def test_accepts_200(self):
-        streamer = self._make_streamer()
+        streamer = _make_streamer()
         mock_resp = MagicMock()
         mock_resp.status_code = 200
 
@@ -290,7 +251,7 @@ class TestMavvrikStreamerAdvanceMarker:
             streamer.advance_marker(1737000000)
 
     def test_raises_on_error_status(self):
-        streamer = self._make_streamer()
+        streamer = _make_streamer()
         mock_resp = MagicMock()
         mock_resp.status_code = 403
         mock_resp.text = "Forbidden"
@@ -301,7 +262,7 @@ class TestMavvrikStreamerAdvanceMarker:
                 streamer.advance_marker(1737000000)
 
     def test_sends_correct_body(self):
-        streamer = self._make_streamer()
+        streamer = _make_streamer()
         mock_resp = MagicMock()
         mock_resp.status_code = 204
 
@@ -317,12 +278,11 @@ class TestMavvrikStreamerAdvanceMarker:
 
         assert captured[0]["json"] == {"metricsMarker": 1737000000}
 
-    def test_patches_agent_base_path(self):
+    def test_patches_agent_base_path_with_connection_id(self):
         streamer = MavvrikStreamer(
             api_key="key",
-            api_endpoint="https://api.example.com",
-            tenant="my-org",
-            instance_id="prod-001",
+            api_endpoint="https://api.example.com/my-org",
+            connection_id="prod-001",
         )
         mock_resp = MagicMock()
         mock_resp.status_code = 204
@@ -337,11 +297,10 @@ class TestMavvrikStreamerAdvanceMarker:
             MockClient.return_value.__enter__.return_value.patch.side_effect = fake_patch
             streamer.advance_marker(1737000000)
 
-        assert "my-org" in captured_url[0]
         assert "prod-001" in captured_url[0]
 
     def test_sends_x_api_key_header(self):
-        streamer = self._make_streamer()
+        streamer = _make_streamer()
         mock_resp = MagicMock()
         mock_resp.status_code = 204
 
@@ -359,19 +318,10 @@ class TestMavvrikStreamerAdvanceMarker:
 
 
 class TestMavvrikStreamerRegister:
-    def _make_streamer(self):
-        return MavvrikStreamer(
-            api_key="test-key",
-            api_endpoint="https://api.mavvrik.dev",
-            tenant="acme",
-            instance_id="litellm-001",
-        )
-
     def test_register_returns_iso_string_from_epoch(self):
-        streamer = self._make_streamer()
+        streamer = _make_streamer()
         mock_resp = MagicMock()
         mock_resp.status_code = 200
-        # epoch 1737000000 → 2025-01-16T08:00:00+00:00
         mock_resp.json.return_value = {"id": "litellm-001", "metricsMarker": 1737000000}
 
         with patch("httpx.Client") as MockClient:
@@ -382,7 +332,7 @@ class TestMavvrikStreamerRegister:
         assert "+00:00" in marker or "UTC" in marker or "Z" in marker or "+00" in marker
 
     def test_register_defaults_to_first_of_month_when_marker_zero(self):
-        streamer = self._make_streamer()
+        streamer = _make_streamer()
         mock_resp = MagicMock()
         mock_resp.status_code = 200
         mock_resp.json.return_value = {"id": "litellm-001", "metricsMarker": 0}
@@ -391,7 +341,6 @@ class TestMavvrikStreamerRegister:
             MockClient.return_value.__enter__.return_value.post.return_value = mock_resp
             marker = streamer.register()
 
-        # Should be first day of month
         from datetime import datetime, timezone
 
         marker_dt = datetime.fromisoformat(marker)
@@ -399,7 +348,7 @@ class TestMavvrikStreamerRegister:
         assert marker_dt.hour == 0
 
     def test_register_defaults_to_first_of_month_when_marker_absent(self):
-        streamer = self._make_streamer()
+        streamer = _make_streamer()
         mock_resp = MagicMock()
         mock_resp.status_code = 200
         mock_resp.json.return_value = {"id": "litellm-001"}  # no metricsMarker
@@ -414,7 +363,7 @@ class TestMavvrikStreamerRegister:
         assert marker_dt.day == 1
 
     def test_register_raises_on_non_200(self):
-        streamer = self._make_streamer()
+        streamer = _make_streamer()
         mock_resp = MagicMock()
         mock_resp.status_code = 401
         mock_resp.text = "Unauthorized"
@@ -427,9 +376,8 @@ class TestMavvrikStreamerRegister:
     def test_register_posts_to_agent_base_path(self):
         streamer = MavvrikStreamer(
             api_key="key",
-            api_endpoint="https://api.example.com",
-            tenant="my-org",
-            instance_id="prod-001",
+            api_endpoint="https://api.example.com/my-org",
+            connection_id="prod-001",
         )
         mock_resp = MagicMock()
         mock_resp.status_code = 200
@@ -445,5 +393,4 @@ class TestMavvrikStreamerRegister:
             MockClient.return_value.__enter__.return_value.post.side_effect = fake_post
             streamer.register()
 
-        assert "my-org" in captured_url[0]
         assert "prod-001" in captured_url[0]

@@ -877,42 +877,7 @@ async def proxy_startup_event(app: FastAPI):  # noqa: PLR0915
                 verbose_proxy_logger.debug(f"is_mavvrik_setup={mavvrik_setup}, scheduler={scheduler is not None}")
 
                 if mavvrik_setup and scheduler is not None:
-                    # Force instantiation of MavvrikLogger by creating instance directly
-                    verbose_proxy_logger.info("Instantiating MavvrikLogger...")
-
-                    # Load Mavvrik settings from database
-                    from litellm.proxy.spend_tracking.mavvrik_endpoints import _get_mavvrik_settings
-                    try:
-                        mavvrik_settings = await _get_mavvrik_settings()
-                        verbose_proxy_logger.info(f"Loaded Mavvrik settings: tenant={mavvrik_settings.get('tenant')}, endpoint={mavvrik_settings.get('api_endpoint')}")
-                    except Exception as e:
-                        verbose_proxy_logger.warning(f"Failed to load Mavvrik settings from database: {e}")
-                        mavvrik_settings = {}
-
-                    # Create MavvrikLogger instance with settings and add to callbacks
-                    mavvrik_logger = MavvrikLogger(
-                        api_key=mavvrik_settings.get("api_key"),
-                        api_endpoint=mavvrik_settings.get("api_endpoint"),
-                        tenant=mavvrik_settings.get("tenant"),
-                        instance_id=mavvrik_settings.get("instance_id"),
-                        timezone=mavvrik_settings.get("timezone", "UTC"),
-                    )
-                    litellm.logging_callback_manager.add_litellm_success_callback(mavvrik_logger)
-                    litellm.logging_callback_manager.add_litellm_async_success_callback(mavvrik_logger)
-
-                    # Remove the string from the callback list
-                    if "mavvrik" in litellm.success_callback:
-                        litellm.success_callback.remove("mavvrik")
-                    if "mavvrik" in litellm._async_success_callback:
-                        litellm._async_success_callback.remove("mavvrik")
-
-                    # Verify logger was created
-                    loggers_after = litellm.logging_callback_manager.get_custom_loggers_for_type(callback_type=MavvrikLogger)
-                    verbose_proxy_logger.info(f"After instantiation: found {len(loggers_after)} MavvrikLogger instance(s)")
-
-                    verbose_proxy_logger.info("Initializing Mavvrik background job...")
                     await MavvrikLogger.init_mavvrik_background_job(scheduler=scheduler)
-                    verbose_proxy_logger.info("✓ Mavvrik scheduler initialized after callbacks")
                 else:
                     verbose_proxy_logger.warning(
                         f"Skipping Mavvrik scheduler init: setup={mavvrik_setup}, scheduler={scheduler is not None}"
@@ -5730,7 +5695,43 @@ class ProxyStartupEvent:
         ########################################################
         # Focus Background Job
         ########################################################
-        await FocusLogger.init_focus_export_background_job(scheduler=scheduler)
+        from litellm.proxy.spend_tracking.focus_endpoints import (
+            is_focus_setup_in_config,
+        )
+
+        if is_focus_setup_in_config():
+            # Get Focus configuration from loaded config
+            config = proxy_config.get_config_state()
+            focus_config = config.get("focus", {})
+
+            # Force logger instantiation with config before scheduler init
+            focus_logger = FocusLogger(
+                provider=focus_config.get("provider"),
+                export_format=focus_config.get("export_format"),
+                frequency=focus_config.get("frequency"),
+                cron_offset_minute=focus_config.get("cron_offset_minute"),
+                interval_seconds=focus_config.get("interval_seconds"),
+                prefix=focus_config.get("prefix"),
+                destination_config=focus_config.get("destination_config"),
+            )
+
+            # Add to in-memory loggers and callback manager
+            from litellm.litellm_core_utils.litellm_logging import _in_memory_loggers
+            _in_memory_loggers.append(focus_logger)
+            litellm.logging_callback_manager.add_litellm_success_callback(focus_logger)
+            verbose_proxy_logger.info("✅ Focus logger instantiated at startup with config")
+
+            # Debug: verify logger is findable
+            focus_loggers_found = litellm.logging_callback_manager.get_custom_loggers_for_type(
+                callback_type=FocusLogger
+            )
+            verbose_proxy_logger.info(f"🔍 Focus loggers found: {len(focus_loggers_found)}")
+            if focus_loggers_found:
+                verbose_proxy_logger.info(f"   First logger: {focus_loggers_found[0]}")
+                verbose_proxy_logger.info(f"   Frequency: {focus_loggers_found[0].frequency}")
+                verbose_proxy_logger.info(f"   Cron offset: {focus_loggers_found[0].cron_offset_minute}")
+
+            await FocusLogger.init_focus_export_background_job(scheduler=scheduler)
 
         ########################################################
         # Prometheus Background Job

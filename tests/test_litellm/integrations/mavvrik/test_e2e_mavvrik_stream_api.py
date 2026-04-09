@@ -3,12 +3,11 @@
 These tests hit the live Mavvrik API and GCS.  They are skipped automatically
 when the required environment variables are absent so they never break CI.
 
-Set the following env vars (or edit the constants below) before running:
+Set the following env vars before running:
 
     MAVVRIK_API_KEY=<api-key>
-    MAVVRIK_API_ENDPOINT=https://api.mavvrik.dev
-    MAVVRIK_TENANT=<tenant-id>
-    MAVVRIK_INSTANCE_ID=<instance-id>
+    MAVVRIK_API_ENDPOINT=https://api.mavvrik.dev/<tenant-id>
+    MAVVRIK_CONNECTION_ID=<connection-id>
 
 Run with:
     poetry run pytest tests/test_litellm/integrations/mavvrik/test_e2e_mavvrik_stream_api.py -v -s
@@ -27,20 +26,18 @@ from litellm.integrations.mavvrik.mavvrik_stream_api import MavvrikStreamer
 # Credentials — populated from env vars; test is skipped if any are absent.
 # ---------------------------------------------------------------------------
 
-API_KEY = os.getenv("MAVVRIK_API_KEY", "xkcsvi7ja9MP3AGXeT4fjOZxyY1eUhMHLEQjZ3w1IHVPFeVCrPhyeJ8sRKNGDhvi")
-API_ENDPOINT = os.getenv("MAVVRIK_API_ENDPOINT", "https://api.mavvrik.dev")
-TENANT = os.getenv("MAVVRIK_TENANT", "iymc3dzwr5_x9izj")
-INSTANCE_ID = os.getenv("MAVVRIK_INSTANCE_ID", "dybter3fyd")
+API_KEY = os.getenv("MAVVRIK_API_KEY", "")
+API_ENDPOINT = os.getenv("MAVVRIK_API_ENDPOINT", "")
+CONNECTION_ID = os.getenv("MAVVRIK_CONNECTION_ID", "")
 
-_CREDS_PRESENT = all([API_KEY, API_ENDPOINT, TENANT, INSTANCE_ID])
+_CREDS_PRESENT = all([API_KEY, API_ENDPOINT, CONNECTION_ID])
 _skip_if_no_creds = pytest.mark.skipif(
     not _CREDS_PRESENT,
-    reason="Mavvrik credentials not configured",
+    reason="Mavvrik credentials not configured — set MAVVRIK_API_KEY, MAVVRIK_API_ENDPOINT, MAVVRIK_CONNECTION_ID",
 )
 
 # Date used for the synthetic upload.
 # Prefixed with "test-" so it is clearly not real data and Mavvrik can ignore it.
-# GCS object name: test-e2e-litellm
 _TEST_DATE = "test-e2e-litellm"
 
 # Minimal synthetic CSV that matches the Mavvrik schema column order
@@ -65,8 +62,7 @@ def streamer():
     return MavvrikStreamer(
         api_key=API_KEY,
         api_endpoint=API_ENDPOINT,
-        tenant=TENANT,
-        instance_id=INSTANCE_ID,
+        connection_id=CONNECTION_ID,
     )
 
 
@@ -84,7 +80,6 @@ class TestE2ERegister:
         marker = streamer.register()
         print(f"\n  register() returned marker: {marker}")
 
-        # Must be parseable as a datetime
         dt = datetime.fromisoformat(marker)
         assert dt.year >= 2020, f"Unexpected marker year: {dt.year}"
 
@@ -94,7 +89,6 @@ class TestE2ERegister:
         m2 = streamer.register()
         print(f"\n  First call:  {m1}")
         print(f"  Second call: {m2}")
-        # Both must be valid ISO strings — values may differ if Mavvrik updates
         from datetime import datetime
         datetime.fromisoformat(m1)
         datetime.fromisoformat(m2)
@@ -116,7 +110,6 @@ class TestE2EGetSignedUrl:
 class TestE2EUpload:
     def test_upload_synthetic_csv(self, streamer):
         """Full 3-step upload: get signed URL → initiate → PUT gzip bytes."""
-        # Should not raise
         streamer.upload(_TEST_CSV, date_str=_TEST_DATE)
         print(f"\n  Upload for date {_TEST_DATE} succeeded")
 
@@ -128,7 +121,6 @@ class TestE2EUpload:
 
     def test_upload_empty_payload_is_noop(self, streamer):
         """Empty payload must return without making any network calls."""
-        # No exception, no upload
         streamer.upload("   ", date_str=_TEST_DATE)
         print("\n  Empty payload correctly skipped")
 
@@ -140,9 +132,8 @@ class TestE2EAdvanceMarker:
         import calendar
         from datetime import date
 
-        epoch = int(
-            calendar.timegm(date.fromisoformat(_TEST_DATE).timetuple())
-        )
+        # Use a safe epoch for the test date string
+        epoch = 1700000000
         streamer.advance_marker(epoch)
         print(f"\n  advance_marker({epoch}) succeeded")
 
@@ -164,19 +155,14 @@ class TestE2EFullFlow:
         import calendar
         from datetime import date, datetime
 
-        # Step 1: register (verify connectivity + get marker)
         marker_iso = streamer.register()
         marker_dt = datetime.fromisoformat(marker_iso)
         print(f"\n  register() marker: {marker_iso}")
 
-        # Step 2: upload one day of synthetic data
         streamer.upload(_TEST_CSV, date_str=_TEST_DATE)
         print(f"  upload() for {_TEST_DATE}: OK")
 
-        # Step 3: advance Mavvrik's metricsMarker to the exported date
-        export_epoch = int(
-            calendar.timegm(date.fromisoformat(_TEST_DATE).timetuple())
-        )
+        export_epoch = 1700000000
         streamer.advance_marker(export_epoch)
         print(f"  advance_marker({export_epoch}): OK")
 

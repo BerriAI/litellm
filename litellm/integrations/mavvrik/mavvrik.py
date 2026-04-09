@@ -238,9 +238,10 @@ class MavvrikLogger(CustomLogger):
             verbose_logger.debug(
                 "MavvrikLogger: no spend data for %s, nothing to upload", date_str
             )
-            return
+            return 0
 
-        verbose_logger.debug("MavvrikLogger: %d rows fetched, transforming…", len(df))
+        record_count = len(df)
+        verbose_logger.debug("MavvrikLogger: %d rows fetched, transforming…", record_count)
 
         transformer = MavvrikTransformer()
         csv_payload = transformer.to_csv(df, connection_id=self.connection_id)
@@ -250,7 +251,7 @@ class MavvrikLogger(CustomLogger):
                 "MavvrikLogger: 0 rows after transform for %s, skipping upload",
                 date_str,
             )
-            return
+            return 0
 
         streamer = MavvrikStreamer(
             api_key=self.api_key or "",
@@ -264,32 +265,39 @@ class MavvrikLogger(CustomLogger):
             len(csv_payload),
             date_str,
         )
+        return record_count
 
     # ------------------------------------------------------------------
     # Dry run (preview without uploading)
     # ------------------------------------------------------------------
 
-    async def dry_run_export_usage_data(self, limit: Optional[int] = None):
+    async def dry_run_export_usage_data(
+        self,
+        date_str: Optional[str] = None,
+        limit: Optional[int] = None,
+    ):
         """Return transformed records as dicts without uploading — for /mavvrik/dry-run.
 
-        Queries the most recent complete day (yesterday) so the preview reflects
-        real final data rather than a partial in-progress day.
+        Args:
+            date_str: Date to preview in YYYY-MM-DD format. Defaults to yesterday.
+            limit:    Max rows to fetch.
         """
         from litellm.integrations.mavvrik.database import LiteLLMDatabase
         from litellm.integrations.mavvrik.transform import MavvrikTransformer
 
-        yesterday = (datetime.now(timezone.utc).date() - timedelta(days=1)).isoformat()
+        if not date_str:
+            date_str = (datetime.now(timezone.utc).date() - timedelta(days=1)).isoformat()
 
         db = LiteLLMDatabase()
         df = await db.get_usage_data(
-            date_str=yesterday,
+            date_str=date_str,
             limit=limit or MAVVRIK_MAX_FETCHED_DATA_RECORDS,
         )
 
         if df.is_empty():
             return {
                 "usage_data": [],
-                "ndjson_records": [],
+                "csv_preview": "",
                 "summary": {
                     "total_records": 0,
                     "total_cost": 0.0,

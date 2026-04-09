@@ -1,19 +1,31 @@
 """FastAPI admin endpoints for the Mavvrik integration.
 
 Endpoints (all require PROXY_ADMIN role):
-    POST /mavvrik/init          Store encrypted settings in LiteLLM_Config
-    GET  /mavvrik/settings      View current settings (API key masked)
-    PUT  /mavvrik/settings      Update existing settings
-    POST /mavvrik/dry-run       Preview NDJSON records without uploading
-    POST /mavvrik/export        Trigger manual upload to GCS
+    POST   /mavvrik/init          Store encrypted settings in LiteLLM_Config
+    GET    /mavvrik/settings      View current settings (API key masked)
+    PUT    /mavvrik/settings      Update existing settings
+    DELETE /mavvrik/delete        Remove all Mavvrik settings
+    POST   /mavvrik/dry-run       Preview CSV records without uploading
+    POST   /mavvrik/export        Trigger manual upload to GCS
 """
 
 import json
+import os
+from datetime import datetime, timedelta
+from datetime import timezone as _tz
 from typing import Optional
 
+import litellm
 from fastapi import APIRouter, Depends, HTTPException
 
 from litellm._logging import verbose_proxy_logger
+from litellm.constants import (
+    MAVVRIK_EXPORT_INTERVAL_MINUTES,
+    MAVVRIK_EXPORT_USAGE_DATA_JOB_NAME,
+)
+from litellm.integrations.mavvrik.mavvrik import MavvrikLogger
+from litellm.integrations.mavvrik.mavvrik_stream_api import MavvrikStreamer
+from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 from litellm.proxy._types import CommonProxyErrors, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
@@ -21,6 +33,7 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     encrypt_value_helper,
 )
 from litellm.types.proxy.mavvrik_endpoints import (
+    MavvrikDeleteResponse,
     MavvrikDryRunResponse,
     MavvrikExportRequest,
     MavvrikExportResponse,
@@ -35,31 +48,7 @@ router = APIRouter()
 # Key used in LiteLLM_Config table
 _CONFIG_KEY = "mavvrik_settings"
 
-
-@router.get("/mavvrik/debug", tags=["Mavvrik"])
-async def debug_mavvrik():
-    """Temporary debug endpoint — inspect scheduler state from inside the live process."""
-    import litellm.proxy.proxy_server as _pserver
-
-    sched = getattr(_pserver, "scheduler", "ATTR_MISSING")
-    jobs = []
-    if sched and hasattr(sched, "get_jobs"):
-        jobs = [{"id": j.id, "next_run": str(j.next_run_time)} for j in sched.get_jobs()]
-
-    import litellm as _litellm
-    from litellm.integrations.mavvrik.mavvrik import MavvrikLogger
-
-    mavvrik_loggers = _litellm.logging_callback_manager.get_custom_loggers_for_type(
-        callback_type=MavvrikLogger
-    )
-
-    return {
-        "scheduler": str(sched),
-        "scheduler_running": getattr(sched, "running", False) if sched else False,
-        "jobs": jobs,
-        "mavvrik_loggers_count": len(mavvrik_loggers),
-        "success_callbacks": _litellm.success_callback,
-    }
+_sensitive_masker = SensitiveDataMasker()
 
 
 # ------------------------------------------------------------------
@@ -73,7 +62,7 @@ async def _set_mavvrik_settings(
     connection_id: str,
     timezone: str,
     marker: Optional[str] = None,
-):
+) -> None:
     """Encrypt API key and upsert all settings into LiteLLM_Config."""
     from litellm.proxy.proxy_server import prisma_client
 
@@ -128,7 +117,6 @@ async def _get_mavvrik_settings() -> dict:
     if not isinstance(value, dict):
         return {}
 
-    # Decrypt API key
     encrypted_key = value.get("api_key", "")
     if encrypted_key:
         try:
@@ -136,17 +124,13 @@ async def _get_mavvrik_settings() -> dict:
                 encrypted_key, key="mavvrik_api_key"
             )
         except Exception:
-            value["api_key"] = encrypted_key  # fall back to raw value
+            value["api_key"] = encrypted_key
 
     return value
 
 
 async def is_mavvrik_setup() -> bool:
     """Return True if Mavvrik settings exist in the database OR are all present as env vars."""
-    import os
-
-    # Fast path: all four required credentials present in env (covers container boot
-    # before /mavvrik/init has been called and the DB has been populated).
     if all(
         os.getenv(v)
         for v in (
@@ -171,10 +155,12 @@ async def is_mavvrik_setup() -> bool:
         return False
 
 
-def _mask_key(api_key: str) -> str:
-    if not api_key or len(api_key) < 8:
-        return "****"
-    return f"{api_key[:4]}...{api_key[-4:]}"
+def _require_admin(user_api_key_dict: UserAPIKeyAuth) -> None:
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+        raise HTTPException(
+            status_code=403,
+            detail={"error": CommonProxyErrors.not_allowed_access.value},
+        )
 
 
 # ------------------------------------------------------------------
@@ -192,22 +178,20 @@ async def init_mavvrik_settings(
     request: MavvrikInitRequest,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
-    """Initialize Mavvrik settings and store encrypted API key in the database."""
-    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
-        raise HTTPException(
-            status_code=403,
-            detail={"error": CommonProxyErrors.not_allowed_access.value},
-        )
+    """Initialize Mavvrik settings and store encrypted credentials in the database.
+
+    Calls the Mavvrik register endpoint to obtain the initial metricsMarker (the
+    earliest date Mavvrik wants LiteLLM to export from). If that call fails, the
+    marker defaults to the first day of the current month.
+
+    After saving settings, the background export job is registered with the
+    APScheduler so exports begin automatically without restarting the proxy.
+    """
+    _require_admin(user_api_key_dict)
 
     try:
-        # Call Mavvrik register endpoint to get the initial metricsMarker
-        # (the epoch timestamp Mavvrik wants LiteLLM to start from).
-        # This is best-effort: if the endpoint is unavailable or the format
-        # changes, we fall back to first-of-month and still save the settings.
         initial_marker: Optional[str] = None
         try:
-            from litellm.integrations.mavvrik.mavvrik_stream_api import MavvrikStreamer
-
             streamer = MavvrikStreamer(
                 api_key=request.api_key,
                 api_endpoint=request.api_endpoint,
@@ -218,9 +202,7 @@ async def init_mavvrik_settings(
                 "Mavvrik register returned initial marker: %s", initial_marker
             )
         except Exception as reg_exc:
-            from datetime import datetime as _dt, timezone as _tz
-
-            now = _dt.now(_tz.utc)
+            now = datetime.now(_tz.utc)
             initial_marker = now.replace(
                 day=1, hour=0, minute=0, second=0, microsecond=0
             ).isoformat()
@@ -241,17 +223,8 @@ async def init_mavvrik_settings(
             "Mavvrik settings initialized, marker=%s", initial_marker
         )
 
-        # At proxy startup the scheduler is skipped when the DB has no settings yet.
-        # After /mavvrik/init saves settings we must create the MavvrikLogger,
-        # add it to the callback manager, and directly schedule the background job.
         try:
             import litellm.proxy.proxy_server as _pserver
-            import litellm as _litellm
-            from litellm.constants import (
-                MAVVRIK_EXPORT_INTERVAL_MINUTES,
-                MAVVRIK_EXPORT_USAGE_DATA_JOB_NAME,
-            )
-            from litellm.integrations.mavvrik.mavvrik import MavvrikLogger
 
             mavvrik_logger = MavvrikLogger(
                 api_key=request.api_key,
@@ -259,16 +232,14 @@ async def init_mavvrik_settings(
                 connection_id=request.connection_id,
                 timezone=request.timezone,
             )
-            _litellm.logging_callback_manager.add_litellm_success_callback(mavvrik_logger)
-            _litellm.logging_callback_manager.add_litellm_async_success_callback(mavvrik_logger)
+            litellm.logging_callback_manager.add_litellm_success_callback(mavvrik_logger)
+            litellm.logging_callback_manager.add_litellm_async_success_callback(mavvrik_logger)
 
-            # Remove the string placeholder now that the real logger is registered
-            if "mavvrik" in _litellm.success_callback:
-                _litellm.success_callback.remove("mavvrik")
-            if "mavvrik" in _litellm._async_success_callback:
-                _litellm._async_success_callback.remove("mavvrik")
+            if "mavvrik" in litellm.success_callback:
+                litellm.success_callback.remove("mavvrik")
+            if "mavvrik" in litellm._async_success_callback:
+                litellm._async_success_callback.remove("mavvrik")
 
-            # Access scheduler via module attribute at call time (not import-time binding)
             _scheduler = getattr(_pserver, "scheduler", None)
             if _scheduler is not None:
                 _scheduler.add_job(
@@ -279,7 +250,7 @@ async def init_mavvrik_settings(
                     replace_existing=True,
                 )
                 verbose_proxy_logger.info(
-                    "Mavvrik background export job scheduled every %d min via /mavvrik/init",
+                    "Mavvrik background export job scheduled every %d min",
                     MAVVRIK_EXPORT_INTERVAL_MINUTES,
                 )
             else:
@@ -314,12 +285,8 @@ async def init_mavvrik_settings(
 async def get_mavvrik_settings(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
-    """View current Mavvrik settings (API key is masked)."""
-    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
-        raise HTTPException(
-            status_code=403,
-            detail={"error": CommonProxyErrors.not_allowed_access.value},
-        )
+    """View current Mavvrik settings. The API key is masked in the response."""
+    _require_admin(user_api_key_dict)
 
     try:
         settings = await _get_mavvrik_settings()
@@ -328,8 +295,9 @@ async def get_mavvrik_settings(
                 api_key_masked=None, marker=None, status="not_configured"
             )
 
+        masked = _sensitive_masker.mask_dict({"api_key": settings.get("api_key", "")})
         return MavvrikSettingsView(
-            api_key_masked=_mask_key(settings.get("api_key", "")),
+            api_key_masked=masked.get("api_key"),
             api_endpoint=settings.get("api_endpoint"),
             connection_id=settings.get("connection_id"),
             timezone=settings.get("timezone"),
@@ -357,12 +325,13 @@ async def update_mavvrik_settings(
     request: MavvrikSettingsUpdate,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
-    """Update one or more Mavvrik settings fields."""
-    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
-        raise HTTPException(
-            status_code=403,
-            detail={"error": CommonProxyErrors.not_allowed_access.value},
-        )
+    """Update one or more Mavvrik settings fields. All fields are optional.
+
+    Use the `marker` field to reset the export cursor to a specific date (YYYY-MM-DD),
+    for example when Mavvrik resets their metricsMarker and asks you to re-export
+    from an earlier date.
+    """
+    _require_admin(user_api_key_dict)
 
     if not any(v is not None for v in request.model_dump().values()):
         raise HTTPException(
@@ -373,7 +342,7 @@ async def update_mavvrik_settings(
     try:
         current = await _get_mavvrik_settings()
 
-        def _pick(new, key, default=""):
+        def _pick(new: Optional[str], key: str, default: str = "") -> str:
             return new if new is not None else current.get(key, default)
 
         await _set_mavvrik_settings(
@@ -381,13 +350,75 @@ async def update_mavvrik_settings(
             api_endpoint=_pick(request.api_endpoint, "api_endpoint"),
             connection_id=_pick(request.connection_id, "connection_id"),
             timezone=_pick(request.timezone, "timezone", "UTC"),
-            # If request.marker is provided, honour it (e.g. Mavvrik reset their
-            # metricsMarker and asked us to re-export from a specific date).
-            # Otherwise keep the existing marker unchanged.
             marker=request.marker if request.marker is not None else current.get("marker"),
         )
         return MavvrikInitResponse(
             message="Mavvrik settings updated successfully", status="success"
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail={"error": str(exc)}) from exc
+
+
+# ------------------------------------------------------------------
+# DELETE /mavvrik/delete
+# ------------------------------------------------------------------
+
+
+@router.delete(
+    "/mavvrik/delete",
+    tags=["Mavvrik"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=MavvrikDeleteResponse,
+)
+async def delete_mavvrik_settings(
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """Remove all Mavvrik settings from the database.
+
+    Also deregisters the background export job from the scheduler if it is running.
+    """
+    _require_admin(user_api_key_dict)
+
+    try:
+        from litellm.proxy.proxy_server import prisma_client
+
+        if prisma_client is None:
+            raise HTTPException(
+                status_code=500,
+                detail={"error": CommonProxyErrors.db_not_connected_error.value},
+            )
+
+        row = await prisma_client.db.litellm_config.find_first(
+            where={"param_name": _CONFIG_KEY}
+        )
+        if row is None:
+            raise HTTPException(
+                status_code=404,
+                detail={"error": "Mavvrik is not configured"},
+            )
+
+        await prisma_client.db.litellm_config.delete(
+            where={"param_name": _CONFIG_KEY}
+        )
+
+        # Deregister the scheduler job if present
+        try:
+            import litellm.proxy.proxy_server as _pserver
+
+            _scheduler = getattr(_pserver, "scheduler", None)
+            if _scheduler is not None:
+                try:
+                    _scheduler.remove_job(MAVVRIK_EXPORT_USAGE_DATA_JOB_NAME)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+        verbose_proxy_logger.info("Mavvrik settings deleted")
+        return MavvrikDeleteResponse(
+            message="Mavvrik settings deleted successfully", status="success"
         )
     except HTTPException:
         raise
@@ -410,16 +441,17 @@ async def dry_run_mavvrik_export(
     request: MavvrikExportRequest,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
-    """Preview NDJSON records that would be uploaded — no data is sent to GCS."""
-    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
-        raise HTTPException(
-            status_code=403,
-            detail={"error": CommonProxyErrors.not_allowed_access.value},
-        )
+    """Preview the CSV records that would be uploaded for a given date without sending data to GCS.
+
+    Defaults to yesterday if `date_str` is not provided.
+    """
+    _require_admin(user_api_key_dict)
 
     try:
         settings = await _get_mavvrik_settings()
-        from litellm.integrations.mavvrik.mavvrik import MavvrikLogger
+        date_str = request.date_str or (
+            datetime.now(_tz.utc).date() - timedelta(days=1)
+        ).isoformat()
 
         logger = MavvrikLogger(
             api_key=settings.get("api_key"),
@@ -427,7 +459,9 @@ async def dry_run_mavvrik_export(
             connection_id=settings.get("connection_id"),
             timezone=settings.get("timezone", "UTC"),
         )
-        result = await logger.dry_run_export_usage_data(limit=request.limit)
+        result = await logger.dry_run_export_usage_data(
+            date_str=date_str, limit=request.limit
+        )
         return MavvrikDryRunResponse(
             message="Mavvrik dry run completed",
             status="success",
@@ -441,9 +475,6 @@ async def dry_run_mavvrik_export(
         raise
     except Exception as exc:
         raise HTTPException(status_code=500, detail={"error": str(exc)}) from exc
-
-
-
 
 
 # ------------------------------------------------------------------
@@ -461,31 +492,24 @@ async def export_mavvrik_data(
     request: MavvrikExportRequest,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
-    """Manually trigger a Mavvrik export (upload to GCS via signed URL)."""
-    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
-        raise HTTPException(
-            status_code=403,
-            detail={"error": CommonProxyErrors.not_allowed_access.value},
-        )
+    """Manually trigger a Mavvrik export for a specific date (uploads to GCS via signed URL).
 
-    from datetime import datetime, timedelta, timezone as _tz
+    Defaults to yesterday if `date_str` is not provided. Re-uploading the same date
+    overwrites the existing GCS object — exports are idempotent.
+    """
+    _require_admin(user_api_key_dict)
 
     try:
         settings = await _get_mavvrik_settings()
         if not settings:
             raise HTTPException(
                 status_code=400,
-                detail={
-                    "error": "Mavvrik not configured. Call POST /mavvrik/init first."
-                },
+                detail={"error": "Mavvrik not configured. Call POST /mavvrik/init first."},
             )
 
-        # Default to yesterday when no date provided
         date_str = request.date_str or (
             datetime.now(_tz.utc).date() - timedelta(days=1)
         ).isoformat()
-
-        from litellm.integrations.mavvrik.mavvrik import MavvrikLogger
 
         logger = MavvrikLogger(
             api_key=settings.get("api_key"),
@@ -493,13 +517,14 @@ async def export_mavvrik_data(
             connection_id=settings.get("connection_id"),
             timezone=settings.get("timezone", "UTC"),
         )
-        await logger.export_usage_data(
+        records_exported = await logger.export_usage_data(
             date_str=date_str,
             limit=request.limit,
         )
         return MavvrikExportResponse(
             message=f"Mavvrik export completed successfully for {date_str}",
             status="success",
+            records_exported=records_exported,
         )
     except HTTPException:
         raise
