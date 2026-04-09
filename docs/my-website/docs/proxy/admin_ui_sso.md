@@ -23,8 +23,6 @@ From v1.76.0, SSO is now Free for up to 5 users.
 <Tabs>
 <TabItem value="okta" label="Okta SSO">
 
-<iframe src="https://www.loom.com/embed/1058e1a8c7a24f238003e31830f6b61c" frameborder="0" webkitallowfullscreen mozallowfullscreen allowfullscreen style={{ width: '100%', height: '400px' }}></iframe>
-
 <iframe src="https://www.loom.com/embed/cac5be90f2714ceaa95d7f89cf4ac548" frameborder="0" webkitallowfullscreen mozallowfullscreen allowfullscreen style={{ width: '100%', height: '400px' }}></iframe>
 
 #### Step 1: Create an OIDC Application in Okta
