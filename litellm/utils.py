@@ -2133,6 +2133,8 @@ def _is_async_request(
 
 _STREAMING_CALL_TYPES = frozenset(
     {
+        "afile_content_streaming",
+        "file_content_streaming",
         CallTypes.generate_content_stream,
         CallTypes.agenerate_content_stream,
         CallTypes.generate_content_stream.value,
