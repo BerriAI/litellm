@@ -1,6 +1,7 @@
 """
 Translate from OpenAI's `/v1/chat/completions` to Lemonade's `/v1/chat/completions`
 """
+
 from typing import Any, List, Optional, Tuple, Union
 
 import httpx
@@ -109,8 +110,7 @@ class LemonadeChatConfig(OpenAILikeChatConfig):
             or get_secret_str("LEMONADE_API_BASE")
             or "http://localhost:8000/api/v1"
         )  # type: ignore
-        # Lemonade doesn't check the key
-        key = "lemonade"
+        key = api_key or get_secret_str("LEMONADE_API_KEY") or "lemonade"
         return api_base, key
 
     def transform_response(
