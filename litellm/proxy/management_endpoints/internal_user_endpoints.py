@@ -471,11 +471,15 @@ async def new_user(
         # Store the hashed password on the newly created user row.
         if hashed_password is not None:
             created_user_id = response.get("user_id")
-            if created_user_id is not None:
-                await prisma_client.db.litellm_usertable.update(
-                    where={"user_id": created_user_id},
-                    data={"password": hashed_password},
+            if created_user_id is None:
+                raise HTTPException(
+                    status_code=500,
+                    detail="User was created but user_id was not returned — password could not be stored.",
                 )
+            await prisma_client.db.litellm_usertable.update(
+                where={"user_id": created_user_id},
+                data={"password": hashed_password},
+            )
         # Admin UI Logic
         # Add User to Team and Organization
         # if team_id passed add this user to the team

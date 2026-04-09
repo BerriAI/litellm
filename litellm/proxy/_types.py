@@ -1427,6 +1427,13 @@ class NewUserRequest(GenerateRequestBase):
     organizations: Optional[List[str]] = None
     password: Optional[str] = None
 
+    @field_validator("password")
+    @classmethod
+    def validate_password(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None and len(v) < 8:
+            raise ValueError("password must be at least 8 characters")
+        return v
+
 
 class NewUserResponse(GenerateKeyResponse):
     max_budget: Optional[float] = None

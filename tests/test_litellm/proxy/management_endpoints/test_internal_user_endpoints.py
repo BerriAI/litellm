@@ -2564,12 +2564,7 @@ async def test_new_user_password_is_hashed_and_stored(mocker):
         }
     )
 
-    # Capture the data passed to litellm_usertable.update
-    update_calls: list = []
-
-    async def mock_update(where, data):
-        update_calls.append({"where": where, "data": data})
-
+    mock_update = mocker.AsyncMock()
     mock_prisma_client.db.litellm_usertable.update = mock_update
 
     mocker.patch(
@@ -2600,11 +2595,11 @@ async def test_new_user_password_is_hashed_and_stored(mocker):
         "password should be popped before calling generate_key_helper_fn"
     )
 
-    # Password must be stored via a separate update call
-    assert len(update_calls) == 1, (
-        f"Expected exactly 1 usertable.update call for password, got {len(update_calls)}"
-    )
-    stored_password = update_calls[0]["data"]["password"]
+    # Password must be stored via a separate update call with the correct args
+    mock_update.assert_called_once()
+    call_kwargs = mock_update.call_args
+    assert call_kwargs.kwargs["where"] == {"user_id": created_user_id}
+    stored_password = call_kwargs.kwargs["data"]["password"]
 
     # Must NOT be stored as plaintext
     assert stored_password != plaintext_password, "Password must not be stored as plaintext"
@@ -2613,3 +2608,65 @@ async def test_new_user_password_is_hashed_and_stored(mocker):
     assert verify_password(plaintext_password, stored_password), (
         "Stored password hash must verify against the original plaintext"
     )
+
+
+@pytest.mark.asyncio
+async def test_new_user_password_raises_if_user_id_missing(mocker):
+    """
+    If generate_key_helper_fn returns a response without user_id,
+    new_user must raise HTTP 500 rather than silently drop the password.
+    """
+    from fastapi import HTTPException
+
+    from litellm.proxy._types import NewUserRequest, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.internal_user_endpoints import new_user
+
+    mock_prisma_client = mocker.MagicMock()
+
+    async def mock_count(*args, **kwargs):
+        return 5
+
+    mock_prisma_client.db.litellm_usertable.count = mock_count
+
+    async def mock_no_duplicate(*args, **kwargs):
+        return None
+
+    mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints._check_duplicate_user_email",
+        mock_no_duplicate,
+    )
+    mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints._check_duplicate_user_id",
+        mock_no_duplicate,
+    )
+
+    mock_license_check = mocker.MagicMock()
+    mock_license_check.is_over_limit.return_value = False
+
+    # generate_key_helper_fn returns a response with no user_id
+    mock_generate_key = mocker.AsyncMock(
+        return_value={"token": "sk-test-token", "expires": None}
+    )
+
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    mocker.patch("litellm.proxy.proxy_server._license_check", mock_license_check)
+    mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints.generate_key_helper_fn",
+        mock_generate_key,
+    )
+    mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints.UserManagementEventHooks.async_user_created_hook",
+        mocker.AsyncMock(),
+    )
+
+    user_request = NewUserRequest(
+        user_email="newuser@example.com",
+        password="super_secret_pass",
+    )
+    mock_user_key = UserAPIKeyAuth(user_id="admin", user_role="proxy_admin")
+
+    with pytest.raises(HTTPException) as exc_info:
+        await new_user(data=user_request, user_api_key_dict=mock_user_key)
+
+    assert exc_info.value.status_code == 500
+    assert "user_id" in exc_info.value.detail
