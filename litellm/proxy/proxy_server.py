@@ -483,6 +483,7 @@ from litellm.proxy.spend_tracking.spend_management_endpoints import (
 )
 from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
 from litellm.proxy.spend_tracking.vantage_endpoints import router as vantage_router
+from litellm.proxy.spend_tracking.mavvrik_endpoints import router as mavvrik_router
 from litellm.proxy.types_utils.utils import get_instance_fn
 from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import (
     router as ui_crud_endpoints_router,
@@ -6570,6 +6571,15 @@ class ProxyStartupEvent:
                         "Failed to register VantageLogger from DB settings: %s", e
                     )
             await VantageLogger.init_vantage_background_job(scheduler=scheduler)
+
+        ########################################################
+        # Mavvrik Background Job
+        ########################################################
+        from litellm.integrations.mavvrik.mavvrik import MavvrikLogger
+        from litellm.proxy.spend_tracking.mavvrik_endpoints import is_mavvrik_setup
+
+        if await is_mavvrik_setup():
+            await MavvrikLogger.init_mavvrik_background_job(scheduler=scheduler)
 
         ########################################################
         # Prometheus Background Job
@@ -13916,6 +13926,7 @@ app.include_router(customer_router)
 app.include_router(spend_management_router)
 app.include_router(cloudzero_router)
 app.include_router(vantage_router)
+app.include_router(mavvrik_router)
 app.include_router(caching_router)
 app.include_router(analytics_router)
 app.include_router(guardrails_router)
