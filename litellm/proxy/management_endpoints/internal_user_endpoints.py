@@ -395,6 +395,7 @@ async def new_user(
     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - internal user-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"]}. IF null or {} then no object permission.
     - prompts: Optional[List[str]] - List of allowed prompts for the user. If specified, the user will only be able to use these specific prompts.
     - organizations: List[str] - List of organization id's the user is a member of
+    - password: Optional[str] - Password for the user (minimum 8 characters). Stored as a scrypt hash; never returned in responses.
     Returns:
     - key: (str) The generated api key for the user
     - expires: (datetime) Datetime object for when key expires.
