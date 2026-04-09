@@ -1341,3 +1341,419 @@ class TestGetTeamDeployments:
         result = await _get_team_deployments(team_id, prisma_client)
         assert len(result) == 1
         assert result[0] is dep1
+################################################################################
+# Config-Only Model Management Tests
+################################################################################
+
+
+class MockProxyConfigForConfigOnly:
+    """Simulates ProxyConfig when running without a database."""
+
+    def __init__(self, initial_model_list: Optional[list] = None):
+        self._config: dict = {
+            "model_list": list(initial_model_list or []),
+        }
+        self.save_config_calls: list = []
+
+    def get_config_state(self) -> dict:
+        import copy
+
+        return copy.deepcopy(self._config)
+
+    async def save_config(self, new_config: dict):
+        self._config = new_config
+        self.save_config_calls.append(new_config)
+
+
+class MockLLMRouterForConfigOnly:
+    """Tracks upsert/delete calls without real routing."""
+
+    def __init__(self):
+        self.upserted: list = []
+        self.deleted: list = []
+
+    def upsert_deployment(self, deployment):
+        self.upserted.append(deployment)
+        return deployment
+
+    def delete_deployment(self, id: str):
+        self.deleted.append(id)
+        return None
+
+    def get_deployment(self, model_id: str):
+        return None
+
+
+class TestConfigOnlyAddModel:
+    """Tests for /model/new when running without a database."""
+
+    @pytest.mark.asyncio
+    async def test_add_model_config_only_success(self):
+        """Model is added to router and persisted to config.yaml."""
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            add_new_model,
+        )
+
+        mock_proxy_config = MockProxyConfigForConfigOnly()
+        mock_router = MockLLMRouterForConfigOnly()
+        admin_user = UserAPIKeyAuth(
+            user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN
+        )
+        model = Deployment(
+            model_name="gpt-4",
+            litellm_params=LiteLLM_Params(model="openai/gpt-4"),
+        )
+
+        with patch("litellm.proxy.proxy_server.prisma_client", None), patch(
+            "litellm.proxy.proxy_server.store_model_in_db", False
+        ), patch(
+            "litellm.proxy.proxy_server.proxy_config", mock_proxy_config
+        ), patch(
+            "litellm.proxy.proxy_server.llm_router", mock_router
+        ), patch(
+            "litellm.proxy.proxy_server.general_settings", {}
+        ), patch(
+            "litellm.proxy.proxy_server.premium_user", False
+        ), patch(
+            "litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()
+        ):
+            result = await add_new_model(
+                model_params=model,
+                user_api_key_dict=admin_user,
+            )
+
+        # Router was updated
+        assert len(mock_router.upserted) == 1
+        # Config was persisted
+        assert len(mock_proxy_config.save_config_calls) == 1
+        saved_models = mock_proxy_config.save_config_calls[0]["model_list"]
+        assert len(saved_models) == 1
+        assert saved_models[0]["model_name"] == "gpt-4"
+        # model_info.id is preserved
+        assert "id" in saved_models[0]["model_info"]
+        # Return value is LiteLLM_ProxyModelTable-compatible
+        assert result.model_name == "gpt-4"
+
+    @pytest.mark.asyncio
+    async def test_add_model_config_only_team_scoped_rejected(self):
+        """Team-scoped models must be rejected when no DB is present."""
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            add_new_model,
+        )
+
+        mock_proxy_config = MockProxyConfigForConfigOnly()
+        mock_router = MockLLMRouterForConfigOnly()
+        admin_user = UserAPIKeyAuth(
+            user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN
+        )
+        model = Deployment(
+            model_name="gpt-4",
+            litellm_params=LiteLLM_Params(model="openai/gpt-4"),
+            model_info={"team_id": "team-123"},
+        )
+
+        with patch("litellm.proxy.proxy_server.prisma_client", None), patch(
+            "litellm.proxy.proxy_server.store_model_in_db", False
+        ), patch(
+            "litellm.proxy.proxy_server.proxy_config", mock_proxy_config
+        ), patch(
+            "litellm.proxy.proxy_server.llm_router", mock_router
+        ), patch(
+            "litellm.proxy.proxy_server.general_settings", {}
+        ), patch(
+            "litellm.proxy.proxy_server.premium_user", False
+        ), patch(
+            "litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()
+        ):
+            from litellm.proxy._types import ProxyException
+
+            with pytest.raises((Exception, ProxyException)) as exc_info:
+                await add_new_model(
+                    model_params=model,
+                    user_api_key_dict=admin_user,
+                )
+            exc = exc_info.value
+            msg = getattr(exc, "message", str(exc))
+            code = getattr(exc, "code", "")
+            assert "Team-scoped" in msg or "400" in str(code)
+
+    @pytest.mark.asyncio
+    async def test_model_id_persisted_in_config(self):
+        """Verify model_info.id round-trips through config save."""
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            _add_model_to_config,
+        )
+
+        mock_proxy_config = MockProxyConfigForConfigOnly()
+        mock_router = MockLLMRouterForConfigOnly()
+        admin_user = UserAPIKeyAuth(
+            user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN
+        )
+        model = Deployment(
+            model_name="gpt-4",
+            litellm_params=LiteLLM_Params(model="openai/gpt-4"),
+        )
+        original_id = model.model_info.id
+
+        result = await _add_model_to_config(
+            model_params=model,
+            user_api_key_dict=admin_user,
+            proxy_config=mock_proxy_config,
+            llm_router=mock_router,
+        )
+
+        saved = mock_proxy_config.save_config_calls[0]["model_list"][0]
+        assert saved["model_info"]["id"] == original_id
+        assert result.model_id == original_id
+
+
+class TestConfigOnlyDeleteModel:
+    """Tests for /model/delete when running without a database."""
+
+    @pytest.mark.asyncio
+    async def test_delete_model_config_only_success(self):
+        """Model is removed from router and config.yaml."""
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            delete_model,
+        )
+        from litellm.proxy._types import ModelInfoDelete
+
+        model_id = "test-model-id-123"
+        initial_models = [
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "openai/gpt-4"},
+                "model_info": {"id": model_id},
+            },
+            {
+                "model_name": "claude-3",
+                "litellm_params": {"model": "anthropic/claude-3"},
+                "model_info": {"id": "other-id"},
+            },
+        ]
+        mock_proxy_config = MockProxyConfigForConfigOnly(initial_models)
+        mock_router = MockLLMRouterForConfigOnly()
+        admin_user = UserAPIKeyAuth(
+            user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN
+        )
+
+        with patch("litellm.proxy.proxy_server.prisma_client", None), patch(
+            "litellm.proxy.proxy_server.store_model_in_db", False
+        ), patch(
+            "litellm.proxy.proxy_server.proxy_config", mock_proxy_config
+        ), patch(
+            "litellm.proxy.proxy_server.llm_router", mock_router
+        ), patch(
+            "litellm.proxy.proxy_server.premium_user", False
+        ):
+            result = await delete_model(
+                model_info=ModelInfoDelete(id=model_id),
+                user_api_key_dict=admin_user,
+            )
+
+        assert "deleted successfully" in result["message"]
+        # Router delete was called
+        assert model_id in mock_router.deleted
+        # Config now has only the other model
+        remaining = mock_proxy_config._config["model_list"]
+        assert len(remaining) == 1
+        assert remaining[0]["model_info"]["id"] == "other-id"
+
+    @pytest.mark.asyncio
+    async def test_delete_model_config_only_not_found(self):
+        """Deleting a nonexistent model returns 400."""
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            delete_model,
+        )
+        from litellm.proxy._types import ModelInfoDelete
+
+        mock_proxy_config = MockProxyConfigForConfigOnly([])
+        mock_router = MockLLMRouterForConfigOnly()
+        admin_user = UserAPIKeyAuth(
+            user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN
+        )
+
+        with patch("litellm.proxy.proxy_server.prisma_client", None), patch(
+            "litellm.proxy.proxy_server.store_model_in_db", False
+        ), patch(
+            "litellm.proxy.proxy_server.proxy_config", mock_proxy_config
+        ), patch(
+            "litellm.proxy.proxy_server.llm_router", mock_router
+        ), patch(
+            "litellm.proxy.proxy_server.premium_user", False
+        ):
+            from litellm.proxy._types import ProxyException
+
+            with pytest.raises((Exception, ProxyException)) as exc_info:
+                await delete_model(
+                    model_info=ModelInfoDelete(id="nonexistent"),
+                    user_api_key_dict=admin_user,
+                )
+            exc = exc_info.value
+            msg = getattr(exc, "message", str(exc))
+            code = getattr(exc, "code", "")
+            assert "400" in str(code) or "not found" in msg.lower()
+
+
+class TestConfigOnlyUpdateModel:
+    """Tests for /model/update when running without a database."""
+
+    @pytest.mark.asyncio
+    async def test_update_model_config_only_success(self):
+        """Model is updated in config.yaml and re-upserted in router."""
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            update_model,
+        )
+        from litellm.types.router import ModelInfo, updateLiteLLMParams
+
+        model_id = "update-me-id"
+        initial_models = [
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "openai/gpt-4"},
+                "model_info": {"id": model_id},
+            },
+        ]
+        mock_proxy_config = MockProxyConfigForConfigOnly(initial_models)
+        mock_router = MockLLMRouterForConfigOnly()
+        admin_user = UserAPIKeyAuth(
+            user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN
+        )
+
+        update_params = updateDeployment(
+            model_name="gpt-4-turbo",
+            litellm_params=updateLiteLLMParams(
+                model="openai/gpt-4-turbo",
+            ),
+            model_info=ModelInfo(id=model_id),
+        )
+
+        with patch("litellm.proxy.proxy_server.prisma_client", None), patch(
+            "litellm.proxy.proxy_server.store_model_in_db", False
+        ), patch(
+            "litellm.proxy.proxy_server.proxy_config", mock_proxy_config
+        ), patch(
+            "litellm.proxy.proxy_server.llm_router", mock_router
+        ), patch(
+            "litellm.proxy.proxy_server.premium_user", False
+        ), patch(
+            "litellm.proxy.proxy_server.LITELLM_PROXY_ADMIN_NAME", "admin"
+        ):
+            result = await update_model(
+                model_params=update_params,
+                user_api_key_dict=admin_user,
+            )
+
+        # Name was updated
+        assert result["model_name"] == "gpt-4-turbo"
+        # model_info.id is preserved
+        assert result["model_info"]["id"] == model_id
+        # Router re-upsert was called
+        assert len(mock_router.upserted) == 1
+        # Config persisted
+        saved = mock_proxy_config._config["model_list"][0]
+        assert saved["model_name"] == "gpt-4-turbo"
+        assert saved["litellm_params"]["model"] == "openai/gpt-4-turbo"
+
+    @pytest.mark.asyncio
+    async def test_update_model_config_only_not_found(self):
+        """Updating a nonexistent model returns 400."""
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            update_model,
+        )
+        from litellm.types.router import ModelInfo, updateLiteLLMParams
+
+        mock_proxy_config = MockProxyConfigForConfigOnly([])
+        mock_router = MockLLMRouterForConfigOnly()
+        admin_user = UserAPIKeyAuth(
+            user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN
+        )
+
+        update_params = updateDeployment(
+            model_name="gpt-4-turbo",
+            litellm_params=updateLiteLLMParams(model="openai/gpt-4-turbo"),
+            model_info=ModelInfo(id="nonexistent"),
+        )
+
+        with patch("litellm.proxy.proxy_server.prisma_client", None), patch(
+            "litellm.proxy.proxy_server.store_model_in_db", False
+        ), patch(
+            "litellm.proxy.proxy_server.proxy_config", mock_proxy_config
+        ), patch(
+            "litellm.proxy.proxy_server.llm_router", mock_router
+        ), patch(
+            "litellm.proxy.proxy_server.premium_user", False
+        ), patch(
+            "litellm.proxy.proxy_server.LITELLM_PROXY_ADMIN_NAME", "admin"
+        ):
+            from litellm.proxy._types import ProxyException
+
+            with pytest.raises((Exception, ProxyException)) as exc_info:
+                await update_model(
+                    model_params=update_params,
+                    user_api_key_dict=admin_user,
+                )
+            exc = exc_info.value
+            msg = getattr(exc, "message", str(exc))
+            code = getattr(exc, "code", "")
+            assert "400" in str(code) or "not found" in msg.lower()
+
+
+class TestDBModeUnaffected:
+    """Verify that with prisma_client set and store_model_in_db=True,
+    the existing DB path is still taken (no regression)."""
+
+    @pytest.mark.asyncio
+    async def test_add_model_db_mode_calls_prisma(self):
+        """When DB is connected, the DB code path is used."""
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            add_new_model,
+        )
+
+        mock_model_response = MagicMock()
+        mock_model_response.model_id = "db-id"
+        mock_model_response.model_name = "gpt-4"
+        mock_model_response.model_dump_json = MagicMock(return_value="{}")
+
+        mock_prisma = MagicMock()
+        mock_prisma.db.litellm_proxymodeltable.create = AsyncMock(
+            return_value=mock_model_response
+        )
+        mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=None)
+        mock_proxy_config = MagicMock()
+        mock_proxy_config.add_deployment = AsyncMock()
+        mock_logging = MagicMock()
+
+        admin_user = UserAPIKeyAuth(
+            user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN
+        )
+        model = Deployment(
+            model_name="gpt-4",
+            litellm_params=LiteLLM_Params(model="openai/gpt-4"),
+        )
+
+        with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma), patch(
+            "litellm.proxy.proxy_server.store_model_in_db", True
+        ), patch(
+            "litellm.proxy.proxy_server.proxy_config", mock_proxy_config
+        ), patch(
+            "litellm.proxy.proxy_server.llm_router", MagicMock()
+        ), patch(
+            "litellm.proxy.proxy_server.general_settings", {}
+        ), patch(
+            "litellm.proxy.proxy_server.premium_user", True
+        ), patch(
+            "litellm.proxy.proxy_server.proxy_logging_obj", mock_logging
+        ), patch(
+            "litellm.proxy.management_endpoints.model_management_endpoints.encrypt_value_helper",
+            side_effect=lambda value, new_encryption_key=None: value,
+        ):
+            result = await add_new_model(
+                model_params=model,
+                user_api_key_dict=admin_user,
+            )
+
+        # DB create was called
+        mock_prisma.db.litellm_proxymodeltable.create.assert_called_once()
+        # proxy_config.add_deployment was called (DB reload path)
+        mock_proxy_config.add_deployment.assert_called_once()

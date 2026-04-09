@@ -1,5 +1,5 @@
 """
-Allow proxy admin to add/update/delete models in the db
+Allow proxy admin to add/update/delete models in the db (or config.yaml when no DB is connected).
 
 Currently most endpoints are in `proxy_server.py`, but those should  be moved here over time.
 
@@ -13,7 +13,7 @@ model/{model_id}/update - PATCH endpoint for model update.
 import asyncio
 import datetime
 import json
-from typing import Dict, List, Literal, Optional, Tuple, Union, cast
+from typing import Any, Dict, List, Literal, Optional, Tuple, Union, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, ConfigDict, Field
@@ -59,6 +59,9 @@ from litellm.types.router import (
 from litellm.utils import get_utc_datetime
 
 router = APIRouter()
+
+# Serialize concurrent config-file writes when running without a database.
+_config_write_lock = asyncio.Lock()
 
 
 async def update_team(*args, **kwargs):
@@ -185,89 +188,103 @@ async def patch_model(
         llm_router,
         premium_user,
         prisma_client,
+        proxy_config,
         store_model_in_db,
     )
 
     try:
-        if prisma_client is None:
-            raise HTTPException(
-                status_code=500,
-                detail={"error": CommonProxyErrors.db_not_connected_error.value},
+        _is_db_mode = prisma_client is not None and store_model_in_db is True
+
+        if _is_db_mode:
+            # --- DB code path (existing behaviour) ---
+            db_model = await get_db_model(
+                model_id=model_id, prisma_client=prisma_client
             )
 
-        # Verify model exists and is stored in DB
-        if not store_model_in_db:
-            raise ProxyException(
-                message="Model updates only supported for DB-stored models",
-                type=ProxyErrorTypes.validation_error.value,
-                code=status.HTTP_400_BAD_REQUEST,
-                param=None,
-            )
-
-        # Fetch existing model
-        db_model = await get_db_model(model_id=model_id, prisma_client=prisma_client)
-
-        if db_model is None:
-            # Check if model exists in config but not DB
-            if llm_router and llm_router.get_deployment(model_id=model_id) is not None:
+            if db_model is None:
+                if (
+                    llm_router
+                    and llm_router.get_deployment(model_id=model_id) is not None
+                ):
+                    raise ProxyException(
+                        message="Cannot edit config-based model. Store model in DB via /model/new first.",
+                        type=ProxyErrorTypes.validation_error.value,
+                        code=status.HTTP_400_BAD_REQUEST,
+                        param=None,
+                    )
                 raise ProxyException(
-                    message="Cannot edit config-based model. Store model in DB via /model/new first.",
-                    type=ProxyErrorTypes.validation_error.value,
-                    code=status.HTTP_400_BAD_REQUEST,
+                    message=f"Model {model_id} not found on proxy.",
+                    type=ProxyErrorTypes.not_found_error,
+                    code=status.HTTP_404_NOT_FOUND,
                     param=None,
                 )
-            raise ProxyException(
-                message=f"Model {model_id} not found on proxy.",
-                type=ProxyErrorTypes.not_found_error,
-                code=status.HTTP_404_NOT_FOUND,
-                param=None,
-            )
 
-        await ModelManagementAuthChecks.can_user_make_model_call(
-            model_params=db_model,
-            user_api_key_dict=user_api_key_dict,
-            prisma_client=prisma_client,
-            premium_user=premium_user,
-        )
-
-        # Handle team model updates with proper alias management
-        update_data = await _update_team_model_in_db(
-            db_model=db_model,
-            patch_data=patch_data,
-            user_api_key_dict=user_api_key_dict,
-            prisma_client=prisma_client,
-        )
-
-        # Add metadata about update
-        update_data["updated_by"] = (
-            user_api_key_dict.user_id or litellm_proxy_admin_name
-        )
-        update_data["updated_at"] = cast(str, get_utc_datetime())
-
-        # Perform partial update
-        updated_model = await prisma_client.db.litellm_proxymodeltable.update(
-            where={"model_id": model_id},
-            data=update_data,
-        )
-
-        # Clear cache and reload models (uses config setting or defaults to preserving config models for DB updates)
-        await clear_cache()
-
-        ## CREATE AUDIT LOG ##
-        asyncio.create_task(
-            create_object_audit_log(
-                object_id=model_id,
-                action="updated",
+            await ModelManagementAuthChecks.can_user_make_model_call(
+                model_params=db_model,
                 user_api_key_dict=user_api_key_dict,
-                table_name=LitellmTableNames.PROXY_MODEL_TABLE_NAME,
-                before_value=db_model.model_dump_json(exclude_none=True),
-                after_value=updated_model.model_dump_json(exclude_none=True),
-                litellm_changed_by=user_api_key_dict.user_id,
-                litellm_proxy_admin_name=LITELLM_PROXY_ADMIN_NAME,
+                prisma_client=prisma_client,
+                premium_user=premium_user,
             )
-        )
 
-        return updated_model
+            update_data = await _update_team_model_in_db(
+                db_model=db_model,
+                patch_data=patch_data,
+                user_api_key_dict=user_api_key_dict,
+                prisma_client=prisma_client,
+            )
+
+            update_data["updated_by"] = (
+                user_api_key_dict.user_id or litellm_proxy_admin_name
+            )
+            update_data["updated_at"] = cast(str, get_utc_datetime())
+
+            updated_model = await prisma_client.db.litellm_proxymodeltable.update(
+                where={"model_id": model_id},
+                data=update_data,
+            )
+
+            await clear_cache()
+
+            asyncio.create_task(
+                create_object_audit_log(
+                    object_id=model_id,
+                    action="updated",
+                    user_api_key_dict=user_api_key_dict,
+                    table_name=LitellmTableNames.PROXY_MODEL_TABLE_NAME,
+                    before_value=db_model.model_dump_json(exclude_none=True),
+                    after_value=updated_model.model_dump_json(exclude_none=True),
+                    litellm_changed_by=user_api_key_dict.user_id,
+                    litellm_proxy_admin_name=LITELLM_PROXY_ADMIN_NAME,
+                )
+            )
+
+            return updated_model
+        else:
+            # --- Config-only code path ---
+            # Inject model_id from path into patch_data so the helper can find it
+            if patch_data.model_info is None:
+                from litellm.types.router import ModelInfo
+
+                patch_data.model_info = ModelInfo(id=model_id)
+            elif patch_data.model_info.id is None:
+                patch_data.model_info.id = model_id
+
+            async with _config_write_lock:
+                updated = await _update_model_in_config(
+                    model_id=model_id,
+                    model_params=patch_data,
+                    user_api_key_dict=user_api_key_dict,
+                    proxy_config=proxy_config,
+                    llm_router=llm_router,
+                )
+            if updated is None:
+                raise ProxyException(
+                    message=f"Model {model_id} not found in config.",
+                    type=ProxyErrorTypes.not_found_error,
+                    code=status.HTTP_404_NOT_FOUND,
+                    param=None,
+                )
+            return updated
 
     except Exception as e:
         verbose_proxy_logger.exception(f"Error in patch_model: {str(e)}")
@@ -373,6 +390,135 @@ async def _add_team_model_to_db(
         )
 
     return model_response
+
+
+################################# Config-Only Helpers ##############################
+# These helpers run the same logical operations as the DB helpers but persist to    #
+# config.yaml (via ProxyConfig.save_config) and the in-memory router.              #
+####################################################################################
+
+
+async def _add_model_to_config(
+    model_params: Deployment,
+    user_api_key_dict: UserAPIKeyAuth,
+    proxy_config: Any,
+    llm_router: Any,
+) -> LiteLLM_ProxyModelTable:
+    """Add a model to the in-memory router and persist it to config.yaml."""
+    # Live router update
+    if llm_router is not None:
+        llm_router.upsert_deployment(deployment=model_params)
+
+    # Persist to config.yaml
+    config = proxy_config.get_config_state()
+    model_list: list = config.get("model_list", [])
+
+    new_entry = model_params.model_dump(exclude_none=True)
+    # Guarantee model_info.id survives round-tripping through YAML
+    if "model_info" not in new_entry:
+        new_entry["model_info"] = {}
+    new_entry["model_info"]["id"] = model_params.model_info.id
+
+    model_list.append(new_entry)
+    config["model_list"] = model_list
+    await proxy_config.save_config(new_config=config)
+
+    # Return a response compatible with the DB code path
+    return LiteLLM_ProxyModelTable(
+        model_id=model_params.model_info.id,
+        model_name=model_params.model_name,
+        litellm_params=model_params.litellm_params.model_dump(exclude_none=True),
+        model_info=model_params.model_info.model_dump(exclude_none=True),
+        created_by=user_api_key_dict.user_id or LITELLM_PROXY_ADMIN_NAME,
+        updated_by=user_api_key_dict.user_id or LITELLM_PROXY_ADMIN_NAME,
+    )
+
+
+async def _delete_model_from_config(
+    model_id: str,
+    proxy_config: Any,
+    llm_router: Any,
+) -> Optional[dict]:
+    """Remove a model from the in-memory router and config.yaml.
+
+    Returns the removed config entry dict, or None if not found.
+    """
+    removed_entry: Optional[dict] = None
+
+    # Remove from in-memory router
+    if llm_router is not None:
+        llm_router.delete_deployment(id=model_id)
+
+    # Remove from config.yaml
+    config = proxy_config.get_config_state()
+    model_list: list = config.get("model_list", [])
+
+    new_model_list = []
+    for m in model_list:
+        if m.get("model_info", {}).get("id") == model_id:
+            removed_entry = m
+        else:
+            new_model_list.append(m)
+
+    if removed_entry is None:
+        return None
+
+    config["model_list"] = new_model_list
+    await proxy_config.save_config(new_config=config)
+    return removed_entry
+
+
+async def _update_model_in_config(
+    model_id: str,
+    model_params: updateDeployment,
+    user_api_key_dict: UserAPIKeyAuth,
+    proxy_config: Any,
+    llm_router: Any,
+) -> Optional[dict]:
+    """Merge updated fields into an existing config.yaml model entry.
+
+    Returns the updated entry dict, or None if not found.
+    """
+    config = proxy_config.get_config_state()
+    model_list: list = config.get("model_list", [])
+
+    target_idx: Optional[int] = None
+    for idx, m in enumerate(model_list):
+        if m.get("model_info", {}).get("id") == model_id:
+            target_idx = idx
+            break
+
+    if target_idx is None:
+        return None
+
+    entry = model_list[target_idx]
+
+    if model_params.model_name is not None:
+        entry["model_name"] = model_params.model_name
+
+    if model_params.litellm_params is not None:
+        existing_lp = entry.get("litellm_params", {})
+        existing_lp.update(
+            model_params.litellm_params.model_dump(exclude_none=True)
+        )
+        entry["litellm_params"] = existing_lp
+
+    if model_params.model_info is not None:
+        existing_mi = entry.get("model_info", {})
+        existing_mi.update(model_params.model_info.model_dump(exclude_none=True))
+        entry["model_info"] = existing_mi
+    entry.setdefault("model_info", {})["id"] = model_id
+
+    model_list[target_idx] = entry
+    config["model_list"] = model_list
+    await proxy_config.save_config(new_config=config)
+
+    # Re-upsert into the live router so traffic picks up changes immediately
+    if llm_router is not None:
+        deployment = Deployment(**entry)
+        llm_router.upsert_deployment(deployment=deployment)
+
+    return entry
 
 
 async def _update_team_model_in_db(
@@ -737,13 +883,11 @@ async def delete_model(
     model_info: ModelInfoDelete,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
-    from litellm.proxy.proxy_server import llm_router
-
     try:
         """
         [BETA] - This is a beta endpoint, format might change based on user feedback. - https://github.com/BerriAI/litellm/issues/964
 
-        - Check if id in db
+        - Check if id in db (or config.yaml)
         - Delete
         """
 
@@ -751,70 +895,62 @@ async def delete_model(
             llm_router,
             premium_user,
             prisma_client,
+            proxy_config,
             store_model_in_db,
         )
 
-        if prisma_client is None:
-            raise HTTPException(
-                status_code=500,
-                detail={
-                    "error": "No DB Connected. Here's how to do it - https://docs.litellm.ai/docs/proxy/virtual_keys"
-                },
+        _is_db_mode = prisma_client is not None and store_model_in_db is True
+
+        if _is_db_mode:
+            # --- DB code path (existing behaviour) ---
+            model_in_db = await prisma_client.db.litellm_proxymodeltable.find_unique(
+                where={"model_id": model_info.id}
             )
-
-        model_in_db = await prisma_client.db.litellm_proxymodeltable.find_unique(
-            where={"model_id": model_info.id}
-        )
-        if model_in_db is None:
-            raise HTTPException(
-                status_code=400,
-                detail={"error": f"Model with id={model_info.id} not found in db"},
-            )
-
-        model_params = Deployment(**model_in_db.model_dump())
-        await ModelManagementAuthChecks.can_user_make_model_call(
-            model_params=model_params,
-            user_api_key_dict=user_api_key_dict,
-            prisma_client=prisma_client,
-            premium_user=premium_user,
-        )
-
-        # delete team model alias
-        if model_params.model_info.team_id is not None:
-            removed_model_aliases = await delete_team_model_alias(
-                public_model_name=model_params.model_name,
-                prisma_client=prisma_client,
-            )
-
-            valid_team_model_aliases = [
-                model
-                for team_id, model in removed_model_aliases
-                if team_id == model_params.model_info.team_id
-            ]
-
-            ## UPDATE TEAM TO NOT LIST MODEL ##
-            existing_team_row = await prisma_client.db.litellm_teamtable.find_unique(
-                where={"team_id": model_params.model_info.team_id}
-            )
-            if existing_team_row is not None:
-                existing_team_row.models = [
-                    model
-                    for model in existing_team_row.models
-                    if model not in valid_team_model_aliases
-                ]
-
-                await prisma_client.db.litellm_teamtable.update(
-                    where={"team_id": model_params.model_info.team_id},
-                    data={"models": existing_team_row.models},
+            if model_in_db is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail={"error": f"Model with id={model_info.id} not found in db"},
                 )
 
-        # update DB
-        if store_model_in_db is True:
-            """
-            - store model_list in db
-            - store keys separately
-            """
-            # encrypt litellm params #
+            model_params = Deployment(**model_in_db.model_dump())
+            await ModelManagementAuthChecks.can_user_make_model_call(
+                model_params=model_params,
+                user_api_key_dict=user_api_key_dict,
+                prisma_client=prisma_client,
+                premium_user=premium_user,
+            )
+
+            # delete team model alias
+            if model_params.model_info.team_id is not None:
+                removed_model_aliases = await delete_team_model_alias(
+                    public_model_name=model_params.model_name,
+                    prisma_client=prisma_client,
+                )
+
+                valid_team_model_aliases = [
+                    model
+                    for team_id, model in removed_model_aliases
+                    if team_id == model_params.model_info.team_id
+                ]
+
+                ## UPDATE TEAM TO NOT LIST MODEL ##
+                existing_team_row = (
+                    await prisma_client.db.litellm_teamtable.find_unique(
+                        where={"team_id": model_params.model_info.team_id}
+                    )
+                )
+                if existing_team_row is not None:
+                    existing_team_row.models = [
+                        model
+                        for model in existing_team_row.models
+                        if model not in valid_team_model_aliases
+                    ]
+
+                    await prisma_client.db.litellm_teamtable.update(
+                        where={"team_id": model_params.model_info.team_id},
+                        data={"models": existing_team_row.models},
+                    )
+
             result = await prisma_client.db.litellm_proxymodeltable.delete(
                 where={"model_id": model_info.id}
             )
@@ -822,7 +958,9 @@ async def delete_model(
             if result is None:
                 raise HTTPException(
                     status_code=400,
-                    detail={"error": f"Model with id={model_info.id} not found in db"},
+                    detail={
+                        "error": f"Model with id={model_info.id} not found in db"
+                    },
                 )
 
             ## DELETE FROM ROUTER ##
@@ -844,12 +982,21 @@ async def delete_model(
             )
             return {"message": f"Model: {result.model_id} deleted successfully"}
         else:
-            raise HTTPException(
-                status_code=500,
-                detail={
-                    "error": "Set `'STORE_MODEL_IN_DB='True'` in your env to enable this feature."
-                },
-            )
+            # --- Config-only code path ---
+            async with _config_write_lock:
+                removed = await _delete_model_from_config(
+                    model_id=model_info.id,
+                    proxy_config=proxy_config,
+                    llm_router=llm_router,
+                )
+            if removed is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": f"Model with id={model_info.id} not found in config"
+                    },
+                )
+            return {"message": f"Model: {model_info.id} deleted successfully"}
 
     except Exception as e:
         verbose_proxy_logger.exception(
@@ -958,6 +1105,7 @@ async def add_new_model(
     """
     from litellm.proxy.proxy_server import (
         general_settings,
+        llm_router,
         premium_user,
         prisma_client,
         proxy_config,
@@ -966,30 +1114,36 @@ async def add_new_model(
     )
 
     try:
-        if prisma_client is None:
-            raise HTTPException(
-                status_code=500,
-                detail={
-                    "error": "No DB Connected. Here's how to do it - https://docs.litellm.ai/docs/proxy/virtual_keys"
-                },
-            )
+        _is_db_mode = prisma_client is not None and store_model_in_db is True
 
-        ## Auth check
-        await ModelManagementAuthChecks.can_user_make_model_call(
-            model_params=model_params,
-            user_api_key_dict=user_api_key_dict,
-            prisma_client=prisma_client,
-            premium_user=premium_user,
-        )
+        # --- Auth ---
+        if _is_db_mode:
+            await ModelManagementAuthChecks.can_user_make_model_call(
+                model_params=model_params,
+                user_api_key_dict=user_api_key_dict,
+                prisma_client=prisma_client,
+                premium_user=premium_user,
+            )
+        else:
+            # Config-only: master key auth already enforced by user_api_key_auth dep.
+            # Team-scoped models require the DB for team management.
+            if (
+                getattr(
+                    getattr(model_params, "model_info", None), "team_id", None
+                )
+                is not None
+            ):
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": "Team-scoped models require a database connection."
+                    },
+                )
 
         model_response: Optional[LiteLLM_ProxyModelTable] = None
-        # update DB
-        if store_model_in_db is True:
-            """
-            - store model_list in db
-            - store keys separately
-            """
 
+        if _is_db_mode:
+            # --- DB code path (existing behaviour) ---
             try:
                 _original_litellm_model_name = model_params.model_name
                 if model_params.model_info.team_id is None:
@@ -1018,40 +1172,42 @@ async def add_new_model(
                     )
             except Exception as e:
                 verbose_proxy_logger.exception(f"Exception in add_new_model: {e}")
-
         else:
-            raise HTTPException(
-                status_code=500,
-                detail={
-                    "error": "Set `'STORE_MODEL_IN_DB='True'` in your env to enable this feature."
-                },
-            )
+            # --- Config-only code path ---
+            async with _config_write_lock:
+                model_response = await _add_model_to_config(
+                    model_params=model_params,
+                    user_api_key_dict=user_api_key_dict,
+                    proxy_config=proxy_config,
+                    llm_router=llm_router,
+                )
 
         if model_response is None:
             raise HTTPException(
                 status_code=500,
                 detail={
-                    "error": "Failed to add model to db. Check your server logs for more details."
+                    "error": "Failed to add model. Check your server logs for more details."
                 },
             )
 
         ## CREATE AUDIT LOG ##
-        asyncio.create_task(
-            create_object_audit_log(
-                object_id=model_response.model_id,
-                action="created",
-                user_api_key_dict=user_api_key_dict,
-                table_name=LitellmTableNames.PROXY_MODEL_TABLE_NAME,
-                before_value=None,
-                after_value=(
-                    model_response.model_dump_json(exclude_none=True)
-                    if isinstance(model_response, BaseModel)
-                    else None
-                ),
-                litellm_changed_by=user_api_key_dict.user_id,
-                litellm_proxy_admin_name=LITELLM_PROXY_ADMIN_NAME,
+        if _is_db_mode:
+            asyncio.create_task(
+                create_object_audit_log(
+                    object_id=model_response.model_id,
+                    action="created",
+                    user_api_key_dict=user_api_key_dict,
+                    table_name=LitellmTableNames.PROXY_MODEL_TABLE_NAME,
+                    before_value=None,
+                    after_value=(
+                        model_response.model_dump_json(exclude_none=True)
+                        if isinstance(model_response, BaseModel)
+                        else None
+                    ),
+                    litellm_changed_by=user_api_key_dict.user_id,
+                    litellm_proxy_admin_name=LITELLM_PROXY_ADMIN_NAME,
+                )
             )
-        )
 
         return model_response
 
@@ -1093,24 +1249,18 @@ async def update_model(
     Old endpoint for model update. Makes a PUT request.
 
     Use `/model/{model_id}/update` to PATCH the stored model in db.
+    Also supports config-only mode when no database is connected.
     """
     from litellm.proxy.proxy_server import (
         LITELLM_PROXY_ADMIN_NAME,
         llm_router,
         premium_user,
         prisma_client,
+        proxy_config,
         store_model_in_db,
     )
 
     try:
-        if prisma_client is None:
-            raise HTTPException(
-                status_code=500,
-                detail={
-                    "error": "No DB Connected. Here's how to do it - https://docs.litellm.ai/docs/proxy/virtual_keys"
-                },
-            )
-
         _model_id = None
         _model_info = getattr(model_params, "model_info", None)
         if _model_info is None:
@@ -1120,36 +1270,38 @@ async def update_model(
         if _model_id is None:
             raise Exception("model_info.id not provided")
 
-        _existing_litellm_params = (
-            await prisma_client.db.litellm_proxymodeltable.find_unique(
-                where={"model_id": _model_id}
-            )
-        )
+        _is_db_mode = prisma_client is not None and store_model_in_db is True
 
-        if _existing_litellm_params is None:
-            if (
-                llm_router is not None
-                and llm_router.get_deployment(model_id=_model_id) is not None
-            ):
-                raise HTTPException(
-                    status_code=400,
-                    detail={
-                        "error": "Can't edit model. Model in config. Store model in db via `/model/new`. to edit."
-                    },
+        if _is_db_mode:
+            # --- DB code path (existing behaviour) ---
+            _existing_litellm_params = (
+                await prisma_client.db.litellm_proxymodeltable.find_unique(
+                    where={"model_id": _model_id}
                 )
-            else:
-                raise Exception("model not found")
-        deployment = Deployment(**_existing_litellm_params.model_dump())
+            )
 
-        await ModelManagementAuthChecks.can_user_make_model_call(
-            model_params=deployment,
-            user_api_key_dict=user_api_key_dict,
-            prisma_client=prisma_client,
-            premium_user=premium_user,
-        )
+            if _existing_litellm_params is None:
+                if (
+                    llm_router is not None
+                    and llm_router.get_deployment(model_id=_model_id) is not None
+                ):
+                    raise HTTPException(
+                        status_code=400,
+                        detail={
+                            "error": "Can't edit model. Model in config. Store model in db via `/model/new`. to edit."
+                        },
+                    )
+                else:
+                    raise Exception("model not found")
+            deployment = Deployment(**_existing_litellm_params.model_dump())
 
-        # update DB
-        if store_model_in_db is True:
+            await ModelManagementAuthChecks.can_user_make_model_call(
+                model_params=deployment,
+                user_api_key_dict=user_api_key_dict,
+                prisma_client=prisma_client,
+                premium_user=premium_user,
+            )
+
             _existing_litellm_params_dict = dict(
                 _existing_litellm_params.litellm_params
             )
@@ -1213,6 +1365,24 @@ async def update_model(
             )
 
             return model_response
+        else:
+            # --- Config-only code path ---
+            async with _config_write_lock:
+                updated = await _update_model_in_config(
+                    model_id=_model_id,
+                    model_params=model_params,
+                    user_api_key_dict=user_api_key_dict,
+                    proxy_config=proxy_config,
+                    llm_router=llm_router,
+                )
+            if updated is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": f"Model with id={_model_id} not found in config"
+                    },
+                )
+            return updated
     except Exception as e:
         verbose_proxy_logger.exception(
             "litellm.proxy.proxy_server.update_model(): Exception occured - {}".format(
