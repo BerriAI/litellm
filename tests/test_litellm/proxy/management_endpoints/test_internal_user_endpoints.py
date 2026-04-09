@@ -2591,9 +2591,9 @@ async def test_new_user_password_is_hashed_and_stored(mocker):
 
     # Password must NOT be passed to generate_key_helper_fn
     call_kwargs = mock_generate_key.call_args.kwargs
-    assert "password" not in call_kwargs, (
-        "password should be popped before calling generate_key_helper_fn"
-    )
+    assert (
+        "password" not in call_kwargs
+    ), "password should be popped before calling generate_key_helper_fn"
 
     # Password must be stored via a separate update call with the correct args
     mock_update.assert_called_once()
@@ -2602,12 +2602,14 @@ async def test_new_user_password_is_hashed_and_stored(mocker):
     stored_password = call_kwargs.kwargs["data"]["password"]
 
     # Must NOT be stored as plaintext
-    assert stored_password != plaintext_password, "Password must not be stored as plaintext"
+    assert (
+        stored_password != plaintext_password
+    ), "Password must not be stored as plaintext"
 
     # Must be verifiable
-    assert verify_password(plaintext_password, stored_password), (
-        "Stored password hash must verify against the original plaintext"
-    )
+    assert verify_password(
+        plaintext_password, stored_password
+    ), "Stored password hash must verify against the original plaintext"
 
 
 @pytest.mark.asyncio
