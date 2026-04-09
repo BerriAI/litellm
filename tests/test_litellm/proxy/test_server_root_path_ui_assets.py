@@ -18,7 +18,17 @@ def _apply_server_root_path_replacements(
     litellm_asset_prefix: str = "/litellm-asset-prefix",
 ) -> None:
     """Replicate the replacement logic from proxy_server.py for testing."""
-    skip_extensions = (".png", ".jpg", ".jpeg", ".gif", ".ico", ".woff", ".woff2", ".ttf", ".eot")
+    skip_extensions = (
+        ".png",
+        ".jpg",
+        ".jpeg",
+        ".gif",
+        ".ico",
+        ".woff",
+        ".woff2",
+        ".ttf",
+        ".eot",
+    )
     for root, _, files in os.walk(ui_path):
         for filename in files:
             if filename.endswith(skip_extensions):
@@ -28,8 +38,12 @@ def _apply_server_root_path_replacements(
                 with open(file_path, "r", encoding="utf-8") as f:
                     content = f.read()
                 modified = content.replace(litellm_asset_prefix, server_root_path)
-                modified = modified.replace('"/ui/assets/', f'"{server_root_path}/ui/assets/')
-                modified = modified.replace("'/ui/assets/", f"'{server_root_path}/ui/assets/")
+                modified = modified.replace(
+                    '"/ui/assets/', f'"{server_root_path}/ui/assets/'
+                )
+                modified = modified.replace(
+                    "'/ui/assets/", f"'{server_root_path}/ui/assets/"
+                )
                 modified = modified.replace(
                     "/litellm/.well-known/litellm-ui-config",
                     f"{server_root_path}/.well-known/litellm-ui-config",
@@ -62,12 +76,12 @@ def test_absolute_ui_asset_paths_rewritten_with_server_root_path(tmp_path):
     _apply_server_root_path_replacements(str(ui_path), server_root_path)
 
     result = js_file.read_text()
-    assert f'"{server_root_path}/ui/assets/logos/"' in result, (
-        f"Absolute /ui/assets/ path not rewritten to include SERVER_ROOT_PATH. Got: {result}"
-    )
-    assert '"/ui/assets/logos/"' not in result, (
-        "Old absolute /ui/assets/ path should have been replaced"
-    )
+    assert (
+        f'"{server_root_path}/ui/assets/logos/"' in result
+    ), f"Absolute /ui/assets/ path not rewritten to include SERVER_ROOT_PATH. Got: {result}"
+    assert (
+        '"/ui/assets/logos/"' not in result
+    ), "Old absolute /ui/assets/ path should have been replaced"
 
 
 def test_litellm_asset_prefix_still_rewritten(tmp_path):
@@ -76,9 +90,7 @@ def test_litellm_asset_prefix_still_rewritten(tmp_path):
     ui_path.mkdir()
 
     js_file = ui_path / "bundle.js"
-    js_file.write_text(
-        'let t="/litellm-asset-prefix/_next/",eq="/ui/assets/logos/"'
-    )
+    js_file.write_text('let t="/litellm-asset-prefix/_next/",eq="/ui/assets/logos/"')
 
     server_root_path = "/myapp"
     _apply_server_root_path_replacements(str(ui_path), server_root_path)
