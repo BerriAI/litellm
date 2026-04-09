@@ -2867,6 +2867,35 @@ def test_vertex_ai_function_tools_with_code_execution_preserved():
     assert "code_execution" in tool_keys
 
 
+def test_vertex_ai_gemini3_tool_combination_no_drop():
+    """
+    Test that search tools are NOT dropped when include_server_side_tool_invocations
+    is enabled (Gemini 3+ tool combination).
+    """
+    v = VertexGeminiConfig()
+    optional_params = {"include_server_side_tool_invocations": True}
+
+    tools = v._map_function(
+        value=[
+            {"enterpriseWebSearch": {}},
+            {"urlContext": {}},
+            {
+                "type": "function",
+                "function": {"name": "my_func", "description": "A function"},
+            },
+        ],
+        optional_params=optional_params,
+    )
+
+    tool_keys = set()
+    for t in tools:
+        tool_keys.update(t.keys())
+    assert "function_declarations" in tool_keys
+    assert "enterpriseWebSearch" in tool_keys
+    assert "url_context" in tool_keys
+    assert len(tools) == 3
+
+
 def test_vertex_ai_openai_web_search_tool_transformation():
     """
     Test that OpenAI-style web_search and web_search_preview tools are transformed to googleSearch.
