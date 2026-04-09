@@ -1360,6 +1360,9 @@ class MockProxyConfigForConfigOnly:
 
         return copy.deepcopy(self._config)
 
+    def update_config_state(self, config: dict):
+        self._config = config
+
     async def save_config(self, new_config: dict):
         self._config = new_config
         self.save_config_calls.append(new_config)

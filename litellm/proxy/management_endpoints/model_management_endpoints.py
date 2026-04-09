@@ -54,6 +54,7 @@ from litellm.types.router import (
     Deployment,
     DeploymentTypedDict,
     LiteLLMParamsTypedDict,
+    ModelInfo,
     updateDeployment,
 )
 from litellm.utils import get_utc_datetime
@@ -261,10 +262,14 @@ async def patch_model(
             return updated_model
         else:
             # --- Config-only code path ---
+            if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+                raise ProxyException(
+                    message="Only proxy admins can manage models in config-only mode.",
+                    type=ProxyErrorTypes.auth_error,
+                    code=status.HTTP_403_FORBIDDEN,
+                )
             # Inject model_id from path into patch_data so the helper can find it
             if patch_data.model_info is None:
-                from litellm.types.router import ModelInfo
-
                 patch_data.model_info = ModelInfo(id=model_id)
             elif patch_data.model_info.id is None:
                 patch_data.model_info.id = model_id
@@ -422,6 +427,7 @@ async def _add_model_to_config(
     model_list.append(new_entry)
     config["model_list"] = model_list
     await proxy_config.save_config(new_config=config)
+    proxy_config.update_config_state(config=config)
 
     # Return a response compatible with the DB code path
     return LiteLLM_ProxyModelTable(
@@ -465,6 +471,7 @@ async def _delete_model_from_config(
 
     config["model_list"] = new_model_list
     await proxy_config.save_config(new_config=config)
+    proxy_config.update_config_state(config=config)
     return removed_entry
 
 
@@ -512,6 +519,7 @@ async def _update_model_in_config(
     model_list[target_idx] = entry
     config["model_list"] = model_list
     await proxy_config.save_config(new_config=config)
+    proxy_config.update_config_state(config=config)
 
     # Re-upsert into the live router so traffic picks up changes immediately
     if llm_router is not None:
@@ -559,8 +567,6 @@ async def _update_team_model_in_db(
 
     # Ensure model_info exists and set team_public_model_name
     if patch_data.model_info is None:
-        from litellm.types.router import ModelInfo
-
         patch_data.model_info = ModelInfo()
     patch_data.model_info.team_public_model_name = public_model_name
 
@@ -983,6 +989,13 @@ async def delete_model(
             return {"message": f"Model: {result.model_id} deleted successfully"}
         else:
             # --- Config-only code path ---
+            if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+                raise HTTPException(
+                    status_code=403,
+                    detail={
+                        "error": "Only proxy admins can manage models in config-only mode."
+                    },
+                )
             async with _config_write_lock:
                 removed = await _delete_model_from_config(
                     model_id=model_info.id,
@@ -1125,7 +1138,14 @@ async def add_new_model(
                 premium_user=premium_user,
             )
         else:
-            # Config-only: master key auth already enforced by user_api_key_auth dep.
+            # Config-only: enforce PROXY_ADMIN role for model management.
+            if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+                raise HTTPException(
+                    status_code=403,
+                    detail={
+                        "error": "Only proxy admins can manage models in config-only mode."
+                    },
+                )
             # Team-scoped models require the DB for team management.
             if (
                 getattr(
@@ -1367,6 +1387,13 @@ async def update_model(
             return model_response
         else:
             # --- Config-only code path ---
+            if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+                raise HTTPException(
+                    status_code=403,
+                    detail={
+                        "error": "Only proxy admins can manage models in config-only mode."
+                    },
+                )
             async with _config_write_lock:
                 updated = await _update_model_in_config(
                     model_id=_model_id,
