@@ -429,7 +429,7 @@ class TestUpdateFromKwargs:
         assert logging_obj.litellm_params["litellm_metadata"] == lm_meta
 
     def test_caller_litellm_params_win_over_kwargs(self, logging_obj):
-        """Explicit litellm_params from the caller should override auto-extracted values."""
+        """Explicit litellm_params metadata merges into kwargs metadata without overwriting."""
         kwargs = {"metadata": {"from_kwargs": True}}
 
         logging_obj.update_from_kwargs(
@@ -437,7 +437,8 @@ class TestUpdateFromKwargs:
             litellm_params={"metadata": {"from_caller": True}, "litellm_call_id": "x"},
         )
 
-        assert logging_obj.litellm_params["metadata"] == {"from_caller": True}
+        # kwargs metadata is preserved, caller metadata is merged in
+        assert logging_obj.litellm_params["metadata"] == {"from_kwargs": True, "from_caller": True}
 
     def test_custom_pricing_detected_via_litellm_metadata(self, logging_obj):
         """Custom pricing in litellm_metadata.model_info should set custom_pricing flag."""
