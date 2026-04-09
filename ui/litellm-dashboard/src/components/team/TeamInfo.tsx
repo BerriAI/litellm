@@ -592,19 +592,21 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       }
 
       // Handle router_settings - read fresh values from DOM at save time.
-      // Only include if the user actually configured something meaningful
-      // (exclude defaults like enable_tag_filtering: false and empty arrays).
       const currentRouterSettings = routerSettingsRef.current?.getValue();
       if (currentRouterSettings?.router_settings) {
-        const hasValues = Object.values(currentRouterSettings.router_settings).some(
-          (value) =>
-            value !== null &&
-            value !== undefined &&
-            value !== "" &&
-            value !== false &&
-            !(Array.isArray(value) && value.length === 0),
-        );
-        if (hasValues) {
+        const isMeaningfulValue = (value: unknown) =>
+          value !== null &&
+          value !== undefined &&
+          value !== "" &&
+          value !== false &&
+          !(Array.isArray(value) && value.length === 0);
+
+        const hasNewValues = Object.values(currentRouterSettings.router_settings).some(isMeaningfulValue);
+        const hadExistingSettings = info.router_settings &&
+          Object.values(info.router_settings).some(isMeaningfulValue);
+
+        // Send if there are new values OR if the user is clearing existing ones
+        if (hasNewValues || hadExistingSettings) {
           updateData.router_settings = currentRouterSettings.router_settings;
         }
       }
@@ -1112,7 +1114,6 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                         ref={routerSettingsRef}
                         accessToken={accessToken || ""}
                         value={info.router_settings ? { router_settings: info.router_settings } : undefined}
-                        modelData={userModels.length > 0 ? { data: userModels.map((model) => ({ model_name: model })) } : undefined}
                       />
                     </Form.Item>
 
