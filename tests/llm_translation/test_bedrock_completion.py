@@ -1164,6 +1164,12 @@ def test_bedrock_converse_tools_pt_converts_custom_schema_type_to_object():
                 },
             },
         },
+        {
+            "input_schema": {
+                "type": "object",
+                "properties": {"q": {"type": "string"}},
+            },
+        },
     ]
 
     result = _bedrock_tools_pt(tools)
@@ -1176,6 +1182,8 @@ def test_bedrock_converse_tools_pt_converts_custom_schema_type_to_object():
     j1 = result[1]["toolSpec"]["inputSchema"]["json"]
     assert j1["type"] == "object"
     assert j1["properties"]["nested_obj"]["type"] == "object"
+
+    assert result[2]["toolSpec"]["name"] == "litellm_unnamed_tool_2"
 
 
 def test_bedrock_tools_transformation_valid_params():
