@@ -17,6 +17,7 @@ import { validateMCPServerUrl, validateMCPServerName } from "./utils";
 import NotificationsManager from "../molecules/notifications_manager";
 import { useMcpOAuthFlow } from "@/hooks/useMcpOAuthFlow";
 import { useTestMCPConnection } from "@/hooks/useTestMCPConnection";
+import { getSecureItem, setSecureItem } from "@/utils/secureStorage";
 
 const asset_logos_folder = "../ui/assets/logos/";
 export const mcpLogoImg = `${asset_logos_folder}mcp_logo.png`;
@@ -94,8 +95,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
     }
     try {
       const values = form.getFieldsValue(true);
-      // codeql[js/clear-text-storage-of-sensitive-data]
-      window.sessionStorage.setItem(
+      setSecureItem(
         CREATE_OAUTH_UI_STATE_KEY,
         JSON.stringify({
           modalVisible: isModalVisible,
@@ -178,7 +178,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
     if (typeof window === "undefined") {
       return;
     }
-    const storedState = window.sessionStorage.getItem(CREATE_OAUTH_UI_STATE_KEY);
+    const storedState = getSecureItem(CREATE_OAUTH_UI_STATE_KEY);
     if (!storedState) {
       return;
     }
