@@ -2,6 +2,7 @@
 
 import { Suspense, useEffect, useMemo } from "react";
 import { useSearchParams } from "next/navigation";
+import { getSecureItem, setSecureItem } from "@/utils/secureStorage";
 
 // Written to sessionStorage so both the admin hook (useMcpOAuthFlow) and the
 // user hook (useUserMcpOAuthFlow) can pick up the result.  Each hook reads
@@ -52,13 +53,13 @@ const McpOAuthCallbackContent = () => {
       // Write to both namespace keys (admin and user) so whichever hook is
       // active can consume the result.  sessionStorage only — no localStorage.
       const serialized = JSON.stringify(payload);
-      window.sessionStorage.setItem(ADMIN_RESULT_KEY, serialized);
-      window.sessionStorage.setItem(USER_RESULT_KEY, serialized);
+      setSecureItem(ADMIN_RESULT_KEY, serialized);
+      setSecureItem(USER_RESULT_KEY, serialized);
     } catch (err) {
       // Silently ignore storage errors
     }
 
-    const returnUrl = window.sessionStorage.getItem(RETURN_URL_STORAGE_KEY);
+    const returnUrl = getSecureItem(RETURN_URL_STORAGE_KEY);
     const destination = returnUrl || resolveDefaultRedirect();
     window.location.replace(destination);
   }, [payload]);
