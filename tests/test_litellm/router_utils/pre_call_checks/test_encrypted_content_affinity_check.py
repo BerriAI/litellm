@@ -27,7 +27,6 @@ import litellm
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import ResponsesAPIResponse
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -70,7 +69,9 @@ class TestEncryptedItemIdCodec:
     def test_roundtrip(self):
         model_id = "deployment-1"
         original_item_id = "rs_abc123def456"
-        encoded = ResponsesAPIRequestUtils._build_encrypted_item_id(model_id, original_item_id)
+        encoded = ResponsesAPIRequestUtils._build_encrypted_item_id(
+            model_id, original_item_id
+        )
         assert encoded.startswith("encitem_")
         decoded = ResponsesAPIRequestUtils._decode_encrypted_item_id(encoded)
         assert decoded is not None
@@ -81,7 +82,9 @@ class TestEncryptedItemIdCodec:
         """Decoding must succeed even if base64 padding (=) was stripped in transit."""
         model_id = "gpt-5.1-codex-openai-2"
         original_item_id = "rs_0efb96cb222403210069a01d5d52588196a9dc394ffdb89d00"
-        encoded = ResponsesAPIRequestUtils._build_encrypted_item_id(model_id, original_item_id)
+        encoded = ResponsesAPIRequestUtils._build_encrypted_item_id(
+            model_id, original_item_id
+        )
         # Strip any trailing '=' to simulate what happens in transit
         stripped = encoded.rstrip("=")
         decoded = ResponsesAPIRequestUtils._decode_encrypted_item_id(stripped)
@@ -98,7 +101,9 @@ class TestEncryptedItemIdCodec:
         """item_id values containing ';' must survive the roundtrip."""
         model_id = "deployment-1"
         original_item_id = "rs_part1;part2;part3"
-        encoded = ResponsesAPIRequestUtils._build_encrypted_item_id(model_id, original_item_id)
+        encoded = ResponsesAPIRequestUtils._build_encrypted_item_id(
+            model_id, original_item_id
+        )
         decoded = ResponsesAPIRequestUtils._decode_encrypted_item_id(encoded)
         assert decoded is not None
         assert decoded["item_id"] == original_item_id
@@ -114,8 +119,10 @@ class TestUpdateEncryptedContentItemIds:
                 {"id": "rs_xyz", "type": "reasoning", "encrypted_content": "secret"},
             ],
         }
-        result = ResponsesAPIRequestUtils._update_encrypted_content_item_ids_in_response(
-            response, model_id
+        result = (
+            ResponsesAPIRequestUtils._update_encrypted_content_item_ids_in_response(
+                response, model_id
+            )
         )
         # Plain message item untouched
         assert result["output"][0]["id"] == "msg_abc"
@@ -128,10 +135,14 @@ class TestUpdateEncryptedContentItemIds:
 
     def test_no_op_when_model_id_is_none(self):
         response = {
-            "output": [{"id": "rs_xyz", "type": "reasoning", "encrypted_content": "secret"}]
+            "output": [
+                {"id": "rs_xyz", "type": "reasoning", "encrypted_content": "secret"}
+            ]
         }
-        result = ResponsesAPIRequestUtils._update_encrypted_content_item_ids_in_response(
-            response, None
+        result = (
+            ResponsesAPIRequestUtils._update_encrypted_content_item_ids_in_response(
+                response, None
+            )
         )
         assert result["output"][0]["id"] == "rs_xyz"
 
@@ -147,16 +158,20 @@ class TestEncryptedContentWrapping:
         assert wrapped.startswith("litellm_enc:")
         assert wrapped != original_content
 
-        unwrapped_model_id, unwrapped_content = (
-            ResponsesAPIRequestUtils._unwrap_encrypted_content_with_model_id(wrapped)
-        )
+        (
+            unwrapped_model_id,
+            unwrapped_content,
+        ) = ResponsesAPIRequestUtils._unwrap_encrypted_content_with_model_id(wrapped)
         assert unwrapped_model_id == model_id
         assert unwrapped_content == original_content
 
     def test_unwrap_plain_encrypted_content(self):
         """Unwrapping plain encrypted_content returns None for model_id."""
         plain_content = "gAAAAABpnW_yEYmSNEyOG_plain_content"
-        model_id, content = ResponsesAPIRequestUtils._unwrap_encrypted_content_with_model_id(
+        (
+            model_id,
+            content,
+        ) = ResponsesAPIRequestUtils._unwrap_encrypted_content_with_model_id(
             plain_content
         )
         assert model_id is None
@@ -175,16 +190,19 @@ class TestEncryptedContentWrapping:
                 },
             ],
         }
-        result = ResponsesAPIRequestUtils._update_encrypted_content_item_ids_in_response(
-            response, model_id
+        result = (
+            ResponsesAPIRequestUtils._update_encrypted_content_item_ids_in_response(
+                response, model_id
+            )
         )
         assert result["output"][0].get("encrypted_content") is None
         wrapped = result["output"][1]["encrypted_content"]
         assert wrapped.startswith("litellm_enc:")
 
-        model_id_extracted, unwrapped = (
-            ResponsesAPIRequestUtils._unwrap_encrypted_content_with_model_id(wrapped)
-        )
+        (
+            model_id_extracted,
+            unwrapped,
+        ) = ResponsesAPIRequestUtils._unwrap_encrypted_content_with_model_id(wrapped)
         assert model_id_extracted == model_id
         assert unwrapped == "gAAAAABpnW_yEYmSNEyOG_secret"
 
@@ -193,14 +211,18 @@ class TestRestoreEncryptedContentItemIds:
     def test_restores_encoded_ids(self):
         model_id = "deployment-1"
         original_id = "rs_encrypted_item_456"
-        encoded_id = ResponsesAPIRequestUtils._build_encrypted_item_id(model_id, original_id)
+        encoded_id = ResponsesAPIRequestUtils._build_encrypted_item_id(
+            model_id, original_id
+        )
 
         request_input = [
             {"type": "message", "id": "msg_abc123", "role": "assistant"},
             {"type": "reasoning", "id": encoded_id, "encrypted_content": "secret"},
         ]
-        restored = ResponsesAPIRequestUtils._restore_encrypted_content_item_ids_in_input(
-            request_input
+        restored = (
+            ResponsesAPIRequestUtils._restore_encrypted_content_item_ids_in_input(
+                request_input
+            )
         )
         assert restored[0]["id"] == "msg_abc123"
         assert restored[1]["id"] == original_id
@@ -209,15 +231,19 @@ class TestRestoreEncryptedContentItemIds:
         """Test that wrapped encrypted_content is unwrapped before forwarding."""
         model_id = "deployment-1"
         original_content = "gAAAAABpnW_yEYmSNEyOG_original"
-        wrapped_content = ResponsesAPIRequestUtils._wrap_encrypted_content_with_model_id(
-            original_content, model_id
+        wrapped_content = (
+            ResponsesAPIRequestUtils._wrap_encrypted_content_with_model_id(
+                original_content, model_id
+            )
         )
 
         request_input = [
             {"type": "reasoning", "encrypted_content": wrapped_content},
         ]
-        restored = ResponsesAPIRequestUtils._restore_encrypted_content_item_ids_in_input(
-            request_input
+        restored = (
+            ResponsesAPIRequestUtils._restore_encrypted_content_item_ids_in_input(
+                request_input
+            )
         )
         assert restored[0]["encrypted_content"] == original_content
 
@@ -258,7 +284,9 @@ async def test_encrypted_content_affinity_tracks_and_routes():
                 "id": "msg_abc123",
                 "status": "completed",
                 "role": "assistant",
-                "content": [{"type": "output_text", "text": "Hello!", "annotations": []}],
+                "content": [
+                    {"type": "output_text", "text": "Hello!", "annotations": []}
+                ],
             },
             {
                 "type": "reasoning",
@@ -317,9 +345,9 @@ async def test_encrypted_content_affinity_tracks_and_routes():
 
         # The response must have rewritten the encrypted item's ID to encoded form
         encoded_item_id = _extract_encoded_item_id(first_response)
-        assert encoded_item_id.startswith("encitem_"), (
-            f"Expected output item ID to be rewritten to encitem_... but got {encoded_item_id!r}"
-        )
+        assert encoded_item_id.startswith(
+            "encitem_"
+        ), f"Expected output item ID to be rewritten to encitem_... but got {encoded_item_id!r}"
 
         # Verify the encoded ID decodes back to the correct deployment + original ID
         decoded = ResponsesAPIRequestUtils._decode_encrypted_item_id(encoded_item_id)
@@ -341,9 +369,9 @@ async def test_encrypted_content_affinity_tracks_and_routes():
         )
         second_model_id = second_response._hidden_params["model_id"]
 
-        assert second_model_id == first_model_id, (
-            f"Expected affinity to route to {first_model_id}, but got {second_model_id}"
-        )
+        assert (
+            second_model_id == first_model_id
+        ), f"Expected affinity to route to {first_model_id}, but got {second_model_id}"
 
 
 @pytest.mark.asyncio
@@ -445,9 +473,9 @@ async def test_encrypted_content_affinity_bypasses_rpm_limits():
 
         # Extract encoded item ID from the first response output
         encoded_item_id = _extract_encoded_item_id(first_response)
-        assert encoded_item_id.startswith("encitem_"), (
-            f"Expected encitem_... but got {encoded_item_id!r}"
-        )
+        assert encoded_item_id.startswith(
+            "encitem_"
+        ), f"Expected encitem_... but got {encoded_item_id!r}"
 
         # Follow-up with the encoded item ID — should pin to same deployment
         second_response = await router.aresponses(
@@ -592,15 +620,16 @@ async def test_encrypted_content_affinity_with_wrapped_content_no_id():
             if hasattr(first_item, "encrypted_content")
             else first_item.get("encrypted_content")
         )
-        assert wrapped_content.startswith("litellm_enc:"), (
-            f"Expected wrapped content but got {wrapped_content[:50]}..."
-        )
+        assert wrapped_content.startswith(
+            "litellm_enc:"
+        ), f"Expected wrapped content but got {wrapped_content[:50]}..."
 
         # Verify we can extract model_id from wrapped content
-        extracted_model_id, _ = (
-            ResponsesAPIRequestUtils._unwrap_encrypted_content_with_model_id(
-                wrapped_content
-            )
+        (
+            extracted_model_id,
+            _,
+        ) = ResponsesAPIRequestUtils._unwrap_encrypted_content_with_model_id(
+            wrapped_content
         )
         assert extracted_model_id == first_model_id
 
@@ -616,9 +645,9 @@ async def test_encrypted_content_affinity_with_wrapped_content_no_id():
         )
         second_model_id = second_response._hidden_params["model_id"]
 
-        assert second_model_id == first_model_id, (
-            f"Expected affinity to route to {first_model_id}, but got {second_model_id}"
-        )
+        assert (
+            second_model_id == first_model_id
+        ), f"Expected affinity to route to {first_model_id}, but got {second_model_id}"
 
 
 def test_encrypted_content_wrapping_preserves_original_content():
@@ -627,19 +656,22 @@ def test_encrypted_content_wrapping_preserves_original_content():
     This is critical for streaming responses where content must round-trip correctly.
     """
     model_id = "test-deployment-1"
-    original_encrypted_content = "gAAAAABpnW_yEYmSNEyOG_streaming_test_content_with_special_chars==+/"
+    original_encrypted_content = (
+        "gAAAAABpnW_yEYmSNEyOG_streaming_test_content_with_special_chars==+/"
+    )
 
     wrapped = ResponsesAPIRequestUtils._wrap_encrypted_content_with_model_id(
         original_encrypted_content, model_id
     )
-    
+
     assert wrapped.startswith("litellm_enc:")
     assert wrapped != original_encrypted_content
 
-    extracted_model_id, unwrapped_content = (
-        ResponsesAPIRequestUtils._unwrap_encrypted_content_with_model_id(wrapped)
-    )
-    
+    (
+        extracted_model_id,
+        unwrapped_content,
+    ) = ResponsesAPIRequestUtils._unwrap_encrypted_content_with_model_id(wrapped)
+
     assert extracted_model_id == model_id
     assert unwrapped_content == original_encrypted_content
 
@@ -654,13 +686,80 @@ def test_encrypted_content_wrapping_with_multiple_semicolons():
     wrapped = ResponsesAPIRequestUtils._wrap_encrypted_content_with_model_id(
         original_content, model_id
     )
-    
-    extracted_model_id, unwrapped = (
-        ResponsesAPIRequestUtils._unwrap_encrypted_content_with_model_id(wrapped)
-    )
-    
+
+    (
+        extracted_model_id,
+        unwrapped,
+    ) = ResponsesAPIRequestUtils._unwrap_encrypted_content_with_model_id(wrapped)
+
     assert extracted_model_id == model_id
     assert unwrapped == original_content
+
+
+# ---------------------------------------------------------------------------
+# Regression tests: affinity check must not break tag-based routing
+# ---------------------------------------------------------------------------
+
+from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
+    EncryptedContentAffinityCheck,
+)
+
+
+@pytest.mark.asyncio
+async def test_encrypted_content_affinity_does_not_create_litellm_metadata_for_chat():
+    """
+    For chat completions / embeddings, request_kwargs uses 'metadata' (not
+    'litellm_metadata').  The affinity check must NOT create a spurious
+    'litellm_metadata' key, because that would cause
+    _get_metadata_variable_name_from_kwargs to return 'litellm_metadata'
+    and tag-based routing would look for tags in the wrong dict.
+    """
+    check = EncryptedContentAffinityCheck()
+    deployments = [
+        {"model_info": {"id": "dep-1"}, "litellm_params": {"model": "gpt-4"}},
+    ]
+    request_kwargs = {"metadata": {"tags": ["prod"]}}
+
+    result = await check.async_filter_deployments(
+        model="gpt-4",
+        healthy_deployments=deployments,
+        messages=[{"role": "user", "content": "hi"}],
+        request_kwargs=request_kwargs,
+    )
+
+    # Must not inject litellm_metadata
+    assert "litellm_metadata" not in request_kwargs
+    # Tags must be untouched
+    assert request_kwargs["metadata"]["tags"] == ["prod"]
+    # All deployments returned (no pinning)
+    assert len(result) == 1
+
+
+@pytest.mark.asyncio
+async def test_encrypted_content_affinity_preserves_litellm_metadata_for_responses():
+    """
+    For Responses API calls, litellm_metadata already exists.  The affinity
+    check should set the flag there and preserve existing keys.
+    """
+    check = EncryptedContentAffinityCheck()
+    deployments = [
+        {"model_info": {"id": "dep-1"}, "litellm_params": {"model": "gpt-5.1-codex"}},
+    ]
+    request_kwargs = {
+        "litellm_metadata": {"model_info": {"id": "dep-1"}},
+    }
+
+    await check.async_filter_deployments(
+        model="gpt-5.1-codex",
+        healthy_deployments=deployments,
+        messages=None,
+        request_kwargs=request_kwargs,
+    )
+
+    assert (
+        request_kwargs["litellm_metadata"]["encrypted_content_affinity_enabled"] is True
+    )
+    assert request_kwargs["litellm_metadata"]["model_info"] == {"id": "dep-1"}
 
 
 def test_encrypted_content_wrapping_empty_string():
@@ -673,12 +772,13 @@ def test_encrypted_content_wrapping_empty_string():
     wrapped = ResponsesAPIRequestUtils._wrap_encrypted_content_with_model_id(
         original_content, model_id
     )
-    
+
     assert wrapped.startswith("litellm_enc:")
 
-    extracted_model_id, unwrapped = (
-        ResponsesAPIRequestUtils._unwrap_encrypted_content_with_model_id(wrapped)
-    )
-    
+    (
+        extracted_model_id,
+        unwrapped,
+    ) = ResponsesAPIRequestUtils._unwrap_encrypted_content_with_model_id(wrapped)
+
     assert extracted_model_id == model_id
     assert unwrapped == original_content
