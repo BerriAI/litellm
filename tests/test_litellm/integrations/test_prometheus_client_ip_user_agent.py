@@ -118,6 +118,8 @@ async def test_async_post_call_success_hook_includes_client_ip_user_agent():
                 "user_api_key_alias": "alias_1",
                 "user_api_key_team_id": "team_1",
                 "user_api_key_team_alias": "team_alias_1",
+                "user_api_key_org_id": None,
+                "user_api_key_org_alias": None,
                 "user_api_key_user_email": "test@example.com",
                 "user_api_key_request_route": "/chat/completions",
                 "requester_ip_address": "192.168.1.1",
