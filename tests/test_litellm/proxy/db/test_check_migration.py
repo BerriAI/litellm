@@ -20,10 +20,8 @@ def test_check_migration_out_of_sync(mocker):
     # assignment.
     from litellm.proxy.db import check_migration
 
-    mock_logger = mocker.patch("litellm.proxy.db.check_migration.verbose_logger")
-
     # Mock the helper function to simulate out-of-sync state
-    mocker.patch.object(
+    mock_logger = mocker.patch.object(
         check_migration,
         "verbose_logger",
         autospec=True,
