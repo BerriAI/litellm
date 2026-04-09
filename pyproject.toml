@@ -45,8 +45,7 @@ proxy = [
     "fastapi-sso==0.16.0",
     "PyJWT==2.11.0; python_version >= '3.9'",
     "python-multipart==0.0.20",
-    # Docker uses 46.0.5; pyproject uses 43.0.3 for Python 3.9.0/3.9.1 compat.
-    "cryptography==43.0.3",
+    "cryptography==46.0.7",
     "pynacl==1.6.2",
     "websockets==15.0.1",
     "boto3==1.42.59",
