@@ -141,6 +141,17 @@ MCP_TOOL_LISTING_TIMEOUT = float(os.getenv("LITELLM_MCP_TOOL_LISTING_TIMEOUT", "
 MCP_METADATA_TIMEOUT = float(os.getenv("LITELLM_MCP_METADATA_TIMEOUT", "10.0"))
 MCP_HEALTH_CHECK_TIMEOUT = float(os.getenv("LITELLM_MCP_HEALTH_CHECK_TIMEOUT", "10.0"))
 
+# Allowlist of commands permitted for MCP stdio transport.
+# Prevents arbitrary command execution via /mcp-rest/test/* endpoints or server creation.
+# Note: allowlisted runtimes can still execute code via args (e.g. python -c "...").
+# This is an accepted residual risk since these endpoints require PROXY_ADMIN.
+# Extend via LITELLM_MCP_STDIO_EXTRA_COMMANDS env var (comma-separated).
+_MCP_STDIO_EXTRA_COMMANDS = os.getenv("LITELLM_MCP_STDIO_EXTRA_COMMANDS", "")
+MCP_STDIO_ALLOWED_COMMANDS: frozenset = frozenset(
+    {"npx", "uvx", "python", "python3", "node", "docker", "deno"}
+    | (set(_MCP_STDIO_EXTRA_COMMANDS.split(",")) - {""})
+)
+
 LITELLM_UI_ALLOW_HEADERS = [
     "x-litellm-semantic-filter",
     "x-litellm-semantic-filter-tools",
@@ -1319,6 +1330,9 @@ LITELLM_KEY_ROTATION_CHECK_INTERVAL_SECONDS = int(
 LITELLM_KEY_ROTATION_GRACE_PERIOD: str = os.getenv(
     "LITELLM_KEY_ROTATION_GRACE_PERIOD", ""
 )  # Duration to keep old key valid after rotation (e.g. "24h", "2d"); empty = immediate revoke (default)
+LITELLM_KEY_ROTATION_LOCK_TTL_SECONDS = int(
+    os.getenv("LITELLM_KEY_ROTATION_LOCK_TTL_SECONDS", 600)
+)  # 10 minutes default — caps the deadlock window if a pod crashes mid-rotation
 UI_SESSION_TOKEN_TEAM_ID = "litellm-dashboard"
 LITELLM_PROXY_ADMIN_NAME = "default_user_id"
 
@@ -1341,12 +1355,14 @@ LITELLM_UI_SESSION_DURATION = os.getenv("LITELLM_UI_SESSION_DURATION", "24h")
 
 ########################### DB CRON JOB NAMES ###########################
 DB_SPEND_UPDATE_JOB_NAME = "db_spend_update_job"
+DB_DAILY_TAG_SPEND_UPDATE_JOB_NAME = "db_daily_tag_spend_update_job"
 PROMETHEUS_EMIT_BUDGET_METRICS_JOB_NAME = "prometheus_emit_budget_metrics"
 CLOUDZERO_EXPORT_USAGE_DATA_JOB_NAME = "cloudzero_export_usage_data"
 CLOUDZERO_MAX_FETCHED_DATA_RECORDS = int(
     os.getenv("CLOUDZERO_MAX_FETCHED_DATA_RECORDS", 50000)
 )
 SPEND_LOG_CLEANUP_JOB_NAME = "spend_log_cleanup"
+KEY_ROTATION_JOB_NAME = "litellm_key_rotation_job"
 SPEND_LOG_RUN_LOOPS = int(os.getenv("SPEND_LOG_RUN_LOOPS", 500))
 SPEND_LOG_CLEANUP_BATCH_SIZE = int(os.getenv("SPEND_LOG_CLEANUP_BATCH_SIZE", 1000))
 SPEND_LOG_QUEUE_SIZE_THRESHOLD = int(os.getenv("SPEND_LOG_QUEUE_SIZE_THRESHOLD", 100))
@@ -1361,6 +1377,9 @@ PROXY_BATCH_POLLING_INTERVAL = int(os.getenv("PROXY_BATCH_POLLING_INTERVAL", 360
 MAX_OBJECTS_PER_POLL_CYCLE = max(1, int(os.getenv("MAX_OBJECTS_PER_POLL_CYCLE", 50)))
 MANAGED_OBJECT_STALENESS_CUTOFF_DAYS = max(
     1, int(os.getenv("MANAGED_OBJECT_STALENESS_CUTOFF_DAYS", 7))
+)
+STALE_OBJECT_CLEANUP_BATCH_SIZE = max(
+    1, int(os.getenv("STALE_OBJECT_CLEANUP_BATCH_SIZE", 1000))
 )
 # Set PROXY_BATCH_POLLING_ENABLED=false to disable the CheckBatchCost and
 # CheckResponsesCost background polling jobs entirely (e.g. to avoid DB load on
@@ -1392,6 +1411,10 @@ APSCHEDULER_REPLACE_EXISTING = os.getenv(
     "true",
     "1",
 ]  # always replace existing jobs
+
+# The number of tag entries are higher than number of user, team entries. This leads to a higher QPS. 
+# This will run tag spcific tasks at a later time to smooth QPS
+DAILY_TAG_SPEND_BATCH_MULTIPLIER = 2.3
 
 DEFAULT_HEALTH_CHECK_INTERVAL = int(
     os.getenv("DEFAULT_HEALTH_CHECK_INTERVAL", 300)

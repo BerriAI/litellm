@@ -26,6 +26,22 @@ from litellm.proxy.common_utils.http_parsing_utils import _safe_get_request_head
 _SPECIAL_HEADERS_CACHE = frozenset(
     v.value.lower() for v in SpecialHeaders._member_map_.values()
 )
+
+
+def _sanitize_for_log(value: Any) -> str:
+    """
+    Basic log sanitization helper to reduce log-injection risk.
+
+    Removes newline and carriage-return characters so user-controlled
+    values cannot forge additional log lines when written to text logs.
+    """
+    try:
+        text = str(value)
+    except Exception:
+        # Fallback to repr if str() fails for any reason
+        text = repr(value)
+    # Strip CR/LF characters commonly used for log injection
+    return text.replace("\r", "").replace("\n", "")
 from litellm.router import Router
 from litellm.secret_managers.main import get_secret_bool
 from litellm.types.llms.anthropic import ANTHROPIC_API_HEADERS
@@ -668,6 +684,7 @@ class LiteLLMProxyRequestSetup:
             user_api_key_project_alias=user_api_key_dict.project_alias,
             user_api_key_user_id=user_api_key_dict.user_id,
             user_api_key_org_id=user_api_key_dict.org_id,
+            user_api_key_org_alias=user_api_key_dict.organization_alias,
             user_api_key_team_alias=user_api_key_dict.team_alias,
             user_api_key_end_user_id=user_api_key_dict.end_user_id,
             user_api_key_user_email=user_api_key_dict.user_email,
@@ -1355,10 +1372,8 @@ def _update_model_if_team_alias_exists(
                         "New sibling deployments may be unreachable. "
                         "Set LITELLM_ENABLE_TEAM_STALE_ALIAS_BYPASS=true to enable "
                         "team-scoped sibling routing.",
-                        str(_model).replace("\n", "").replace("\r", ""),
-                        str(user_api_key_dict.team_id)
-                        .replace("\n", "")
-                        .replace("\r", ""),
+                        _sanitize_for_log(_model),
+                        user_api_key_dict.team_id,
                     )
 
         data["model"] = aliased_target
@@ -1472,17 +1487,19 @@ def _add_guardrails_from_key_or_team_metadata(
     team_metadata: Optional[dict],
     data: dict,
     metadata_variable_name: str,
+    project_metadata: Optional[dict] = None,
 ) -> None:
     """
-    Helper add guardrails from key or team metadata to request data
+    Helper add guardrails from key, team, or project metadata to request data
 
-    Key guardrails are set first, then team guardrails are appended (without duplicates).
+    Key guardrails are set first, then team and project guardrails are appended (without duplicates).
 
     Args:
         key_metadata: The key metadata dictionary to check for guardrails
         team_metadata: The team metadata dictionary to check for guardrails
         data: The request data to update
         metadata_variable_name: The name of the metadata field in data
+        project_metadata: The project metadata dictionary to check for guardrails
 
     """
     from litellm.proxy.utils import _premium_user_check
@@ -1508,6 +1525,15 @@ def _add_guardrails_from_key_or_team_metadata(
             _premium_user_check()
             combined_guardrails.update(team_metadata["guardrails"])
 
+    # Add project-level guardrails (set automatically handles duplicates)
+    if project_metadata and "guardrails" in project_metadata:
+        if (
+            isinstance(project_metadata["guardrails"], list)
+            and len(project_metadata["guardrails"]) > 0
+        ):
+            _premium_user_check()
+            combined_guardrails.update(project_metadata["guardrails"])
+
     # Set combined guardrails in metadata as list
     if combined_guardrails:
         data[metadata_variable_name]["guardrails"] = list(combined_guardrails)
@@ -1518,12 +1544,13 @@ def _add_guardrails_from_policies_in_metadata(
     team_metadata: Optional[dict],
     data: dict,
     metadata_variable_name: str,
+    project_metadata: Optional[dict] = None,
 ) -> None:
     """
-    Helper to resolve guardrails from policies attached to key/team metadata.
+    Helper to resolve guardrails from policies attached to key/team/project metadata.
 
     This function:
-    1. Gets policy names from key and team metadata
+    1. Gets policy names from key, team, and project metadata
     2. Resolves guardrails from those policies (including inheritance)
     3. Adds resolved guardrails to request metadata
 
@@ -1532,6 +1559,7 @@ def _add_guardrails_from_policies_in_metadata(
         team_metadata: The team metadata dictionary to check for policies
         data: The request data to update
         metadata_variable_name: The name of the metadata field in data
+        project_metadata: The project metadata dictionary to check for policies
     """
     from litellm._logging import verbose_proxy_logger
     from litellm.proxy.policy_engine.policy_registry import get_policy_registry
@@ -1559,6 +1587,15 @@ def _add_guardrails_from_policies_in_metadata(
         ):
             _premium_user_check()
             policy_names.update(team_metadata["policies"])
+
+    # Add project-level policies
+    if project_metadata and "policies" in project_metadata:
+        if (
+            isinstance(project_metadata["policies"], list)
+            and len(project_metadata["policies"]) > 0
+        ):
+            _premium_user_check()
+            policy_names.update(project_metadata["policies"])
 
     if not policy_names:
         return
@@ -1641,6 +1678,7 @@ async def move_guardrails_to_metadata(
     # Early-out: skip all guardrails processing when nothing is configured
     key_metadata = user_api_key_dict.metadata
     team_metadata = user_api_key_dict.team_metadata
+    project_metadata = user_api_key_dict.project_metadata or {}
 
     has_key_config = key_metadata and (
         "guardrails" in key_metadata or "policies" in key_metadata
@@ -1648,12 +1686,15 @@ async def move_guardrails_to_metadata(
     has_team_config = team_metadata and (
         "guardrails" in team_metadata or "policies" in team_metadata
     )
+    has_project_config = project_metadata and (
+        "guardrails" in project_metadata or "policies" in project_metadata
+    )
     has_request_config = (
         "guardrails" in data or "guardrail_config" in data or "policies" in data
     )
 
     # Only check policy engine if no local config (avoid import + registry lookup)
-    if not (has_key_config or has_team_config or has_request_config):
+    if not (has_key_config or has_team_config or has_project_config or has_request_config):
         from litellm.proxy.policy_engine.policy_registry import get_policy_registry
 
         if not get_policy_registry().is_initialized():
@@ -1661,20 +1702,22 @@ async def move_guardrails_to_metadata(
             data.pop("policies", None)
             return
 
-    # Check key-level guardrails
+    # Check key/team/project-level guardrails
     _add_guardrails_from_key_or_team_metadata(
         key_metadata=user_api_key_dict.metadata,
         team_metadata=user_api_key_dict.team_metadata,
+        project_metadata=project_metadata,
         data=data,
         metadata_variable_name=_metadata_variable_name,
     )
 
     #########################################################################################
-    # Add guardrails from policies attached to key/team metadata
+    # Add guardrails from policies attached to key/team/project metadata
     #########################################################################################
     _add_guardrails_from_policies_in_metadata(
         key_metadata=user_api_key_dict.metadata,
         team_metadata=user_api_key_dict.team_metadata,
+        project_metadata=project_metadata,
         data=data,
         metadata_variable_name=_metadata_variable_name,
     )
