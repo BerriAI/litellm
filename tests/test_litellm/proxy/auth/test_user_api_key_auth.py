@@ -714,6 +714,51 @@ class TestJWTOAuth2Coexistence:
             assert result.user_id == "machine-client-1"
 
     @pytest.mark.asyncio
+    async def test_oauth2_path_requires_premium_user(self):
+        """
+        OAuth2 token validation should fail when enterprise premium is disabled.
+        """
+        opaque_token = "some-opaque-m2m-oauth2-token"
+        general_settings = {
+            "enable_oauth2_auth": True,
+            "enable_jwt_auth": True,
+        }
+
+        mock_request = MagicMock()
+        mock_request.url.path = "/v1/chat/completions"
+        mock_request.headers = {"authorization": f"Bearer {opaque_token}"}
+        mock_request.query_params = {}
+
+        with patch(
+            "litellm.proxy.proxy_server.general_settings", general_settings
+        ), patch("litellm.proxy.proxy_server.premium_user", False), patch(
+            "litellm.proxy.proxy_server.master_key", "sk-master"
+        ), patch(
+            "litellm.proxy.proxy_server.prisma_client", None
+        ), patch(
+            "litellm.proxy.auth.user_api_key_auth.Oauth2Handler.check_oauth2_token",
+            new_callable=AsyncMock,
+        ) as mock_oauth2:
+            litellm.proxy.proxy_server.jwt_handler.update_environment(
+                prisma_client=None,
+                user_api_key_cache=DualCache(),
+                litellm_jwtauth=LiteLLM_JWTAuth(),
+            )
+
+            with pytest.raises(ProxyException) as exc_info:
+                await user_api_key_auth(
+                    request=mock_request,
+                    api_key=f"Bearer {opaque_token}",
+                )
+
+            assert exc_info.value.type == ProxyErrorTypes.auth_error
+            assert (
+                "Oauth2 token validation is only available for premium users"
+                in exc_info.value.message
+            )
+            mock_oauth2.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_both_enabled_jwt_token_skips_oauth2(self):
         """
         When both enable_jwt_auth and enable_oauth2_auth are True,
@@ -973,6 +1018,248 @@ class TestJWTOAuth2Coexistence:
             mock_oauth2.assert_called_once_with(token=jwt_token)
             mock_jwt_auth.assert_not_called()
             assert result.user_id == "machine-client-aud-list"
+
+    @pytest.mark.asyncio
+    async def test_routing_override_routes_jwt_to_oauth2_when_oauth2_globally_disabled(
+        self,
+    ):
+        """
+        If enable_oauth2_auth is false, JWT tokens matching routing_overrides
+        should still route to OAuth2 introspection.
+        """
+        jwt_token = (
+            "eyJhbGciOiJSUzI1NiJ9."
+            "eyJpc3MiOiJtYWNoaW5lLWlzc3Vlci5leGFtcGxlLmNvbSIsImNsaWVudF9pZCI6Ik1JRF9MSVRFTExNIn0."
+            "c2ln"
+        )
+        general_settings = {
+            "enable_oauth2_auth": False,
+            "enable_jwt_auth": True,
+        }
+        mock_oauth2_response = UserAPIKeyAuth(
+            api_key=jwt_token,
+            user_id="machine-client-override-oauth2-off",
+        )
+
+        mock_request = MagicMock()
+        mock_request.url.path = "/v1/chat/completions"
+        mock_request.headers = {"authorization": f"Bearer {jwt_token}"}
+        mock_request.query_params = {}
+
+        with patch(
+            "litellm.proxy.proxy_server.general_settings", general_settings
+        ), patch("litellm.proxy.proxy_server.premium_user", True), patch(
+            "litellm.proxy.proxy_server.master_key", "sk-master"
+        ), patch(
+            "litellm.proxy.proxy_server.prisma_client", None
+        ), patch(
+            "litellm.proxy.auth.user_api_key_auth.Oauth2Handler.check_oauth2_token",
+            new_callable=AsyncMock,
+            return_value=mock_oauth2_response,
+        ) as mock_oauth2, patch(
+            "litellm.proxy.auth.user_api_key_auth.JWTAuthManager.auth_builder",
+            new_callable=AsyncMock,
+        ) as mock_jwt_auth:
+            litellm.proxy.proxy_server.jwt_handler.update_environment(
+                prisma_client=None,
+                user_api_key_cache=DualCache(),
+                litellm_jwtauth=LiteLLM_JWTAuth(
+                    routing_overrides=[
+                        JWTRoutingOverride(
+                            iss="machine-issuer.example.com",
+                            client_id="MID_LITELLM",
+                            path="oauth2",
+                        )
+                    ]
+                ),
+            )
+
+            result = await user_api_key_auth(
+                request=mock_request,
+                api_key=f"Bearer {jwt_token}",
+            )
+
+            mock_oauth2.assert_called_once_with(token=jwt_token)
+            mock_jwt_auth.assert_not_called()
+            assert result.user_id == "machine-client-override-oauth2-off"
+
+    @pytest.mark.asyncio
+    async def test_opaque_token_does_not_use_oauth2_when_oauth2_globally_disabled(
+        self,
+    ):
+        """
+        With enable_oauth2_auth=false, opaque tokens must not be sent to OAuth2.
+        """
+        opaque_token = "sk-ui-session-token"
+        general_settings = {
+            "enable_oauth2_auth": False,
+            "enable_jwt_auth": True,
+        }
+
+        mock_request = MagicMock()
+        mock_request.url.path = "/v1/chat/completions"
+        mock_request.headers = {"authorization": f"Bearer {opaque_token}"}
+        mock_request.query_params = {}
+
+        with patch(
+            "litellm.proxy.proxy_server.general_settings", general_settings
+        ), patch("litellm.proxy.proxy_server.premium_user", True), patch(
+            "litellm.proxy.proxy_server.master_key", "sk-master"
+        ), patch(
+            "litellm.proxy.proxy_server.prisma_client", None
+        ), patch(
+            "litellm.proxy.auth.user_api_key_auth.Oauth2Handler.check_oauth2_token",
+            new_callable=AsyncMock,
+        ) as mock_oauth2:
+            with pytest.raises(ProxyException) as exc_info:
+                await user_api_key_auth(
+                    request=mock_request,
+                    api_key=f"Bearer {opaque_token}",
+                )
+
+            assert exc_info.value.type in (
+                ProxyErrorTypes.auth_error,
+                ProxyErrorTypes.no_db_connection,
+            )
+            mock_oauth2.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_routing_override_on_info_route_uses_oauth2_when_oauth2_globally_disabled(
+        self,
+    ):
+        """
+        With enable_oauth2_auth=false, a JWT matching routing_overrides should
+        still route to OAuth2 on info routes.
+        """
+        jwt_token = (
+            "eyJhbGciOiJSUzI1NiJ9."
+            "eyJpc3MiOiJtYWNoaW5lLWlzc3Vlci5leGFtcGxlLmNvbSIsImNsaWVudF9pZCI6Ik1JRF9MSVRFTExNIn0."
+            "c2ln"
+        )
+        general_settings = {
+            "enable_oauth2_auth": False,
+            "enable_jwt_auth": True,
+        }
+        mock_oauth2_response = UserAPIKeyAuth(
+            api_key=jwt_token,
+            user_id="machine-client-info-override-oauth2-off",
+        )
+
+        mock_request = MagicMock()
+        mock_request.url.path = "/team/list"
+        mock_request.headers = {"authorization": f"Bearer {jwt_token}"}
+        mock_request.query_params = {}
+
+        with patch(
+            "litellm.proxy.proxy_server.general_settings", general_settings
+        ), patch("litellm.proxy.proxy_server.premium_user", True), patch(
+            "litellm.proxy.proxy_server.master_key", "sk-master"
+        ), patch(
+            "litellm.proxy.proxy_server.prisma_client", None
+        ), patch(
+            "litellm.proxy.auth.user_api_key_auth.Oauth2Handler.check_oauth2_token",
+            new_callable=AsyncMock,
+            return_value=mock_oauth2_response,
+        ) as mock_oauth2, patch(
+            "litellm.proxy.auth.user_api_key_auth.JWTAuthManager.auth_builder",
+            new_callable=AsyncMock,
+        ) as mock_jwt_auth:
+            litellm.proxy.proxy_server.jwt_handler.update_environment(
+                prisma_client=None,
+                user_api_key_cache=DualCache(),
+                litellm_jwtauth=LiteLLM_JWTAuth(
+                    routing_overrides=[
+                        JWTRoutingOverride(
+                            iss="machine-issuer.example.com",
+                            client_id="MID_LITELLM",
+                            path="oauth2",
+                        )
+                    ]
+                ),
+            )
+
+            result = await user_api_key_auth(
+                request=mock_request,
+                api_key=f"Bearer {jwt_token}",
+            )
+
+            mock_oauth2.assert_called_once_with(token=jwt_token)
+            mock_jwt_auth.assert_not_called()
+            assert result.user_id == "machine-client-info-override-oauth2-off"
+
+    @pytest.mark.asyncio
+    async def test_routing_override_on_management_route_does_not_use_oauth2(self):
+        """
+        JWT routing_overrides should not force OAuth2 on management routes.
+        """
+        jwt_token = (
+            "eyJhbGciOiJSUzI1NiJ9."
+            "eyJpc3MiOiJtYWNoaW5lLWlzc3Vlci5leGFtcGxlLmNvbSIsImNsaWVudF9pZCI6Ik1JRF9MSVRFTExNIn0."
+            "c2ln"
+        )
+        general_settings = {
+            "enable_oauth2_auth": False,
+            "enable_jwt_auth": True,
+        }
+        mock_jwt_result = {
+            "is_proxy_admin": True,
+            "team_object": None,
+            "user_object": None,
+            "end_user_object": None,
+            "org_object": None,
+            "token": jwt_token,
+            "team_id": None,
+            "user_id": "jwt-admin-user",
+            "end_user_id": None,
+            "org_id": None,
+            "team_membership": None,
+            "jwt_claims": {
+                "iss": "machine-issuer.example.com",
+                "client_id": "MID_LITELLM",
+            },
+        }
+
+        mock_request = MagicMock()
+        mock_request.url.path = "/key/generate"
+        mock_request.headers = {"authorization": f"Bearer {jwt_token}"}
+        mock_request.query_params = {}
+
+        with patch(
+            "litellm.proxy.proxy_server.general_settings", general_settings
+        ), patch("litellm.proxy.proxy_server.premium_user", True), patch(
+            "litellm.proxy.proxy_server.master_key", "sk-master"
+        ), patch(
+            "litellm.proxy.proxy_server.prisma_client", None
+        ), patch(
+            "litellm.proxy.auth.user_api_key_auth.Oauth2Handler.check_oauth2_token",
+            new_callable=AsyncMock,
+        ) as mock_oauth2, patch(
+            "litellm.proxy.auth.user_api_key_auth.JWTAuthManager.auth_builder",
+            new_callable=AsyncMock,
+            return_value=mock_jwt_result,
+        ) as mock_jwt_auth:
+            litellm.proxy.proxy_server.jwt_handler.update_environment(
+                prisma_client=None,
+                user_api_key_cache=DualCache(),
+                litellm_jwtauth=LiteLLM_JWTAuth(
+                    routing_overrides=[
+                        JWTRoutingOverride(
+                            iss="machine-issuer.example.com",
+                            client_id="MID_LITELLM",
+                            path="oauth2",
+                        )
+                    ]
+                ),
+            )
+
+            result = await user_api_key_auth(
+                request=mock_request,
+                api_key=f"Bearer {jwt_token}",
+            )
+
+            mock_oauth2.assert_not_called()
+            mock_jwt_auth.assert_called_once()
+            assert result.user_id == "jwt-admin-user"
 
     @pytest.mark.asyncio
     async def test_only_oauth2_enabled_handles_all_tokens(self):

@@ -141,6 +141,17 @@ MCP_TOOL_LISTING_TIMEOUT = float(os.getenv("LITELLM_MCP_TOOL_LISTING_TIMEOUT", "
 MCP_METADATA_TIMEOUT = float(os.getenv("LITELLM_MCP_METADATA_TIMEOUT", "10.0"))
 MCP_HEALTH_CHECK_TIMEOUT = float(os.getenv("LITELLM_MCP_HEALTH_CHECK_TIMEOUT", "10.0"))
 
+# Allowlist of commands permitted for MCP stdio transport.
+# Prevents arbitrary command execution via /mcp-rest/test/* endpoints or server creation.
+# Note: allowlisted runtimes can still execute code via args (e.g. python -c "...").
+# This is an accepted residual risk since these endpoints require PROXY_ADMIN.
+# Extend via LITELLM_MCP_STDIO_EXTRA_COMMANDS env var (comma-separated).
+_MCP_STDIO_EXTRA_COMMANDS = os.getenv("LITELLM_MCP_STDIO_EXTRA_COMMANDS", "")
+MCP_STDIO_ALLOWED_COMMANDS: frozenset = frozenset(
+    {"npx", "uvx", "python", "python3", "node", "docker", "deno"}
+    | (set(_MCP_STDIO_EXTRA_COMMANDS.split(",")) - {""})
+)
+
 LITELLM_UI_ALLOW_HEADERS = [
     "x-litellm-semantic-filter",
     "x-litellm-semantic-filter-tools",
@@ -1366,6 +1377,9 @@ PROXY_BATCH_POLLING_INTERVAL = int(os.getenv("PROXY_BATCH_POLLING_INTERVAL", 360
 MAX_OBJECTS_PER_POLL_CYCLE = max(1, int(os.getenv("MAX_OBJECTS_PER_POLL_CYCLE", 50)))
 MANAGED_OBJECT_STALENESS_CUTOFF_DAYS = max(
     1, int(os.getenv("MANAGED_OBJECT_STALENESS_CUTOFF_DAYS", 7))
+)
+STALE_OBJECT_CLEANUP_BATCH_SIZE = max(
+    1, int(os.getenv("STALE_OBJECT_CLEANUP_BATCH_SIZE", 1000))
 )
 # Set PROXY_BATCH_POLLING_ENABLED=false to disable the CheckBatchCost and
 # CheckResponsesCost background polling jobs entirely (e.g. to avoid DB load on
