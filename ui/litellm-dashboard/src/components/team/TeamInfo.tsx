@@ -591,11 +591,18 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         updateData.access_group_ids = values.access_group_ids;
       }
 
-      // Handle router_settings - read fresh values from DOM at save time
+      // Handle router_settings - read fresh values from DOM at save time.
+      // Only include if the user actually configured something meaningful
+      // (exclude defaults like enable_tag_filtering: false and empty arrays).
       const currentRouterSettings = routerSettingsRef.current?.getValue();
       if (currentRouterSettings?.router_settings) {
         const hasValues = Object.values(currentRouterSettings.router_settings).some(
-          (value) => value !== null && value !== undefined && value !== "",
+          (value) =>
+            value !== null &&
+            value !== undefined &&
+            value !== "" &&
+            value !== false &&
+            !(Array.isArray(value) && value.length === 0),
         );
         if (hasValues) {
           updateData.router_settings = currentRouterSettings.router_settings;
