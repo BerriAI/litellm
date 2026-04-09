@@ -1561,6 +1561,12 @@ class CustomStreamWrapper:
                         and self.stream_options["include_usage"] is True
                     ):
                         return model_response
+                    # Still return model_response when it carries usage data
+                    # so trailing usage chunks (e.g. from vLLM) get accumulated
+                    # in self.chunks for calculate_total_usage(). The __next__
+                    # loop will strip the usage field and skip empty responses.
+                    if getattr(model_response, "usage", None) is not None:
+                        return model_response
                     return
             ## CHECK FOR TOOL USE
 

@@ -1543,6 +1543,92 @@ def test_usage_chunk_after_finish_reason_updates_hidden_params(logging_obj):
         f"Expected completion_tokens=135 from provider, got {hidden_usage.completion_tokens}"
     )
 
+def test_usage_chunk_empty_choices_vllm_pattern(logging_obj):
+    """
+    Test that usage data from a trailing chunk with an empty choices array
+    (as sent by vLLM) is preserved in _hidden_params.
+
+    Reproduces issue #25389: vLLM sends usage in a separate SSE chunk after
+    finish_reason with choices=[]. Without the fix, chunk_creator() returns
+    None for this chunk and the usage is lost.
+    """
+    # Simulate vLLM's streaming pattern:
+    # 1) content chunk
+    # 2) finish_reason chunk
+    # 3) usage-only chunk with empty choices array
+    chunks = [
+        ModelResponseStream(
+            id="chatcmpl-abc",
+            object="chat.completion.chunk",
+            created=1000000,
+            model="vllm/qwen",
+            choices=[
+                StreamingChoices(
+                    index=0,
+                    delta=Delta(role="assistant", content="Hello"),
+                    finish_reason=None,
+                )
+            ],
+        ),
+        ModelResponseStream(
+            id="chatcmpl-abc",
+            object="chat.completion.chunk",
+            created=1000000,
+            model="vllm/qwen",
+            choices=[
+                StreamingChoices(
+                    index=0,
+                    delta=Delta(content=""),
+                    finish_reason="stop",
+                )
+            ],
+        ),
+        # vLLM sends usage in a chunk with an EMPTY choices array
+        ModelResponseStream(
+            id="chatcmpl-abc",
+            object="chat.completion.chunk",
+            created=1000000,
+            model="vllm/qwen",
+            choices=[],
+            usage=Usage(
+                prompt_tokens=26,
+                completion_tokens=242,
+                total_tokens=268,
+            ),
+        ),
+    ]
+
+    wrapper = CustomStreamWrapper(
+        completion_stream=ModelResponseListIterator(model_responses=chunks),
+        model="vllm/qwen",
+        logging_obj=logging_obj,
+        custom_llm_provider="openai",
+        stream_options=None,
+    )
+
+    collected = []
+    for chunk in wrapper:
+        collected.append(chunk)
+
+    assert len(collected) > 0, "Expected at least one chunk"
+
+    # The empty-choices usage chunk must NOT leak as a visible chunk
+    for c in collected:
+        assert len(c.choices) > 0, (
+            "Empty-choices usage chunk should not be yielded to the caller"
+        )
+
+    last_chunk = collected[-1]
+    hidden_usage = last_chunk._hidden_params.get("usage")
+    assert hidden_usage is not None, "Expected usage in _hidden_params"
+    assert hidden_usage.prompt_tokens == 26, (
+        f"Expected prompt_tokens=26, got {hidden_usage.prompt_tokens}"
+    )
+    assert hidden_usage.completion_tokens == 242, (
+        f"Expected completion_tokens=242, got {hidden_usage.completion_tokens}"
+    )
+
+
 @pytest.mark.asyncio
 async def test_custom_stream_wrapper_aclose():
     """Test that aclose() delegates to the underlying completion_stream's aclose()"""
