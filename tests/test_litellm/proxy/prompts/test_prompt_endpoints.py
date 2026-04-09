@@ -248,7 +248,9 @@ class TestPromptVersionsEndpoint:
         }
 
         # Mock the IN_MEMORY_PROMPT_REGISTRY at the import location
-        with patch("litellm.proxy.prompts.prompt_registry.IN_MEMORY_PROMPT_REGISTRY") as mock_registry:
+        with patch(
+            "litellm.proxy.prompts.prompt_registry.IN_MEMORY_PROMPT_REGISTRY"
+        ) as mock_registry, patch("litellm.proxy.proxy_server.prisma_client", None):
             mock_registry.IN_MEMORY_PROMPTS = mock_prompts
 
             # Test with base prompt ID
@@ -293,7 +295,9 @@ class TestPromptVersionsEndpoint:
             user_role=LitellmUserRoles.PROXY_ADMIN
         )
 
-        with patch("litellm.proxy.prompts.prompt_registry.IN_MEMORY_PROMPT_REGISTRY") as mock_registry:
+        with patch(
+            "litellm.proxy.prompts.prompt_registry.IN_MEMORY_PROMPT_REGISTRY"
+        ) as mock_registry, patch("litellm.proxy.proxy_server.prisma_client", None):
             mock_registry.IN_MEMORY_PROMPTS = {}
 
             with pytest.raises(HTTPException) as exc_info:
@@ -304,4 +308,3 @@ class TestPromptVersionsEndpoint:
 
             assert exc_info.value.status_code == 404
             assert "No versions found" in exc_info.value.detail
-

@@ -26,6 +26,7 @@ from pydantic import BaseModel
 import litellm
 from litellm import ModelResponse
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.bridges.completion_transformation import (
     CompletionTransformationBridge,
@@ -39,7 +40,6 @@ from litellm.types.llms.openai import (
     ResponsesAPIStreamEvents,
 )
 from litellm.types.utils import GenericStreamingChunk, ModelResponseStream
-from litellm.utils import CustomStreamWrapper
 
 if TYPE_CHECKING:
     from openai.types.responses import ResponseInputImageParam
