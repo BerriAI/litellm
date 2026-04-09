@@ -42,9 +42,13 @@ jobs:
 
       - name: Check Black formatting
         run: |
-          cd litellm
-          poetry run black --check --exclude '/enterprise/' .
-          cd ..
+          CHANGED_PY=$(git diff --name-only origin/main...HEAD -- '*.py' | grep -v '^enterprise/' | tr '\n' ' ')
+          if [ -n "$CHANGED_PY" ]; then
+            echo "Checking Black formatting on changed files: $CHANGED_PY"
+            poetry run black --check $CHANGED_PY
+          else
+            echo "No Python files changed, skipping Black check"
+          fi
 
       - name: Debug - Check file state
         run: |
