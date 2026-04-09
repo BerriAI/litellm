@@ -362,6 +362,176 @@ async def test_acompletion_with_mcp_auto_exec_performs_follow_up(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_acompletion_with_mcp_non_streaming_auto_exec_supports_multiple_rounds(
+    monkeypatch,
+):
+    tools = [
+        {
+            "type": "mcp",
+            "server_url": "litellm_proxy/mcp/local",
+            "require_approval": "never",
+        }
+    ]
+    openai_tools = [{"type": "function", "function": {"name": "local_search"}}]
+
+    first_tool_call = {
+        "id": "call-1",
+        "type": "function",
+        "function": {"name": "local_search", "arguments": "{}"},
+    }
+    second_tool_call = {
+        "id": "call-2",
+        "type": "function",
+        "function": {"name": "local_search", "arguments": '{"phase":"second"}'},
+    }
+
+    first_response = ModelResponse(
+        id="resp-1",
+        model="test-model",
+        created=1234567890,
+        object="chat.completion",
+        choices=[
+            {
+                "index": 0,
+                "finish_reason": "tool_calls",
+                "message": {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [first_tool_call],
+                },
+            }
+        ],
+    )
+    second_response = ModelResponse(
+        id="resp-2",
+        model="test-model",
+        created=1234567891,
+        object="chat.completion",
+        choices=[
+            {
+                "index": 0,
+                "finish_reason": "tool_calls",
+                "message": {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [second_tool_call],
+                },
+            }
+        ],
+    )
+    final_response = ModelResponse(
+        id="resp-3",
+        model="test-model",
+        created=1234567892,
+        object="chat.completion",
+        choices=[
+            {
+                "index": 0,
+                "finish_reason": "stop",
+                "message": {
+                    "role": "assistant",
+                    "content": "final answer",
+                },
+            }
+        ],
+    )
+
+    mock_acompletion = AsyncMock(
+        side_effect=[first_response, second_response, final_response]
+    )
+
+    monkeypatch.setattr(
+        LiteLLM_Proxy_MCP_Handler,
+        "_should_use_litellm_mcp_gateway",
+        staticmethod(lambda tools: True),
+    )
+    monkeypatch.setattr(
+        LiteLLM_Proxy_MCP_Handler,
+        "_parse_mcp_tools",
+        staticmethod(lambda tools: (tools, [])),
+    )
+
+    async def mock_process(**_):
+        return (tools, {"local_search": "local"})
+
+    monkeypatch.setattr(
+        LiteLLM_Proxy_MCP_Handler,
+        "_process_mcp_tools_without_openai_transform",
+        mock_process,
+    )
+    monkeypatch.setattr(
+        LiteLLM_Proxy_MCP_Handler,
+        "_transform_mcp_tools_to_openai",
+        staticmethod(lambda *_, **__: openai_tools),
+    )
+    monkeypatch.setattr(
+        LiteLLM_Proxy_MCP_Handler,
+        "_should_auto_execute_tools",
+        staticmethod(lambda **_: True),
+    )
+
+    async def mock_execute(**kwargs):
+        tool_calls = kwargs["tool_calls"]
+        tool_id = tool_calls[0]["id"]
+        return [
+            {
+                "tool_call_id": tool_id,
+                "name": "local_search",
+                "result": f"result-for-{tool_id}",
+            }
+        ]
+
+    monkeypatch.setattr(
+        LiteLLM_Proxy_MCP_Handler,
+        "_execute_tool_calls",
+        mock_execute,
+    )
+    monkeypatch.setattr(
+        ResponsesAPIRequestUtils,
+        "extract_mcp_headers_from_request",
+        staticmethod(lambda **_: (None, None, None, None)),
+    )
+
+    with patch("litellm.acompletion", mock_acompletion), patch.object(
+        chat_completions_handler,
+        "litellm_acompletion",
+        mock_acompletion,
+        create=True,
+    ):
+        result = await acompletion_with_mcp(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": "hello"}],
+            tools=tools,
+            stream=False,
+            tool_choice="required",
+        )
+
+    assert isinstance(result, ModelResponse)
+    assert result.choices[0].message.content == "final answer"
+    assert mock_acompletion.await_count == 3
+
+    first_call = mock_acompletion.await_args_list[0].kwargs
+    second_call = mock_acompletion.await_args_list[1].kwargs
+    third_call = mock_acompletion.await_args_list[2].kwargs
+
+    assert first_call["stream"] is False
+    assert first_call["tool_choice"] == "required"
+    assert second_call["stream"] is False
+    assert "tool_choice" not in second_call
+    assert third_call["stream"] is False
+    assert "tool_choice" not in third_call
+    assert any(msg.get("role") == "tool" for msg in second_call["messages"])
+    assert any(msg.get("role") == "tool" for msg in third_call["messages"])
+
+    provider_fields = result.choices[0].message.provider_specific_fields
+    assert provider_fields is not None
+    assert len(provider_fields["mcp_tool_calls"]) == 2
+    assert len(provider_fields["mcp_call_results"]) == 2
+    assert provider_fields["mcp_call_results"][0]["tool_call_id"] == "call-1"
+    assert provider_fields["mcp_call_results"][1]["tool_call_id"] == "call-2"
+
+
+@pytest.mark.asyncio
 async def test_acompletion_with_mcp_adds_metadata_to_streaming(monkeypatch):
     """
     Test that acompletion_with_mcp adds MCP metadata to CustomStreamWrapper
