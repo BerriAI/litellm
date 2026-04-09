@@ -130,7 +130,10 @@ async def run_async_fallback(
                 kwargs["model"] = mg
             elif isinstance(mg, dict):
                 kwargs.update(mg)
-            kwargs.setdefault("metadata", {}).update(
+            _metadata_key = (
+                "litellm_metadata" if "litellm_metadata" in kwargs else "metadata"
+            )
+            kwargs.setdefault(_metadata_key, {}).update(
                 {"model_group": kwargs.get("model", None)}
             )  # update model_group used, if fallbacks are done
             fallback_depth = fallback_depth + 1
