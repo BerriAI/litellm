@@ -110,7 +110,7 @@ class LemonadeChatConfig(OpenAILikeChatConfig):
             or get_secret_str("LEMONADE_API_BASE")
             or "http://localhost:8000/api/v1"
         )  # type: ignore
-        # Lemonade doesn't check the key
+        # Use explicitly provided key, fall back to env var, then to default
         key = (
             api_key
             or get_secret_str("LEMONADE_API_KEY")
