@@ -60,7 +60,17 @@ const McpOAuthCallbackContent = () => {
     }
 
     const returnUrl = getSecureItem(RETURN_URL_STORAGE_KEY);
-    const destination = returnUrl || resolveDefaultRedirect();
+    let destination = resolveDefaultRedirect();
+    if (returnUrl) {
+      try {
+        const parsed = new URL(returnUrl, window.location.origin);
+        if (parsed.origin === window.location.origin) {
+          destination = parsed.href;
+        }
+      } catch {
+        // invalid URL — fall through to default
+      }
+    }
     window.location.replace(destination);
   }, [payload]);
 
