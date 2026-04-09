@@ -15,7 +15,21 @@ from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.utils import ModelResponse
 from litellm.utils import CustomStreamWrapper
 
-MAX_CHAT_MCP_AUTO_EXECUTION_ROUNDS = 6
+DEFAULT_CHAT_MCP_AUTO_EXECUTION_ROUNDS = 6
+
+
+def _get_max_chat_mcp_auto_execution_rounds() -> int:
+    import litellm
+
+    configured_rounds = getattr(
+        litellm,
+        "max_mcp_auto_execution_rounds",
+        DEFAULT_CHAT_MCP_AUTO_EXECUTION_ROUNDS,
+    )
+    try:
+        return max(1, int(configured_rounds))
+    except (TypeError, ValueError):
+        return DEFAULT_CHAT_MCP_AUTO_EXECUTION_ROUNDS
 
 
 def _add_mcp_metadata_to_response(
@@ -615,7 +629,7 @@ async def acompletion_with_mcp(  # noqa: PLR0915
     aggregated_tool_calls: List[Any] = []
     aggregated_tool_results: List[Any] = []
 
-    for _round_idx in range(MAX_CHAT_MCP_AUTO_EXECUTION_ROUNDS):
+    for _round_idx in range(_get_max_chat_mcp_auto_execution_rounds()):
         if not isinstance(response, ModelResponse):
             return response
 
@@ -631,8 +645,6 @@ async def acompletion_with_mcp(  # noqa: PLR0915
                 tool_results=aggregated_tool_results or None,
             )
             return response
-
-        aggregated_tool_calls.extend(tool_calls)
 
         tool_results = await LiteLLM_Proxy_MCP_Handler._execute_tool_calls(
             tool_server_map=tool_server_map,
@@ -655,6 +667,7 @@ async def acompletion_with_mcp(  # noqa: PLR0915
             )
             return response
 
+        aggregated_tool_calls.extend(tool_calls)
         aggregated_tool_results.extend(tool_results)
         current_messages = LiteLLM_Proxy_MCP_Handler._create_follow_up_messages_for_chat(
             original_messages=current_messages,
