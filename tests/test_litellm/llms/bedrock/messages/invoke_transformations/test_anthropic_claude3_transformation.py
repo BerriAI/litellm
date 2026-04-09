@@ -1,4 +1,5 @@
 import asyncio
+import copy
 import json
 import os
 import sys
@@ -11,7 +12,10 @@ import pytest
 sys.path.insert(0, os.path.abspath("../../../../../.."))
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.llms.bedrock.common_utils import remove_custom_field_from_tools
+from litellm.llms.bedrock.common_utils import (
+    normalize_tool_input_schema_types_for_bedrock_invoke,
+    remove_custom_field_from_tools,
+)
 from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation import (
     AmazonAnthropicClaudeMessagesConfig,
     AmazonAnthropicClaudeMessagesStreamDecoder,

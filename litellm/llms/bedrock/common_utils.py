@@ -6,7 +6,7 @@ Common utilities used across bedrock chat/embedding/image generation
 
 import json
 import os
-from typing import TYPE_CHECKING, Dict, List, Literal, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union
 
 if TYPE_CHECKING:
     from litellm.types.llms.bedrock import BedrockCreateBatchRequest
@@ -68,6 +68,61 @@ def remove_custom_field_from_tools(request_body: dict) -> None:
     for tool in tools:
         if isinstance(tool, dict):
             tool.pop("custom", None)
+
+
+def normalize_json_schema_custom_types_to_object(schema: dict) -> None:
+    """
+    In-place: replace JSON Schema ``type: \"custom\"`` with ``\"object\"`` recursively.
+
+    Anthropic / Claude Code use ``custom`` for tool schemas; Bedrock Invoke and
+    Bedrock Converse only accept standard JSON Schema type strings.
+    """
+
+    def _fix_schema(node: Any) -> None:
+        if not isinstance(node, dict):
+            return
+        if node.get("type") == "custom":
+            node["type"] = "object"
+        items = node.get("items")
+        if isinstance(items, dict):
+            _fix_schema(items)
+        addl = node.get("additionalProperties")
+        if isinstance(addl, dict):
+            _fix_schema(addl)
+        props = node.get("properties")
+        if isinstance(props, dict):
+            for sub in props.values():
+                _fix_schema(sub)
+        for combiner in ("allOf", "anyOf", "oneOf"):
+            arr = node.get(combiner)
+            if isinstance(arr, list):
+                for sub in arr:
+                    _fix_schema(sub)
+
+    _fix_schema(schema)
+
+
+def normalize_tool_input_schema_types_for_bedrock_invoke(request_body: dict) -> None:
+    """
+    Bedrock Invoke (Anthropic Messages) validates ``input_schema`` as JSON Schema.
+    Anthropic's API allows ``type: \"custom\"`` for Claude Code custom tools; Bedrock
+    rejects it with: ``tools.0.custom.input_schema.type: Input should be 'object'``.
+
+    Normalizes ``type: \"custom\"`` to ``\"object\"`` throughout each tool's
+    ``input_schema`` (recursive for nested properties, items, combinators).
+
+    Args:
+        request_body: Request dictionary to modify in-place.
+    """
+    tools = request_body.get("tools")
+    if not tools or not isinstance(tools, list):
+        return
+    for tool in tools:
+        if not isinstance(tool, dict):
+            continue
+        input_schema = tool.get("input_schema")
+        if isinstance(input_schema, dict):
+            normalize_json_schema_custom_types_to_object(input_schema)
 
 
 class AmazonBedrockGlobalConfig:
