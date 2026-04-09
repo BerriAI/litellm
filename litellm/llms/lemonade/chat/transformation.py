@@ -111,11 +111,7 @@ class LemonadeChatConfig(OpenAILikeChatConfig):
             or "http://localhost:8000/api/v1"
         )  # type: ignore
         # Use explicitly provided key, fall back to env var, then to default
-        key = (
-            api_key
-            or get_secret_str("LEMONADE_API_KEY")
-            or "lemonade"
-        )
+        key = api_key or get_secret_str("LEMONADE_API_KEY") or "lemonade"
         return api_base, key
 
     def transform_response(
