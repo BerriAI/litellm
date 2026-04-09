@@ -129,8 +129,6 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
 
                 if should_start_new_block and not self.sent_content_block_finish:
                     # Queue the sequence: content_block_stop -> content_block_start
-                    # The trigger chunk itself is not emitted as a delta since the
-                    # content_block_start already carries the relevant information.
                     self.chunk_queue.append(
                         {
                             "type": "content_block_stop",
@@ -144,6 +142,13 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                             "content_block": self.current_content_block_start,
                         }
                     )
+                    # Also queue the delta if it carries content — some providers
+                    # (e.g. Gemini) send tool arguments in the same chunk as the
+                    # function name, so dropping the delta loses those arguments.
+                    if processed_chunk.get("type") == "content_block_delta":
+                        delta = processed_chunk.get("delta", {})
+                        if delta.get("partial_json") or delta.get("text") or delta.get("thinking"):
+                            self.chunk_queue.append(processed_chunk)
                     self.sent_content_block_finish = False
                     return self.chunk_queue.popleft()
 
@@ -305,8 +310,6 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 if not self.queued_usage_chunk:
                     if should_start_new_block and not self.sent_content_block_finish:
                         # Queue the sequence: content_block_stop -> content_block_start
-                        # The trigger chunk itself is not emitted as a delta since the
-                        # content_block_start already carries the relevant information.
 
                         # 1. Stop current content block
                         self.chunk_queue.append(
@@ -324,6 +327,15 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                                 "content_block": self.current_content_block_start,
                             }
                         )
+
+                        # 3. Queue the delta if it carries content — some providers
+                        # (e.g. Gemini) send tool arguments in the same chunk as
+                        # the function name, so dropping the delta loses those
+                        # arguments.
+                        if processed_chunk.get("type") == "content_block_delta":
+                            delta = processed_chunk.get("delta", {})
+                            if delta.get("partial_json") or delta.get("text") or delta.get("thinking"):
+                                self.chunk_queue.append(processed_chunk)
 
                         # Reset state for new block
                         self.sent_content_block_finish = False
