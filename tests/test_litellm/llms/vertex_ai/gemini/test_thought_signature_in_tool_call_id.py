@@ -331,9 +331,9 @@ def test_sibling_thought_part_propagates_to_all_parallel_calls() -> None:
     # Both function calls must carry the thought signature from the sibling thought part.
     for i, tool in enumerate(tools):
         sig = tool.get("provider_specific_fields", {}).get("thought_signature")
-        assert sig == thought_signature, (
-            f"tool[{i}] expected thought_signature={thought_signature!r}, got {sig!r}"
-        )
-        assert THOUGHT_SIGNATURE_SEPARATOR in tool["id"], (
-            f"tool[{i}] thought signature should be embedded in ID"
-        )
+        assert (
+            sig == thought_signature
+        ), f"tool[{i}] expected thought_signature={thought_signature!r}, got {sig!r}"
+        assert (
+            THOUGHT_SIGNATURE_SEPARATOR in tool["id"]
+        ), f"tool[{i}] thought signature should be embedded in ID"
