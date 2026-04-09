@@ -55,9 +55,7 @@ _RETRY_BACKOFF_BASE = 1.0  # seconds; doubles each retry
 class MavvrikStreamer:
     """Upload NDJSON+gzip cost data to GCS via a Mavvrik-issued signed URL."""
 
-    def __init__(
-        self, api_key: str, api_endpoint: str, connection_id: str
-    ) -> None:
+    def __init__(self, api_key: str, api_endpoint: str, connection_id: str) -> None:
         self.api_key = api_key
         # Strip trailing slash for consistent URL construction
         self.api_endpoint = api_endpoint.rstrip("/")

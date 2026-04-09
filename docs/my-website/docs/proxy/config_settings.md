@@ -602,6 +602,12 @@ router_settings:
 | MCP_OAUTH2_TOKEN_CACHE_MAX_SIZE | Maximum number of entries in MCP OAuth2 token cache. Default is 200
 | MCP_OAUTH2_TOKEN_CACHE_MIN_TTL | Minimum TTL in seconds for MCP OAuth2 token cache. Default is 10
 | MCP_OAUTH2_TOKEN_EXPIRY_BUFFER_SECONDS | Seconds to subtract from token expiry when computing cache TTL. Default is 60
+| MAVVRIK_API_KEY | API key for Mavvrik cost analytics integration
+| MAVVRIK_API_ENDPOINT | Base URL for Mavvrik API endpoint
+| MAVVRIK_CONNECTION_ID | Connection ID for Mavvrik data submission
+| MAVVRIK_EXPORT_INTERVAL_MINUTES | Interval in minutes between Mavvrik cost data exports. Default is 60
+| MAVVRIK_MAX_FETCHED_DATA_RECORDS | Maximum number of spend records to fetch per Mavvrik export cycle. Default is 50000
+| MAVVRIK_TIMEZONE | Timezone for date handling in Mavvrik exports. Default is UTC
 | DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT | Default token count for mock response completions. Default is 20
 | DEFAULT_MOCK_RESPONSE_PROMPT_TOKEN_COUNT | Default token count for mock response prompts. Default is 10
 | DEFAULT_MODEL_CREATED_AT_TIME | Default creation timestamp for models. Default is 1677610602

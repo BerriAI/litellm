@@ -232,8 +232,12 @@ async def init_mavvrik_settings(
                 connection_id=request.connection_id,
                 timezone=request.timezone,
             )
-            litellm.logging_callback_manager.add_litellm_success_callback(mavvrik_logger)
-            litellm.logging_callback_manager.add_litellm_async_success_callback(mavvrik_logger)
+            litellm.logging_callback_manager.add_litellm_success_callback(
+                mavvrik_logger
+            )
+            litellm.logging_callback_manager.add_litellm_async_success_callback(
+                mavvrik_logger
+            )
 
             if "mavvrik" in litellm.success_callback:
                 litellm.success_callback.remove("mavvrik")
@@ -350,7 +354,9 @@ async def update_mavvrik_settings(
             api_endpoint=_pick(request.api_endpoint, "api_endpoint"),
             connection_id=_pick(request.connection_id, "connection_id"),
             timezone=_pick(request.timezone, "timezone", "UTC"),
-            marker=request.marker if request.marker is not None else current.get("marker"),
+            marker=(
+                request.marker if request.marker is not None else current.get("marker")
+            ),
         )
         return MavvrikInitResponse(
             message="Mavvrik settings updated successfully", status="success"
@@ -399,9 +405,7 @@ async def delete_mavvrik_settings(
                 detail={"error": "Mavvrik is not configured"},
             )
 
-        await prisma_client.db.litellm_config.delete(
-            where={"param_name": _CONFIG_KEY}
-        )
+        await prisma_client.db.litellm_config.delete(where={"param_name": _CONFIG_KEY})
 
         # Deregister the scheduler job if present
         try:
@@ -449,9 +453,10 @@ async def dry_run_mavvrik_export(
 
     try:
         settings = await _get_mavvrik_settings()
-        date_str = request.date_str or (
-            datetime.now(_tz.utc).date() - timedelta(days=1)
-        ).isoformat()
+        date_str = (
+            request.date_str
+            or (datetime.now(_tz.utc).date() - timedelta(days=1)).isoformat()
+        )
 
         logger = MavvrikLogger(
             api_key=settings.get("api_key"),
@@ -504,12 +509,15 @@ async def export_mavvrik_data(
         if not settings:
             raise HTTPException(
                 status_code=400,
-                detail={"error": "Mavvrik not configured. Call POST /mavvrik/init first."},
+                detail={
+                    "error": "Mavvrik not configured. Call POST /mavvrik/init first."
+                },
             )
 
-        date_str = request.date_str or (
-            datetime.now(_tz.utc).date() - timedelta(days=1)
-        ).isoformat()
+        date_str = (
+            request.date_str
+            or (datetime.now(_tz.utc).date() - timedelta(days=1)).isoformat()
+        )
 
         logger = MavvrikLogger(
             api_key=settings.get("api_key"),

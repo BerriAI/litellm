@@ -1361,9 +1361,7 @@ CLOUDZERO_EXPORT_USAGE_DATA_JOB_NAME = "cloudzero_export_usage_data"
 CLOUDZERO_MAX_FETCHED_DATA_RECORDS = int(
     os.getenv("CLOUDZERO_MAX_FETCHED_DATA_RECORDS", 50000)
 )
-MAVVRIK_EXPORT_INTERVAL_MINUTES = int(
-    os.getenv("MAVVRIK_EXPORT_INTERVAL_MINUTES", 60)
-)
+MAVVRIK_EXPORT_INTERVAL_MINUTES = int(os.getenv("MAVVRIK_EXPORT_INTERVAL_MINUTES", 60))
 MAVVRIK_EXPORT_USAGE_DATA_JOB_NAME = "mavvrik_export_usage_data"
 MAVVRIK_MAX_FETCHED_DATA_RECORDS = int(
     os.getenv("MAVVRIK_MAX_FETCHED_DATA_RECORDS", 50000)
@@ -1419,7 +1417,7 @@ APSCHEDULER_REPLACE_EXISTING = os.getenv(
     "1",
 ]  # always replace existing jobs
 
-# The number of tag entries are higher than number of user, team entries. This leads to a higher QPS. 
+# The number of tag entries are higher than number of user, team entries. This leads to a higher QPS.
 # This will run tag spcific tasks at a later time to smooth QPS
 DAILY_TAG_SPEND_BATCH_MULTIPLIER = 2.3
 

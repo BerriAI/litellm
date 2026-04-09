@@ -83,9 +83,7 @@ class MavvrikDryRunResponse(BaseModel):
 class MavvrikSettingsView(BaseModel):
     """Response for GET /mavvrik/settings — API key is masked."""
 
-    api_key_masked: Optional[str] = Field(
-        None, description="Masked API key"
-    )
+    api_key_masked: Optional[str] = Field(None, description="Masked API key")
     api_endpoint: Optional[str] = None
     connection_id: Optional[str] = None
     timezone: Optional[str] = None

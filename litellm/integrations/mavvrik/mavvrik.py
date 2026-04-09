@@ -110,9 +110,7 @@ class MavvrikLogger(CustomLogger):
             )
             mavvrik_marker_iso = _streamer.register()
             mavvrik_date = date.fromisoformat(mavvrik_marker_iso[:10])
-            local_date = (
-                date.fromisoformat(marker_str[:10]) if marker_str else None
-            )
+            local_date = date.fromisoformat(marker_str[:10]) if marker_str else None
             if local_date is None or mavvrik_date < local_date:
                 verbose_logger.info(
                     "MavvrikLogger: Mavvrik metricsMarker %s is earlier than local "
@@ -241,7 +239,9 @@ class MavvrikLogger(CustomLogger):
             return 0
 
         record_count = len(df)
-        verbose_logger.debug("MavvrikLogger: %d rows fetched, transforming…", record_count)
+        verbose_logger.debug(
+            "MavvrikLogger: %d rows fetched, transforming…", record_count
+        )
 
         transformer = MavvrikTransformer()
         csv_payload = transformer.to_csv(df, connection_id=self.connection_id)
@@ -286,7 +286,9 @@ class MavvrikLogger(CustomLogger):
         from litellm.integrations.mavvrik.transform import MavvrikTransformer
 
         if not date_str:
-            date_str = (datetime.now(timezone.utc).date() - timedelta(days=1)).isoformat()
+            date_str = (
+                datetime.now(timezone.utc).date() - timedelta(days=1)
+            ).isoformat()
 
         db = LiteLLMDatabase()
         df = await db.get_usage_data(
@@ -315,19 +317,12 @@ class MavvrikLogger(CustomLogger):
         # Compute summary stats from the raw DataFrame
         total_cost = float(df["spend"].sum()) if "spend" in df.columns else 0.0
         total_tokens = (
-            int(
-                (df["prompt_tokens"].sum() or 0)
-                + (df["completion_tokens"].sum() or 0)
-            )
+            int((df["prompt_tokens"].sum() or 0) + (df["completion_tokens"].sum() or 0))
             if "prompt_tokens" in df.columns
             else 0
         )
-        unique_models = (
-            df["model"].n_unique() if "model" in df.columns else 0
-        )
-        unique_teams = (
-            df["team_id"].n_unique() if "team_id" in df.columns else 0
-        )
+        unique_models = df["model"].n_unique() if "model" in df.columns else 0
+        unique_teams = df["team_id"].n_unique() if "team_id" in df.columns else 0
 
         return {
             "usage_data": usage_sample,
@@ -368,10 +363,10 @@ class MavvrikLogger(CustomLogger):
     @staticmethod
     async def init_mavvrik_background_job(scheduler: AsyncIOScheduler):
         """Register the hourly export job with APScheduler."""
-        loggers: List[
-            CustomLogger
-        ] = litellm.logging_callback_manager.get_custom_loggers_for_type(
-            callback_type=MavvrikLogger
+        loggers: List[CustomLogger] = (
+            litellm.logging_callback_manager.get_custom_loggers_for_type(
+                callback_type=MavvrikLogger
+            )
         )
         verbose_logger.debug("MavvrikLogger: found %d logger instance(s)", len(loggers))
 
@@ -381,14 +376,22 @@ class MavvrikLogger(CustomLogger):
         # 2. Container starts with MAVVRIK_* env vars but no config.yaml callback set
         if not loggers and all(
             os.getenv(v)
-            for v in ("MAVVRIK_API_KEY", "MAVVRIK_API_ENDPOINT", "MAVVRIK_CONNECTION_ID")
+            for v in (
+                "MAVVRIK_API_KEY",
+                "MAVVRIK_API_ENDPOINT",
+                "MAVVRIK_CONNECTION_ID",
+            )
         ):
             verbose_logger.info(
                 "MavvrikLogger: env vars detected, auto-creating logger from environment"
             )
             mavvrik_logger = MavvrikLogger()
-            litellm.logging_callback_manager.add_litellm_success_callback(mavvrik_logger)
-            litellm.logging_callback_manager.add_litellm_async_success_callback(mavvrik_logger)
+            litellm.logging_callback_manager.add_litellm_success_callback(
+                mavvrik_logger
+            )
+            litellm.logging_callback_manager.add_litellm_async_success_callback(
+                mavvrik_logger
+            )
             for cb_list in (litellm.success_callback, litellm._async_success_callback):
                 if "mavvrik" in cb_list:
                     cb_list.remove("mavvrik")
