@@ -349,6 +349,7 @@ const sidebars = {
             "proxy/debugging",
             "proxy/error_diagnosis",
             "proxy/deploy",
+            "proxy/docker_image_security",
             "proxy/health",
             "proxy/master_key_rotations",
             "proxy/model_management",
