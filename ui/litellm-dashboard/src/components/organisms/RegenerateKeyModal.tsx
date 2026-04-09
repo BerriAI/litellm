@@ -1,12 +1,16 @@
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
-import { Button, Col, Grid, Text, TextInput, Title } from "@tremor/react";
-import { Form, InputNumber, Modal } from "antd";
+import { CopyOutlined, SyncOutlined } from "@ant-design/icons";
+import { Alert, Button, Col, Form, Input, InputNumber, Modal, Row, Space, Typography } from "antd";
 import { add } from "date-fns";
 import { useEffect, useState } from "react";
 import { CopyToClipboard } from "react-copy-to-clipboard";
 import { KeyResponse } from "../key_team_helpers/key_list";
 import NotificationManager from "../molecules/notifications_manager";
 import { regenerateKeyCall } from "../networking";
+
+const { Text } = Typography;
+
+
 
 interface RegenerateKeyModalProps {
   selectedToken: KeyResponse | null;
@@ -151,6 +155,7 @@ export function RegenerateKeyModal({ selectedToken, visible, onClose, onKeyUpdat
       title="Regenerate Virtual Key"
       open={visible}
       onCancel={handleClose}
+      width={520}
       footer={
         regeneratedKey
           ? [
@@ -159,46 +164,69 @@ export function RegenerateKeyModal({ selectedToken, visible, onClose, onKeyUpdat
               </Button>,
             ]
           : [
-              <Button key="cancel" onClick={handleClose} className="mr-2">
-                Cancel
-              </Button>,
-              <Button key="regenerate" onClick={handleRegenerateKey} disabled={isRegenerating}>
-                {isRegenerating ? "Regenerating..." : "Regenerate"}
-              </Button>,
+              <Space key="footer-actions">
+                <Button onClick={handleClose}>Cancel</Button>
+                <Button type="primary" icon={<SyncOutlined />} onClick={handleRegenerateKey} loading={isRegenerating}>
+                  Regenerate
+                </Button>
+              </Space>,
             ]
       }
     >
       {regeneratedKey ? (
-        <Grid numItems={1} className="gap-2 w-full">
-          <Title>Regenerated Key</Title>
-          <Col numColSpan={1}>
-            <p>
-              Please replace your old key with the new key generated. For security reasons,{" "}
-              <b>you will not be able to view it again</b> through your LiteLLM account. If you lose this secret key,
-              you will need to generate a new one.
-            </p>
-          </Col>
-          <Col numColSpan={1}>
-            <Text className="mt-3">Key Alias:</Text>
-            <div className="bg-gray-100 p-2 rounded mb-2">
-              <pre className="break-words whitespace-normal">{selectedToken?.key_alias || "No alias set"}</pre>
+        <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+          <Alert
+            type="warning"
+            showIcon
+            banner
+            message="Save it now, you will not see it again"
+          />
+
+          <div>
+            <div style={{ fontSize: 12, color: "#8c8c8c", marginBottom: 2 }}>Key Alias</div>
+            <div style={{ fontSize: 14, color: "#595959" }}>
+              {selectedToken?.key_alias || "No alias set"}
             </div>
-            <Text className="mt-3">New Virtual Key:</Text>
-            <div className="bg-gray-100 p-2 rounded mb-2">
-              <pre className="break-words whitespace-normal">{regeneratedKey}</pre>
-            </div>
+          </div>
+
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
+              background: "#f5f5f5",
+              border: "1px solid #d9d9d9",
+              borderRadius: 6,
+              padding: "10px 12px",
+            }}
+          >
+            <code
+              style={{
+                flex: 1,
+                fontFamily: "SFMono-Regular, Consolas, 'Liberation Mono', Menlo, monospace",
+                fontSize: 13,
+                color: "#262626",
+                wordBreak: "break-all",
+                lineHeight: 1.5,
+              }}
+            >
+              {regeneratedKey}
+            </code>
             <CopyToClipboard
               text={regeneratedKey}
               onCopy={() => NotificationManager.success("Virtual Key copied to clipboard")}
             >
-              <Button className="mt-3">Copy Virtual Key</Button>
+              <Button type="primary" icon={<CopyOutlined />} size="small">
+                Copy
+              </Button>
             </CopyToClipboard>
-          </Col>
-        </Grid>
+          </div>
+        </div>
       ) : (
         <Form
           form={form}
           layout="vertical"
+          style={{ marginTop: 4 }}
           onValuesChange={(changedValues) => {
             if ("duration" in changedValues) {
               setRegenerateFormData((prev: { duration?: string }) => ({ ...prev, duration: changedValues.duration }));
@@ -206,41 +234,69 @@ export function RegenerateKeyModal({ selectedToken, visible, onClose, onKeyUpdat
           }}
         >
           <Form.Item name="key_alias" label="Key Alias">
-            <TextInput disabled={true} />
+            <Input disabled />
           </Form.Item>
-          <Form.Item name="max_budget" label="Max Budget (USD)">
-            <InputNumber step={0.01} precision={2} style={{ width: "100%" }} />
-          </Form.Item>
-          <Form.Item name="tpm_limit" label="TPM Limit">
-            <InputNumber style={{ width: "100%" }} />
-          </Form.Item>
-          <Form.Item name="rpm_limit" label="RPM Limit">
-            <InputNumber style={{ width: "100%" }} />
-          </Form.Item>
-          <Form.Item name="duration" label="Expire Key (eg: 30s, 30h, 30d)" className="mt-8">
-            <TextInput placeholder="" />
-          </Form.Item>
-          <div className="mt-2 text-sm text-gray-500">
-            Current expiry: {selectedToken?.expires ? new Date(selectedToken.expires).toLocaleString() : "Never"}
-          </div>
-          {newExpiryTime && <div className="mt-2 text-sm text-green-600">New expiry: {newExpiryTime}</div>}
-          <Form.Item
-            name="grace_period"
-            label="Grace Period (eg: 24h, 2d)"
-            tooltip="Keep the old key valid for this duration after rotation. Both keys work during this period for seamless cutover. Empty = immediate revoke."
-            className="mt-8"
-            rules={[
-              {
-                pattern: /^(\d+(s|m|h|d|w|mo))?$/,
-                message: "Must be a duration like 30s, 30m, 24h, 2d, 1w, or 1mo",
-              },
-            ]}
-          >
-            <TextInput placeholder="e.g. 24h, 2d (empty = immediate revoke)" />
-          </Form.Item>
-          <div className="mt-2 text-sm text-gray-500">
-            Recommended: 24h to 72h for production keys to allow seamless client migration.
-          </div>
+
+          <Row gutter={12}>
+            <Col span={8}>
+              <Form.Item name="max_budget" label="Max Budget (USD)">
+                <InputNumber step={0.01} precision={2} style={{ width: "100%" }} />
+              </Form.Item>
+            </Col>
+            <Col span={8}>
+              <Form.Item name="tpm_limit" label="TPM Limit">
+                <InputNumber style={{ width: "100%" }} />
+              </Form.Item>
+            </Col>
+            <Col span={8}>
+              <Form.Item name="rpm_limit" label="RPM Limit">
+                <InputNumber style={{ width: "100%" }} />
+              </Form.Item>
+            </Col>
+          </Row>
+
+          <Row gutter={12}>
+            <Col span={12}>
+              <Form.Item
+                name="duration"
+                label="Expire Key"
+                extra={
+                  <>
+                    <Text type="secondary" style={{ fontSize: 12 }}>
+                      Current expiry: {selectedToken?.expires ? new Date(selectedToken.expires).toLocaleString() : "Never"}
+                    </Text>
+                    {newExpiryTime && (
+                      <div>
+                        <Text style={{ fontSize: 12, color: "#52c41a" }}>New expiry: {newExpiryTime}</Text>
+                      </div>
+                    )}
+                  </>
+                }
+              >
+                <Input placeholder="e.g. 30s, 30h, 30d" />
+              </Form.Item>
+            </Col>
+            <Col span={12}>
+              <Form.Item
+                name="grace_period"
+                label="Grace Period"
+                tooltip="Keep the old key valid for this duration after rotation. Both keys work during this period for seamless cutover. Empty = immediate revoke."
+                extra={
+                  <Text type="secondary" style={{ fontSize: 12 }}>
+                    Recommended: 24h to 72h for production keys
+                  </Text>
+                }
+                rules={[
+                  {
+                    pattern: /^(\d+(s|m|h|d|w|mo))?$/,
+                    message: "Must be a duration like 30s, 30m, 24h, 2d, 1w, or 1mo",
+                  },
+                ]}
+              >
+                <Input placeholder="e.g. 24h, 2d" />
+              </Form.Item>
+            </Col>
+          </Row>
         </Form>
       )}
     </Modal>

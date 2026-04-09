@@ -63,8 +63,9 @@ test.describe("Proxy Admin - Keys", () => {
     await page.getByRole("button", { name: "Regenerate Key" }).click();
     await page.getByRole("button", { name: "Regenerate", exact: true }).click();
 
-    // Success shows "Copy Virtual Key" button in the regenerated key dialog
-    await expect(page.getByText("Copy Virtual Key")).toBeVisible({ timeout: 10_000 });
+    // Success view shows the warning banner and a Copy button for the regenerated key
+    await expect(page.getByText("Save it now, you will not see it again")).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByRole("button", { name: /Copy/ })).toBeVisible({ timeout: 10_000 });
   });
 
   test("Update key TPM and RPM limits", async ({ page }) => {
