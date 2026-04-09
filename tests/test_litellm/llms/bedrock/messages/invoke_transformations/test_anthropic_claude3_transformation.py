@@ -1,4 +1,5 @@
 import asyncio
+import copy
 import json
 import os
 import sys
@@ -11,7 +12,10 @@ import pytest
 sys.path.insert(0, os.path.abspath("../../../../../.."))
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.llms.bedrock.common_utils import remove_custom_field_from_tools
+from litellm.llms.bedrock.common_utils import (
+    normalize_tool_input_schema_types_for_bedrock_invoke,
+    remove_custom_field_from_tools,
+)
 from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation import (
     AmazonAnthropicClaudeMessagesConfig,
     AmazonAnthropicClaudeMessagesStreamDecoder,
@@ -290,6 +294,99 @@ def test_remove_custom_field_from_tools():
     request4 = {"tools": None}
     remove_custom_field_from_tools(request4)
     assert request4["tools"] is None
+
+
+def test_normalize_tool_input_schema_types_for_bedrock_invoke():
+    """
+    Claude Code sends ``input_schema.type: \"custom\"`` for custom tools.
+    Bedrock Invoke rejects this; it requires JSON Schema ``type: \"object\"``.
+    """
+
+    request = {
+        "tools": [
+            {
+                "name": "Agent",
+                "type": "custom",
+                "description": "subagent",
+                "input_schema": {
+                    "type": "custom",
+                    "additionalProperties": False,
+                    "properties": {
+                        "nested": {"type": "custom", "properties": {"x": {"type": "string"}}}
+                    },
+                    "required": ["nested"],
+                },
+            },
+            {
+                "name": "Read",
+                "input_schema": {"type": "object", "properties": {}},
+            },
+        ]
+    }
+
+    normalize_tool_input_schema_types_for_bedrock_invoke(request)
+
+    agent_tool = request["tools"][0]
+    assert agent_tool["type"] == "custom"
+    assert agent_tool["input_schema"]["type"] == "object"
+    assert agent_tool["input_schema"]["properties"]["nested"]["type"] == "object"
+    assert request["tools"][1]["input_schema"]["type"] == "object"
+
+    request2 = {"messages": []}
+    normalize_tool_input_schema_types_for_bedrock_invoke(request2)
+    assert request2 == {"messages": []}
+
+
+def test_bedrock_invoke_messages_transform_converts_custom_tool_schema_type_to_object():
+    """
+    End-to-end: AmazonAnthropicClaudeMessagesConfig must emit Bedrock Invoke bodies
+    where every ``input_schema`` uses JSON Schema types (``object``), not Anthropic
+    ``type: \"custom\"`` (root and nested).
+    """
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    tools = [
+        {
+            "name": "Agent",
+            "type": "custom",
+            "description": "Subagent",
+            "input_schema": {
+                "type": "custom",
+                "additionalProperties": False,
+                "properties": {
+                    "prompt": {"type": "string"},
+                    "nested": {
+                        "type": "custom",
+                        "properties": {"x": {"type": "string"}},
+                        "required": ["x"],
+                    },
+                },
+                "required": ["prompt"],
+            },
+        }
+    ]
+    optional_params = {
+        "max_tokens": 256,
+        "tools": copy.deepcopy(tools),
+        "stream": False,
+    }
+    messages = [{"role": "user", "content": "hi"}]
+
+    result = cfg.transform_anthropic_messages_request(
+        model="anthropic.claude-3-haiku-20240307-v1:0",
+        messages=messages,
+        anthropic_messages_optional_request_params=optional_params,
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert "tools" in result
+    schema = result["tools"][0]["input_schema"]
+    assert schema["type"] == "object"
+    assert schema["properties"]["nested"]["type"] == "object"
+    # Tool discriminator stays Anthropic-side; only input_schema is normalized
+    assert result["tools"][0]["type"] == "custom"
 
 
 def test_remove_scope_from_cache_control():
