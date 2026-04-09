@@ -5151,7 +5151,7 @@ def _bedrock_tools_pt(tools: List) -> List[BedrockToolBlock]:
         ("array", "boolean", "integer", "null", "number", "object", "string")
     )
     tool_block_list: List[BedrockToolBlock] = []
-    for tool in tools:
+    for tool_idx, tool in enumerate(tools):
         # Check if tool is already a BedrockToolBlock (e.g., systemTool for Nova grounding)
         if _is_bedrock_tool_block(tool):
             # Already a BedrockToolBlock, pass it through
@@ -5173,6 +5173,9 @@ def _bedrock_tools_pt(tools: List) -> List[BedrockToolBlock]:
             )
             raw_name = tool.get("function", {}).get("name", "") or ""
             _tool_description = tool.get("function", {}).get("description", None)
+
+        if not (raw_name and str(raw_name).strip()):
+            raw_name = f"litellm_unnamed_tool_{tool_idx}"
 
         # related issue: https://github.com/BerriAI/litellm/issues/5007
         # Bedrock tool names must satisfy regular expression pattern: [a-zA-Z][a-zA-Z0-9_]* ensure this is true
