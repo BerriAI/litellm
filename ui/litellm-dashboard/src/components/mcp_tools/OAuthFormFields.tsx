@@ -4,7 +4,6 @@ import { InfoCircleOutlined, PlusOutlined, CloseOutlined } from "@ant-design/ico
 import { Button, TextInput } from "@tremor/react";
 import { OAUTH_FLOW } from "./types";
 
-// ── Quick-add presets for common providers ────────────────────────────────────
 const CLAIM_PRESETS = [
   { label: "Slack enterprise", field: "enterprise_id", placeholder: "e.g. E04XXXXXXX" },
   { label: "Jira cloud", field: "cloud_id", placeholder: "e.g. abc-123" },
@@ -40,10 +39,8 @@ const TokenClaimsBuilder: React.FC<TokenClaimsBuilderProps> = ({ value, onChange
     onChange?.(JSON.stringify(obj));
   };
 
-  const update = (i: number, key: keyof ClaimRow, val: string) => {
-    const next = rows.map((r, idx) => idx === i ? { ...r, [key]: val } : r);
-    emit(next);
-  };
+  const update = (i: number, key: keyof ClaimRow, val: string) =>
+    emit(rows.map((r, idx) => idx === i ? { ...r, [key]: val } : r));
 
   const remove = (i: number) => emit(rows.filter((_, idx) => idx !== i));
 
@@ -52,11 +49,8 @@ const TokenClaimsBuilder: React.FC<TokenClaimsBuilderProps> = ({ value, onChange
     emit([...rows, { field, value: "" }]);
   };
 
-  const addBlank = () => emit([...rows, { field: "", value: "" }]);
-
   return (
     <div className="space-y-3">
-      {/* Quick-add chips */}
       <div className="flex flex-wrap gap-2">
         <span className="text-xs text-gray-400 self-center">Quick add:</span>
         {CLAIM_PRESETS.map(p => (
@@ -72,7 +66,6 @@ const TokenClaimsBuilder: React.FC<TokenClaimsBuilderProps> = ({ value, onChange
         ))}
       </div>
 
-      {/* Rows */}
       {rows.length > 0 && (
         <div className="rounded-lg border border-gray-200 overflow-hidden">
           <div className="grid grid-cols-[1fr_1fr_32px] bg-gray-50 border-b border-gray-200 px-3 py-1.5">
@@ -111,7 +104,7 @@ const TokenClaimsBuilder: React.FC<TokenClaimsBuilderProps> = ({ value, onChange
 
       <button
         type="button"
-        onClick={addBlank}
+        onClick={() => emit([...rows, { field: "", value: "" }])}
         className="flex items-center gap-1 text-xs text-blue-600 hover:text-blue-800 transition-colors"
       >
         <PlusOutlined style={{ fontSize: 11 }} />
