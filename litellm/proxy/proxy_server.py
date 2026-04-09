@@ -1377,9 +1377,14 @@ try:
                         # equivalents so logo/asset requests include the root path prefix.
                         # Some JS bundles emit absolute paths like "/ui/assets/logos/" which
                         # resolve incorrectly when the app is served under a sub-path.
+                        # Both double-quoted and single-quoted variants are handled.
                         modified_content = modified_content.replace(
                             '"/ui/assets/',
                             f'"{server_root_path}/ui/assets/',
+                        )
+                        modified_content = modified_content.replace(
+                            "'/ui/assets/",
+                            f"'{server_root_path}/ui/assets/",
                         )
 
                         # Replace the /.well-known/litellm-ui-config with the server root path

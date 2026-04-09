@@ -29,6 +29,7 @@ def _apply_server_root_path_replacements(
                     content = f.read()
                 modified = content.replace(litellm_asset_prefix, server_root_path)
                 modified = modified.replace('"/ui/assets/', f'"{server_root_path}/ui/assets/')
+                modified = modified.replace("'/ui/assets/", f"'{server_root_path}/ui/assets/")
                 modified = modified.replace(
                     "/litellm/.well-known/litellm-ui-config",
                     f"{server_root_path}/.well-known/litellm-ui-config",
@@ -117,3 +118,67 @@ def test_binary_files_are_skipped(tmp_path):
     _apply_server_root_path_replacements(str(ui_path), "/root")
 
     assert png_file.read_bytes() == b"\x89PNG\r\n\x1a\n"
+
+
+def test_single_quoted_ui_asset_paths_rewritten(tmp_path):
+    """
+    Single-quoted '/ui/assets/' paths must also be rewritten.
+    Some HTML/CSS files use single quotes for attribute values.
+    """
+    ui_path = tmp_path / "ui"
+    ui_path.mkdir()
+
+    js_file = ui_path / "bundle.js"
+    js_file.write_text("let eq='/ui/assets/logos/',r={}")
+
+    server_root_path = "/myapp"
+    _apply_server_root_path_replacements(str(ui_path), server_root_path)
+
+    result = js_file.read_text()
+    assert f"'{server_root_path}/ui/assets/logos/'" in result
+    assert "'/ui/assets/logos/'" not in result
+
+
+def test_invalid_server_root_path_raises_value_error():
+    """
+    get_server_root_path() must raise ValueError for values that could
+    be injected into served JS/HTML files (XSS prevention).
+    """
+    import os
+    from unittest.mock import patch
+
+    from litellm.proxy.utils import get_server_root_path
+
+    malicious_paths = [
+        '"><script>alert(1)</script>',
+        "/myapp/../../etc/passwd",
+        "/myapp with spaces",
+        "/myapp?query=1",
+    ]
+    for path in malicious_paths:
+        with patch.dict(os.environ, {"SERVER_ROOT_PATH": path}):
+            try:
+                result = get_server_root_path()
+                assert False, f"Expected ValueError for path {path!r}, got {result!r}"
+            except ValueError:
+                pass  # expected
+
+
+def test_valid_server_root_path_accepted():
+    """Valid SERVER_ROOT_PATH values must be accepted without error."""
+    import os
+    from unittest.mock import patch
+
+    from litellm.proxy.utils import get_server_root_path
+
+    valid_paths = [
+        "",
+        "/myapp",
+        "/myapp/v1",
+        "/web-llmgateway/v1",
+        "/a-b_c",
+    ]
+    for path in valid_paths:
+        with patch.dict(os.environ, {"SERVER_ROOT_PATH": path}):
+            result = get_server_root_path()
+            assert result == path

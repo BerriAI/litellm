@@ -4,6 +4,7 @@ import hashlib
 import inspect
 import json
 import os
+import re
 import smtplib
 import sys
 import threading
@@ -5396,14 +5397,27 @@ def get_proxy_base_url() -> Optional[str]:
     return os.getenv("PROXY_BASE_URL")
 
 
+_SERVER_ROOT_PATH_PATTERN = re.compile(r"^(/[a-zA-Z0-9_-]+)*$")
+
+
 def get_server_root_path() -> str:
     """
     Get the server root path from the environment variables.
 
     - If SERVER_ROOT_PATH is set, return it.
     - Otherwise, default to "/".
+
+    Raises ValueError on startup if the value contains characters that could
+    be injected into served static files (e.g. script tags).
     """
-    return os.getenv("SERVER_ROOT_PATH", "")
+    value = os.getenv("SERVER_ROOT_PATH", "")
+    if value and not _SERVER_ROOT_PATH_PATTERN.match(value):
+        raise ValueError(
+            f"Invalid SERVER_ROOT_PATH {value!r}: must be empty or match "
+            r"^(/[a-zA-Z0-9_-]+)*$ (e.g. '/myapp' or '/myapp/v1'). "
+            "Characters outside this set could be injected into served UI assets."
+        )
+    return value
 
 
 def normalize_route_for_root_path(route: str) -> Optional[str]:
