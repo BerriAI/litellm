@@ -1308,7 +1308,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
 
                     <div className="sticky z-10 bg-white p-4 pr-0 border-t border-gray-200 bottom-[-1.5rem] inset-x-[-1.5rem]">
                       <div className="flex justify-end items-center gap-2">
-                        <Button onClick={() => setIsEditing(false)} disabled={isTeamSaving}>
+                        <Button onClick={() => { setIsEditing(false); setRouterSettings(null); }} disabled={isTeamSaving}>
                           Cancel
                         </Button>
                         <Button icon={<SaveOutlined className="h-4 w-4" />} type="primary" htmlType="submit" loading={isTeamSaving}>
