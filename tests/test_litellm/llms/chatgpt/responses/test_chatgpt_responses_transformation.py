@@ -197,3 +197,48 @@ class TestChatGPTResponsesAPITransformation:
         )
 
         assert parsed.output_text == "Hello!"
+
+    @pytest.mark.parametrize(
+        ("model_name", "response_model"),
+        [
+            ("chatgpt/gpt-5.2-codex", "gpt-5.2-codex"),
+            ("chatgpt/gpt-5.3-codex", "gpt-5.3-codex"),
+        ],
+    )
+    def test_chatgpt_non_stream_sse_response_recovers_output_items(
+        self, model_name: str, response_model: str
+    ):
+        config = ChatGPTResponsesAPIConfig()
+        response_payload = {
+            "id": "resp_test",
+            "object": "response",
+            "created_at": 1700000000,
+            "status": "completed",
+            "model": response_model,
+            "output": [],
+        }
+        streamed_output_item = {
+            "type": "message",
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": "Hello from stream!"}],
+        }
+        sse_body = "\n".join(
+            [
+                f"data: {json.dumps({'type': 'response.output_item.done', 'output_index': 0, 'item': streamed_output_item})}",
+                f"data: {json.dumps({'type': 'response.completed', 'response': response_payload})}",
+                "data: [DONE]",
+                "",
+            ]
+        )
+        raw_response = httpx.Response(
+            200, headers={"content-type": "text/event-stream"}, text=sse_body
+        )
+        logging_obj = MagicMock()
+
+        parsed = config.transform_response_api_response(
+            model=model_name,
+            raw_response=raw_response,
+            logging_obj=logging_obj,
+        )
+
+        assert parsed.output_text == "Hello from stream!"
