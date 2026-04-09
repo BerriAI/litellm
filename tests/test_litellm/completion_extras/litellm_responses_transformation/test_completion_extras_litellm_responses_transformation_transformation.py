@@ -640,6 +640,71 @@ def test_transform_response_recovers_output_item_done_from_raw_sse():
     assert result.choices[0].message.content == "Recovered from output item"
 
 
+def test_transform_response_recovers_output_item_done_from_whitespace_padded_raw_sse():
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    handler = LiteLLMResponsesTransformationHandler()
+
+    output_item_event = {
+        "type": "response.output_item.done",
+        "output_index": 0,
+        "item": {
+            "type": "message",
+            "id": "msg_from_item",
+            "role": "assistant",
+            "status": "completed",
+            "content": [
+                {
+                    "type": "output_text",
+                    "text": "Recovered from padded output item",
+                    "annotations": [],
+                }
+            ],
+        },
+    }
+    completed_event = {
+        "type": "response.completed",
+        "response": {
+            "id": "resp_from_stream",
+            "object": "response",
+            "created_at": 1760144904,
+            "status": "completed",
+            "model": "gpt-5.4",
+            "output": [],
+        },
+    }
+    raw_sse = "\n".join(
+        [
+            f"   data:  {json.dumps(output_item_event)}   ",
+            f"\tdata: {json.dumps(completed_event)}",
+            "data: [DONE]",
+            "",
+        ]
+    )
+
+    raw_response = _make_empty_responses_api_response()
+    model_response = _make_empty_model_response()
+    logging_obj = Mock()
+    logging_obj.model_call_details = {"original_response": raw_sse}
+
+    result = handler.transform_response(
+        model="gpt-5.4",
+        raw_response=raw_response,
+        model_response=model_response,
+        logging_obj=logging_obj,
+        request_data={"model": "gpt-5.4"},
+        messages=[{"role": "user", "content": "Reply with exactly: ok"}],
+        optional_params={},
+        litellm_params={},
+        encoding=Mock(),
+    )
+
+    assert len(result.choices) == 1
+    assert result.choices[0].message.content == "Recovered from padded output item"
+
+
 def test_transform_response_prefers_completed_output_from_raw_sse():
     from litellm.completion_extras.litellm_responses_transformation.transformation import (
         LiteLLMResponsesTransformationHandler,

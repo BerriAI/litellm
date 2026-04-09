@@ -39,6 +39,7 @@ from litellm.types.llms.openai import (
     ResponsesAPIStreamEvents,
 )
 from litellm.types.utils import GenericStreamingChunk, ModelResponseStream
+from litellm.utils import CustomStreamWrapper
 
 if TYPE_CHECKING:
     from openai.types.responses import ResponseInputImageParam
@@ -97,7 +98,7 @@ def _build_reasoning_item(
 
 
 def _reasoning_item_to_response_input(
-    r_item: Union[ChatCompletionReasoningItem, Dict[str, Any]]
+    r_item: Union[ChatCompletionReasoningItem, Dict[str, Any]],
 ) -> Dict[str, Any]:
     """Convert a stored ChatCompletionReasoningItem back to a Responses API input item."""
     r_input: Dict[str, Any] = {
@@ -300,10 +301,10 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             if key in ("max_tokens", "max_completion_tokens"):
                 responses_api_request["max_output_tokens"] = value
             elif key == "tools" and value is not None:
-                responses_api_request[
-                    "tools"
-                ] = self._convert_tools_to_responses_format(
-                    cast(List[Dict[str, Any]], value)
+                responses_api_request["tools"] = (
+                    self._convert_tools_to_responses_format(
+                        cast(List[Dict[str, Any]], value)
+                    )
                 )
             elif key == "response_format":
                 text_format = self._transform_response_format_to_text_format(value)
@@ -506,9 +507,11 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                         annotations=annotations,
                         reasoning_items=cast(
                             Optional[List[ChatCompletionReasoningItem]],
-                            [pending_reasoning_item]
-                            if pending_reasoning_item is not None
-                            else None,
+                            (
+                                [pending_reasoning_item]
+                                if pending_reasoning_item is not None
+                                else None
+                            ),
                         ),
                     )
 
@@ -566,9 +569,11 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 reasoning_content=reasoning_content,
                 reasoning_items=cast(
                     Optional[List[ChatCompletionReasoningItem]],
-                    [pending_reasoning_item]
-                    if pending_reasoning_item is not None
-                    else None,
+                    (
+                        [pending_reasoning_item]
+                        if pending_reasoning_item is not None
+                        else None
+                    ),
                 ),
             )
             choices.append(
@@ -578,13 +583,6 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             pending_reasoning_item = None
 
         return choices
-
-    @staticmethod
-    def _strip_sse_data_prefix(chunk: str) -> str:
-        stripped_chunk = chunk.strip()
-        if stripped_chunk.startswith("data:"):
-            return stripped_chunk[len("data:") :].strip()
-        return stripped_chunk
 
     @classmethod
     def _recover_output_items_from_raw_sse(
@@ -597,7 +595,9 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         recovered_text_only_items: Dict[int, Dict[str, Any]] = {}
 
         for chunk in raw_sse.splitlines():
-            stripped_chunk = cls._strip_sse_data_prefix(chunk)
+            stripped_chunk = (
+                CustomStreamWrapper._strip_sse_data_from_chunk(chunk.strip()) or ""
+            ).strip()
             if (
                 not stripped_chunk
                 or stripped_chunk == "[DONE]"
@@ -623,7 +623,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                         return cast(List[Dict[str, Any]], response_output)
                 continue
 
-            if event_type == "response.output_item.done":
+            if event_type == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE:
                 item = parsed_chunk.get("item")
                 if not isinstance(item, dict):
                     continue
@@ -729,7 +729,9 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
 
         output_items = raw_response.output
         if len(output_items) == 0:
-            recovered_output_items = self._recover_output_items_from_logging(logging_obj)
+            recovered_output_items = self._recover_output_items_from_logging(
+                logging_obj
+            )
             if recovered_output_items:
                 output_items = recovered_output_items
                 raw_response.output = recovered_output_items
@@ -1289,9 +1291,9 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
                 )
 
                 if provider_specific_fields:
-                    function_chunk[
-                        "provider_specific_fields"
-                    ] = provider_specific_fields
+                    function_chunk["provider_specific_fields"] = (
+                        provider_specific_fields
+                    )
 
                 tool_call_index = parsed_chunk.get("output_index", 0)
                 tool_call_chunk = ChatCompletionToolCallChunk(
@@ -1342,7 +1344,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
                 raise ValueError(
                     f"Chat provider: Invalid function argument delta {parsed_chunk}"
                 )
-        elif event_type == "response.output_item.done":
+        elif event_type == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE:
             # New output item added
             output_item = parsed_chunk.get("item", {})
             if output_item.get("type") == "function_call":
@@ -1364,9 +1366,9 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
 
                 # Add provider_specific_fields to function if present
                 if provider_specific_fields:
-                    function_chunk[
-                        "provider_specific_fields"
-                    ] = provider_specific_fields
+                    function_chunk["provider_specific_fields"] = (
+                        provider_specific_fields
+                    )
 
                 tool_call_index = parsed_chunk.get("output_index", 0)
                 tool_call_chunk = ChatCompletionToolCallChunk(

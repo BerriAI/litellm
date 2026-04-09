@@ -77,9 +77,9 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
         existing_instructions = request.get("instructions")
         if existing_instructions:
             if base_instructions not in existing_instructions:
-                request[
-                    "instructions"
-                ] = f"{base_instructions}\n\n{existing_instructions}"
+                request["instructions"] = (
+                    f"{base_instructions}\n\n{existing_instructions}"
+                )
         else:
             request["instructions"] = base_instructions
         request["store"] = False
@@ -151,7 +151,7 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
             if not isinstance(parsed_chunk, dict):
                 continue
             event_type = parsed_chunk.get("type")
-            if event_type == "response.output_item.done":
+            if event_type == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE:
                 item = parsed_chunk.get("item")
                 output_index = parsed_chunk.get("output_index")
                 if isinstance(item, dict):
