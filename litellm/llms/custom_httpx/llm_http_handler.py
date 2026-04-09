@@ -5027,6 +5027,10 @@ class BaseLLMHTTPHandler:
             litellm_params={},
         )
         ws_url = http_url.replace("https://", "wss://").replace("http://", "ws://")
+        # OpenAI's WebSocket responses endpoint requires ?model= in the URL,
+        # matching the Realtime API convention (wss://.../v1/realtime?model=...).
+        if "?" not in ws_url:
+            ws_url = f"{ws_url}?model={model}"
 
         try:
             ssl_context = get_shared_realtime_ssl_context()
