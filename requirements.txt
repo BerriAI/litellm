@@ -85,4 +85,4 @@ requests-toolbelt==1.0.0 # transitive dep (langfuse)
 ########################
 # LITELLM ENTERPRISE DEPENDENCIES
 ########################
-litellm-enterprise==0.1.36
+litellm-enterprise==0.1.37
