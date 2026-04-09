@@ -974,32 +974,103 @@ class TestWebSocketChunkTypes:
 
 
 class TestNativeWebSocketUrlConstruction:
-    """Test that native WebSocket URLs include the model query parameter."""
+    """Test that native WebSocket URLs include the model query parameter.
 
-    def test_openai_ws_url_includes_model(self):
-        """ws_url for OpenAI native WebSocket must include ?model= so OpenAI
-        knows which model to use before the first response.create event."""
-        config = OpenAIResponsesAPIConfig()
-        http_url = config.get_complete_url(api_base=None, litellm_params={})
-        base_ws_url = http_url.replace("https://", "wss://").replace("http://", "ws://")
+    These tests mock websockets.connect so they exercise the actual URL-building
+    code inside BaseLLMHTTPHandler.async_responses_websocket rather than
+    reimplementing the logic themselves.
+    """
 
-        # get_complete_url should not include query params
-        assert "?" not in base_ws_url
+    @pytest.mark.asyncio
+    async def test_openai_ws_url_includes_model(self):
+        """Handler must pass ?model= in the URL to the backend WebSocket."""
+        from unittest.mock import AsyncMock, MagicMock, patch
 
-        # The handler appends ?model= when none is present
-        model = "gpt-4o-mini"
-        ws_url = f"{base_ws_url}?model={model}" if "?" not in base_ws_url else base_ws_url
-        assert ws_url == "wss://api.openai.com/v1/responses?model=gpt-4o-mini"
+        captured_urls = []
 
-    def test_ws_url_model_not_duplicated_if_query_already_present(self):
-        """If api_base already has query params, the ?model= should not be appended."""
-        http_url = "https://custom.example.com/v1/responses?api-version=2024-05-01"
-        ws_url = http_url.replace("https://", "wss://").replace("http://", "ws://")
+        class FakeConnect:
+            def __init__(self, url, **kwargs):
+                captured_urls.append(url)
 
-        # Fix: only append when no query string present
-        if "?" not in ws_url:
-            ws_url = f"{ws_url}?model=gpt-4o"
+            async def __aenter__(self):
+                raise Exception("stop")
 
-        assert "api-version=2024-05-01" in ws_url
-        assert ws_url.count("?") == 1
-        assert "model=gpt-4o" not in ws_url
+            async def __aexit__(self, *args):
+                pass
+
+        mock_config = MagicMock(spec=OpenAIResponsesAPIConfig)
+        mock_config.supports_native_websocket.return_value = True
+        mock_config.get_complete_url.return_value = "https://api.openai.com/v1/responses"
+        mock_config.validate_environment.return_value = {}
+
+        mock_logging = MagicMock()
+        mock_logging.pre_call = MagicMock()
+
+        from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
+
+        handler = BaseLLMHTTPHandler()
+
+        mock_ws = MagicMock()
+        mock_ws.close = AsyncMock()
+
+        with patch("websockets.connect", FakeConnect):
+            await handler.async_responses_websocket(
+                model="gpt-4o-mini",
+                websocket=mock_ws,
+                logging_obj=mock_logging,
+                responses_api_provider_config=mock_config,
+                api_key="sk-test",
+            )
+
+        assert len(captured_urls) == 1
+        from urllib.parse import parse_qs, urlparse
+        qs = parse_qs(urlparse(captured_urls[0]).query)
+        assert qs.get("model") == ["gpt-4o-mini"], f"Expected model in URL, got: {captured_urls[0]}"
+
+    @pytest.mark.asyncio
+    async def test_ws_url_preserves_existing_params_and_adds_model(self):
+        """When api_base already has query params, model is added alongside them."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        captured_urls = []
+
+        class FakeConnect:
+            def __init__(self, url, **kwargs):
+                captured_urls.append(url)
+
+            async def __aenter__(self):
+                raise Exception("stop")
+
+            async def __aexit__(self, *args):
+                pass
+
+        mock_config = MagicMock(spec=OpenAIResponsesAPIConfig)
+        mock_config.supports_native_websocket.return_value = True
+        mock_config.get_complete_url.return_value = (
+            "https://custom.example.com/v1/responses?api-version=2024-05-01"
+        )
+        mock_config.validate_environment.return_value = {}
+
+        mock_logging = MagicMock()
+        mock_logging.pre_call = MagicMock()
+
+        from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
+
+        handler = BaseLLMHTTPHandler()
+        mock_ws = MagicMock()
+        mock_ws.close = AsyncMock()
+
+        with patch("websockets.connect", FakeConnect):
+            await handler.async_responses_websocket(
+                model="gpt-4o",
+                websocket=mock_ws,
+                logging_obj=mock_logging,
+                responses_api_provider_config=mock_config,
+                api_key="sk-test",
+            )
+
+        assert len(captured_urls) == 1
+        from urllib.parse import parse_qs, urlparse
+        qs = parse_qs(urlparse(captured_urls[0]).query)
+        assert qs.get("model") == ["gpt-4o"], f"model missing from URL: {captured_urls[0]}"
+        assert qs.get("api-version") == ["2024-05-01"], f"existing param lost: {captured_urls[0]}"

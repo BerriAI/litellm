@@ -1,5 +1,6 @@
 import json
 import ssl
+from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -5029,8 +5030,14 @@ class BaseLLMHTTPHandler:
         ws_url = http_url.replace("https://", "wss://").replace("http://", "ws://")
         # OpenAI's WebSocket responses endpoint requires ?model= in the URL,
         # matching the Realtime API convention (wss://.../v1/realtime?model=...).
-        if "?" not in ws_url:
-            ws_url = f"{ws_url}?model={model}"
+        # Use urllib.parse so existing query params (e.g. api-version) are preserved.
+        _parsed = urlparse(ws_url)
+        _qs = parse_qs(_parsed.query)
+        if "model" not in _qs:
+            _qs["model"] = [model]
+            ws_url = urlunparse(
+                _parsed._replace(query=urlencode({k: v[0] for k, v in _qs.items()}))
+            )
 
         try:
             ssl_context = get_shared_realtime_ssl_context()
