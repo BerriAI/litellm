@@ -440,6 +440,22 @@ class TestUpdateFromKwargs:
         # kwargs metadata is preserved, caller metadata is merged in
         assert logging_obj.litellm_params["metadata"] == {"from_kwargs": True, "from_caller": True}
 
+    def test_kwargs_metadata_wins_over_caller_metadata_in_conflict(self, logging_obj):
+        """kwargs metadata takes precedence; caller litellm_params metadata is merged without overwriting."""
+        kwargs = {"metadata": {"from_kwargs": True, "shared_key": "kwargs_value"}}
+
+        logging_obj.update_from_kwargs(
+            kwargs=kwargs,
+            litellm_params={"metadata": {"from_caller": True, "shared_key": "caller_value"}, "litellm_call_id": "x"},
+        )
+
+        # kwargs metadata is preserved (shared_key keeps the kwargs value), caller-only keys are added
+        assert logging_obj.litellm_params["metadata"] == {
+            "from_kwargs": True,
+            "from_caller": True,
+            "shared_key": "kwargs_value",  # kwargs wins on conflict
+        }
+
     def test_custom_pricing_detected_via_litellm_metadata(self, logging_obj):
         """Custom pricing in litellm_metadata.model_info should set custom_pricing flag."""
         from litellm.litellm_core_utils.litellm_logging import \
