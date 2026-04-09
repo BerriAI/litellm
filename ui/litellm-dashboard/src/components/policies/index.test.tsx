@@ -182,4 +182,39 @@ describe("PoliciesPanel attachment delete", () => {
       expect(networkingMocks.deletePolicyAttachmentCall).toHaveBeenCalledWith("test-token", EXPECTED_ATTACHMENT_ID);
     });
   });
+
+  it("should show mutation pending state while attachment delete is in flight", async () => {
+    let resolveDelete: (() => void) | undefined;
+    const deletePromise = new Promise<void>((resolve) => {
+      resolveDelete = resolve;
+    });
+    networkingMocks.deletePolicyAttachmentCall.mockImplementationOnce(() => deletePromise);
+
+    const user = userEvent.setup();
+    renderWithProviders(<PoliciesPanel accessToken="test-token" userRole="Admin" />);
+
+    await waitFor(() => {
+      expect(networkingMocks.getPolicyAttachmentsList).toHaveBeenCalled();
+    });
+
+    await user.click(screen.getByRole("tab", { name: /^attachments$/i }));
+    await waitFor(() => {
+      expect(screen.getByText("test-policy")).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByRole("button", { name: /TrashIcon/i }));
+    const dialog = await screen.findByRole("dialog", {}, { timeout: 5000 });
+
+    const deleteButton = within(dialog).getByRole("button", { name: /^delete$/i });
+    await user.click(deleteButton);
+
+    await waitFor(() => {
+      expect(within(dialog).getByRole("button", { name: /deleting/i })).toBeDisabled();
+    });
+
+    resolveDelete?.();
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    });
+  });
 });
