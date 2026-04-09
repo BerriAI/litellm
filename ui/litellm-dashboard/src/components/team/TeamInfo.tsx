@@ -41,7 +41,7 @@ import ObjectPermissionsView from "../object_permissions_view";
 import NumericalInput from "../shared/numerical_input";
 import VectorStoreSelector from "../vector_store_management/VectorStoreSelector";
 import EditLoggingSettings from "./EditLoggingSettings";
-import RouterSettingsAccordion, { RouterSettingsAccordionRef, RouterSettingsAccordionValue } from "../common_components/RouterSettingsAccordion";
+import RouterSettingsAccordion, { RouterSettingsAccordionRef } from "../common_components/RouterSettingsAccordion";
 import MemberModal from "./EditMembership";
 import MemberPermissions from "./member_permissions";
 import {
@@ -189,7 +189,6 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [isTeamSaving, setIsTeamSaving] = useState(false);
-  const [routerSettings, setRouterSettings] = useState<RouterSettingsAccordionValue | null>(null);
   const routerSettingsRef = React.useRef<RouterSettingsAccordionRef>(null);
   const [organization, setOrganization] = useState<Organization | null>(null);
   const { userRole, userId } = useAuthorized();
@@ -592,8 +591,8 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         updateData.access_group_ids = values.access_group_ids;
       }
 
-      // Handle router_settings - use ref to get fresh values from DOM at save time
-      const currentRouterSettings = routerSettingsRef.current?.getValue() ?? routerSettings;
+      // Handle router_settings - read fresh values from DOM at save time
+      const currentRouterSettings = routerSettingsRef.current?.getValue();
       if (currentRouterSettings?.router_settings) {
         const hasValues = Object.values(currentRouterSettings.router_settings).some(
           (value) => value !== null && value !== undefined && value !== "",
@@ -607,7 +606,6 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
 
       NotificationsManager.success("Team settings updated successfully");
       setIsEditing(false);
-      setRouterSettings(null);
       fetchTeamInfo();
     } catch (error) {
       console.error("Error updating team:", error);
@@ -1106,8 +1104,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                       <RouterSettingsAccordion
                         ref={routerSettingsRef}
                         accessToken={accessToken || ""}
-                        value={routerSettings || (info.router_settings ? { router_settings: info.router_settings } : undefined)}
-                        onChange={setRouterSettings}
+                        value={info.router_settings ? { router_settings: info.router_settings } : undefined}
                         modelData={userModels.length > 0 ? { data: userModels.map((model) => ({ model_name: model })) } : undefined}
                       />
                     </Form.Item>
@@ -1311,7 +1308,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
 
                     <div className="sticky z-10 bg-white p-4 pr-0 border-t border-gray-200 bottom-[-1.5rem] inset-x-[-1.5rem]">
                       <div className="flex justify-end items-center gap-2">
-                        <Button onClick={() => { setIsEditing(false); setRouterSettings(null); }} disabled={isTeamSaving}>
+                        <Button onClick={() => setIsEditing(false)} disabled={isTeamSaving}>
                           Cancel
                         </Button>
                         <Button icon={<SaveOutlined className="h-4 w-4" />} type="primary" htmlType="submit" loading={isTeamSaving}>

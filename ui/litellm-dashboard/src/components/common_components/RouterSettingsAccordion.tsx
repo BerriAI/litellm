@@ -92,11 +92,15 @@ const RouterSettingsAccordion = forwardRef<RouterSettingsAccordionRef, RouterSet
         })
         : null;
 
-      // Skip if this is an internal update (from our own onChange)
-      if (isInternalUpdateRef.current) {
+      // Skip if this is an internal update (from our own onChange) and the value hasn't actually changed
+      if (isInternalUpdateRef.current && valueKey === lastInitializedValueRef.current) {
         isInternalUpdateRef.current = false;
-        lastInitializedValueRef.current = valueKey;
         return;
+      }
+
+      // Reset the flag if value actually changed externally
+      if (isInternalUpdateRef.current && valueKey !== lastInitializedValueRef.current) {
+        isInternalUpdateRef.current = false;
       }
 
       // Only update if the value actually changed from an external source
