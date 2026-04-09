@@ -2291,6 +2291,8 @@ def test_prompt_factory_nested():
 async def test_completion_fine_tuned_model():
     load_vertex_ai_credentials()
     mock_response = AsyncMock()
+    mock_response.headers = {}
+    mock_response.status_code = 200
 
     def return_val():
         return {
@@ -2326,7 +2328,6 @@ async def test_completion_fine_tuned_model():
         }
 
     mock_response.json = return_val
-    mock_response.status_code = 200
 
     expected_payload = {
         "contents": [
