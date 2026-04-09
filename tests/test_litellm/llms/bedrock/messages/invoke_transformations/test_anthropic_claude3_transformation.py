@@ -13,6 +13,7 @@ sys.path.insert(0, os.path.abspath("../../../../../.."))
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.bedrock.common_utils import (
+    ensure_bedrock_anthropic_messages_tool_names,
     normalize_tool_input_schema_types_for_bedrock_invoke,
     remove_custom_field_from_tools,
 )
@@ -335,6 +336,50 @@ def test_normalize_tool_input_schema_types_for_bedrock_invoke():
     request2 = {"messages": []}
     normalize_tool_input_schema_types_for_bedrock_invoke(request2)
     assert request2 == {"messages": []}
+
+
+def test_ensure_bedrock_anthropic_messages_tool_names():
+    request = {
+        "tools": [
+            {"input_schema": {"type": "object", "properties": {}}},
+            {"name": "", "input_schema": {"type": "object", "properties": {}}},
+            {"name": "  ", "input_schema": {"type": "object", "properties": {}}},
+            {"name": "KeepMe", "input_schema": {"type": "object", "properties": {}}},
+        ]
+    }
+    ensure_bedrock_anthropic_messages_tool_names(request)
+    assert request["tools"][0]["name"] == "litellm_unnamed_tool_0"
+    assert request["tools"][1]["name"] == "litellm_unnamed_tool_1"
+    assert request["tools"][2]["name"] == "litellm_unnamed_tool_2"
+    assert request["tools"][3]["name"] == "KeepMe"
+
+
+def test_bedrock_invoke_messages_transform_adds_name_when_tool_missing_name():
+    """Bedrock requires tools.0.custom.name when the payload is schema-only."""
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    optional_params = {
+        "max_tokens": 128,
+        "tools": [
+            {
+                "input_schema": {
+                    "type": "object",
+                    "properties": {"questions": {"type": "array"}},
+                    "required": ["questions"],
+                },
+            }
+        ],
+        "stream": False,
+    }
+    result = cfg.transform_anthropic_messages_request(
+        model="anthropic.claude-3-haiku-20240307-v1:0",
+        messages=[{"role": "user", "content": "hi"}],
+        anthropic_messages_optional_request_params=copy.deepcopy(optional_params),
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+    assert result["tools"][0]["name"] == "litellm_unnamed_tool_0"
 
 
 def test_bedrock_invoke_messages_transform_converts_custom_tool_schema_type_to_object():
