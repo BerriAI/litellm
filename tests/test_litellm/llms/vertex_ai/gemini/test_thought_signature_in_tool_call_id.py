@@ -285,3 +285,55 @@ def test_parallel_tool_calls_with_signatures(enable_preview_features):
     assert THOUGHT_SIGNATURE_SEPARATOR not in tools[1]["id"]
     sig2 = _get_thought_signature_from_tool({"id": tools[1]["id"], "type": "function"})
     assert sig2 is None
+
+
+def test_sibling_thought_part_propagates_to_all_parallel_calls() -> None:
+    """
+    Regression test for the scenario this PR addresses.
+
+    Gemini may return a structure like:
+        [{thought: true, thoughtSignature: "..."}, {functionCall: A}, {functionCall: B}]
+
+    The thoughtSignature is on a *sibling* thought part, not on the functionCall parts.
+    It represents the model's reasoning for the entire turn and should be propagated to
+    ALL parallel function calls so that multi-turn context is preserved on the next turn.
+
+    This also verifies that a functionCall part's OWN thoughtSignature (a separate scenario
+    where Gemini puts the signature directly on the functionCall) does NOT bleed into
+    sibling calls — _thought_signatures only collects from parts where thought==True,
+    so functionCall-level signatures stay scoped to their own call.
+    """
+    thought_signature = "ErcN4Ad4qImqBhBo8LkVzGuqK7Y="
+
+    # Gemini response: one thought part with signature, two parallel function calls
+    parts_sibling_thought = [
+        HttpxPartType(
+            thought=True,
+            thoughtSignature=thought_signature,
+        ),
+        HttpxPartType(
+            functionCall={"name": "get_temperature", "args": {"location": "Paris"}},
+        ),
+        HttpxPartType(
+            functionCall={"name": "get_temperature", "args": {"location": "London"}},
+        ),
+    ]
+
+    function, tools, _ = VertexGeminiConfig._transform_parts(
+        parts=parts_sibling_thought,
+        cumulative_tool_call_idx=0,
+        is_function_call=False,
+    )
+
+    assert tools is not None
+    assert len(tools) == 2
+
+    # Both function calls must carry the thought signature from the sibling thought part.
+    for i, tool in enumerate(tools):
+        sig = tool.get("provider_specific_fields", {}).get("thought_signature")
+        assert sig == thought_signature, (
+            f"tool[{i}] expected thought_signature={thought_signature!r}, got {sig!r}"
+        )
+        assert THOUGHT_SIGNATURE_SEPARATOR in tool["id"], (
+            f"tool[{i}] thought signature should be embedded in ID"
+        )

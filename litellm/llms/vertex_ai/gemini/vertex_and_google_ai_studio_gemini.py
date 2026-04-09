@@ -1585,10 +1585,14 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
     ]:
         function: Optional[ChatCompletionToolCallFunctionChunk] = None
         _tools: List[ChatCompletionToolCallChunk] = []
-        # Collect thoughtSignature values only from thought parts (thought: true).
-        # Gemini may place thoughtSignature on a separate thought part rather than
-        # the functionCall part. We exclude functionCall parts to avoid bleeding
-        # signatures across parallel function calls.
+        # Collect thoughtSignature values ONLY from thought parts (thought: true).
+        # Gemini may return: [{thought: true, thoughtSignature: "..."}, {functionCall: A}, ...]
+        # In this layout the signature belongs to ALL function calls in the turn (it
+        # encodes the model's reasoning context for multi-turn preservation), so we
+        # propagate it to every parallel call via the fallback below.
+        # We intentionally exclude functionCall parts here — a signature on a
+        # functionCall part is already consumed via `part.get("thoughtSignature")`
+        # in the loop and must NOT bleed into sibling calls.
         _thought_signatures = [
             p.get("thoughtSignature")
             for p in parts
