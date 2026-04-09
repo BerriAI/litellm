@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ### Installation
 - `make install-dev` - Install core development dependencies
 - `make install-proxy-dev` - Install proxy development dependencies with full feature set
-- `make install-test-deps` - Install all test dependencies
+- `make install-test-deps` - Install the full local test environment and generate the Prisma client
 
 ### Testing
 - `make test` - Run all tests
@@ -20,14 +20,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - `make format` - Apply Black code formatting
 - `make lint-ruff` - Run Ruff linting only
 - `make lint-mypy` - Run MyPy type checking only
-- **Before committing, always run `poetry run black .` to format your code.** Black formatting is enforced in CI.
+- **Before committing, always run `uv run black .` to format your code.** Black formatting is enforced in CI.
 
 ### Single Test Files
-- `poetry run pytest tests/path/to/test_file.py -v` - Run specific test file
-- `poetry run pytest tests/path/to/test_file.py::test_function -v` - Run specific test
+- `uv run pytest tests/path/to/test_file.py -v` - Run specific test file
+- `uv run pytest tests/path/to/test_file.py::test_function -v` - Run specific test
 
 ### Running Scripts
-- `poetry run python script.py` - Run Python scripts (use for non-test files)
+- `uv run python script.py` - Run Python scripts (use for non-test files)
 
 ### GitHub Issue & PR Templates
 When contributing to the project, use the appropriate templates:
