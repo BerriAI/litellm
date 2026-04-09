@@ -213,8 +213,9 @@ token: Optional[
 ] = None  # Not used anymore, will be removed in next MAJOR release - https://github.com/BerriAI/litellm/discussions/648
 telemetry = True
 max_tokens: int = DEFAULT_MAX_TOKENS  # OpenAI Defaults
-max_mcp_auto_execution_rounds: int = int(
-    os.getenv("LITELLM_MAX_MCP_AUTO_EXECUTION_ROUNDS", 6)
+_raw_max_rounds = os.getenv("LITELLM_MAX_MCP_AUTO_EXECUTION_ROUNDS")
+max_mcp_auto_execution_rounds: int = (
+    int(_raw_max_rounds) if _raw_max_rounds is not None and _raw_max_rounds.isdigit() else 6
 )
 drop_params = bool(os.getenv("LITELLM_DROP_PARAMS", False))
 modify_params = bool(os.getenv("LITELLM_MODIFY_PARAMS", False))
