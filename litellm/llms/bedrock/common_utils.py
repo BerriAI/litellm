@@ -72,7 +72,7 @@ def remove_custom_field_from_tools(request_body: dict) -> None:
 
 def normalize_json_schema_custom_types_to_object(schema: dict) -> None:
     """
-    In-place: replace JSON Schema ``type: \"custom\"`` with ``\"object`` (iterative walk).
+    In-place: replace JSON Schema ``type: \"custom\"`` with ``\"object\"`` (iterative walk).
 
     Anthropic / Claude Code use ``custom`` for tool schemas; Bedrock Invoke and
     Bedrock Converse only accept standard JSON Schema type strings.
@@ -131,6 +131,25 @@ def normalize_tool_input_schema_types_for_bedrock_invoke(request_body: dict) -> 
         input_schema = tool.get("input_schema")
         if isinstance(input_schema, dict):
             normalize_json_schema_custom_types_to_object(input_schema)
+
+
+def ensure_bedrock_anthropic_messages_tool_names(request_body: dict) -> None:
+    """
+    Bedrock Invoke (Anthropic Messages) requires each tool to include ``name``.
+    Some clients send only ``input_schema``; Bedrock then errors with
+    ``tools.0.custom.name: Field required``.
+
+    In-place: set ``name`` to ``litellm_unnamed_tool_{index}`` when missing or blank.
+    """
+    tools = request_body.get("tools")
+    if not tools or not isinstance(tools, list):
+        return
+    for i, tool in enumerate(tools):
+        if not isinstance(tool, dict):
+            continue
+        name = tool.get("name")
+        if name is None or (isinstance(name, str) and not name.strip()):
+            tool["name"] = f"litellm_unnamed_tool_{i}"
 
 
 class AmazonBedrockGlobalConfig:
