@@ -80,6 +80,25 @@ def _has_file_search_tool(tools: Optional[Any]) -> bool:
     return any(isinstance(t, dict) and t.get("type") == "file_search" for t in tools)
 
 
+def _extract_dynamic_params_from_extra_body(
+    extra_body: Dict[str, Any], kwargs: Dict[str, Any]
+) -> None:
+    """Extract dynamic prompt management params from extra_body into kwargs.
+
+    The Responses API receives params like ``cache_control_injection_points``
+    inside ``extra_body``, but the prompt management hook system expects them
+    as top-level kwargs.  Move recognised keys so the hooks can find them.
+    """
+    if not isinstance(extra_body, dict):
+        return
+
+    from litellm.types.utils import DynamicPromptManagementParamLiteral
+
+    for param in DynamicPromptManagementParamLiteral.list_all_params():
+        if param in extra_body and param not in kwargs:
+            kwargs[param] = extra_body.pop(param)
+
+
 def mock_responses_api_response(
     mock_response: str = "In a peaceful grove beneath a silver moon, a unicorn named Lumina discovered a hidden pool that reflected the stars. As she dipped her horn into the water, the pool began to shimmer, revealing a pathway to a magical realm of endless night skies. Filled with wonder, Lumina whispered a wish for all who dream to find their own hidden magic, and as she glanced back, her hoofprints sparkled like stardust.",
 ):
@@ -484,6 +503,10 @@ async def aresponses(
         prompt_variables = cast(Optional[dict], kwargs.get("prompt_variables", None))
         original_model = model
 
+        # Extract dynamic prompt management params from extra_body
+        if extra_body:
+            _extract_dynamic_params_from_extra_body(extra_body, kwargs)
+
         if isinstance(
             litellm_logging_obj, LiteLLMLoggingObj
         ) and litellm_logging_obj.should_run_prompt_management_hooks(
@@ -782,6 +805,11 @@ def responses(
             litellm_params=litellm_params,
             local_vars=local_vars,
         )
+
+        # Extract dynamic prompt management params (e.g. cache_control_injection_points)
+        # from extra_body into kwargs so the hook system can find them.
+        if extra_body:
+            _extract_dynamic_params_from_extra_body(extra_body, kwargs)
 
         #########################################################
         # PROMPT MANAGEMENT

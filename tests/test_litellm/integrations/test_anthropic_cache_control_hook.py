@@ -1073,3 +1073,45 @@ async def test_anthropic_cache_control_hook_string_negative_index():
                 f"Expected cachePoint in last message content, got: {last_message_content}. "
                 "String index '-1' was not parsed correctly (str.isdigit() returns False for negative strings)."
             )
+
+
+def test_extract_dynamic_params_from_extra_body():
+    """
+    Verify that cache_control_injection_points inside extra_body gets
+    extracted into kwargs so the prompt-management hook system can find it.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/25335
+    """
+    from litellm.responses.main import _extract_dynamic_params_from_extra_body
+
+    injection_points = [
+        {"location": "message", "role": "system", "index": 0},
+        {"location": "message", "role": "user", "index": -1},
+    ]
+
+    extra_body: dict = {"cache_control_injection_points": injection_points, "other_key": "keep"}
+    kwargs: dict = {}
+
+    _extract_dynamic_params_from_extra_body(extra_body, kwargs)
+
+    # cache_control_injection_points should be moved to kwargs
+    assert kwargs["cache_control_injection_points"] == injection_points
+    # should be removed from extra_body
+    assert "cache_control_injection_points" not in extra_body
+    # other keys should remain
+    assert extra_body["other_key"] == "keep"
+
+
+def test_extract_dynamic_params_does_not_overwrite_existing_kwargs():
+    """If kwargs already has the key, extra_body should not overwrite it."""
+    from litellm.responses.main import _extract_dynamic_params_from_extra_body
+
+    extra_body: dict = {"cache_control_injection_points": [{"from": "extra_body"}]}
+    kwargs: dict = {"cache_control_injection_points": [{"from": "kwargs"}]}
+
+    _extract_dynamic_params_from_extra_body(extra_body, kwargs)
+
+    # kwargs value should remain unchanged
+    assert kwargs["cache_control_injection_points"] == [{"from": "kwargs"}]
+    # extra_body should still have it since it wasn't consumed
+    assert "cache_control_injection_points" in extra_body
