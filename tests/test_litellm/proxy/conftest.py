@@ -13,31 +13,6 @@ import pytest
 import yaml
 from fastapi.testclient import TestClient
 
-def _patch_missing_responses_activate() -> None:
-    """
-    Ensure tests using @responses.activate are skipped when the installed
-    `responses` package does not expose `activate`.
-    """
-    try:
-        import responses  # type: ignore
-    except Exception:
-        return
-
-    if hasattr(responses, "activate"):
-        return
-
-    reason = "Skipping: installed responses package has no 'activate' attribute"
-
-    def _skip_activate(func=None, *args, **kwargs):
-        if func is None:
-            return lambda f: pytest.mark.skip(reason=reason)(f)
-        return pytest.mark.skip(reason=reason)(func)
-
-    setattr(responses, "activate", _skip_activate)
-
-
-_patch_missing_responses_activate()
-
 def build_cache_config(enable_cache: bool = True) -> Optional[Dict]:
     """
     Build Redis cache configuration from environment variables.
