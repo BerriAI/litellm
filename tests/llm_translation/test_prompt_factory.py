@@ -859,8 +859,8 @@ def test_ensure_alternating_roles_three_consecutive_assistants():
     ]
 
 
-def test_ensure_alternating_roles_does_not_split_tool_call_chain():
-    """Tool-call chains [user, assistant(tc), tool, user] are preserved as-is."""
+def test_ensure_alternating_roles_inserts_assistant_continue_across_tool_chain():
+    """[user, assistant(tc), tool, user] gets assistant_continue before the second user."""
     messages = [
         {"role": "user", "content": "Search for X"},
         {
@@ -899,15 +899,16 @@ def test_ensure_alternating_roles_does_not_split_tool_call_chain():
             ],
         },
         {"role": "tool", "tool_call_id": "c1", "content": "results"},
+        {"role": "assistant", "content": "Please continue."},
         {"role": "user", "content": "Thanks, now do Y"},
     ]
 
 
 def test_ensure_alternating_roles_assistant_tool_call_then_assistant():
     """
-    Preserve old behavior for malformed adjacent assistant turns:
-    [assistant(tool_calls), assistant(no-tool-calls), user] should insert
-    user_continue between assistant messages.
+    Malformed [assistant(tc), assistant(no-tc), user]:
+    user_continue inserts break between adjacents, then assistant_continue
+    fills the counted-sequence gap.
     """
     messages = [
         {
@@ -945,6 +946,7 @@ def test_ensure_alternating_roles_assistant_tool_call_then_assistant():
                 }
             ],
         },
+        {"role": "assistant", "content": "Please continue."},
         {"role": "user", "content": "Please continue."},
         {"role": "assistant", "content": "Here's what I found."},
         {"role": "user", "content": "Thanks"},
@@ -993,7 +995,181 @@ def test_ensure_alternating_roles_trailing_tool_call_assistant():
                 }
             ],
         },
+        {"role": "assistant", "content": "Please continue."},
         {"role": "user", "content": "Please continue."},
+    ]
+
+
+def test_ensure_alternating_roles_multiple_tool_results():
+    """[user, assistant(tc), tool, tool, user] — multiple tool results before next user."""
+    messages = [
+        {"role": "user", "content": "Search for X and Y"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "c1",
+                    "type": "function",
+                    "function": {"name": "search_x", "arguments": "{}"},
+                },
+                {
+                    "id": "c2",
+                    "type": "function",
+                    "function": {"name": "search_y", "arguments": "{}"},
+                },
+            ],
+        },
+        {"role": "tool", "tool_call_id": "c1", "content": "result X"},
+        {"role": "tool", "tool_call_id": "c2", "content": "result Y"},
+        {"role": "user", "content": "Thanks"},
+    ]
+
+    transformed_messages = get_completion_messages(
+        messages=messages,
+        assistant_continue_message=None,
+        user_continue_message=None,
+        ensure_alternating_roles=True,
+    )
+
+    assert transformed_messages == [
+        {"role": "user", "content": "Search for X and Y"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "c1",
+                    "type": "function",
+                    "function": {"name": "search_x", "arguments": "{}"},
+                },
+                {
+                    "id": "c2",
+                    "type": "function",
+                    "function": {"name": "search_y", "arguments": "{}"},
+                },
+            ],
+        },
+        {"role": "tool", "tool_call_id": "c1", "content": "result X"},
+        {"role": "tool", "tool_call_id": "c2", "content": "result Y"},
+        {"role": "assistant", "content": "Please continue."},
+        {"role": "user", "content": "Thanks"},
+    ]
+
+
+def test_ensure_alternating_roles_chained_tool_calls():
+    """[user, assistant(tc), tool, assistant(tc), tool, user] — chained tool calls."""
+    messages = [
+        {"role": "user", "content": "Do multi-step task"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "c1",
+                    "type": "function",
+                    "function": {"name": "step1", "arguments": "{}"},
+                },
+            ],
+        },
+        {"role": "tool", "tool_call_id": "c1", "content": "step1 done"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "c2",
+                    "type": "function",
+                    "function": {"name": "step2", "arguments": "{}"},
+                },
+            ],
+        },
+        {"role": "tool", "tool_call_id": "c2", "content": "step2 done"},
+        {"role": "user", "content": "What happened?"},
+    ]
+
+    transformed_messages = get_completion_messages(
+        messages=messages,
+        assistant_continue_message=None,
+        user_continue_message=None,
+        ensure_alternating_roles=True,
+    )
+
+    assert transformed_messages == [
+        {"role": "user", "content": "Do multi-step task"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "c1",
+                    "type": "function",
+                    "function": {"name": "step1", "arguments": "{}"},
+                },
+            ],
+        },
+        {"role": "tool", "tool_call_id": "c1", "content": "step1 done"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "c2",
+                    "type": "function",
+                    "function": {"name": "step2", "arguments": "{}"},
+                },
+            ],
+        },
+        {"role": "tool", "tool_call_id": "c2", "content": "step2 done"},
+        {"role": "assistant", "content": "Please continue."},
+        {"role": "user", "content": "What happened?"},
+    ]
+
+
+def test_ensure_alternating_roles_system_prefix_with_tool_chain():
+    """[system, user, assistant(tc), tool, user] — system prefix doesn't interfere."""
+    messages = [
+        {"role": "system", "content": "You are helpful."},
+        {"role": "user", "content": "Search for X"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "c1",
+                    "type": "function",
+                    "function": {"name": "search", "arguments": "{}"},
+                },
+            ],
+        },
+        {"role": "tool", "tool_call_id": "c1", "content": "results"},
+        {"role": "user", "content": "Thanks"},
+    ]
+
+    transformed_messages = get_completion_messages(
+        messages=messages,
+        assistant_continue_message=None,
+        user_continue_message=None,
+        ensure_alternating_roles=True,
+    )
+
+    assert transformed_messages == [
+        {"role": "system", "content": "You are helpful."},
+        {"role": "user", "content": "Search for X"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "c1",
+                    "type": "function",
+                    "function": {"name": "search", "arguments": "{}"},
+                },
+            ],
+        },
+        {"role": "tool", "tool_call_id": "c1", "content": "results"},
+        {"role": "assistant", "content": "Please continue."},
+        {"role": "user", "content": "Thanks"},
     ]
 
 

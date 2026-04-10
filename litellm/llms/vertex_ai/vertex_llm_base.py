@@ -81,26 +81,26 @@ class VertexBase:
     ) -> Tuple[Any, str]:
         if credentials is not None:
             if isinstance(credentials, str):
+                _is_path = os.path.exists(
+                    credentials
+                )  # credentials is from server config (litellm_params), not user input
                 verbose_logger.debug(
-                    "Vertex: Loading vertex credentials from %s", credentials
-                )
-                verbose_logger.debug(
-                    "Vertex: checking if credentials is a valid path, os.path.exists(%s)=%s, current dir %s",
-                    credentials,
-                    os.path.exists(credentials),
+                    "Vertex: Loading vertex credentials, is_file_path=%s, current dir %s",
+                    _is_path,
                     os.getcwd(),
                 )
 
                 try:
-                    if os.path.exists(credentials):
-                        json_obj = json.load(open(credentials))
+                    if _is_path:
+                        with open(credentials) as f:
+                            json_obj = json.load(f)
                     else:
                         json_obj = json.loads(credentials)
-                except Exception:
+                except Exception as e:
                     raise Exception(
-                        "Unable to load vertex credentials from environment. Got={}".format(
-                            credentials
-                        )
+                        "Unable to load vertex credentials from environment. "
+                        "Ensure the JSON is valid (check for unescaped newlines in private_key). "
+                        "Parse error: {}".format(type(e).__name__)
                     )
             elif isinstance(credentials, dict):
                 json_obj = credentials
@@ -136,6 +136,11 @@ class VertexBase:
                             json_obj,
                             scopes=["https://www.googleapis.com/auth/cloud-platform"],
                         )
+                elif isinstance(credential_source, dict) and "executable" in credential_source:
+                    creds = self._credentials_from_pluggable(
+                        json_obj,
+                        scopes=["https://www.googleapis.com/auth/cloud-platform"],
+                    )
                 else:
                     creds = self._credentials_from_identity_pool(
                         json_obj,
@@ -186,6 +191,17 @@ class VertexBase:
             raise ImportError(GOOGLE_IMPORT_ERROR_MESSAGE)
 
         creds = identity_pool.Credentials.from_info(json_obj)
+        if scopes and hasattr(creds, "requires_scopes") and creds.requires_scopes:
+            creds = creds.with_scopes(scopes)
+        return creds
+
+    def _credentials_from_pluggable(self, json_obj, scopes):
+        try:
+            from google.auth import pluggable
+        except ImportError:
+            raise ImportError(GOOGLE_IMPORT_ERROR_MESSAGE)
+
+        creds = pluggable.Credentials.from_info(json_obj)
         if scopes and hasattr(creds, "requires_scopes") and creds.requires_scopes:
             creds = creds.with_scopes(scopes)
         return creds
@@ -668,8 +684,8 @@ class VertexBase:
         ## VALIDATION STEP
         if _credentials.token is None or not isinstance(_credentials.token, str):
             raise ValueError(
-                "Could not resolve credentials token. Got None or non-string token - {}".format(
-                    _credentials.token
+                "Could not resolve credentials token. Got None or non-string token (type={})".format(
+                    type(_credentials.token).__name__
                 )
             )
 
