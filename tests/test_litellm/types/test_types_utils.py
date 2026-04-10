@@ -80,51 +80,51 @@ def test_usage_completion_tokens_details_text_tokens():
 
     # Test data from the reported issue
     usage_data = {
-        'completion_tokens': 77,
-        'prompt_tokens': 11937,
-        'total_tokens': 12014,
-        'completion_tokens_details': {
-            'accepted_prediction_tokens': None,
-            'audio_tokens': None,
-            'reasoning_tokens': 65,
-            'rejected_prediction_tokens': None,
-            'text_tokens': 12
+        "completion_tokens": 77,
+        "prompt_tokens": 11937,
+        "total_tokens": 12014,
+        "completion_tokens_details": {
+            "accepted_prediction_tokens": None,
+            "audio_tokens": None,
+            "reasoning_tokens": 65,
+            "rejected_prediction_tokens": None,
+            "text_tokens": 12,
         },
-        'prompt_tokens_details': {
-            'audio_tokens': None,
-            'cached_tokens': None,
-            'text_tokens': 11937,
-            'image_tokens': None
-        }
+        "prompt_tokens_details": {
+            "audio_tokens": None,
+            "cached_tokens": None,
+            "text_tokens": 11937,
+            "image_tokens": None,
+        },
     }
 
     # Create Usage object
     u = Usage(**usage_data)
-    
+
     # Verify the object has the text_tokens field
-    assert hasattr(u.completion_tokens_details, 'text_tokens')
+    assert hasattr(u.completion_tokens_details, "text_tokens")
     assert u.completion_tokens_details.text_tokens == 12
-    
+
     # Get model_dump output
     dump_result = u.model_dump()
-    
+
     # Verify text_tokens is present in the model_dump output
-    assert 'completion_tokens_details' in dump_result
-    assert 'text_tokens' in dump_result['completion_tokens_details']
-    assert dump_result['completion_tokens_details']['text_tokens'] == 12
-    
+    assert "completion_tokens_details" in dump_result
+    assert "text_tokens" in dump_result["completion_tokens_details"]
+    assert dump_result["completion_tokens_details"]["text_tokens"] == 12
+
     # Verify the full completion_tokens_details structure
     expected_completion_details = {
-        'accepted_prediction_tokens': None,
-        'audio_tokens': None,
-        'reasoning_tokens': 65,
-        'rejected_prediction_tokens': None,
-        'text_tokens': 12,
-        'image_tokens': None,
-        'video_tokens': None
+        "accepted_prediction_tokens": None,
+        "audio_tokens": None,
+        "reasoning_tokens": 65,
+        "rejected_prediction_tokens": None,
+        "text_tokens": 12,
+        "image_tokens": None,
+        "video_tokens": None,
     }
-    assert dump_result['completion_tokens_details'] == expected_completion_details
-    
+    assert dump_result["completion_tokens_details"] == expected_completion_details
+
     # Verify round-trip serialization works
     new_usage = Usage(**dump_result)
     assert new_usage.completion_tokens_details.text_tokens == 12
@@ -257,7 +257,9 @@ class TestNativeFinishReason:
         )
         assert choice.finish_reason == "length"
         assert choice.provider_specific_fields["native_finish_reason"] == "max_tokens"
-        assert choice.provider_specific_fields["citations"] == [{"url": "http://example.com"}]
+        assert choice.provider_specific_fields["citations"] == [
+            {"url": "http://example.com"}
+        ]
 
     def test_gemini_safety_reason_exposed(self):
         from litellm.types.utils import Choices
@@ -279,6 +281,8 @@ class TestNativeFinishReason:
         choice = Choices(finish_reason="MAX_TOKENS")
         assert choice.finish_reason == "length"
         assert choice.provider_specific_fields["native_finish_reason"] == "MAX_TOKENS"
+
+
 def test_delta_maps_reasoning_to_reasoning_content():
     """
     Test that Delta maps 'reasoning' field to 'reasoning_content'.
@@ -291,7 +295,9 @@ def test_delta_maps_reasoning_to_reasoning_content():
     # When provider sends 'reasoning' (e.g., Cerebras gpt-oss streaming)
     delta = Delta(content=None, role="assistant", reasoning="thinking step by step")
     assert delta.reasoning_content == "thinking step by step"
-    assert not hasattr(delta, "reasoning"), "reasoning should not leak as an extra attribute"
+    assert not hasattr(
+        delta, "reasoning"
+    ), "reasoning should not leak as an extra attribute"
 
     # When provider sends 'reasoning_content' directly (e.g., NIM), it still works
     delta2 = Delta(content="hello", reasoning_content="direct reasoning")
@@ -304,3 +310,36 @@ def test_delta_maps_reasoning_to_reasoning_content():
     # When neither is present, reasoning_content is not set (OpenAI spec)
     delta4 = Delta(content="hello")
     assert not hasattr(delta4, "reasoning_content")
+
+
+def test_adapter_completion_stream_wrapper():
+    """Test AdapterCompletionStreamWrapper properly handles None chunks and logging."""
+    from litellm.types.utils import AdapterCompletionStreamWrapper
+
+    # Test 1: Normal chunk iteration works
+    normal_chunks = ["chunk1", "chunk2", "chunk3"]
+    wrapper = AdapterCompletionStreamWrapper(iter(normal_chunks))
+    result = list(wrapper)
+    assert result == ["chunk1", "chunk2", "chunk3"]
+
+    # Test 2: None chunk raises ValueError with descriptive message
+    none_chunks = ["valid", None, "after"]
+    wrapper = AdapterCompletionStreamWrapper(iter(none_chunks))
+    with pytest.raises(ValueError) as exc_info:
+        for chunk in wrapper:
+            pass
+    assert "None chunk" in str(exc_info.value)
+
+    # Test 3: "None" string raises ValueError
+    string_none_chunks = ["valid", "None", "after"]
+    wrapper = AdapterCompletionStreamWrapper(iter(string_none_chunks))
+    with pytest.raises(ValueError) as exc_info:
+        for chunk in wrapper:
+            pass
+    assert "None chunk" in str(exc_info.value)
+
+    # Test 4: Empty iterator raises StopIteration
+    empty_chunks = []
+    wrapper = AdapterCompletionStreamWrapper(iter(empty_chunks))
+    with pytest.raises(StopIteration):
+        next(wrapper)
