@@ -73,7 +73,7 @@ jsonschema==4.23.0 # validating json schema - aligned with openapi-core + mcp
 websockets==15.0.1 # for realtime API
 soundfile==0.12.1 # for audio file processing
 openapi-core==0.21.0 # for OpenAPI compliance tests
-pypdf==6.9.2 # for PDF text extraction in RAG ingestion (CVE-2026-27888)
+pypdf==6.10.0 # for PDF text extraction in RAG ingestion (CVE-2026-27888)
 
 # Transitive deps pinned to prevent floating between builds
 aiofiles==24.1.0 # transitive dep (langfuse)
