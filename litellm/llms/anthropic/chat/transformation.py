@@ -19,6 +19,7 @@ from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.llms.base_llm.base_utils import type_to_response_format_param
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.types.llms.anthropic import (
+    ANTHROPIC_ADVISOR_TOOL_TYPE,
     ANTHROPIC_BETA_HEADER_VALUES,
     ANTHROPIC_HOSTED_TOOLS,
     AllAnthropicMessageValues,
@@ -513,7 +514,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 type="tool_search_tool_bm25_20251119",
                 name=tool_name,
             )
-        elif tool["type"] == "advisor_20260301":
+        elif tool["type"] == ANTHROPIC_ADVISOR_TOOL_TYPE:
             from litellm.types.llms.anthropic import AnthropicAdvisorTool
 
             _tool_dict = cast(dict, tool)
@@ -521,7 +522,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             if not isinstance(advisor_model, str):
                 raise ValueError("Advisor tool must have a valid model")
             _advisor_tool = AnthropicAdvisorTool(
-                type="advisor_20260301",
+                type=ANTHROPIC_ADVISOR_TOOL_TYPE,
                 name="advisor",
                 model=advisor_model,
             )
@@ -1334,7 +1335,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 headers, ANTHROPIC_BETA_HEADER_VALUES.FAST_MODE_2026_02_01.value
             )
         for tool in _tools:
-            if tool.get("type") == "advisor_20260301":
+            if tool.get("type") == ANTHROPIC_ADVISOR_TOOL_TYPE:
                 self._ensure_beta_header(
                     headers, ANTHROPIC_BETA_HEADER_VALUES.ADVISOR_TOOL_2026_03_01.value
                 )
@@ -1422,7 +1423,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         ## Prevents Anthropic 400: advisor_tool_result in history requires advisor tool.
         _all_tools = optional_params.get("tools") or []
         _has_advisor = any(
-            isinstance(t, dict) and t.get("type") == "advisor_20260301"
+            isinstance(t, dict) and t.get("type") == ANTHROPIC_ADVISOR_TOOL_TYPE
             for t in _all_tools
         )
         if not _has_advisor:
