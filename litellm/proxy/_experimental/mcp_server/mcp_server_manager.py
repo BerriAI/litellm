@@ -2455,6 +2455,37 @@ class MCPServerManager:
             )
             tasks.append(during_hook_task)
 
+        # For per-user OAuth servers: if the client didn't supply a token in
+        # oauth2_headers, look up the stored token from Redis / DB.  This is the
+        # call_tool equivalent of _get_user_oauth_extra_headers_from_db used in
+        # list_tools.
+        if (
+            mcp_server.needs_user_oauth_token
+            and not oauth2_headers
+            and user_api_key_auth is not None
+        ):
+            user_id = getattr(user_api_key_auth, "user_id", None)
+            if user_id:
+                try:
+                    from litellm.proxy._experimental.mcp_server.server import (  # noqa: PLC0415
+                        _get_user_oauth_extra_headers_from_db,
+                    )
+
+                    stored_headers = await _get_user_oauth_extra_headers_from_db(
+                        server=mcp_server,
+                        user_api_key_auth=user_api_key_auth,
+                    )
+                    if stored_headers:
+                        oauth2_headers = stored_headers
+                except Exception as _lookup_exc:
+                    verbose_logger.debug(
+                        "call_tool: per-user token lookup failed for "
+                        "user=%s server=%s: %s",
+                        user_id,
+                        mcp_server.server_id,
+                        _lookup_exc,
+                    )
+
         # For OpenAPI servers, call the tool handler directly instead of via MCP client
         if mcp_server.spec_path:
             verbose_logger.debug(
