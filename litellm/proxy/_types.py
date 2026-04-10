@@ -1332,6 +1332,9 @@ class MCPOAuthUserCredentialRequest(LiteLLMPydanticObjectBase):
     refresh_token: Optional[str] = None
     expires_in: Optional[int] = None  # seconds until expiry
     scopes: Optional[List[str]] = None
+    # Extra fields from the token response (e.g. Slack's enterprise_id, team_id).
+    # These are checked against the server's token_validation rules.
+    token_response_metadata: Optional[Dict[str, Any]] = None
 
 
 class MCPOAuthUserCredentialStatus(LiteLLMPydanticObjectBase):
