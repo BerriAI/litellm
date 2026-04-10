@@ -68,8 +68,8 @@ test.describe("Proxy Admin - Keys", () => {
     const modal = page.locator(".ant-modal:visible");
     await modal.getByRole("button", { name: /Regenerate/ }).click();
 
-    // Success view shows a Copy Key button in the footer
-    await expect(modal.getByRole("button", { name: /Copy Key/ })).toBeVisible({ timeout: 20_000 });
+    // Success view shows a Copy button in the footer (text varies between modal versions)
+    await expect(modal.getByRole("button", { name: /Copy.*Key/ })).toBeVisible({ timeout: 20_000 });
   });
 
   test("Update key TPM and RPM limits", async ({ page }) => {
