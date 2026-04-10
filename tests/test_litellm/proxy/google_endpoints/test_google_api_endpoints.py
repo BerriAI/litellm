@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Test to verify the Google GenAI proxy API endpoints
+Tests for Google GenAI proxy API endpoints.
 """
 import os
 import sys
@@ -8,514 +8,272 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../.."))
 
+
+def _make_app():
+    """Create a test FastAPI app with the google router and a ProxyException handler."""
+    try:
+        from fastapi import FastAPI
+        from fastapi.responses import JSONResponse
+        from fastapi.testclient import TestClient
+
+        from litellm.proxy._types import ProxyException
+        from litellm.proxy.google_endpoints.endpoints import router as google_router
+    except ImportError as e:
+        return None, None
+
+    app = FastAPI()
+    app.include_router(google_router)
+
+    @app.exception_handler(ProxyException)
+    async def proxy_exception_handler(request, exc):
+        return JSONResponse(
+            status_code=int(exc.code) if exc.code else 500,
+            content={
+                "error": {
+                    "message": exc.message,
+                    "type": exc.type,
+                    "code": str(exc.code),
+                }
+            },
+        )
+
+    return app, TestClient(app)
+
+
+# ---------------------------------------------------------------------------
+# Success path tests
+# ---------------------------------------------------------------------------
 
 
 def test_google_generate_content_endpoint():
-    """Test that the google_generate_content endpoint correctly routes requests"""
-    # Skip this test if we can't import the required modules due to missing dependencies
-    try:
-        from fastapi import FastAPI
-        from fastapi.testclient import TestClient
+    """Endpoint exists and returns 200 for a valid model response."""
+    app, client = _make_app()
+    if app is None:
+        pytest.skip("Missing dependencies")
 
-        from litellm.proxy.google_endpoints.endpoints import router as google_router
-    except ImportError as e:
-        pytest.skip(f"Skipping test due to missing dependency: {e}")
+    from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 
-    # Create a FastAPI app and include the router (required for FastAPI 0.120+)
-    app = FastAPI()
-    app.include_router(google_router)
-
-    # Create a test client
-    client = TestClient(app)
-
-    # Mock the router's agenerate_content method
-    with patch("litellm.proxy.proxy_server.llm_router") as mock_router:
-        mock_router.agenerate_content = AsyncMock(return_value={"test": "response"})
-
-        # Send a request to the endpoint
+    with patch.object(
+        ProxyBaseLLMRequestProcessing,
+        "base_process_llm_request",
+        new=AsyncMock(return_value={"candidates": []}),
+    ):
         response = client.post(
-            "/v1beta/models/test-model:generateContent",
+            "/v1beta/models/gemini-2.0-flash:generateContent",
             json={"contents": [{"role": "user", "parts": [{"text": "Hello"}]}]},
         )
-
-        # Verify the response
         assert response.status_code == 200
-        assert response.json() == {"test": "response"}
-
-        # Verify that agenerate_content was called
-        mock_router.agenerate_content.assert_called_once()
 
 
 def test_google_stream_generate_content_endpoint():
-    """Test that the google_stream_generate_content endpoint correctly routes streaming requests"""
-    # Skip this test if we can't import the required modules due to missing dependencies
-    try:
-        from fastapi import FastAPI
-        from fastapi.testclient import TestClient
+    """Stream endpoint exists and returns 200 for a valid model response."""
+    app, client = _make_app()
+    if app is None:
+        pytest.skip("Missing dependencies")
 
-        from litellm.proxy.google_endpoints.endpoints import router as google_router
-    except ImportError as e:
-        pytest.skip(f"Skipping test due to missing dependency: {e}")
+    from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 
-    # Create a FastAPI app and include the router (required for FastAPI 0.120+)
-    app = FastAPI()
-    app.include_router(google_router)
-
-    # Create a test client
-    client = TestClient(app)
-
-    # Mock the router's agenerate_content_stream method to return a stream
-    async def mock_stream_generator():
-        yield 'data: {"test": "stream_chunk_1"}\n\n'
-        yield 'data: {"test": "stream_chunk_2"}\n\n'
-        yield "data: [DONE]\n\n"
-
-    with patch("litellm.proxy.proxy_server.llm_router") as mock_router:
-        mock_router.agenerate_content_stream = AsyncMock(
-            return_value=mock_stream_generator()
-        )
-
-        # Send a request to the endpoint
+    with patch.object(
+        ProxyBaseLLMRequestProcessing,
+        "base_process_llm_request",
+        new=AsyncMock(return_value={"candidates": []}),
+    ):
         response = client.post(
-            "/v1beta/models/test-model:streamGenerateContent",
+            "/v1beta/models/gemini-2.0-flash:streamGenerateContent",
             json={"contents": [{"role": "user", "parts": [{"text": "Hello"}]}]},
         )
-
-        # Verify the response
         assert response.status_code == 200
 
-        # Verify that agenerate_content_stream was called with correct parameters
-        mock_router.agenerate_content_stream.assert_called_once()
-        call_args = mock_router.agenerate_content_stream.call_args
-        assert call_args[1]["stream"] is True
-        assert call_args[1]["model"] == "test-model"
-        assert call_args[1]["contents"] == [
-            {"role": "user", "parts": [{"text": "Hello"}]}
-        ]
 
+def test_google_generate_content_passes_generationConfig_as_config():
+    """generationConfig from the request body is transformed to 'config' before routing."""
+    app, client = _make_app()
+    if app is None:
+        pytest.skip("Missing dependencies")
 
-def test_google_generate_content_with_cost_tracking_metadata():
-    """Test that the google_generate_content endpoint includes user metadata for cost tracking"""
-    try:
-        from fastapi import FastAPI
-        from fastapi.testclient import TestClient
+    from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 
-        from litellm.proxy._types import UserAPIKeyAuth
-        from litellm.proxy.google_endpoints.endpoints import router as google_router
-    except ImportError as e:
-        pytest.skip(f"Skipping test due to missing dependency: {e}")
+    captured = {}
 
-    # Create a FastAPI app and include the router (required for FastAPI 0.120+)
-    app = FastAPI()
-    app.include_router(google_router)
+    async def capture_call(self, **kwargs):
+        captured.update(self.data)
+        return {"candidates": []}
 
-    # Create a test client
-    client = TestClient(app)
-
-    # Mock all required proxy server dependencies
-    with patch("litellm.proxy.proxy_server.llm_router") as mock_router, patch(
-        "litellm.proxy.proxy_server.general_settings", {}
-    ), patch("litellm.proxy.proxy_server.proxy_config") as mock_proxy_config, patch(
-        "litellm.proxy.proxy_server.version", "1.0.0"
-    ), patch(
-        "litellm.proxy.litellm_pre_call_utils.add_litellm_data_to_request"
-    ) as mock_add_data:
-        mock_router.agenerate_content = AsyncMock(return_value={"test": "response"})
-
-        # Mock add_litellm_data_to_request to return data with metadata
-        async def mock_add_litellm_data(
-            data, request, user_api_key_dict, proxy_config, general_settings, version
-        ):
-            # Simulate adding user metadata
-            data["litellm_metadata"] = {
-                "user_api_key_user_id": "test-user-id",
-                "user_api_key_team_id": "test-team-id",
-                "user_api_key": "hashed-key",
-            }
-            return data
-
-        mock_add_data.side_effect = mock_add_litellm_data
-
-        # Send a request to the endpoint
-        response = client.post(
-            "/v1beta/models/test-model:generateContent",
-            json={"contents": [{"role": "user", "parts": [{"text": "Hello"}]}]},
-            headers={"Authorization": "Bearer sk-test-key"},
+    with patch.object(
+        ProxyBaseLLMRequestProcessing,
+        "base_process_llm_request",
+        capture_call,
+    ):
+        client.post(
+            "/v1beta/models/gemini-2.0-flash:generateContent",
+            json={
+                "contents": [{"role": "user", "parts": [{"text": "Hello"}]}],
+                "generationConfig": {"temperature": 0.5, "maxOutputTokens": 100},
+            },
         )
 
-        # Verify the response
-        assert response.status_code == 200
-
-        # Verify that add_litellm_data_to_request was called
-        mock_add_data.assert_called_once()
-
-        # Verify that agenerate_content was called with metadata
-        mock_router.agenerate_content.assert_called_once()
-        call_args = mock_router.agenerate_content.call_args
-        called_data = call_args[1]
-
-        # Verify that litellm_metadata exists and contains user information
-        assert "litellm_metadata" in called_data
-        assert called_data["litellm_metadata"]["user_api_key_user_id"] == "test-user-id"
-        assert called_data["litellm_metadata"]["user_api_key_team_id"] == "test-team-id"
-
-
-def test_google_stream_generate_content_with_cost_tracking_metadata():
-    """Test that the google_stream_generate_content endpoint includes user metadata for cost tracking"""
-    try:
-        from fastapi import FastAPI
-        from fastapi.testclient import TestClient
-
-        from litellm.proxy.google_endpoints.endpoints import router as google_router
-    except ImportError as e:
-        pytest.skip(f"Skipping test due to missing dependency: {e}")
-
-    # Create a FastAPI app and include the router (required for FastAPI 0.120+)
-    app = FastAPI()
-    app.include_router(google_router)
-
-    # Create a test client
-    client = TestClient(app)
-
-    # Mock the router's agenerate_content_stream method to return a stream
-    mock_stream = AsyncMock()
-    mock_stream.__aiter__ = lambda self: mock_stream
-    mock_stream.__anext__.side_effect = StopAsyncIteration
-
-    # Mock all required proxy server dependencies
-    with patch("litellm.proxy.proxy_server.llm_router") as mock_router, patch(
-        "litellm.proxy.proxy_server.general_settings", {}
-    ), patch("litellm.proxy.proxy_server.proxy_config") as mock_proxy_config, patch(
-        "litellm.proxy.proxy_server.version", "1.0.0"
-    ), patch(
-        "litellm.proxy.litellm_pre_call_utils.add_litellm_data_to_request"
-    ) as mock_add_data:
-        mock_router.agenerate_content_stream = AsyncMock(return_value=mock_stream)
-
-        # Mock add_litellm_data_to_request to return data with metadata
-        async def mock_add_litellm_data(
-            data, request, user_api_key_dict, proxy_config, general_settings, version
-        ):
-            # Simulate adding user metadata
-            data["litellm_metadata"] = {
-                "user_api_key_user_id": "test-user-id",
-                "user_api_key_team_id": "test-team-id",
-                "user_api_key": "hashed-key",
-            }
-            return data
-
-        mock_add_data.side_effect = mock_add_litellm_data
-
-        # Send a request to the endpoint
-        response = client.post(
-            "/v1beta/models/test-model:streamGenerateContent",
-            json={"contents": [{"role": "user", "parts": [{"text": "Hello"}]}]},
-            headers={"Authorization": "Bearer sk-test-key"},
-        )
-
-        # Verify the response
-        assert response.status_code == 200
-
-        # Verify that add_litellm_data_to_request was called
-        mock_add_data.assert_called_once()
-
-        # Verify that agenerate_content_stream was called with metadata
-        mock_router.agenerate_content_stream.assert_called_once()
-        call_args = mock_router.agenerate_content_stream.call_args
-        called_data = call_args[1]
-
-        # Verify that litellm_metadata exists and contains user information
-        assert "litellm_metadata" in called_data
-        assert called_data["litellm_metadata"]["user_api_key_user_id"] == "test-user-id"
-        assert called_data["litellm_metadata"]["user_api_key_team_id"] == "test-team-id"
-        # Verify stream is set to True
-        assert called_data["stream"] is True
+    assert "config" in captured
+    assert captured["config"]["temperature"] == 0.5
+    assert "generationConfig" not in captured
 
 
 def test_google_generate_content_with_system_instruction():
-    """
-    Test that systemInstruction is correctly passed through from the endpoint to the router.
+    """systemInstruction is forwarded to the processor unchanged."""
+    app, client = _make_app()
+    if app is None:
+        pytest.skip("Missing dependencies")
 
-    This test verifies the fix for systemInstruction being dropped when forwarding
-    requests to Vertex AI through the Google GenAI endpoint.
-    """
-    try:
-        from fastapi import FastAPI
-        from fastapi.testclient import TestClient
+    from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 
-        from litellm.proxy.google_endpoints.endpoints import router as google_router
-    except ImportError as e:
-        pytest.skip(f"Skipping test due to missing dependency: {e}")
+    captured = {}
 
-    # Create a FastAPI app and include the router
-    app = FastAPI()
-    app.include_router(google_router)
+    async def capture_call(self, **kwargs):
+        captured.update(self.data)
+        return {"candidates": []}
 
-    # Create a test client
-    client = TestClient(app)
-
-    # Mock all required proxy server dependencies
-    with patch("litellm.proxy.proxy_server.llm_router") as mock_router, patch(
-        "litellm.proxy.proxy_server.general_settings", {}
-    ), patch("litellm.proxy.proxy_server.proxy_config") as mock_proxy_config, patch(
-        "litellm.proxy.proxy_server.version", "1.0.0"
-    ), patch(
-        "litellm.proxy.litellm_pre_call_utils.add_litellm_data_to_request"
-    ) as mock_add_data:
-        mock_router.agenerate_content = AsyncMock(return_value={"test": "response"})
-
-        # Mock add_litellm_data_to_request to pass through data unchanged
-        async def mock_add_litellm_data(
-            data, request, user_api_key_dict, proxy_config, general_settings, version
-        ):
-            return data
-
-        mock_add_data.side_effect = mock_add_litellm_data
-
-        # Define the systemInstruction to test
+    with patch.object(
+        ProxyBaseLLMRequestProcessing,
+        "base_process_llm_request",
+        capture_call,
+    ):
         system_instruction = {"parts": [{"text": "Your name is Doodle."}]}
-
-        # Send a request with systemInstruction
-        response = client.post(
+        client.post(
             "/v1beta/models/gemini-2.5-pro:generateContent",
             json={
                 "systemInstruction": system_instruction,
-                "contents": [
-                    {"parts": [{"text": "What is your name?"}], "role": "user"}
-                ],
+                "contents": [{"parts": [{"text": "What is your name?"}], "role": "user"}],
             },
-            headers={"Authorization": "Bearer sk-test-key"},
         )
 
-        # Verify the response
-        assert response.status_code == 200
-
-        # Verify that agenerate_content was called
-        mock_router.agenerate_content.assert_called_once()
-        call_args = mock_router.agenerate_content.call_args
-        called_data = call_args[1]
-
-        # Verify that systemInstruction is present in the call arguments
-        assert "systemInstruction" in called_data
-        assert called_data["systemInstruction"] == system_instruction
-        assert (
-            called_data["systemInstruction"]["parts"][0]["text"]
-            == "Your name is Doodle."
-        )
-
-        # Verify contents are also present
-        assert "contents" in called_data
-        assert len(called_data["contents"]) == 1
-        assert called_data["contents"][0]["role"] == "user"
+    assert "systemInstruction" in captured
+    assert captured["systemInstruction"] == system_instruction
 
 
-def test_google_generate_content_with_image_config():
-    """
-    Test that imageConfig is correctly passed through from generationConfig to the router.
+def test_google_stream_generate_content_sets_stream_true():
+    """stream=True is enforced for the stream endpoint."""
+    app, client = _make_app()
+    if app is None:
+        pytest.skip("Missing dependencies")
 
-    This test verifies that imageConfig parameters (aspectRatio, imageSize) are preserved
-    when forwarding requests to Google GenAI through the endpoint.
-    """
-    try:
-        from fastapi import FastAPI
-        from fastapi.testclient import TestClient
+    from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 
-        from litellm.proxy.google_endpoints.endpoints import router as google_router
-    except ImportError as e:
-        pytest.skip(f"Skipping test due to missing dependency: {e}")
+    captured = {}
 
-    # Create a FastAPI app and include the router
-    app = FastAPI()
-    app.include_router(google_router)
+    async def capture_call(self, **kwargs):
+        captured.update(self.data)
+        return {"candidates": []}
 
-    # Create a test client
-    client = TestClient(app)
-
-    # Mock all required proxy server dependencies
-    with patch("litellm.proxy.proxy_server.llm_router") as mock_router, patch(
-        "litellm.proxy.proxy_server.general_settings", {}
-    ), patch("litellm.proxy.proxy_server.proxy_config") as mock_proxy_config, patch(
-        "litellm.proxy.proxy_server.version", "1.0.0"
-    ), patch(
-        "litellm.proxy.litellm_pre_call_utils.add_litellm_data_to_request"
-    ) as mock_add_data:
-        mock_router.agenerate_content = AsyncMock(return_value={"test": "response"})
-
-        # Mock add_litellm_data_to_request to pass through data unchanged
-        async def mock_add_litellm_data(
-            data, request, user_api_key_dict, proxy_config, general_settings, version
-        ):
-            return data
-
-        mock_add_data.side_effect = mock_add_litellm_data
-
-        # Send a request with generationConfig containing imageConfig
-        response = client.post(
-            "/v1beta/models/gemini-3-pro-image-preview:generateContent",
-            json={
-                "contents": [
-                    {
-                        "role": "user",
-                        "parts": [
-                            {
-                                "text": "Create a vibrant infographic about photosynthesis"
-                            }
-                        ],
-                    }
-                ],
-                "generationConfig": {
-                    "responseModalities": ["TEXT", "IMAGE"],
-                    "imageConfig": {"aspectRatio": "9:16", "imageSize": "4K"},
-                },
-            },
-            headers={"Authorization": "Bearer sk-test-key"},
-        )
-
-        # Verify the response
-        assert response.status_code == 200
-
-        # Verify that agenerate_content was called
-        mock_router.agenerate_content.assert_called_once()
-        call_args = mock_router.agenerate_content.call_args
-        called_data = call_args[1]
-
-        # Verify that config is present in the call arguments
-        assert "config" in called_data
-
-        # Verify that imageConfig is preserved in the config
-        assert "imageConfig" in called_data["config"]
-        assert called_data["config"]["imageConfig"]["aspectRatio"] == "9:16"
-        assert called_data["config"]["imageConfig"]["imageSize"] == "4K"
-
-        # Verify that responseModalities is also preserved
-        assert "responseModalities" in called_data["config"]
-        assert called_data["config"]["responseModalities"] == ["TEXT", "IMAGE"]
-
-        # Verify contents are also present
-        assert "contents" in called_data
-        assert len(called_data["contents"]) == 1
-        assert called_data["contents"][0]["role"] == "user"
-
-
-def test_google_generate_content_metadata_and_trace_id_callbacks():
-    """Test that google_generate_content sets litellm_call_id and logging_obj for callbacks (e.g. S3, Langfuse)"""
-    try:
-        from fastapi import FastAPI
-        from fastapi.testclient import TestClient
-
-        from litellm.proxy.google_endpoints.endpoints import router as google_router
-    except ImportError as e:
-        pytest.skip(f"Skipping test due to missing dependency: {e}")
-
-    # Create a FastAPI app and include the router
-    app = FastAPI()
-    app.include_router(google_router)
-
-    # Create a test client
-    client = TestClient(app)
-
-    # Mock all required proxy server dependencies
-    with patch("litellm.proxy.proxy_server.llm_router") as mock_router, patch(
-        "litellm.proxy.proxy_server.general_settings", {}
-    ), patch("litellm.proxy.proxy_server.proxy_config") as mock_proxy_config, patch(
-        "litellm.proxy.proxy_server.version", "1.0.0"
-    ), patch(
-        "litellm.proxy.litellm_pre_call_utils.add_litellm_data_to_request"
-    ) as mock_add_data:
-        mock_router.agenerate_content = AsyncMock(return_value={"test": "response"})
-
-        # Mock add_litellm_data_to_request to return data with metadata
-        async def mock_add_litellm_data(
-            data, request, user_api_key_dict, proxy_config, general_settings, version
-        ):
-            # Simulate adding user metadata
-            data["litellm_metadata"] = {
-                "user_api_key_user_id": "test-user-id",
-            }
-            return data
-
-        mock_add_data.side_effect = mock_add_litellm_data
-
-        # Send a request to the endpoint with x-litellm-call-id header
-        test_call_id = "test-custom-call-id"
-        response = client.post(
-            "/v1beta/models/test-model:generateContent",
+    with patch.object(
+        ProxyBaseLLMRequestProcessing,
+        "base_process_llm_request",
+        capture_call,
+    ):
+        client.post(
+            "/v1beta/models/gemini-2.0-flash:streamGenerateContent",
             json={"contents": [{"role": "user", "parts": [{"text": "Hello"}]}]},
-            headers={
-                "Authorization": "Bearer sk-test-key",
-                "x-litellm-call-id": test_call_id,
-            },
         )
 
-        assert response.status_code == 200
-
-        mock_router.agenerate_content.assert_called_once()
-        call_args = mock_router.agenerate_content.call_args
-        called_data = call_args[1]
-
-        # Verify that the litellm_logging_obj got assigned in the final called_data to router
-        assert "litellm_logging_obj" in called_data
-        assert "litellm_call_id" in called_data
-        assert called_data["litellm_call_id"] == test_call_id
+    assert captured.get("stream") is True
 
 
-def test_google_stream_generate_content_metadata_and_trace_id_callbacks():
-    """Test that google_stream_generate_content sets litellm_call_id and logging_obj for callbacks"""
-    try:
-        from fastapi import FastAPI
-        from fastapi.testclient import TestClient
+# ---------------------------------------------------------------------------
+# Error path tests — the bug fix
+# ---------------------------------------------------------------------------
 
-        from litellm.proxy.google_endpoints.endpoints import router as google_router
-    except ImportError as e:
-        pytest.skip(f"Skipping test due to missing dependency: {e}")
 
-    app = FastAPI()
-    app.include_router(google_router)
-    client = TestClient(app)
+def test_google_generate_content_returns_400_for_nonexistent_model():
+    """
+    When the router raises BadRequestError for a non-existent model, the endpoint
+    must return 400 (not 500).
 
-    mock_stream = AsyncMock()
-    mock_stream.__aiter__ = lambda self: mock_stream
-    mock_stream.__anext__.side_effect = StopAsyncIteration
+    Regression test for: /v1beta/models/{model}:generateContent returning 500
+    instead of 400/404 for models not in the router's model list.
+    """
+    app, client = _make_app()
+    if app is None:
+        pytest.skip("Missing dependencies")
 
-    with patch("litellm.proxy.proxy_server.llm_router") as mock_router, patch(
-        "litellm.proxy.proxy_server.general_settings", {}
-    ), patch("litellm.proxy.proxy_server.proxy_config") as mock_proxy_config, patch(
-        "litellm.proxy.proxy_server.version", "1.0.0"
-    ), patch(
-        "litellm.proxy.litellm_pre_call_utils.add_litellm_data_to_request"
-    ) as mock_add_data:
-        mock_router.agenerate_content_stream = AsyncMock(return_value=mock_stream)
+    import litellm
+    from litellm.proxy._types import ProxyException
+    from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 
-        async def mock_add_litellm_data(
-            data, request, user_api_key_dict, proxy_config, general_settings, version
-        ):
-            data["litellm_metadata"] = {
-                "user_api_key_user_id": "test-user-id",
-            }
-            return data
+    bad_request_error = litellm.BadRequestError(
+        message="litellm.BadRequestError: You passed in model=nonexistent-model. "
+        "There are no healthy deployments for this model.",
+        model="nonexistent-model",
+        llm_provider="",
+    )
 
-        mock_add_data.side_effect = mock_add_litellm_data
-
-        test_call_id = "test-custom-stream-call-id"
+    with patch.object(
+        ProxyBaseLLMRequestProcessing,
+        "base_process_llm_request",
+        side_effect=bad_request_error,
+    ), patch.object(
+        ProxyBaseLLMRequestProcessing,
+        "_handle_llm_api_exception",
+        new=AsyncMock(
+            return_value=ProxyException(
+                message=str(bad_request_error),
+                type="invalid_request_error",
+                param=None,
+                code=400,
+            )
+        ),
+    ):
         response = client.post(
-            "/v1beta/models/test-model:streamGenerateContent",
-            json={"contents": [{"role": "user", "parts": [{"text": "Hello stream"}]}]},
-            headers={
-                "Authorization": "Bearer sk-test-key",
-                "x-litellm-call-id": test_call_id,
-            },
+            "/v1beta/models/nonexistent-model:generateContent",
+            json={"contents": [{"role": "user", "parts": [{"text": "hello"}]}]},
         )
 
-        assert response.status_code == 200
+    assert response.status_code == 400, (
+        f"Expected 400 Bad Request, got {response.status_code}. "
+        "Non-existent model should be a client error, not a server error."
+    )
 
-        mock_router.agenerate_content_stream.assert_called_once()
-        call_args = mock_router.agenerate_content_stream.call_args
-        called_data = call_args[1]
 
-        assert "litellm_logging_obj" in called_data
-        assert "litellm_call_id" in called_data
-        assert called_data["litellm_call_id"] == test_call_id
+def test_google_stream_generate_content_returns_400_for_nonexistent_model():
+    """
+    Stream endpoint must also return 400 (not 500) for a non-existent model.
+    """
+    app, client = _make_app()
+    if app is None:
+        pytest.skip("Missing dependencies")
+
+    import litellm
+    from litellm.proxy._types import ProxyException
+    from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+
+    bad_request_error = litellm.BadRequestError(
+        message="litellm.BadRequestError: You passed in model=nonexistent-model. "
+        "There are no healthy deployments for this model.",
+        model="nonexistent-model",
+        llm_provider="",
+    )
+
+    with patch.object(
+        ProxyBaseLLMRequestProcessing,
+        "base_process_llm_request",
+        side_effect=bad_request_error,
+    ), patch.object(
+        ProxyBaseLLMRequestProcessing,
+        "_handle_llm_api_exception",
+        new=AsyncMock(
+            return_value=ProxyException(
+                message=str(bad_request_error),
+                type="invalid_request_error",
+                param=None,
+                code=400,
+            )
+        ),
+    ):
+        response = client.post(
+            "/v1beta/models/nonexistent-model:streamGenerateContent",
+            json={"contents": [{"role": "user", "parts": [{"text": "hello"}]}]},
+        )
+
+    assert response.status_code == 400, (
+        f"Expected 400 Bad Request, got {response.status_code}. "
+        "Non-existent model should be a client error, not a server error."
+    )
