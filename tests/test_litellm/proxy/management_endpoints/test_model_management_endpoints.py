@@ -64,11 +64,12 @@ class MockPrismaClient:
         # Support model_name startswith filter (used by _get_team_deployments)
         if where and "model_name" in where:
             model_name_filter = where["model_name"]
-            if isinstance(model_name_filter, dict) and "startswith" in model_name_filter:
+            if (
+                isinstance(model_name_filter, dict)
+                and "startswith" in model_name_filter
+            ):
                 prefix = model_name_filter["startswith"]
-                results = [
-                    d for d in results if d.model_name.startswith(prefix)
-                ]
+                results = [d for d in results if d.model_name.startswith(prefix)]
 
         return results
 
@@ -1215,14 +1216,19 @@ class TestAddAndDeleteModelLifecycle:
 
         _PS = "litellm.proxy.proxy_server"
         _ENCRYPT = "litellm.proxy.management_endpoints.model_management_endpoints.encrypt_value_helper"
-        with patch(f"{_PS}.prisma_client", mock_prisma), \
-             patch(f"{_PS}.store_model_in_db", True), \
-             patch(f"{_PS}.proxy_config", mock_proxy_config), \
-             patch(f"{_PS}.proxy_logging_obj", MagicMock()), \
-             patch(f"{_PS}.general_settings", {}), \
-             patch(f"{_PS}.premium_user", True), \
-             patch(f"{_PS}.llm_router", mock_router), \
-             patch(_ENCRYPT, side_effect=lambda value, **kwargs: value):
+        with patch(f"{_PS}.prisma_client", mock_prisma), patch(
+            f"{_PS}.store_model_in_db", True
+        ), patch(f"{_PS}.proxy_config", mock_proxy_config), patch(
+            f"{_PS}.proxy_logging_obj", MagicMock()
+        ), patch(
+            f"{_PS}.general_settings", {}
+        ), patch(
+            f"{_PS}.premium_user", True
+        ), patch(
+            f"{_PS}.llm_router", mock_router
+        ), patch(
+            _ENCRYPT, side_effect=lambda value, **kwargs: value
+        ):
 
             # --- ADD ---
             add_result = await add_new_model(
@@ -1341,6 +1347,8 @@ class TestGetTeamDeployments:
         result = await _get_team_deployments(team_id, prisma_client)
         assert len(result) == 1
         assert result[0] is dep1
+
+
 ################################################################################
 # Config-Only Model Management Tests
 ################################################################################
@@ -1409,9 +1417,7 @@ class TestConfigOnlyAddModel:
 
         with patch("litellm.proxy.proxy_server.prisma_client", None), patch(
             "litellm.proxy.proxy_server.store_model_in_db", False
-        ), patch(
-            "litellm.proxy.proxy_server.proxy_config", mock_proxy_config
-        ), patch(
+        ), patch("litellm.proxy.proxy_server.proxy_config", mock_proxy_config), patch(
             "litellm.proxy.proxy_server.llm_router", mock_router
         ), patch(
             "litellm.proxy.proxy_server.general_settings", {}
@@ -1457,9 +1463,7 @@ class TestConfigOnlyAddModel:
 
         with patch("litellm.proxy.proxy_server.prisma_client", None), patch(
             "litellm.proxy.proxy_server.store_model_in_db", False
-        ), patch(
-            "litellm.proxy.proxy_server.proxy_config", mock_proxy_config
-        ), patch(
+        ), patch("litellm.proxy.proxy_server.proxy_config", mock_proxy_config), patch(
             "litellm.proxy.proxy_server.llm_router", mock_router
         ), patch(
             "litellm.proxy.proxy_server.general_settings", {}
@@ -1542,9 +1546,7 @@ class TestConfigOnlyDeleteModel:
 
         with patch("litellm.proxy.proxy_server.prisma_client", None), patch(
             "litellm.proxy.proxy_server.store_model_in_db", False
-        ), patch(
-            "litellm.proxy.proxy_server.proxy_config", mock_proxy_config
-        ), patch(
+        ), patch("litellm.proxy.proxy_server.proxy_config", mock_proxy_config), patch(
             "litellm.proxy.proxy_server.llm_router", mock_router
         ), patch(
             "litellm.proxy.proxy_server.premium_user", False
@@ -1578,9 +1580,7 @@ class TestConfigOnlyDeleteModel:
 
         with patch("litellm.proxy.proxy_server.prisma_client", None), patch(
             "litellm.proxy.proxy_server.store_model_in_db", False
-        ), patch(
-            "litellm.proxy.proxy_server.proxy_config", mock_proxy_config
-        ), patch(
+        ), patch("litellm.proxy.proxy_server.proxy_config", mock_proxy_config), patch(
             "litellm.proxy.proxy_server.llm_router", mock_router
         ), patch(
             "litellm.proxy.proxy_server.premium_user", False
@@ -1633,9 +1633,7 @@ class TestConfigOnlyUpdateModel:
 
         with patch("litellm.proxy.proxy_server.prisma_client", None), patch(
             "litellm.proxy.proxy_server.store_model_in_db", False
-        ), patch(
-            "litellm.proxy.proxy_server.proxy_config", mock_proxy_config
-        ), patch(
+        ), patch("litellm.proxy.proxy_server.proxy_config", mock_proxy_config), patch(
             "litellm.proxy.proxy_server.llm_router", mock_router
         ), patch(
             "litellm.proxy.proxy_server.premium_user", False
@@ -1680,9 +1678,7 @@ class TestConfigOnlyUpdateModel:
 
         with patch("litellm.proxy.proxy_server.prisma_client", None), patch(
             "litellm.proxy.proxy_server.store_model_in_db", False
-        ), patch(
-            "litellm.proxy.proxy_server.proxy_config", mock_proxy_config
-        ), patch(
+        ), patch("litellm.proxy.proxy_server.proxy_config", mock_proxy_config), patch(
             "litellm.proxy.proxy_server.llm_router", mock_router
         ), patch(
             "litellm.proxy.proxy_server.premium_user", False
@@ -1737,9 +1733,7 @@ class TestDBModeUnaffected:
 
         with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma), patch(
             "litellm.proxy.proxy_server.store_model_in_db", True
-        ), patch(
-            "litellm.proxy.proxy_server.proxy_config", mock_proxy_config
-        ), patch(
+        ), patch("litellm.proxy.proxy_server.proxy_config", mock_proxy_config), patch(
             "litellm.proxy.proxy_server.llm_router", MagicMock()
         ), patch(
             "litellm.proxy.proxy_server.general_settings", {}

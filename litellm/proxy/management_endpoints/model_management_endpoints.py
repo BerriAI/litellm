@@ -505,9 +505,7 @@ async def _update_model_in_config(
 
     if model_params.litellm_params is not None:
         existing_lp = entry.get("litellm_params", {})
-        existing_lp.update(
-            model_params.litellm_params.model_dump(exclude_none=True)
-        )
+        existing_lp.update(model_params.litellm_params.model_dump(exclude_none=True))
         entry["litellm_params"] = existing_lp
 
     if model_params.model_info is not None:
@@ -964,9 +962,7 @@ async def delete_model(
             if result is None:
                 raise HTTPException(
                     status_code=400,
-                    detail={
-                        "error": f"Model with id={model_info.id} not found in db"
-                    },
+                    detail={"error": f"Model with id={model_info.id} not found in db"},
                 )
 
             ## DELETE FROM ROUTER ##
@@ -1148,9 +1144,7 @@ async def add_new_model(
                 )
             # Team-scoped models require the DB for team management.
             if (
-                getattr(
-                    getattr(model_params, "model_info", None), "team_id", None
-                )
+                getattr(getattr(model_params, "model_info", None), "team_id", None)
                 is not None
             ):
                 raise HTTPException(
@@ -1405,9 +1399,7 @@ async def update_model(
             if updated is None:
                 raise HTTPException(
                     status_code=400,
-                    detail={
-                        "error": f"Model with id={_model_id} not found in config"
-                    },
+                    detail={"error": f"Model with id={_model_id} not found in config"},
                 )
             return updated
     except Exception as e:
