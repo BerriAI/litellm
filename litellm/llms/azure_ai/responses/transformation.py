@@ -12,11 +12,9 @@ from urllib.parse import urlparse
 
 import httpx
 
-import litellm
 from litellm.llms.azure.common_utils import BaseAzureLLM
 from litellm.llms.azure_ai.common_utils import AzureFoundryModelInfo
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
-from litellm.secret_managers.main import get_secret_str
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
 from litellm.utils import _add_path_to_api_base
@@ -120,7 +118,7 @@ class AzureAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
             new_url = _add_path_to_api_base(
                 api_base=api_base, ending_path="/openai/v1/responses"
             )
-        elif "services.ai.azure.com" in api_base:
+        elif self._should_use_api_key_header(api_base):
             new_url = _add_path_to_api_base(
                 api_base=api_base, ending_path="/models/responses"
             )
