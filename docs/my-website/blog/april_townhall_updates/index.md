@@ -25,24 +25,24 @@ Our CI/CD v2 work is centered around four goals:
 1. **Limit** what each package can access
 2. **Reduce** the number of sensitive environment variables
 3. **Avoid** compromised packages
-4. **Prevent** release tampering
+4. **Reduce the risk of** release tampering
 
 #### New architecture: isolated environments
 
-We have moved to isolated environments for distinct CI/CD stages so a single compromised step does not inherit broad access across the entire pipeline.
+We have begun moving to isolated environments for distinct CI/CD stages to reduce the chance that a single compromised step can inherit broad access across the entire pipeline.
 
 <Image
   img={require('../../img/april_townhall_isolated_environments.png')}
   style={{width: '900px', height: 'auto', display: 'block'}}
 />
 
-#### New releases are already live
+#### Current rollout status
 
-New releases using these changes are already in production. [See here](https://github.com/BerriAI/litellm/tags)
+These changes are deployed in our current release workflow. [See here](https://github.com/BerriAI/litellm/tags)
 
 #### Independently verify releases
 
-A key part of CI/CD v2 is enabling users to independently verify release artifacts and reduce trust on any single credential or release path.
+A key part of CI/CD v2 is supporting independent verification of release artifacts using our published verification process, while reducing reliance on any single credential or release path.
 
 [**Learn more about how to verify releases**](https://docs.litellm.ai/docs/proxy/docker_image_security)
 
@@ -56,12 +56,12 @@ A key part of CI/CD v2 is enabling users to independently verify release artifac
 ### SDLC improvements
 
 This month, we're focusing on process stability improvements around:
-- Ensuring 'main' is always stable
+- Improving main-branch stability
 - Mapping UI QA to built Docker images for 1:1 environment parity
 - Consistent release tags across PyPI and Docker
 - Fixing release notes publication
 
-#### Main is always stable
+#### Improving main-branch stability
 
 We're introducing a staging-gated flow:
 
@@ -72,15 +72,15 @@ We're introducing a staging-gated flow:
 
 - Only an internal staging branch can push to `main`.
 - PRs to that staging branch must pass CircleCI LLM API testing.
-- Collision handling happens on staging, keeping `main` stable.
+- Collision handling happens on staging, which is designed to reduce unstable changes reaching `main`.
 
 #### UI QA in Docker environment
 
 Moving forward, all UI QA will be performed in the built Docker image that users run.
 
-Previously, this was done in a local environment that missed Docker-specific edge cases.
+Previously, some UI QA paths were run in local environments that did not fully replicate Docker runtime conditions.
 
-Leading to issues like the MCP column drop in `v1.82.3`.
+That contributed to release-specific issues, including MCP registration problems in `v1.82.3`.
 
 #### Consistent release tags
 
@@ -88,28 +88,28 @@ Today we publish releases for multiple scenarios:
 - Dev (Built of a PR for a customer-specific scenario)
 - Nightly (Passes all CI/CD checks)
 - Release Candidate (Passes all CI/CD checks + manual UI QA)
-- Stable (Passes all CI/CD checks + manual UI QA + 7 days of production testing)
+- Stable (intended to pass all CI/CD checks + manual UI QA + 7 days of production testing)
 
-By the end of April, we aim to have a consistent naming convention across PyPI and Docker.
+We are targeting a consistent naming convention across PyPI and Docker by the end of April.
 
 #### Release notes
 
-CI/CD v2 changes moved release notes to a manual path. This is a temporary solution while we investigate a better automated workflow. Our goal is to have this done in a more consistent manner, by the end of April.
+CI/CD v2 changes moved release notes to a manual path. This is a temporary solution while we investigate a better automated workflow. We are targeting a more consistent process by the end of April.
 
 ### Product stability improvements
 
 #### Stable Prisma migrations
 
-Today, we have a few different migration failure classes:
+Today, we have observed several migration failure classes:
 - Migration not applied
 - Migration marked applied but incomplete
 - Migration not applied due to non-root image issues
 
-We're dedicating this month to resolving all of these error classes. We have assigned an engineering owner to this effort.
+We're prioritizing this work this month and have assigned an engineering owner to the effort. Our target is to resolve these error classes by the end of April.
 
 #### UI type safety
 
-Another area of focus is improving the stability of the UI. Today, a cause of errors is that the UI maintains it's own assumptions about backend API types. This leads to issues when the backend responses differ from the UI's assumptions.
+Another area of focus is improving the stability of the UI. Today, one cause of errors is that the UI maintains its own assumptions about backend API types. This can lead to issues when backend responses differ from UI assumptions.
 
 We aim to move to having the UI and Backend be in sync with each other, and are exploring OpenAPI-driven mapping to achieve this.
 
@@ -132,8 +132,10 @@ Over the next few years, we expect:
 
 #### Long-term 
 
-- Agent auditability (how decisions were made across LLM + MCP + sub-agent inputs/outputs) will become a compliance requirement.
+- We expect many organizations to treat agent auditability (how decisions were made across LLM + MCP + sub-agent inputs/outputs) as a compliance expectation.
 - Permission management will get more complex as user-agent interaction chains deepen.
+
+Roadmap timelines in this post are targets and may evolve based on validation and user feedback.
 
 ## April investments
 
