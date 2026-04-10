@@ -177,6 +177,11 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         if messages is None:
             return bedrock_request
         for message in messages:
+            if (
+                self.experimental_use_latest_role_message_only
+                and message.get("role") != "user"
+            ):
+                continue
             message_text_content: Optional[List[str]] = self.get_content_for_message(
                 message=message
             )
@@ -970,25 +975,39 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             input_filter = self._prepare_guardrail_messages_for_role(
                 messages=new_messages
             )
-            input_messages = input_filter.payload_messages or new_messages
+            input_messages = input_filter.payload_messages
+            if input_messages is None:
+                if self.experimental_use_latest_role_message_only:
+                    input_messages = None  # no user messages → skip INPUT validation
+                else:
+                    input_messages = new_messages
 
-            # Create tasks for parallel execution of both INPUT and OUTPUT validation
-            input_task = self.make_bedrock_api_request(
-                source="INPUT",
-                messages=input_messages,
-                request_data=data,
-            )
-            output_task = self.make_bedrock_api_request(
-                source="OUTPUT", response=response, request_data=data
-            )
-
-            # Execute both requests in parallel
-            try:
-                _, output_content_bedrock = await asyncio.gather(
-                    input_task, output_task
+            if input_messages is not None:
+                # Create tasks for parallel execution of both INPUT and OUTPUT validation
+                input_task = self.make_bedrock_api_request(
+                    source="INPUT",
+                    messages=input_messages,
+                    request_data=data,
                 )
-            except GuardrailInterventionNormalStringError as e:
-                output_content_bedrock = e.message
+                output_task = self.make_bedrock_api_request(
+                    source="OUTPUT", response=response, request_data=data
+                )
+
+                # Execute both requests in parallel
+                try:
+                    _, output_content_bedrock = await asyncio.gather(
+                        input_task, output_task
+                    )
+                except GuardrailInterventionNormalStringError as e:
+                    output_content_bedrock = e.message
+            else:
+                # No user messages to validate INPUT — only run OUTPUT validation
+                try:
+                    output_content_bedrock = await self.make_bedrock_api_request(
+                        source="OUTPUT", response=response, request_data=data
+                    )
+                except GuardrailInterventionNormalStringError as e:
+                    output_content_bedrock = e.message
         else:
             # Only run OUTPUT validation (INPUT was already validated in pre_call or during_call)
             try:
@@ -1113,25 +1132,41 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                 input_filter = self._prepare_guardrail_messages_for_role(
                     messages=request_data.get("messages")
                 )
-                input_messages = input_filter.payload_messages or request_data.get(
-                    "messages"
-                )
-                input_task = self.make_bedrock_api_request(
-                    source="INPUT",
-                    messages=input_messages,
-                    request_data=request_data,
-                )  # Only input messages
-                output_task = self.make_bedrock_api_request(
-                    source="OUTPUT", response=assembled_model_response
-                )  # Only response
+                input_messages = input_filter.payload_messages
+                if input_messages is None:
+                    if self.experimental_use_latest_role_message_only:
+                        input_messages = None  # no user messages → skip INPUT validation
+                    else:
+                        input_messages = request_data.get("messages")
 
-                # Execute both requests in parallel
-                try:
-                    _, output_guardrail_response = await asyncio.gather(
-                        input_task, output_task
-                    )
-                except GuardrailInterventionNormalStringError as e:
-                    output_guardrail_response = e.message
+                if input_messages is not None:
+                    input_task = self.make_bedrock_api_request(
+                        source="INPUT",
+                        messages=input_messages,
+                        request_data=request_data,
+                    )  # Only input messages
+                    output_task = self.make_bedrock_api_request(
+                        source="OUTPUT", response=assembled_model_response
+                    )  # Only response
+
+                    # Execute both requests in parallel
+                    try:
+                        _, output_guardrail_response = await asyncio.gather(
+                            input_task, output_task
+                        )
+                    except GuardrailInterventionNormalStringError as e:
+                        output_guardrail_response = e.message
+                else:
+                    # No user messages to validate INPUT — only run OUTPUT validation
+                    try:
+                        output_guardrail_response = (
+                            await self.make_bedrock_api_request(
+                                source="OUTPUT",
+                                response=assembled_model_response,
+                            )
+                        )
+                    except GuardrailInterventionNormalStringError as e:
+                        output_guardrail_response = e.message
             else:
                 # Only run OUTPUT validation (INPUT was already validated in pre_call or during_call)
                 try:
@@ -1407,7 +1442,12 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             filter_result = self._prepare_guardrail_messages_for_role(
                 messages=request_messages
             )
-            filtered_messages = filter_result.payload_messages or mock_messages
+            filtered_messages = filter_result.payload_messages
+            if filtered_messages is None:
+                if self.experimental_use_latest_role_message_only:
+                    filtered_messages = None
+                else:
+                    filtered_messages = mock_messages
 
             # Bedrock will throw an error if there is no text to process
             if filtered_messages:
