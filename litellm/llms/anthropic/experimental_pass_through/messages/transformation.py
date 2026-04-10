@@ -324,6 +324,16 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         if optional_params.get("speed") == "fast":
             beta_values.add(ANTHROPIC_BETA_HEADER_VALUES.FAST_MODE_2026_02_01.value)
 
+        # Check for advisor tool
+        tools = optional_params.get("tools")
+        if tools:
+            for tool in tools:
+                if isinstance(tool, dict) and tool.get("type") == "advisor_20260301":
+                    beta_values.add(
+                        ANTHROPIC_BETA_HEADER_VALUES.ADVISOR_TOOL_2026_03_01.value
+                    )
+                    break
+
         # Check for tool search tools
         tools = optional_params.get("tools")
         if tools:
