@@ -10,7 +10,7 @@ import contextvars
 import time
 import uuid as uuid_module
 from functools import partial
-from typing import Any, AsyncIterator, Coroutine, Dict, Iterator, Literal, Optional, Union, cast
+from typing import Any,Coroutine, Dict, Literal, Optional, Union, cast
 
 import httpx
 
@@ -1045,19 +1045,9 @@ def file_content_streaming(
     """
     try:
         optional_params = GenericLiteLLMParams(**kwargs)
-        litellm_params_dict = get_litellm_params(**kwargs)
-        client = kwargs.get("client")
         logging_obj = cast(
             Optional[LiteLLMLoggingObj], kwargs.get("litellm_logging_obj")
         )
-
-        try:
-            if model is not None:
-                _, custom_llm_provider, _, _ = get_llm_provider(
-                    model, custom_llm_provider
-                )
-        except Exception:
-            pass
 
         timeout = optional_params.timeout or kwargs.get("request_timeout", 600) or 600
         if (
