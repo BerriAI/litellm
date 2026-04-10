@@ -24,9 +24,13 @@ class ModelResponseIterator:
             is_finished = False
             finish_reason = ""
             usage: Optional[ChatCompletionUsageBlock] = None
+            reasoning_content: Optional[str] = None
 
             if processed_chunk.choices[0].delta.content is not None:  # type: ignore
                 text = processed_chunk.choices[0].delta.content  # type: ignore
+
+            if getattr(processed_chunk.choices[0].delta, "reasoning_content", None) is not None:  # type: ignore
+                reasoning_content = processed_chunk.choices[0].delta.reasoning_content  # type: ignore
 
             if (
                 processed_chunk.choices[0].delta.tool_calls is not None  # type: ignore
@@ -68,6 +72,7 @@ class ModelResponseIterator:
                 finish_reason=finish_reason,
                 usage=usage,
                 index=0,
+                reasoning_content=reasoning_content,
             )
         except json.JSONDecodeError:
             raise ValueError(f"Failed to decode JSON from chunk: {chunk}")
