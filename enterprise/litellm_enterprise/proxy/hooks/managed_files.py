@@ -1,15 +1,16 @@
 # What is this?
 ## This hook is used to check for LiteLLM managed files in the request body, and replace them with model-specific file id
 
-import asyncio
 import base64
 import json
+from datetime import datetime
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union, cast
 
 from fastapi import HTTPException
 
 import litellm
 from litellm import Router, verbose_logger
+from litellm.utils import Rules, function_setup
 from litellm._uuid import uuid
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
@@ -28,6 +29,12 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
     get_model_id_from_unified_batch_id,
     get_models_from_unified_file_id,
     normalize_mime_type_for_provider,
+)
+from litellm.types.containers.main import (
+    ContainerFileListResponse,
+    ContainerFileObject,
+    ContainerObject,
+    DeleteContainerResult,
 )
 from litellm.types.llms.openai import (  # pyright: ignore[reportAttributeAccessIssue]
     AllMessageValues,
@@ -67,6 +74,25 @@ else:
 
 
 class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
+    """
+    Managed container IDs reuse the managed-file unified ID layout
+    (LITELLM_MANAGED_FILE_COMPLETE_STR) with a dedicated MIME segment so they are
+    distinct from uploaded files while sharing decode/store helpers.
+    """
+
+    MANAGED_CONTAINER_MIME_TYPE = "application/vnd.litellm.managed-container"
+    MANAGED_CONTAINER_CALL_TYPES = frozenset(
+        {
+            "aretrieve_container",
+            "adelete_container",
+            "alist_container_files",
+            "aupload_container_file",
+            "aretrieve_container_file",
+            "adelete_container_file",
+            "aretrieve_container_file_content",
+        }
+    )
+
     # Class variables or attributes
     def __init__(
         self, internal_usage_cache: InternalUsageCache, prisma_client: PrismaClient
@@ -371,6 +397,34 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 )
         return False
 
+    async def _apply_managed_container_id_to_request_data(
+        self, data: Dict, user_api_key_dict: UserAPIKeyAuth
+    ) -> None:
+        container_id = data.get("container_id")
+        if not container_id or not isinstance(container_id, str):
+            return
+        decoded = _is_base64_encoded_unified_file_id(container_id)
+        if not decoded:
+            return
+        if self.MANAGED_CONTAINER_MIME_TYPE not in decoded:
+            return
+        if not await self.can_user_call_unified_file_id(
+            container_id, user_api_key_dict
+        ):
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    f"User {user_api_key_dict.user_id} does not have access to the "
+                    f"container {container_id}"
+                ),
+            )
+        model_id = self.get_model_id_from_unified_file_id(decoded)
+        provider_container_id = self.get_output_file_id_from_unified_file_id(decoded)
+        if model_id:
+            data["model"] = model_id
+        data["container_id"] = provider_container_id
+        data["_litellm_unified_container_id"] = container_id
+
     async def check_file_ids_access(
         self, file_ids: List[str], user_api_key_dict: UserAPIKeyAuth
     ) -> None:
@@ -547,6 +601,10 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 data[accessor_key] = get_batch_id_from_unified_batch_id(
                     potential_llm_object_id
                 )
+        elif call_type in self.MANAGED_CONTAINER_CALL_TYPES:
+            await self._apply_managed_container_id_to_request_data(
+                data, user_api_key_dict
+            )
         elif call_type == CallTypes.acreate_fine_tuning_job.value:
             input_file_id = cast(Optional[str], data.get("training_file"))
             if input_file_id:
@@ -983,6 +1041,79 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
 
         return response
 
+    def return_unified_container_id(
+        self,
+        container_objects: List[ContainerObject],
+        target_model_names_list: List[str],
+    ) -> ContainerObject:
+        first = container_objects[0]
+        provider_container_id = first.id
+        model_id = (first._hidden_params or {}).get("model_id") or ""
+        unified_inner = SpecialEnums.LITELLM_MANAGED_FILE_COMPLETE_STR.value.format(
+            self.MANAGED_CONTAINER_MIME_TYPE,
+            str(uuid.uuid4()),
+            ",".join(target_model_names_list),
+            provider_container_id,
+            model_id,
+        )
+        b64_unified = (
+            base64.urlsafe_b64encode(unified_inner.encode()).decode().rstrip("=")
+        )
+        return first.model_copy(
+            update={
+                "id": b64_unified,
+                "_hidden_params": dict(first._hidden_params or {}),
+            },
+        )
+
+    async def acreate_container(
+        self,
+        llm_router: Router,
+        request_data: Dict[str, Any],
+        target_model_names_list: List[str],
+        litellm_parent_otel_span: Span,
+        user_api_key_dict: UserAPIKeyAuth,
+    ) -> ContainerObject:
+        responses: List[ContainerObject] = []
+        for model in target_model_names_list:
+            call_kwargs = dict(request_data)
+            call_kwargs.pop("litellm_logging_obj", None)
+            call_kwargs["model"] = model
+            logging_obj, call_kwargs = function_setup(
+                original_function="acreate_container",
+                rules_obj=Rules(),
+                start_time=datetime.now(),
+                **call_kwargs,
+            )
+            call_kwargs["litellm_logging_obj"] = logging_obj
+            individual = await llm_router.acreate_container(**call_kwargs)
+            responses.append(individual)
+
+        response = self.return_unified_container_id(
+            container_objects=responses,
+            target_model_names_list=target_model_names_list,
+        )
+
+        model_mappings: Dict[str, str] = {}
+        for container_obj in responses:
+            hidden = container_obj._hidden_params or {}
+            model_file_id_mapping = hidden.get("model_file_id_mapping")
+            if isinstance(model_file_id_mapping, dict):
+                model_mappings.update(model_file_id_mapping)
+            else:
+                mid = hidden.get("model_id")
+                if mid:
+                    model_mappings[str(mid)] = container_obj.id
+
+        await self.store_unified_file_id(
+            file_id=response.id,
+            file_object=None,
+            litellm_parent_otel_span=litellm_parent_otel_span,
+            model_mappings=model_mappings,
+            user_api_key_dict=user_api_key_dict,
+        )
+        return response
+
     def get_unified_generic_response_id(
         self, model_id: str, generic_response_id: str
     ) -> str:
@@ -1027,7 +1158,24 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
     def get_output_file_id_from_unified_file_id(self, file_id: str) -> str:
         return file_id.split("llm_output_file_id,")[1].split(";")[0]
 
-    async def async_post_call_success_hook(
+    def _rewrite_response_with_unified_container_id(
+        self, data: Dict[str, Any], response: Any
+    ) -> Any:
+        unified_cid = data.get("_litellm_unified_container_id")
+        if not unified_cid or not isinstance(unified_cid, str):
+            return response
+        if isinstance(response, ContainerObject):
+            response.id = unified_cid
+        elif isinstance(response, DeleteContainerResult):
+            response.id = unified_cid
+        elif isinstance(response, ContainerFileObject):
+            response.container_id = unified_cid
+        elif isinstance(response, ContainerFileListResponse):
+            for item in response.data:
+                item.container_id = unified_cid
+        return response
+
+    async def async_post_call_success_hook(  # noqa: PLR0915
         self, data: Dict, user_api_key_dict: UserAPIKeyAuth, response: LLMResponseTypes
     ) -> Any:
         if isinstance(response, LiteLLMBatch):
@@ -1187,6 +1335,8 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                     response.data = user_created_file_ids  # type: ignore
                     return response
             return response
+
+        response = self._rewrite_response_with_unified_container_id(data, response)
         return response
 
     async def afile_retrieve(
@@ -1385,8 +1535,8 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 error_message += f" (showing {MAX_BATCHES_IN_ERROR} most recent): {', '.join(batch_statuses)}. "
             
             error_message += (
-                f"To delete this file before complete cost tracking, please delete or cancel the referencing batch(es) first. "
-                f"Alternatively, wait for all batches to complete and for cost to be computed (batch_processed=true)."
+                "To delete this file before complete cost tracking, please delete or cancel the referencing batch(es) first. "
+                "Alternatively, wait for all batches to complete and for cost to be computed (batch_processed=true)."
             )
             
             # Record blocked deletion metric

@@ -1,10 +1,13 @@
 #### Container Endpoints #####
 
-from typing import Any, Dict
+import asyncio
+from datetime import datetime
+from typing import Any, Dict, List
 
-from fastapi import APIRouter, Depends, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import ORJSONResponse
 
+from litellm._uuid import uuid
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
@@ -16,6 +19,17 @@ from litellm.proxy.common_utils.openai_endpoint_utils import (
 )
 
 router = APIRouter()
+
+
+def _parse_target_model_names_from_body(value: Any) -> List[str]:
+    """Parse JSON `target_model_names` (comma-separated string or list of names)."""
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return [str(x).strip() for x in value if str(x).strip()]
+    if isinstance(value, str):
+        return [x.strip() for x in value.split(",") if x.strip()]
+    return []
 
 
 @router.post(
@@ -95,9 +109,116 @@ async def create_container(
     # Add custom_llm_provider to data
     data["custom_llm_provider"] = custom_llm_provider
 
+    target_model_names_list = _parse_target_model_names_from_body(
+        data.get("target_model_names")
+    )
+
     # Process request using ProxyBaseLLMRequestProcessing
     processor = ProxyBaseLLMRequestProcessing(data=data)
     try:
+        if target_model_names_list:
+            from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+            from litellm.utils import Rules, function_setup
+
+            data.pop("target_model_names", None)
+
+            if llm_router is None:
+                raise HTTPException(
+                    status_code=500,
+                    detail={
+                        "error": "LLM Router not initialized. Ensure models added to proxy."
+                    },
+                )
+
+            managed_files_obj = proxy_logging_obj.get_proxy_hook("managed_files")
+            if managed_files_obj is None or not hasattr(
+                managed_files_obj, "acreate_container"
+            ):
+                raise ProxyException(
+                    message=(
+                        "Managed containers with target_model_names require the "
+                        "managed_files (enterprise) hook with acreate_container support."
+                    ),
+                    type="None",
+                    param="managed_files",
+                    code=503,
+                )
+
+            hook_data = await add_litellm_data_to_request(
+                data=dict(data),
+                request=request,
+                general_settings=general_settings,
+                user_api_key_dict=user_api_key_dict,
+                version=version,
+                proxy_config=proxy_config,
+            )
+            # function_setup() requires litellm_call_id (see litellm.utils.function_setup);
+            # common_processing_pre_call_logic sets this after add_litellm_data_to_request.
+            if not hook_data.get("litellm_call_id"):
+                hook_data["litellm_call_id"] = request.headers.get(
+                    "x-litellm-call-id", str(uuid.uuid4())
+                )
+            start_time = datetime.now()
+            logging_obj, hook_data = function_setup(
+                original_function="acreate_container",
+                rules_obj=Rules(),
+                start_time=start_time,
+                **hook_data,
+            )
+            hook_data["litellm_logging_obj"] = logging_obj
+            hook_data = await proxy_logging_obj.pre_call_hook(
+                user_api_key_dict=user_api_key_dict,
+                data=hook_data,
+                call_type="acreate_container",  # type: ignore[arg-type]
+            )
+            if hook_data is None:
+                raise HTTPException(
+                    status_code=500,
+                    detail={"error": "Invalid request after pre-call hook"},
+                )
+
+            response = await managed_files_obj.acreate_container(
+                llm_router=llm_router,
+                request_data=hook_data,
+                target_model_names_list=target_model_names_list,
+                litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
+                user_api_key_dict=user_api_key_dict,
+            )
+
+            asyncio.create_task(
+                proxy_logging_obj.update_request_status(
+                    litellm_call_id=hook_data.get("litellm_call_id", ""), status="success"
+                )
+            )
+            hooked = await proxy_logging_obj.post_call_success_hook(
+                data=hook_data,
+                user_api_key_dict=user_api_key_dict,
+                response=response,
+            )
+            if hooked is not None:
+                response = hooked
+
+            hidden_params = getattr(response, "_hidden_params", {}) or {}
+            model_id = hidden_params.get("model_id", None) or ""
+            cache_key = hidden_params.get("cache_key", None) or ""
+            api_base = hidden_params.get("api_base", None) or ""
+
+            fastapi_response.headers.update(
+                ProxyBaseLLMRequestProcessing.get_custom_headers(
+                    user_api_key_dict=user_api_key_dict,
+                    call_id=hook_data.get("litellm_call_id"),
+                    model_id=model_id,
+                    cache_key=cache_key,
+                    api_base=api_base,
+                    version=version,
+                    model_region=getattr(
+                        user_api_key_dict, "allowed_model_region", ""
+                    ),
+                    litellm_logging_obj=logging_obj,
+                )
+            )
+            return response
+
         return await processor.base_process_llm_request(
             request=request,
             fastapi_response=fastapi_response,

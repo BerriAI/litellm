@@ -2222,3 +2222,79 @@ async def test_same_user_different_keys_can_access_batch():
     assert "batch_id" in result2
     # Both keys should get the same result
     assert result1["batch_id"] == result2["batch_id"]
+
+
+def test_return_unified_container_id_encoding():
+    from litellm.types.containers.main import ContainerObject
+    from litellm.types.utils import SpecialEnums
+
+    hook = _PROXY_LiteLLMManagedFiles(DualCache(), prisma_client=MagicMock())
+    a = ContainerObject(
+        id="cntr_prov",
+        object="container",
+        created_at=99,
+        status="running",
+        name="n",
+    )
+    a._hidden_params = {"model_id": "mid-1"}
+    out = hook.return_unified_container_id([a], ["gpt-4o", "gpt-4o-mini"])
+    dec = _is_base64_encoded_unified_file_id(out.id)
+    assert dec
+    assert hook.MANAGED_CONTAINER_MIME_TYPE in dec
+    assert "target_model_names,gpt-4o,gpt-4o-mini" in dec
+    assert "llm_output_file_id,cntr_prov" in dec
+    assert "llm_output_file_model_id,mid-1" in dec
+
+
+@pytest.mark.asyncio
+async def test_managed_container_pre_call_decodes_id():
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.types.utils import SpecialEnums
+
+    prisma_client = AsyncMock()
+    row = MagicMock()
+    row.created_by = "user-1"
+    prisma_client.db.litellm_managedfiletable.find_first = AsyncMock(return_value=row)
+
+    hook = _PROXY_LiteLLMManagedFiles(DualCache(), prisma_client=prisma_client)
+
+    inner = SpecialEnums.LITELLM_MANAGED_FILE_COMPLETE_STR.value.format(
+        _PROXY_LiteLLMManagedFiles.MANAGED_CONTAINER_MIME_TYPE,
+        "uuid-1",
+        "gpt-4o",
+        "cntr_real_123",
+        "deploy-model-hash",
+    )
+    b64 = base64.urlsafe_b64encode(inner.encode()).decode().rstrip("=")
+
+    data = {"container_id": b64}
+    out = await hook.async_pre_call_hook(
+        user_api_key_dict=UserAPIKeyAuth(
+            user_id="user-1", parent_otel_span=MagicMock()
+        ),
+        cache=MagicMock(),
+        data=data,
+        call_type="aretrieve_container",
+    )
+    assert out["container_id"] == "cntr_real_123"
+    assert out["model"] == "deploy-model-hash"
+    assert out["_litellm_unified_container_id"] == b64
+
+
+@pytest.mark.asyncio
+async def test_managed_container_post_call_restores_unified_id():
+    from litellm.types.containers.main import ContainerObject
+
+    hook = _PROXY_LiteLLMManagedFiles(DualCache(), prisma_client=MagicMock())
+    c = ContainerObject(
+        id="cntr_raw",
+        object="container",
+        created_at=1,
+        status="active",
+    )
+    out = await hook.async_post_call_success_hook(
+        {"_litellm_unified_container_id": "unified-b64-id"},
+        MagicMock(),
+        c,
+    )
+    assert out.id == "unified-b64-id"
