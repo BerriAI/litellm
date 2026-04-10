@@ -232,6 +232,7 @@ LLM_CONFIG_NAMES = (
     "HostedVLLMResponsesAPIConfig",
     "VolcEngineResponsesAPIConfig",
     "PerplexityResponsesConfig",
+    "SailResearchResponsesConfig",
     "DatabricksResponsesAPIConfig",
     "OpenRouterResponsesAPIConfig",
     "GoogleAIStudioInteractionsConfig",
@@ -932,6 +933,10 @@ _LLM_CONFIGS_IMPORT_MAP = {
     "PerplexityResponsesConfig": (
         ".llms.perplexity.responses.transformation",
         "PerplexityResponsesConfig",
+    ),
+    "SailResearchResponsesConfig": (
+        ".llms.sail_research.responses.transformation",
+        "SailResearchResponsesConfig",
     ),
     "DatabricksResponsesAPIConfig": (
         ".llms.databricks.responses.transformation",

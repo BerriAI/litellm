@@ -1639,6 +1639,9 @@ if TYPE_CHECKING:
     from .llms.perplexity.responses.transformation import (
         PerplexityResponsesConfig as PerplexityResponsesConfig,
     )
+    from .llms.sail_research.responses.transformation import (
+        SailResearchResponsesConfig as SailResearchResponsesConfig,
+    )
     from .llms.databricks.responses.transformation import (
         DatabricksResponsesAPIConfig as DatabricksResponsesAPIConfig,
     )
