@@ -4,13 +4,14 @@ Tests for LTX Video generation transformation.
 
 import asyncio
 import os
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 import httpx
 import pytest
 
 import litellm
 import litellm.llms.ltx.videos.transformation as ltx_video_transformation
+from litellm.cost_calculator import completion_cost
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
@@ -113,8 +114,10 @@ class TestLTXVideoTransformation:
         assert headers["Authorization"] == "Bearer test-api-key"
         assert headers["Content-Type"] == "application/json"
 
-    def test_validate_environment_missing_key(self):
+    def test_validate_environment_missing_key(self, monkeypatch):
         """Test that missing API key raises ValueError."""
+        monkeypatch.delenv("LTX_API_KEY", raising=False)
+        monkeypatch.setattr(litellm, "api_key", None)
         with pytest.raises(ValueError, match="LTX API key is required"):
             self.config.validate_environment(
                 headers={},
@@ -122,8 +125,10 @@ class TestLTXVideoTransformation:
                 api_key=None,
             )
 
-    def test_validate_environment_empty_model_still_requires_key(self):
+    def test_validate_environment_empty_model_still_requires_key(self, monkeypatch):
         """Test that content retrieval no longer relies on a model='' sentinel."""
+        monkeypatch.delenv("LTX_API_KEY", raising=False)
+        monkeypatch.setattr(litellm, "api_key", None)
         with pytest.raises(ValueError, match="LTX API key is required"):
             self.config.validate_environment(
                 headers={},
@@ -252,6 +257,41 @@ class TestLTXVideoTransformation:
         assert result.usage["duration_seconds"] == 5.0
         assert stored_video_path.read_bytes() == mock_response.content
         assert result._hidden_params["video_content_path"] == str(stored_video_path)
+
+    def test_transform_video_create_response_usage_drives_cost_calculation(
+        self, monkeypatch, tmp_path
+    ):
+        """Test LTX usage.duration_seconds is consumed by completion_cost()."""
+        monkeypatch.setattr(ltx_video_transformation, "LTX_VIDEO_STORAGE_DIR", tmp_path)
+        mock_response = Mock(spec=httpx.Response)
+        mock_response.content = b"\x00\x00\x00\x1cftypisom"
+        mock_response.status_code = 200
+        mock_response.request = httpx.Request("POST", "https://api.ltx.video/v1")
+
+        result = self.config.transform_video_create_response(
+            model="ltx/ltx-2-3-fast",
+            raw_response=mock_response,
+            logging_obj=self.mock_logging_obj,
+            custom_llm_provider="ltx",
+            request_data={
+                "model": "ltx/ltx-2-3-fast",
+                "duration": 5,
+            },
+        )
+
+        with patch(
+            "litellm.llms.openai.cost_calculation.video_generation_cost",
+            return_value=0.3,
+        ) as mock_video_generation_cost:
+            cost = completion_cost(
+                completion_response=result,
+                model="ltx/ltx-2-3-fast",
+                custom_llm_provider="ltx",
+                call_type="create_video",
+            )
+
+        assert cost == 0.3
+        assert mock_video_generation_cost.call_args.kwargs["duration_seconds"] == 5.0
 
     def test_transform_video_create_response_without_request_data(
         self, monkeypatch, tmp_path

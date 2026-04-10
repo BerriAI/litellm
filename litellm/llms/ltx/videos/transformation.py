@@ -189,7 +189,8 @@ class LTXVideoConfig(BaseVideoConfig):
             "model": model,
         }
 
-        # Add mapped parameters
+        # LTX's image-to-video endpoint accepts image_uri in the JSON body.
+        # See docs.ltx.video/input-formats and the /v1/image-to-video reference.
         request_data.update(video_create_optional_request_params)
 
         files_list: List[Tuple[str, Any]] = []
@@ -256,6 +257,7 @@ class LTXVideoConfig(BaseVideoConfig):
         usage_data: Dict[str, Any] = {}
         if request_data and "duration" in request_data:
             try:
+                # completion_cost() reads usage.duration_seconds for video billing.
                 usage_data["duration_seconds"] = float(request_data["duration"])
             except (ValueError, TypeError):
                 # Duration is used only for cost accounting, so skip invalid values.
