@@ -41,7 +41,6 @@ jobs:
       workers: ${{ matrix.workers }}
       reruns: 2
       timeout-minutes: ${{ matrix.timeout }}
-      enable-redis: false
       enable-postgres: true
       artifact-name: proxy-db-${{ matrix.test-group }}
     secrets:
