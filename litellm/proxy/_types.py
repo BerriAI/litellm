@@ -607,6 +607,32 @@ class LiteLLMRoutes(enum.Enum):
         ]
     )
 
+    # Retained for backwards compatibility with JWT auth configs that reference
+    # "ui_routes" in admin_allowed_routes. Not used by the proxy's own route
+    # authorization — UI tokens now go through the same RBAC path as API tokens.
+    ui_routes = [
+        "/sso",
+        "/sso/get/ui_settings",
+        "/get/ui_settings",
+        "/login",
+        "/key/info",
+        "/config",
+        "/spend",
+        "/model/info",
+        "/v2/model/info",
+        "/v2/key/info",
+        "/models",
+        "/v1/models",
+        "/global/spend",
+        "/global/spend/logs",
+        "/global/spend/keys",
+        "/global/spend/models",
+        "/global/spend/tags",
+        "/global/predict/spend/logs",
+        "/global/activity",
+        "/health/services",
+    ] + info_routes
+
     internal_user_routes = (
         [
             "/global/activity",
