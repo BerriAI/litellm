@@ -99,7 +99,7 @@ The following checks were performed on each of these signatures:
   - The signatures were verified against the specified public key
 ```
 
-Learn more about LiteLLM's release signing in the [CI/CD v2 announcement](https://docs.litellm.ai/blog/ci-cd-v2-improvements#verify-docker-image-signatures).
+Learn more about LiteLLM's release signing in the [CI/CD v2 announcement](https://docs.litellm.ai/blog/ci-cd-v2-improvements#verify-docker-image-signatures). For a complete guide covering all image variants, CI/CD enforcement, and deployment best practices, see the [Docker Image Security Guide](./docker_image_security.md).
 
 ### Docker Run
 
