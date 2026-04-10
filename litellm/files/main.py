@@ -36,7 +36,10 @@ FileContentProvider = Literal[
 
 import litellm
 from litellm import get_secret_str
-from litellm.files.streaming import FileContentStreamingResponse
+from litellm.files.streaming import (
+    FileContentStreamingResponse,
+    FileContentStreamingResult,
+)
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.azure.common_utils import get_azure_credentials
@@ -990,7 +993,7 @@ async def afile_content_streaming(
     extra_body: Optional[Dict[str, str]] = None,
     chunk_size: int = 1024 * 1024,
     **kwargs,
-) -> Union[Iterator[bytes], AsyncIterator[bytes]]:
+) -> FileContentStreamingResult:
     """
     Async wrapper for file_content_streaming.
     """
@@ -1034,7 +1037,7 @@ def file_content_streaming(
     extra_body: Optional[Dict[str, str]] = None,
     chunk_size: int = 1024 * 1024,
     **kwargs,
-) -> Union[Iterator[bytes], AsyncIterator[bytes]]:
+) -> Union[FileContentStreamingResult, Coroutine[Any, Any, FileContentStreamingResult]]:
     """
     Prototype API: Returns a byte iterator for file contents.
 
@@ -1080,7 +1083,23 @@ def file_content_streaming(
                 litellm_params["api_base"] = optional_params.api_base
             logging_obj.model_call_details["litellm_params"] = litellm_params
 
-        response = cast(Union[Iterator[bytes], AsyncIterator[bytes]], iter(()))
+        def _wrap_streaming_result(
+            response: FileContentStreamingResult,
+        ) -> FileContentStreamingResult:
+            return FileContentStreamingResult(
+                stream_iterator=FileContentStreamingResponse(
+                    stream_iterator=response.stream_iterator,
+                    file_id=file_id,
+                    model=model,
+                    custom_llm_provider=custom_llm_provider,
+                    logging_obj=logging_obj,
+                ),
+                headers=response.headers,
+            )
+
+        response: Union[
+            FileContentStreamingResult, Coroutine[Any, Any, FileContentStreamingResult]
+        ] = FileContentStreamingResult(stream_iterator=iter(()), headers={})
         if custom_llm_provider in OPENAI_COMPATIBLE_BATCH_AND_FILES_PROVIDERS:
             openai_creds = get_openai_credentials(
                 api_base=optional_params.api_base,
@@ -1115,12 +1134,12 @@ def file_content_streaming(
                 ),
             )
 
-        return FileContentStreamingResponse(
-            stream_iterator=response,
-            file_id=file_id,
-            model=model,
-            custom_llm_provider=custom_llm_provider,
-            logging_obj=logging_obj,
-        )
+        if asyncio.iscoroutine(response):
+            async def _await_and_wrap() -> FileContentStreamingResult:
+                return _wrap_streaming_result(await response)
+
+            return _await_and_wrap()
+
+        return _wrap_streaming_result(response)
     except Exception as e:
         raise e

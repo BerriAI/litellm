@@ -2,6 +2,7 @@ import pytest
 from typing import AsyncIterator, cast
 
 from litellm.files import main as files_main
+from litellm.files.streaming import FileContentStreamingResult
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
 
@@ -17,7 +18,10 @@ async def test_afile_content_streaming_routes_to_openai_streaming_handler(
 
     def _mock_file_content_streaming(**kwargs):
         captured_kwargs.update(kwargs)
-        return _mock_stream()
+        return FileContentStreamingResult(
+            stream_iterator=_mock_stream(),
+            headers={"content-length": "11"},
+        )
 
     monkeypatch.setattr(
         files_main.openai_files_instance,
@@ -25,7 +29,7 @@ async def test_afile_content_streaming_routes_to_openai_streaming_handler(
         _mock_file_content_streaming,
     )
 
-    stream_iterator = await files_main.afile_content_streaming(
+    stream_result = await files_main.afile_content_streaming(
         file_id="file-abc123",
         custom_llm_provider="openai",
         api_key="sk-test",
@@ -34,10 +38,11 @@ async def test_afile_content_streaming_routes_to_openai_streaming_handler(
         chunk_size=8,
     )
 
-    async_stream_iterator = cast(AsyncIterator[bytes], stream_iterator)
+    async_stream_iterator = cast(AsyncIterator[bytes], stream_result.stream_iterator)
     chunks = [chunk async for chunk in async_stream_iterator]
 
     assert chunks == [b"hello ", b"world"]
+    assert stream_result.headers["content-length"] == "11"
     assert captured_kwargs["_is_async"] is True
     assert captured_kwargs["file_content_request"]["file_id"] == "file-abc123"
     assert captured_kwargs["api_key"] == "sk-test"
@@ -56,7 +61,10 @@ async def test_afile_content_streaming_builds_standard_logging_object_on_complet
         yield b"hello"
 
     def _mock_file_content_streaming(**kwargs):
-        return _mock_stream()
+        return FileContentStreamingResult(
+            stream_iterator=_mock_stream(),
+            headers={"content-length": "5"},
+        )
 
     async def _mock_async_success_handler(
         self, result=None, start_time=None, end_time=None, cache_hit=None, **kwargs
@@ -81,17 +89,18 @@ async def test_afile_content_streaming_builds_standard_logging_object_on_complet
         lambda self, result, start_time, end_time, cache_hit=None: None,
     )
 
-    stream_iterator = await files_main.afile_content_streaming(
+    stream_result = await files_main.afile_content_streaming(
         file_id="file-abc123",
         custom_llm_provider="openai",
         api_key="sk-test",
         api_base="https://api.openai.com/v1",
     )
 
-    async_stream_iterator = cast(AsyncIterator[bytes], stream_iterator)
+    async_stream_iterator = cast(AsyncIterator[bytes], stream_result.stream_iterator)
     chunks = [chunk async for chunk in async_stream_iterator]
 
     assert chunks == [b"hello"]
+    assert stream_result.headers["content-length"] == "5"
     assert captured_standard_logging_object is not None
     assert captured_standard_logging_object["call_type"] == "afile_content_streaming"
     assert captured_standard_logging_object["custom_llm_provider"] == "openai"

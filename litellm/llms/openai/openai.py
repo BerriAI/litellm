@@ -32,6 +32,7 @@ import litellm
 from litellm import LlmProviders
 from litellm._logging import verbose_logger
 from litellm.constants import DEFAULT_MAX_RETRIES
+from litellm.files.streaming import FileContentStreamingResult
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
@@ -1756,12 +1757,21 @@ class OpenAIFilesAPI(BaseLLM):
         file_content_request: FileContentRequest,
         openai_client: AsyncOpenAI,
         chunk_size: int = 1024 * 1024,
-    ) -> AsyncIterator[bytes]:
-        async with openai_client.files.with_streaming_response.content(
+    ) -> FileContentStreamingResult:
+        response_cm = openai_client.files.with_streaming_response.content(
             **file_content_request
-        ) as response:
-            async for chunk in response.iter_bytes(chunk_size=chunk_size):
-                yield chunk
+        )
+        response = await response_cm.__aenter__()
+        headers = dict(response.headers)
+
+        async def _stream() -> AsyncIterator[bytes]:
+            try:
+                async for chunk in response.iter_bytes(chunk_size=chunk_size):
+                    yield chunk
+            finally:
+                await response_cm.__aexit__(None, None, None)
+
+        return FileContentStreamingResult(stream_iterator=_stream(), headers=headers)
 
     def file_content_streaming(
         self,
@@ -1774,7 +1784,7 @@ class OpenAIFilesAPI(BaseLLM):
         organization: Optional[str],
         chunk_size: int = 1024 * 1024,
         client: Optional[Union[OpenAI, AsyncOpenAI]] = None,
-    ) -> Union[Iterator[bytes], AsyncIterator[bytes]]:
+    ) -> FileContentStreamingResult:
         openai_client: Optional[Union[OpenAI, AsyncOpenAI]] = self.get_openai_client(
             api_key=api_key,
             api_base=api_base,
@@ -1800,13 +1810,19 @@ class OpenAIFilesAPI(BaseLLM):
                 chunk_size=chunk_size,
             )
 
-        def _stream() -> Iterator[bytes]:
-            with cast(OpenAI, openai_client).files.with_streaming_response.content(
-                **file_content_request
-            ) as response:
-                yield from response.iter_bytes(chunk_size=chunk_size)
+        response_cm = cast(OpenAI, openai_client).files.with_streaming_response.content(
+            **file_content_request
+        )
+        response = response_cm.__enter__()
+        headers = dict(response.headers)
 
-        return _stream()
+        def _stream() -> Iterator[bytes]:
+            try:
+                yield from response.iter_bytes(chunk_size=chunk_size)
+            finally:
+                response_cm.__exit__(None, None, None)
+
+        return FileContentStreamingResult(stream_iterator=_stream(), headers=headers)
 
     async def aretrieve_file(
         self,

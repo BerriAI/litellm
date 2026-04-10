@@ -14,6 +14,7 @@ sys.path.insert(
 
 import litellm
 from litellm import Router
+from litellm.files.streaming import FileContentStreamingResult
 from litellm.proxy._types import LiteLLM_UserTableFiltered, UserAPIKeyAuth
 from litellm.proxy.hooks import get_proxy_hook
 from litellm.proxy.management_endpoints.internal_user_endpoints import ui_view_users
@@ -1575,7 +1576,10 @@ def test_get_file_content_streams_openai_direct_path(
             yield b"hello "
             yield b"world"
 
-        return _stream()
+        return FileContentStreamingResult(
+            stream_iterator=_stream(),
+            headers={"content-length": "11"},
+        )
 
     async def _fail_buffered_path(*args, **kwargs):
         raise AssertionError("buffered afile_content path should not be used")
@@ -1604,6 +1608,7 @@ def test_get_file_content_streams_openai_direct_path(
     assert response.status_code == 200, response.text
     assert response.content == b"hello world"
     assert response.headers["content-type"].startswith("application/octet-stream")
+    assert response.headers["content-length"] == "11"
     assert captured_kwargs["custom_llm_provider"] == "openai"
     assert captured_kwargs["file_id"] == "file-abc123"
     proxy_logging_obj.update_request_status.assert_awaited_once()

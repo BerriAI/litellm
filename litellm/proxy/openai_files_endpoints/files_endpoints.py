@@ -114,25 +114,30 @@ async def _get_streaming_file_content_response(
             file_id=original_file_id,
         )
 
+    stream_result = await litellm.afile_content_streaming(
+        **{
+            "custom_llm_provider": custom_llm_provider,
+            "file_id": file_id,
+            **data,
+        }  # type: ignore
+    )
     stream_iterator = cast(
         AsyncIterator[bytes],
-        await litellm.afile_content_streaming(
-            **{
-                "custom_llm_provider": custom_llm_provider,
-                "file_id": file_id,
-                **data,
-            }  # type: ignore
-        ),
+        stream_result.stream_iterator,
     )
     hidden_params = getattr(stream_iterator, "_hidden_params", {}) or {}
-    response_headers = ProxyBaseLLMRequestProcessing.get_custom_headers(
-        user_api_key_dict=user_api_key_dict,
-        model_id=hidden_params.get("model_id", "") or "",
-        cache_key=hidden_params.get("cache_key", "") or "",
-        api_base=hidden_params.get("api_base", "") or "",
-        version=version,
-        model_region=getattr(user_api_key_dict, "allowed_model_region", ""),
-    )
+    response_headers = {
+        **stream_result.headers,
+        **ProxyBaseLLMRequestProcessing.get_custom_headers(
+            user_api_key_dict=user_api_key_dict,
+            model_id=hidden_params.get("model_id", "") or "",
+            cache_key=hidden_params.get("cache_key", "") or "",
+            api_base=hidden_params.get("api_base", "") or "",
+            version=version,
+            model_region=getattr(user_api_key_dict, "allowed_model_region", ""),
+        ),
+    }
+    
     return StreamingResponse(
         _stream_file_content_with_logging(
             stream_iterator=stream_iterator,

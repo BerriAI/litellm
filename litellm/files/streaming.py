@@ -1,6 +1,6 @@
 import datetime
 import traceback
-from typing import AsyncIterator, Dict, Iterator, Literal, Optional, Union, cast
+from typing import AsyncIterator, Dict, Iterator, Literal, NamedTuple, Optional, Union, cast
 
 from litellm.litellm_core_utils.litellm_logging import (
     Logging as LiteLLMLoggingObj,
@@ -11,6 +11,11 @@ from litellm.types.utils import StandardLoggingHiddenParams, StandardLoggingPayl
 FileContentProvider = Literal[
     "openai", "azure", "vertex_ai", "bedrock", "hosted_vllm", "anthropic", "manus"
 ]
+
+
+class FileContentStreamingResult(NamedTuple):
+    stream_iterator: Union[Iterator[bytes], AsyncIterator[bytes]]
+    headers: Dict[str, str]
 
 
 class FileContentStreamingResponse:
