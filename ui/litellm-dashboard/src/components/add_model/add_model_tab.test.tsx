@@ -269,7 +269,7 @@ describe("Add Model Tab", () => {
       },
       { timeout: 10000 },
     );
-  }, 15000); // 15 second timeout to allow waitFor to complete
+  });
 
   it("should show team selection when team-only switch is enabled", async () => {
     const props = createTestProps();
