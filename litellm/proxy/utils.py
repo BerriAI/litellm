@@ -2645,7 +2645,7 @@ class PrismaClient:
             raise e
 
     async def _query_first_with_cached_plan_fallback(
-        self, sql_query: str
+        self, sql_query: str, *args
     ) -> Optional[dict]:
         """
         Execute a query with automatic fallback for PostgreSQL cached plan errors.
@@ -2664,7 +2664,7 @@ class PrismaClient:
             Original exception if not a cached plan error
         """
         try:
-            return await self.db.query_first(query=sql_query)
+            return await self.db.query_first(sql_query, *args)
         except Exception as e:
             error_str = str(e)
             if "cached plan must not change result type" in error_str:
@@ -2679,7 +2679,7 @@ class PrismaClient:
                     "retrying with fresh plan. This may occur during rolling deployments "
                     "when schema changes are applied."
                 )
-                return await self.db.query_first(query=sql_query_retry)
+                return await self.db.query_first(sql_query_retry, *args)
             else:
                 raise
 
@@ -2978,7 +2978,7 @@ class PrismaClient:
                             detail={"error": f"No token passed in. Token={token}"},
                         )
 
-                    sql_query = f"""
+                    sql_query = """
                         SELECT 
                             v.*,
                             t.spend AS team_spend, 
@@ -3016,11 +3016,11 @@ class PrismaClient:
                         LEFT JOIN "LiteLLM_ProjectTable" AS p ON v.project_id = p.project_id
                         LEFT JOIN "LiteLLM_OrganizationTable" AS o ON v.organization_id = o.organization_id
                         LEFT JOIN "LiteLLM_BudgetTable" AS b2 ON o.budget_id = b2.budget_id
-                        WHERE v.token = '{token}'
+                        WHERE v.token = $1
                     """
 
                     response = await self._query_first_with_cached_plan_fallback(
-                        sql_query
+                        sql_query, hashed_token
                     )
 
                     # If not found in main table, check deprecated keys (grace period)
