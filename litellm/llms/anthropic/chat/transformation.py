@@ -19,6 +19,7 @@ from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.llms.base_llm.base_utils import type_to_response_format_param
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.types.llms.anthropic import (
+    ANTHROPIC_ADVISOR_TOOL_TYPE,
     ANTHROPIC_BETA_HEADER_VALUES,
     ANTHROPIC_HOSTED_TOOLS,
     AllAnthropicMessageValues,
@@ -75,7 +76,12 @@ from litellm.utils import (
     token_counter,
 )
 
-from ..common_utils import AnthropicError, AnthropicModelInfo, process_anthropic_headers
+from ..common_utils import (
+    AnthropicError,
+    AnthropicModelInfo,
+    process_anthropic_headers,
+    strip_advisor_blocks_from_messages,
+)
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -508,6 +514,23 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 type="tool_search_tool_bm25_20251119",
                 name=tool_name,
             )
+        elif tool["type"] == ANTHROPIC_ADVISOR_TOOL_TYPE:
+            from litellm.types.llms.anthropic import AnthropicAdvisorTool
+
+            _tool_dict = cast(dict, tool)
+            advisor_model = _tool_dict.get("model")
+            if not isinstance(advisor_model, str):
+                raise ValueError("Advisor tool must have a valid model")
+            _advisor_tool = AnthropicAdvisorTool(
+                type=ANTHROPIC_ADVISOR_TOOL_TYPE,
+                name="advisor",
+                model=advisor_model,
+            )
+            if _tool_dict.get("max_uses") is not None:
+                _advisor_tool["max_uses"] = _tool_dict["max_uses"]
+            if _tool_dict.get("caching") is not None:
+                _advisor_tool["caching"] = _tool_dict["caching"]
+            returned_tool = _advisor_tool  # type: ignore[assignment]
         if returned_tool is None and mcp_server is None:
             raise ValueError(f"Unsupported tool type: {tool['type']}")
 
@@ -964,11 +987,11 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 if mcp_servers:
                     optional_params["mcp_servers"] = mcp_servers
             elif param == "tool_choice" or param == "parallel_tool_calls":
-                _tool_choice: Optional[
-                    AnthropicMessagesToolChoice
-                ] = self._map_tool_choice(
-                    tool_choice=non_default_params.get("tool_choice"),
-                    parallel_tool_use=non_default_params.get("parallel_tool_calls"),
+                _tool_choice: Optional[AnthropicMessagesToolChoice] = (
+                    self._map_tool_choice(
+                        tool_choice=non_default_params.get("tool_choice"),
+                        parallel_tool_use=non_default_params.get("parallel_tool_calls"),
+                    )
                 )
 
                 if _tool_choice is not None:
@@ -1066,9 +1089,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                         self.map_openai_context_management_to_anthropic(value)
                     )
                     if anthropic_context_management is not None:
-                        optional_params[
-                            "context_management"
-                        ] = anthropic_context_management
+                        optional_params["context_management"] = (
+                            anthropic_context_management
+                        )
             elif param == "speed" and isinstance(value, str):
                 # Pass through Anthropic-specific speed parameter for fast mode
                 optional_params["speed"] = value
@@ -1142,9 +1165,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                         text=system_message_block["content"],
                     )
                     if "cache_control" in system_message_block:
-                        anthropic_system_message_content[
-                            "cache_control"
-                        ] = system_message_block["cache_control"]
+                        anthropic_system_message_content["cache_control"] = (
+                            system_message_block["cache_control"]
+                        )
                     anthropic_system_message_list.append(
                         anthropic_system_message_content
                     )
@@ -1168,9 +1191,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                             )
                         )
                         if "cache_control" in _content:
-                            anthropic_system_message_content[
-                                "cache_control"
-                            ] = _content["cache_control"]
+                            anthropic_system_message_content["cache_control"] = (
+                                _content["cache_control"]
+                            )
 
                         anthropic_system_message_list.append(
                             anthropic_system_message_content
@@ -1311,6 +1334,12 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             self._ensure_beta_header(
                 headers, ANTHROPIC_BETA_HEADER_VALUES.FAST_MODE_2026_02_01.value
             )
+        for tool in _tools:
+            if tool.get("type") == ANTHROPIC_ADVISOR_TOOL_TYPE:
+                self._ensure_beta_header(
+                    headers, ANTHROPIC_BETA_HEADER_VALUES.ADVISOR_TOOL_2026_03_01.value
+                )
+                break
         return headers
 
     def transform_request(
@@ -1389,6 +1418,16 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 status_code=400,
                 message="{}\nReceived Messages={}".format(str(e), messages),
             )  # don't use verbose_logger.exception, if exception is raised
+
+        ## Auto-strip advisor blocks from history if advisor tool is absent.
+        ## Prevents Anthropic 400: advisor_tool_result in history requires advisor tool.
+        _all_tools = optional_params.get("tools") or []
+        _has_advisor = any(
+            isinstance(t, dict) and t.get("type") == ANTHROPIC_ADVISOR_TOOL_TYPE
+            for t in _all_tools
+        )
+        if not _has_advisor:
+            anthropic_messages = strip_advisor_blocks_from_messages(anthropic_messages)
 
         ## Add code_execution tool if container_upload is in messages
         _tools = (
@@ -1477,9 +1516,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 )
         return _message
 
-    def extract_response_content(
-        self, completion_response: dict
-    ) -> Tuple[
+    def extract_response_content(self, completion_response: dict) -> Tuple[
         str,
         Optional[List[Any]],
         Optional[
@@ -1773,9 +1810,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             code_interpreter_results = self._build_code_interpreter_results(
                 tool_results, code_by_id, container_id
             )
-            provider_specific_fields[
-                "code_interpreter_results"
-            ] = code_interpreter_results
+            provider_specific_fields["code_interpreter_results"] = (
+                code_interpreter_results
+            )
 
         container = completion_response.get("container")
         if container is not None:
