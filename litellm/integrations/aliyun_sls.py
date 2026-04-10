@@ -11,6 +11,7 @@ Configuration via litellm.aliyun_sls_callback_params or environment variables:
 """
 
 import asyncio
+import os
 import time
 from typing import Any, Dict, Optional
 
@@ -33,12 +34,34 @@ class AliyunSLSLogger(CustomLogger):
                 else:
                     params[key] = value
 
-        region = params.get("aliyun_sls_region") or ""
-        self.project = params.get("aliyun_sls_project") or ""
-        self.logstore = params.get("aliyun_sls_logstore") or ""
-        access_key_id = params.get("aliyun_sls_access_key_id") or ""
-        access_key_secret = params.get("aliyun_sls_access_key_secret") or ""
-        custom_endpoint = params.get("aliyun_sls_endpoint") or ""
+        region = (
+            params.get("aliyun_sls_region") or os.environ.get("aliyun_sls_region") or ""
+        )
+        self.project = (
+            params.get("aliyun_sls_project")
+            or os.environ.get("aliyun_sls_project")
+            or ""
+        )
+        self.logstore = (
+            params.get("aliyun_sls_logstore")
+            or os.environ.get("aliyun_sls_logstore")
+            or ""
+        )
+        access_key_id = (
+            params.get("aliyun_sls_access_key_id")
+            or os.environ.get("aliyun_sls_access_key_id")
+            or ""
+        )
+        access_key_secret = (
+            params.get("aliyun_sls_access_key_secret")
+            or os.environ.get("aliyun_sls_access_key_secret")
+            or ""
+        )
+        custom_endpoint = (
+            params.get("aliyun_sls_endpoint")
+            or os.environ.get("aliyun_sls_endpoint")
+            or ""
+        )
 
         if not region and not custom_endpoint:
             raise ValueError("aliyun_sls_region is required")
