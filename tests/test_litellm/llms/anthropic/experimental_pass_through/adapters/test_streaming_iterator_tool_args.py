@@ -47,6 +47,14 @@ def _make_chunk(
     return chunk
 
 
+def _collect_events_sync(wrapper: AnthropicStreamWrapper) -> List[dict]:
+    """Drain all events from a sync AnthropicStreamWrapper."""
+    events = []
+    for event in wrapper:
+        events.append(event)
+    return events
+
+
 async def _collect_events_async(wrapper: AnthropicStreamWrapper) -> List[dict]:
     """Drain all events from an async AnthropicStreamWrapper."""
     events = []
@@ -63,9 +71,7 @@ async def test_async_stream_emits_input_json_delta_for_bundled_tool_args():
     content_block_delta after the tool_use content_block_start.
     """
     # Chunk 1: text content
-    text_chunk = _make_chunk(
-        Delta(content="Hello", role="assistant", tool_calls=None)
-    )
+    text_chunk = _make_chunk(Delta(content="Hello", role="assistant", tool_calls=None))
 
     # Chunk 2: tool call with name AND arguments in the same chunk (xAI/Gemini style)
     tool_chunk = _make_chunk(
@@ -102,9 +108,7 @@ async def test_async_stream_emits_input_json_delta_for_bundled_tool_args():
     )
 
     events = await _collect_events_async(wrapper)
-    event_types = [
-        e.get("type") if isinstance(e, dict) else str(e) for e in events
-    ]
+    event_types = [e.get("type") if isinstance(e, dict) else str(e) for e in events]
 
     # Find the tool_use content_block_start and subsequent input_json_delta
     tool_start_idx = None
@@ -126,21 +130,21 @@ async def test_async_stream_emits_input_json_delta_for_bundled_tool_args():
         ):
             input_json_delta_idx = i
 
-    assert tool_start_idx is not None, (
-        f"Expected content_block_start with type=tool_use; events: {event_types}"
-    )
-    assert input_json_delta_idx is not None, (
-        f"Expected content_block_delta with input_json_delta; events: {event_types}"
-    )
-    assert input_json_delta_idx == tool_start_idx + 1, (
-        "input_json_delta should immediately follow the tool_use content_block_start"
-    )
+    assert (
+        tool_start_idx is not None
+    ), f"Expected content_block_start with type=tool_use; events: {event_types}"
+    assert (
+        input_json_delta_idx is not None
+    ), f"Expected content_block_delta with input_json_delta; events: {event_types}"
+    assert (
+        input_json_delta_idx == tool_start_idx + 1
+    ), "input_json_delta should immediately follow the tool_use content_block_start"
 
     # Verify the delta carries the tool arguments
     delta_event = events[input_json_delta_idx]
-    assert delta_event["delta"]["partial_json"], (
-        "input_json_delta should have non-empty partial_json"
-    )
+    assert delta_event["delta"][
+        "partial_json"
+    ], "input_json_delta should have non-empty partial_json"
 
 
 @pytest.mark.asyncio
@@ -151,9 +155,7 @@ async def test_async_stream_no_extra_delta_when_tool_args_empty():
     after content_block_start. This verifies backward compatibility.
     """
     # Chunk 1: text
-    text_chunk = _make_chunk(
-        Delta(content="Hi", role="assistant", tool_calls=None)
-    )
+    text_chunk = _make_chunk(Delta(content="Hi", role="assistant", tool_calls=None))
 
     # Chunk 2: tool call with name but NO arguments (OpenAI-style)
     tool_name_chunk = _make_chunk(
@@ -230,4 +232,143 @@ async def test_async_stream_no_extra_delta_when_tool_args_empty():
         and next_event["delta"].get("type") == "input_json_delta"
     ):
         # This delta must come from tool_args_chunk, not tool_name_chunk
+        assert next_event["delta"].get("partial_json") == '{"location": "NYC"}'
+
+
+def test_sync_stream_emits_input_json_delta_for_bundled_tool_args():
+    """
+    Sync counterpart: when a provider bundles tool_call arguments in the first
+    streaming chunk, the sync wrapper must also emit the input_json_delta.
+    """
+    text_chunk = _make_chunk(Delta(content="Hello", role="assistant", tool_calls=None))
+    tool_chunk = _make_chunk(
+        Delta(
+            content=None,
+            role="assistant",
+            tool_calls=[
+                ChatCompletionDeltaToolCall(
+                    id="call_abc123",
+                    function=Function(
+                        name="get_weather",
+                        arguments='{"location": "Boston"}',
+                    ),
+                    type="function",
+                    index=0,
+                )
+            ],
+        )
+    )
+    finish_chunk = _make_chunk(
+        Delta(content=None, role="assistant", tool_calls=None),
+        finish_reason="tool_calls",
+    )
+
+    wrapper = AnthropicStreamWrapper(
+        completion_stream=iter([text_chunk, tool_chunk, finish_chunk]),
+        model="test-model",
+    )
+
+    events = _collect_events_sync(wrapper)
+    event_types = [e.get("type") if isinstance(e, dict) else str(e) for e in events]
+
+    tool_start_idx = None
+    input_json_delta_idx = None
+
+    for i, event in enumerate(events):
+        if not isinstance(event, dict):
+            continue
+        if (
+            event.get("type") == "content_block_start"
+            and isinstance(event.get("content_block"), dict)
+            and event["content_block"].get("type") == "tool_use"
+        ):
+            tool_start_idx = i
+        if (
+            event.get("type") == "content_block_delta"
+            and isinstance(event.get("delta"), dict)
+            and event["delta"].get("type") == "input_json_delta"
+        ):
+            input_json_delta_idx = i
+
+    assert (
+        tool_start_idx is not None
+    ), f"Expected content_block_start with type=tool_use; events: {event_types}"
+    assert (
+        input_json_delta_idx is not None
+    ), f"Expected content_block_delta with input_json_delta; events: {event_types}"
+    assert (
+        input_json_delta_idx == tool_start_idx + 1
+    ), "input_json_delta should immediately follow the tool_use content_block_start"
+    assert events[input_json_delta_idx]["delta"]["partial_json"]
+
+
+def test_sync_stream_no_extra_delta_when_tool_args_empty():
+    """
+    Sync counterpart: empty args (OpenAI-style) should not emit an extra
+    input_json_delta from the trigger chunk.
+    """
+    text_chunk = _make_chunk(Delta(content="Hi", role="assistant", tool_calls=None))
+    tool_name_chunk = _make_chunk(
+        Delta(
+            content=None,
+            role="assistant",
+            tool_calls=[
+                ChatCompletionDeltaToolCall(
+                    id="call_xyz789",
+                    function=Function(name="get_weather", arguments=""),
+                    type="function",
+                    index=0,
+                )
+            ],
+        )
+    )
+    tool_args_chunk = _make_chunk(
+        Delta(
+            content=None,
+            role="assistant",
+            tool_calls=[
+                ChatCompletionDeltaToolCall(
+                    id=None,
+                    function=Function(name=None, arguments='{"location": "NYC"}'),
+                    type="function",
+                    index=0,
+                )
+            ],
+        )
+    )
+    finish_chunk = _make_chunk(
+        Delta(content=None, role="assistant", tool_calls=None),
+        finish_reason="tool_calls",
+    )
+
+    wrapper = AnthropicStreamWrapper(
+        completion_stream=iter(
+            [text_chunk, tool_name_chunk, tool_args_chunk, finish_chunk]
+        ),
+        model="test-model",
+    )
+
+    events = _collect_events_sync(wrapper)
+
+    tool_start_idx = None
+    for i, event in enumerate(events):
+        if not isinstance(event, dict):
+            continue
+        if (
+            event.get("type") == "content_block_start"
+            and isinstance(event.get("content_block"), dict)
+            and event["content_block"].get("type") == "tool_use"
+        ):
+            tool_start_idx = i
+            break
+
+    assert tool_start_idx is not None
+
+    next_event = events[tool_start_idx + 1]
+    if (
+        isinstance(next_event, dict)
+        and next_event.get("type") == "content_block_delta"
+        and isinstance(next_event.get("delta"), dict)
+        and next_event["delta"].get("type") == "input_json_delta"
+    ):
         assert next_event["delta"].get("partial_json") == '{"location": "NYC"}'
