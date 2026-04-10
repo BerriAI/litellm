@@ -508,6 +508,23 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 type="tool_search_tool_bm25_20251119",
                 name=tool_name,
             )
+        elif tool["type"] == "advisor_20260301":
+            from litellm.types.llms.anthropic import AnthropicAdvisorTool
+
+            _tool_dict = cast(dict, tool)
+            advisor_model = _tool_dict.get("model")
+            if not isinstance(advisor_model, str):
+                raise ValueError("Advisor tool must have a valid model")
+            _advisor_tool = AnthropicAdvisorTool(
+                type="advisor_20260301",
+                name="advisor",
+                model=advisor_model,
+            )
+            if _tool_dict.get("max_uses") is not None:
+                _advisor_tool["max_uses"] = _tool_dict["max_uses"]
+            if _tool_dict.get("caching") is not None:
+                _advisor_tool["caching"] = _tool_dict["caching"]
+            returned_tool = _advisor_tool  # type: ignore[assignment]
         if returned_tool is None and mcp_server is None:
             raise ValueError(f"Unsupported tool type: {tool['type']}")
 
@@ -1311,6 +1328,12 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             self._ensure_beta_header(
                 headers, ANTHROPIC_BETA_HEADER_VALUES.FAST_MODE_2026_02_01.value
             )
+        for tool in _tools:
+            if tool.get("type") == "advisor_20260301":
+                self._ensure_beta_header(
+                    headers, ANTHROPIC_BETA_HEADER_VALUES.ADVISOR_TOOL_2026_03_01.value
+                )
+                break
         return headers
 
     def transform_request(
