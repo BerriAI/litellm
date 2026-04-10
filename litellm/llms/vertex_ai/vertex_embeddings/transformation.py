@@ -132,7 +132,7 @@ class VertexAITextEmbeddingConfig(BaseModel):
                 vertex_request["labels"] = labels
             return vertex_request
 
-        vertex_request: VertexEmbeddingRequest = VertexEmbeddingRequest()
+        vertex_request = VertexEmbeddingRequest()
         vertex_text_embedding_input_list: List[TextEmbeddingInput] = []
         task_type: Optional[TaskType] = optional_params.get("task_type")
         title = optional_params.get("title")
