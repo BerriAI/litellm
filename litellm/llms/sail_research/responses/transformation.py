@@ -12,11 +12,8 @@ Sail is a responses-only provider. Key differences from vanilla OpenAI:
 Ref: https://api.sailresearch.com
 """
 
-from typing import Any, Dict, List, Optional, Union
+from typing import Dict, Optional, Union
 
-import httpx
-
-from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import ResponseInputParam
@@ -95,7 +92,11 @@ class SailResearchResponsesConfig(OpenAIResponsesAPIConfig):
                 }
 
         # Never send stream: true to Sail
-        response_api_optional_request_params.pop("stream", None)
+        response_api_optional_request_params = {
+            k: v
+            for k, v in response_api_optional_request_params.items()
+            if k != "stream"
+        }
 
         return super().transform_responses_api_request(
             model=model,

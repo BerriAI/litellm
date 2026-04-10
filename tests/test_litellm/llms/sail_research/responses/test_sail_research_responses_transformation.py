@@ -15,10 +15,12 @@ import pytest
 
 sys.path.insert(0, os.path.abspath("../../../../.."))
 
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.sail_research.responses.transformation import (
     SailResearchResponsesConfig,
 )
 from litellm.types.llms.openai import ResponsesAPIOptionalRequestParams
+from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
 from litellm.utils import ProviderConfigManager
 
@@ -225,7 +227,6 @@ class TestSailResearchResponsesTransformation:
     def test_validate_environment_sets_auth_header(self):
         """API key is set in Authorization header"""
         config = SailResearchResponsesConfig()
-        from litellm.types.router import GenericLiteLLMParams
 
         headers = config.validate_environment(
             headers={},
@@ -237,10 +238,6 @@ class TestSailResearchResponsesTransformation:
 
     def test_successful_response_passes_through(self):
         """Normal completed response delegates to base OpenAI handler"""
-        from litellm.litellm_core_utils.litellm_logging import (
-            Logging as LiteLLMLoggingObj,
-        )
-
         config = SailResearchResponsesConfig()
 
         success_body = {
