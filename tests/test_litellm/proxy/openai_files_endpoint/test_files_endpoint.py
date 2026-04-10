@@ -14,11 +14,13 @@ sys.path.insert(
 
 import litellm
 from litellm import Router
-from litellm.files.file_content_streaming_handler import FileContentStreamingHandler
 from litellm.files.types import FileContentStreamingResult
 from litellm.proxy._types import LiteLLM_UserTableFiltered, UserAPIKeyAuth
 from litellm.proxy.hooks import get_proxy_hook
 from litellm.proxy.management_endpoints.internal_user_endpoints import ui_view_users
+from litellm.proxy.openai_files_endpoints.file_content_streaming_handler import (
+    FileContentStreamingHandler,
+)
 from litellm.proxy.proxy_server import app
 from litellm.types.llms.openai import OpenAIFileObject
 

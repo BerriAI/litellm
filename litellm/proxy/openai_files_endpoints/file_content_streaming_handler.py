@@ -6,10 +6,11 @@ import litellm
 from litellm.files.types import FileContentStreamingResult
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+from litellm.proxy.utils import ProxyLogging
+
 from litellm.proxy.openai_files_endpoints.common_utils import (
     prepare_data_with_credentials,
 )
-from litellm.proxy.utils import ProxyLogging
 
 
 class FileContentStreamingHandler:
