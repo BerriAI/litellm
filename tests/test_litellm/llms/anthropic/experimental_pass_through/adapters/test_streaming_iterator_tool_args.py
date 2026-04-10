@@ -221,18 +221,22 @@ async def test_async_stream_no_extra_delta_when_tool_args_empty():
 
     assert tool_start_idx is not None
 
-    # The event immediately after content_block_start should NOT be
-    # an input_json_delta from the trigger chunk (since arguments were empty).
-    # It should be an input_json_delta from the subsequent tool_args_chunk.
-    next_event = events[tool_start_idx + 1]
-    if (
-        isinstance(next_event, dict)
-        and next_event.get("type") == "content_block_delta"
-        and isinstance(next_event.get("delta"), dict)
-        and next_event["delta"].get("type") == "input_json_delta"
-    ):
-        # This delta must come from tool_args_chunk, not tool_name_chunk
-        assert next_event["delta"].get("partial_json") == '{"location": "NYC"}'
+    # Count how many input_json_delta events appear after the tool_use block start.
+    # With empty args in the trigger chunk, only the subsequent tool_args_chunk
+    # should produce one — not the trigger chunk itself.
+    input_json_deltas = [
+        e
+        for e in events[tool_start_idx + 1 :]
+        if isinstance(e, dict)
+        and e.get("type") == "content_block_delta"
+        and isinstance(e.get("delta"), dict)
+        and e["delta"].get("type") == "input_json_delta"
+    ]
+    assert len(input_json_deltas) == 1, (
+        f"Expected exactly 1 input_json_delta (from the follow-up chunk), "
+        f"got {len(input_json_deltas)}"
+    )
+    assert input_json_deltas[0]["delta"]["partial_json"] == '{"location": "NYC"}'
 
 
 def test_sync_stream_emits_input_json_delta_for_bundled_tool_args():
@@ -364,11 +368,16 @@ def test_sync_stream_no_extra_delta_when_tool_args_empty():
 
     assert tool_start_idx is not None
 
-    next_event = events[tool_start_idx + 1]
-    if (
-        isinstance(next_event, dict)
-        and next_event.get("type") == "content_block_delta"
-        and isinstance(next_event.get("delta"), dict)
-        and next_event["delta"].get("type") == "input_json_delta"
-    ):
-        assert next_event["delta"].get("partial_json") == '{"location": "NYC"}'
+    input_json_deltas = [
+        e
+        for e in events[tool_start_idx + 1 :]
+        if isinstance(e, dict)
+        and e.get("type") == "content_block_delta"
+        and isinstance(e.get("delta"), dict)
+        and e["delta"].get("type") == "input_json_delta"
+    ]
+    assert len(input_json_deltas) == 1, (
+        f"Expected exactly 1 input_json_delta (from the follow-up chunk), "
+        f"got {len(input_json_deltas)}"
+    )
+    assert input_json_deltas[0]["delta"]["partial_json"] == '{"location": "NYC"}'
