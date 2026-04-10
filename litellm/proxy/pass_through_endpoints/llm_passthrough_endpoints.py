@@ -37,6 +37,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (
 from litellm.proxy.pass_through_endpoints.common_utils import get_litellm_virtual_key
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     HttpPassThroughEndpointHelpers,
+    LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY,
     create_pass_through_route,
     create_websocket_passthrough_route,
     websocket_passthrough_request,
@@ -1086,11 +1087,11 @@ async def bedrock_proxy_route(
         is_streaming_request=is_streaming_request,
         _forward_headers=True,
     )  # dynamically construct pass-through endpoint based on incoming path
+    setattr(request.state, LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY, data)
     received_value = await endpoint_func(
         request,
         fastapi_response,
         user_api_key_dict,
-        custom_body=data,  # type: ignore
     )
 
     return received_value
