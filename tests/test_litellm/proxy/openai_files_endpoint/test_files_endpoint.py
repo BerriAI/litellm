@@ -1647,3 +1647,69 @@ def test_get_file_content_streams_openai_direct_path(
     assert captured_kwargs["stream"] is True
     proxy_logging_obj.update_request_status.assert_awaited_once()
     proxy_logging_obj.post_call_failure_hook.assert_not_called()
+
+
+def test_get_file_content_streams_with_routed_provider(
+    mocker: MockerFixture, monkeypatch, llm_router: Router
+):
+    import litellm.proxy.proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles
+
+    proxy_logging_obj = setup_proxy_logging_object(monkeypatch, llm_router)
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    proxy_logging_obj.update_request_status = mocker.AsyncMock()
+    proxy_logging_obj.post_call_failure_hook = mocker.AsyncMock()
+
+    captured_kwargs = {}
+
+    async def _mock_afile_content(**kwargs):
+        captured_kwargs.update(kwargs)
+
+        async def _stream():
+            yield b"hello "
+            yield b"world"
+
+        return FileContentStreamingResult(
+            stream_iterator=_stream(),
+            headers={"content-length": "11"},
+        )
+
+    monkeypatch.setattr(litellm, "afile_content", _mock_afile_content)
+    monkeypatch.setattr(
+        "litellm.proxy.openai_files_endpoints.files_endpoints.handle_model_based_routing",
+        lambda **kwargs: (
+            True,
+            "azure-gpt-3-5-turbo",
+            "file-original-123",
+            {
+                "custom_llm_provider": "azure",
+                "api_key": "azure-key",
+                "api_base": "https://azure.example.com",
+            },
+        ),
+    )
+
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        api_key="test-key",
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        user_id="test-user",
+    )
+
+    try:
+        response = client.get(
+            "/v1/files/file-abc123/content",
+            headers={"Authorization": "Bearer test-key"},
+        )
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+    assert response.status_code == 200, response.text
+    assert response.content == b"hello world"
+    assert captured_kwargs["custom_llm_provider"] == "azure"
+    assert captured_kwargs["file_id"] == "file-original-123"
+    assert captured_kwargs["api_key"] == "azure-key"
+    assert captured_kwargs["api_base"] == "https://azure.example.com"
+    assert captured_kwargs["stream"] is True
+    proxy_logging_obj.update_request_status.assert_awaited_once()
+    proxy_logging_obj.post_call_failure_hook.assert_not_called()
