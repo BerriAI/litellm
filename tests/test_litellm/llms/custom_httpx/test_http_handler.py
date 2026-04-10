@@ -3,7 +3,7 @@ import os
 import pathlib
 import ssl
 import sys
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import certifi
 import httpx
@@ -656,5 +656,45 @@ async def test_httpx_handler_uses_env_user_agent(monkeypatch):
     try:
         req = handler.client.build_request("GET", "https://example.com")
         assert req.headers.get("User-Agent") == "Claude Code"
+    finally:
+        await handler.close()
+
+
+@pytest.mark.asyncio
+async def test_async_http_handler_retries_on_connection_reset_error_text():
+    handler = AsyncHTTPHandler()
+    retry_client = MagicMock()
+    retry_client.aclose = AsyncMock()
+    retry_response = MagicMock(spec=httpx.Response)
+
+    handler.client.send = AsyncMock(
+        side_effect=Exception("[Errno 104] Connection reset by peer")
+    )
+    handler.create_client = MagicMock(return_value=retry_client)
+    handler.single_connection_post_request = AsyncMock(return_value=retry_response)
+
+    try:
+        response = await handler.post(
+            url="https://example.com",
+            data={"hello": "world"},
+            headers={"x-test": "1"},
+            content="payload",
+        )
+
+        assert response is retry_response
+        handler.create_client.assert_called_once_with(
+            timeout=handler.timeout, event_hooks=handler.event_hooks
+        )
+        handler.single_connection_post_request.assert_awaited_once_with(
+            url="https://example.com",
+            client=retry_client,
+            data={"hello": "world"},
+            json=None,
+            params=None,
+            headers={"x-test": "1"},
+            stream=False,
+            content="payload",
+        )
+        retry_client.aclose.assert_awaited_once()
     finally:
         await handler.close()
