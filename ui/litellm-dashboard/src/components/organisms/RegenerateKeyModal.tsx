@@ -26,9 +26,6 @@ export function RegenerateKeyModal({ selectedToken, visible, onClose, onKeyUpdat
   const [isRegenerating, setIsRegenerating] = useState(false);
   const [copied, setCopied] = useState(false);
 
-  // Track whether this is the user's own authentication key
-  const [isOwnKey, setIsOwnKey] = useState<boolean>(false);
-
   // Keep track of the current valid access token locally
   const [currentAccessToken, setCurrentAccessToken] = useState<string | null>(null);
 
@@ -45,10 +42,6 @@ export function RegenerateKeyModal({ selectedToken, visible, onClose, onKeyUpdat
 
       // Initialize the current access token
       setCurrentAccessToken(accessToken);
-
-      // Check if this is the user's own authentication key by comparing the key values
-      const isUserOwnKey = selectedToken.key_name === accessToken;
-      setIsOwnKey(isUserOwnKey);
     }
   }, [visible, selectedToken, form, accessToken]);
 
@@ -57,7 +50,6 @@ export function RegenerateKeyModal({ selectedToken, visible, onClose, onKeyUpdat
       // Reset states when modal is closed
       setRegeneratedKey(null);
       setIsRegenerating(false);
-      setIsOwnKey(false);
       setCurrentAccessToken(null);
       setCopied(false);
       form.resetFields();
