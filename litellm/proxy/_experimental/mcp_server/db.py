@@ -84,6 +84,11 @@ def _prepare_mcp_server_data(
     # but be explicit to ensure a False value is always written to the DB).
     data_dict["is_byok"] = getattr(data, "is_byok", False)
 
+    # token_validation is a JSON dict — serialize it
+    token_validation = getattr(data, "token_validation", None)
+    if token_validation is not None:
+        data_dict["token_validation"] = safe_dumps(token_validation)
+
     return data_dict
 
 
