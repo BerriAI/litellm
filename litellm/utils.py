@@ -1811,6 +1811,11 @@ def client(original_function):  # noqa: PLR0915
             if modified_kwargs is not None:
                 kwargs = modified_kwargs
 
+            # Sync logging_obj.stream after deployment hooks (they may convert it).
+            _hook_stream = kwargs.get("stream")
+            if _hook_stream is not None and logging_obj.stream != _hook_stream:
+                logging_obj.stream = _hook_stream
+
             kwargs["litellm_logging_obj"] = logging_obj
             ## LOAD CREDENTIALS
             load_credentials_from_list(kwargs)
