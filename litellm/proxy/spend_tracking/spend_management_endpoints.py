@@ -13,11 +13,10 @@ from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import *
 from litellm.proxy._types import ProviderBudgetResponse, ProviderBudgetResponseObject
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.management_endpoints.common_utils import (
-    _is_user_team_admin,
-    _team_member_has_permission,
-    _user_has_admin_view,
-)
+
+# NOTE: Avoid module-level import from common_utils: proxy_server imports this
+# module while common_utils may pull proxy_server during init, which can leave
+# those names undefined. Import the helpers locally where they are used.
 from litellm.proxy.spend_tracking.spend_tracking_utils import (
     get_spend_by_team_and_customer,
 )
@@ -3442,6 +3441,8 @@ def _is_admin_view_safe(user_api_key_dict: UserAPIKeyAuth) -> bool:
     Safely determine if the current user has admin view permissions.
     Wraps the underlying check and defaults to False on any exception.
     """
+    from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
+
     try:
         return _user_has_admin_view(user_api_key_dict=user_api_key_dict)
     except Exception:
@@ -3458,6 +3459,11 @@ async def _can_team_member_view_log(
     Returns True if the team exists and the user is either a team admin or
     a team member with the ``/spend/logs`` permission.
     """
+    from litellm.proxy.management_endpoints.common_utils import (
+        _is_user_team_admin,
+        _team_member_has_permission,
+    )
+
     if team_id is None:
         return False
     team_row = await prisma_client.db.litellm_teamtable.find_unique(
@@ -3509,7 +3515,7 @@ async def _assert_user_can_view_request_id(
     if row is None:
         return
 
-    if row.user == user_api_key_dict.user_id:
+    if row.user is not None and row.user == user_api_key_dict.user_id:
         return
 
     if row.team_id:
@@ -3539,7 +3545,12 @@ async def _get_permitted_team_ids_for_spend_logs(
     Return team IDs where the user is either a team admin or has the
     ``/spend/logs`` permission, allowing them to view team-wide spend logs.
     """
+    # Imported here to avoid circular import: proxy_server imports this module.
     from litellm.proxy.auth.auth_checks import get_user_object
+    from litellm.proxy.management_endpoints.common_utils import (
+        _is_user_team_admin,
+        _team_member_has_permission,
+    )
     from litellm.proxy.proxy_server import proxy_logging_obj, user_api_key_cache
 
     user_obj = await get_user_object(
@@ -3559,9 +3570,7 @@ async def _get_permitted_team_ids_for_spend_logs(
     permitted: List[str] = []
     for team_row in team_rows:
         team_obj = LiteLLM_TeamTable(**team_row.model_dump())
-        if _is_user_team_admin(
-            user_api_key_dict=user_api_key_dict, team_obj=team_obj
-        ):
+        if _is_user_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team_obj):
             permitted.append(team_obj.team_id)
         elif _team_member_has_permission(
             user_api_key_dict=user_api_key_dict,
