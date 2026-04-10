@@ -126,7 +126,7 @@ class Authenticator:
                 message=f"Failed to save API key: {str(e)}",
                 status_code=500,
             )
-        except RefreshAPIKeyError as e:
+        except (RefreshAPIKeyError, GetAccessTokenError) as e:
             raise GetAPIKeyError(
                 message=f"Failed to refresh API key: {str(e)}",
                 status_code=401,
@@ -153,6 +153,11 @@ class Authenticator:
         """
         Refresh the API key using the access token.
 
+        On a 401 response the cached access token is deleted and a fresh
+        token is acquired before retrying. If re-acquisition succeeds the
+        invalidation is not repeated; if it fails each subsequent 401
+        re-attempts.
+
         Returns:
             Dict[str, Any]: The API key information including token and expiration.
 
@@ -160,13 +165,14 @@ class Authenticator:
             RefreshAPIKeyError: If unable to refresh the API key.
         """
         access_token = self.get_access_token()
-        headers = self._get_github_headers(access_token)
         api_key_url = os.getenv(
             "GITHUB_COPILOT_API_KEY_URL", DEFAULT_GITHUB_API_KEY_URL
         )
+        token_invalidated = False
 
         max_retries = 3
         for attempt in range(max_retries):
+            headers = self._get_github_headers(access_token)
             try:
                 sync_client = _get_httpx_client()
                 response = sync_client.get(api_key_url, headers=headers)
@@ -184,6 +190,12 @@ class Authenticator:
                 verbose_logger.error(
                     f"HTTP error refreshing API key (attempt {attempt+1}/{max_retries}): {str(e)}"
                 )
+                if e.response.status_code == 401 and not token_invalidated:
+                    result = self._invalidate_and_reacquire_token()
+                    token_invalidated = True
+                    if result is None:
+                        continue
+                    access_token = result
             except Exception as e:
                 verbose_logger.error(f"Unexpected error refreshing API key: {str(e)}")
 
@@ -191,6 +203,28 @@ class Authenticator:
             message="Failed to refresh API key after maximum retries",
             status_code=401,
         )
+
+    def _invalidate_and_reacquire_token(self) -> Optional[str]:
+        """
+        Delete the cached access token and re-acquire via device-flow login.
+
+        Returns:
+            The fresh access token, or None if either the file deletion or
+            re-acquisition failed (the caller should continue to the next
+            retry with the existing token).
+        """
+        try:
+            os.remove(self.access_token_file)
+        except OSError:
+            verbose_logger.warning("Failed to delete cached access token file")
+            return None
+        try:
+            return self.get_access_token()
+        except (GetAccessTokenError, GetDeviceCodeError) as e:
+            verbose_logger.warning(
+                f"Failed to re-acquire access token after 401: {str(e)}"
+            )
+            return None
 
     def _ensure_token_dir(self) -> None:
         """Ensure the token directory exists."""
