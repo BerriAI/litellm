@@ -191,6 +191,15 @@ def test_gpt5_unknown_model_supports_tool_choice(gpt5_config: OpenAIGPT5Config):
     assert "tool_choice" in supported_params
 
 
+def test_gpt5_chat_does_not_support_tool_choice(gpt5_config: OpenAIGPT5Config):
+    """gpt-5-chat explicitly sets supports_tool_choice: false in the cost map,
+    so tool_choice must be absent from supported params."""
+    supported_params = gpt5_config.get_supported_openai_params(
+        model="gpt-5-chat-latest"
+    )
+    assert "tool_choice" not in supported_params
+
+
 def test_gpt5_codex_supports_function_calling(config: OpenAIConfig):
     """Test that GPT-5-Codex supports function calling parameters."""
     supported_params = config.get_supported_openai_params(model="gpt-5-codex")
