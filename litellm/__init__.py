@@ -424,6 +424,11 @@ disable_aiohttp_trust_env: bool = (
 )
 force_ipv4: bool = False  # when True, litellm will force ipv4 for all LLM requests. Some users have seen httpx ConnectionError when using ipv6.
 network_mock: bool = False  # When True, use mock transport — no real network calls
+# When True, proxy Responses API WebSocket sessions directly to
+# wss://api.openai.com/v1/responses instead of the managed HTTP-streaming path.
+# Only enable this if your OpenAI deployment / reverse proxy reliably responds to
+# response.create events over the native WebSocket protocol.
+openai_responses_native_websocket: bool = False
 
 ####### STOP SEQUENCE LIMIT #######
 disable_stop_sequence_limit: bool = False  # when True, stop sequence limit is disabled

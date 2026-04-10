@@ -348,15 +348,21 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         return False
 
     def supports_native_websocket(self) -> bool:
-        """Use managed HTTP-streaming path for Responses API WebSocket mode.
+        """Use managed HTTP-streaming path for Responses API WebSocket mode by default.
 
         OpenAI's wss://api.openai.com/v1/responses endpoint exists but does not
         reliably stream events back in response to response.create messages in all
         deployment contexts. The ManagedResponsesWebSocketHandler makes a normal
         HTTP streaming call to /v1/responses and forwards the events over the
         WebSocket, which is proven to work.
+
+        Set ``litellm.openai_responses_native_websocket = True`` to opt back in
+        to the native WebSocket path (e.g. when using a private deployment or
+        reverse proxy that reliably honours the native wss:// protocol).
         """
-        return False
+        import litellm
+
+        return bool(getattr(litellm, "openai_responses_native_websocket", False))
 
     #########################################################
     ########## DELETE RESPONSE API TRANSFORMATION ##############
