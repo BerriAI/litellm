@@ -219,6 +219,54 @@ describe("RegenerateKeyModal", () => {
     expect(updateCall.key_name).toBe("sk-new-regenerated-key");
   });
 
+  it.each([
+    ["30s", /New expiry:/],
+    ["15m", /New expiry:/],
+    ["2h", /New expiry:/],
+    ["7d", /New expiry:/],
+    ["2w", /New expiry:/],
+    ["1mo", /New expiry:/],
+  ])("should compute a new expiry preview for duration '%s'", async (durationInput, expected) => {
+    const user = userEvent.setup();
+    renderWithProviders(<RegenerateKeyModal {...defaultProps} />);
+
+    const durationField = screen.getByPlaceholderText("e.g. 30s, 30h, 30d");
+    await user.clear(durationField);
+    await user.type(durationField, durationInput);
+
+    await waitFor(() => {
+      expect(screen.getByText(expected)).toBeInTheDocument();
+    });
+  });
+
+  it("should fall back to the previous expiry when duration is unparseable", async () => {
+    // Regression: if calculateNewExpiryTime returns null (unrecognised suffix),
+    // the payload should fall back to the previous expires rather than null.
+    const user = userEvent.setup();
+    const previousExpires = "2026-12-31T00:00:00Z";
+    mockRegenerateKeyCall.mockResolvedValue({
+      key: "sk-new-regenerated-key",
+      token: "new-token-hash",
+    });
+
+    renderWithProviders(
+      <RegenerateKeyModal {...defaultProps} selectedToken={makeToken({ expires: previousExpires })} />,
+    );
+
+    const durationField = screen.getByPlaceholderText("e.g. 30s, 30h, 30d");
+    await user.clear(durationField);
+    await user.type(durationField, "bogus");
+
+    await user.click(screen.getByRole("button", { name: /Regenerate/ }));
+
+    await waitFor(() => {
+      expect(mockOnKeyUpdate).toHaveBeenCalledOnce();
+    });
+
+    const updateCall = mockOnKeyUpdate.mock.calls[0][0];
+    expect(updateCall.expires).toBe(previousExpires);
+  });
+
   it("should pass form values to onKeyUpdate even when the API echoes back different limits", async () => {
     // Regression: when the regenerate endpoint returns GenerateKeyResponse, it echoes
     // back the existing max_budget / tpm_limit / rpm_limit. The modal must prefer the
