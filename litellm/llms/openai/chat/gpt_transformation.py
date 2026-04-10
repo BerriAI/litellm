@@ -806,13 +806,17 @@ class OpenAIChatCompletionStreamingHandler(BaseModelResponseIterator):
             # Handle error responses embedded in SSE streams (e.g. from sglang)
             if "error" in chunk:
                 error_data = chunk["error"]
-                error_message = error_data.get("message", str(error_data))
-                error_type = error_data.get("type", "")
-                error_code = error_data.get("code", 500)
+                if isinstance(error_data, dict):
+                    error_message = error_data.get("message", str(error_data))
+                    error_code = error_data.get("code", 400)
+                else:
+                    error_message = str(error_data)
+                    error_code = 400
                 raise litellm.BadRequestError(
                     message=f"Received error in stream: {error_message}",
                     model=chunk.get("model", ""),
                     llm_provider=self.custom_llm_provider,
+                    response=httpx.Response(status_code=error_code, request=httpx.Request(method="POST", url="")),
                 )
 
             choices = chunk.get("choices", [])
