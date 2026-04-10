@@ -1131,6 +1131,16 @@ async def _update_single_user_helper(
     if prisma_client is None:
         raise Exception("Not connected to DB!")
 
+    # Only proxy admins can modify user_role
+    if (
+        user_request.user_role is not None
+        and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail="Only proxy admins can modify user roles.",
+        )
+
     # Validate user identifier
     if not user_request.user_id and not user_request.user_email:
         raise ValueError("Either user_id or user_email must be provided")
