@@ -1,6 +1,7 @@
 """
 Azure Anthropic messages transformation config - extends AnthropicMessagesConfig with Azure authentication
 """
+
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
@@ -163,4 +164,10 @@ class AzureAnthropicMessagesConfig(AnthropicMessagesConfig):
             headers=headers,
         )
         self._remove_scope_from_cache_control(anthropic_messages_request)
+
+        # Remove parameters that Azure AI Foundry's Anthropic endpoint rejects.
+        # These may leak into the request body from the router's default litellm
+        # params or from the proxy layer.
+        for unsupported_param in ("max_retries", "extra_body", "stream_options"):
+            anthropic_messages_request.pop(unsupported_param, None)
         return anthropic_messages_request

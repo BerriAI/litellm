@@ -59,7 +59,9 @@ class TestAzureAnthropicMessagesConfig:
             assert result["x-api-key"] == "test-api-key"
             assert "api-key" not in result
 
-    def test_validate_anthropic_messages_environment_converts_api_key_to_x_api_key(self):
+    def test_validate_anthropic_messages_environment_converts_api_key_to_x_api_key(
+        self,
+    ):
         """Test that api-key header is converted to x-api-key"""
         config = AzureAnthropicMessagesConfig()
         headers = {}
@@ -231,7 +233,7 @@ class TestAzureAnthropicMessagesConfig:
         config = AzureAnthropicMessagesConfig()
         model = "claude-sonnet-4-5"
         params = config.get_supported_anthropic_messages_params(model)
-        
+
         assert "messages" in params
         assert "model" in params
         assert "max_tokens" in params
@@ -281,7 +283,9 @@ class TestAzureAnthropicMessagesConfig:
         assert "scope" not in result["system"][0]["cache_control"]
         assert result["system"][0]["cache_control"]["type"] == "ephemeral"
         assert "scope" not in result["messages"][0]["content"][0]["cache_control"]
-        assert result["messages"][0]["content"][0]["cache_control"]["type"] == "ephemeral"
+        assert (
+            result["messages"][0]["content"][0]["cache_control"]["type"] == "ephemeral"
+        )
 
 
 class TestProviderConfigManagerAzureAnthropicMessages:
@@ -327,3 +331,62 @@ class TestProviderConfigManagerAzureAnthropicMessages:
         )
 
         assert config is None
+
+
+class TestAzureAnthropicMessagesTransformRequest:
+    """Test that unsupported parameters are stripped from the request body (issue #18746)"""
+
+    def test_transform_request_removes_max_retries(self):
+        """Test that max_retries is removed from the request body.
+
+        Regression test for https://github.com/BerriAI/litellm/issues/18746
+        Azure AI Foundry rejects max_retries with 'Extra inputs are not permitted'.
+        """
+        config = AzureAnthropicMessagesConfig()
+        model = "claude-haiku-4-5"
+        messages = [{"role": "user", "content": [{"type": "text", "text": "hi"}]}]
+        optional_params = {
+            "max_tokens": 1000,
+            "max_retries": 0,
+        }
+        litellm_params = GenericLiteLLMParams()
+        headers = {}
+
+        result = config.transform_anthropic_messages_request(
+            model=model,
+            messages=messages,
+            anthropic_messages_optional_request_params=optional_params,
+            litellm_params=litellm_params,
+            headers=headers,
+        )
+
+        assert "max_retries" not in result
+        assert result["model"] == model
+        assert result["max_tokens"] == 1000
+        assert result["messages"] == messages
+
+    def test_transform_request_removes_extra_body_and_stream_options(self):
+        """Test that extra_body and stream_options are also removed."""
+        config = AzureAnthropicMessagesConfig()
+        model = "claude-haiku-4-5"
+        messages = [{"role": "user", "content": [{"type": "text", "text": "hi"}]}]
+        optional_params = {
+            "max_tokens": 1000,
+            "extra_body": {"foo": "bar"},
+            "stream_options": {"include_usage": True},
+        }
+        litellm_params = GenericLiteLLMParams()
+        headers = {}
+
+        result = config.transform_anthropic_messages_request(
+            model=model,
+            messages=messages,
+            anthropic_messages_optional_request_params=optional_params,
+            litellm_params=litellm_params,
+            headers=headers,
+        )
+
+        assert "extra_body" not in result
+        assert "stream_options" not in result
+        assert result["model"] == model
+        assert result["max_tokens"] == 1000
