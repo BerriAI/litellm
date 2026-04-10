@@ -219,6 +219,34 @@ describe("RegenerateKeyModal", () => {
     expect(updateCall.key_name).toBe("sk-new-regenerated-key");
   });
 
+  it("should pass form values to onKeyUpdate even when the API echoes back different limits", async () => {
+    // Regression: when the regenerate endpoint returns GenerateKeyResponse, it echoes
+    // back the existing max_budget / tpm_limit / rpm_limit. The modal must prefer the
+    // values the user just submitted, not whatever the server echoes.
+    const user = userEvent.setup();
+    mockRegenerateKeyCall.mockResolvedValue({
+      key: "sk-new-regenerated-key",
+      token: "new-token-hash",
+      // stale values echoed from the server
+      max_budget: 9999,
+      tpm_limit: 9999,
+      rpm_limit: 9999,
+    });
+
+    renderWithProviders(<RegenerateKeyModal {...defaultProps} />);
+    await user.click(screen.getByRole("button", { name: /Regenerate/ }));
+
+    await waitFor(() => {
+      expect(mockOnKeyUpdate).toHaveBeenCalledOnce();
+    });
+
+    const updateCall = mockOnKeyUpdate.mock.calls[0][0];
+    // The form's pre-filled values (from makeToken) must win over the API echo.
+    expect(updateCall.max_budget).toBe(100);
+    expect(updateCall.tpm_limit).toBe(5000);
+    expect(updateCall.rpm_limit).toBe(500);
+  });
+
   it("should display key alias in success view", async () => {
     const user = userEvent.setup();
     mockRegenerateKeyCall.mockResolvedValue({

@@ -111,22 +111,19 @@ export function RegenerateKeyModal({ selectedToken, visible, onClose, onKeyUpdat
       setRegeneratedKey(response.key);
       NotificationManager.success("Virtual Key regenerated successfully");
 
-      console.log("Full regenerate response:", response); // Debug log to see what's returned
-
-      // Create updated key data with ALL new values from the response
+      // Build the update payload. Spread the API response first so any new
+      // fields it returns (new token, timestamps, etc.) are captured, then
+      // override with the explicit form values — the user's just-submitted
+      // edits must win over whatever the API echoes back.
       const updatedKeyData: Partial<KeyResponse> = {
-        // Use the new token/key ID from the response (this is what was missing!)
-        token: response.token || response.key_id || selectedToken.token, // Try different possible field names
-        key_name: response.key, // This is the new secret key string
+        ...response,
+        token: response.token || response.key_id || selectedToken.token,
+        key_name: response.key,
         max_budget: formValues.max_budget,
         tpm_limit: formValues.tpm_limit,
         rpm_limit: formValues.rpm_limit,
         expires: formValues.duration ? calculateNewExpiryTime(formValues.duration) : selectedToken.expires,
-        // Include any other fields that might be returned by the API
-        ...response, // Spread the entire response to capture all updated fields
       };
-
-      console.log("Updated key data with new token:", updatedKeyData); // Debug log
 
       // Update the parent component with new key data
       if (onKeyUpdate) {
