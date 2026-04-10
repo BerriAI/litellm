@@ -861,7 +861,6 @@ const sidebars = {
           ]
         },
         "providers/anthropic",
-        "providers/anthropic_advisor_tool",
         "providers/anthropic_tool_search",
         "providers/aws_sagemaker",
         {
@@ -1234,6 +1233,7 @@ const learnSidebar = {
             "completion/web_fetch",
             "completion/computer_use",
             "guides/code_interpreter",
+            "completion/anthropic_advisor_tool",
             "completion/message_sanitization",
           ],
         },
