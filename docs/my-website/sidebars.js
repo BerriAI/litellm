@@ -861,6 +861,8 @@ const sidebars = {
           ]
         },
         "providers/anthropic",
+        "providers/anthropic_advisor_tool",
+        "providers/anthropic_tool_search",
         "providers/aws_sagemaker",
         {
           type: "category",
