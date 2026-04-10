@@ -64,14 +64,16 @@ class FileContentStreamingHandler:
     ) -> StreamingResponse:
         effective_custom_llm_provider = custom_llm_provider
         if should_route:
+            if credentials is None or credentials.get("custom_llm_provider") is None:
+                raise ValueError(
+                    "Model-based file routing requires credentials with custom_llm_provider"
+                )
             prepare_data_with_credentials(
                 data=data,
-                credentials=credentials,  # type: ignore[arg-type]
+                credentials=credentials,
                 file_id=original_file_id,
             )
-            effective_custom_llm_provider = cast(
-                str, credentials["custom_llm_provider"]
-            )
+            effective_custom_llm_provider = cast(str, credentials["custom_llm_provider"])
 
         stream_result = cast(
             FileContentStreamingResult,
