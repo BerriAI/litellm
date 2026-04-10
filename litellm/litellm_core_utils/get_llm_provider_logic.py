@@ -533,7 +533,11 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
         return model, custom_llm_provider, dynamic_api_key, api_base
 
     if custom_llm_provider == "sail_research":
-        api_base = api_base or get_secret_str("SAIL_API_BASE") or "https://api.sailresearch.com"
+        api_base = (
+            api_base
+            or get_secret_str("SAIL_API_BASE")
+            or "https://api.sailresearch.com"
+        )
         dynamic_api_key = api_key or get_secret_str("SAIL_API_KEY")
     elif custom_llm_provider == "perplexity":
         # perplexity is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.perplexity.ai
