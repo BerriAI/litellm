@@ -8,8 +8,8 @@ Docs: https://docs.together.ai/reference/completions-1
 
 from typing import Optional
 
-from litellm.utils import get_model_info
 from litellm._logging import verbose_logger
+from litellm.utils import get_model_info
 
 from ..openai.chat.gpt_transformation import OpenAIGPTConfig
 
@@ -22,11 +22,13 @@ class TogetherAIConfig(OpenAIGPTConfig):
         Docs: https://docs.together.ai/docs/json-mode
         """
         supports_function_calling: Optional[bool] = None
+        supports_reasoning: Optional[bool] = None
         try:
             model_info = get_model_info(model, custom_llm_provider="together_ai")
             supports_function_calling = model_info.get(
                 "supports_function_calling", False
             )
+            supports_reasoning = model_info.get("supports_reasoning", False)
         except Exception as e:
             verbose_logger.debug(f"Error getting supported openai params: {e}")
             pass
@@ -40,6 +42,8 @@ class TogetherAIConfig(OpenAIGPTConfig):
             optional_params.remove("tool_choice")
             optional_params.remove("function_call")
             optional_params.remove("response_format")
+        if supports_reasoning is True and "reasoning_effort" not in optional_params:
+            optional_params.append("reasoning_effort")
         return optional_params
 
     def map_openai_params(

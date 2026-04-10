@@ -28668,6 +28668,7 @@
         "source": "https://www.together.ai/models/gpt-oss-20b",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
+        "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true
     },
