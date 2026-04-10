@@ -1,16 +1,13 @@
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
-import { CopyOutlined, SyncOutlined } from "@ant-design/icons";
-import { Alert, Button, Col, Form, Input, InputNumber, Modal, Row, Space, Typography } from "antd";
+import { SyncOutlined } from "@ant-design/icons";
+import { Alert, Button, Col, Flex, Form, Input, InputNumber, Modal, Row, Space, Typography } from "antd";
 import { add } from "date-fns";
 import { useEffect, useState } from "react";
-import { CopyToClipboard } from "react-copy-to-clipboard";
 import { KeyResponse } from "../key_team_helpers/key_list";
 import NotificationManager from "../molecules/notifications_manager";
 import { regenerateKeyCall } from "../networking";
 
-const { Text } = Typography;
-
-
+const { Text, Paragraph } = Typography;
 
 interface RegenerateKeyModalProps {
   selectedToken: KeyResponse | null;
@@ -174,54 +171,27 @@ export function RegenerateKeyModal({ selectedToken, visible, onClose, onKeyUpdat
       }
     >
       {regeneratedKey ? (
-        <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-          <Alert
-            type="warning"
-            showIcon
-            banner
-            message="Save it now, you will not see it again"
-          />
+        <Flex vertical gap="middle">
+          <Alert type="warning" showIcon message="Save it now, you will not see it again" />
 
-          <div>
-            <div style={{ fontSize: 12, color: "#8c8c8c", marginBottom: 2 }}>Key Alias</div>
-            <div style={{ fontSize: 14, color: "#595959" }}>
-              {selectedToken?.key_alias || "No alias set"}
-            </div>
-          </div>
+          <Flex vertical gap={2}>
+            <Text type="secondary" style={{ fontSize: 12 }}>
+              Key Alias
+            </Text>
+            <Text>{selectedToken?.key_alias || "No alias set"}</Text>
+          </Flex>
 
-          <div
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: 8,
-              background: "#f5f5f5",
-              border: "1px solid #d9d9d9",
-              borderRadius: 6,
-              padding: "10px 12px",
+          <Paragraph
+            code
+            copyable={{
+              text: regeneratedKey,
+              onCopy: () => NotificationManager.success("Virtual Key copied to clipboard"),
             }}
+            style={{ marginBottom: 0, wordBreak: "break-all" }}
           >
-            <code
-              style={{
-                flex: 1,
-                fontFamily: "SFMono-Regular, Consolas, 'Liberation Mono', Menlo, monospace",
-                fontSize: 13,
-                color: "#262626",
-                wordBreak: "break-all",
-                lineHeight: 1.5,
-              }}
-            >
-              {regeneratedKey}
-            </code>
-            <CopyToClipboard
-              text={regeneratedKey}
-              onCopy={() => NotificationManager.success("Virtual Key copied to clipboard")}
-            >
-              <Button type="primary" icon={<CopyOutlined />} size="small">
-                Copy
-              </Button>
-            </CopyToClipboard>
-          </div>
-        </div>
+            {regeneratedKey}
+          </Paragraph>
+        </Flex>
       ) : (
         <Form
           form={form}
@@ -261,16 +231,17 @@ export function RegenerateKeyModal({ selectedToken, visible, onClose, onKeyUpdat
                 name="duration"
                 label="Expire Key"
                 extra={
-                  <>
+                  <Flex vertical gap={2}>
                     <Text type="secondary" style={{ fontSize: 12 }}>
-                      Current expiry: {selectedToken?.expires ? new Date(selectedToken.expires).toLocaleString() : "Never"}
+                      Current expiry:{" "}
+                      {selectedToken?.expires ? new Date(selectedToken.expires).toLocaleString() : "Never"}
                     </Text>
                     {newExpiryTime && (
-                      <div>
-                        <Text style={{ fontSize: 12, color: "#52c41a" }}>New expiry: {newExpiryTime}</Text>
-                      </div>
+                      <Text type="success" style={{ fontSize: 12 }}>
+                        New expiry: {newExpiryTime}
+                      </Text>
                     )}
-                  </>
+                  </Flex>
                 }
               >
                 <Input placeholder="e.g. 30s, 30h, 30d" />

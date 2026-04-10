@@ -10,14 +10,6 @@ vi.mock("../networking", () => ({
   regenerateKeyCall: (...args: unknown[]) => mockRegenerateKeyCall(...args),
 }));
 
-// Mock CopyToClipboard to render a simple button
-vi.mock("react-copy-to-clipboard", () => ({
-  CopyToClipboard: ({ children, onCopy }: { children: React.ReactElement; onCopy: () => void }) => {
-    const React = require("react");
-    return React.cloneElement(children, { onClick: onCopy });
-  },
-}));
-
 const makeToken = (overrides: Partial<KeyResponse> = {}): KeyResponse =>
   ({
     token: "token-hash-123",
@@ -71,12 +63,7 @@ describe("RegenerateKeyModal", () => {
   });
 
   it("should display 'Never' when token has no expires", () => {
-    renderWithProviders(
-      <RegenerateKeyModal
-        {...defaultProps}
-        selectedToken={makeToken({ expires: undefined })}
-      />,
-    );
+    renderWithProviders(<RegenerateKeyModal {...defaultProps} selectedToken={makeToken({ expires: undefined })} />);
     expect(screen.getByText("Current expiry: Never")).toBeInTheDocument();
   });
 
@@ -119,9 +106,7 @@ describe("RegenerateKeyModal", () => {
 
   it("should display grace period recommendation text", () => {
     renderWithProviders(<RegenerateKeyModal {...defaultProps} />);
-    expect(
-      screen.getByText("Recommended: 24h to 72h for production keys"),
-    ).toBeInTheDocument();
+    expect(screen.getByText("Recommended: 24h to 72h for production keys")).toBeInTheDocument();
   });
 
   it("should call regenerateKeyCall and show success view on successful regeneration", async () => {
@@ -222,12 +207,7 @@ describe("RegenerateKeyModal", () => {
       token: "new-token-hash",
     });
 
-    renderWithProviders(
-      <RegenerateKeyModal
-        {...defaultProps}
-        selectedToken={makeToken({ key_alias: undefined })}
-      />,
-    );
+    renderWithProviders(<RegenerateKeyModal {...defaultProps} selectedToken={makeToken({ key_alias: undefined })} />);
     await user.click(screen.getByRole("button", { name: /Regenerate/ }));
 
     await waitFor(() => {
@@ -237,9 +217,7 @@ describe("RegenerateKeyModal", () => {
 
   it("should not call regenerateKeyCall when selectedToken is null", async () => {
     const user = userEvent.setup();
-    renderWithProviders(
-      <RegenerateKeyModal {...defaultProps} selectedToken={null} />,
-    );
+    renderWithProviders(<RegenerateKeyModal {...defaultProps} selectedToken={null} />);
 
     // The form shouldn't even be populated, but we check the button doesn't trigger a call
     const regenerateBtn = screen.queryByRole("button", { name: /Regenerate/ });
