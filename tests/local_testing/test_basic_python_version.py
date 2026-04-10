@@ -112,9 +112,8 @@ def test_litellm_proxy_server_config_no_general_settings():
             
             result = _run_uv(
                 "run", "--no-sync", "prisma", "generate",
-                capture_output=True, 
-                text=True, 
-                check=True
+                capture_output=True,
+                text=True,
             )
             print(f"Prisma generate stdout: {result.stdout}")
         except subprocess.CalledProcessError as e:

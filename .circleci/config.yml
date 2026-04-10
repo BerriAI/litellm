@@ -1031,7 +1031,7 @@ jobs:
       - run:
           name: Run proxy tests part 1 (high-volume directories)
           command: |
-            prisma generate
+            uv run --no-sync prisma generate
             export PYTHONUNBUFFERED=1
             uv run --no-sync python -m pytest tests/test_litellm/proxy/guardrails tests/test_litellm/proxy/management_endpoints tests/test_litellm/proxy/_experimental tests/test_litellm/proxy/client tests/test_litellm/proxy/auth --junitxml=test-results/junit-proxy-part1.xml --durations=10 -n 4 --maxfail=5 --timeout=60 -vv --log-cli-level=WARNING -r A
           no_output_timeout: 15m
@@ -1050,7 +1050,7 @@ jobs:
       - run:
           name: Run proxy tests part 2 (all other tests)
           command: |
-            prisma generate
+            uv run --no-sync prisma generate
             export PYTHONUNBUFFERED=1
             uv run --no-sync python -m pytest tests/test_litellm/proxy --ignore=tests/test_litellm/proxy/guardrails --ignore=tests/test_litellm/proxy/management_endpoints --ignore=tests/test_litellm/proxy/_experimental --ignore=tests/test_litellm/proxy/client --ignore=tests/test_litellm/proxy/auth --junitxml=test-results/junit-proxy-part2.xml --durations=10 -n 4 --maxfail=5 --timeout=120 -vv --log-cli-level=WARNING -r A
           no_output_timeout: 15m
@@ -1089,7 +1089,7 @@ jobs:
           command: |
             pwd
             ls
-            prisma generate
+            uv run --no-sync prisma generate
             uv run --no-sync python -m pytest -v tests/enterprise -x --junitxml=test-results/junit-enterprise.xml --durations=10 -n 4
           no_output_timeout: 15m
       # Store test results
@@ -1389,7 +1389,7 @@ jobs:
       - run:
           name: Install Dependencies
           command: |
-            python -m pip install --upgrade pip uv
+            python -m pip install --upgrade 'pip==26.0.1' 'uv==0.10.9'
             uv pip install --system -r requirements.txt
             pip install "pytest==7.3.1"
             pip install "pytest-retry==1.6.3"
@@ -3141,7 +3141,7 @@ jobs:
       - run:
           name: Install Python dependencies
           command: |
-            python -m pip install --upgrade pip uv
+            python -m pip install --upgrade 'pip==26.0.1' 'uv==0.10.9'
             uv pip install --system -r requirements.txt
             pip install "prisma==0.11.0"
             prisma generate --schema litellm/proxy/schema.prisma
