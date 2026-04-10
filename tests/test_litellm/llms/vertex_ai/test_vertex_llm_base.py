@@ -120,6 +120,69 @@ class TestVertexBase:
             assert token2 == "token-1"
             assert project2 == "project-1"
 
+    def test_invalidate_credentials_clears_project_and_none_keys(self):
+        """
+        After get_access_token(project_id=None), both (creds, None) and (creds, resolved)
+        may exist; invalidate_credentials(project_id=resolved) must remove both (#23512).
+        """
+        vertex_base = VertexBase()
+        credentials = {"type": "service_account", "project_id": "resolved-proj"}
+        cache_creds = json.dumps(credentials)
+        mock_creds = MagicMock()
+        key_none = (cache_creds, None)
+        key_resolved = (cache_creds, "resolved-proj")
+        vertex_base._credentials_project_mapping[key_none] = (
+            mock_creds,
+            "resolved-proj",
+        )
+        vertex_base._credentials_project_mapping[key_resolved] = (
+            mock_creds,
+            "resolved-proj",
+        )
+
+        vertex_base.invalidate_credentials(
+            credentials=credentials,
+            project_id="resolved-proj",
+        )
+
+        assert key_none not in vertex_base._credentials_project_mapping
+        assert key_resolved not in vertex_base._credentials_project_mapping
+
+    def test_invalidate_credentials_removes_single_cache_entry(self):
+        """When only (creds, project_id) exists, invalidate removes that entry."""
+        vertex_base = VertexBase()
+        credentials = {"type": "service_account", "project_id": "p-only"}
+        cache_creds = json.dumps(credentials)
+        mock_creds = MagicMock()
+        key = (cache_creds, "p-only")
+        vertex_base._credentials_project_mapping[key] = (mock_creds, "p-only")
+
+        vertex_base.invalidate_credentials(credentials=credentials, project_id="p-only")
+
+        assert key not in vertex_base._credentials_project_mapping
+
+    def test_invalidate_credentials_with_none_project_id(self):
+        """invalidate_credentials(..., project_id=None) only removes the (creds, None) key."""
+        vertex_base = VertexBase()
+        credentials = {"type": "service_account"}
+        cache_creds = json.dumps(credentials)
+        mock_creds = MagicMock()
+        key_none = (cache_creds, None)
+        key_other = (cache_creds, "other-project")
+        vertex_base._credentials_project_mapping[key_none] = (mock_creds, "x")
+        vertex_base._credentials_project_mapping[key_other] = (mock_creds, "x")
+
+        vertex_base.invalidate_credentials(credentials=credentials, project_id=None)
+
+        assert key_none not in vertex_base._credentials_project_mapping
+        assert key_other in vertex_base._credentials_project_mapping
+
+    def test_invalidate_credentials_noop_when_key_missing(self):
+        vertex_base = VertexBase()
+        credentials = {"type": "service_account", "project_id": "missing"}
+        vertex_base.invalidate_credentials(credentials=credentials, project_id="missing")
+        assert vertex_base._credentials_project_mapping == {}
+
     @pytest.mark.parametrize("is_async", [True, False], ids=["async", "sync"])
     @pytest.mark.asyncio
     async def test_credential_refresh(self, is_async):
