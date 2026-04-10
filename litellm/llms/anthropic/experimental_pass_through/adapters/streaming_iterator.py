@@ -305,8 +305,12 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 if not self.queued_usage_chunk:
                     if should_start_new_block and not self.sent_content_block_finish:
                         # Queue the sequence: content_block_stop -> content_block_start
-                        # The trigger chunk itself is not emitted as a delta since the
-                        # content_block_start already carries the relevant information.
+                        # For text blocks the trigger chunk is not emitted as a separate
+                        # delta because content_block_start carries the information.
+                        # For tool_use blocks we must also emit the trigger chunk's delta
+                        # when it carries input_json_delta data, because some providers
+                        # (e.g. xAI, Gemini) include tool arguments in the same streaming
+                        # chunk as the function name/id.
 
                         # 1. Stop current content block
                         self.chunk_queue.append(
@@ -324,6 +328,16 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                                 "content_block": self.current_content_block_start,
                             }
                         )
+
+                        # 3. If the trigger chunk carries tool argument data, queue it
+                        # so the input_json_delta is not silently dropped.
+                        if (
+                            processed_chunk.get("type") == "content_block_delta"
+                            and isinstance(processed_chunk.get("delta"), dict)
+                            and processed_chunk["delta"].get("type") == "input_json_delta"
+                            and processed_chunk["delta"].get("partial_json")
+                        ):
+                            self.chunk_queue.append(processed_chunk)
 
                         # Reset state for new block
                         self.sent_content_block_finish = False
