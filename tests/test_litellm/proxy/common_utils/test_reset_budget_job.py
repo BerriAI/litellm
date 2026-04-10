@@ -1,7 +1,6 @@
 import asyncio
 import os
 import sys
-import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List
 
@@ -11,9 +10,7 @@ sys.path.insert(
     0, os.path.abspath("../../..")
 )  # Adds the parent directory to the system path
 
-from litellm._logging import verbose_proxy_logger
 from litellm.proxy.common_utils.reset_budget_job import ResetBudgetJob
-from litellm.proxy.utils import ProxyLogging
 
 
 # Mock classes for testing
@@ -252,6 +249,256 @@ def test_reset_budget_for_enduser(reset_budget_job, mock_prisma_client):
     assert updated_budget.budget_reset_at > now
 
 
+def test_reset_budget_for_enduser_invalidates_cache():
+    """
+    Test that _reset_budget_for_enduser invalidates the cached end-user object
+    so auth checks pick up the reset spend instead of a stale cached value.
+    """
+    from unittest.mock import AsyncMock, patch
+
+    test_enduser = type(
+        "LiteLLM_EndUserTable",
+        (),
+        {
+            "spend": 45.0,
+            "user_id": "cached-enduser-1",
+        },
+    )
+
+    mock_cache = AsyncMock()
+    mock_cache.async_delete_cache = AsyncMock()
+
+    async def _run():
+        # Patch sys.modules so the lazy import inside _reset_budget_for_enduser
+        # (`from litellm.proxy.proxy_server import user_api_key_cache`)
+        # picks up our mock cache.
+        with patch.dict(
+            "sys.modules",
+            {
+                "litellm.proxy.proxy_server": type(
+                    "module", (), {"user_api_key_cache": mock_cache}
+                )()
+            },
+        ):
+            result = await ResetBudgetJob._reset_budget_for_enduser(
+                enduser=test_enduser
+            )
+
+        assert result is not None
+        assert result.spend == 0.0
+        mock_cache.async_delete_cache.assert_called_once_with(
+            key="end_user_id:cached-enduser-1"
+        )
+
+    asyncio.run(_run())
+
+
+def test_reset_budget_for_enduser_cache_failure_does_not_block_reset():
+    """
+    Test that if cache invalidation fails (e.g. Redis down), the spend reset
+    still succeeds. The cache failure should be logged as a warning, not
+    propagated as an exception.
+    """
+    from unittest.mock import AsyncMock, patch
+
+    test_enduser = type(
+        "LiteLLM_EndUserTable",
+        (),
+        {
+            "spend": 30.0,
+            "user_id": "enduser-cache-fail",
+        },
+    )
+
+    mock_cache = AsyncMock()
+    mock_cache.async_delete_cache = AsyncMock(
+        side_effect=ConnectionError("Redis connection refused")
+    )
+
+    async def _run():
+        with patch.dict(
+            "sys.modules",
+            {
+                "litellm.proxy.proxy_server": type(
+                    "module", (), {"user_api_key_cache": mock_cache}
+                )()
+            },
+        ):
+            result = await ResetBudgetJob._reset_budget_for_enduser(
+                enduser=test_enduser
+            )
+
+        # Spend should still be reset even though cache invalidation failed
+        assert result is not None
+        assert result.spend == 0.0
+        # Cache delete was attempted
+        mock_cache.async_delete_cache.assert_called_once()
+
+    asyncio.run(_run())
+
+
+def test_reset_budget_for_enduser_with_none_user_id():
+    """
+    Test that _reset_budget_for_enduser handles end users with user_id=None
+    gracefully - spend is reset but cache invalidation is skipped.
+    """
+    from unittest.mock import AsyncMock, patch
+
+    test_enduser = type(
+        "LiteLLM_EndUserTable",
+        (),
+        {
+            "spend": 15.0,
+            "user_id": None,
+        },
+    )
+
+    mock_cache = AsyncMock()
+
+    async def _run():
+        with patch.dict(
+            "sys.modules",
+            {
+                "litellm.proxy.proxy_server": type(
+                    "module", (), {"user_api_key_cache": mock_cache}
+                )()
+            },
+        ):
+            result = await ResetBudgetJob._reset_budget_for_enduser(
+                enduser=test_enduser
+            )
+
+        assert result is not None
+        assert result.spend == 0.0
+        # Cache delete should NOT be called when user_id is None
+        mock_cache.async_delete_cache.assert_not_called()
+
+    asyncio.run(_run())
+
+
+def test_enduser_budget_reset_reproduces_stale_cache_bug():
+    """
+    Reproduce the exact bug from issue #24675:
+    1. End user has spend=45 cached, budget=50
+    2. Cron job resets spend=0 in DB
+    3. Without fix: auth check reads stale cache (spend=45), user appears near limit
+    4. With fix: cache is invalidated, next read gets fresh spend=0
+
+    This test simulates the full flow using real LiteLLM_EndUserTable and
+    LiteLLM_BudgetTable Pydantic objects.
+    """
+    from unittest.mock import patch
+
+    from litellm.proxy._types import LiteLLM_BudgetTable, LiteLLM_EndUserTable
+
+    # Step 1: Create an end user near their budget limit
+    budget = LiteLLM_BudgetTable(
+        budget_id="monthly-50",
+        max_budget=50.0,
+        budget_duration="1mo",
+    )
+    end_user = LiteLLM_EndUserTable(
+        user_id="customer-123",
+        blocked=False,
+        spend=45.0,
+        litellm_budget_table=budget,
+    )
+
+    # Simulate the cache holding stale data
+    from litellm.caching.caching import DualCache
+
+    cache = DualCache()
+
+    async def _run():
+        # Put the end user in cache (simulating what get_end_user_object does)
+        await cache.async_set_cache(
+            key="end_user_id:customer-123",
+            value=end_user.dict(),
+        )
+
+        # Verify stale data is in cache
+        cached = await cache.async_get_cache(key="end_user_id:customer-123")
+        assert cached is not None
+        assert cached["spend"] == 45.0  # stale!
+
+        # Step 2: Cron job runs _reset_budget_for_enduser WITH our fix
+        with patch.dict(
+            "sys.modules",
+            {
+                "litellm.proxy.proxy_server": type(
+                    "module", (), {"user_api_key_cache": cache}
+                )()
+            },
+        ):
+            result = await ResetBudgetJob._reset_budget_for_enduser(enduser=end_user)
+
+        # Step 3: Verify spend is reset
+        assert result.spend == 0.0
+
+        # Step 4: Verify cache was invalidated (the key fix)
+        cached_after_reset = await cache.async_get_cache(key="end_user_id:customer-123")
+        assert cached_after_reset is None, (
+            "Cache should be invalidated after budget reset, but stale entry "
+            f"still exists with spend={cached_after_reset.get('spend') if cached_after_reset else 'N/A'}"
+        )
+
+    asyncio.run(_run())
+
+
+def test_multiple_endusers_budget_reset_invalidates_all_caches():
+    """
+    When multiple end users are linked to the same budget and the budget
+    resets, ALL of their cache entries should be invalidated.
+    """
+    from unittest.mock import AsyncMock, patch
+
+    mock_cache = AsyncMock()
+    mock_cache.async_delete_cache = AsyncMock()
+    deleted_keys = []
+
+    async def track_delete(key):
+        deleted_keys.append(key)
+
+    mock_cache.async_delete_cache = AsyncMock(side_effect=track_delete)
+
+    endusers = []
+    for i in range(5):
+        endusers.append(
+            type(
+                "LiteLLM_EndUserTable",
+                (),
+                {
+                    "spend": 10.0 * (i + 1),
+                    "user_id": f"user-{i}",
+                },
+            )
+        )
+
+    async def _run():
+        with patch.dict(
+            "sys.modules",
+            {
+                "litellm.proxy.proxy_server": type(
+                    "module", (), {"user_api_key_cache": mock_cache}
+                )()
+            },
+        ):
+            for enduser in endusers:
+                await ResetBudgetJob._reset_budget_for_enduser(enduser=enduser)
+
+        # All 5 users should have spend reset
+        for enduser in endusers:
+            assert enduser.spend == 0.0
+
+        # All 5 cache entries should be invalidated
+        assert len(deleted_keys) == 5
+        expected_keys = [f"end_user_id:user-{i}" for i in range(5)]
+        for key in expected_keys:
+            assert key in deleted_keys, f"Cache key {key} was not invalidated"
+
+    asyncio.run(_run())
+
+
 def test_reset_budget_all(reset_budget_job, mock_prisma_client):
     # Setup test data with timezone-aware datetime
     now = datetime.now(timezone.utc)
@@ -343,8 +590,6 @@ def test_reset_budget_for_keys_linked_to_budgets(reset_budget_job, mock_prisma_c
     This covers the case where keys were created with budget_id but
     budget_duration was not inherited to the key (pre-fix keys).
     """
-    from litellm.proxy._types import LiteLLM_BudgetTableFull
-
     now = datetime.now(timezone.utc)
 
     # Create a budget tier that is due for reset
@@ -434,9 +679,7 @@ def test_reset_budget_for_keys_linked_to_budgets_empty(
     """
     # Run with empty list
     asyncio.run(
-        reset_budget_job.reset_budget_for_keys_linked_to_budgets(
-            budgets_to_reset=[]
-        )
+        reset_budget_job.reset_budget_for_keys_linked_to_budgets(budgets_to_reset=[])
     )
 
     # Verify no update_many calls were made
