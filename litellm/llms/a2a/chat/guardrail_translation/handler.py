@@ -216,7 +216,7 @@ class A2AGuardrailHandler(BaseTranslation):
             response["result"] = result
             return response
 
-    async def process_output_streaming_response(
+    async def process_output_streaming_response(  # noqa: PLR0915
         self,
         responses_so_far: List[Any],
         guardrail_to_apply: "CustomGuardrail",

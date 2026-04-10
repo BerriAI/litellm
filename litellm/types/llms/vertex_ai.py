@@ -286,6 +286,10 @@ class UsageMetadata(TypedDict, total=False):
     candidatesTokensDetails: List[
         PromptTokensDetails
     ]  # Alternative key name used in some responses
+    toolUsePromptTokenCount: int
+    toolUsePromptTokensDetails: List[
+        PromptTokensDetails
+    ]  # TODO: parse into prompt_tokens_details per modality
 
 
 class TokenCountDetailsResponse(TypedDict):
