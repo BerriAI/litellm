@@ -150,10 +150,6 @@ httpRoute:
   # - matches:
   #     - path:
   #         type: PathPrefix
-  rules: []
-  # - matches:
-  #     - path:
-  #         type: PathPrefix
   #         value: /
   #   backendRefs:
   #   - name: litellm
