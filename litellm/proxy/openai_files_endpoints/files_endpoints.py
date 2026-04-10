@@ -24,7 +24,7 @@ from fastapi import (
 import litellm
 from litellm import CreateFileRequest, get_secret_str
 from litellm._logging import verbose_proxy_logger
-from litellm.files.file_content_streaming_handler import (
+from litellm.proxy.openai_files_endpoints.file_content_streaming_handler import (
     FileContentStreamingHandler,
 )
 from litellm.llms.base_llm.files.transformation import BaseFileEndpoints
@@ -49,14 +49,16 @@ from litellm.types.llms.openai import (
     OpenAIFilesPurpose,
 )
 
-from .common_utils import (
+from litellm.proxy.openai_files_endpoints.common_utils import (
     _is_base64_encoded_unified_file_id,
     encode_file_id_with_model,
     extract_file_creation_params,
     get_credentials_for_model,
     handle_model_based_routing,
 )
-from .storage_backend_service import StorageBackendFileService
+from litellm.proxy.openai_files_endpoints.storage_backend_service import (
+    StorageBackendFileService,
+)
 
 router = APIRouter()
 
