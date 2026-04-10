@@ -1,4 +1,5 @@
 import json
+import logging
 import time
 from enum import Enum
 from typing import (
@@ -2481,23 +2482,33 @@ class AdapterCompletionStreamWrapper:
         try:
             for chunk in self.completion_stream:
                 if chunk == "None" or chunk is None:
-                    raise Exception
+                    raise ValueError(
+                        "Received None chunk in stream. This usually indicates "
+                        "an issue with the adapter response transformation."
+                    )
                 return chunk
             raise StopIteration
         except StopIteration:
             raise StopIteration
+        except ValueError:
+            raise
         except Exception as e:
-            print(f"AdapterCompletionStreamWrapper - {e}")  # noqa
+            logging.getLogger(__name__).warning(f"AdapterCompletionStreamWrapper - {e}")
 
     async def __anext__(self):
         try:
             async for chunk in self.completion_stream:
                 if chunk == "None" or chunk is None:
-                    raise Exception
+                    raise ValueError(
+                        "Received None chunk in stream. This usually indicates "
+                        "an issue with the adapter response transformation."
+                    )
                 return chunk
             raise StopIteration
         except StopIteration:
             raise StopAsyncIteration
+        except ValueError:
+            raise
 
 
 class StandardLoggingUserAPIKeyMetadata(TypedDict):
