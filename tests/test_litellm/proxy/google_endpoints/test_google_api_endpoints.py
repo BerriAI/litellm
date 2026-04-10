@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Tests for Google GenAI proxy API endpoints.
+Test to verify the Google GenAI proxy API endpoints
 """
 import os
 import sys
@@ -8,7 +8,9 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../.."))
+sys.path.insert(
+    0, os.path.abspath("../../..")
+)  # Adds the parent directory to the system path
 
 
 def _make_app():
