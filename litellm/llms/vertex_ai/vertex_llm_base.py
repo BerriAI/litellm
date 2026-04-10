@@ -136,6 +136,11 @@ class VertexBase:
                             json_obj,
                             scopes=["https://www.googleapis.com/auth/cloud-platform"],
                         )
+                elif isinstance(credential_source, dict) and "executable" in credential_source:
+                    creds = self._credentials_from_pluggable(
+                        json_obj,
+                        scopes=["https://www.googleapis.com/auth/cloud-platform"],
+                    )
                 else:
                     creds = self._credentials_from_identity_pool(
                         json_obj,
@@ -186,6 +191,17 @@ class VertexBase:
             raise ImportError(GOOGLE_IMPORT_ERROR_MESSAGE)
 
         creds = identity_pool.Credentials.from_info(json_obj)
+        if scopes and hasattr(creds, "requires_scopes") and creds.requires_scopes:
+            creds = creds.with_scopes(scopes)
+        return creds
+
+    def _credentials_from_pluggable(self, json_obj, scopes):
+        try:
+            from google.auth import pluggable
+        except ImportError:
+            raise ImportError(GOOGLE_IMPORT_ERROR_MESSAGE)
+
+        creds = pluggable.Credentials.from_info(json_obj)
         if scopes and hasattr(creds, "requires_scopes") and creds.requires_scopes:
             creds = creds.with_scopes(scopes)
         return creds
