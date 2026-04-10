@@ -7,6 +7,7 @@ NOTE 1: S3 does not provide a BATCH PUT API endpoint, so we create tasks to uplo
 """
 
 import asyncio
+import time
 from datetime import datetime
 from typing import List, Optional, cast
 
@@ -563,8 +564,6 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
                 else None
             )
             # Make the request with retry for transient S3 errors (500/503)
-            import time
-
             max_retries = 3
             for attempt in range(max_retries):
                 response = httpx_client.put(
