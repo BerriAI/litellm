@@ -135,6 +135,15 @@ MCP_OAUTH2_TOKEN_CACHE_DEFAULT_TTL = int(
 MCP_NPM_CACHE_DIR = os.getenv("MCP_NPM_CACHE_DIR", "/tmp/.npm_mcp_cache")
 MCP_OAUTH2_TOKEN_CACHE_MIN_TTL = int(os.getenv("MCP_OAUTH2_TOKEN_CACHE_MIN_TTL", "10"))
 
+# Per-user OAuth token Redis cache (for server-side token storage)
+MCP_PER_USER_TOKEN_REDIS_KEY_PREFIX = "mcp:per_user_token"
+MCP_PER_USER_TOKEN_DEFAULT_TTL = int(
+    os.getenv("MCP_PER_USER_TOKEN_DEFAULT_TTL", "43200")  # 12 hours
+)
+MCP_PER_USER_TOKEN_EXPIRY_BUFFER_SECONDS = int(
+    os.getenv("MCP_PER_USER_TOKEN_EXPIRY_BUFFER_SECONDS", "60")
+)
+
 # MCP timeout defaults (seconds). Override via env vars for slow/custom MCP servers.
 MCP_CLIENT_TIMEOUT = float(os.getenv("LITELLM_MCP_CLIENT_TIMEOUT", "60.0"))
 MCP_TOOL_LISTING_TIMEOUT = float(os.getenv("LITELLM_MCP_TOOL_LISTING_TIMEOUT", "30.0"))
