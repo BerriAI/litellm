@@ -8,6 +8,7 @@ from litellm.llms.base_llm.anthropic_messages.transformation import (
     BaseAnthropicMessagesConfig,
 )
 from litellm.types.llms.anthropic import (
+    ANTHROPIC_ADVISOR_TOOL_TYPE,
     ANTHROPIC_BETA_HEADER_VALUES,
     AnthropicMessagesRequest,
 )
@@ -220,7 +221,8 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         # Prevents Anthropic 400: advisor_tool_result in history requires advisor tool.
         _tools = anthropic_messages_optional_request_params.get("tools") or []
         _has_advisor = any(
-            isinstance(t, dict) and t.get("type") == "advisor_20260301" for t in _tools
+            isinstance(t, dict) and t.get("type") == ANTHROPIC_ADVISOR_TOOL_TYPE
+            for t in _tools
         )
         if not _has_advisor:
             messages = strip_advisor_blocks_from_messages(messages)  # type: ignore[assignment]
@@ -339,7 +341,10 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         tools = optional_params.get("tools")
         if tools:
             for tool in tools:
-                if isinstance(tool, dict) and tool.get("type") == "advisor_20260301":
+                if (
+                    isinstance(tool, dict)
+                    and tool.get("type") == ANTHROPIC_ADVISOR_TOOL_TYPE
+                ):
                     beta_values.add(
                         ANTHROPIC_BETA_HEADER_VALUES.ADVISOR_TOOL_2026_03_01.value
                     )
