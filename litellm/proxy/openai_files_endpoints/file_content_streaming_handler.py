@@ -62,18 +62,22 @@ class FileContentStreamingHandler:
         user_api_key_dict: UserAPIKeyAuth,
         version: str,
     ) -> StreamingResponse:
+        effective_custom_llm_provider = custom_llm_provider
         if should_route:
             prepare_data_with_credentials(
                 data=data,
                 credentials=credentials,  # type: ignore[arg-type]
                 file_id=original_file_id,
             )
+            effective_custom_llm_provider = cast(
+                str, credentials["custom_llm_provider"]
+            )
 
         stream_result = cast(
             FileContentStreamingResult,
             await litellm.afile_content(
                 **{
-                    "custom_llm_provider": custom_llm_provider,
+                    "custom_llm_provider": effective_custom_llm_provider,
                     "file_id": file_id,
                     "stream": True,
                     **data,
