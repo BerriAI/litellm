@@ -384,14 +384,6 @@ const MCPToolConfiguration: React.FC<MCPToolConfigurationProps> = ({
           )}
         </div>
 
-        {/* Description */}
-        <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
-          <Text className="text-blue-800 text-sm">
-            <strong>Select which tools users can call:</strong> Only checked tools will be available for users to
-            invoke. Unchecked tools will be blocked from execution.
-          </Text>
-        </div>
-
         {/* Loading state */}
         {isLoadingTools && (
           <div className="flex items-center justify-center py-6">

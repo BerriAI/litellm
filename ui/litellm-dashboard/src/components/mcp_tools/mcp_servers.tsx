@@ -28,10 +28,16 @@ const EDIT_OAUTH_UI_STATE_KEY = "litellm-mcp-oauth-edit-state";
 const { Option } = Select;
 
 const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID }) => {
-  const { data: mcpServers, isLoading: isLoadingServers, refetch } = useMCPServers();
+  const { data: mcpServers, isLoading: isLoadingServers, refetch: refetchMcpServers } = useMCPServers();
 
   // Fetch health status for all servers
-  const { data: healthStatuses, isLoading: isLoadingHealth, recheckServerHealth, recheckingServerIds } = useMCPServerHealth();
+  const {
+    data: healthStatuses,
+    isLoading: isLoadingHealth,
+    recheckServerHealth,
+    recheckingServerIds,
+    refetch: refetchMcpHealth,
+  } = useMCPServerHealth();
 
   // Merge health status data into servers
   const serversWithHealth = useMemo(() => {
@@ -190,7 +196,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
       setIsDeletingServer(true);
       await deleteMCPServer(accessToken, serverIdToDelete);
       NotificationsManager.success("Deleted MCP Server successfully");
-      refetch();
+      refetchMcpServers();
     } catch (error) {
       console.error("Error deleting the mcp server:", error);
     } finally {
@@ -210,10 +216,12 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
     ? (mcpServers || []).find((server) => server.server_id === serverIdToDelete)
     : null;
 
-  const handleCreateSuccess = (newMcpServer: MCPServer) => {
+  const handleCreateSuccess = async (newMcpServer: MCPServer) => {
     setFilteredServers((prev) => [...prev, newMcpServer]);
     setModalVisible(false);
-    refetch();
+    // Refresh list + health so the new row shows real status (not "unknown" until full page reload).
+    await refetchMcpServers();
+    await refetchMcpHealth();
   };
 
   // Memoize the selected server to prevent unnecessary re-renders
@@ -236,8 +244,8 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
   const handleBack = React.useCallback(() => {
     setEditServer(false);
     setSelectedServerId(null);
-    refetch();
-  }, [refetch]);
+    refetchMcpServers();
+  }, [refetchMcpServers]);
 
   if (!accessToken || !userRole || !userID) {
     console.log("Missing required authentication parameters", { accessToken, userRole, userID });
@@ -455,7 +463,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
           open={!!byokModalServer}
           onClose={() => setByokModalServer(null)}
           onSuccess={(_serverId) => {
-            refetch();
+            refetchMcpServers();
             setByokModalServer(null);
           }}
           accessToken={accessToken || ""}

@@ -47,6 +47,29 @@ export const OAUTH_FLOW = {
   M2M: "m2m",
 };
 
+/** Values persisted by the proxy / API (`NewMCPServerRequest.oauth2_flow`). */
+export type OAuth2FlowApi = "client_credentials" | "authorization_code";
+
+export function mapUiOAuthFlowToApi(ui: string | null | undefined): OAuth2FlowApi | undefined {
+  if (ui === OAUTH_FLOW.M2M) return "client_credentials";
+  if (ui === OAUTH_FLOW.INTERACTIVE) return "authorization_code";
+  return undefined;
+}
+
+export function mapApiOAuthFlowToUi(api: string | null | undefined): typeof OAUTH_FLOW.M2M | typeof OAUTH_FLOW.INTERACTIVE | undefined {
+  if (api === "client_credentials") return OAUTH_FLOW.M2M;
+  if (api === "authorization_code") return OAUTH_FLOW.INTERACTIVE;
+  return undefined;
+}
+
+/** Human-readable label for overview / read-only UI. */
+export function formatOAuth2FlowForDisplay(api: string | null | undefined): string {
+  if (api === "client_credentials") return "Machine-to-machine (client credentials)";
+  if (api === "authorization_code") return "Interactive (authorization code)";
+  if (api == null || api === "") return "Not set — proxy may infer from credentials";
+  return api;
+}
+
 export const TRANSPORT = {
   SSE: "sse",
   HTTP: "http",
@@ -185,6 +208,8 @@ export interface MCPServer {
   authorization_url?: string | null;
   token_url?: string | null;
   registration_url?: string | null;
+  /** OAuth2 grant: `client_credentials` (M2M) or `authorization_code` (interactive). */
+  oauth2_flow?: string | null;
   mcp_info?: MCPInfo | null;
   created_at: string;
   created_by: string;

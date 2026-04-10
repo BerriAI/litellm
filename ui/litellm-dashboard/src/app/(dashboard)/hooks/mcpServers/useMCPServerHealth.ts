@@ -36,10 +36,13 @@ export const useMCPServerHealth = () => {
         { queryKey: mcpServerHealthKeys.lists() },
         (oldData) => {
           if (!oldData) return result;
-          return oldData.map((h) => {
-            const updated = result.find((r) => r.server_id === h.server_id);
-            return updated ?? h;
-          });
+          // Merge by id: update existing rows and append any new server_ids from this fetch
+          // (single-server recheck previously dropped rows not present in oldData).
+          const byId = new Map(oldData.map((h) => [h.server_id, h]));
+          for (const r of result) {
+            byId.set(r.server_id, r);
+          }
+          return Array.from(byId.values());
         },
       );
     } finally {
