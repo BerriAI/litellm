@@ -12,7 +12,7 @@ metadata:
 spec:
   parentRefs:
     - name: {{ required "httpRoute.gatewayName is required when httpRoute.enabled is true" .Values.httpRoute.gatewayName }}
-      {{- with (default "" .Values.httpRoute.gatewayNamespace) }}
+      {{- with .Values.httpRoute.gatewayNamespace }}
       namespace: {{ . }}
       {{- end }}
       {{- with .Values.httpRoute.gatewayGroup }}

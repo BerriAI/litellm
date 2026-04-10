@@ -139,7 +139,7 @@ ingress:
 
 httpRoute:
   enabled: false
-  gatewayName: ""
+  gatewayName: "my-envoy-gateway" # required
   gatewayNamespace: ""
   gatewayGroup: ""
   gatewayKind: ""
