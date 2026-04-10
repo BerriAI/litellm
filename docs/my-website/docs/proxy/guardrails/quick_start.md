@@ -82,6 +82,23 @@ For generic guardrail APIs you can also set **static headers** (`headers`: key/v
 - `during_call` Run **during** LLM call, on **input** Same as `pre_call` but runs in parallel as LLM call.  Response not returned until guardrail check completes
 - A list of the above values to run multiple modes, e.g. `mode: [pre_call, post_call]`
 
+### Skip system messages in guardrail evaluation
+
+You can stop **unified** guardrails from scanning `role: system` content while still sending the full `messages` list to the model.
+
+**Global** — in `litellm_settings`:
+
+```yaml
+litellm_settings:
+  skip_system_message_in_guardrail: true
+```
+
+**Per guardrail** — under that guardrail’s `litellm_params`: set `skip_system_message_in_guardrail: true` or `false`. If omitted, the global `litellm_settings` value is used; per-guardrail `false` forces system messages to be included even when the global flag is `true`.
+
+**Where this applies:** Only the **unified** guardrail path (providers that implement `apply_guardrail` and run through LiteLLM’s message translation layer) on **OpenAI Chat Completions** (`/v1/chat/completions`) and **Anthropic Messages** (`/v1/messages`). Examples include Presidio, Bedrock guardrails, `litellm_content_filter`, OpenAI Moderation, Generic Guardrail API, and custom code guardrails that define `apply_guardrail`.
+
+**Where this does *not* apply:** Guardrails that run only via direct hooks on the raw request (e.g. Lakera v2, Aporia, DynamoAI, Javelin, Lasso, Pangea, Model Armor, Azure Content Safety hooks, Guardrails AI, AIM, tool permission, MCP security). It also does not apply to other routes until those endpoints use the same translation layer (e.g. Responses API, embeddings, speech).
+
 ### Load Balancing Guardrails
 
 Need to distribute guardrail requests across multiple accounts or regions? See [Guardrail Load Balancing](./guardrail_load_balancing.md) for details on:
