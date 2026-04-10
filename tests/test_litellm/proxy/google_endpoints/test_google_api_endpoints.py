@@ -20,12 +20,18 @@ def _make_app():
         from fastapi.responses import JSONResponse
         from fastapi.testclient import TestClient
 
-        from litellm.proxy._types import ProxyException
+        from litellm.proxy._types import ProxyException, UserAPIKeyAuth
+        from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
         from litellm.proxy.google_endpoints.endpoints import router as google_router
     except ImportError as e:
         return None, None
 
     app = FastAPI()
+    # Bypass authentication in tests — user_api_key_auth enforces API key validation
+    # which requires a running proxy and database. Override with a no-op stub.
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+        api_key="sk-test"
+    )
     app.include_router(google_router)
 
     @app.exception_handler(ProxyException)
