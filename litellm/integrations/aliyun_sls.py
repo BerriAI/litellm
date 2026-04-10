@@ -70,9 +70,9 @@ class AliyunSLSLogger(CustomLogger):
     def _build_contents(
         self,
         kwargs: Dict[str, Any],
-        response_obj: Any,
-        start_time: Any,
-        end_time: Any,
+        _response_obj: Any,
+        _start_time: Any,
+        _end_time: Any,
         status: str,
     ) -> list:
         payload: Optional[StandardLoggingPayload] = kwargs.get(
@@ -119,7 +119,7 @@ class AliyunSLSLogger(CustomLogger):
             contents = self._build_contents(
                 kwargs, response_obj, start_time, end_time, "success"
             )
-            await asyncio.get_event_loop().run_in_executor(
+            await asyncio.get_running_loop().run_in_executor(
                 None, self._put_logs, contents
             )
         except Exception as e:
@@ -134,7 +134,7 @@ class AliyunSLSLogger(CustomLogger):
             contents = self._build_contents(
                 kwargs, response_obj, start_time, end_time, "failure"
             )
-            await asyncio.get_event_loop().run_in_executor(
+            await asyncio.get_running_loop().run_in_executor(
                 None, self._put_logs, contents
             )
         except Exception as e:
