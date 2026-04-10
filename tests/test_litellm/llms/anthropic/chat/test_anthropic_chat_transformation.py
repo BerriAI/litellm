@@ -3368,7 +3368,9 @@ def test_extract_response_content_thinking_block_null_thinking():
     text, _, thinking_blocks, _, _, _, _, _ = config.extract_response_content(
         completion_response_null
     )
-    assert thinking_blocks is not None, "thinking blocks should not be None when thinking=null"
+    assert (
+        thinking_blocks is not None
+    ), "thinking blocks should not be None when thinking=null"
     assert len(thinking_blocks) == 1
     assert "Hello" in text
 
@@ -3382,7 +3384,9 @@ def test_extract_response_content_thinking_block_null_thinking():
     text, _, thinking_blocks, _, _, _, _, _ = config.extract_response_content(
         completion_response_missing
     )
-    assert thinking_blocks is not None, "thinking blocks should not be None when thinking key is absent"
+    assert (
+        thinking_blocks is not None
+    ), "thinking blocks should not be None when thinking key is absent"
     assert len(thinking_blocks) == 1
     assert "World" in text
 
@@ -3454,7 +3458,9 @@ def test_advisor_beta_header_injected():
             }
         ]
     }
-    result = config.update_headers_with_optional_anthropic_beta(headers, optional_params)
+    result = config.update_headers_with_optional_anthropic_beta(
+        headers, optional_params
+    )
     assert ANTHROPIC_BETA_HEADER_VALUES.ADVISOR_TOOL_2026_03_01.value in result.get(
         "anthropic-beta", ""
     )
@@ -3465,7 +3471,9 @@ def test_advisor_beta_header_not_injected_without_tool():
     config = AnthropicConfig()
     headers: dict = {}
     optional_params: dict = {"tools": []}
-    result = config.update_headers_with_optional_anthropic_beta(headers, optional_params)
+    result = config.update_headers_with_optional_anthropic_beta(
+        headers, optional_params
+    )
     assert "advisor-tool-2026-03-01" not in result.get("anthropic-beta", "")
 
 
@@ -3484,7 +3492,10 @@ def test_advisor_tool_result_preserved_in_response():
             {
                 "type": "advisor_tool_result",
                 "tool_use_id": "srvtoolu_abc123",
-                "content": {"type": "advisor_result", "text": "Use a channel-based pattern."},
+                "content": {
+                    "type": "advisor_result",
+                    "text": "Use a channel-based pattern.",
+                },
             },
             {"type": "text", "text": "Here is the implementation."},
         ]
@@ -3529,3 +3540,64 @@ def test_messages_path_advisor_beta_header_preserved_when_user_sends_it():
     optional_params: dict = {"tools": []}
     result = config._update_headers_with_anthropic_beta(headers, optional_params)
     assert "advisor-tool-2026-03-01" in result.get("anthropic-beta", "")
+
+
+def test_strip_advisor_blocks_when_no_advisor_tool():
+    """
+    Auto-strip removes server_tool_use(advisor) + advisor_tool_result blocks when
+    advisor tool is absent, preventing Anthropic 400 on follow-up turns.
+    """
+    from litellm.llms.anthropic.common_utils import strip_advisor_blocks_from_messages
+
+    messages = [
+        {"role": "user", "content": "Build a worker pool."},
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "text", "text": "Let me consult the advisor."},
+                {
+                    "type": "server_tool_use",
+                    "id": "srvtoolu_abc123",
+                    "name": "advisor",
+                    "input": {},
+                },
+                {
+                    "type": "advisor_tool_result",
+                    "tool_use_id": "srvtoolu_abc123",
+                    "content": {"type": "advisor_result", "text": "Use channels."},
+                },
+                {"type": "text", "text": "Here is the implementation."},
+            ],
+        },
+    ]
+    result = strip_advisor_blocks_from_messages(messages)
+    assistant_content = result[1]["content"]
+    types = [b["type"] for b in assistant_content]
+    assert "server_tool_use" not in types
+    assert "advisor_tool_result" not in types
+    assert "text" in types
+    assert len(assistant_content) == 2
+
+
+def test_strip_advisor_blocks_no_op_when_no_advisor_blocks():
+    """strip_advisor_blocks_from_messages is a no-op when no advisor blocks exist."""
+    from litellm.llms.anthropic.common_utils import strip_advisor_blocks_from_messages
+
+    messages = [
+        {"role": "user", "content": "Hello"},
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "text", "text": "Hi there"},
+                {
+                    "type": "tool_use",
+                    "id": "toolu_abc",
+                    "name": "get_weather",
+                    "input": {"location": "SF"},
+                },
+            ],
+        },
+    ]
+    original_content = [dict(b) for b in messages[1]["content"]]
+    result = strip_advisor_blocks_from_messages(messages)
+    assert result[1]["content"] == original_content
