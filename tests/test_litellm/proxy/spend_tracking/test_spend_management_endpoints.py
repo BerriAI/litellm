@@ -318,6 +318,28 @@ async def test_assert_user_can_view_request_id_rejects_both_users_none():
     assert exc_info.value.status_code == 403
 
 
+def test_ui_view_request_response_forbids_non_admin_without_db(client, monkeypatch):
+    """
+    Without prisma, non-admins cannot be authorized to read request/response
+    payloads (including from custom loggers); do not skip RBAC silently.
+    """
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="user_1",
+    )
+    try:
+        response = client.get(
+            "/spend/logs/ui/req-no-db",
+            headers={"Authorization": "Bearer sk-test"},
+        )
+        assert response.status_code == 403
+        body = response.json()
+        assert "database" in str(body).lower()
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
 ignored_keys = [
     "request_id",
     "session_id",
