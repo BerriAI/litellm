@@ -468,6 +468,7 @@ cost_margin_config: Dict[
 # Combined: {"vertex_ai": {"percentage": 0.08, "fixed_amount": 0.0005}}
 custom_prompt_dict: Dict[str, dict] = {}
 check_provider_endpoint = False
+enforce_openai_completion_token_invariant: bool = True
 
 
 ####### THREAD-SPECIFIC DATA ####################
