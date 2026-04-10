@@ -7,7 +7,7 @@ to reuse all authentication and Azure Storage operations.
 """
 
 import time
-from typing import Optional
+from typing import AsyncIterator, Optional
 from urllib.parse import quote
 
 from litellm._logging import verbose_logger
@@ -252,19 +252,7 @@ class AzureBlobStorageBackend(BaseFileStorageBackend, AzureBlobStorageLogger):
             bytes: File content
         """
         try:
-            # Parse blob URL to extract path
-            # URL format: https://{account}.blob.core.windows.net/{container}/{path}
-            if ".blob.core.windows.net/" not in storage_url:
-                raise ValueError(f"Invalid Azure Blob Storage URL: {storage_url}")
-
-            # Extract path after container name
-            container_and_path = storage_url.split(".blob.core.windows.net/", 1)[1]
-            path_parts = container_and_path.split("/", 1)
-            if len(path_parts) < 2:
-                raise ValueError(
-                    f"Invalid Azure Blob Storage URL format: {storage_url}"
-                )
-            file_path = path_parts[1]  # Path after container name
+            file_path = self._extract_file_path_from_storage_url(storage_url)
 
             if self.azure_storage_account_key:
                 # Use Azure SDK (reuse logger's service client)
@@ -278,6 +266,54 @@ class AzureBlobStorageBackend(BaseFileStorageBackend, AzureBlobStorageLogger):
                 f"Error downloading file from Azure Blob Storage: {str(e)}"
             )
             raise
+
+    async def download_file_streaming(
+        self, storage_url: str, chunk_size: int = 1024 * 1024
+    ) -> AsyncIterator[bytes]:
+        """
+        Stream-download a file from Azure Blob Storage.
+
+        Args:
+            storage_url: Blob URL in format: https://{account}.blob.core.windows.net/{container}/{path}
+            chunk_size: Chunk size in bytes for streamed reads
+
+        Yields:
+            bytes: File content chunks
+        """
+        try:
+            file_path = self._extract_file_path_from_storage_url(storage_url)
+
+            if self.azure_storage_account_key:
+                async for chunk in self._download_file_with_account_key_streaming(
+                    file_path=file_path,
+                    chunk_size=chunk_size,
+                ):
+                    yield chunk
+            else:
+                async for chunk in self._download_file_with_azure_ad_streaming(
+                    file_path=file_path,
+                    chunk_size=chunk_size,
+                ):
+                    yield chunk
+        except Exception as e:
+            verbose_logger.exception(
+                f"Error streaming file from Azure Blob Storage: {str(e)}"
+            )
+            raise
+
+    def _extract_file_path_from_storage_url(self, storage_url: str) -> str:
+        # Parse blob URL to extract path
+        # URL format: https://{account}.blob.core.windows.net/{container}/{path}
+        """Extract file path from Azure blob URL."""
+        if ".blob.core.windows.net/" not in storage_url:
+            raise ValueError(f"Invalid Azure Blob Storage URL: {storage_url}")
+
+        container_and_path = storage_url.split(".blob.core.windows.net/", 1)[1]
+        path_parts = container_and_path.split("/", 1)
+        if len(path_parts) < 2:
+            raise ValueError(f"Invalid Azure Blob Storage URL format: {storage_url}")
+
+        return path_parts[1]
 
     async def _download_file_with_account_key(self, file_path: str) -> bytes:
         """Download file using Azure SDK with account key."""
@@ -296,6 +332,42 @@ class AzureBlobStorageBackend(BaseFileStorageBackend, AzureBlobStorageLogger):
         download_response = await file_client.download_file()
         file_content = await download_response.readall()
         return file_content
+
+    async def _download_file_with_account_key_streaming(
+        self, file_path: str, chunk_size: int = 1024 * 1024
+    ) -> AsyncIterator[bytes]:
+        """Stream-download file using Azure SDK with account key."""
+        service_client = await self.get_service_client()
+        file_system_client = service_client.get_file_system_client(
+            file_system=self.azure_storage_file_system
+        )
+        if not await file_system_client.exists():
+            raise ValueError(
+                f"Filesystem {self.azure_storage_file_system} does not exist"
+            )
+
+        file_client = file_system_client.get_file_client(file_path)
+        download_response = await file_client.download_file()
+
+        chunks_method = getattr(download_response, "chunks", None)
+        if chunks_method is None or not callable(chunks_method):
+            raise RuntimeError(
+                "Azure SDK download response does not support chunk streaming"
+            )
+
+        chunks_iterable = chunks_method()
+        if hasattr(chunks_iterable, "__aiter__"):
+            async for chunk in chunks_iterable: #type: ignore
+                if chunk:
+                    yield chunk
+        elif hasattr(chunks_iterable, "__iter__"):
+            for chunk in chunks_iterable: #type: ignore
+                if chunk:
+                    yield chunk
+        else:
+            raise RuntimeError(
+                "Azure SDK download response chunks() did not return an iterable"
+            )
 
     async def _download_file_with_azure_ad(self, file_path: str) -> bytes:
         """Download file using REST API with Azure AD token."""
@@ -323,3 +395,31 @@ class AzureBlobStorageBackend(BaseFileStorageBackend, AzureBlobStorageLogger):
         response = await async_client.get(blob_url, headers=headers)
         response.raise_for_status()
         return response.content
+
+    async def _download_file_with_azure_ad_streaming(
+        self, file_path: str, chunk_size: int = 1024 * 1024
+    ) -> AsyncIterator[bytes]:
+        """Stream-download file using REST API with Azure AD token."""
+        await self.set_valid_azure_ad_token()
+
+        from litellm.llms.custom_httpx.http_handler import (
+            get_async_httpx_client,
+            httpxSpecialProvider,
+        )
+        from litellm.constants import AZURE_STORAGE_MSFT_VERSION
+
+        async_client = get_async_httpx_client(
+            llm_provider=httpxSpecialProvider.LoggingCallback
+        )
+
+        blob_url = f"https://{self.azure_storage_account_name}.blob.core.windows.net/{self.azure_storage_file_system}/{file_path}"
+        headers = {
+            "x-ms-version": AZURE_STORAGE_MSFT_VERSION,
+            "Authorization": f"Bearer {self.azure_auth_token}",
+        }
+
+        async with async_client.client.stream("GET", blob_url, headers=headers) as response:
+            response.raise_for_status()
+            async for chunk in response.aiter_bytes(chunk_size=chunk_size):
+                if chunk:
+                    yield chunk

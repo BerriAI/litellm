@@ -136,6 +136,22 @@ class TestTransformFileContent:
         assert isinstance(result, HttpxBinaryResponseContent)
         assert result.response.content == b'{"line": 1}\n{"line": 2}\n'
 
+    def test_should_preserve_alt_media_query_when_build_request_has_no_params(self, config):
+        file_id = "gs://my-bucket/path/to/file.jsonl"
+        url, params = config.transform_file_content_request(
+            file_content_request={"file_id": file_id},
+            optional_params={},
+            litellm_params={},
+        )
+
+        assert params == {}
+
+        client = httpx.Client()
+        request = client.build_request("GET", url, headers={})
+
+        assert str(request.url) == url
+        assert request.url.params.get("alt") == "media"
+
 
 class TestTransformDeleteFile:
     def test_should_build_correct_gcs_delete_url(self, config):

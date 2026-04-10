@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Any, AsyncIterator, Dict, Iterator, List, Optional, Union
 
 import httpx
 from openai.types.file_deleted import FileDeleted
@@ -259,3 +259,13 @@ class BaseFileEndpoints(ABC):
         **data: Dict,
     ) -> "HttpxBinaryResponseContent":
         pass
+
+    async def afile_content_streaming(
+        self,
+        file_id: str,
+        litellm_parent_otel_span: Optional[Span],
+        llm_router: Router,
+        chunk_size: int = 1024 * 1024,
+        **data: Dict,
+    ) -> Union[Iterator[bytes], AsyncIterator[bytes]]:
+        raise NotImplementedError()

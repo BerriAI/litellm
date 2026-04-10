@@ -21,6 +21,7 @@ from fastapi import (
     UploadFile,
     status,
 )
+from fastapi.responses import StreamingResponse
 
 import litellm
 from litellm import CreateFileRequest, get_secret_str
@@ -822,6 +823,254 @@ async def get_file_content(  # noqa: PLR0915
                 param=getattr(e, "param", "None"),
                 code=getattr(e, "status_code", 500),
             )
+
+
+@router.get(
+    "/{provider}/v2/files/{file_id:path}/content",
+    dependencies=[Depends(user_api_key_auth)],
+    tags=["files"],
+)
+@router.get(
+    "/v2/files/{file_id:path}/content",
+    dependencies=[Depends(user_api_key_auth)],
+    tags=["files"],
+)
+async def get_file_content_streaming(
+    request: Request,
+    fastapi_response: Response,
+    file_id: str,
+    provider: Optional[str] = None,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    from litellm.proxy.proxy_server import (
+        general_settings,
+        llm_router,
+        proxy_config,
+        proxy_logging_obj,
+        version,
+    )
+
+    data: Dict = {"file_id": file_id}
+    try:
+        base_llm_response_processor = ProxyBaseLLMRequestProcessing(data=data)
+        (
+            data,
+            _,
+        ) = await base_llm_response_processor.common_processing_pre_call_logic(
+            request=request,
+            general_settings=general_settings,
+            user_api_key_dict=user_api_key_dict,
+            version=version,
+            proxy_logging_obj=proxy_logging_obj,
+            proxy_config=proxy_config,
+            route_type="afile_content_streaming",
+        )
+
+        custom_llm_provider = (
+            provider
+            or get_custom_llm_provider_from_request_headers(request=request)
+            or get_custom_llm_provider_from_request_query(request=request)
+            or await get_custom_llm_provider_from_request_body(request=request)
+            or "openai"
+        )
+
+        ## check if file_id is a litellm managed file (same top-level flow as v1)
+        is_base64_unified_file_id = _is_base64_encoded_unified_file_id(file_id)
+        if is_base64_unified_file_id:
+            managed_files_obj = proxy_logging_obj.get_proxy_hook("managed_files")
+            if managed_files_obj is None:
+                raise ProxyException(
+                    message="Managed files hook not found",
+                    type="None",
+                    param="None",
+                    code=500,
+                )
+            if llm_router is None:
+                raise ProxyException(
+                    message="LLM Router not found",
+                    type="None",
+                    param="None",
+                    code=500,
+                )
+            if not isinstance(managed_files_obj, BaseFileEndpoints):
+                raise ProxyException(
+                    message="Managed files hook is not a BaseFileEndpoints",
+                    type="None",
+                    param="None",
+                    code=500,
+                )
+
+            if hasattr(managed_files_obj, "prisma_client") and getattr(
+                managed_files_obj, "prisma_client", None
+            ):
+                prisma_client = getattr(managed_files_obj, "prisma_client")
+                db_file = await prisma_client.db.litellm_managedfiletable.find_first(
+                    where={"unified_file_id": file_id}
+                )
+                if db_file and db_file.storage_backend and db_file.storage_url:
+                    from litellm.llms.base_llm.files.storage_backend_factory import (
+                        get_storage_backend,
+                    )
+
+                    storage_backend_name = db_file.storage_backend
+                    storage_url = db_file.storage_url
+                    try:
+                        storage_backend = get_storage_backend(storage_backend_name)
+
+                        return StreamingResponse(
+                            content=storage_backend.download_file_streaming(storage_url),
+                            media_type="application/octet-stream",
+                            headers={
+                                "content-disposition": f'attachment; filename="{file_id}.bin"',
+                            },
+                        )
+                    except ValueError as e:
+                        raise ProxyException(
+                            message=f"Storage backend error: {str(e)}",
+                            type="invalid_request_error",
+                            param="file_id",
+                            code=400,
+                        )
+
+            model = cast(Optional[str], data.get("model"))
+            if model:
+                stream_iterator = await litellm.afile_content_streaming(
+                    **{
+                        "model": model,
+                        "file_id": file_id,
+                        **data,
+                    }
+                )  # type: ignore
+            else:
+                stream_iterator = await managed_files_obj.afile_content_streaming(
+                    **{
+                        "file_id": file_id,
+                        "litellm_parent_otel_span": user_api_key_dict.parent_otel_span,
+                        "llm_router": llm_router,
+                        **data,
+                    }
+                )
+        else:
+            # Check for model-based credential routing
+            (
+                should_route,
+                model_used,
+                original_file_id,
+                credentials,
+            ) = handle_model_based_routing(
+                file_id=file_id,
+                request=request,
+                llm_router=llm_router,
+                data=data,
+                check_file_id_encoding=True,
+            )
+
+            if should_route:
+                # Use model-based routing with credentials from config
+                prepare_data_with_credentials(
+                    data=data,
+                    credentials=credentials,  # type: ignore
+                    file_id=original_file_id,  # Use decoded file ID if from encoded ID
+                )
+
+                data.pop("custom_llm_provider", None)
+                stream_iterator = await litellm.afile_content_streaming(
+                    custom_llm_provider=credentials["custom_llm_provider"],  # type: ignore
+                    **data,
+                )  # type: ignore
+
+                verbose_proxy_logger.debug(
+                    f"Retrieved file content stream using model: {model_used}"
+                    + (
+                        f", file_id: {file_id} -> {original_file_id}"
+                        if original_file_id
+                        else ""
+                    )
+                )
+            else:
+                data.pop("file_id", None)
+                stream_iterator = await litellm.afile_content_streaming(
+                    custom_llm_provider=custom_llm_provider,  # type: ignore
+                    file_id=file_id,
+                    **data,
+                )
+
+        async def _stream_with_logging():
+            try:
+                # Handle both async and sync iterators
+                if hasattr(stream_iterator, '__aiter__'):
+                    async for chunk in stream_iterator: # type: ignore
+                        yield chunk
+                else:
+                    for chunk in stream_iterator:# type: ignore
+                        yield chunk
+                asyncio.create_task(
+                    proxy_logging_obj.update_request_status(
+                        litellm_call_id=data.get("litellm_call_id", ""), status="success"
+                    )
+                )
+            except Exception as e:
+                verbose_proxy_logger.exception(
+                    "File streaming failed mid-transfer - {}".format(str(e))
+                )
+                await proxy_logging_obj.post_call_failure_hook(
+                    user_api_key_dict=user_api_key_dict,
+                    original_exception=e,
+                    request_data=data,
+                )
+                asyncio.create_task(
+                    proxy_logging_obj.update_request_status(
+                        litellm_call_id=data.get("litellm_call_id", ""), status="fail"
+                    )
+                )
+                raise
+
+        fastapi_response.headers.update(
+            ProxyBaseLLMRequestProcessing.get_custom_headers(
+                user_api_key_dict=user_api_key_dict,
+                model_id="",
+                cache_key="",
+                api_base="",
+                version=version,
+                model_region=getattr(user_api_key_dict, "allowed_model_region", ""),
+            )
+        )
+
+        return StreamingResponse(
+            content=_stream_with_logging(),
+            media_type="application/octet-stream",
+            headers={
+                "content-disposition": f'attachment; filename="{file_id}.bin"',
+            },
+        )
+    except Exception as e:
+        if isinstance(e, ProxyException):
+            raise e
+        await proxy_logging_obj.post_call_failure_hook(
+            user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
+        )
+        verbose_proxy_logger.exception(
+            "litellm.proxy.proxy_server.retrieve_file_content(): Exception occured - {}".format(
+                str(e)
+            )
+        )
+        verbose_proxy_logger.debug(traceback.format_exc())
+        if isinstance(e, HTTPException):
+            raise ProxyException(
+                message=getattr(e, "message", str(e.detail)),
+                type=getattr(e, "type", "None"),
+                param=getattr(e, "param", "None"),
+                code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
+            )
+        else:
+            error_msg = f"{str(e)}"
+            raise ProxyException(
+                message=getattr(e, "message", error_msg),
+                type=getattr(e, "type", "None"),
+                param=getattr(e, "param", "None"),
+                code=getattr(e, "status_code", 500),
+            )
+        
 
 
 @router.get(

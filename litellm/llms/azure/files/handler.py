@@ -1,4 +1,5 @@
-from typing import Any, Coroutine, Optional, Union, cast
+
+from typing import Any, AsyncIterator, Coroutine, Iterator, Optional, Union, cast
 
 import httpx
 from openai import AsyncAzureOpenAI, AsyncOpenAI, AzureOpenAI, OpenAI
@@ -142,6 +143,67 @@ class AzureOpenAIFilesAPI(BaseAzureLLM):
         )
 
         return HttpxBinaryResponseContent(response=response.response)
+
+    async def afile_content_streaming(
+        self,
+        file_content_request: FileContentRequest,
+        openai_client: Union[AsyncAzureOpenAI, AsyncOpenAI],
+        chunk_size: int = 1024 * 1024,
+    ) -> AsyncIterator[bytes]:
+        async with openai_client.files.with_streaming_response.content(
+            **file_content_request
+        ) as response:
+            async for chunk in response.iter_bytes(chunk_size=chunk_size):
+                yield chunk
+
+    def file_content_streaming(
+        self,
+        _is_async: bool,
+        file_content_request: FileContentRequest,
+        api_base: Optional[str],
+        api_key: Optional[str],
+        timeout: Union[float, httpx.Timeout],
+        max_retries: Optional[int],
+        api_version: Optional[str] = None,
+        chunk_size: int = 1024 * 1024,
+        client: Optional[
+            Union[AzureOpenAI, AsyncAzureOpenAI, OpenAI, AsyncOpenAI]
+        ] = None,
+        litellm_params: Optional[dict] = None,
+    ) -> Union[Iterator[bytes], AsyncIterator[bytes]]:
+        openai_client: Optional[
+            Union[AzureOpenAI, AsyncAzureOpenAI, OpenAI, AsyncOpenAI]
+        ] = self.get_azure_openai_client(
+            litellm_params=litellm_params or {},
+            api_key=api_key,
+            api_base=api_base,
+            api_version=api_version,
+            client=client,
+            _is_async=_is_async,
+        )
+        if openai_client is None:
+            raise ValueError(
+                "AzureOpenAI client is not initialized. Make sure api_key is passed or OPENAI_API_KEY is set in the environment."
+            )
+
+        if _is_async is True:
+            if not isinstance(openai_client, (AsyncAzureOpenAI, AsyncOpenAI)):
+                raise ValueError(
+                    "AzureOpenAI client is not an instance of AsyncAzureOpenAI. Make sure you passed an AsyncAzureOpenAI client."
+                )
+            return self.afile_content_streaming(
+                file_content_request=file_content_request,
+                openai_client=openai_client,
+                chunk_size=chunk_size,
+            )
+
+        def _stream() -> Iterator[bytes]:
+            with cast(Union[AzureOpenAI, OpenAI], openai_client).files.with_streaming_response.content(
+                **file_content_request
+            ) as response:
+                yield from response.iter_bytes(chunk_size=chunk_size)
+
+        return _stream()
 
     async def aretrieve_file(
         self,

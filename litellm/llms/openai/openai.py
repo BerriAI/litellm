@@ -1751,6 +1751,63 @@ class OpenAIFilesAPI(BaseLLM):
 
         return HttpxBinaryResponseContent(response=response.response)
 
+    async def afile_content_streaming(
+        self,
+        file_content_request: FileContentRequest,
+        openai_client: AsyncOpenAI,
+        chunk_size: int = 1024 * 1024,
+    ) -> AsyncIterator[bytes]:
+        async with openai_client.files.with_streaming_response.content(
+            **file_content_request
+        ) as response:
+            async for chunk in response.iter_bytes(chunk_size=chunk_size):
+                yield chunk
+
+    def file_content_streaming(
+        self,
+        _is_async: bool,
+        file_content_request: FileContentRequest,
+        api_base: str,
+        api_key: Optional[str],
+        timeout: Union[float, httpx.Timeout],
+        max_retries: Optional[int],
+        organization: Optional[str],
+        chunk_size: int = 1024 * 1024,
+        client: Optional[Union[OpenAI, AsyncOpenAI]] = None,
+    ) -> Union[Iterator[bytes], AsyncIterator[bytes]]:
+        openai_client: Optional[Union[OpenAI, AsyncOpenAI]] = self.get_openai_client(
+            api_key=api_key,
+            api_base=api_base,
+            timeout=timeout,
+            max_retries=max_retries,
+            organization=organization,
+            client=client,
+            _is_async=_is_async,
+        )
+        if openai_client is None:
+            raise ValueError(
+                "OpenAI client is not initialized. Make sure api_key is passed or OPENAI_API_KEY is set in the environment."
+            )
+
+        if _is_async is True:
+            if not isinstance(openai_client, AsyncOpenAI):
+                raise ValueError(
+                    "OpenAI client is not an instance of AsyncOpenAI. Make sure you passed an AsyncOpenAI client."
+                )
+            return self.afile_content_streaming(  # type: ignore
+                file_content_request=file_content_request,
+                openai_client=openai_client,
+                chunk_size=chunk_size,
+            )
+
+        def _stream() -> Iterator[bytes]:
+            with cast(OpenAI, openai_client).files.with_streaming_response.content(
+                **file_content_request
+            ) as response:
+                yield from response.iter_bytes(chunk_size=chunk_size)
+
+        return _stream()
+
     async def aretrieve_file(
         self,
         file_id: str,

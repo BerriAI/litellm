@@ -1,7 +1,9 @@
 import json
 import os
 import sys
+from types import SimpleNamespace
 from unittest.mock import ANY
+from typing import Any, Optional, cast
 
 import pytest
 import respx
@@ -15,9 +17,14 @@ sys.path.insert(
 import litellm
 from litellm import Router
 from litellm.proxy._types import LiteLLM_UserTableFiltered, UserAPIKeyAuth
+from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+from litellm.proxy.enterprise.litellm_enterprise.proxy.hooks.managed_files import (
+    _PROXY_LiteLLMManagedFiles,
+)
 from litellm.proxy.hooks import get_proxy_hook
 from litellm.proxy.management_endpoints.internal_user_endpoints import ui_view_users
 from litellm.proxy.proxy_server import app
+from litellm.proxy.openai_files_endpoints.common_utils import encode_file_id_with_model
 from litellm.types.llms.openai import OpenAIFileObject
 
 client = TestClient(app)
@@ -75,6 +82,67 @@ def setup_proxy_logging_object(monkeypatch, llm_router: Router) -> ProxyLogging:
         "litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging_object
     )
     return proxy_logging_object
+
+
+async def _stream_bytes(*chunks: bytes):
+    for chunk in chunks:
+        yield chunk
+
+
+def _build_managed_files_hook(prisma_client=None) -> _PROXY_LiteLLMManagedFiles:
+    return _PROXY_LiteLLMManagedFiles(
+        internal_usage_cache=cast(Any, DualCache(default_in_memory_ttl=1)),
+        prisma_client=cast(Any, prisma_client),
+    )
+
+
+def _setup_streaming_proxy(
+    monkeypatch, llm_router: Router, managed_files_obj
+):
+    import litellm.proxy.proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", llm_router)
+
+    proxy_logging_obj = ProxyLogging(
+        user_api_key_cache=DualCache(default_in_memory_ttl=1)
+    )
+    proxy_logging_obj.proxy_hook_mapping["managed_files"] = managed_files_obj
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging_obj
+    )
+
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        user_id="test-user",
+    )
+
+    return proxy_logging_obj
+
+
+def _patch_managed_file_detection(monkeypatch, is_managed: bool) -> None:
+    monkeypatch.setattr(
+        "litellm.proxy.openai_files_endpoints.files_endpoints._is_base64_encoded_unified_file_id",
+        lambda file_id: file_id if is_managed else False,
+    )
+
+
+def _patch_common_processing(
+    monkeypatch, model: Optional[str] = None
+) -> None:
+    async def fake_common_processing(self, **kwargs):
+        data = {**self.data}
+        if model is not None:
+            data["model"] = model
+        return data, None
+
+    monkeypatch.setattr(
+        ProxyBaseLLMRequestProcessing,
+        "common_processing_pre_call_logic",
+        fake_common_processing,
+    )
 
 
 def test_invalid_purpose(mocker: MockerFixture, monkeypatch, llm_router: Router):
@@ -1552,3 +1620,324 @@ def test_file_invalid_anchor_returns_500(
     )
     assert response.status_code == 500
     assert "created_at" in response.json()["error"]["message"]
+
+
+def test_get_file_content_streaming_uses_storage_backend(
+    mocker: MockerFixture, monkeypatch, llm_router: Router
+):
+    import litellm.proxy.proxy_server as ps
+
+    encoded_file_id = encode_file_id_with_model("file-abc123", "gpt-3.5-turbo")
+    hook = _build_managed_files_hook()
+    proxy_logging_obj = _setup_streaming_proxy(monkeypatch, llm_router, hook)
+    _patch_managed_file_detection(monkeypatch, True)
+    _patch_common_processing(monkeypatch)
+
+    find_first = mocker.AsyncMock(
+        return_value=SimpleNamespace(
+            storage_backend="azure_storage",
+            storage_url="https://storage.example/file.bin",
+        )
+    )
+    hook.prisma_client = SimpleNamespace(
+        db=SimpleNamespace(
+            litellm_managedfiletable=SimpleNamespace(find_first=find_first)
+        )
+    )
+
+    class DummyStorageBackend:
+        async def download_file_streaming(self, storage_url, chunk_size=1024 * 1024):
+            assert storage_url == "https://storage.example/file.bin"
+            yield b"storage-"
+            yield b"stream"
+
+    mocker.patch(
+        "litellm.llms.base_llm.files.storage_backend_factory.get_storage_backend",
+        return_value=DummyStorageBackend(),
+    )
+
+    try:
+        response = client.get(
+            f"/v2/files/{encoded_file_id}/content",
+            headers={"Authorization": "Bearer test-key"},
+        )
+
+        assert response.status_code == 200, response.text
+        assert response.content == b"storage-stream"
+        assert (
+            response.headers["content-disposition"]
+            == f'attachment; filename="{encoded_file_id}.bin"'
+        )
+        find_first.assert_awaited_once_with(where={"unified_file_id": encoded_file_id})
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+def test_get_file_content_streaming_uses_managed_files_hook(
+    mocker: MockerFixture, monkeypatch, llm_router: Router
+):
+    import litellm.proxy.proxy_server as ps
+
+    encoded_file_id = encode_file_id_with_model("file-abc123", "gpt-3.5-turbo")
+    hook = _build_managed_files_hook()
+    _setup_streaming_proxy(monkeypatch, llm_router, hook)
+    _patch_managed_file_detection(monkeypatch, True)
+    _patch_common_processing(monkeypatch)
+
+    hook.get_model_file_id_mapping = mocker.AsyncMock(
+        return_value={
+            encoded_file_id: {"azure-gpt-3-5-turbo": "file-provider-123"}
+        }
+    )
+    stream_mock = mocker.patch(
+        "litellm.afile_content_streaming",
+        new=mocker.AsyncMock(return_value=_stream_bytes(b"managed-", b"hook")),
+    )
+
+    try:
+        response = client.get(
+            f"/v2/files/{encoded_file_id}/content",
+            headers={"Authorization": "Bearer test-key"},
+        )
+
+        assert response.status_code == 200, response.text
+        assert response.content == b"managed-hook"
+        hook.get_model_file_id_mapping.assert_awaited_once_with(
+            [encoded_file_id], None
+        )
+        stream_mock.assert_awaited_once()
+        called_kwargs = stream_mock.await_args.kwargs
+        assert called_kwargs["model"] == "azure-gpt-3-5-turbo"
+        assert called_kwargs["file_id"] == "file-provider-123"
+        assert "llm_router" not in called_kwargs
+        assert "litellm_parent_otel_span" not in called_kwargs
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+def test_get_file_content_streaming_uses_litellm_for_managed_model_branch(
+    mocker: MockerFixture, monkeypatch, llm_router: Router
+):
+    import litellm.proxy.proxy_server as ps
+
+    encoded_file_id = encode_file_id_with_model("file-abc123", "gpt-3.5-turbo")
+    hook = _build_managed_files_hook()
+    _setup_streaming_proxy(monkeypatch, llm_router, hook)
+    _patch_common_processing(monkeypatch, model="gpt-4o")
+
+    stream_mock = mocker.patch(
+        "litellm.afile_content_streaming",
+        new=mocker.AsyncMock(return_value=_stream_bytes(b"model-", b"stream")),
+    )
+
+    try:
+        response = client.get(
+            f"/v2/files/{encoded_file_id}/content",
+            headers={"Authorization": "Bearer test-key"},
+        )
+
+        assert response.status_code == 200, response.text
+        assert response.content == b"model-stream"
+        stream_mock.assert_awaited_once()
+        called_kwargs = stream_mock.await_args.kwargs
+        assert called_kwargs["model"] == "gpt-4o"
+        assert called_kwargs["file_id"] == "file-abc123"
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+def test_get_file_content_streaming_routes_model_request(
+    mocker: MockerFixture, monkeypatch, llm_router: Router
+):
+    import litellm.proxy.proxy_server as ps
+
+    hook = _build_managed_files_hook()
+    _setup_streaming_proxy(monkeypatch, llm_router, hook)
+    _patch_common_processing(monkeypatch)
+
+    handle_routing_mock = mocker.patch(
+        "litellm.proxy.openai_files_endpoints.files_endpoints.handle_model_based_routing",
+        return_value=(
+            True,
+            "routed-model",
+            "file-original-123",
+            {
+                "custom_llm_provider": "azure",
+                "api_key": "routed-api-key",
+            },
+        ),
+    )
+
+    def fake_prepare_data_with_credentials(data, credentials, file_id):
+        data.update(credentials)
+        data["file_id"] = file_id
+
+    mocker.patch(
+        "litellm.proxy.openai_files_endpoints.files_endpoints.prepare_data_with_credentials",
+        side_effect=fake_prepare_data_with_credentials,
+    )
+    stream_mock = mocker.patch(
+        "litellm.afile_content_streaming",
+        new=mocker.AsyncMock(return_value=_stream_bytes(b"routed-", b"stream")),
+    )
+
+    try:
+        response = client.get(
+            "/v2/files/file-plain-123/content",
+            headers={"Authorization": "Bearer test-key"},
+        )
+
+        assert response.status_code == 200, response.text
+        assert response.content == b"routed-stream"
+        handle_routing_mock.assert_called_once()
+        stream_mock.assert_awaited_once()
+        called_kwargs = stream_mock.await_args.kwargs
+        assert called_kwargs["custom_llm_provider"] == "azure"
+        assert called_kwargs["file_id"] == "file-original-123"
+        assert called_kwargs["api_key"] == "routed-api-key"
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+def test_get_file_content_streaming_falls_back_to_provider(
+    mocker: MockerFixture, monkeypatch, llm_router: Router
+):
+    import litellm.proxy.proxy_server as ps
+
+    hook = _build_managed_files_hook()
+    _setup_streaming_proxy(monkeypatch, llm_router, hook)
+    _patch_managed_file_detection(monkeypatch, False)
+    _patch_common_processing(monkeypatch)
+
+    mocker.patch(
+        "litellm.proxy.openai_files_endpoints.files_endpoints.handle_model_based_routing",
+        return_value=(False, None, None, {}),
+    )
+    stream_mock = mocker.patch(
+        "litellm.afile_content_streaming",
+        new=mocker.AsyncMock(return_value=_stream_bytes(b"fallback-", b"stream")),
+    )
+
+    try:
+        response = client.get(
+            "/v2/files/file-plain-456/content",
+            headers={"Authorization": "Bearer test-key"},
+        )
+
+        assert response.status_code == 200, response.text
+        assert response.content == b"fallback-stream"
+        stream_mock.assert_awaited_once()
+        called_kwargs = stream_mock.await_args.kwargs
+        assert called_kwargs["custom_llm_provider"] == "openai"
+        assert called_kwargs["file_id"] == "file-plain-456"
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+def test_get_file_content_streaming_errors_when_managed_files_hook_missing(
+    monkeypatch, llm_router: Router
+):
+    import litellm.proxy.proxy_server as ps
+
+    encoded_file_id = encode_file_id_with_model("file-abc123", "gpt-3.5-turbo")
+    _setup_streaming_proxy(monkeypatch, llm_router, None)
+    _patch_managed_file_detection(monkeypatch, True)
+    _patch_common_processing(monkeypatch)
+
+    try:
+        response = client.get(
+            f"/v2/files/{encoded_file_id}/content",
+            headers={"Authorization": "Bearer test-key"},
+        )
+
+        assert response.status_code == 500
+        assert "Managed files hook not found" in response.text
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+def test_get_file_content_streaming_errors_when_managed_files_hook_is_wrong_type(
+    monkeypatch, llm_router: Router
+):
+    import litellm.proxy.proxy_server as ps
+
+    encoded_file_id = encode_file_id_with_model("file-abc123", "gpt-3.5-turbo")
+    _setup_streaming_proxy(monkeypatch, llm_router, object())
+    _patch_managed_file_detection(monkeypatch, True)
+    _patch_common_processing(monkeypatch)
+
+    try:
+        response = client.get(
+            f"/v2/files/{encoded_file_id}/content",
+            headers={"Authorization": "Bearer test-key"},
+        )
+
+        assert response.status_code == 500
+        assert "Managed files hook is not a BaseFileEndpoints" in response.text
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+def test_get_file_content_streaming_errors_when_router_is_missing(
+    monkeypatch, llm_router: Router
+):
+    import litellm.proxy.proxy_server as ps
+
+    encoded_file_id = encode_file_id_with_model("file-abc123", "gpt-3.5-turbo")
+    hook = _build_managed_files_hook()
+    _setup_streaming_proxy(monkeypatch, llm_router, hook)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None)
+    _patch_managed_file_detection(monkeypatch, True)
+    _patch_common_processing(monkeypatch)
+
+    try:
+        response = client.get(
+            f"/v2/files/{encoded_file_id}/content",
+            headers={"Authorization": "Bearer test-key"},
+        )
+
+        assert response.status_code == 500
+        assert "LLM Router not found" in response.text
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+def test_get_file_content_streaming_errors_when_storage_backend_is_invalid(
+    mocker: MockerFixture, monkeypatch, llm_router: Router
+):
+    import litellm.proxy.proxy_server as ps
+
+    encoded_file_id = encode_file_id_with_model("file-abc123", "gpt-3.5-turbo")
+    hook = _build_managed_files_hook()
+    _setup_streaming_proxy(monkeypatch, llm_router, hook)
+    _patch_managed_file_detection(monkeypatch, True)
+    _patch_common_processing(monkeypatch)
+
+    hook.prisma_client = SimpleNamespace(
+        db=SimpleNamespace(
+            litellm_managedfiletable=SimpleNamespace(
+                find_first=mocker.AsyncMock(
+                    return_value=SimpleNamespace(
+                        storage_backend="bad-backend",
+                        storage_url="https://storage.example/file.bin",
+                    )
+                )
+            )
+        )
+    )
+
+    mocker.patch(
+        "litellm.llms.base_llm.files.storage_backend_factory.get_storage_backend",
+        side_effect=ValueError("backend missing"),
+    )
+
+    try:
+        response = client.get(
+            f"/v2/files/{encoded_file_id}/content",
+            headers={"Authorization": "Bearer test-key"},
+        )
+
+        assert response.status_code == 400
+        assert "Storage backend error" in response.text
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
