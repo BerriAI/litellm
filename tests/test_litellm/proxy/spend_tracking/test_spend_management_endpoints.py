@@ -112,38 +112,30 @@ from litellm.types.utils import BudgetConfig
 
 
 @pytest.mark.asyncio
-async def test_is_admin_view_safe_true(monkeypatch):
-    # Force underlying check to return True
-    monkeypatch.setattr(
-        common_utils,
-        "_user_has_admin_view",
-        lambda user_api_key_dict: True,
-    )
+async def test_is_admin_view_safe_true():
     auth = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin_user")
     assert spend_management_endpoints._is_admin_view_safe(auth) is True
-
-
-@pytest.mark.asyncio
-async def test_is_admin_view_safe_false(monkeypatch):
-    # Force underlying check to return False
-    monkeypatch.setattr(
-        common_utils,
-        "_user_has_admin_view",
-        lambda user_api_key_dict: False,
+    auth_view = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY, user_id="admin_view"
     )
+    assert spend_management_endpoints._is_admin_view_safe(auth_view) is True
+
+
+@pytest.mark.asyncio
+async def test_is_admin_view_safe_false():
     auth = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="user_1")
     assert spend_management_endpoints._is_admin_view_safe(auth) is False
 
 
 @pytest.mark.asyncio
-async def test_is_admin_view_safe_exception(monkeypatch):
+async def test_is_admin_view_safe_exception():
     # Ensure exceptions are swallowed and return False
-    def raise_err(*args, **kwargs):
-        raise RuntimeError("boom")
+    class ExplodingAuth:
+        @property
+        def user_role(self):
+            raise RuntimeError("boom")
 
-    monkeypatch.setattr(common_utils, "_user_has_admin_view", raise_err)
-    auth = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="user_1")
-    assert spend_management_endpoints._is_admin_view_safe(auth) is False
+    assert spend_management_endpoints._is_admin_view_safe(ExplodingAuth()) is False  # type: ignore[arg-type]
 
 
 @pytest.mark.asyncio
