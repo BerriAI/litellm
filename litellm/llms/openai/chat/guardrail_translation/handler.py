@@ -24,7 +24,7 @@ from litellm.llms.base_llm.guardrail_translation.utils import (
     openai_messages_without_system,
 )
 from litellm.main import stream_chunk_builder
-from litellm.types.llms.openai import ChatCompletionToolParam
+from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
 from litellm.types.utils import (
     Choices,
     GenericGuardrailAPIInputs,
@@ -93,10 +93,11 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             if tool_calls_to_check:
                 inputs["tool_calls"] = tool_calls_to_check  # type: ignore
             if messages:
+                msg_list = cast(List[AllMessageValues], messages)
                 inputs["structured_messages"] = (
-                    openai_messages_without_system(messages)
+                    openai_messages_without_system(msg_list)
                     if skip_system
-                    else messages
+                    else msg_list
                 )
             # Pass tools (function definitions) to the guardrail
             tools = data.get("tools")

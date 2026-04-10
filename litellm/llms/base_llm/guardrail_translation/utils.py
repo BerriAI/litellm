@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List
+from typing import Any, List
+
+from litellm.types.llms.openai import AllMessageValues
 
 
 def effective_skip_system_message_for_guardrail(guardrail_to_apply: Any) -> bool:
@@ -13,8 +15,8 @@ def effective_skip_system_message_for_guardrail(guardrail_to_apply: Any) -> bool
 
 
 def openai_messages_without_system(
-    messages: List[Dict[str, Any]],
-) -> List[Dict[str, Any]]:
+    messages: List[AllMessageValues],
+) -> List[AllMessageValues]:
     return [
         m
         for m in messages

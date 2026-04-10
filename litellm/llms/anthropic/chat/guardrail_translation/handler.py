@@ -33,6 +33,7 @@ from litellm.types.llms.anthropic import (
     AnthropicMessagesRequest,
 )
 from litellm.types.llms.openai import (
+    AllMessageValues,
     ChatCompletionToolCallChunk,
     ChatCompletionToolParam,
 )
@@ -89,11 +90,12 @@ class AnthropicMessagesHandler(BaseTranslation):
             anthropic_message_request=cast(AnthropicMessagesRequest, data.copy())
         )
 
-        structured_messages = chat_completion_compatible_request.get("messages", [])
+        structured_messages = cast(
+            List[AllMessageValues],
+            chat_completion_compatible_request.get("messages", []),
+        )
         if skip_system:
-            structured_messages = openai_messages_without_system(
-                list(structured_messages)
-            )
+            structured_messages = openai_messages_without_system(structured_messages)
 
         texts_to_check: List[str] = []
         images_to_check: List[str] = []
