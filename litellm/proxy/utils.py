@@ -2601,6 +2601,7 @@ class PrismaClient:
         key: str,
         value: Any,
         table_name: Literal["users", "keys", "config", "spend"],
+        _transport_reconnect_retry: bool = True,
     ):
         """
         Generic implementation of get data
@@ -2626,6 +2627,21 @@ class PrismaClient:
             return response
         except Exception as e:
             import traceback
+
+            if (
+                _transport_reconnect_retry
+                and PrismaDBExceptionHandler.is_database_transport_error(e)
+            ):
+                did_reconnect = await self.attempt_db_reconnect(
+                    reason="get_generic_data_transport_error",
+                )
+                if did_reconnect:
+                    return await self.get_generic_data(
+                        key=key,
+                        value=value,
+                        table_name=table_name,
+                        _transport_reconnect_retry=False,
+                    )
 
             error_msg = f"LiteLLM Prisma Client Exception get_generic_data: {str(e)}"
             verbose_proxy_logger.error(error_msg)

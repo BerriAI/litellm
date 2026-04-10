@@ -190,3 +190,114 @@ def test_get_projected_spend_over_limit_includes_current_spend(monkeypatch):
     projected_spend, projected_exceeded_date = result
     assert projected_spend == 290.0
     assert projected_exceeded_date == real_datetime.date(2026, 4, 21)
+
+
+@pytest.mark.asyncio
+async def test_get_generic_data_retries_on_transport_error():
+    """
+    Test that get_generic_data retries once after a successful DB reconnect
+    when a transport error (e.g. httpx.ReadError) occurs.
+    """
+    import httpx
+    from unittest.mock import AsyncMock, patch
+
+    from litellm.proxy.utils import PrismaClient
+
+    prisma_client = PrismaClient(
+        database_url="postgresql://user:pass@localhost:5432/db",
+        proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
+    )
+
+    mock_db = MagicMock()
+    # First call raises a transport error, second call succeeds
+    fake_result = MagicMock()
+    fake_result.param_name = "general_settings"
+    mock_find_first = AsyncMock(
+        side_effect=[httpx.ReadError("connection reset"), fake_result]
+    )
+    mock_db.litellm_config.find_first = mock_find_first
+    prisma_client.db = mock_db
+
+    # Mock attempt_db_reconnect to succeed
+    prisma_client.attempt_db_reconnect = AsyncMock(return_value=True)
+
+    result = await prisma_client.get_generic_data(
+        key="param_name",
+        value="general_settings",
+        table_name="config",
+    )
+
+    assert result == fake_result
+    assert mock_find_first.call_count == 2
+    prisma_client.attempt_db_reconnect.assert_awaited_once_with(
+        reason="get_generic_data_transport_error",
+    )
+
+
+@pytest.mark.asyncio
+async def test_get_generic_data_no_retry_on_non_transport_error():
+    """
+    Test that get_generic_data does NOT retry on non-transport errors
+    (e.g. a PrismaError for invalid query).
+    """
+    from unittest.mock import AsyncMock, patch
+
+    from litellm.proxy.utils import PrismaClient
+
+    prisma_client = PrismaClient(
+        database_url="postgresql://user:pass@localhost:5432/db",
+        proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
+    )
+
+    mock_db = MagicMock()
+    mock_find_first = AsyncMock(side_effect=ValueError("some non-transport error"))
+    mock_db.litellm_config.find_first = mock_find_first
+    prisma_client.db = mock_db
+
+    prisma_client.attempt_db_reconnect = AsyncMock(return_value=True)
+
+    with pytest.raises(ValueError, match="some non-transport error"):
+        await prisma_client.get_generic_data(
+            key="param_name",
+            value="general_settings",
+            table_name="config",
+        )
+
+    # Should NOT have attempted reconnect for a non-transport error
+    assert mock_find_first.call_count == 1
+    prisma_client.attempt_db_reconnect.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_get_generic_data_raises_after_failed_reconnect():
+    """
+    Test that get_generic_data raises the original error when reconnect fails.
+    """
+    import httpx
+    from unittest.mock import AsyncMock
+
+    from litellm.proxy.utils import PrismaClient
+
+    prisma_client = PrismaClient(
+        database_url="postgresql://user:pass@localhost:5432/db",
+        proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
+    )
+
+    mock_db = MagicMock()
+    mock_find_first = AsyncMock(side_effect=httpx.ReadError("connection reset"))
+    mock_db.litellm_config.find_first = mock_find_first
+    prisma_client.db = mock_db
+
+    # Mock attempt_db_reconnect to fail
+    prisma_client.attempt_db_reconnect = AsyncMock(return_value=False)
+
+    with pytest.raises(httpx.ReadError):
+        await prisma_client.get_generic_data(
+            key="param_name",
+            value="general_settings",
+            table_name="config",
+        )
+
+    # Should have tried reconnect once but not retried the query
+    assert mock_find_first.call_count == 1
+    prisma_client.attempt_db_reconnect.assert_awaited_once()
