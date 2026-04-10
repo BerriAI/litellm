@@ -151,7 +151,9 @@ def test_google_generate_content_with_system_instruction():
             "/v1beta/models/gemini-2.5-pro:generateContent",
             json={
                 "systemInstruction": system_instruction,
-                "contents": [{"parts": [{"text": "What is your name?"}], "role": "user"}],
+                "contents": [
+                    {"parts": [{"text": "What is your name?"}], "role": "user"}
+                ],
             },
         )
 
