@@ -205,7 +205,7 @@ async def google_count_tokens(request: Request, model_name: str):
             message=getattr(e, "message", str(e)),
             type=getattr(e, "type", "invalid_request_error"),
             param=getattr(e, "param", None),
-            code=getattr(e, "status_code", 400),
+            code=getattr(e, "status_code", 500),
         )
 
     if token_response is not None:
