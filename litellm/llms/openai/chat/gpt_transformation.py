@@ -803,6 +803,18 @@ class OpenAIChatCompletionStreamingHandler(BaseModelResponseIterator):
 
     def chunk_parser(self, chunk: dict) -> ModelResponseStream:
         try:
+            # Handle error responses embedded in SSE streams (e.g. from sglang)
+            if "error" in chunk:
+                error_data = chunk["error"]
+                error_message = error_data.get("message", str(error_data))
+                error_type = error_data.get("type", "")
+                error_code = error_data.get("code", 500)
+                raise litellm.BadRequestError(
+                    message=f"Received error in stream: {error_message}",
+                    model=chunk.get("model", ""),
+                    llm_provider=self.custom_llm_provider,
+                )
+
             choices = chunk.get("choices", [])
             choices = self._map_reasoning_to_reasoning_content(choices)
 
