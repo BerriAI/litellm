@@ -3503,3 +3503,29 @@ def test_advisor_tool_result_preserved_in_response():
     assert len(tool_results) == 1
     assert tool_results[0]["type"] == "advisor_tool_result"
     assert tool_results[0]["tool_use_id"] == "srvtoolu_abc123"
+
+
+def test_messages_path_advisor_beta_header_injected():
+    """advisor-tool-2026-03-01 beta header is auto-injected in /messages path."""
+    config = AnthropicMessagesConfig()
+    headers: dict = {}
+    optional_params = {
+        "tools": [
+            {
+                "type": "advisor_20260301",
+                "name": "advisor",
+                "model": "claude-opus-4-6",
+            }
+        ]
+    }
+    result = config._update_headers_with_anthropic_beta(headers, optional_params)
+    assert "advisor-tool-2026-03-01" in result.get("anthropic-beta", "")
+
+
+def test_messages_path_advisor_beta_header_preserved_when_user_sends_it():
+    """Existing anthropic-beta headers are preserved and advisor header is merged."""
+    config = AnthropicMessagesConfig()
+    headers: dict = {"anthropic-beta": "advisor-tool-2026-03-01"}
+    optional_params: dict = {"tools": []}
+    result = config._update_headers_with_anthropic_beta(headers, optional_params)
+    assert "advisor-tool-2026-03-01" in result.get("anthropic-beta", "")
