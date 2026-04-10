@@ -196,9 +196,7 @@ def _is_model_cost_zero(
     return True
 
 
-def _is_cost_explicitly_configured(
-    model: str, llm_router: "Router"
-) -> bool:
+def _is_cost_explicitly_configured(model: str, llm_router: "Router") -> bool:
     """
     Check if any deployment in the model group has cost fields explicitly
     set in its litellm.model_cost entry.
@@ -215,10 +213,7 @@ def _is_cost_explicitly_configured(
         if model_id is None:
             continue
         raw_entry = litellm.model_cost.get(model_id, {})
-        if (
-            "input_cost_per_token" in raw_entry
-            or "output_cost_per_token" in raw_entry
-        ):
+        if "input_cost_per_token" in raw_entry or "output_cost_per_token" in raw_entry:
             return True
     return False
 
@@ -596,17 +591,12 @@ async def common_checks(  # noqa: PLR0915
         user_object=user_object, route=route, request_body=request_body
     )
 
-    token_team = getattr(valid_token, "team_id", None)
-    token_type: Literal["ui", "api"] = (
-        "ui" if token_team is not None and token_team == "litellm-dashboard" else "api"
-    )
-    _is_route_allowed = _is_allowed_route(
+    _is_route_allowed = _is_api_route_allowed(
         route=route,
-        token_type=token_type,
-        user_obj=user_object,
         request=request,
         request_data=request_body,
         valid_token=valid_token,
+        user_obj=user_object,
     )
 
     # 11. [OPTIONAL] Vector store checks - is the object allowed to access the vector store
@@ -627,31 +617,6 @@ async def common_checks(  # noqa: PLR0915
         )
 
     return True
-
-
-def _is_ui_route(
-    route: str,
-    user_obj: Optional[LiteLLM_UserTable] = None,
-) -> bool:
-    """
-    - Check if the route is a UI used route
-    """
-    # this token is only used for managing the ui
-    allowed_routes = LiteLLMRoutes.ui_routes.value
-    # check if the current route startswith any of the allowed routes
-    if (
-        route is not None
-        and isinstance(route, str)
-        and any(route.startswith(allowed_route) for allowed_route in allowed_routes)
-    ):
-        # Do something if the current route starts with any of the allowed routes
-        return True
-    elif any(
-        RouteChecks._route_matches_pattern(route=route, pattern=allowed_route)
-        for allowed_route in allowed_routes
-    ):
-        return True
-    return False
 
 
 def _get_user_role(
@@ -715,30 +680,6 @@ def _is_user_proxy_admin(user_obj: Optional[LiteLLM_UserTable]):
         return True
 
     return False
-
-
-def _is_allowed_route(
-    route: str,
-    token_type: Literal["ui", "api"],
-    request: Request,
-    request_data: dict,
-    valid_token: Optional[UserAPIKeyAuth],
-    user_obj: Optional[LiteLLM_UserTable] = None,
-) -> bool:
-    """
-    - Route b/w ui token check and normal token check
-    """
-
-    if token_type == "ui" and _is_ui_route(route=route, user_obj=user_obj):
-        return True
-    else:
-        return _is_api_route_allowed(
-            route=route,
-            request=request,
-            request_data=request_data,
-            valid_token=valid_token,
-            user_obj=user_obj,
-        )
 
 
 def _allowed_routes_check(user_route: str, allowed_routes: list) -> bool:
