@@ -14,10 +14,8 @@ sys.path.insert(
 
 import litellm
 from litellm import Router
+from litellm.files.file_content_streaming_handler import FileContentStreamingHandler
 from litellm.files.types import FileContentStreamingResult
-from litellm.proxy.openai_files_endpoints.files_endpoints import (
-    _stream_file_content_with_logging,
-)
 from litellm.proxy._types import LiteLLM_UserTableFiltered, UserAPIKeyAuth
 from litellm.proxy.hooks import get_proxy_hook
 from litellm.proxy.management_endpoints.internal_user_endpoints import ui_view_users
@@ -100,7 +98,7 @@ async def test_stream_file_content_with_logging_closes_inner_iterator_on_early_e
     stream_iterator = MockStreamIterator()
     proxy_logging_obj = AsyncMock()
 
-    generator = _stream_file_content_with_logging(
+    generator = FileContentStreamingHandler.stream_file_content_with_logging(
         stream_iterator=stream_iterator,
         proxy_logging_obj=proxy_logging_obj,
         user_api_key_dict=AsyncMock(),
@@ -1606,7 +1604,7 @@ def test_get_file_content_streams_openai_direct_path(
 
     captured_kwargs = {}
 
-    async def _mock_afile_content_streaming(**kwargs):
+    async def _mock_afile_content(**kwargs):
         captured_kwargs.update(kwargs)
 
         async def _stream():
@@ -1618,11 +1616,7 @@ def test_get_file_content_streams_openai_direct_path(
             headers={"content-length": "11"},
         )
 
-    async def _fail_buffered_path(*args, **kwargs):
-        raise AssertionError("buffered afile_content path should not be used")
-
-    monkeypatch.setattr(litellm, "afile_content_streaming", _mock_afile_content_streaming)
-    monkeypatch.setattr(litellm, "afile_content", _fail_buffered_path)
+    monkeypatch.setattr(litellm, "afile_content", _mock_afile_content)
     monkeypatch.setattr(
         "litellm.proxy.openai_files_endpoints.files_endpoints.handle_model_based_routing",
         lambda **kwargs: (False, None, None, None),
@@ -1648,5 +1642,6 @@ def test_get_file_content_streams_openai_direct_path(
     assert response.headers["content-length"] == "11"
     assert captured_kwargs["custom_llm_provider"] == "openai"
     assert captured_kwargs["file_id"] == "file-abc123"
+    assert captured_kwargs["stream"] is True
     proxy_logging_obj.update_request_status.assert_awaited_once()
     proxy_logging_obj.post_call_failure_hook.assert_not_called()

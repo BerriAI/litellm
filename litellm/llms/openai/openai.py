@@ -1765,11 +1765,18 @@ class OpenAIFilesAPI(BaseLLM):
         headers = dict(response.headers)
 
         async def _stream() -> AsyncIterator[bytes]:
+            exc: Optional[BaseException] = None
             try:
                 async for chunk in response.iter_bytes(chunk_size=chunk_size):
                     yield chunk
+            except BaseException as e:
+                exc = e
+                raise
             finally:
-                await response_cm.__aexit__(None, None, None)
+                if exc is None:
+                    await response_cm.__aexit__(None, None, None)
+                else:
+                    await response_cm.__aexit__(type(exc), exc, exc.__traceback__)
 
         return FileContentStreamingResult(stream_iterator=_stream(), headers=headers)
 
@@ -1817,10 +1824,17 @@ class OpenAIFilesAPI(BaseLLM):
         headers = dict(response.headers)
 
         def _stream() -> Iterator[bytes]:
+            exc: Optional[BaseException] = None
             try:
                 yield from response.iter_bytes(chunk_size=chunk_size)
+            except BaseException as e:
+                exc = e
+                raise
             finally:
-                response_cm.__exit__(None, None, None)
+                if exc is None:
+                    response_cm.__exit__(None, None, None)
+                else:
+                    response_cm.__exit__(type(exc), exc, exc.__traceback__)
 
         return FileContentStreamingResult(stream_iterator=_stream(), headers=headers)
 
