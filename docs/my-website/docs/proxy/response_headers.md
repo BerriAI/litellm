@@ -55,7 +55,9 @@ These headers are useful for clients to understand the current rate limit status
 | `x-litellm-model-id` | string | Unique identifier for the model used | |
 | `x-litellm-model-api-base` | string | Base URL of the API endpoint | ✅ |
 | `x-litellm-version` | string | Version of LiteLLM being used | |
-| `x-litellm-model-group` | string | Model group identifier | |
+| `x-litellm-model-group` | string | Routed **`model_name`** from `model_list` (client-visible alias) | |
+
+This header names the **model group** LiteLLM selected: the **`model_name`** entry in your proxy `model_list`—the same value clients send as `model`. It does **not** mirror **`litellm_params.model`** (the actual provider model id LiteLLM forwards upstream). Use **`x-litellm-model-id`** when you need the deployment identifier.
 
 ## Response headers from LLM providers
 
