@@ -602,6 +602,8 @@ router_settings:
 | MCP_OAUTH2_TOKEN_CACHE_MAX_SIZE | Maximum number of entries in MCP OAuth2 token cache. Default is 200
 | MCP_OAUTH2_TOKEN_CACHE_MIN_TTL | Minimum TTL in seconds for MCP OAuth2 token cache. Default is 10
 | MCP_OAUTH2_TOKEN_EXPIRY_BUFFER_SECONDS | Seconds to subtract from token expiry when computing cache TTL. Default is 60
+| MCP_PER_USER_TOKEN_DEFAULT_TTL | Default TTL in seconds for per-user MCP OAuth tokens stored in Redis. Default is 43200 (12 hours)
+| MCP_PER_USER_TOKEN_EXPIRY_BUFFER_SECONDS | Seconds to subtract from per-user MCP OAuth token expiry when computing Redis TTL. Default is 60
 | MAVVRIK_API_KEY | API key for Mavvrik cost analytics integration
 | MAVVRIK_API_ENDPOINT | Base URL for Mavvrik API endpoint
 | MAVVRIK_CONNECTION_ID | Connection ID for Mavvrik data submission
