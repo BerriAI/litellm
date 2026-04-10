@@ -68,9 +68,9 @@ test.describe("Proxy Admin - Keys", () => {
     const modal = page.locator(".ant-modal:visible");
     await modal.getByRole("button", { name: /Regenerate/ }).click();
 
-    // Success view shows the warning banner and a Copy button for the regenerated key
+    // Success view shows the warning banner and a Copy Key button in the footer
     await expect(modal.getByText("Save it now, you will not see it again")).toBeVisible({ timeout: 10_000 });
-    await expect(modal.getByRole("button", { name: "Copy", exact: true })).toBeVisible({ timeout: 10_000 });
+    await expect(modal.getByRole("button", { name: /Copy Key/ })).toBeVisible({ timeout: 10_000 });
   });
 
   test("Update key TPM and RPM limits", async ({ page }) => {

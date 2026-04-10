@@ -1,13 +1,14 @@
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
-import { SyncOutlined } from "@ant-design/icons";
+import { CheckOutlined, CopyOutlined, SyncOutlined } from "@ant-design/icons";
 import { Alert, Button, Col, Flex, Form, Input, InputNumber, Modal, Row, Space, Typography } from "antd";
 import { add } from "date-fns";
 import { useEffect, useState } from "react";
+import { CopyToClipboard } from "react-copy-to-clipboard";
 import { KeyResponse } from "../key_team_helpers/key_list";
 import NotificationManager from "../molecules/notifications_manager";
 import { regenerateKeyCall } from "../networking";
 
-const { Text, Paragraph } = Typography;
+const { Text } = Typography;
 
 interface RegenerateKeyModalProps {
   selectedToken: KeyResponse | null;
@@ -23,6 +24,7 @@ export function RegenerateKeyModal({ selectedToken, visible, onClose, onKeyUpdat
   const [regenerateFormData, setRegenerateFormData] = useState<any>(null);
   const [newExpiryTime, setNewExpiryTime] = useState<string | null>(null);
   const [isRegenerating, setIsRegenerating] = useState(false);
+  const [copied, setCopied] = useState(false);
 
   // Track whether this is the user's own authentication key
   const [isOwnKey, setIsOwnKey] = useState<boolean>(false);
@@ -57,6 +59,7 @@ export function RegenerateKeyModal({ selectedToken, visible, onClose, onKeyUpdat
       setIsRegenerating(false);
       setIsOwnKey(false);
       setCurrentAccessToken(null);
+      setCopied(false);
       form.resetFields();
     }
   }, [visible, form]);
@@ -143,8 +146,13 @@ export function RegenerateKeyModal({ selectedToken, visible, onClose, onKeyUpdat
     setIsRegenerating(false);
     setIsOwnKey(false);
     setCurrentAccessToken(null);
+    setCopied(false);
     form.resetFields();
     onClose();
+  };
+
+  const handleCopyKey = () => {
+    setCopied(true);
   };
 
   return (
@@ -153,12 +161,18 @@ export function RegenerateKeyModal({ selectedToken, visible, onClose, onKeyUpdat
       open={visible}
       onCancel={handleClose}
       width={520}
+      maskClosable={false}
       footer={
         regeneratedKey
           ? [
-              <Button key="close" onClick={handleClose}>
-                Close
-              </Button>,
+              <Space key="footer-actions">
+                <Button onClick={handleClose}>Close</Button>
+                <CopyToClipboard text={regeneratedKey} onCopy={handleCopyKey}>
+                  <Button type="primary" icon={copied ? <CheckOutlined /> : <CopyOutlined />}>
+                    {copied ? "Copied" : "Copy Key"}
+                  </Button>
+                </CopyToClipboard>
+              </Space>,
             ]
           : [
               <Space key="footer-actions">
@@ -181,16 +195,25 @@ export function RegenerateKeyModal({ selectedToken, visible, onClose, onKeyUpdat
             <Text>{selectedToken?.key_alias || "No alias set"}</Text>
           </Flex>
 
-          <Paragraph
-            code
-            copyable={{
-              text: regeneratedKey,
-              onCopy: () => NotificationManager.success("Virtual Key copied to clipboard"),
-            }}
-            style={{ marginBottom: 0, wordBreak: "break-all" }}
-          >
-            {regeneratedKey}
-          </Paragraph>
+          <Flex vertical gap={6}>
+            <Text type="secondary" style={{ fontSize: 12 }}>
+              Virtual Key
+            </Text>
+            <div
+              style={{
+                background: "#f5f5f5",
+                border: "1px solid #e8e8e8",
+                borderRadius: 6,
+                padding: "14px 16px",
+                fontFamily: "SFMono-Regular, Consolas, 'Liberation Mono', Menlo, monospace",
+                fontSize: 16,
+                wordBreak: "break-all",
+                color: "#262626",
+              }}
+            >
+              {regeneratedKey}
+            </div>
+          </Flex>
         </Flex>
       ) : (
         <Form
