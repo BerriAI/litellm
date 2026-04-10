@@ -54,9 +54,15 @@ from litellm.types.router import (
     Deployment,
     DeploymentTypedDict,
     LiteLLMParamsTypedDict,
-    ModelInfo,
     updateDeployment,
 )
+
+# NOTE: `ModelInfo` is imported inline inside the two functions that use it
+# (`patch_model` and `_update_team_model_in_db`) to break a module-level cyclic
+# import. `litellm.types.router` re-imports this module before `ModelInfo` is
+# defined, so a top-level `from litellm.types.router import ModelInfo` is
+# unsafe at load time. CodeQL flagged this as a "module-level cyclic import"
+# in PR #25413; the inline pattern is the original safe form.
 from litellm.utils import get_utc_datetime
 
 router = APIRouter()
@@ -192,6 +198,9 @@ async def patch_model(
         proxy_config,
         store_model_in_db,
     )
+
+    # Inline import to avoid module-level cyclic import (CodeQL #25413).
+    from litellm.types.router import ModelInfo
 
     try:
         _is_db_mode = prisma_client is not None and store_model_in_db is True
@@ -543,6 +552,9 @@ async def _update_team_model_in_db(
     """
     # Validate team_id if present in patch_data
     from litellm.proxy.proxy_server import premium_user
+
+    # Inline import to avoid module-level cyclic import (CodeQL #25413).
+    from litellm.types.router import ModelInfo
 
     await ModelManagementAuthChecks.allow_team_model_action(
         model_params=patch_data,
