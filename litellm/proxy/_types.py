@@ -1139,6 +1139,13 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
     byok_description: List[str] = Field(default_factory=list)
     byok_api_key_help_url: Optional[str] = None
     source_url: Optional[str] = None
+    # OAuth token validation rules: key-value pairs that must match fields in the
+    # OAuth token response. Tokens that don't match are rejected with HTTP 403.
+    # Example: {"enterprise_id": "E04COREWEAVE"}
+    token_validation: Optional[Dict[str, Any]] = None
+    # How long to cache per-user OAuth tokens in Redis (seconds).
+    # Defaults to the token's own expires_in, or 12 hours if absent.
+    token_storage_ttl_seconds: Optional[int] = None
     # BYOM submission fields — set by the endpoint, not by the caller.
     # Any caller-provided values are silently overridden before persistence.
     approval_status: Optional[str] = Field(
@@ -1220,6 +1227,8 @@ class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
     byok_description: List[str] = Field(default_factory=list)
     byok_api_key_help_url: Optional[str] = None
     source_url: Optional[str] = None
+    token_validation: Optional[Dict[str, Any]] = None
+    token_storage_ttl_seconds: Optional[int] = None
 
     @model_validator(mode="before")
     @classmethod
