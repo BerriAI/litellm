@@ -1,6 +1,6 @@
 [project]
 name = "litellm"
-version = "1.83.5"
+version = "1.83.6"
 description = "Library to easily interface with LLM API providers"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -238,7 +238,7 @@ source-exclude = [
 profile = "black"
 
 [tool.commitizen]
-version = "1.83.5"
+version = "1.83.6"
 version_files = [
     "pyproject.toml:^version",
 ]
