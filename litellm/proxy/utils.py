@@ -2235,6 +2235,32 @@ class ProxyLogging:
         async for chunk in current_response:
             yield chunk
 
+        # Fire deferred logging AFTER all guardrail end-of-stream blocks
+        # completed.  unified_guardrail writes guardrail_information during
+        # its end-of-stream block (inside current_response), so by the time
+        # we reach this point the metadata is fully populated.
+        ProxyLogging._fire_deferred_stream_logging(request_data)
+
+    @staticmethod
+    def _fire_deferred_stream_logging(request_data: dict) -> None:
+        """
+        Fire the deferred streaming logging callback after the full streaming
+        pipeline (including guardrail end-of-stream blocks) has completed.
+
+        CSW.__anext__ stores the callback and args on logging_obj instead of
+        scheduling via create_task (which would race with unified_guardrail's
+        end-of-stream block).  This method retrieves and fires them.
+        """
+        logging_obj = request_data.get("litellm_logging_obj")
+        if logging_obj is None:
+            return
+        _deferred_cb = getattr(logging_obj, "_on_deferred_stream_complete", None)
+        _args = getattr(logging_obj, "_deferred_stream_complete_args", None)
+        if _deferred_cb is not None and _args is not None:
+            logging_obj._on_deferred_stream_complete = None
+            logging_obj._deferred_stream_complete_args = None
+            asyncio.create_task(_deferred_cb(*_args))
+
     def _init_response_taking_too_long_task(self, data: Optional[dict] = None):
         """
         Initialize the response taking too long task if user is using slack alerting
@@ -2978,6 +3004,7 @@ class PrismaClient:
                             b.model_max_budget as litellm_budget_table_model_max_budget,
                             b.soft_budget as litellm_budget_table_soft_budget,
                             o.metadata as organization_metadata,
+                            o.organization_alias as organization_alias,
                             b2.max_budget as organization_max_budget,
                             b2.tpm_limit as organization_tpm_limit,
                             b2.rpm_limit as organization_rpm_limit
@@ -3267,7 +3294,7 @@ class PrismaClient:
             if update_key_values is not None:
                 update_key_values = self.jsonify_object(data=update_key_values)
             if token is not None:
-                print_verbose(f"token: {token}")
+                print_verbose(f"token: [set={token is not None}]")
                 # check if plain text or hash
                 token = _hash_token_if_needed(token=token)
                 db_data["token"] = token
@@ -4801,6 +4828,9 @@ async def update_spend(  # noqa: PLR0915
 
     Triggered every minute.
 
+    NOTE: This job now skips tag spend updates, which are handled by a separate
+    scheduler job (update_daily_tag_spend) at a longer interval to reduce contention.
+
     Requires:
     user_id_list: dict,
     keys_list: list,
@@ -4831,6 +4861,46 @@ async def update_spend(  # noqa: PLR0915
             db_writer_client=db_writer_client,
             proxy_logging_obj=proxy_logging_obj,
         )
+
+
+async def update_daily_tag_spend(
+    prisma_client: PrismaClient,
+    proxy_logging_obj: ProxyLogging,
+):
+    """
+    Separate scheduler job to commit daily tag spend updates.
+    
+    Runs at a longer interval (2.3x default) than the main update_spend job
+    to reduce query contention for DailyTagSpend table.
+    
+    This is called by a dedicated scheduler job and does NOT process:
+    - Regular spend updates (user, key, team, org)
+    - End-user spend
+    - Agent spend
+    - Spend logs
+    
+    Only processes tag spend transactions from the daily_tag_spend_update_queue.
+    
+    Args:
+        prisma_client: PrismaClient instance
+        proxy_logging_obj: ProxyLogging instance for error handling
+    """
+    n_retry_times = 3
+    try:
+        if proxy_logging_obj.db_spend_update_writer.redis_update_buffer._should_commit_spend_updates_to_redis():
+            await proxy_logging_obj.db_spend_update_writer._commit_daily_tag_spend_to_db_with_redis(
+                prisma_client=prisma_client,
+                n_retry_times=n_retry_times,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+        else:
+            await proxy_logging_obj.db_spend_update_writer._commit_daily_tag_spend_to_db(
+                prisma_client=prisma_client,
+                n_retry_times=n_retry_times,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+    except Exception as e:
+        verbose_proxy_logger.error(f"Error updating daily tag spend: {e}")
 
 
 async def update_spend_logs_job(
@@ -5224,11 +5294,12 @@ def handle_exception_on_proxy(e: Exception) -> ProxyException:
         )
     elif isinstance(e, ProxyException):
         return e
+    _status_code = getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR)
     return ProxyException(
-        message="Internal Server Error, " + str(e),
+        message=str(e),
         type=ProxyErrorTypes.internal_server_error,
         param=getattr(e, "param", "None"),
-        code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        code=_status_code,
     )
 
 

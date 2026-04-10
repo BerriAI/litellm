@@ -843,7 +843,7 @@ describe("OldTeams - access_group_ids in team create", () => {
         }),
       );
     });
-  }, { timeout: 30000 });
+  });
 });
 
 describe("OldTeams - models dropdown options", () => {

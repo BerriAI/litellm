@@ -23,6 +23,7 @@ import {
 } from "@/components/networking";
 import NotificationsManager from "@/components/molecules/notifications_manager";
 import { extractErrorMessage } from "@/utils/errorUtils";
+import { getSecureItem, setSecureItem } from "@/utils/secureStorage";
 
 export type UserMcpOAuthStatus = "idle" | "authorizing" | "exchanging" | "success" | "error";
 
@@ -79,22 +80,11 @@ const genChallenge = async (verifier: string) => {
 };
 
 const setStorage = (key: string, value: string) => {
-  try {
-    // Use sessionStorage only — do not write to localStorage.
-    // The flow state may contain the LiteLLM access token; writing it to
-    // localStorage would persist it across browser sessions and make it
-    // readable by any injected script (XSS).
-    // codeql[js/clear-text-storage-of-sensitive-data]
-    window.sessionStorage.setItem(key, value);
-  } catch (_) {}
+  setSecureItem(key, value);
 };
 
 const getStorage = (key: string): string | null => {
-  try {
-    return window.sessionStorage.getItem(key);
-  } catch (_) {
-    return null;
-  }
+  return getSecureItem(key);
 };
 
 const clearStorage = (...keys: string[]) => {
