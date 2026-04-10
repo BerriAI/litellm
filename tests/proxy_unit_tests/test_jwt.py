@@ -715,7 +715,7 @@ async def aaaatest_user_token_output(
     assert team_result.user_id == user_id
 
 
-@pytest.mark.parametrize("admin_allowed_routes", [None, ["info_routes"]])
+@pytest.mark.parametrize("admin_allowed_routes", [None, ["ui_routes"]])
 @pytest.mark.parametrize("audience", [None, "litellm-proxy"])
 @pytest.mark.asyncio
 async def test_allowed_routes_admin(
