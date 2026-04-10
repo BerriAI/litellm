@@ -43,6 +43,7 @@ class FileContentStreamingResponse:
             if logging_obj is not None and getattr(logging_obj, "start_time", None)
             else datetime.datetime.now()
         )
+        self._sync_hidden_params()
 
     def __iter__(self) -> "FileContentStreamingResponse":
         if not hasattr(self.stream_iterator, "__next__"):
