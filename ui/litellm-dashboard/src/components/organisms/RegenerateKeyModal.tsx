@@ -145,7 +145,6 @@ export function RegenerateKeyModal({ selectedToken, visible, onClose, onKeyUpdat
   const handleClose = () => {
     setRegeneratedKey(null);
     setIsRegenerating(false);
-    setIsOwnKey(false);
     setCurrentAccessToken(null);
     setCopied(false);
     form.resetFields();
