@@ -152,7 +152,7 @@ describe("RegenerateKeyModal", () => {
     expect(screen.queryByRole("button", { name: /Regenerate/ })).not.toBeInTheDocument();
   });
 
-  it("should show Copy Virtual Key button after successful regeneration", async () => {
+  it("should show Copy Key button after successful regeneration", async () => {
     const user = userEvent.setup();
     mockRegenerateKeyCall.mockResolvedValue({
       key: "sk-new-regenerated-key",
@@ -163,7 +163,41 @@ describe("RegenerateKeyModal", () => {
     await user.click(screen.getByRole("button", { name: /Regenerate/ }));
 
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: /Copy/ })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: /Copy Key/ })).toBeInTheDocument();
+    });
+  });
+
+  it("should swap the Copy Key button to 'Copied' after clicking it", async () => {
+    const user = userEvent.setup();
+    mockRegenerateKeyCall.mockResolvedValue({
+      key: "sk-new-regenerated-key",
+      token: "new-token-hash",
+    });
+
+    renderWithProviders(<RegenerateKeyModal {...defaultProps} />);
+    await user.click(screen.getByRole("button", { name: /Regenerate/ }));
+
+    const copyButton = await screen.findByRole("button", { name: /Copy Key/ });
+    await user.click(copyButton);
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /Copied/ })).toBeInTheDocument();
+    });
+    expect(screen.queryByRole("button", { name: /Copy Key/ })).not.toBeInTheDocument();
+  });
+
+  it("should display the 'Virtual Key' label above the key in the success view", async () => {
+    const user = userEvent.setup();
+    mockRegenerateKeyCall.mockResolvedValue({
+      key: "sk-new-regenerated-key",
+      token: "new-token-hash",
+    });
+
+    renderWithProviders(<RegenerateKeyModal {...defaultProps} />);
+    await user.click(screen.getByRole("button", { name: /Regenerate/ }));
+
+    await waitFor(() => {
+      expect(screen.getByText("Virtual Key")).toBeInTheDocument();
     });
   });
 
