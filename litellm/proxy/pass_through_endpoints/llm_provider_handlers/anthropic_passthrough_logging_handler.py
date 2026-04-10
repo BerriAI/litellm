@@ -143,7 +143,7 @@ class AnthropicPassthroughLoggingHandler:
             )
 
             kwargs["response_cost"] = response_cost
-            kwargs["model"] = model
+            kwargs["model"] = model_for_cost
             passthrough_logging_payload: Optional[PassthroughStandardLoggingPayload] = (  # type: ignore
                 kwargs.get("passthrough_logging_payload")
             )
@@ -168,9 +168,9 @@ class AnthropicPassthroughLoggingHandler:
             litellm_model_response.model = model
             logging_obj.model_call_details["model"] = model
             if not logging_obj.model_call_details.get("custom_llm_provider"):
-                logging_obj.model_call_details[
-                    "custom_llm_provider"
-                ] = litellm.LlmProviders.ANTHROPIC.value
+                logging_obj.model_call_details["custom_llm_provider"] = (
+                    litellm.LlmProviders.ANTHROPIC.value
+                )
             return kwargs
         except Exception as e:
             verbose_proxy_logger.exception(
