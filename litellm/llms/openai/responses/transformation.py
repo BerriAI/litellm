@@ -348,8 +348,15 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         return False
 
     def supports_native_websocket(self) -> bool:
-        """OpenAI supports native WebSocket for Responses API"""
-        return True
+        """Use managed HTTP-streaming path for Responses API WebSocket mode.
+
+        OpenAI's wss://api.openai.com/v1/responses endpoint exists but does not
+        reliably stream events back in response to response.create messages in all
+        deployment contexts. The ManagedResponsesWebSocketHandler makes a normal
+        HTTP streaming call to /v1/responses and forwards the events over the
+        WebSocket, which is proven to work.
+        """
+        return False
 
     #########################################################
     ########## DELETE RESPONSE API TRANSFORMATION ##############
