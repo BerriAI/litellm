@@ -1619,6 +1619,22 @@ if MCP_AVAILABLE:
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail={"error": f"MCP Server {server_id} not found"},
             )
+
+        # Enforce token validation rules configured on the server.
+        # The caller must pass token_response_metadata with any fields
+        # that the server requires (e.g. enterprise_id from Slack's token response).
+        token_validation = getattr(mcp_server, "token_validation", None)
+        if token_validation and isinstance(token_validation, dict) and token_validation:
+            from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+                _validate_token_response,
+            )
+
+            _validate_token_response(
+                token_response=payload.token_response_metadata or {},
+                validation_rules=token_validation,
+                server_id=server_id,
+            )
+
         user_id = user_api_key_dict.user_id or ""
         if not user_id:
             raise HTTPException(
