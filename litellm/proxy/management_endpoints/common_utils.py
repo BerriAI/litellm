@@ -2,6 +2,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 from litellm._logging import verbose_proxy_logger
 from litellm.caching import DualCache
+from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 from litellm.proxy._types import (
     KeyRequestBase,
     LiteLLM_ManagementEndpoint_MetadataFields,
@@ -356,6 +357,7 @@ async def _upsert_budget_and_membership(
     rpm_limit: Optional[int] = None,
     allowed_models: Optional[List[str]] = None,
     team_default_budget_id: Optional[str] = None,
+    budget_duration: Optional[str] = None,
 ):
     """
     Helper function to Create/Update or Delete the budget within the team membership
@@ -374,8 +376,9 @@ async def _upsert_budget_and_membership(
             existing_budget_id matches this, we clone-on-write so editing one
             member's budget does not mutate the shared default (and therefore
             every other member who still points at it).
+        budget_duration: Budget reset period for the team member (e.g. '30d', '1mo')
 
-    If max_budget, tpm_limit, rpm_limit, and allowed_models are all None, the user's budget is removed from the team membership.
+    If max_budget, tpm_limit, rpm_limit, allowed_models, and budget_duration are all None, the user's budget is removed from the team membership.
     If any of these values exist, a budget is updated or created and linked to the team membership.
     """
     if (
@@ -383,6 +386,7 @@ async def _upsert_budget_and_membership(
         and tpm_limit is None
         and rpm_limit is None
         and allowed_models is None
+        and budget_duration is None
     ):
         # disconnect the budget since all limits are None
         await tx.litellm_teammembership.update(
@@ -411,6 +415,11 @@ async def _upsert_budget_and_membership(
             update_data["rpm_limit"] = rpm_limit
         if allowed_models is not None:
             update_data["allowed_models"] = allowed_models
+        if budget_duration is not None:
+            update_data["budget_duration"] = budget_duration
+            update_data["budget_reset_at"] = get_budget_reset_time(
+                budget_duration=budget_duration
+            )
         await tx.litellm_budgettable.update(
             where={"budget_id": existing_budget_id},
             data=update_data,
@@ -459,6 +468,12 @@ async def _upsert_budget_and_membership(
         create_data["rpm_limit"] = rpm_limit
     if allowed_models is not None:
         create_data["allowed_models"] = allowed_models
+    if budget_duration is not None:
+        create_data["budget_duration"] = budget_duration
+
+    bd = create_data.get("budget_duration")
+    if bd is not None:
+        create_data["budget_reset_at"] = get_budget_reset_time(budget_duration=bd)
 
     new_budget = await tx.litellm_budgettable.create(
         data=create_data,
