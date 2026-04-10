@@ -7,6 +7,7 @@ model_list:
 
 general_settings:
   master_key: sk-1234
+  database_url: "sqlite:///litellm_dev.db"
 
 litellm_settings:
   drop_params: True
