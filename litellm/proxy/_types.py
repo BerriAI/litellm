@@ -3775,6 +3775,12 @@ class TeamMemberUpdateRequest(TeamMemberDeleteRequest):
     rpm_limit: Optional[int] = Field(
         default=None, description="Requests per minute limit for this team member"
     )
+    budget_duration: Optional[str] = Field(
+        default=None,
+        description="Budget reset period for this team member (e.g. '30d', '1mo'). "
+        "Pass null to explicitly set a lifetime cap. "
+        "If omitted, inherits the team's team_member_budget_duration.",
+    )
 
 
 class TeamMemberUpdateResponse(MemberUpdateResponse):
@@ -3782,6 +3788,7 @@ class TeamMemberUpdateResponse(MemberUpdateResponse):
     max_budget_in_team: Optional[float] = None
     tpm_limit: Optional[int] = None
     rpm_limit: Optional[int] = None
+    budget_duration: Optional[str] = None
 
 
 class TeamModelAddRequest(BaseModel):
