@@ -1,5 +1,5 @@
 from __future__ import annotations
-from typing import Any, Callable, Dict, Final, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, Final, List, Optional, Sequence, Tuple, Union
 from datetime import datetime, timedelta, timezone
 from threading import Lock
 from pathlib import Path
@@ -7,9 +7,11 @@ from dataclasses import dataclass
 import json
 import os
 import tempfile
+import httpx
 
-from litellm import sap_service_key
-from litellm.llms.custom_httpx.http_handler import _get_httpx_client
+from litellm.llms.custom_httpx.http_handler import _get_httpx_client, HTTPHandler
+from litellm._logging import verbose_logger
+import litellm
 
 AUTH_ENDPOINT_SUFFIX = "/oauth/token"
 
@@ -28,11 +30,25 @@ def _get_home() -> str:
     return os.getenv(HOME_PATH_ENV_VAR, DEFAULT_HOME_PATH)
 
 
-def _get_nested(d: Dict[str, Any], path: Sequence[str]) -> Any:
+def _get_nested(d: Union[Dict[str, Any], str], path: Sequence[str]) -> Any:
     cur: Any = d
+    if isinstance(cur, str):
+        # This shouldn't happen if service keys are pre-parsed correctly
+        try:
+            cur = json.loads(cur)
+        except json.JSONDecodeError:
+            verbose_logger.warning(
+                "SAP service key or VCAP service is a string but not valid JSON."
+            )
+            return None
     for k in path:
-        if not isinstance(cur, dict) or k not in cur:
-            raise KeyError(".".join(path))
+        if not isinstance(cur, dict):
+            verbose_logger.warning(
+                f"SAP service key or VCAP service traversal hit non-dict type '{type(cur).__name__}' at key '{k}'."
+            )
+            return None
+        if k not in cur:
+            return None
         cur = cur[k]
     return cur
 
@@ -47,6 +63,13 @@ def _load_json_env(var_name: str) -> Optional[Dict[str, Any]]:
         return None
 
 
+def _str_or_none(value) -> Optional[str]:
+    try:
+        return str(value) if value is not None else None
+    except Exception:
+        return None
+
+
 def _load_vcap() -> Dict[str, Any]:
     return _load_json_env(VCAP_SERVICES_ENV_VAR) or {}
 
@@ -57,6 +80,12 @@ def _get_vcap_service(label: str) -> Optional[Dict[str, Any]]:
             if svc.get("label") == label:
                 return svc
     return None
+
+
+@dataclass
+class Source:
+    name: str
+    get: Callable[[CredentialsValue], Optional[str]]
 
 
 @dataclass(frozen=True)
@@ -82,7 +111,6 @@ CREDENTIAL_VALUES: Final[List[CredentialsValue]] = [
         transform_fn=lambda url: url.rstrip("/")
         + ("" if url.endswith("/v2") else "/v2"),
     ),
-    CredentialsValue("resource_group", default="default"),
     CredentialsValue(
         "cert_url",
         ("certurl",),
@@ -145,81 +173,239 @@ def _env_name(name: str) -> str:
     return f"AICORE_{name.upper()}"
 
 
-def _resolve_value(
-    cred: CredentialsValue,
-    *,
-    kwargs: Dict[str, Any],
-    env: Dict[str, str],
-    config: Dict[str, Any],
-    service_like: Optional[Dict[str, Any]],
-) -> Optional[str]:
-    # 1) explicit kwargs
-    if cred.name in kwargs and kwargs[cred.name] is not None:
-        return kwargs[cred.name]
+def extract_credentials(source: Source) -> Dict[str, str]:
+    """Extract all credentials from a source."""
+    credentials = {}
+    for cv in CREDENTIAL_VALUES:
+        value = source.get(cv)
+        if value is not None:
+            credentials[cv.name] = cv.transform_fn(value) if cv.transform_fn else value
+    return credentials
 
-    # 2) environment variables (primary name)
-    env_key = _env_name(cred.name)
-    if env_key in env and env[env_key] is not None:
-        return env[env_key]
 
-    # 3) config file (accept both prefixed and plain keys)
-    for key in (env_key, cred.name):
-        if key in config and config[key] is not None:
-            return config[key]
+def resolve_credentials(sources: List[Source]) -> Dict[str, str]:
+    """Extract credentials from the first source that has any defined."""
+    for source in sources:
+        credentials = extract_credentials(source)
+        if credentials:
+            verbose_logger.debug(f"Resolved SAP credentials from source {source.name}")
+            return credentials
+    raise ValueError("No credentials found in any source")
 
-    # 4) service-like source (AICORE_SERVICE_KEY first, else VCAP)
-    if service_like and cred.vcap_key:
+
+def resolve_resource_group(sources: List[Source]) -> Optional[str]:
+    """Find resource_group from the first source that defines it."""
+    rg_cred = CredentialsValue("resource_group", default="default")
+    for source in sources:
+        value = source.get(rg_cred)
+        if value is not None:
+            verbose_logger.debug(
+                f"Resolved GEN AI Hub resource_group from source {source.name}"
+            )
+            return value
+    return rg_cred.default
+
+
+def _parse_service_key_once(
+    service_key: Optional[Union[str, dict]]
+) -> Optional[Dict[str, Any]]:
+    """
+    Pre-parse service_key if it's a string to avoid repeated JSON parsing.
+
+    Returns None if parsing fails (other credential sources may still work).
+    """
+    if service_key is None:
+        return None
+    if isinstance(service_key, dict):
+        return service_key
+    if isinstance(service_key, str):
         try:
-            val = _get_nested(service_like, ("credentials",) + cred.vcap_key)
-            if val is not None:
-                return val
-        except KeyError:
-            pass
+            return json.loads(service_key)
+        except json.JSONDecodeError:
+            verbose_logger.warning(
+                "SAP service key is a string but not valid JSON. Skipping this source."
+            )
+            return None
+    verbose_logger.warning(
+        f"SAP service key has unexpected type '{type(service_key).__name__}'. Expected str or dict. Ignoring."
+    )
+    return None
 
-    # 5) default
-    return cred.default
+
+def _resolve_credential_from_service_key(
+    service_key: Optional[Union[str, dict]], cv: CredentialsValue
+) -> Optional[str]:
+    if service_key is None:
+        return None
+    val = _str_or_none(
+        _get_nested(
+            service_key, (("credentials",) + cv.vcap_key) if cv.vcap_key else (cv.name,)
+        )
+    )
+    if val is None:
+        return _str_or_none(
+            _get_nested(service_key, cv.vcap_key if cv.vcap_key else (cv.name,))
+        )
+    return val
 
 
 def fetch_credentials(
-    service_key: Optional[str] = None, profile: Optional[str] = None, **kwargs
+    service_key: Optional[Union[str, dict]] = None,
+    profile: Optional[str] = None,
+    **kwargs,
 ) -> Dict[str, str]:
     """
-    Resolution order per key:
+    Resolution order (first-source-wins):
+
+    Sources are checked in this order:
       kwargs
+      > service key
       > env (AICORE_<NAME>)
       > config (AICORE_<NAME> or plain <name>)
-      > service-like source from JSON in $AICORE_SERVICE_KEY (same structure as a VCAP service object)
-        falling back to service entry in $VCAP_SERVICES with label 'aicore'
+      > vcap service key
       > default
+
+    Important:
+      - Credentials are extracted from the FIRST source that provides any credential value.
+      - Values are NOT merged per key across sources. Except resource_group, which is merged.
+
+    Warning:
+      - This function does NOT validate the returned credentials just parsed it from the sources.
+      - Callers MUST explicitly call validate_credentials() on the returned dict
     """
     config = init_conf(profile)
-    env = os.environ  # snapshot for testability
-    service_like = None
 
-    if not config:
-        # Prefer AICORE_SERVICE_KEY if present; otherwise fall back to the VCAP service.
-        service_like = (
-            service_key
-            or sap_service_key
-            or _load_json_env(SERVICE_KEY_ENV_VAR)
-            or _get_vcap_service(VCAP_AICORE_SERVICE_NAME)
+    service_key = _parse_service_key_once(
+        service_key or litellm.sap_service_key or os.environ.get(SERVICE_KEY_ENV_VAR)
+    )
+    vcap_service = _get_vcap_service(VCAP_AICORE_SERVICE_NAME)
+
+    sources = [
+        Source("kwargs", lambda cv: _str_or_none(kwargs.get(cv.name))),
+        Source(
+            "service key",
+            lambda cv: _resolve_credential_from_service_key(service_key, cv),
+        ),
+        Source(
+            "environment variables",
+            lambda cv: _str_or_none(os.environ.get(f"AICORE_{cv.name.upper()}")),
+        ),
+        Source(
+            "config file",
+            lambda cv: _str_or_none(
+                config.get(f"AICORE_{cv.name.upper()}")
+                if config.get(f"AICORE_{cv.name.upper()}") is not None
+                else config.get(cv.name)
+            ),
+        ),
+        Source(
+            "VCAP service",
+            lambda cv: (
+                _str_or_none(
+                    _get_nested(
+                        vcap_service,
+                        (("credentials",) + cv.vcap_key) if cv.vcap_key else (cv.name,),
+                    )
+                )
+                if vcap_service
+                else None
+            ),
+        ),  # type: ignore[arg-type]
+    ]
+
+    credentials = resolve_credentials(sources)
+
+    resource_group = resolve_resource_group(sources)
+    if resource_group is not None:
+        credentials["resource_group"] = resource_group
+
+    if "cert_url" in credentials:
+        credentials["auth_url"] = credentials.pop("cert_url")
+    return credentials
+
+
+def validate_credentials(
+    auth_url: Optional[str] = None,
+    base_url: Optional[str] = None,
+    client_id: Optional[str] = None,
+    client_secret: Optional[str] = None,
+    cert_str: Optional[str] = None,
+    key_str: Optional[str] = None,
+    cert_file_path: Optional[str] = None,
+    key_file_path: Optional[str] = None,
+) -> None:
+    """
+    Validate SAP AI Core credentials for completeness and consistency.
+
+    Args:
+        auth_url: OAuth2 token endpoint URL (required)
+        base_url: SAP AI Core API base URL (required)
+        client_id: OAuth2 client ID (required)
+        client_secret: OAuth2 client secret (for secret-based auth)
+        cert_str: PEM-encoded certificate string (for cert-based auth)
+        key_str: PEM-encoded private key string (for cert-based auth)
+        cert_file_path: Path to certificate file (for file-based cert auth)
+        key_file_path: Path to private key file (for file-based cert auth)
+
+    Raises:
+        ValueError: If required fields are missing or authentication mode is ambiguous.
+
+    Note:
+        - This function does NOT validate resource_group (resolved separately).
+        - Exactly one authentication method must be provided:
+          * client_secret, OR
+          * (cert_str AND key_str), OR
+          * (cert_file_path AND key_file_path)
+    """
+    if not auth_url or not client_id or not base_url:
+        raise ValueError(
+            "SAP AI Core credentials not found. "
+            "Please provide credentials by setting appropriate environment variables "
+            "(e.g. AICORE_CLIENT_ID, AICORE_CLIENT_SECRET, etc.)"
         )
 
-    out: Dict[str, str] = {}
-    for cred in CREDENTIAL_VALUES:
-        value = _resolve_value(cred, kwargs=kwargs, env=env, config=config, service_like=service_like)  # type: ignore
-        if value is None:
-            continue
-        if cred.transform_fn:
-            value = cred.transform_fn(value)
-        out[cred.name] = value
-    if "cert_url" in out.keys():
-        out["auth_url"] = out.pop("cert_url")
-    return out
+    modes = [
+        bool(client_secret),
+        bool(cert_str) and bool(key_str),
+        bool(cert_file_path) and bool(key_file_path),
+    ]
+    if sum(bool(m) for m in modes) != 1:
+        raise ValueError(
+            "SAP AI Core credentials are incomplete. "
+            "Invalid credentials: provide exactly one of client_secret, "
+            "(cert_str & key_str), or (cert_file_path & key_file_path)."
+        )
+
+
+def _request_token(
+    client_id: str, auth_url: str, timeout: float, cert_pair=None, client_secret=None
+) -> tuple[str, datetime]:
+    data = {"grant_type": "client_credentials", "client_id": client_id}
+    if client_secret:
+        data["client_secret"] = client_secret
+
+    resp: Optional[httpx.Response] = None
+    try:
+        if cert_pair:
+            with httpx.Client(cert=cert_pair) as raw_client:
+                handler = HTTPHandler(client=raw_client)
+                resp = handler.post(auth_url, data=data, timeout=timeout)  # type: ignore[arg-type]
+                payload = resp.json()
+        else:
+            handler = _get_httpx_client()
+            resp = handler.post(auth_url, data=data, timeout=timeout)  # type: ignore[arg-type]
+            payload = resp.json()
+        access_token = payload["access_token"]
+        expires_in = int(payload.get("expires_in", 3600))
+        expiry_date = datetime.now(timezone.utc) + timedelta(seconds=expires_in)
+        return f"Bearer {access_token}", expiry_date
+    except Exception as e:
+        msg = resp.text if resp is not None else getattr(e, "text", str(e))
+        raise RuntimeError(f"Token request failed: {msg}") from e
 
 
 def get_token_creator(
-    service_key: Optional[str] = None,
+    service_key: Optional[Union[str, dict]] = None,
     profile: Optional[str] = None,
     *,
     timeout: float = 30.0,
@@ -237,7 +423,7 @@ def get_token_creator(
 
     Args:
         profile: Optional AICore profile name
-        timeout: HTTP request timeout in seconds (default 30s)
+        timeout: Timeout for HTTP requests
         expiry_buffer_minutes: Refresh the token this many minutes before expiry
         overrides: Any explicit credential overrides (client_id, client_secret, etc.)
 
@@ -251,6 +437,7 @@ def get_token_creator(
     )
 
     auth_url = credentials.get("auth_url")
+    base_url = credentials.get("base_url")
     client_id = credentials.get("client_id")
     client_secret = credentials.get("client_secret")
     cert_str = credentials.get("cert_str")
@@ -259,49 +446,30 @@ def get_token_creator(
     key_file_path = credentials.get("key_file_path")
 
     # Sanity check
-    if not auth_url or not client_id:
-        raise ValueError(
-            "fetch_credentials did not return valid 'auth_url' or 'client_id'"
-        )
-
-    modes = [
-        client_secret is not None,
-        (cert_str is not None and key_str is not None),
-        (cert_file_path is not None and key_file_path is not None),
-    ]
-    if sum(bool(m) for m in modes) != 1:
-        raise ValueError(
-            "Invalid credentials: provide exactly one of client_secret, "
-            "(cert_str & key_str), or (cert_file_path & key_file_path)."
-        )
+    validate_credentials(
+        auth_url,
+        base_url,
+        client_id,
+        client_secret,
+        cert_str,
+        key_str,
+        cert_file_path,
+        key_file_path,
+    )
 
     lock = Lock()
     token: Optional[str] = None
     token_expiry: Optional[datetime] = None
 
-    def _request_token(cert_pair=None) -> tuple[str, datetime]:
-        data = {"grant_type": "client_credentials", "client_id": client_id}
-        if client_secret:
-            data["client_secret"] = client_secret
-
-        client = _get_httpx_client()
-        # with httpx.Client(cert=cert_pair, timeout=timeout) as client:
-        resp = client.post(auth_url, data=data)
-        try:
-            resp.raise_for_status()
-            payload = resp.json()
-            access_token = payload["access_token"]
-            expires_in = int(payload.get("expires_in", 3600))
-            expiry_date = datetime.now(timezone.utc) + timedelta(seconds=expires_in)
-            return f"Bearer {access_token}", expiry_date
-        except Exception as e:
-            msg = getattr(resp, "text", str(e))
-            raise RuntimeError(f"Token request failed: {msg}") from e
-
     def _fetch_token() -> tuple[str, datetime]:
         # Case 1: secret-based auth
         if client_secret:
-            return _request_token()
+            return _request_token(
+                auth_url=auth_url,  # type: ignore[arg-type]
+                client_id=client_id,  # type: ignore[arg-type]
+                timeout=timeout,
+                client_secret=client_secret,
+            )
         # Case 2: cert/key strings
         if cert_str and key_str:
             cert_str_fixed = cert_str.replace("\\n", "\n")
@@ -313,9 +481,24 @@ def get_token_creator(
                     f.write(cert_str_fixed)
                 with open(key_path, "w") as f:
                     f.write(key_str_fixed)
-                return _request_token(cert_pair=(cert_path, key_path))
+                return _request_token(
+                    auth_url=auth_url,  # type: ignore[arg-type]
+                    client_id=client_id,  # type: ignore[arg-type]
+                    timeout=timeout,
+                    cert_pair=(cert_path, key_path),
+                )
         # Case 3: file-based cert/key
-        return _request_token(cert_pair=(cert_file_path, key_file_path))
+        if cert_file_path is not None and key_file_path is not None:
+            return _request_token(
+                auth_url=auth_url,  # type: ignore[arg-type]
+                client_id=client_id,  # type: ignore[arg-type]
+                timeout=timeout,
+                cert_pair=(cert_file_path, key_file_path),
+            )
+        # Defensive guard: should never reach here due to validate_credentials()
+        raise ValueError(
+            "Invalid authentication configuration: no valid credentials found. "
+        )
 
     def get_token() -> str:
         nonlocal token, token_expiry

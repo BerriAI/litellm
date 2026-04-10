@@ -1,6 +1,6 @@
 import React from "react";
 import { Button as TremorButton } from "@tremor/react";
-import { Input } from "antd";
+import { Input, Select } from "antd";
 import { ArrowLeftIcon, SaveIcon, ClockIcon } from "lucide-react";
 import PromptCodeSnippets from "./PromptCodeSnippets";
 
@@ -20,6 +20,8 @@ interface PromptEditorHeaderProps {
     PROXY_BASE_URL?: string;
     LITELLM_UI_API_DOC_BASE_URL?: string | null;
   };
+  environment: string;
+  onEnvironmentChange: (env: string) => void;
 }
 
 const PromptEditorHeader: React.FC<PromptEditorHeaderProps> = ({
@@ -35,6 +37,8 @@ const PromptEditorHeader: React.FC<PromptEditorHeaderProps> = ({
   promptVariables = {},
   accessToken,
   proxySettings,
+  environment,
+  onEnvironmentChange,
 }) => {
   return (
     <div className="bg-white border-b border-gray-200 px-6 py-3 flex items-center justify-between">
@@ -53,6 +57,17 @@ const PromptEditorHeader: React.FC<PromptEditorHeaderProps> = ({
             {version}
           </span>
         )}
+        <Select
+          value={environment}
+          onChange={onEnvironmentChange}
+          style={{ width: 140 }}
+          size="small"
+          options={[
+            { label: "Development", value: "development" },
+            { label: "Staging", value: "staging" },
+            { label: "Production", value: "production" },
+          ]}
+        />
         <span className="px-2 py-0.5 text-xs bg-gray-100 text-gray-600 rounded">Draft</span>
         <span className="text-xs text-gray-400">Unsaved changes</span>
       </div>

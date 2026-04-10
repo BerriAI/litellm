@@ -3,7 +3,7 @@ import { ChatCompletionMessageParam } from "openai/resources/chat/completions";
 import { TokenUsage } from "../chat_ui/ResponseMetrics";
 import { VectorStoreSearchResponse } from "../chat_ui/types";
 import { getProxyBaseUrl } from "@/components/networking";
-import { MCPServer, type MCPEvent } from "../../mcp_tools/types";
+import { MCPServer, MCPToolset, type MCPEvent } from "../../mcp_tools/types";
 
 export async function makeOpenAIChatCompletionRequest(
   chatHistory: { role: string; content: string | any[] }[],
@@ -30,6 +30,7 @@ export async function makeOpenAIChatCompletionRequest(
   mcpServerToolRestrictions?: Record<string, string[]>,
   onMCPEvent?: (event: MCPEvent) => void,
   mockTestFallbacks?: boolean,
+  mcpToolsets?: MCPToolset[],
 ) {
   // base url should be the current base_url
   const isLocal = process.env.NODE_ENV === "development";
@@ -82,19 +83,31 @@ export async function makeOpenAIChatCompletionRequest(
           require_approval: "never",
         });
       } else {
-        // Individual servers selected - create one entry per server
+        // Individual servers/toolsets selected - create one entry per item
         selectedMCPServers.forEach((serverId) => {
-          const server = mcpServers?.find((s) => s.server_id === serverId);
-          const serverName = server?.alias || server?.server_name || serverId;
-          const allowedTools = mcpServerToolRestrictions?.[serverId] || [];
+          if (serverId.startsWith("toolset:")) {
+            const toolsetId = serverId.slice("toolset:".length);
+            const toolset = mcpToolsets?.find((t) => t.toolset_id === toolsetId);
+            const toolsetName = toolset?.toolset_name || toolsetId;
+            tools.push({
+              type: "mcp",
+              server_label: toolsetName,
+              server_url: `litellm_proxy/mcp/${encodeURIComponent(toolsetName)}`,
+              require_approval: "never",
+            });
+          } else {
+            const server = mcpServers?.find((s) => s.server_id === serverId);
+            const serverName = server?.alias || server?.server_name || serverId;
+            const allowedTools = mcpServerToolRestrictions?.[serverId] || [];
 
-          tools.push({
-            type: "mcp",
-            server_label: "litellm",
-            server_url: `litellm_proxy/mcp/${serverName}`,
-            require_approval: "never",
-            ...(allowedTools.length > 0 ? { allowed_tools: allowedTools } : {}),
-          });
+            tools.push({
+              type: "mcp",
+              server_label: "litellm",
+              server_url: `litellm_proxy/mcp/${serverName}`,
+              require_approval: "never",
+              ...(allowedTools.length > 0 ? { allowed_tools: allowedTools } : {}),
+            });
+          }
         });
       }
     }

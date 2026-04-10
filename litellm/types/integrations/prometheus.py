@@ -1,7 +1,7 @@
 import re
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Dict, List, Literal, Optional, Tuple
+from typing import Any, ClassVar, Dict, List, Literal, Optional, Tuple
 
 from pydantic import BaseModel, Field, field_validator
 from typing_extensions import Annotated
@@ -665,6 +665,24 @@ class PrometheusMetricLabels:
     litellm_cache_misses_metric = _cache_metric_labels
     litellm_cached_tokens_metric = _cache_metric_labels
 
+    # Metrics whose emission paths supply org context (used by get_labels)
+    _org_label_metrics: ClassVar[frozenset] = frozenset(
+        {
+            "litellm_llm_api_latency_metric",
+            "litellm_llm_api_time_to_first_token_metric",
+            "litellm_request_total_latency_metric",
+            "litellm_request_queue_time_seconds",
+            "litellm_proxy_total_requests_metric",
+            "litellm_proxy_failed_requests_metric",
+            "litellm_deployment_latency_per_output_token",
+            "litellm_requests_metric",
+            "litellm_spend_metric",
+            "litellm_input_tokens_metric",
+            "litellm_total_tokens_metric",
+            "litellm_output_tokens_metric",
+        }
+    )
+
     # Managed batch metrics
     _batch_user_labels = [
         UserAPIKeyLabelNames.v1_LITELLM_MODEL_NAME.value,
@@ -730,6 +748,14 @@ class PrometheusMetricLabels:
             and UserAPIKeyLabelNames.STREAM.value not in default_labels
         ):
             custom_labels.append(UserAPIKeyLabelNames.STREAM.value)
+
+        if label_name in PrometheusMetricLabels._org_label_metrics:
+            for label in [
+                UserAPIKeyLabelNames.ORG_ID.value,
+                UserAPIKeyLabelNames.ORG_ALIAS.value,
+            ]:
+                if label not in default_labels and label not in custom_labels:
+                    custom_labels.append(label)
 
         return default_labels + custom_labels
 

@@ -38,6 +38,102 @@ class FakeAnthropicMessagesStreamIterator:
         self.chunks = self._create_streaming_chunks()
         self.current_index = 0
 
+    def _create_content_block_chunks(
+        self, block_dict: Dict[str, Any], index: int
+    ) -> List[bytes]:
+        """Build SSE chunks for a single content block."""
+        chunks = []
+        block_type = block_dict.get("type")
+
+        if block_type == "text":
+            content_block_start = {
+                "type": "content_block_start",
+                "index": index,
+                "content_block": {"type": "text", "text": ""},
+            }
+            chunks.append(
+                f"event: content_block_start\ndata: {json.dumps(content_block_start)}\n\n".encode()
+            )
+            text = block_dict.get("text", "")
+            content_block_delta = {
+                "type": "content_block_delta",
+                "index": index,
+                "delta": {"type": "text_delta", "text": text},
+            }
+            chunks.append(
+                f"event: content_block_delta\ndata: {json.dumps(content_block_delta)}\n\n".encode()
+            )
+
+        elif block_type == "thinking":
+            content_block_start = {
+                "type": "content_block_start",
+                "index": index,
+                "content_block": {"type": "thinking", "thinking": "", "signature": ""},
+            }
+            chunks.append(
+                f"event: content_block_start\ndata: {json.dumps(content_block_start)}\n\n".encode()
+            )
+            thinking_text = block_dict.get("thinking", "")
+            if thinking_text:
+                content_block_delta = {
+                    "type": "content_block_delta",
+                    "index": index,
+                    "delta": {"type": "thinking_delta", "thinking": thinking_text},
+                }
+                chunks.append(
+                    f"event: content_block_delta\ndata: {json.dumps(content_block_delta)}\n\n".encode()
+                )
+            signature = block_dict.get("signature", "")
+            if signature:
+                signature_delta = {
+                    "type": "content_block_delta",
+                    "index": index,
+                    "delta": {"type": "signature_delta", "signature": signature},
+                }
+                chunks.append(
+                    f"event: content_block_delta\ndata: {json.dumps(signature_delta)}\n\n".encode()
+                )
+
+        elif block_type == "redacted_thinking":
+            content_block_start = {
+                "type": "content_block_start",
+                "index": index,
+                "content_block": {"type": "redacted_thinking"},
+            }
+            chunks.append(
+                f"event: content_block_start\ndata: {json.dumps(content_block_start)}\n\n".encode()
+            )
+
+        elif block_type == "tool_use":
+            content_block_start = {
+                "type": "content_block_start",
+                "index": index,
+                "content_block": {
+                    "type": "tool_use",
+                    "id": block_dict.get("id"),
+                    "name": block_dict.get("name"),
+                    "input": {},
+                },
+            }
+            chunks.append(
+                f"event: content_block_start\ndata: {json.dumps(content_block_start)}\n\n".encode()
+            )
+            input_data = block_dict.get("input", {})
+            content_block_delta = {
+                "type": "content_block_delta",
+                "index": index,
+                "delta": {"type": "input_json_delta", "partial_json": json.dumps(input_data)},
+            }
+            chunks.append(
+                f"event: content_block_delta\ndata: {json.dumps(content_block_delta)}\n\n".encode()
+            )
+
+        content_block_stop = {"type": "content_block_stop", "index": index}
+        chunks.append(
+            f"event: content_block_stop\ndata: {json.dumps(content_block_stop)}\n\n".encode()
+        )
+        return chunks
+
     def _create_streaming_chunks(self) -> List[bytes]:
         """Convert the non-streaming response to streaming chunks"""
         chunks = []
@@ -69,152 +165,34 @@ class FakeAnthropicMessagesStreamIterator:
 
         # 2-4. For each content block, send start/delta/stop events
         content_blocks = response_dict.get("content", [])
-        if content_blocks:
-            for index, block in enumerate(content_blocks):
-                # Cast block to dict for easier access
-                block_dict = cast(Dict[str, Any], block)
-                block_type = block_dict.get("type")
-
-                if block_type == "text":
-                    # content_block_start
-                    content_block_start = {
-                        "type": "content_block_start",
-                        "index": index,
-                        "content_block": {"type": "text", "text": ""},
-                    }
-                    chunks.append(
-                        f"event: content_block_start\ndata: {json.dumps(content_block_start)}\n\n".encode()
-                    )
-
-                    # content_block_delta (send full text as one delta for simplicity)
-                    text = block_dict.get("text", "")
-                    content_block_delta = {
-                        "type": "content_block_delta",
-                        "index": index,
-                        "delta": {"type": "text_delta", "text": text},
-                    }
-                    chunks.append(
-                        f"event: content_block_delta\ndata: {json.dumps(content_block_delta)}\n\n".encode()
-                    )
-
-                    # content_block_stop
-                    content_block_stop = {"type": "content_block_stop", "index": index}
-                    chunks.append(
-                        f"event: content_block_stop\ndata: {json.dumps(content_block_stop)}\n\n".encode()
-                    )
-
-                elif block_type == "thinking":
-                    # content_block_start for thinking
-                    content_block_start = {
-                        "type": "content_block_start",
-                        "index": index,
-                        "content_block": {
-                            "type": "thinking",
-                            "thinking": "",
-                            "signature": "",
-                        },
-                    }
-                    chunks.append(
-                        f"event: content_block_start\ndata: {json.dumps(content_block_start)}\n\n".encode()
-                    )
-
-                    # content_block_delta for thinking text
-                    thinking_text = block_dict.get("thinking", "")
-                    if thinking_text:
-                        content_block_delta = {
-                            "type": "content_block_delta",
-                            "index": index,
-                            "delta": {
-                                "type": "thinking_delta",
-                                "thinking": thinking_text,
-                            },
-                        }
-                        chunks.append(
-                            f"event: content_block_delta\ndata: {json.dumps(content_block_delta)}\n\n".encode()
-                        )
-
-                    # content_block_delta for signature (if present)
-                    signature = block_dict.get("signature", "")
-                    if signature:
-                        signature_delta = {
-                            "type": "content_block_delta",
-                            "index": index,
-                            "delta": {
-                                "type": "signature_delta",
-                                "signature": signature,
-                            },
-                        }
-                        chunks.append(
-                            f"event: content_block_delta\ndata: {json.dumps(signature_delta)}\n\n".encode()
-                        )
-
-                    # content_block_stop
-                    content_block_stop = {"type": "content_block_stop", "index": index}
-                    chunks.append(
-                        f"event: content_block_stop\ndata: {json.dumps(content_block_stop)}\n\n".encode()
-                    )
-
-                elif block_type == "redacted_thinking":
-                    # content_block_start for redacted_thinking
-                    content_block_start = {
-                        "type": "content_block_start",
-                        "index": index,
-                        "content_block": {"type": "redacted_thinking"},
-                    }
-                    chunks.append(
-                        f"event: content_block_start\ndata: {json.dumps(content_block_start)}\n\n".encode()
-                    )
-
-                    # content_block_stop (no delta for redacted thinking)
-                    content_block_stop = {"type": "content_block_stop", "index": index}
-                    chunks.append(
-                        f"event: content_block_stop\ndata: {json.dumps(content_block_stop)}\n\n".encode()
-                    )
-
-                elif block_type == "tool_use":
-                    # content_block_start
-                    content_block_start = {
-                        "type": "content_block_start",
-                        "index": index,
-                        "content_block": {
-                            "type": "tool_use",
-                            "id": block_dict.get("id"),
-                            "name": block_dict.get("name"),
-                            "input": {},
-                        },
-                    }
-                    chunks.append(
-                        f"event: content_block_start\ndata: {json.dumps(content_block_start)}\n\n".encode()
-                    )
-
-                    # content_block_delta (send input as JSON delta)
-                    input_data = block_dict.get("input", {})
-                    content_block_delta = {
-                        "type": "content_block_delta",
-                        "index": index,
-                        "delta": {
-                            "type": "input_json_delta",
-                            "partial_json": json.dumps(input_data),
-                        },
-                    }
-                    chunks.append(
-                        f"event: content_block_delta\ndata: {json.dumps(content_block_delta)}\n\n".encode()
-                    )
-
-                    # content_block_stop
-                    content_block_stop = {"type": "content_block_stop", "index": index}
-                    chunks.append(
-                        f"event: content_block_stop\ndata: {json.dumps(content_block_stop)}\n\n".encode()
-                    )
+        for index, block in enumerate(content_blocks):
+            block_dict = cast(Dict[str, Any], block)
+            chunks.extend(self._create_content_block_chunks(block_dict, index))
 
         # 5. message_delta event (with final usage and stop_reason)
+        # Include cache usage fields so clients that only read message_delta
+        # (like Claude Code's SDK) see the full input token breakdown.
+        delta_usage: Dict[str, Any] = {
+            "output_tokens": usage.get("output_tokens", 0) if usage else 0,
+        }
+        if usage:
+            if usage.get("input_tokens") is not None:
+                delta_usage["input_tokens"] = usage["input_tokens"]
+            if usage.get("cache_creation_input_tokens") is not None:
+                delta_usage["cache_creation_input_tokens"] = usage[
+                    "cache_creation_input_tokens"
+                ]
+            if usage.get("cache_read_input_tokens") is not None:
+                delta_usage["cache_read_input_tokens"] = usage[
+                    "cache_read_input_tokens"
+                ]
         message_delta = {
             "type": "message_delta",
             "delta": {
                 "stop_reason": response_dict.get("stop_reason"),
                 "stop_sequence": response_dict.get("stop_sequence"),
             },
-            "usage": {"output_tokens": usage.get("output_tokens", 0) if usage else 0},
+            "usage": delta_usage,
         }
         chunks.append(
             f"event: message_delta\ndata: {json.dumps(message_delta)}\n\n".encode()

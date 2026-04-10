@@ -385,6 +385,7 @@ async def test_get_mcp_tools_from_manager_enables_list_tools_logging(monkeypatch
     fake_manager = types.SimpleNamespace(
         get_allowed_mcp_servers=AsyncMock(return_value=[]),
         get_mcp_servers_from_ids=MagicMock(return_value=[]),
+        get_mcp_server_by_name=MagicMock(return_value=None),
     )
     monkeypatch.setattr(
         "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",

@@ -112,6 +112,14 @@ class _ProxyDBLogger(CustomLogger):
                     _litellm_logging_obj, "litellm_trace_id", None
                 )
 
+        # Use the actual request start time from the logging object so that
+        # failed requests record the real duration instead of 0.
+        actual_start_time = datetime.now()
+        if _litellm_logging_obj is not None:
+            obj_start = getattr(_litellm_logging_obj, "start_time", None)
+            if obj_start is not None:
+                actual_start_time = obj_start
+
         await proxy_logging_obj.db_spend_update_writer.update_database(
             token=user_api_key_dict.api_key,
             response_cost=0.0,
@@ -120,7 +128,7 @@ class _ProxyDBLogger(CustomLogger):
             team_id=user_api_key_dict.team_id,
             kwargs=request_data,
             completion_response=original_exception,
-            start_time=datetime.now(),
+            start_time=actual_start_time,
             end_time=datetime.now(),
             org_id=user_api_key_dict.org_id,
         )
