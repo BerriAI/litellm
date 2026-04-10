@@ -1,7 +1,8 @@
 import os
 import sys
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
+import httpx
 import pytest
 
 sys.path.insert(
@@ -288,3 +289,104 @@ async def test_async_anthropic_messages_handler_header_priority():
         assert captured_headers["X-Forwarded-Only"] == "keep"
         assert captured_headers["X-Extra-Only"] == "also-keep"
         assert captured_headers["X-Provider-Only"] == "keep-this-too"
+
+
+def _http_401_error() -> httpx.HTTPStatusError:
+    req = httpx.Request("POST", "https://aiplatform.googleapis.com/v1/fake")
+    resp = httpx.Response(401, request=req, json={"error": {"code": 401}})
+    return httpx.HTTPStatusError("unauthorized", request=req, response=resp)
+
+
+def test_invalidate_vertex_on_anthropic_http_error_skips_non_vertex_provider():
+    """401 must not call Vertex cache invalidation when custom_llm_provider is not vertex_ai."""
+    handler = BaseLLMHTTPHandler()
+    mock_config = MagicMock()
+    handler._invalidate_vertex_credentials_on_anthropic_http_error(
+        e=_http_401_error(),
+        anthropic_messages_provider_config=mock_config,
+        litellm_params=GenericLiteLLMParams(),
+        custom_llm_provider="anthropic",
+    )
+    mock_config.invalidate_credentials.assert_not_called()
+
+
+def test_invalidate_vertex_on_anthropic_http_error_skips_non_vertex_base_config():
+    """Non-VertexBase provider configs are ignored even for vertex_ai (defensive)."""
+    handler = BaseLLMHTTPHandler()
+    mock_config = Mock(spec=["invalidate_credentials"])
+    handler._invalidate_vertex_credentials_on_anthropic_http_error(
+        e=_http_401_error(),
+        anthropic_messages_provider_config=mock_config,
+        litellm_params=GenericLiteLLMParams(
+            vertex_project="proj-x",
+            vertex_credentials={"type": "service_account"},
+        ),
+        custom_llm_provider="vertex_ai",
+    )
+    mock_config.invalidate_credentials.assert_not_called()
+
+
+def test_invalidate_vertex_on_anthropic_http_error_skips_non_401():
+    handler = BaseLLMHTTPHandler()
+    from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.experimental_pass_through.transformation import (
+        VertexAIPartnerModelsAnthropicMessagesConfig,
+    )
+
+    config = VertexAIPartnerModelsAnthropicMessagesConfig()
+    with patch.object(config, "invalidate_credentials") as mock_inv:
+        req = httpx.Request("POST", "https://example.com")
+        resp = httpx.Response(429, request=req)
+        err = httpx.HTTPStatusError("rate limit", request=req, response=resp)
+        handler._invalidate_vertex_credentials_on_anthropic_http_error(
+            e=err,
+            anthropic_messages_provider_config=config,
+            litellm_params=GenericLiteLLMParams(vertex_project="p"),
+            custom_llm_provider="vertex_ai",
+        )
+        mock_inv.assert_not_called()
+
+
+def test_invalidate_vertex_on_anthropic_http_error_calls_invalidate_on_401():
+    """Vertex Anthropic + httpx 401 → invalidate_credentials with safe_get params."""
+    handler = BaseLLMHTTPHandler()
+    from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.experimental_pass_through.transformation import (
+        VertexAIPartnerModelsAnthropicMessagesConfig,
+    )
+
+    creds = {"type": "service_account", "project_id": "unit-test-proj"}
+    config = VertexAIPartnerModelsAnthropicMessagesConfig()
+    with patch.object(config, "invalidate_credentials") as mock_inv:
+        handler._invalidate_vertex_credentials_on_anthropic_http_error(
+            e=_http_401_error(),
+            anthropic_messages_provider_config=config,
+            litellm_params=GenericLiteLLMParams(
+                vertex_project="unit-test-proj",
+                vertex_location="global",
+                vertex_credentials=creds,
+            ),
+            custom_llm_provider="vertex_ai",
+        )
+    mock_inv.assert_called_once_with(
+        credentials=creds,
+        project_id="unit-test-proj",
+    )
+
+
+def test_invalidate_vertex_on_anthropic_http_error_401_via_status_code_attr():
+    """Some transports attach status_code without being httpx.HTTPStatusError."""
+    handler = BaseLLMHTTPHandler()
+    from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.experimental_pass_through.transformation import (
+        VertexAIPartnerModelsAnthropicMessagesConfig,
+    )
+
+    config = VertexAIPartnerModelsAnthropicMessagesConfig()
+    err = Exception("wrapped")
+    setattr(err, "status_code", 401)
+    with patch.object(config, "invalidate_credentials") as mock_inv:
+        handler._invalidate_vertex_credentials_on_anthropic_http_error(
+            e=err,
+            anthropic_messages_provider_config=config,
+            litellm_params=GenericLiteLLMParams(vertex_project="p2"),
+            custom_llm_provider="vertex_ai",
+        )
+    mock_inv.assert_called_once_with(credentials=None, project_id="p2")

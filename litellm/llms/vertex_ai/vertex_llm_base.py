@@ -557,6 +557,40 @@ class VertexBase:
             # Re-raise the original error for better context
             raise error
 
+    def invalidate_credentials(
+        self,
+        credentials: Optional[VERTEX_CREDENTIALS_TYPES],
+        project_id: Optional[str],
+    ) -> None:
+        """
+        Drop cached OAuth credentials for this (credentials, project_id) pair.
+
+        Used when the Vertex / Google API returns 401 so the next get_access_token()
+        reloads credentials instead of reusing an access token Google rejects while
+        google-auth may still consider non-expired (see #23512).
+        """
+        cache_credentials = (
+            json.dumps(credentials) if isinstance(credentials, dict) else credentials
+        )
+        key = (cache_credentials, project_id)
+        if key in self._credentials_project_mapping:
+            verbose_logger.debug(
+                "Invalidating cached Vertex credentials for project_id=%s (API 401)",
+                project_id,
+            )
+            del self._credentials_project_mapping[key]
+        # get_access_token may register (creds, None) then duplicate under resolved
+        # project_id; clear the None entry when invalidating a resolved project.
+        if project_id is not None:
+            none_key = (cache_credentials, None)
+            if none_key in self._credentials_project_mapping:
+                verbose_logger.debug(
+                    "Invalidating cached Vertex credentials for project_id=None "
+                    "(paired with resolved project_id=%s)",
+                    project_id,
+                )
+                del self._credentials_project_mapping[none_key]
+
     def get_access_token(
         self,
         credentials: Optional[VERTEX_CREDENTIALS_TYPES],
