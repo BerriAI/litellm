@@ -328,6 +328,8 @@ model LiteLLM_MCPServerTable {
   submitted_at     DateTime?
   reviewed_at      DateTime?
   review_notes     String?
+  token_validation            Json?
+  token_storage_ttl_seconds   Int?
 
   @@index([approval_status])
 }
