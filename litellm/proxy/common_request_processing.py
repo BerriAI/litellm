@@ -221,16 +221,21 @@ async def create_response(
             f"Error consuming first chunk from generator: {e}"
         )
 
-        # Fallback to a generic error stream
+        # Preserve status code from HTTPException (e.g., guardrail blocks)
+        error_status = getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR)
+        error_detail = getattr(e, "detail", "Error processing stream start")
+        if not isinstance(error_detail, str):
+            error_detail = str(error_detail)
+
         async def error_gen_message() -> AsyncGenerator[str, None]:
-            yield f"data: {json.dumps({'error': {'message': 'Error processing stream start', 'code': status.HTTP_500_INTERNAL_SERVER_ERROR}})}\n\n"
+            yield f"data: {json.dumps({'error': {'message': error_detail, 'code': error_status}})}\n\n"
             yield "data: [DONE]\n\n"
 
         return StreamingResponse(
             error_gen_message(),
             media_type=media_type,
             headers=headers,
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            status_code=error_status,
         )
 
     async def combined_generator() -> AsyncGenerator[str, None]:

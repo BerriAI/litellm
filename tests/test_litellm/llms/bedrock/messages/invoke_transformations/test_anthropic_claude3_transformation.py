@@ -34,7 +34,9 @@ async def test_bedrock_sse_wrapper_encodes_dict_chunks():
         _dummy_stream(),
         litellm_logging_obj=LiteLLMLoggingObj(
             model="bedrock/invoke/anthropic.claude-3-sonnet-20240229-v1:0",
-            messages=[{"role": "user", "content": "Hello, can you tell me a short joke?"}],
+            messages=[
+                {"role": "user", "content": "Hello, can you tell me a short joke?"}
+            ],
             stream=True,
             call_type="chat",
             start_time=datetime.now(),
@@ -56,6 +58,74 @@ async def test_bedrock_sse_wrapper_encodes_dict_chunks():
 
     # Second chunk should be forwarded unchanged
     assert collected[1] == b"raw-bytes"
+
+
+@pytest.mark.asyncio
+async def test_bedrock_sse_wrapper_keeps_usage_in_message_start_and_message_delta():
+    """Regression test: usage should be available on both message_start and message_delta SSE events."""
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+
+    async def _dummy_stream():  # type: ignore[return-type]
+        yield {
+            "type": "message_start",
+            "message": {
+                "id": "msg_123",
+                "type": "message",
+                "role": "assistant",
+                "content": [],
+                "usage": {
+                    "input_tokens": 3,
+                    "output_tokens": 1,
+                },
+            },
+        }
+        yield {
+            "type": "message_delta",
+            "delta": {"stop_reason": "end_turn", "stop_sequence": None},
+            "usage": {
+                "input_tokens": 3,
+                "output_tokens": 8,
+            },
+        }
+        yield {
+            "type": "message_stop",
+            "usage": {
+                "input_tokens": 3,
+                "cache_creation_input_tokens": 1562,
+                "cache_read_input_tokens": 32392,
+            },
+        }
+
+    collected: list[bytes] = []
+    async for chunk in cfg.bedrock_sse_wrapper(
+        _dummy_stream(),
+        litellm_logging_obj=LiteLLMLoggingObj(
+            model="bedrock/invoke/anthropic.claude-3-sonnet-20240229-v1:0",
+            messages=[{"role": "user", "content": "Hello"}],
+            stream=True,
+            call_type="chat",
+            start_time=datetime.now(),
+            litellm_call_id="test_bedrock_sse_wrapper_keeps_usage_in_both_events",
+            function_id="test_bedrock_sse_wrapper_keeps_usage_in_both_events",
+        ),
+        request_body={},
+    ):
+        collected.append(chunk)
+
+    start_chunk = next(c for c in collected if b"event: message_start\n" in c)
+    delta_chunk = next(c for c in collected if b"event: message_delta\n" in c)
+
+    start_json = json.loads(start_chunk.decode("utf-8").split("data: ", 1)[1].strip())
+    delta_json = json.loads(delta_chunk.decode("utf-8").split("data: ", 1)[1].strip())
+
+    assert "usage" in start_json["message"]
+    assert start_json["message"]["usage"]["input_tokens"] == 3
+
+    assert "usage" in delta_json
+    assert delta_json["usage"]["cache_creation_input_tokens"] == 1562
+    assert delta_json["usage"]["cache_read_input_tokens"] == 32392
+    assert delta_json["usage"]["input_tokens"] == 3 + 1562 + 32392
 
 
 def test_chunk_parser_usage_transformation():
@@ -96,12 +166,9 @@ def test_remove_ttl_from_cache_control():
                     {
                         "type": "text",
                         "text": "Hello",
-                        "cache_control": {
-                            "type": "ephemeral",
-                            "ttl": "1h"
-                        }
+                        "cache_control": {"type": "ephemeral", "ttl": "1h"},
                     }
-                ]
+                ],
             }
         ]
     }
@@ -122,20 +189,14 @@ def test_remove_ttl_from_cache_control():
                     {
                         "type": "text",
                         "text": "Hello",
-                        "cache_control": {
-                            "type": "ephemeral",
-                            "ttl": "1h"
-                        }
+                        "cache_control": {"type": "ephemeral", "ttl": "1h"},
                     },
                     {
                         "type": "text",
                         "text": "World",
-                        "cache_control": {
-                            "type": "ephemeral",
-                            "ttl": "2h"
-                        }
-                    }
-                ]
+                        "cache_control": {"type": "ephemeral", "ttl": "2h"},
+                    },
+                ],
             }
         ]
     }
@@ -156,11 +217,9 @@ def test_remove_ttl_from_cache_control():
                     {
                         "type": "text",
                         "text": "Hello",
-                        "cache_control": {
-                            "type": "ephemeral"
-                        }
+                        "cache_control": {"type": "ephemeral"},
                     }
-                ]
+                ],
             }
         ]
     }
@@ -231,6 +290,7 @@ def test_remove_custom_field_from_tools():
     request4 = {"tools": None}
     remove_custom_field_from_tools(request4)
     assert request4["tools"] is None
+
 
 def test_remove_scope_from_cache_control():
     """Ensure scope field is removed from cache_control for Bedrock (not supported)."""
@@ -303,9 +363,9 @@ def test_bedrock_messages_strips_output_config():
         headers={},
     )
 
-    assert "output_config" not in result, (
-        "output_config should be stripped — Bedrock Invoke rejects it"
-    )
+    assert (
+        "output_config" not in result
+    ), "output_config should be stripped — Bedrock Invoke rejects it"
     # Other params should be preserved
     assert result.get("max_tokens") == 4096
 

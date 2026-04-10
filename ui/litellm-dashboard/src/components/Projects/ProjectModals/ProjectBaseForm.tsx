@@ -22,6 +22,7 @@ import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import { Team } from "../../key_team_helpers/key_list";
 import { fetchTeamModels } from "../../organisms/create_key_button";
 import { getModelDisplayName } from "../../key_team_helpers/fetch_available_models_team_key";
+import { getGuardrailsList } from "@/components/networking";
 
 export interface ProjectFormValues {
   project_alias: string;
@@ -30,6 +31,7 @@ export interface ProjectFormValues {
   models: string[];
   max_budget?: number;
   isBlocked: boolean;
+  guardrails?: string[];
   modelLimits?: { model: string; tpm?: number; rpm?: number }[];
   metadata?: { key: string; value: string }[];
 }
@@ -46,6 +48,23 @@ export function ProjectBaseForm({
 
   const [selectedTeam, setSelectedTeam] = useState<Team | null>(null);
   const [modelsToPick, setModelsToPick] = useState<string[]>([]);
+  const [guardrailsList, setGuardrailsList] = useState<string[]>([]);
+
+  useEffect(() => {
+    const fetchGuardrails = async () => {
+      if (!accessToken) return;
+      try {
+        const response = await getGuardrailsList(accessToken);
+        const names = response.guardrails.map(
+          (g: { guardrail_name: string }) => g.guardrail_name
+        );
+        setGuardrailsList(names);
+      } catch (error) {
+        console.error("Failed to fetch guardrails:", error);
+      }
+    };
+    fetchGuardrails();
+  }, [accessToken]);
 
   // Sync selectedTeam from form value (needed for edit mode pre-fill)
   const teamIdValue = Form.useWatch("team_id", form);
@@ -255,6 +274,24 @@ export function ProjectBaseForm({
                           />
                         ) : null
                       }
+                    </Form.Item>
+
+                    <Divider />
+
+                    <Form.Item
+                      label="Guardrails"
+                      name="guardrails"
+                      help="Select existing guardrails or enter new ones"
+                    >
+                      <Select
+                        mode="tags"
+                        style={{ width: "100%" }}
+                        placeholder="Select or enter guardrails"
+                        options={guardrailsList.map((name) => ({
+                          value: name,
+                          label: name,
+                        }))}
+                      />
                     </Form.Item>
 
                     <Divider />
