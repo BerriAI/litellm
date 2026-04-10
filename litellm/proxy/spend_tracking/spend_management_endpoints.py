@@ -2070,12 +2070,21 @@ async def ui_view_request_response_for_request_id(
     from litellm.proxy.proxy_server import prisma_client
 
     if not _is_admin_view_safe(user_api_key_dict=user_api_key_dict):
-        if prisma_client is not None:
-            await _assert_user_can_view_request_id(
-                prisma_client=prisma_client,
-                user_api_key_dict=user_api_key_dict,
-                request_id=request_id,
+        if prisma_client is None:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={
+                    "error": (
+                        "Cannot authorize spend log access without a database "
+                        "connection. Connect a database or use a proxy admin key."
+                    )
+                },
             )
+        await _assert_user_can_view_request_id(
+            prisma_client=prisma_client,
+            user_api_key_dict=user_api_key_dict,
+            request_id=request_id,
+        )
 
     custom_loggers = (
         litellm.logging_callback_manager.get_active_additional_logging_utils_from_custom_logger()
