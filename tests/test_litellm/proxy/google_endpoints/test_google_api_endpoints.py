@@ -192,13 +192,18 @@ def test_google_generate_content_returns_400_for_nonexistent_model():
 
     Regression test for: /v1beta/models/{model}:generateContent returning 500
     instead of 400/404 for models not in the router's model list.
+
+    _handle_llm_api_exception is NOT mocked here — the real conversion logic
+    (BadRequestError.status_code=400 → ProxyException(code=400)) is exercised
+    end-to-end through the HTTP response.
     """
+    from unittest.mock import AsyncMock, MagicMock
+
     app, client = _make_app()
     if app is None:
         pytest.skip("Missing dependencies")
 
     import litellm
-    from litellm.proxy._types import ProxyException
     from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 
     bad_request_error = litellm.BadRequestError(
@@ -208,22 +213,15 @@ def test_google_generate_content_returns_400_for_nonexistent_model():
         llm_provider="",
     )
 
+    mock_logging = MagicMock()
+    mock_logging.post_call_failure_hook = AsyncMock(return_value=None)
+    mock_logging.post_call_response_headers_hook = AsyncMock(return_value=None)
+
     with patch.object(
         ProxyBaseLLMRequestProcessing,
         "base_process_llm_request",
         side_effect=bad_request_error,
-    ), patch.object(
-        ProxyBaseLLMRequestProcessing,
-        "_handle_llm_api_exception",
-        new=AsyncMock(
-            return_value=ProxyException(
-                message=str(bad_request_error),
-                type="invalid_request_error",
-                param=None,
-                code=400,
-            )
-        ),
-    ):
+    ), patch("litellm.proxy.proxy_server.proxy_logging_obj", mock_logging):
         response = client.post(
             "/v1beta/models/nonexistent-model:generateContent",
             json={"contents": [{"role": "user", "parts": [{"text": "hello"}]}]},
@@ -238,13 +236,15 @@ def test_google_generate_content_returns_400_for_nonexistent_model():
 def test_google_stream_generate_content_returns_400_for_nonexistent_model():
     """
     Stream endpoint must also return 400 (not 500) for a non-existent model.
+    _handle_llm_api_exception is NOT mocked — the real conversion logic is exercised.
     """
+    from unittest.mock import AsyncMock, MagicMock
+
     app, client = _make_app()
     if app is None:
         pytest.skip("Missing dependencies")
 
     import litellm
-    from litellm.proxy._types import ProxyException
     from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 
     bad_request_error = litellm.BadRequestError(
@@ -254,22 +254,15 @@ def test_google_stream_generate_content_returns_400_for_nonexistent_model():
         llm_provider="",
     )
 
+    mock_logging = MagicMock()
+    mock_logging.post_call_failure_hook = AsyncMock(return_value=None)
+    mock_logging.post_call_response_headers_hook = AsyncMock(return_value=None)
+
     with patch.object(
         ProxyBaseLLMRequestProcessing,
         "base_process_llm_request",
         side_effect=bad_request_error,
-    ), patch.object(
-        ProxyBaseLLMRequestProcessing,
-        "_handle_llm_api_exception",
-        new=AsyncMock(
-            return_value=ProxyException(
-                message=str(bad_request_error),
-                type="invalid_request_error",
-                param=None,
-                code=400,
-            )
-        ),
-    ):
+    ), patch("litellm.proxy.proxy_server.proxy_logging_obj", mock_logging):
         response = client.post(
             "/v1beta/models/nonexistent-model:streamGenerateContent",
             json={"contents": [{"role": "user", "parts": [{"text": "hello"}]}]},
