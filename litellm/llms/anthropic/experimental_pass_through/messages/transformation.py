@@ -21,6 +21,7 @@ from ...common_utils import (
     AnthropicError,
     AnthropicModelInfo,
     optionally_handle_anthropic_oauth,
+    strip_advisor_blocks_from_messages,
 )
 
 DEFAULT_ANTHROPIC_API_VERSION = "2023-06-01"
@@ -208,12 +209,22 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
                 )
             )
             if transformed_context_management is not None:
-                anthropic_messages_optional_request_params[
-                    "context_management"
-                ] = transformed_context_management
+                anthropic_messages_optional_request_params["context_management"] = (
+                    transformed_context_management
+                )
 
         ####### get required params for all anthropic messages requests ######
         verbose_logger.debug(f"TRANSFORMATION DEBUG - Messages: {messages}")
+
+        # Auto-strip advisor blocks from history if advisor tool is absent.
+        # Prevents Anthropic 400: advisor_tool_result in history requires advisor tool.
+        _tools = anthropic_messages_optional_request_params.get("tools") or []
+        _has_advisor = any(
+            isinstance(t, dict) and t.get("type") == "advisor_20260301" for t in _tools
+        )
+        if not _has_advisor:
+            messages = strip_advisor_blocks_from_messages(messages)  # type: ignore[assignment]
+
         anthropic_messages_request: AnthropicMessagesRequest = AnthropicMessagesRequest(
             messages=messages,
             max_tokens=max_tokens,
