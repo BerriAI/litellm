@@ -1,21 +1,18 @@
 import datetime
 import traceback
-from typing import AsyncIterator, Dict, Iterator, Literal, NamedTuple, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, AsyncIterator, Dict, Iterator, Literal, Optional, Union, cast
 
-from litellm.litellm_core_utils.litellm_logging import (
-    Logging as LiteLLMLoggingObj,
-    get_standard_logging_object_payload,
-)
-from litellm.types.utils import StandardLoggingHiddenParams, StandardLoggingPayload
+import anyio
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import (
+        Logging as LiteLLMLoggingObj,
+    )
+    from litellm.types.utils import StandardLoggingHiddenParams, StandardLoggingPayload
 
 FileContentProvider = Literal[
     "openai", "azure", "vertex_ai", "bedrock", "hosted_vllm", "anthropic", "manus"
 ]
-
-
-class FileContentStreamingResult(NamedTuple):
-    stream_iterator: Union[Iterator[bytes], AsyncIterator[bytes]]
-    headers: Dict[str, str]
 
 
 class FileContentStreamingResponse:
@@ -30,18 +27,17 @@ class FileContentStreamingResponse:
         file_id: str,
         model: Optional[str],
         custom_llm_provider: Optional[Union[FileContentProvider, str]],
-        logging_obj: Optional[LiteLLMLoggingObj],
+        logging_obj: Optional["LiteLLMLoggingObj"],
     ) -> None:
         self.stream_iterator = stream_iterator
         self.file_id = file_id
         self.model = model
         self.custom_llm_provider = custom_llm_provider
         self.logging_obj = logging_obj
-        self.standard_logging_object: Optional[StandardLoggingPayload] = None
-        self._hidden_params: StandardLoggingHiddenParams = cast(
-            StandardLoggingHiddenParams, {}
-        )
+        self.standard_logging_object: Optional["StandardLoggingPayload"] = None
+        self._hidden_params: Dict[str, Any] = {}
         self._logging_completed = False
+        self._close_completed = False
         self._start_time = (
             logging_obj.start_time
             if logging_obj is not None and getattr(logging_obj, "start_time", None)
@@ -84,6 +80,37 @@ class FileContentStreamingResponse:
             await self._log_failure_async(e)
             raise
 
+    async def aclose(self) -> None:
+        if self._close_completed:
+            return
+
+        self._close_completed = True
+        self._logging_completed = True
+        stream_to_close = self.stream_iterator
+        self.stream_iterator = cast(Union[Iterator[bytes], AsyncIterator[bytes]], iter(()))
+
+        # Shield cleanup from request cancellation so upstream HTTP connections
+        # are released promptly on client disconnects.
+        with anyio.CancelScope(shield=True):
+            if hasattr(stream_to_close, "aclose"):
+                await cast(AsyncIterator[bytes], stream_to_close).aclose()  # type: ignore[attr-defined]
+            elif hasattr(stream_to_close, "close"):
+                result = cast(Iterator[bytes], stream_to_close).close()  # type: ignore[attr-defined]
+                if result is not None:
+                    await result
+
+    def close(self) -> None:
+        if self._close_completed:
+            return
+
+        self._close_completed = True
+        self._logging_completed = True
+        stream_to_close = self.stream_iterator
+        self.stream_iterator = cast(Union[Iterator[bytes], AsyncIterator[bytes]], iter(()))
+
+        if hasattr(stream_to_close, "close"):
+            cast(Iterator[bytes], stream_to_close).close()  # type: ignore[attr-defined]
+
     def _build_logging_response(self) -> Dict[str, str]:
         response = {
             "id": self.file_id,
@@ -112,12 +139,16 @@ class FileContentStreamingResponse:
     def _build_standard_logging_object(
         self,
         end_time: datetime.datetime,
-    ) -> Optional[StandardLoggingPayload]:
+    ) -> Optional["StandardLoggingPayload"]:
         if self.standard_logging_object is not None:
             return self.standard_logging_object
 
         if self.logging_obj is None:
             return None
+
+        from litellm.litellm_core_utils.litellm_logging import (
+            get_standard_logging_object_payload,
+        )
 
         self._sync_hidden_params()
         payload = get_standard_logging_object_payload(
@@ -132,11 +163,9 @@ class FileContentStreamingResponse:
             return None
 
         merged_hidden_params = cast(
-            StandardLoggingHiddenParams,
+            "StandardLoggingHiddenParams",
             {
-                **cast(
-                    StandardLoggingHiddenParams, payload.get("hidden_params") or {}
-                ),
+                **cast(Dict[str, Any], payload.get("hidden_params") or {}),
                 **self._hidden_params,
             },
         )

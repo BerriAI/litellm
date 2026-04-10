@@ -93,6 +93,9 @@ async def _stream_file_content_with_logging(
             request_data=data,
         )
         raise
+    finally:
+        if hasattr(stream_iterator, "aclose"):
+            await stream_iterator.aclose()  # type: ignore[attr-defined]
 
 
 async def _get_streaming_file_content_response(

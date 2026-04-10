@@ -36,10 +36,8 @@ FileContentProvider = Literal[
 
 import litellm
 from litellm import get_secret_str
-from litellm.files.streaming import (
-    FileContentStreamingResponse,
-    FileContentStreamingResult,
-)
+from litellm.files.streaming import FileContentStreamingResponse
+from litellm.files.types import FileContentStreamingResult
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.azure.common_utils import get_azure_credentials

@@ -1,7 +1,7 @@
 import json
 import os
 import sys
-from unittest.mock import ANY
+from unittest.mock import ANY, AsyncMock
 
 import pytest
 import respx
@@ -14,7 +14,10 @@ sys.path.insert(
 
 import litellm
 from litellm import Router
-from litellm.files.streaming import FileContentStreamingResult
+from litellm.files.types import FileContentStreamingResult
+from litellm.proxy.openai_files_endpoints.files_endpoints import (
+    _stream_file_content_with_logging,
+)
 from litellm.proxy._types import LiteLLM_UserTableFiltered, UserAPIKeyAuth
 from litellm.proxy.hooks import get_proxy_hook
 from litellm.proxy.management_endpoints.internal_user_endpoints import ui_view_users
@@ -76,6 +79,40 @@ def setup_proxy_logging_object(monkeypatch, llm_router: Router) -> ProxyLogging:
         "litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging_object
     )
     return proxy_logging_object
+
+
+@pytest.mark.asyncio
+async def test_stream_file_content_with_logging_closes_inner_iterator_on_early_exit():
+    class MockStreamIterator:
+        def __init__(self) -> None:
+            self._chunks = iter([b"hello", b"world"])
+            self.aclose = AsyncMock()
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            try:
+                return next(self._chunks)
+            except StopIteration:
+                raise StopAsyncIteration
+
+    stream_iterator = MockStreamIterator()
+    proxy_logging_obj = AsyncMock()
+
+    generator = _stream_file_content_with_logging(
+        stream_iterator=stream_iterator,
+        proxy_logging_obj=proxy_logging_obj,
+        user_api_key_dict=AsyncMock(),
+        data={"litellm_call_id": "call-123"},
+    )
+
+    assert await generator.__anext__() == b"hello"
+
+    await generator.aclose()
+
+    stream_iterator.aclose.assert_awaited_once()
+    proxy_logging_obj.update_request_status.assert_not_called()
 
 
 def test_invalid_purpose(mocker: MockerFixture, monkeypatch, llm_router: Router):

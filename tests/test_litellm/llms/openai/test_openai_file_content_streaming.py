@@ -2,7 +2,8 @@ import pytest
 from typing import AsyncIterator, cast
 
 from litellm.files import main as files_main
-from litellm.files.streaming import FileContentStreamingResult
+from litellm.files.streaming import FileContentStreamingResponse
+from litellm.files.types import FileContentStreamingResult
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
 
@@ -109,3 +110,30 @@ async def test_afile_content_streaming_builds_standard_logging_object_on_complet
         captured_standard_logging_object["hidden_params"]["api_base"]
         == "https://api.openai.com/v1"
     )
+
+
+@pytest.mark.asyncio
+async def test_file_content_streaming_response_aclose_closes_underlying_async_generator():
+    close_called = False
+
+    async def _mock_stream():
+        nonlocal close_called
+        try:
+            yield b"hello"
+            yield b"world"
+        finally:
+            close_called = True
+
+    stream = FileContentStreamingResponse(
+        stream_iterator=_mock_stream(),
+        file_id="file-abc123",
+        model="gpt-4o",
+        custom_llm_provider="openai",
+        logging_obj=None,
+    )
+
+    assert await stream.__anext__() == b"hello"
+
+    await stream.aclose()
+
+    assert close_called is True
