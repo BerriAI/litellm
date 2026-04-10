@@ -3201,7 +3201,6 @@ jobs:
           name: Start LiteLLM proxy
           environment:
             LITELLM_MASTER_KEY: "sk-1234"
-            LITELLM_LICENSE: ${LITELLM_LICENSE}
             MOCK_LLM_URL: "http://127.0.0.1:8090/v1"
             DISABLE_SCHEMA_UPDATE: "true"
             SERVER_ROOT_PATH: ""
