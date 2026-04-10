@@ -41,6 +41,7 @@ from litellm.integrations.mlflow import MlflowLogger
 from litellm.integrations.openmeter import OpenMeterLogger
 from litellm.integrations.opentelemetry import OpenTelemetry
 from litellm.integrations.opik.opik import OpikLogger
+from litellm.integrations.aliyun_sls import AliyunSLSLogger
 from litellm.integrations.posthog import PostHogLogger
 from litellm.integrations.prometheus import PrometheusLogger
 from litellm.integrations.s3_v2 import S3Logger
@@ -102,6 +103,7 @@ class CustomLoggerRegistry:
         "focus": FocusLogger,
         "vantage": VantageLogger,
         "posthog": PostHogLogger,
+        "aliyun_sls": AliyunSLSLogger,
     }
 
     try:
