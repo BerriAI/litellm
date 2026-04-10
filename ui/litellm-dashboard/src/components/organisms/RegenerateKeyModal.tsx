@@ -68,15 +68,25 @@ export function RegenerateKeyModal({ selectedToken, visible, onClose, onKeyUpdat
     if (!duration) return null;
 
     try {
+      const amount = parseInt(duration);
+      if (Number.isNaN(amount)) {
+        throw new Error("Invalid duration format");
+      }
       const now = new Date();
+      // Check "mo" before "m" to avoid a false prefix match (e.g. "1mo" → minutes).
       let newExpiry: Date;
-
-      if (duration.endsWith("s")) {
-        newExpiry = add(now, { seconds: parseInt(duration) });
+      if (duration.endsWith("mo")) {
+        newExpiry = add(now, { months: amount });
+      } else if (duration.endsWith("s")) {
+        newExpiry = add(now, { seconds: amount });
+      } else if (duration.endsWith("m")) {
+        newExpiry = add(now, { minutes: amount });
       } else if (duration.endsWith("h")) {
-        newExpiry = add(now, { hours: parseInt(duration) });
+        newExpiry = add(now, { hours: amount });
       } else if (duration.endsWith("d")) {
-        newExpiry = add(now, { days: parseInt(duration) });
+        newExpiry = add(now, { days: amount });
+      } else if (duration.endsWith("w")) {
+        newExpiry = add(now, { weeks: amount });
       } else {
         throw new Error("Invalid duration format");
       }
@@ -122,7 +132,9 @@ export function RegenerateKeyModal({ selectedToken, visible, onClose, onKeyUpdat
         max_budget: formValues.max_budget,
         tpm_limit: formValues.tpm_limit,
         rpm_limit: formValues.rpm_limit,
-        expires: formValues.duration ? calculateNewExpiryTime(formValues.duration) : selectedToken.expires,
+        expires: formValues.duration
+          ? (calculateNewExpiryTime(formValues.duration) ?? selectedToken.expires)
+          : selectedToken.expires,
       };
 
       // Update the parent component with new key data
