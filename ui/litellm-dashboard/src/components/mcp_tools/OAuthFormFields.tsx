@@ -1,5 +1,5 @@
 import React from "react";
-import { Form, Select, Tooltip } from "antd";
+import { Form, Input, InputNumber, Select, Tooltip } from "antd";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { Button, TextInput } from "@tremor/react";
 import { OAUTH_FLOW } from "./types";
@@ -150,6 +150,50 @@ const OAuthFormFields: React.FC<OAuthFormFieldsProps> = ({
             name="registration_url"
           >
             <TextInput placeholder="https://example.com/oauth/register" className={fieldClassName} />
+          </Form.Item>
+          <Form.Item
+            label={
+              <FieldLabel
+                label="Token Validation Rules (optional)"
+                tooltip='JSON object of key-value rules checked against the OAuth token response before storing. Supports dot-notation for nested fields (e.g. {"organization": "my-org", "team.id": "123"}). Tokens that fail validation are rejected with HTTP 403.'
+              />
+            }
+            name="token_validation_json"
+            rules={[
+              {
+                validator: (_: any, value: string) => {
+                  if (!value || value.trim() === "") return Promise.resolve();
+                  try {
+                    JSON.parse(value);
+                    return Promise.resolve();
+                  } catch {
+                    return Promise.reject(new Error("Must be valid JSON"));
+                  }
+                },
+              },
+            ]}
+          >
+            <Input.TextArea
+              placeholder={'{\n  "organization": "my-org",\n  "team.id": "123"\n}'}
+              rows={4}
+              className="font-mono text-sm rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
+            />
+          </Form.Item>
+          <Form.Item
+            label={
+              <FieldLabel
+                label="Token Storage TTL (seconds, optional)"
+                tooltip="How long to cache each user's OAuth access token in Redis before evicting it (regardless of the token's own expires_in). Leave blank to derive the TTL from the token's expires_in, or fall back to the 12-hour default."
+              />
+            }
+            name="token_storage_ttl_seconds"
+          >
+            <InputNumber
+              min={1}
+              placeholder="e.g. 3600"
+              className="w-full rounded-lg"
+              style={{ width: "100%" }}
+            />
           </Form.Item>
           {oauthFlow && (
             <div className="rounded-lg border border-dashed border-gray-300 p-4 space-y-2">
