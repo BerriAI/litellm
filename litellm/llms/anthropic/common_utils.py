@@ -650,7 +650,7 @@ def strip_advisor_blocks_from_messages(messages: List[Any]) -> List[Any]:
     control or on a follow-up turn.
     """
     for message in messages:
-        if message.get("role") != "assistant":
+        if not isinstance(message, dict) or message.get("role") != "assistant":
             continue
         content = message.get("content")
         if not isinstance(content, list):
