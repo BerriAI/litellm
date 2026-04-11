@@ -155,13 +155,10 @@ class LowestLatencyLoggingHandler(CustomLogger):
                             "time_to_first_token", []
                         ).append(time_to_first_token)
                     else:
-                        request_count_dict[id][
-                            "time_to_first_token"
-                        ] = request_count_dict[id]["time_to_first_token"][
-                            1:
-                        ] + [
-                            time_to_first_token
-                        ]
+                        request_count_dict[id]["time_to_first_token"] = (
+                            request_count_dict[id]["time_to_first_token"][1:]
+                            + [time_to_first_token]
+                        )
 
                 if precise_minute not in request_count_dict[id]:
                     request_count_dict[id][precise_minute] = {}
@@ -383,13 +380,10 @@ class LowestLatencyLoggingHandler(CustomLogger):
                             "time_to_first_token", []
                         ).append(time_to_first_token)
                     else:
-                        request_count_dict[id][
-                            "time_to_first_token"
-                        ] = request_count_dict[id]["time_to_first_token"][
-                            1:
-                        ] + [
-                            time_to_first_token
-                        ]
+                        request_count_dict[id]["time_to_first_token"] = (
+                            request_count_dict[id]["time_to_first_token"][1:]
+                            + [time_to_first_token]
+                        )
 
                 if precise_minute not in request_count_dict[id]:
                     request_count_dict[id][precise_minute] = {}
