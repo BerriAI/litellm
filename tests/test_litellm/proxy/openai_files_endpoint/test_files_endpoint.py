@@ -116,6 +116,93 @@ async def test_stream_file_content_with_logging_closes_inner_iterator_on_early_e
     proxy_logging_obj.update_request_status.assert_not_called()
 
 
+def test_resolve_streaming_request_params_non_routed_returns_original_values():
+    data = {"file_id": "file-abc123", "metadata": {"k": "v"}}
+
+    (
+        resolved_custom_llm_provider,
+        resolved_file_id,
+        resolved_streaming_data,
+    ) = FileContentStreamingHandler.resolve_streaming_request_params(
+        custom_llm_provider="openai",
+        file_id="file-abc123",
+        data=data,
+        should_route=False,
+        original_file_id=None,
+        credentials=None,
+    )
+
+    assert resolved_custom_llm_provider == "openai"
+    assert resolved_file_id == "file-abc123"
+    assert resolved_streaming_data is data
+
+
+def test_resolve_streaming_request_params_routed_uses_credentials_and_original_file_id():
+    data = {
+        "file_id": "file-encoded-123",
+        "model": "azure-gpt-3-5-turbo",
+        "metadata": {"k": "v"},
+    }
+    credentials = {
+        "custom_llm_provider": "azure",
+        "api_key": "azure-key",
+        "api_base": "https://azure.example.com",
+    }
+
+    (
+        resolved_custom_llm_provider,
+        resolved_file_id,
+        resolved_streaming_data,
+    ) = FileContentStreamingHandler.resolve_streaming_request_params(
+        custom_llm_provider="openai",
+        file_id="file-encoded-123",
+        data=data,
+        should_route=True,
+        original_file_id="file-original-123",
+        credentials=credentials,
+    )
+
+    assert resolved_custom_llm_provider == "azure"
+    assert resolved_file_id == "file-original-123"
+    assert resolved_streaming_data["file_id"] == "file-original-123"
+    assert resolved_streaming_data["api_key"] == "azure-key"
+    assert resolved_streaming_data["api_base"] == "https://azure.example.com"
+    assert "custom_llm_provider" not in resolved_streaming_data
+    assert "model" not in resolved_streaming_data
+    assert data["file_id"] == "file-encoded-123"
+    assert data["model"] == "azure-gpt-3-5-turbo"
+
+
+def test_resolve_streaming_request_params_routed_preserves_input_data_object():
+    data = {
+        "file_id": "file-encoded-123",
+        "model": "openai/gpt-4o",
+    }
+    credentials = {
+        "custom_llm_provider": "openai",
+        "api_key": "sk-test",
+    }
+
+    (
+        _resolved_custom_llm_provider,
+        _resolved_file_id,
+        resolved_streaming_data,
+    ) = FileContentStreamingHandler.resolve_streaming_request_params(
+        custom_llm_provider="openai",
+        file_id="file-encoded-123",
+        data=data,
+        should_route=True,
+        original_file_id=None,
+        credentials=credentials,
+    )
+
+    assert resolved_streaming_data is not data
+    assert data == {
+        "file_id": "file-encoded-123",
+        "model": "openai/gpt-4o",
+    }
+
+
 def test_invalid_purpose(mocker: MockerFixture, monkeypatch, llm_router: Router):
     """
     Asserts 'create_file' is called with the correct arguments
@@ -1650,7 +1737,7 @@ def test_get_file_content_streams_openai_direct_path(
     proxy_logging_obj.post_call_failure_hook.assert_not_called()
 
 
-def test_get_file_content_streams_with_routed_provider(
+def test_get_file_content_routed_provider_skips_streaming_when_resolved_provider_is_not_supported(
     mocker: MockerFixture, monkeypatch, llm_router: Router
 ):
     import litellm.proxy.proxy_server as ps
@@ -1666,17 +1753,25 @@ def test_get_file_content_streams_with_routed_provider(
 
     async def _mock_afile_content(**kwargs):
         captured_kwargs.update(kwargs)
-
-        async def _stream():
-            yield b"hello "
-            yield b"world"
-
-        return FileContentStreamingResult(
-            stream_iterator=_stream(),
-            headers={"content-length": "11"},
+        return HttpxBinaryResponseContent(
+            response=httpx.Response(
+                status_code=200,
+                content=b"azure-bytes",
+                headers={
+                    "content-type": "application/octet-stream",
+                    "content-length": "11",
+                },
+            )
         )
 
+    mock_streaming_response = mocker.AsyncMock()
+
     monkeypatch.setattr(litellm, "afile_content", _mock_afile_content)
+    monkeypatch.setattr(
+        FileContentStreamingHandler,
+        "get_streaming_file_content_response",
+        mock_streaming_response,
+    )
     monkeypatch.setattr(
         "litellm.proxy.openai_files_endpoints.files_endpoints.handle_model_based_routing",
         lambda **kwargs: (
@@ -1706,13 +1801,13 @@ def test_get_file_content_streams_with_routed_provider(
         app.dependency_overrides.pop(ps.user_api_key_auth, None)
 
     assert response.status_code == 200, response.text
-    assert response.content == b"hello world"
+    assert response.content == b"azure-bytes"
     assert captured_kwargs["custom_llm_provider"] == "azure"
     assert captured_kwargs["file_id"] == "file-original-123"
     assert captured_kwargs["api_key"] == "azure-key"
     assert captured_kwargs["api_base"] == "https://azure.example.com"
-    assert captured_kwargs["stream"] is True
-    proxy_logging_obj.update_request_status.assert_awaited_once()
+    assert "stream" not in captured_kwargs
+    mock_streaming_response.assert_not_awaited()
     proxy_logging_obj.post_call_failure_hook.assert_not_called()
 
 

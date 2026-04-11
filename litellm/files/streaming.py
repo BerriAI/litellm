@@ -1,19 +1,15 @@
 import datetime
 import traceback
-from typing import TYPE_CHECKING, Any, AsyncIterator, Dict, Iterator, Literal, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, AsyncIterator, Dict, Iterator, Optional, Union, cast
 
 import anyio
+from litellm.files.types import FileContentProvider
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import (
         Logging as LiteLLMLoggingObj,
     )
     from litellm.types.utils import StandardLoggingHiddenParams, StandardLoggingPayload
-
-FileContentProvider = Literal[
-    "openai", "azure", "vertex_ai", "bedrock", "hosted_vllm", "anthropic", "manus"
-]
-
 
 class FileContentStreamingResponse:
     """

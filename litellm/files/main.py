@@ -30,14 +30,10 @@ FileRetrieveProvider = Literal[
 ]
 FileDeleteProvider = Literal["openai", "azure", "gemini", "manus", "anthropic"]
 FileListProvider = Literal["openai", "azure", "manus", "anthropic"]
-FileContentProvider = Literal[
-    "openai", "azure", "vertex_ai", "bedrock", "hosted_vllm", "anthropic", "manus"
-]
-
 import litellm
 from litellm import get_secret_str
 from litellm.files.streaming import FileContentStreamingResponse
-from litellm.files.types import FileContentStreamingResult
+from litellm.files.types import FileContentProvider, FileContentStreamingResult
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.azure.common_utils import get_azure_credentials
@@ -68,6 +64,15 @@ from litellm.utils import (
 base_llm_http_handler = BaseLLMHTTPHandler()
 
 ####### ENVIRONMENT VARIABLES ###################
+
+
+def _should_sdk_support_streaming(
+    custom_llm_provider: Optional[Union[FileContentProvider, str]],
+) -> bool:
+    """
+    Return whether file content streaming is supported for the provider.
+    """
+    return custom_llm_provider in OPENAI_COMPATIBLE_BATCH_AND_FILES_PROVIDERS
 openai_files_instance = OpenAIFilesAPI()
 azure_files_instance = AzureOpenAIFilesAPI()
 vertex_ai_files_instance = VertexAIFilesHandler()
@@ -869,7 +874,7 @@ def file_content(
 
         _is_async = kwargs.pop("afile_content", False) is True
 
-        if stream:
+        if stream and _should_sdk_support_streaming(custom_llm_provider):
             return file_content_streaming(
                 file_id=file_id,
                 model=model,
@@ -1075,8 +1080,9 @@ def file_content_streaming(
         )
     else:
         raise litellm.exceptions.BadRequestError(
-            message="LiteLLM doesn't support {} for 'file_content'. Supported providers are 'openai', 'azure', 'vertex_ai', 'bedrock', 'manus', 'anthropic'.".format(
-                custom_llm_provider
+            message="LiteLLM doesn't support {} for streaming 'file_content'. Supported providers are {}.".format(
+                custom_llm_provider,
+                sorted(OPENAI_COMPATIBLE_BATCH_AND_FILES_PROVIDERS),
             ),
             model="n/a",
             llm_provider=custom_llm_provider,
