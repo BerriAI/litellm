@@ -1627,6 +1627,7 @@ async def test_upsert_team_member_budget_table_no_existing_budget():
 
     team_table = MagicMock(spec=LiteLLM_TeamTable)
     team_table.metadata = {}
+    team_table.team_id = "test_team_id"
     team_table.team_alias = "Test Team"
     team_table.budget_duration = None
 
@@ -1639,12 +1640,22 @@ async def test_upsert_team_member_budget_table_no_existing_budget():
     mock_budget_response = MagicMock()
     mock_budget_response.budget_id = "new_budget_456"
 
-    with patch(
-        "litellm.proxy.management_endpoints.budget_management_endpoints.new_budget",
-        new_callable=AsyncMock
-    ) as mock_new_budget:
-        mock_new_budget.return_value = mock_budget_response
+    mock_db = MagicMock()
+    mock_db.litellm_teammembership.update_many = AsyncMock(return_value={"count": 0})
+    mock_prisma = MagicMock()
+    mock_prisma.db = mock_db
 
+    with (
+        patch(
+            "litellm.proxy.management_endpoints.budget_management_endpoints.new_budget",
+            new_callable=AsyncMock,
+            return_value=mock_budget_response,
+        ) as mock_new_budget,
+        patch(
+            "litellm.proxy.proxy_server.prisma_client",
+            mock_prisma,
+        ),
+    ):
         result = await TeamMemberBudgetHandler.upsert_team_member_budget_table(
             team_table=team_table,
             user_api_key_dict=mock_user_api_key_dict,
@@ -1659,6 +1670,125 @@ async def test_upsert_team_member_budget_table_no_existing_budget():
 
         assert "team_member_budget" not in result
         assert "team_member_budget_duration" not in result
+
+
+@pytest.mark.asyncio
+async def test_upsert_team_member_budget_table_wires_up_null_budget_members_on_create():
+    """
+    Regression test: when a team budget is being CREATED for the first time,
+    existing team members whose budget_id is null must be assigned the new
+    template budget so that their 'Next Budget Reset' column reflects the reset time.
+
+    Previously, members added before the team's budget duration was configured had
+    budget_id=null. Creating the template budget left those memberships disconnected
+    — they never showed a reset date.
+    """
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from litellm.proxy._types import LitellmUserRoles, LiteLLM_TeamTable, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.team_endpoints import TeamMemberBudgetHandler
+
+    mock_user = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="test_user_id"
+    )
+
+    # No existing budget_id — triggers the create path
+    team_table = MagicMock(spec=LiteLLM_TeamTable)
+    team_table.metadata = {}
+    team_table.team_id = "team-xyz"
+    team_table.team_alias = "Test Team"
+    team_table.budget_duration = None
+
+    updated_kv: dict = {"team_id": "team-xyz"}
+
+    mock_budget_response = MagicMock()
+    mock_budget_response.budget_id = "new-template-budget-abc"
+
+    mock_db = MagicMock()
+    mock_db.litellm_teammembership.update_many = AsyncMock(return_value={"count": 2})
+
+    mock_prisma = MagicMock()
+    mock_prisma.db = mock_db
+
+    with (
+        patch(
+            "litellm.proxy.management_endpoints.budget_management_endpoints.new_budget",
+            new_callable=AsyncMock,
+            return_value=mock_budget_response,
+        ),
+        patch(
+            "litellm.proxy.proxy_server.prisma_client",
+            mock_prisma,
+        ),
+    ):
+        await TeamMemberBudgetHandler.upsert_team_member_budget_table(
+            team_table=team_table,
+            user_api_key_dict=mock_user,
+            updated_kv=updated_kv,
+            team_member_budget_duration="7d",
+        )
+
+    # update_many must have been called to wire up members with no budget
+    mock_db.litellm_teammembership.update_many.assert_awaited_once()
+    call_kwargs = mock_db.litellm_teammembership.update_many.call_args.kwargs
+    assert call_kwargs["where"]["team_id"] == "team-xyz"
+    assert call_kwargs["where"]["budget_id"] is None
+    assert call_kwargs["data"]["budget_id"] == "new-template-budget-abc"
+
+
+@pytest.mark.asyncio
+async def test_upsert_team_member_budget_table_update_does_not_wire_up_null_members():
+    """
+    When the team already has a template budget and the settings are UPDATED,
+    members with budget_id=null must NOT be silently assigned the budget.
+    Those members were intentionally left unlimited; assigning a budget on
+    every settings save would be a backwards-incompatible behaviour change.
+    """
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from litellm.proxy._types import LitellmUserRoles, LiteLLM_TeamTable, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.team_endpoints import TeamMemberBudgetHandler
+
+    mock_user = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="test_user_id"
+    )
+
+    # Existing budget_id — triggers the update path
+    team_table = MagicMock(spec=LiteLLM_TeamTable)
+    team_table.metadata = {"team_member_budget_id": "template-budget-abc"}
+    team_table.team_id = "team-xyz"
+
+    updated_kv: dict = {"team_id": "team-xyz"}
+
+    mock_budget_response = MagicMock()
+    mock_budget_response.budget_id = "template-budget-abc"
+
+    mock_db = MagicMock()
+    mock_db.litellm_teammembership.update_many = AsyncMock(return_value={"count": 0})
+
+    mock_prisma = MagicMock()
+    mock_prisma.db = mock_db
+
+    with (
+        patch(
+            "litellm.proxy.management_endpoints.budget_management_endpoints.update_budget",
+            new_callable=AsyncMock,
+            return_value=mock_budget_response,
+        ),
+        patch(
+            "litellm.proxy.proxy_server.prisma_client",
+            mock_prisma,
+        ),
+    ):
+        await TeamMemberBudgetHandler.upsert_team_member_budget_table(
+            team_table=team_table,
+            user_api_key_dict=mock_user,
+            updated_kv=updated_kv,
+            team_member_budget_duration="7d",
+        )
+
+    # update_many must NOT have been called — no silent budget assignment on update
+    mock_db.litellm_teammembership.update_many.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -6497,6 +6627,84 @@ async def test_create_team_member_budget_table_with_duration():
         assert budget_request.budget_duration == "30d"
         assert budget_request.max_budget == 20.0
         assert result["metadata"]["team_member_budget_id"] == "budget-abc"
+
+
+@pytest.mark.asyncio
+async def test_upsert_budget_and_membership_updates_existing_budget():
+    """
+    When existing_budget_id is provided, _upsert_budget_and_membership must UPDATE
+    the existing budget row rather than creating a new one — otherwise each call
+    silently orphans the previous LiteLLM_BudgetTable row.
+    """
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.common_utils import _upsert_budget_and_membership
+
+    mock_user = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin"
+    )
+
+    mock_tx = MagicMock()
+    mock_tx.litellm_budgettable.update = AsyncMock()
+    mock_tx.litellm_budgettable.create = AsyncMock()
+    mock_tx.litellm_teammembership.upsert = AsyncMock()
+
+    await _upsert_budget_and_membership(
+        tx=mock_tx,
+        team_id="team-1",
+        user_id="user-1",
+        max_budget=50.0,
+        existing_budget_id="budget-existing-123",
+        user_api_key_dict=mock_user,
+    )
+
+    # Must update, not create
+    mock_tx.litellm_budgettable.update.assert_awaited_once()
+    mock_tx.litellm_budgettable.create.assert_not_awaited()
+
+    # Membership must be connected to the existing budget id
+    upsert_call = mock_tx.litellm_teammembership.upsert.call_args
+    connect_id = upsert_call.kwargs["data"]["update"]["litellm_budget_table"]["connect"]["budget_id"]
+    assert connect_id == "budget-existing-123"
+
+
+@pytest.mark.asyncio
+async def test_upsert_budget_and_membership_creates_new_budget_when_none():
+    """
+    When existing_budget_id is None, _upsert_budget_and_membership must CREATE
+    a new budget row and connect it to the membership.
+    """
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.common_utils import _upsert_budget_and_membership
+
+    mock_user = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin"
+    )
+
+    mock_new_budget = MagicMock()
+    mock_new_budget.budget_id = "budget-new-456"
+
+    mock_tx = MagicMock()
+    mock_tx.litellm_budgettable.update = AsyncMock()
+    mock_tx.litellm_budgettable.create = AsyncMock(return_value=mock_new_budget)
+    mock_tx.litellm_teammembership.upsert = AsyncMock()
+
+    await _upsert_budget_and_membership(
+        tx=mock_tx,
+        team_id="team-1",
+        user_id="user-1",
+        max_budget=100.0,
+        existing_budget_id=None,
+        user_api_key_dict=mock_user,
+    )
+
+    # Must create, not update
+    mock_tx.litellm_budgettable.create.assert_awaited_once()
+    mock_tx.litellm_budgettable.update.assert_not_awaited()
+
+    # Membership must be connected to the newly created budget id
+    upsert_call = mock_tx.litellm_teammembership.upsert.call_args
+    connect_id = upsert_call.kwargs["data"]["update"]["litellm_budget_table"]["connect"]["budget_id"]
+    assert connect_id == "budget-new-456"
 
 
 # ---------------------------------------------------------------------------

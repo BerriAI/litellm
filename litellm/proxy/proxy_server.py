@@ -6273,6 +6273,12 @@ class ProxyStartupEvent:
                 misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
             )
 
+            # Run once immediately at startup so expired budget_reset_at values are
+            # advanced before the first UI request. Without this, any budget that
+            # expired exactly at restart time would show a stale past timestamp
+            # until the first scheduled interval fires (~10 minutes later).
+            asyncio.create_task(budget_reset_job.reset_budget())
+
         ### UPDATE SPEND ###
         scheduler.add_job(
             update_spend,

@@ -45,11 +45,25 @@ export default function TeamMemberTab({
     return "0";
   };
 
-  // Helper function to get spend for a user
+  // Helper function to get spend for a user (current budget period only)
   const getUserSpend = (userId: string | null): number | null => {
     if (!userId) return 0;
     const membership = teamData.team_memberships.find((tm) => tm.user_id === userId);
     return membership?.spend || 0;
+  };
+
+  // Helper function to get total (all-time) spend for a user
+  const getUserTotalSpend = (userId: string | null): number | null => {
+    if (!userId) return 0;
+    const membership = teamData.team_memberships.find((tm) => tm.user_id === userId);
+    return membership?.total_spend ?? 0;
+  };
+
+  // Helper function to get the next budget reset datetime for a user
+  const getUserBudgetResetAt = (userId: string | null): string | null => {
+    if (!userId) return null;
+    const membership = teamData.team_memberships.find((tm) => tm.user_id === userId);
+    return membership?.litellm_budget_table?.budget_reset_at ?? null;
   };
 
   const getUserBudget = (userId: string | null): string | null => {
@@ -86,8 +100,8 @@ export default function TeamMemberTab({
     {
       title: (
         <Space direction="horizontal">
-          Team Member Spend (USD)
-          <Tooltip title="This is the amount spent by a user in the team.">
+          Spend (Current Period)
+          <Tooltip title="Amount spent by this member in the current budget period. Resets when the budget period ends.">
             <InfoCircleOutlined />
           </Tooltip>
         </Space>
@@ -98,6 +112,20 @@ export default function TeamMemberTab({
       ),
     },
     {
+      title: (
+        <Space direction="horizontal">
+          Total Spend (USD)
+          <Tooltip title="Cumulative amount spent by this member across all budget periods.">
+            <InfoCircleOutlined />
+          </Tooltip>
+        </Space>
+      ),
+      key: "total_spend",
+      render: (_: unknown, record: Member) => (
+        <Typography.Text>${formatNumberWithCommas(getUserTotalSpend(record.user_id), 4)}</Typography.Text>
+      ),
+    },
+    {
       title: "Team Member Budget (USD)",
       key: "budget",
       render: (_: unknown, record: Member) => {
@@ -105,6 +133,26 @@ export default function TeamMemberTab({
         return (
           <Typography.Text>
             {budget ? `$${formatNumberWithCommas(Number(budget), 4)}` : "No Limit"}
+          </Typography.Text>
+        );
+      },
+    },
+    {
+      title: (
+        <Space direction="horizontal">
+          Next Budget Reset
+          <Tooltip title="When this member's spend resets for the next budget period.">
+            <InfoCircleOutlined />
+          </Tooltip>
+        </Space>
+      ),
+      key: "budget_reset_at",
+      render: (_: unknown, record: Member) => {
+        const resetAt = getUserBudgetResetAt(record.user_id);
+        if (!resetAt) return <Typography.Text>-</Typography.Text>;
+        return (
+          <Typography.Text>
+            {new Date(resetAt).toLocaleString()}
           </Typography.Text>
         );
       },
@@ -138,6 +186,7 @@ export default function TeamMemberTab({
           max_budget_in_team: membership?.litellm_budget_table?.max_budget || null,
           tpm_limit: membership?.litellm_budget_table?.tpm_limit || null,
           rpm_limit: membership?.litellm_budget_table?.rpm_limit || null,
+          budget_duration: membership?.litellm_budget_table?.budget_duration || null,
         };
         setSelectedEditMember(enhancedMember);
         setIsEditMemberModalVisible(true);
