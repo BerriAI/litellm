@@ -32,6 +32,7 @@ sys.path.insert(0, os.path.abspath("../../.."))
 # ---------------------------------------------------------------------------
 
 OCI_CONFIG_FILE = os.path.expanduser("~/.oci/config")
+OCI_PROFILE = os.environ.get("OCI_CONFIG_PROFILE", "DEFAULT")
 _OCI_AVAILABLE = os.path.isfile(OCI_CONFIG_FILE)
 
 pytestmark = pytest.mark.skipif(
@@ -42,9 +43,9 @@ pytestmark = pytest.mark.skipif(
 
 @pytest.fixture(scope="module")
 def oci_signer():
-    """Return an oci.Signer built from ~/.oci/config [DEFAULT]."""
+    """Return an oci.Signer built from ~/.oci/config [<profile>]."""
     oci = pytest.importorskip("oci")
-    config = oci.config.from_file()
+    config = oci.config.from_file(profile_name=OCI_PROFILE)
     return oci.Signer(
         tenancy=config["tenancy"],
         user=config["user"],
@@ -57,7 +58,7 @@ def oci_signer():
 def oci_params(oci_signer) -> dict:
     """Common OCI call-time parameters shared by all tests."""
     oci = pytest.importorskip("oci")
-    config = oci.config.from_file()
+    config = oci.config.from_file(profile_name=OCI_PROFILE)
     compartment_id = os.environ.get("OCI_TEST_COMPARTMENT_ID", config["tenancy"])
     region = os.environ.get("OCI_TEST_REGION", "us-chicago-1")
     return {
@@ -483,7 +484,7 @@ class TestOCIEnvVarCredentials:
     def test_completion_via_env_vars(self, monkeypatch):
         """Completion works when credentials are set through environment variables."""
         oci = pytest.importorskip("oci")
-        config = oci.config.from_file()
+        config = oci.config.from_file(profile_name=OCI_PROFILE)
         key_path = os.path.expanduser(config["key_file"])
 
         with open(key_path) as f:
@@ -507,7 +508,7 @@ class TestOCIEnvVarCredentials:
 
     def test_embedding_via_env_vars(self, monkeypatch):
         oci = pytest.importorskip("oci")
-        config = oci.config.from_file()
+        config = oci.config.from_file(profile_name=OCI_PROFILE)
         key_path = os.path.expanduser(config["key_file"])
 
         with open(key_path) as f:
