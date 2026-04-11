@@ -55,21 +55,35 @@ def test_eager_loading_enabled():
     assert result.returncode == 0, f"Subprocess failed:\nstdout: {result.stdout}\nstderr: {result.stderr}"
 
 
-@pytest.mark.parametrize("value", ["1", "true", "True", "TRUE", "yes", "on"])
-def test_eager_loading_env_var_values(value):
-    """Test that various env var values enable eager loading"""
+def test_eager_loading_env_var_values():
+    """Test that various truthy env var values all enable eager loading.
+
+    All values are tested inside a single subprocess to avoid spawning one
+    cold ``import litellm`` process per value (~78 s each on CI).  The
+    subprocess re-imports litellm in isolated ``importlib`` reloads so each
+    value gets a fresh module, but we only pay the process-start cost once.
+    """
     result = _run_python(
         """
-        import litellm
-        assert hasattr(litellm, "encoding"), "Encoding should be available"
-        encoding = litellm.encoding
-        tokens = encoding.encode("test")
-        assert len(tokens) > 0
+        import importlib, sys, os
+
+        values = ["1", "true", "True", "TRUE", "yes", "Yes", "YES", "on", "On", "ON"]
+        for value in values:
+            # Set the env var for this iteration
+            os.environ["LITELLM_DISABLE_LAZY_LOADING"] = value
+            # Remove cached litellm modules so re-import picks up the new env
+            mods_to_remove = [k for k in sys.modules if k == "litellm" or k.startswith("litellm.")]
+            for m in mods_to_remove:
+                del sys.modules[m]
+            import litellm
+            assert hasattr(litellm, "encoding"), f"Encoding missing for {value!r}"
+            tokens = litellm.encoding.encode("test")
+            assert len(tokens) > 0, f"Encoding broken for {value!r}"
         """,
-        env_override={"LITELLM_DISABLE_LAZY_LOADING": value},
+        env_override={"LITELLM_DISABLE_LAZY_LOADING": "1"},
     )
     assert result.returncode == 0, (
-        f"Failed for value {value!r}:\nstdout: {result.stdout}\nstderr: {result.stderr}"
+        f"Failed:\nstdout: {result.stdout}\nstderr: {result.stderr}"
     )
 
 

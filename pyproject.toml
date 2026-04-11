@@ -211,7 +211,7 @@ build-backend = "uv_build"
 [tool.uv]
 default-groups = ["dev"]
 required-version = "==0.10.9"
-exclude-newer = "2026-04-10"
+exclude-newer = "3 days"
 
 [tool.uv.sources]
 litellm-proxy-extras = { workspace = true }
