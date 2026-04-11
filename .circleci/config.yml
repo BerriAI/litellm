@@ -1645,11 +1645,7 @@ jobs:
       - run: uv run --no-sync python ./tests/code_coverage_tests/ban_copy_deepcopy_kwargs.py
       - run: uv run --no-sync python ./tests/code_coverage_tests/check_fastuuid_usage.py
       - run: uv run --no-sync python ./tests/code_coverage_tests/memory_test.py
-      - run:
-          name: Install Helm
-          command: |
-            curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
-      - run: helm lint ./deploy/charts/litellm-helm
+      # helm lint is handled by the dedicated helm_chart_testing job
 
   db_migration_disable_update_check:
     machine:
