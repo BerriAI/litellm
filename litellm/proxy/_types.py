@@ -494,10 +494,12 @@ class LiteLLMRoutes(enum.Enum):
         "/v2/key/info",
         "/model_group/info",
         "/health",
+        "/health/services",
         "/key/list",
         "/user/filter/ui",
         "/models",
         "/v1/models",
+        "/sso/get/ui_settings",
     ]
 
     # NOTE: ROUTES ONLY FOR MASTER KEY - only the Master Key should be able to Reset Spend
@@ -566,6 +568,8 @@ class LiteLLMRoutes(enum.Enum):
         "/spend/tags",
         "/spend/calculate",
         "/spend/logs",
+        "/spend/logs/ui",
+        "/spend/logs/session/ui",
         "/cost/estimate",
     ]
 
@@ -581,6 +585,7 @@ class LiteLLMRoutes(enum.Enum):
         "/global/spend/report",
         "/global/spend/provider",
         "/global/spend/tags",
+        "/global/spend/all_tag_names",
     ]
 
     public_routes = set(
@@ -602,6 +607,9 @@ class LiteLLMRoutes(enum.Enum):
         ]
     )
 
+    # Retained for backwards compatibility with JWT auth configs that reference
+    # "ui_routes" in admin_allowed_routes. Not used by the proxy's own route
+    # authorization — UI tokens now go through the same RBAC path as API tokens.
     ui_routes = [
         "/sso",
         "/sso/get/ui_settings",
@@ -627,19 +635,16 @@ class LiteLLMRoutes(enum.Enum):
 
     internal_user_routes = (
         [
-            "/global/spend/tags",
-            "/global/spend/keys",
-            "/global/spend/models",
-            "/global/spend/provider",
-            "/global/spend/end_users",
             "/global/activity",
             "/global/activity/model",
+            "/global/activity/cache_hits",
             "/v1/models/{model_id}",
             "/models/{model_id}",
             "/guardrails/list",
             "/v2/guardrails/list",
         ]
         + spend_tracking_routes
+        + global_spend_tracking_routes
         + key_management_routes
     )
 
@@ -694,6 +699,9 @@ class LiteLLMRoutes(enum.Enum):
         "/tag/list",
         "/audit",
         "/audit/{id}",
+        "/global/activity",
+        "/global/activity/model",
+        "/global/activity/cache_hits",
     ] + info_routes
 
     # All routes accesible by an Org Admin

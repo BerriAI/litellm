@@ -13,12 +13,12 @@ RUN pip install --no-cache-dir -r requirements.txt
 RUN chmod +x /app/health_check_client.py
 
 # Run as non-root user
-RUN adduser --disabled-password --gecos "" --uid 1001 healthcheck
-USER healthcheck
+RUN groupadd --gid 1000 appuser && useradd --uid 1000 --gid 1000 --no-create-home appuser
+USER appuser
 
 # Health check
-HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
-  CMD python /app/health_check_client.py --help || exit 1
+HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
+  CMD ["python", "/app/health_check_client.py", "--help"]
 
 # Set entrypoint
 ENTRYPOINT ["python", "/app/health_check_client.py"]
