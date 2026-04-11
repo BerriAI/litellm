@@ -558,6 +558,123 @@ async def test_auto_register_creates_key_and_mapping():
     assert cached == "hashed_auto_key"
 
 
+@pytest.mark.asyncio
+async def test_auto_register_triggers_on_stale_no_mapping_sentinel():
+    """
+    If the cache holds a stale __NO_MAPPING__ sentinel (written under a prior
+    fallback_team_mapping config) and behavior is now AUTO_REGISTER, the sentinel
+    must be evicted and auto-registration must run — not silently return None.
+    """
+    from litellm.proxy._types import UnregisteredJWTClientBehavior
+
+    jwt_handler = JWTHandler()
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(
+        virtual_key_claim_field="email",
+        unregistered_jwt_client_behavior=UnregisteredJWTClientBehavior.AUTO_REGISTER,
+        virtual_key_mapping_cache_ttl=300,
+    )
+    jwt_claims = {"email": "alice@corp.com"}
+
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_jwtkeymapping.find_first = AsyncMock(return_value=None)
+    prisma_client.db.litellm_jwtkeymapping.create = AsyncMock()
+
+    user_api_key_cache = DualCache()
+    # Seed the stale sentinel
+    await user_api_key_cache.async_set_cache(
+        "jwt_key_mapping:email:alice@corp.com", "__NO_MAPPING__"
+    )
+
+    mock_key_obj = UserAPIKeyAuth(token="hashed_auto_key", team_id=None)
+
+    with patch(
+        "litellm.proxy.auth.user_api_key_auth.get_key_object", new_callable=AsyncMock
+    ) as mock_get_key, patch(
+        "litellm.proxy.management_endpoints.key_management_endpoints.generate_key_helper_fn",
+        new_callable=AsyncMock,
+    ) as mock_gen_key:
+        mock_gen_key.return_value = {"token": "hashed_auto_key", "key": "sk-auto-key"}
+        mock_get_key.return_value = mock_key_obj
+
+        result = await _resolve_jwt_to_virtual_key(
+            jwt_claims=jwt_claims,
+            jwt_handler=jwt_handler,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            parent_otel_span=None,
+            proxy_logging_obj=None,
+        )
+
+    # Must have auto-registered, not returned None
+    assert result == mock_key_obj
+    prisma_client.db.litellm_jwtkeymapping.create.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_auto_register_race_condition_unique_conflict():
+    """
+    If two concurrent requests both call _auto_register_jwt_mapping and the
+    second hits a unique-constraint violation on create, it must fall back to
+    fetching the winner's mapping — no error surfaced to the caller.
+    """
+    from litellm.proxy.auth.user_api_key_auth import _auto_register_jwt_mapping
+    from litellm.proxy._types import UnregisteredJWTClientBehavior
+
+    jwt_handler = JWTHandler()
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(
+        virtual_key_claim_field="sub",
+        unregistered_jwt_client_behavior=UnregisteredJWTClientBehavior.AUTO_REGISTER,
+        virtual_key_mapping_cache_ttl=300,
+    )
+
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_jwtkeymapping.create = AsyncMock(
+        side_effect=Exception("Unique constraint failed (P2002)")
+    )
+    # Simulate the winner's mapping already in DB after the conflict
+    winner_mapping = MagicMock()
+    winner_mapping.token = "winner_token_hash"
+    winner_mapping.is_active = True
+    prisma_client.db.litellm_jwtkeymapping.find_first = AsyncMock(
+        return_value=winner_mapping
+    )
+
+    user_api_key_cache = DualCache()
+    mock_key_obj = UserAPIKeyAuth(token="winner_token_hash", team_id=None)
+
+    with patch(
+        "litellm.proxy.auth.user_api_key_auth.get_key_object", new_callable=AsyncMock
+    ) as mock_get_key, patch(
+        "litellm.proxy.management_endpoints.key_management_endpoints.generate_key_helper_fn",
+        new_callable=AsyncMock,
+        return_value={"token": "loser_token_hash", "key": "sk-loser"},
+    ):
+        mock_get_key.return_value = mock_key_obj
+
+        result = await _auto_register_jwt_mapping(
+            virtual_key_claim_field="sub",
+            claim_value="user-42",
+            jwt_handler=jwt_handler,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            parent_otel_span=None,
+            proxy_logging_obj=None,
+            cache_key="jwt_key_mapping:sub:user-42",
+        )
+
+    assert result == mock_key_obj
+    # Cache should hold the winner's token, not the loser's
+    cached = await user_api_key_cache.async_get_cache("jwt_key_mapping:sub:user-42")
+    assert cached == "winner_token_hash"
+    mock_get_key.assert_called_once_with(
+        hashed_token="winner_token_hash",
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        parent_otel_span=None,
+        proxy_logging_obj=None,
+    )
+
+
 # ──────────────────────────────────────────────
 # Tests: backward-compat alias jwt_client_id_field
 # ──────────────────────────────────────────────
