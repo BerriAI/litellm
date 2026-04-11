@@ -243,8 +243,6 @@ from typing import (
     get_args,
 )
 
-from openai import OpenAIError as OriginalError
-
 # These are lazy loaded via __getattr__
 from litellm.llms.base_llm.base_utils import (
     BaseLLMModelInfo,
