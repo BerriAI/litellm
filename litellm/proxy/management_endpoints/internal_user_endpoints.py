@@ -1518,6 +1518,23 @@ async def bulk_user_update(
             detail={"error": "Database not connected"},
         )
 
+    # Only proxy admins can modify user_role in bulk updates
+    _bulk_role = (
+        getattr(data.user_updates, "user_role", None) if data.user_updates else None
+    )
+    if _bulk_role is None and data.users:
+        _bulk_role = next(
+            (u.user_role for u in data.users if u.user_role is not None), None
+        )
+    if (
+        _bulk_role is not None
+        and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail="Only proxy admins can modify user roles.",
+        )
+
     # Determine the list of users to update
     users_to_update: Union[
         List[UpdateUserRequest], List[UpdateUserRequestNoUserIDorEmail]
