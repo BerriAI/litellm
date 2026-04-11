@@ -322,7 +322,7 @@ def test_target_storage_invokes_storage_backend(
         )
     )
     mocker.patch(
-        "litellm.proxy.openai_files_endpoints.files_endpoints.StorageBackendFileService.upload_file_to_storage_backend",
+        "litellm.proxy.openai_files_endpoints.storage_backend_service.StorageBackendFileService.upload_file_to_storage_backend",
         new=async_mock,
     )
 
@@ -381,7 +381,7 @@ def test_target_storage_with_target_models(
         )
     )
     mocker.patch(
-        "litellm.proxy.openai_files_endpoints.files_endpoints.StorageBackendFileService.upload_file_to_storage_backend",
+        "litellm.proxy.openai_files_endpoints.storage_backend_service.StorageBackendFileService.upload_file_to_storage_backend",
         new=async_mock,
     )
 
