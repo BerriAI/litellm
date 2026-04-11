@@ -24,9 +24,6 @@ from fastapi import (
 import litellm
 from litellm import CreateFileRequest, get_secret_str
 from litellm._logging import verbose_proxy_logger
-from litellm.proxy.openai_files_endpoints.file_content_streaming_handler import (
-    FileContentStreamingHandler,
-)
 from litellm.llms.base_llm.files.transformation import BaseFileEndpoints
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -55,9 +52,7 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
     extract_file_creation_params,
     get_credentials_for_model,
     handle_model_based_routing,
-)
-from litellm.proxy.openai_files_endpoints.storage_backend_service import (
-    StorageBackendFileService,
+    prepare_data_with_credentials,
 )
 
 router = APIRouter()
@@ -161,6 +156,9 @@ async def route_create_file(
     if target_storage and target_storage != "default":
         from litellm.litellm_core_utils.prompt_templates.common_utils import (
             extract_file_data,
+        )
+        from litellm.proxy.openai_files_endpoints.storage_backend_service import (
+            StorageBackendFileService,
         )
 
         # Extract file data
@@ -732,6 +730,10 @@ async def get_file_content(  # noqa: PLR0915
                 llm_router=llm_router,
                 data=data,
                 check_file_id_encoding=True,
+            )
+
+            from litellm.proxy.openai_files_endpoints.file_content_streaming_handler import (
+                FileContentStreamingHandler,
             )
 
             if FileContentStreamingHandler.should_stream_file_content(
