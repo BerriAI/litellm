@@ -1330,6 +1330,57 @@ jobs:
           paths:
             - audio_coverage.xml
             - audio_coverage
+  redis_caching_unit_tests:
+    docker:
+      - image: cimg/python:3.11
+        auth:
+          username: ${DOCKERHUB_USERNAME}
+          password: ${DOCKERHUB_PASSWORD}
+    working_directory: ~/project
+
+    steps:
+      - checkout
+      - setup_google_dns
+      - run:
+          name: Install Dependencies
+          command: |
+            python -m pip install --upgrade pip uv
+            uv pip install --system -r requirements.txt
+            pip install "pytest==7.3.1"
+            pip install "pytest-retry==1.6.3"
+            pip install "pytest-cov==5.0.0"
+            pip install "pytest-asyncio==0.21.1"
+            pip install "pytest-xdist==3.6.1"
+            pip install "pytest-rerunfailures==14.0"
+      # Run pytest and generate JUnit XML report
+      - run:
+          name: Run tests
+          command: |
+            pwd
+            ls
+            python -m pytest -vv \
+              tests/local_testing/test_dual_cache.py \
+              tests/local_testing/test_redis_batch_optimizations.py \
+              tests/local_testing/test_router_utils.py \
+              --cov=litellm --cov-report=xml \
+              -x -s -v --junitxml=test-results/junit.xml \
+              --durations=5 -n 2 \
+              --reruns 2 --reruns-delay 1
+          no_output_timeout: 20m
+      - run:
+          name: Rename the coverage files
+          command: |
+            mv coverage.xml redis_caching_coverage.xml
+            mv .coverage redis_caching_coverage
+
+      # Store test results
+      - store_test_results:
+          path: test-results
+      - persist_to_workspace:
+          root: .
+          paths:
+            - redis_caching_coverage.xml
+            - redis_caching_coverage
   installing_litellm_on_python:
     docker:
       - image: cimg/python:3.11
@@ -2889,7 +2940,7 @@ jobs:
             python -m venv venv
             . venv/bin/activate
             pip install coverage
-            coverage combine realtime_translation_coverage ocr_coverage search_coverage mcp_coverage litellm_mcps_tests_coverage logging_coverage audio_coverage local_testing_part1_coverage local_testing_part2_coverage pass_through_unit_tests_coverage batches_coverage guardrails_coverage
+            coverage combine realtime_translation_coverage ocr_coverage search_coverage mcp_coverage litellm_mcps_tests_coverage logging_coverage audio_coverage local_testing_part1_coverage local_testing_part2_coverage pass_through_unit_tests_coverage batches_coverage guardrails_coverage redis_caching_coverage
             coverage xml
       - codecov/upload:
           file: ./coverage.xml
@@ -3074,6 +3125,117 @@ jobs:
             CI=true npm run test -- --run \
               --pool forks --poolOptions.forks.maxForks=8
 
+  e2e_ui_testing:
+    docker:
+      - image: cimg/python:3.12-browsers
+        auth:
+          username: ${DOCKERHUB_USERNAME}
+          password: ${DOCKERHUB_PASSWORD}
+      - image: cimg/postgres:16.0
+        environment:
+          POSTGRES_USER: e2euser
+          POSTGRES_PASSWORD: e2epassword
+          POSTGRES_DB: litellm_e2e
+    resource_class: large
+    working_directory: ~/project
+    environment:
+      DATABASE_URL: "postgresql://e2euser:e2epassword@localhost:5432/litellm_e2e"
+      CI: "true"
+    steps:
+      - checkout
+      - setup_google_dns
+      - restore_cache:
+          keys:
+            - ui-e2e-py-deps-v1-{{ checksum "requirements.txt" }}
+      - run:
+          name: Install Python dependencies
+          command: |
+            python -m pip install --upgrade pip uv
+            uv pip install --system -r requirements.txt
+            pip install "prisma==0.11.0"
+            prisma generate --schema litellm/proxy/schema.prisma
+      - save_cache:
+          key: ui-e2e-py-deps-v1-{{ checksum "requirements.txt" }}
+          paths:
+            - ~/.local/lib
+            - ~/.local/bin
+      - restore_cache:
+          keys:
+            - ui-e2e-node-deps-v1-{{ checksum "ui/litellm-dashboard/package-lock.json" }}
+      - run:
+          name: Install Node dependencies and Playwright
+          command: |
+            cd ui/litellm-dashboard
+            npm ci
+            npx playwright install chromium --with-deps
+      - save_cache:
+          key: ui-e2e-node-deps-v1-{{ checksum "ui/litellm-dashboard/package-lock.json" }}
+          paths:
+            - ui/litellm-dashboard/node_modules
+      - run:
+          name: Build UI from source
+          command: |
+            cd ui/litellm-dashboard
+            npm run build
+            cp -r out/ ../../litellm/proxy/_experimental/out/
+            # Restructure HTML so extensionless routes work (login.html -> login/index.html)
+            find ../../litellm/proxy/_experimental/out -name '*.html' ! -name 'index.html' | while read -r f; do
+              d="${f%.html}"; mkdir -p "$d"; mv "$f" "$d/index.html"
+            done
+      - run:
+          name: Wait for PostgreSQL
+          command: dockerize -wait tcp://localhost:5432 -timeout 30s
+      - run:
+          name: Push Prisma schema
+          command: prisma db push --schema litellm/proxy/schema.prisma --accept-data-loss
+      - run:
+          name: Seed database
+          command: |
+            PGPASSWORD=e2epassword psql -h localhost -p 5432 -U e2euser -d litellm_e2e \
+              -f ui/litellm-dashboard/e2e_tests/fixtures/seed.sql
+      - run:
+          name: Start mock LLM server
+          command: python ui/litellm-dashboard/e2e_tests/fixtures/mock_llm_server/server.py
+          background: true
+      - run:
+          name: Start LiteLLM proxy
+          environment:
+            LITELLM_MASTER_KEY: "sk-1234"
+            MOCK_LLM_URL: "http://127.0.0.1:8090/v1"
+            DISABLE_SCHEMA_UPDATE: "true"
+            SERVER_ROOT_PATH: ""
+            PROXY_LOGOUT_URL: ""
+          command: |
+            python -m litellm.proxy.proxy_cli \
+              --config ui/litellm-dashboard/e2e_tests/fixtures/config.yml \
+              --port 4000
+          background: true
+      - run:
+          name: Wait for proxy to be ready
+          command: |
+            for i in $(seq 1 60); do
+              HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:4000/health -H "Authorization: Bearer sk-1234" 2>/dev/null || true)
+              if [ "$HTTP_CODE" = "200" ]; then
+                echo "Proxy is ready"
+                exit 0
+              fi
+              sleep 2
+            done
+            echo "Proxy failed to start"
+            exit 1
+      - run:
+          name: Run Playwright E2E tests
+          command: |
+            cd ui/litellm-dashboard
+            npx playwright test --config e2e_tests/playwright.config.ts
+          no_output_timeout: 10m
+      - store_artifacts:
+          path: ui/litellm-dashboard/test-results
+          destination: e2e-test-results
+      - store_artifacts:
+          path: ui/litellm-dashboard/playwright-report
+          destination: e2e-playwright-report
+
   build_docker_database_image:
     machine:
       image: ubuntu-2204:2024.04.1
@@ -3099,80 +3261,6 @@ jobs:
           paths:
             - litellm-docker-database.tar.zst
 
-  e2e_ui_testing:
-    machine:
-      image: ubuntu-2204:2023.10.1
-    resource_class: large
-    working_directory: ~/project
-    parameters:
-      browser:
-        type: string
-    steps:
-      - checkout
-      - setup_google_dns
-      - attach_workspace:
-          at: ~/project
-      - run:
-          name: Load Docker Database Image
-          command: |
-            zstd -d litellm-docker-database.tar.zst --stdout | docker load
-            docker images | grep litellm-docker-database
-      - run:
-          name: Install Dependencies
-          command: |
-            npm install -D @playwright/test
-      - run:
-          name: Install Playwright Browsers
-          command: |
-            npx playwright install
-      - run:
-          name: Run Docker container
-          command: |
-            docker run -d \
-              -p 4000:4000 \
-              -e DATABASE_URL=$E2E_UI_TEST_DATABASE_URL \
-              -e LITELLM_MASTER_KEY="sk-1234" \
-              -e OPENAI_API_KEY=$OPENAI_API_KEY \
-              -e UI_USERNAME="admin" \
-              -e UI_PASSWORD="gm" \
-              -e LITELLM_LICENSE=$LITELLM_LICENSE \
-              --name litellm-docker-database-<< parameters.browser >> \
-              -v $(pwd)/litellm/proxy/example_config_yaml/simple_config.yaml:/app/config.yaml \
-              litellm-docker-database:ci \
-              --config /app/config.yaml \
-              --port 4000 \
-              --detailed_debug
-      - run:
-          name: Install curl and dockerize
-          command: |
-            sudo apt-get update
-            sudo apt-get install -y curl
-            sudo wget https://github.com/jwilder/dockerize/releases/download/v0.6.1/dockerize-linux-amd64-v0.6.1.tar.gz
-            sudo tar -C /usr/local/bin -xzvf dockerize-linux-amd64-v0.6.1.tar.gz
-            sudo rm dockerize-linux-amd64-v0.6.1.tar.gz
-      - run:
-          name: Start outputting logs
-          command: docker logs -f litellm-docker-database-<< parameters.browser >>
-          background: true
-      - run:
-          name: Wait for app to be ready
-          command: dockerize -wait http://localhost:4000 -timeout 5m
-      - run:
-          name: Run Playwright Tests
-          command: |
-            npx playwright test \
-              --project << parameters.browser >> \
-              --config ui/litellm-dashboard/e2e_tests/playwright.config.ts \
-              --reporter=html \
-              --output=test-results
-          no_output_timeout: 15m
-      - store_artifacts:
-          path: test-results
-          destination: playwright-results
-
-      - store_artifacts:
-          path: playwright-report
-          destination: playwright-report
 
   prisma_schema_sync:
     machine:
@@ -3401,32 +3489,12 @@ workflows:
               only:
                 - main
                 - /litellm_.*/
-      # - e2e_ui_testing:
-      #     name: e2e_ui_testing_chromium
-      #     browser: chromium
-      #     context: e2e_ui_tests
-      #     requires:
-      #       - ui_build
-      #       - build_docker_database_image
-      #       - prisma_schema_sync
-      #     filters:
-      #       branches:
-      #         only:
-      #           - main
-      #           - /litellm_.*/
-      # - e2e_ui_testing:
-      #     name: e2e_ui_testing_firefox
-      #     browser: firefox
-      #     context: e2e_ui_tests
-      #     requires:
-      #       - ui_build
-      #       - build_docker_database_image
-      #       - prisma_schema_sync
-      #     filters:
-      #       branches:
-      #         only:
-      #           - main
-      #           - /litellm_.*/
+      - e2e_ui_testing:
+          filters:
+            branches:
+              only:
+                - main
+                - /litellm_.*/
       - build_and_test:
           requires:
             - build_docker_database_image
@@ -3615,6 +3683,12 @@ workflows:
               only:
                 - main
                 - /litellm_.*/
+      - redis_caching_unit_tests:
+          filters:
+            branches:
+              only:
+                - main
+                - /litellm_.*/
       - upload-coverage:
           requires:
             - realtime_translation_testing
@@ -3633,6 +3707,7 @@ workflows:
             - image_gen_testing
             - logging_testing
             - audio_testing
+            - redis_caching_unit_tests
             - langfuse_logging_unit_tests
             - local_testing_part1
             - local_testing_part2
