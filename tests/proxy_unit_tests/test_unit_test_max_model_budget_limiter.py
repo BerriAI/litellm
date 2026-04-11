@@ -413,3 +413,137 @@ async def test_async_log_success_event_uses_end_user_model_budget_duration(
             f"{END_USER_SPEND_CACHE_KEY_PREFIX}:{end_user_id}:{model}:{budget_duration}"
         )
         assert call_kwargs["response_cost"] == 0.05
+
+
+# ---------------------------------------------------------------------------
+# DB fallback tests (Bug 2 — cold cache = no enforcement)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_virtual_key_spend_db_fallback_enforces_budget(budget_limiter):
+    """
+    When both cache lookups return None (cold cache), _get_virtual_key_spend_for_model
+    must fall back to _get_spend_from_db and return that value so the caller can
+    raise BudgetExceededError rather than silently passing the request through.
+    """
+    budget_config = GenericBudgetInfo(budget_limit=100.0, time_period="1d")
+
+    # Both cache tiers cold
+    with patch.object(
+        budget_limiter.dual_cache, "async_get_cache", return_value=None
+    ):
+        with patch.object(
+            budget_limiter,
+            "_get_spend_from_db",
+            new_callable=AsyncMock,
+            return_value=120.0,  # over budget
+        ) as mock_db:
+            spend = await budget_limiter._get_virtual_key_spend_for_model(
+                user_api_key_hash="hash-abc",
+                model="gpt-4o",
+                key_budget_config=budget_config,
+            )
+
+    assert spend == 120.0
+    mock_db.assert_awaited_once()
+    call_kwargs = mock_db.call_args.kwargs
+    assert call_kwargs["model"] == "gpt-4o"
+    assert call_kwargs["budget_duration"] == "1d"
+    assert "hash-abc" in call_kwargs["budget_start_time_key"]
+    assert call_kwargs["entity_filter"] == {"api_key": "hash-abc"}
+
+
+@pytest.mark.asyncio
+async def test_get_end_user_spend_db_fallback_enforces_budget(budget_limiter):
+    """
+    When both cache lookups return None, _get_end_user_spend_for_model must
+    fall back to _get_spend_from_db and return the DB value.
+    """
+    budget_config = GenericBudgetInfo(budget_limit=50.0, time_period="7d")
+
+    with patch.object(
+        budget_limiter.dual_cache, "async_get_cache", return_value=None
+    ):
+        with patch.object(
+            budget_limiter,
+            "_get_spend_from_db",
+            new_callable=AsyncMock,
+            return_value=55.0,
+        ) as mock_db:
+            spend = await budget_limiter._get_end_user_spend_for_model(
+                end_user_id="user-xyz",
+                model="claude-3",
+                key_budget_config=budget_config,
+            )
+
+    assert spend == 55.0
+    mock_db.assert_awaited_once()
+    call_kwargs = mock_db.call_args.kwargs
+    assert call_kwargs["entity_filter"] == {"end_user": "user-xyz"}
+    assert "user-xyz" in call_kwargs["budget_start_time_key"]
+
+
+@pytest.mark.asyncio
+async def test_get_virtual_key_spend_cache_hit_skips_db(budget_limiter):
+    """
+    When cache returns a value, _get_spend_from_db must NOT be called.
+    The DB fallback is only for cold-cache scenarios.
+    """
+    budget_config = GenericBudgetInfo(budget_limit=100.0, time_period="1d")
+
+    with patch.object(
+        budget_limiter.dual_cache, "async_get_cache", return_value=30.0
+    ):
+        with patch.object(
+            budget_limiter, "_get_spend_from_db", new_callable=AsyncMock
+        ) as mock_db:
+            spend = await budget_limiter._get_virtual_key_spend_for_model(
+                user_api_key_hash="hash-abc",
+                model="gpt-4o",
+                key_budget_config=budget_config,
+            )
+
+    assert spend == 30.0
+    mock_db.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_db_fallback_seeds_cache(budget_limiter):
+    """
+    After a successful DB fallback, the result must be written to cache so
+    subsequent requests don't hit the DB on every call.
+    """
+    budget_config = GenericBudgetInfo(budget_limit=100.0, time_period="1d")
+
+    set_cache_calls = []
+
+    async def fake_get_cache(key):
+        return None  # always cold
+
+    async def fake_set_cache(key, value, ttl=None):
+        set_cache_calls.append((key, value, ttl))
+
+    with patch.object(
+        budget_limiter.dual_cache, "async_get_cache", side_effect=fake_get_cache
+    ):
+        with patch.object(
+            budget_limiter.dual_cache, "async_set_cache", side_effect=fake_set_cache
+        ):
+            with patch.object(
+                budget_limiter,
+                "_get_spend_from_db",
+                new_callable=AsyncMock,
+                return_value=75.0,
+            ):
+                await budget_limiter._get_virtual_key_spend_for_model(
+                    user_api_key_hash="hash-abc",
+                    model="gpt-4o",
+                    key_budget_config=budget_config,
+                )
+
+    assert len(set_cache_calls) == 1, "Expected exactly one cache write to seed the result"
+    cached_key, cached_value, cached_ttl = set_cache_calls[0]
+    assert cached_value == 75.0
+    assert "gpt-4o" in cached_key
+    assert "1d" in cached_key
