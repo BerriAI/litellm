@@ -673,6 +673,13 @@ async def _resolve_jwt_to_virtual_key(
     behavior = jwt_handler.litellm_jwtauth.unregistered_jwt_client_behavior
 
     if behavior == UnregisteredJWTClientBehavior.REJECT:
+        # Cache the miss before raising so repeated rejections are served from
+        # cache and don't re-query the DB on every request.
+        await user_api_key_cache.async_set_cache(
+            key=cache_key,
+            value="__NO_MAPPING__",
+            ttl=jwt_handler.litellm_jwtauth.virtual_key_mapping_cache_ttl,
+        )
         raise HTTPException(
             status_code=403,
             detail=f"JWT Key Mapping: No registered mapping for {virtual_key_claim_field}='{claim_value}'. Access denied.",

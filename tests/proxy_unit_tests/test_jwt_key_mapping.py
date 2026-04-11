@@ -467,6 +467,62 @@ async def test_reject_behavior_raises_403_on_no_mapping():
 
 
 @pytest.mark.asyncio
+async def test_reject_behavior_caches_sentinel_after_db_miss():
+    """
+    On a fresh DB miss with REJECT, the __NO_MAPPING__ sentinel must be written
+    to cache so that subsequent rejected requests are served from cache and do
+    not re-query the DB.
+    """
+    from litellm.proxy._types import UnregisteredJWTClientBehavior
+
+    jwt_handler = JWTHandler()
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(
+        virtual_key_claim_field="email",
+        unregistered_jwt_client_behavior=UnregisteredJWTClientBehavior.REJECT,
+        virtual_key_mapping_cache_ttl=300,
+    )
+    jwt_claims = {"email": "unknown@example.com"}
+
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_jwtkeymapping.find_first = AsyncMock(return_value=None)
+
+    user_api_key_cache = DualCache()
+
+    with patch("litellm.proxy.auth.user_api_key_auth.get_key_object", new_callable=AsyncMock):
+        # First call — DB miss, should raise 403 and write sentinel
+        with pytest.raises(HTTPException) as exc_info:
+            await _resolve_jwt_to_virtual_key(
+                jwt_claims=jwt_claims,
+                jwt_handler=jwt_handler,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                parent_otel_span=None,
+                proxy_logging_obj=None,
+            )
+        assert exc_info.value.status_code == 403
+
+        # Sentinel must now be in cache
+        cached = await user_api_key_cache.async_get_cache(
+            "jwt_key_mapping:email:unknown@example.com"
+        )
+        assert cached == "__NO_MAPPING__"
+
+        # Second call — must raise 403 from cache, no additional DB hit
+        prisma_client.db.litellm_jwtkeymapping.find_first.reset_mock()
+        with pytest.raises(HTTPException) as exc_info2:
+            await _resolve_jwt_to_virtual_key(
+                jwt_claims=jwt_claims,
+                jwt_handler=jwt_handler,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                parent_otel_span=None,
+                proxy_logging_obj=None,
+            )
+        assert exc_info2.value.status_code == 403
+        prisma_client.db.litellm_jwtkeymapping.find_first.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_reject_behavior_raises_403_on_cached_no_mapping():
     """
     When the negative-cache sentinel __NO_MAPPING__ is present and behavior is
