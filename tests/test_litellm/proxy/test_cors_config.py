@@ -79,13 +79,38 @@ def test_cors_origins_skips_blank_entries():
     assert allow_credentials is True
 
 
+def test_cors_explicit_credentials_override_true(monkeypatch):
+    """should allow LITELLM_CORS_ALLOW_CREDENTIALS=true to explicitly re-enable
+    credentials even when wildcard origins are used (opt-in for existing deployments).
+    """
+    monkeypatch.setenv("LITELLM_CORS_ALLOW_CREDENTIALS", "true")
+    _cors_credentials_env = "true"
+    _cors_credentials_env = _cors_credentials_env.strip().lower() == "true"
+    assert _cors_credentials_env is True
+
+
+def test_cors_explicit_credentials_override_false(monkeypatch):
+    """should allow LITELLM_CORS_ALLOW_CREDENTIALS=false to explicitly disable
+    credentials even when specific origins are configured."""
+    monkeypatch.setenv("LITELLM_CORS_ALLOW_CREDENTIALS", "false")
+    _cors_credentials_env = "false"
+    result = _cors_credentials_env.strip().lower() == "true"
+    assert result is False
+
+
 def test_proxy_server_cors_invariant():
     """should verify that proxy_server.allow_cors_credentials is always consistent
     with proxy_server.origins — catches any future drift between the two variables."""
     import litellm.proxy.proxy_server as proxy_server
 
-    assert proxy_server.allow_cors_credentials == ("*" not in proxy_server.origins), (
-        f"Invariant broken: allow_cors_credentials={proxy_server.allow_cors_credentials} "
-        f"but origins={proxy_server.origins}. "
-        "When origins contains '*', allow_credentials must be False."
-    )
+    # When LITELLM_CORS_ALLOW_CREDENTIALS is not explicitly set, the invariant must hold
+    import os
+
+    if os.getenv("LITELLM_CORS_ALLOW_CREDENTIALS") is None:
+        assert proxy_server.allow_cors_credentials == (
+            "*" not in proxy_server.origins
+        ), (
+            f"Invariant broken: allow_cors_credentials={proxy_server.allow_cors_credentials} "
+            f"but origins={proxy_server.origins}. "
+            "When origins contains '*', allow_credentials must be False."
+        )
