@@ -2418,6 +2418,60 @@ def test_empty_assistant_message_handling():
         assert result[1]["content"][0]["text"] == "I'm doing well, thank you!"
 
 
+def test_bedrock_converse_trailing_prefix_assistant_skips_user_continue():
+    """Assistant prefill (prefix: true) must not inject a dummy user 'Please continue.' turn."""
+    import litellm.litellm_core_utils.prompt_templates.factory as factory_module
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        _bedrock_converse_messages_pt,
+    )
+
+    messages = [
+        {"role": "user", "content": "Hello, how are you?"},
+        {
+            "role": "assistant",
+            "content": "Good as",
+            "prefix": True,
+        },
+    ]
+
+    with patch.object(factory_module.litellm, "modify_params", True):
+        result = _bedrock_converse_messages_pt(
+            messages=list(messages),
+            model="anthropic.claude-haiku-4-5-20251001-v1:0",
+            llm_provider="bedrock_converse",
+        )
+
+    assert len(result) == 2
+    assert result[0]["role"] == "user"
+    assert result[1]["role"] == "assistant"
+    assert result[1]["content"][0]["text"] == "Good as"
+
+
+def test_bedrock_converse_leading_prefix_assistant_skips_user_continue():
+    """Leading assistant with prefix: true should not prepend dummy user."""
+    import litellm.litellm_core_utils.prompt_templates.factory as factory_module
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        _bedrock_converse_messages_pt,
+    )
+
+    messages = [
+        {"role": "assistant", "content": "Partial", "prefix": True},
+        {"role": "user", "content": "Go on"},
+    ]
+
+    with patch.object(factory_module.litellm, "modify_params", True):
+        result = _bedrock_converse_messages_pt(
+            messages=list(messages),
+            model="anthropic.claude-haiku-4-5-20251001-v1:0",
+            llm_provider="bedrock_converse",
+        )
+
+    assert len(result) == 2
+    assert result[0]["role"] == "assistant"
+    assert result[0]["content"][0]["text"] == "Partial"
+    assert result[1]["role"] == "user"
+
+
 def test_is_nova_2_model():
     """Test the _is_nova_2_model() method for detecting Nova 2 models."""
     config = AmazonConverseConfig()
