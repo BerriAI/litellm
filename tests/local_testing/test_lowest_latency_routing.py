@@ -1282,3 +1282,72 @@ def test_list_order_preserved_after_multiple_trims():
         assert (
             abs(latency_list[i] - expected) < tolerance
         ), f"At index {i}, expected ~{expected}, got {latency_list[i]}"
+
+
+@pytest.mark.asyncio
+async def test_ttft_list_trimming_discards_oldest_entry_async():
+    """
+    Async counterpart: the time_to_first_token list trims the oldest entry
+    when full. Exercises the async_log_success_event TTFT path, which only
+    runs when response_obj is a ModelResponse and the call is marked as
+    streaming with a completion_start_time.
+    """
+    max_size = 3
+    test_cache = DualCache()
+    lowest_latency_logger = LowestLatencyLoggingHandler(
+        router_cache=test_cache, routing_args={"max_latency_list_size": max_size}
+    )
+
+    model_group = "gpt-3.5-turbo"
+    deployment_id = "test-deployment"
+
+    ttft_values = []
+    for i in range(max_size + 1):
+        start_time = time.time()
+        expected_ttft = float(i + 1) * 0.1  # 0.1, 0.2, 0.3, 0.4
+        completion_start_time = start_time + expected_ttft
+        end_time = start_time + float(i + 1)
+        ttft_values.append(expected_ttft)
+
+        kwargs = {
+            "litellm_params": {
+                "metadata": {
+                    "model_group": model_group,
+                    "deployment": "azure/gpt-4.1-mini",
+                },
+                "model_info": {"id": deployment_id},
+            },
+            "stream": True,
+            "completion_start_time": completion_start_time,
+        }
+        response_obj = litellm.ModelResponse(
+            usage=litellm.Usage(completion_tokens=1, total_tokens=1)
+        )
+
+        await lowest_latency_logger.async_log_success_event(
+            response_obj=response_obj,
+            kwargs=kwargs,
+            start_time=start_time,
+            end_time=end_time,
+        )
+
+    latency_key = f"{model_group}_map"
+    cached_data = await test_cache.async_get_cache(key=latency_key)
+    ttft_list = cached_data[deployment_id].get("time_to_first_token", [])
+
+    assert (
+        len(ttft_list) == max_size
+    ), f"Expected {max_size} entries, got {len(ttft_list)}"
+
+    newest_ttft = ttft_values[-1]
+    oldest_ttft = ttft_values[0]
+    tolerance = 0.05
+
+    assert (
+        abs(ttft_list[-1] - newest_ttft) < tolerance
+    ), f"Newest TTFT {newest_ttft} should be at end of list"
+
+    for ttft in ttft_list:
+        assert (
+            abs(ttft - oldest_ttft) > tolerance
+        ), f"Oldest TTFT {oldest_ttft} should have been discarded"
