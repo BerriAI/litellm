@@ -610,10 +610,10 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
 
   const initialKillSwitchOn = info.metadata?.disable_global_guardrails === true;
   const optedOutGlobals = new Set<string>(info.metadata?.opted_out_global_guardrails || []);
-  const nonGlobalOptIns = (info.metadata?.guardrails || []).filter(
+  const nonGlobalOptIns: string[] = (info.metadata?.guardrails || []).filter(
     (n: string) => !globalGuardrailNames.has(n),
   );
-  const effectiveGuardrails = initialKillSwitchOn
+  const effectiveGuardrails: string[] = initialKillSwitchOn
     ? nonGlobalOptIns
     : [
         ...Array.from(globalGuardrailNames).filter((n) => !optedOutGlobals.has(n)),
