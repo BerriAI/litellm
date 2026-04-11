@@ -702,14 +702,14 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                                 "action": w.get("action"),
                             }
                         )
-                for w in word_policy.get("managedWordLists") or []:
-                    if w.get("action") == "BLOCKED":
+                for mw in word_policy.get("managedWordLists") or []:
+                    if mw.get("action") == "BLOCKED":
                         word_matches.append(
                             {
                                 "category": "managedWordLists",
-                                "type": w.get("type"),
-                                "match": w.get("match"),
-                                "action": w.get("action"),
+                                "type": mw.get("type"),
+                                "match": mw.get("match"),
+                                "action": mw.get("action"),
                             }
                         )
                 if word_matches:
