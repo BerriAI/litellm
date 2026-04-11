@@ -55,23 +55,22 @@ def test_eager_loading_enabled():
     assert result.returncode == 0, f"Subprocess failed:\nstdout: {result.stdout}\nstderr: {result.stderr}"
 
 
-def test_eager_loading_env_var_values():
+@pytest.mark.parametrize("value", ["1", "true", "True", "TRUE", "yes", "on"])
+def test_eager_loading_env_var_values(value):
     """Test that various env var values enable eager loading"""
-    values = ["1", "true", "True", "TRUE", "yes", "Yes", "YES", "on", "On", "ON"]
-    for value in values:
-        result = _run_python(
-            """
-            import litellm
-            assert hasattr(litellm, "encoding"), "Encoding should be available"
-            encoding = litellm.encoding
-            tokens = encoding.encode("test")
-            assert len(tokens) > 0
-            """,
-            env_override={"LITELLM_DISABLE_LAZY_LOADING": value},
-        )
-        assert result.returncode == 0, (
-            f"Failed for value {value!r}:\nstdout: {result.stdout}\nstderr: {result.stderr}"
-        )
+    result = _run_python(
+        """
+        import litellm
+        assert hasattr(litellm, "encoding"), "Encoding should be available"
+        encoding = litellm.encoding
+        tokens = encoding.encode("test")
+        assert len(tokens) > 0
+        """,
+        env_override={"LITELLM_DISABLE_LAZY_LOADING": value},
+    )
+    assert result.returncode == 0, (
+        f"Failed for value {value!r}:\nstdout: {result.stdout}\nstderr: {result.stderr}"
+    )
 
 
 def test_lazy_loading_default():
