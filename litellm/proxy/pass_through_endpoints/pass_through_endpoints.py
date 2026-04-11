@@ -61,6 +61,7 @@ from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     EndpointType,
+    LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY,
     PassthroughStandardLoggingPayload,
 )
 
@@ -75,11 +76,6 @@ pass_through_endpoint_logging = PassThroughEndpointLogging()
 _registered_pass_through_routes: Dict[
     str, Dict[str, Union[str, List[str], Dict[str, Any]]]
 ] = {}
-
-# Programmatic pass-through callers (e.g. Bedrock proxy) attach JSON here. Must not use a
-# `custom_body: dict` route parameter — FastAPI would treat it as the HTTP body and reject
-# multipart/form-data before the handler runs.
-LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY = "litellm_pass_through_custom_body"
 
 
 def get_response_body(response: httpx.Response) -> Optional[dict]:
