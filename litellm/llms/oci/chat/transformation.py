@@ -461,7 +461,7 @@ class OCIChatConfig(BaseConfig):
         litellm_params: dict,
         stream: Optional[bool] = None,
     ) -> str:
-        base = get_oci_base_url(optional_params, api_base or litellm.api_base)
+        base = get_oci_base_url(optional_params, api_base)
         return f"{base}/{OCI_API_VERSION}/actions/chat"
 
     def _get_optional_params(self, vendor: OCIVendors, optional_params: dict) -> Dict:
