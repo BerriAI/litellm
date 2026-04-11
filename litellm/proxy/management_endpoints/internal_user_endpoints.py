@@ -1541,6 +1541,12 @@ async def bulk_user_update(
     ] = []
 
     if data.all_users and data.user_updates:
+        # Only proxy admins can update all users at once
+        if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value:
+            raise HTTPException(
+                status_code=403,
+                detail="Only proxy admins can update all users at once.",
+            )
         # Optimized path for updating all users directly in database
         all_users_in_db = await prisma_client.db.litellm_usertable.find_many(
             order={"created_at": "desc"}
