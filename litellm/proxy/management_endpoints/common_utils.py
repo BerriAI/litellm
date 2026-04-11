@@ -1,8 +1,6 @@
-from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any, Dict, Optional, Union
 
 from litellm._logging import verbose_proxy_logger
-from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.caching import DualCache
 from litellm.proxy._types import (
     KeyRequestBase,
@@ -399,9 +397,11 @@ async def _upsert_budget_and_membership(
     if rpm_limit is not None:
         create_data["rpm_limit"] = rpm_limit
     if budget_duration is not None:
+        from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
+
         create_data["budget_duration"] = budget_duration
-        create_data["budget_reset_at"] = datetime.utcnow() + timedelta(
-            seconds=duration_in_seconds(duration=budget_duration)
+        create_data["budget_reset_at"] = get_budget_reset_time(
+            budget_duration=budget_duration
         )
 
     new_budget = await tx.litellm_budgettable.create(

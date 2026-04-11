@@ -287,13 +287,12 @@ async def test_upsert_with_budget_duration(mock_tx, fake_user):
     from unittest.mock import patch
     from datetime import datetime as dt
 
-    fake_now = dt(2026, 1, 1, 0, 0, 0)
+    fake_reset_at = dt(2026, 1, 31, 0, 0, 0)
 
     with patch(
-        "litellm.proxy.management_endpoints.common_utils.datetime"
-    ) as mock_dt:
-        mock_dt.utcnow.return_value = fake_now
-
+        "litellm.proxy.common_utils.timezone_utils.get_budget_reset_time",
+        return_value=fake_reset_at,
+    ):
         await _upsert_budget_and_membership(
             mock_tx,
             team_id="team-dur",
@@ -306,10 +305,7 @@ async def test_upsert_with_budget_duration(mock_tx, fake_user):
 
     call_data = mock_tx.litellm_budgettable.create.call_args.kwargs["data"]
     assert call_data["budget_duration"] == "30d"
-    assert "budget_reset_at" in call_data
-    # 30 days from fake_now
-    from datetime import timedelta
-    assert call_data["budget_reset_at"] == fake_now + timedelta(days=30)
+    assert call_data["budget_reset_at"] == fake_reset_at
 
     # membership upsert should still happen
     mock_tx.litellm_teammembership.upsert.assert_awaited_once()
@@ -325,13 +321,12 @@ async def test_upsert_budget_duration_only_creates_budget(mock_tx, fake_user):
     from unittest.mock import patch
     from datetime import datetime as dt
 
-    fake_now = dt(2026, 1, 1, 0, 0, 0)
+    fake_reset_at = dt(2026, 1, 8, 0, 0, 0)
 
     with patch(
-        "litellm.proxy.management_endpoints.common_utils.datetime"
-    ) as mock_dt:
-        mock_dt.utcnow.return_value = fake_now
-
+        "litellm.proxy.common_utils.timezone_utils.get_budget_reset_time",
+        return_value=fake_reset_at,
+    ):
         await _upsert_budget_and_membership(
             mock_tx,
             team_id="team-dur-only",
@@ -348,7 +343,7 @@ async def test_upsert_budget_duration_only_creates_budget(mock_tx, fake_user):
     # Should create a budget with budget_duration set
     call_data = mock_tx.litellm_budgettable.create.call_args.kwargs["data"]
     assert call_data["budget_duration"] == "7d"
-    assert "budget_reset_at" in call_data
+    assert call_data["budget_reset_at"] == fake_reset_at
 
     # Should upsert membership
     mock_tx.litellm_teammembership.upsert.assert_awaited_once()

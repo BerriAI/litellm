@@ -247,8 +247,12 @@ class TestPromptVersionsEndpoint:
             ),
         }
 
-        # Mock the IN_MEMORY_PROMPT_REGISTRY at the import location
-        with patch("litellm.proxy.prompts.prompt_registry.IN_MEMORY_PROMPT_REGISTRY") as mock_registry:
+        # Mock the IN_MEMORY_PROMPT_REGISTRY at the import location.
+        # Also patch prisma_client to None so the function takes the in-memory
+        # path regardless of any test-suite-level state (avoids Python 3.12
+        # "MagicMock can't be used in await expression" errors).
+        with patch("litellm.proxy.prompts.prompt_registry.IN_MEMORY_PROMPT_REGISTRY") as mock_registry, \
+             patch("litellm.proxy.proxy_server.prisma_client", None):
             mock_registry.IN_MEMORY_PROMPTS = mock_prompts
 
             # Test with base prompt ID
@@ -293,7 +297,11 @@ class TestPromptVersionsEndpoint:
             user_role=LitellmUserRoles.PROXY_ADMIN
         )
 
-        with patch("litellm.proxy.prompts.prompt_registry.IN_MEMORY_PROMPT_REGISTRY") as mock_registry:
+        # Also patch prisma_client to None to force the in-memory path (avoids
+        # Python 3.12 "MagicMock can't be used in await expression" errors when
+        # another test in the same xdist worker sets prisma_client to a MagicMock).
+        with patch("litellm.proxy.prompts.prompt_registry.IN_MEMORY_PROMPT_REGISTRY") as mock_registry, \
+             patch("litellm.proxy.proxy_server.prisma_client", None):
             mock_registry.IN_MEMORY_PROMPTS = {}
 
             with pytest.raises(HTTPException) as exc_info:
