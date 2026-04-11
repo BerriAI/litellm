@@ -3,7 +3,7 @@ name = "litellm"
 version = "1.83.6"
 description = "Library to easily interface with LLM API providers"
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.9, <3.14"
 license = "MIT"
 license-files = ["LICENSE"]
 authors = [
@@ -211,7 +211,7 @@ build-backend = "uv_build"
 [tool.uv]
 default-groups = ["dev"]
 required-version = "==0.10.9"
-exclude-newer = "30 days"
+exclude-newer = "2026-04-10"
 
 [tool.uv.sources]
 litellm-proxy-extras = { workspace = true }
