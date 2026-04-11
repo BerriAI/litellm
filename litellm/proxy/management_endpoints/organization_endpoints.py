@@ -56,7 +56,7 @@ async def _verify_org_access(
 
     Raises HTTPException(403) if the caller does not have access.
     """
-    if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN:
+    if _user_has_admin_view(user_api_key_dict):
         return
 
     if not user_api_key_dict.user_id:
