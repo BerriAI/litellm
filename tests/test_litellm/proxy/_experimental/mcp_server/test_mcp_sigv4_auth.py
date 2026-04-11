@@ -838,6 +838,8 @@ class TestSigV4BuildFromTable:
         table_record.tool_name_to_description = None
         table_record.byok_api_key_help_url = None
         table_record.oauth2_flow = None
+        table_record.token_validation = None
+        table_record.token_storage_ttl_seconds = None
 
         manager = MCPServerManager()
 
@@ -895,6 +897,8 @@ class TestSigV4BuildFromTable:
         table_record.tool_name_to_description = None
         table_record.byok_api_key_help_url = None
         table_record.oauth2_flow = None
+        table_record.token_validation = None
+        table_record.token_storage_ttl_seconds = None
 
         manager = MCPServerManager()
 
