@@ -1,6 +1,4 @@
-import io
 import os
-import pathlib
 import ssl
 import sys
 from unittest.mock import AsyncMock, MagicMock, patch
