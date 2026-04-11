@@ -112,6 +112,15 @@ from litellm.types.proxy.management_endpoints.team_endpoints import (
 router = APIRouter()
 
 
+def _sanitize_for_log(value: Any) -> str:
+    """Strip CR/LF from user-controlled values to prevent log injection."""
+    try:
+        text = str(value)
+    except Exception:
+        text = repr(value)
+    return text.replace("\r", "").replace("\n", "")
+
+
 class TeamMemberBudgetHandler:
     """Helper class to handle team member budget, RPM, and TPM limit operations"""
 
@@ -257,7 +266,7 @@ class TeamMemberBudgetHandler:
     @staticmethod
     async def backfill_team_member_budget_entries(
         team_id: str,
-        members_with_roles: List[Member],
+        members_with_roles: List[Union[Member, dict]],
         team_member_budget_id: str,
         prisma_client: PrismaClient,
     ) -> None:
@@ -305,8 +314,8 @@ class TeamMemberBudgetHandler:
             verbose_proxy_logger.info(
                 "Backfilled %d team_memberships for team %s with budget %s",
                 len(missing),
-                team_id,
-                team_member_budget_id,
+                _sanitize_for_log(team_id),
+                _sanitize_for_log(team_member_budget_id),
             )
 
 
