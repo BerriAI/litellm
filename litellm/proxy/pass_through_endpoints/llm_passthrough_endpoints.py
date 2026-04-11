@@ -37,7 +37,6 @@ from litellm.proxy.common_utils.http_parsing_utils import (
 from litellm.proxy.pass_through_endpoints.common_utils import get_litellm_virtual_key
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     HttpPassThroughEndpointHelpers,
-    LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY,
     create_pass_through_route,
     create_websocket_passthrough_route,
     websocket_passthrough_request,
@@ -87,6 +86,14 @@ def is_passthrough_request_streaming(request_body: dict) -> bool:
     Returns True if the request is streaming
     """
     return request_body.get("stream", False)
+
+
+def _get_litellm_pass_through_custom_body_state_key() -> str:
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+        LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY,
+    )
+
+    return LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY
 
 
 async def llm_passthrough_factory_proxy_route(
