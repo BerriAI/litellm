@@ -223,7 +223,8 @@ async def get_global_activity_internal_user(
         COUNT(*) AS api_requests,
         SUM(total_tokens) AS total_tokens
     FROM "LiteLLM_SpendLogs"
-    WHERE "startTime" >= $1::timestamptz AND "startTime" < ($2::timestamptz + INTERVAL \'1 day\')
+    WHERE "startTime" >= ($1::timestamptz AT TIME ZONE 'UTC')
+      AND "startTime" <  (($2::timestamptz + INTERVAL '1 day') AT TIME ZONE 'UTC')
     AND "user" = $3
     GROUP BY date_trunc('day', "startTime")
     """
@@ -282,8 +283,10 @@ async def get_global_activity(
             detail={"error": "Please provide start_date and end_date"},
         )
 
-    start_date_obj = datetime.strptime(start_date, "%Y-%m-%d")
-    end_date_obj = datetime.strptime(end_date, "%Y-%m-%d")
+    start_date_obj = datetime.strptime(start_date, "%Y-%m-%d").replace(
+        tzinfo=timezone.utc
+    )
+    end_date_obj = datetime.strptime(end_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
 
     from litellm.proxy.proxy_server import prisma_client
 
@@ -307,7 +310,8 @@ async def get_global_activity(
                 COUNT(*) AS api_requests,
                 SUM(total_tokens) AS total_tokens
             FROM "LiteLLM_SpendLogs"
-            WHERE "startTime" >= $1::timestamptz AND "startTime" < ($2::timestamptz + INTERVAL \'1 day\')
+            WHERE "startTime" >= ($1::timestamptz AT TIME ZONE 'UTC')
+              AND "startTime" <  (($2::timestamptz + INTERVAL '1 day') AT TIME ZONE 'UTC')
             GROUP BY date_trunc('day', "startTime")
             """
             db_response = await prisma_client.db.query_raw(
@@ -366,7 +370,8 @@ async def get_global_activity_model_internal_user(
         COUNT(*) AS api_requests,
         SUM(total_tokens) AS total_tokens
     FROM "LiteLLM_SpendLogs"
-    WHERE "startTime" >= $1::timestamptz AND "startTime" < ($2::timestamptz + INTERVAL \'1 day\')
+    WHERE "startTime" >= ($1::timestamptz AT TIME ZONE 'UTC')
+      AND "startTime" <  (($2::timestamptz + INTERVAL '1 day') AT TIME ZONE 'UTC')
     AND "user" = $3
     GROUP BY model_group, date_trunc('day', "startTime")
     """
@@ -448,8 +453,10 @@ async def get_global_activity_model(
             detail={"error": "Please provide start_date and end_date"},
         )
 
-    start_date_obj = datetime.strptime(start_date, "%Y-%m-%d")
-    end_date_obj = datetime.strptime(end_date, "%Y-%m-%d")
+    start_date_obj = datetime.strptime(start_date, "%Y-%m-%d").replace(
+        tzinfo=timezone.utc
+    )
+    end_date_obj = datetime.strptime(end_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
 
     from litellm.proxy.proxy_server import prisma_client
 
@@ -474,7 +481,8 @@ async def get_global_activity_model(
                 COUNT(*) AS api_requests,
                 SUM(total_tokens) AS total_tokens
             FROM "LiteLLM_SpendLogs"
-            WHERE "startTime" >= $1::timestamptz AND "startTime" < ($2::timestamptz + INTERVAL \'1 day\')
+            WHERE "startTime" >= ($1::timestamptz AT TIME ZONE 'UTC')
+              AND "startTime" <  (($2::timestamptz + INTERVAL '1 day') AT TIME ZONE 'UTC')
             GROUP BY model_group, date_trunc('day', "startTime")
             """
             db_response = await prisma_client.db.query_raw(
@@ -600,8 +608,10 @@ async def get_global_activity_exceptions_per_deployment(
             detail={"error": "Please provide start_date and end_date"},
         )
 
-    start_date_obj = datetime.strptime(start_date, "%Y-%m-%d")
-    end_date_obj = datetime.strptime(end_date, "%Y-%m-%d")
+    start_date_obj = datetime.strptime(start_date, "%Y-%m-%d").replace(
+        tzinfo=timezone.utc
+    )
+    end_date_obj = datetime.strptime(end_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
 
     from litellm.proxy.proxy_server import prisma_client
 
@@ -619,7 +629,8 @@ async def get_global_activity_exceptions_per_deployment(
         FROM
             "LiteLLM_ErrorLogs"
         WHERE
-            "startTime" >= $1::timestamptz AND "startTime" < ($2::timestamptz + INTERVAL \'1 day\')
+            "startTime" >= ($1::timestamptz AT TIME ZONE 'UTC')
+            AND "startTime" <  (($2::timestamptz + INTERVAL '1 day') AT TIME ZONE 'UTC')
             AND model_group = $3
             AND status_code = '429'
         GROUP BY
@@ -732,8 +743,10 @@ async def get_global_activity_exceptions(
             detail={"error": "Please provide start_date and end_date"},
         )
 
-    start_date_obj = datetime.strptime(start_date, "%Y-%m-%d")
-    end_date_obj = datetime.strptime(end_date, "%Y-%m-%d")
+    start_date_obj = datetime.strptime(start_date, "%Y-%m-%d").replace(
+        tzinfo=timezone.utc
+    )
+    end_date_obj = datetime.strptime(end_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
 
     from litellm.proxy.proxy_server import prisma_client
 
@@ -750,7 +763,8 @@ async def get_global_activity_exceptions(
         FROM
             "LiteLLM_ErrorLogs"
         WHERE
-            "startTime" >= $1::timestamptz AND "startTime" < ($2::timestamptz + INTERVAL \'1 day\')
+            "startTime" >= ($1::timestamptz AT TIME ZONE 'UTC')
+            AND "startTime" <  (($2::timestamptz + INTERVAL '1 day') AT TIME ZONE 'UTC')
             AND model_group = $3
             AND status_code = '429'
         GROUP BY
@@ -837,8 +851,10 @@ async def get_global_spend_provider(
             detail={"error": "Please provide start_date and end_date"},
         )
 
-    start_date_obj = datetime.strptime(start_date, "%Y-%m-%d")
-    end_date_obj = datetime.strptime(end_date, "%Y-%m-%d")
+    start_date_obj = datetime.strptime(start_date, "%Y-%m-%d").replace(
+        tzinfo=timezone.utc
+    )
+    end_date_obj = datetime.strptime(end_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
 
     from litellm.proxy.proxy_server import llm_router, prisma_client
 
@@ -863,7 +879,8 @@ async def get_global_spend_provider(
             model_id,
             SUM(spend) AS spend
             FROM "LiteLLM_SpendLogs"
-            WHERE "startTime" >= $1::timestamptz AND "startTime" < ($2::timestamptz + INTERVAL \'1 day\') 
+            WHERE "startTime" >= ($1::timestamptz AT TIME ZONE 'UTC')
+              AND "startTime" <  (($2::timestamptz + INTERVAL '1 day') AT TIME ZONE 'UTC')
             AND length(model_id) > 0
             AND "user" = $3
             GROUP BY model_id
@@ -877,7 +894,9 @@ async def get_global_spend_provider(
             model_id,
             SUM(spend) AS spend
             FROM "LiteLLM_SpendLogs"
-            WHERE "startTime" >= $1::timestamptz AND "startTime" < ($2::timestamptz + INTERVAL \'1 day\') AND length(model_id) > 0
+            WHERE "startTime" >= ($1::timestamptz AT TIME ZONE 'UTC')
+              AND "startTime" <  (($2::timestamptz + INTERVAL '1 day') AT TIME ZONE 'UTC')
+              AND length(model_id) > 0
             GROUP BY model_id
             """
             db_response = await prisma_client.db.query_raw(
@@ -996,8 +1015,10 @@ async def get_global_spend_report(
             detail={"error": "Please provide start_date and end_date"},
         )
 
-    start_date_obj = datetime.strptime(start_date, "%Y-%m-%d")
-    end_date_obj = datetime.strptime(end_date, "%Y-%m-%d")
+    start_date_obj = datetime.strptime(start_date, "%Y-%m-%d").replace(
+        tzinfo=timezone.utc
+    )
+    end_date_obj = datetime.strptime(end_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
 
     from litellm.proxy.proxy_server import premium_user, prisma_client
 
@@ -1029,7 +1050,9 @@ async def get_global_spend_report(
                     FROM
                         "LiteLLM_SpendLogs" sl
                     WHERE
-                        sl."startTime" >= $1::timestamptz AND "startTime" < ($2::timestamptz + INTERVAL \'1 day\') AND sl.api_key = $3
+                        sl."startTime" >= ($1::timestamptz AT TIME ZONE 'UTC')
+                        AND sl."startTime" <  (($2::timestamptz + INTERVAL '1 day') AT TIME ZONE 'UTC')
+                        AND sl.api_key = $3
                     GROUP BY
                         sl.api_key,
                         sl.model
@@ -1074,7 +1097,9 @@ async def get_global_spend_report(
                     FROM
                         "LiteLLM_SpendLogs" sl
                     WHERE
-                        sl."startTime" >= $1::timestamptz AND "startTime" < ($2::timestamptz + INTERVAL \'1 day\') AND sl.user = $3
+                        sl."startTime" >= ($1::timestamptz AT TIME ZONE 'UTC')
+                        AND sl."startTime" <  (($2::timestamptz + INTERVAL '1 day') AT TIME ZONE 'UTC')
+                        AND sl.user = $3
                     GROUP BY
                         sl.api_key,
                         sl.model
@@ -1128,7 +1153,8 @@ async def get_global_spend_report(
                 ON 
                     sl.team_id = tt.team_id
                 WHERE
-                    sl."startTime" >= $1::timestamptz AND "startTime" < ($2::timestamptz + INTERVAL \'1 day\')
+                    sl."startTime" >= ($1::timestamptz AT TIME ZONE 'UTC')
+                    AND sl."startTime" <  (($2::timestamptz + INTERVAL '1 day') AT TIME ZONE 'UTC')
                 GROUP BY
                     date_trunc('day', sl."startTime"),
                     tt.team_alias,
@@ -1187,7 +1213,8 @@ async def get_global_spend_report(
                 FROM
                     "LiteLLM_SpendLogs" sl
                 WHERE
-                    sl."startTime" >= $1::timestamptz AND "startTime" < ($2::timestamptz + INTERVAL \'1 day\')
+                    sl."startTime" >= ($1::timestamptz AT TIME ZONE 'UTC')
+                    AND sl."startTime" <  (($2::timestamptz + INTERVAL '1 day') AT TIME ZONE 'UTC')
                 GROUP BY
                     date_trunc('day', sl."startTime"),
                     customer,
@@ -1244,7 +1271,8 @@ async def get_global_spend_report(
                     FROM
                         "LiteLLM_SpendLogs" sl
                     WHERE
-                        sl."startTime" >= $1::timestamptz AND "startTime" < ($2::timestamptz + INTERVAL \'1 day\')
+                        sl."startTime" >= ($1::timestamptz AT TIME ZONE 'UTC')
+                        AND sl."startTime" <  (($2::timestamptz + INTERVAL '1 day') AT TIME ZONE 'UTC')
                     GROUP BY
                         sl.api_key,
                         sl.model
@@ -1448,11 +1476,12 @@ async def _get_spend_report_for_time_range(
 
         # get spend per tag for today
         sql_query = """
-        SELECT 
+        SELECT
         jsonb_array_elements_text(request_tags) AS individual_request_tag,
         SUM(spend) AS total_spend
         FROM "LiteLLM_SpendLogs"
-        WHERE "startTime" >= $1::timestamptz AND "startTime" < ($2::timestamptz + INTERVAL \'1 day\')
+        WHERE "startTime" >= ($1::timestamptz AT TIME ZONE 'UTC')
+          AND "startTime" <  (($2::timestamptz + INTERVAL '1 day') AT TIME ZONE 'UTC')
         GROUP BY individual_request_tag
         ORDER BY total_spend DESC;
         """
@@ -1910,11 +1939,17 @@ async def ui_view_spend_logs(  # noqa: PLR0915
         sql_params: List[Any] = []
         p = 1  # parameter index counter
 
-        # Date range (always present)
-        sql_conditions.append(f'"startTime" >= ${p}::timestamptz')
+        # Date range (always present). Wrap the param side with
+        # `AT TIME ZONE 'UTC'` so comparison against the plain `timestamp`
+        # column does not depend on the DB session timezone (see #22529).
+        sql_conditions.append(
+            f"\"startTime\" >= (${p}::timestamptz AT TIME ZONE 'UTC')"
+        )
         sql_params.append(start_date_obj)
         p += 1
-        sql_conditions.append(f'"startTime" <= ${p}::timestamptz')
+        sql_conditions.append(
+            f"\"startTime\" <= (${p}::timestamptz AT TIME ZONE 'UTC')"
+        )
         sql_params.append(end_date_obj)
         p += 1
 
@@ -2897,8 +2932,8 @@ async def global_spend_end_users(data: Optional[GlobalEndUsersSpend] = None):
     sql_query = """
 SELECT end_user, COUNT(*) AS total_count, SUM(spend) AS total_spend
 FROM "LiteLLM_SpendLogs"
-WHERE "startTime" >= $1::timestamptz
-  AND "startTime" < $2::timestamptz
+WHERE "startTime" >= ($1::timestamptz AT TIME ZONE 'UTC')
+  AND "startTime" <  ($2::timestamptz AT TIME ZONE 'UTC')
   AND (
     CASE
       WHEN $3::TEXT IS NULL THEN TRUE
