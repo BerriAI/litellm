@@ -1,5 +1,5 @@
 import json
-from typing import Optional
+from typing import Optional, cast
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 from fastapi import APIRouter, Form, HTTPException, Request
@@ -381,8 +381,10 @@ async def _persist_oauth_credentials(
         else:
             merged = new_credentials
 
+        from litellm.types.mcp import MCPCredentials
+
         encrypted_credentials = encrypt_credentials(
-            credentials=merged,
+            credentials=cast(MCPCredentials, merged),
             encryption_key=_get_salt_key(),
         )
 
