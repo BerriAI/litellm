@@ -179,7 +179,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   const [mcpAccessGroups, setMcpAccessGroups] = useState<string[]>([]);
   const [mcpAccessGroupsLoaded, setMcpAccessGroupsLoaded] = useState(false);
   const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({});
-  const { data: guardrailsData } = useGuardrails();
+  const { data: guardrailsData, isLoading: isGuardrailsLoading } = useGuardrails();
   const globalGuardrailNames = guardrailsData?.globalGuardrailNames ?? new Set<string>();
   const [policiesList, setPoliciesList] = useState<string[]>([]);
   const [policyGuardrails, setPolicyGuardrails] = useState<Record<string, string[]>>({});
@@ -855,7 +855,9 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                   )}
                 </div>
 
-                {isEditing ? (
+                {isEditing && isGuardrailsLoading ? (
+                  <div className="p-4">Loading...</div>
+                ) : isEditing ? (
                   <Form
                     form={form}
                     onFinish={handleTeamUpdate}
