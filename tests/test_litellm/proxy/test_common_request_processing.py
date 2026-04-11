@@ -886,14 +886,17 @@ class TestCommonRequestProcessingHelpers:
         response = await create_response(mock_gen, "text/event-stream", {})
         assert response.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR
         content = await self.consume_stream(response)
+        # Streaming SSE error frame now mirrors ProxyException.to_dict() shape
+        # so streaming and non-streaming surfaces emit byte-identical errors.
         expected_error_data = {
             "error": {
                 "message": "Error processing stream start",
-                "code": status.HTTP_500_INTERNAL_SERVER_ERROR,
+                "type": "None",
+                "param": "None",
+                "code": str(status.HTTP_500_INTERNAL_SERVER_ERROR),
             }
         }
         assert len(content) == 2
-        # Use json.dumps to match the formatting in create_streaming_response's exception handler
         import json
 
         assert content[0] == f"data: {json.dumps(expected_error_data)}\n\n"
@@ -919,12 +922,129 @@ class TestCommonRequestProcessingHelpers:
         expected_error_data = {
             "error": {
                 "message": "Content blocked by guardrail",
-                "code": 400,
+                "type": "None",
+                "param": "None",
+                "code": "400",
             }
         }
         assert len(content) == 2
         assert content[0] == f"data: {json.dumps(expected_error_data)}\n\n"
         assert content[1] == "data: [DONE]\n\n"
+
+    async def test_create_streaming_response_http_exception_dict_detail_bedrock_shape(
+        self,
+    ):
+        """
+        Bedrock-style dict detail (with the post-L3 shape) must be preserved as
+        structured `provider_specific_fields` in the SSE error frame, not stringified
+        into a Python-repr blob inside `error.message`. Regression for case
+        2026-04-10-internal-bedrock-guardrail-streaming-error.
+        """
+        import json
+
+        mock_gen = AsyncMock()
+        mock_gen.__anext__.side_effect = HTTPException(
+            status_code=400,
+            detail={
+                "error": "Violated guardrail policy",
+                "bedrock_guardrail_response": "Sorry, the model cannot answer this question. Prompt is blocked",
+                "guardrailIdentifier": "amgllac6xf3r",
+                "guardrailVersion": "1",
+                "assessments": [
+                    {
+                        "policy": "sensitiveInformationPolicy",
+                        "matches": [
+                            {
+                                "category": "piiEntities",
+                                "type": "NAME",
+                                "action": "BLOCKED",
+                                "match": "Jack",
+                            }
+                        ],
+                    }
+                ],
+                "guardrail_name": "bedrock-pii-guard",
+                "guardrail_mode": "post_call",
+            },
+        )
+
+        response = await create_response(mock_gen, "text/event-stream", {})
+        assert response.status_code == 400
+        content = await self.consume_stream(response)
+        assert len(content) == 2
+        assert content[1] == "data: [DONE]\n\n"
+
+        payload = json.loads(content[0][len("data: ") :].strip())
+        assert payload["error"]["message"] == "Violated guardrail policy"
+        assert payload["error"]["code"] == "400"
+        psf = payload["error"]["provider_specific_fields"]
+        assert psf["guardrail_name"] == "bedrock-pii-guard"
+        assert psf["guardrail_mode"] == "post_call"
+        assert psf["guardrailIdentifier"] == "amgllac6xf3r"
+        assert psf["assessments"][0]["policy"] == "sensitiveInformationPolicy"
+        assert psf["assessments"][0]["matches"][0]["type"] == "NAME"
+
+    async def test_create_streaming_response_http_exception_dict_detail_nested_error_shape(
+        self,
+    ):
+        """PANW Prisma AIRS-style nested `{"error": {"message": ...}}` detail must
+        extract `error.message` as the human-readable summary while preserving the
+        full payload."""
+        import json
+
+        mock_gen = AsyncMock()
+        mock_gen.__anext__.side_effect = HTTPException(
+            status_code=400,
+            detail={
+                "error": {
+                    "message": "MCP request blocked: no rewritable argument field present",
+                    "type": "guardrail_violation",
+                    "code": "panw_prisma_airs_blocked",
+                }
+            },
+        )
+        response = await create_response(mock_gen, "text/event-stream", {})
+        content = await self.consume_stream(response)
+        payload = json.loads(content[0][len("data: ") :].strip())
+        assert (
+            payload["error"]["message"]
+            == "MCP request blocked: no rewritable argument field present"
+        )
+        assert (
+            payload["error"]["provider_specific_fields"]["error"]["code"]
+            == "panw_prisma_airs_blocked"
+        )
+
+    async def test_serialize_http_exception_detail_helper(self):
+        """Direct unit coverage for the L1 helper across all branches."""
+        from litellm.proxy.common_request_processing import (
+            _serialize_http_exception_detail,
+        )
+        import json as _json
+
+        assert _serialize_http_exception_detail("plain") == ("plain", None)
+
+        msg, fields = _serialize_http_exception_detail(
+            {"error": "Violated", "extra": "x"}
+        )
+        assert msg == "Violated"
+        assert fields == {"error": "Violated", "extra": "x"}
+
+        msg, fields = _serialize_http_exception_detail(
+            {"error": {"message": "blocked", "code": "x"}}
+        )
+        assert msg == "blocked"
+        assert fields == {"error": {"message": "blocked", "code": "x"}}
+
+        msg, fields = _serialize_http_exception_detail({"message": "top-level"})
+        assert msg == "top-level"
+        assert fields == {"message": "top-level"}
+
+        msg, fields = _serialize_http_exception_detail({"weird": ["a", "b"]})
+        assert msg == _json.dumps({"weird": ["a", "b"]})
+        assert fields == {"weird": ["a", "b"]}
+
+        assert _serialize_http_exception_detail(42) == ("42", None)
 
     async def test_create_streaming_response_first_chunk_error_string_code(self):
         """
@@ -1853,3 +1973,56 @@ class TestHasAttributeErrorInChain:
         exc_a.__context__ = exc_b
         exc_b.__context__ = exc_a  # circular
         assert _has_attribute_error_in_chain(exc_a) is False
+
+
+@pytest.mark.asyncio
+class TestHandleLLMApiExceptionDictDetail:
+    """
+    Coverage for `_handle_llm_api_exception` HTTPException branch (Site 2).
+    Regression for case 2026-04-10-internal-bedrock-guardrail-streaming-error:
+    dict-detail HTTPExceptions raised by guardrails must round-trip cleanly
+    through ProxyException instead of being str()-mangled into a Python repr.
+    """
+
+    async def _invoke(self, exc: Exception):
+        from litellm.proxy._types import ProxyException, UserAPIKeyAuth
+
+        processor = ProxyBaseLLMRequestProcessing(data={})
+        user_api_key_dict = UserAPIKeyAuth(api_key="sk-test")
+        proxy_logging_obj = MagicMock()
+        proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
+        proxy_logging_obj.post_call_response_headers_hook = AsyncMock(return_value={})
+
+        try:
+            await processor._handle_llm_api_exception(
+                e=exc,
+                user_api_key_dict=user_api_key_dict,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+        except ProxyException as raised:
+            return raised
+        raise AssertionError("ProxyException was not raised")
+
+    async def test_dict_detail_bedrock_shape_preserved(self):
+        exc = HTTPException(
+            status_code=400,
+            detail={
+                "error": "Violated guardrail policy",
+                "bedrock_guardrail_response": "...",
+                "guardrail_name": "bedrock-pii-guard",
+            },
+        )
+        proxy_exc = await self._invoke(exc)
+        assert proxy_exc.message == "Violated guardrail policy"
+        assert (
+            proxy_exc.provider_specific_fields["guardrail_name"]
+            == "bedrock-pii-guard"
+        )
+        # No Python repr leakage of the dict into the message field.
+        assert "{'error':" not in proxy_exc.message
+
+    async def test_string_detail_unchanged(self):
+        exc = HTTPException(status_code=400, detail="Content blocked by guardrail")
+        proxy_exc = await self._invoke(exc)
+        assert proxy_exc.message == "Content blocked by guardrail"
+        assert proxy_exc.provider_specific_fields is None
