@@ -4371,17 +4371,19 @@ class BedrockConverseMessagesProcessor:
 
         # if initial message is assistant message
         if messages[0].get("role") is not None and messages[0]["role"] == "assistant":
-            if user_continue_message is not None:
-                messages.insert(0, user_continue_message)
-            elif litellm.modify_params:
-                messages.insert(0, DEFAULT_USER_CONTINUE_MESSAGE)
+            if not messages[0].get("prefix"):
+                if user_continue_message is not None:
+                    messages.insert(0, user_continue_message)
+                elif litellm.modify_params:
+                    messages.insert(0, DEFAULT_USER_CONTINUE_MESSAGE)
 
         # if final message is assistant message
         if messages[-1].get("role") is not None and messages[-1]["role"] == "assistant":
-            if user_continue_message is not None:
-                messages.append(user_continue_message)
-            elif litellm.modify_params:
-                messages.append(DEFAULT_USER_CONTINUE_MESSAGE)
+            if not messages[-1].get("prefix"):
+                if user_continue_message is not None:
+                    messages.append(user_continue_message)
+                elif litellm.modify_params:
+                    messages.append(DEFAULT_USER_CONTINUE_MESSAGE)
         return messages
 
     @staticmethod
