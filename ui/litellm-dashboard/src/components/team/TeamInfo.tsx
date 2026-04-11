@@ -203,6 +203,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   // Models currently selected in the team edit form, used to scope the per-model
   // rate limit dropdown to models this team actually has access to.
   const selectedModelsInForm = Form.useWatch("models", form) as string[] | undefined;
+  const killSwitchOn = Form.useWatch("disable_global_guardrails", form) as boolean | undefined;
   const availableRateLimitModels = useMemo(() => {
     const selected = selectedModelsInForm ?? teamData?.team_info?.models ?? [];
     if (selected.includes("all-proxy-models") || selected.includes("all-team-models")) {
@@ -480,6 +481,13 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         }
       }
 
+      const killSwitchOnAtSave = values.disable_global_guardrails === true;
+      const optedOutGlobalGuardrails = killSwitchOnAtSave
+        ? Array.from(globalGuardrailNames)
+        : Array.from(globalGuardrailNames).filter(
+            (n) => !(values.guardrails || []).includes(n),
+          );
+
       const updateData: any = {
         team_id: teamId,
         team_alias: values.team_alias,
@@ -494,11 +502,9 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         metadata: {
           ...parsedMetadata,
           guardrails: (values.guardrails || []).filter((n: string) => !globalGuardrailNames.has(n)),
-          disabled_global_guardrails: Array.from(globalGuardrailNames).filter(
-            (n) => !(values.guardrails || []).includes(n),
-          ),
+          opted_out_global_guardrails: optedOutGlobalGuardrails,
           ...(values.logging_settings?.length > 0 ? { logging: values.logging_settings } : {}),
-          disable_global_guardrails: values.disable_global_guardrails || false,
+          disable_global_guardrails: killSwitchOnAtSave,
           soft_budget_alerting_emails:
             typeof values.soft_budget_alerting_emails === "string"
               ? values.soft_budget_alerting_emails
@@ -602,11 +608,17 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
 
   const { team_info: info } = teamData;
 
-  const optedOutGlobals = new Set<string>(info.metadata?.disabled_global_guardrails || []);
-  const effectiveGuardrails = [
-    ...Array.from(globalGuardrailNames).filter((n) => !optedOutGlobals.has(n)),
-    ...(info.metadata?.guardrails || []),
-  ];
+  const initialKillSwitchOn = info.metadata?.disable_global_guardrails === true;
+  const optedOutGlobals = new Set<string>(info.metadata?.opted_out_global_guardrails || []);
+  const nonGlobalOptIns = (info.metadata?.guardrails || []).filter(
+    (n: string) => !globalGuardrailNames.has(n),
+  );
+  const effectiveGuardrails = initialKillSwitchOn
+    ? nonGlobalOptIns
+    : [
+        ...Array.from(globalGuardrailNames).filter((n) => !optedOutGlobals.has(n)),
+        ...nonGlobalOptIns,
+      ];
 
   const preventTagMouseDown = (e: React.MouseEvent) => {
     e.preventDefault();
@@ -861,6 +873,17 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                   <Form
                     form={form}
                     onFinish={handleTeamUpdate}
+                    onValuesChange={(changedValues) => {
+                      if ("disable_global_guardrails" in changedValues) {
+                        const checked = changedValues.disable_global_guardrails === true;
+                        const current = (form.getFieldValue("guardrails") || []) as string[];
+                        const nonGlobals = current.filter((n) => !globalGuardrailNames.has(n));
+                        form.setFieldValue(
+                          "guardrails",
+                          checked ? nonGlobals : [...Array.from(globalGuardrailNames), ...nonGlobals],
+                        );
+                      }
+                    }}
                     initialValues={{
                       ...info,
                       team_alias: info.team_alias,
@@ -1136,6 +1159,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                                 key={g.guardrail_name}
                                 value={g.guardrail_name}
                                 label={g.guardrail_name}
+                                disabled={killSwitchOn}
                               >
                                 {g.guardrail_name}
                               </Select.Option>

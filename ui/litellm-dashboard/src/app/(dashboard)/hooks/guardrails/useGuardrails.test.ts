@@ -271,4 +271,29 @@ describe("useGuardrails", () => {
     expect(names).toContain("custom-guardrail-1");
     expect(names).toContain("custom-guardrail-2");
   });
+
+  it("should partition guardrails into global and optional sets based on default_on", async () => {
+    const mockMixedResponse = {
+      guardrails: [
+        { guardrail_name: "global-guard-a", litellm_params: { default_on: true } },
+        { guardrail_name: "global-guard-b", litellm_params: { default_on: true } },
+        { guardrail_name: "optional-guard-a", litellm_params: { default_on: false } },
+        { guardrail_name: "optional-guard-b" },
+      ],
+    };
+    (getGuardrailsList as any).mockResolvedValue(mockMixedResponse);
+
+    const { result } = renderHook(() => useGuardrails(), { wrapper });
+
+    await waitFor(() => {
+      expect(result.current.isSuccess).toBe(true);
+    });
+
+    expect(result.current.data?.globalGuardrailNames).toEqual(
+      new Set(["global-guard-a", "global-guard-b"]),
+    );
+    expect(result.current.data?.optionalGuardrailNames).toEqual(
+      new Set(["optional-guard-a", "optional-guard-b"]),
+    );
+  });
 });
