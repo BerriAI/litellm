@@ -1,8 +1,9 @@
-from unittest.mock import Mock
+from unittest.mock import AsyncMock, Mock
 
 import httpx
 import pytest
 
+from litellm.llms.predibase.chat.handler import PredibaseChatCompletion
 from litellm.llms.predibase.chat.transformation import PredibaseConfig
 from litellm.llms.predibase.common_utils import PredibaseError
 from litellm.utils import Choices, Message, ModelResponse
@@ -84,6 +85,34 @@ def test_predibase_get_complete_url_stream_and_non_stream():
 
     assert non_stream_url.endswith("/generate")
     assert stream_url.endswith("/generate_stream")
+
+
+def test_predibase_get_complete_url_missing_tenant_id():
+    config = PredibaseConfig()
+
+    with pytest.raises(ValueError, match="Missing Predibase Tenant ID"):
+        config.get_complete_url(
+            api_base=None,
+            api_key="test-key",
+            model="predibase-model",
+            optional_params={},
+            litellm_params={},
+        )
+
+
+def test_predibase_get_complete_url_with_tenant_id_key():
+    config = PredibaseConfig()
+
+    url = config.get_complete_url(
+        api_base="https://serving.example.com",
+        api_key="test-key",
+        model="predibase-model",
+        optional_params={},
+        litellm_params={"tenant_id": "tenant-xyz"},
+    )
+
+    assert "tenant-xyz" in url
+    assert url.endswith("/generate")
 
 
 def test_predibase_transform_response_success_best_of(monkeypatch):
@@ -176,3 +205,133 @@ def test_predibase_transform_response_error_field():
         )
 
     assert exc.value.status_code == 400
+
+
+def test_predibase_transform_response_missing_generated_text():
+    config = PredibaseConfig()
+
+    with pytest.raises(PredibaseError, match="'generated_text' is not a key"):
+        config.transform_response(
+            model="predibase-model",
+            raw_response=httpx.Response(status_code=200, json={"details": {}}),
+            model_response=_build_model_response(),
+            logging_obj=Mock(),
+            request_data={},
+            messages=[{"role": "user", "content": "hello"}],
+            optional_params={},
+            litellm_params={},
+            encoding=Mock(),
+            api_key="test-key",
+        )
+
+
+def test_predibase_transform_response_usage_fallbacks(monkeypatch):
+    config = PredibaseConfig()
+    logging_obj = Mock()
+    encoding = Mock()
+    encoding.encode.side_effect = RuntimeError("encoding failure")
+    monkeypatch.setattr(
+        "litellm.token_counter", lambda messages: (_ for _ in ()).throw(RuntimeError())
+    )
+
+    raw_response = httpx.Response(
+        status_code=200,
+        json={"generated_text": "ok", "details": {"tokens": [], "finish_reason": "stop"}},
+    )
+
+    result = config.transform_response(
+        model="predibase-model",
+        raw_response=raw_response,
+        model_response=_build_model_response(),
+        logging_obj=logging_obj,
+        request_data={"inputs": "hello", "parameters": {}},
+        messages=[{"role": "user", "content": "hello"}],
+        optional_params={},
+        litellm_params={},
+        encoding=encoding,
+        api_key="test-key",
+    )
+
+    assert result.usage.prompt_tokens == 0
+    assert result.usage.completion_tokens == 0
+
+
+@pytest.mark.asyncio
+async def test_predibase_async_completion_uses_passed_config(monkeypatch):
+    handler = PredibaseChatCompletion()
+    mock_response = httpx.Response(status_code=200, json={"generated_text": "ok"})
+
+    async_handler = Mock()
+    async_handler.post = AsyncMock(return_value=mock_response)
+    monkeypatch.setattr(
+        "litellm.llms.predibase.chat.handler.get_async_httpx_client",
+        lambda **kwargs: async_handler,
+    )
+
+    passed_config = Mock()
+    passed_config.transform_response.return_value = _build_model_response()
+
+    result = await handler.async_completion(
+        model="predibase-model",
+        messages=[{"role": "user", "content": "hello"}],
+        api_base="https://serving.example.com/x/generate",
+        model_response=_build_model_response(),
+        print_verbose=Mock(),
+        encoding=Mock(),
+        api_key="test-key",
+        logging_obj=Mock(),
+        stream=False,
+        data={"inputs": "hello", "parameters": {}},
+        optional_params={},
+        timeout=10,
+        litellm_params={},
+        headers={"Authorization": "Bearer test"},
+        predibase_config=passed_config,
+    )
+
+    assert result is passed_config.transform_response.return_value
+    passed_config.transform_response.assert_called_once()
+
+
+def test_predibase_completion_passes_existing_config_to_async_completion(monkeypatch):
+    handler = PredibaseChatCompletion()
+    captured = {}
+
+    def fake_validate_environment(self, **kwargs):
+        captured["config_instance"] = self
+        return {"Authorization": "Bearer test"}
+
+    def fake_get_complete_url(self, **kwargs):
+        return "https://serving.example.com/tenant/deployments/v2/llms/model/generate"
+
+    def fake_transform_request(self, **kwargs):
+        return {"inputs": "hello", "parameters": {}}
+
+    def fake_async_completion(**kwargs):
+        captured["async_kwargs"] = kwargs
+        return "async-result"
+
+    monkeypatch.setattr(PredibaseConfig, "validate_environment", fake_validate_environment)
+    monkeypatch.setattr(PredibaseConfig, "get_complete_url", fake_get_complete_url)
+    monkeypatch.setattr(PredibaseConfig, "transform_request", fake_transform_request)
+    monkeypatch.setattr(handler, "async_completion", fake_async_completion)
+
+    result = handler.completion(
+        model="predibase-model",
+        messages=[{"role": "user", "content": "hello"}],
+        api_base="https://serving.example.com",
+        custom_prompt_dict={},
+        model_response=_build_model_response(),
+        print_verbose=Mock(),
+        encoding=Mock(),
+        api_key="test-key",
+        logging_obj=Mock(),
+        optional_params={},
+        litellm_params={},
+        tenant_id="tenant-123",
+        timeout=10,
+        acompletion=True,
+    )
+
+    assert result == "async-result"
+    assert captured["async_kwargs"]["predibase_config"] is captured["config_instance"]
