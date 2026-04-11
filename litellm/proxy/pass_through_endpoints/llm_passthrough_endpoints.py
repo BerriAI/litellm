@@ -37,10 +37,12 @@ from litellm.proxy.common_utils.http_parsing_utils import (
 from litellm.proxy.pass_through_endpoints.common_utils import get_litellm_virtual_key
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     HttpPassThroughEndpointHelpers,
-    LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY,
     create_pass_through_route,
     create_websocket_passthrough_route,
     websocket_passthrough_request,
+)
+from litellm.types.passthrough_endpoints.pass_through_endpoints import (
+    LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY,
 )
 from litellm.proxy.utils import is_known_model
 from litellm.proxy.vector_store_endpoints.utils import (
