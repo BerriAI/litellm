@@ -16,6 +16,56 @@ commands:
             echo "nameserver 127.0.0.11" | sudo tee /etc/resolv.conf
             echo "nameserver 8.8.8.8" | sudo tee -a /etc/resolv.conf
             echo "nameserver 8.8.4.4" | sudo tee -a /etc/resolv.conf
+  wait_for_service:
+    description: "Poll a TCP or HTTP endpoint until it responds (replaces dockerize -wait)"
+    parameters:
+      url:
+        type: string
+      timeout:
+        type: string
+        default: "60"
+    steps:
+      - run:
+          name: "Wait for << parameters.url >>"
+          command: |
+            TIMEOUT=<< parameters.timeout >>
+            URL="<< parameters.url >>"
+            ELAPSED=0
+            echo "Waiting up to ${TIMEOUT}s for ${URL} ..."
+            if echo "$URL" | grep -q '^tcp://'; then
+              HOST=$(echo "$URL" | sed 's|tcp://||' | cut -d: -f1)
+              PORT=$(echo "$URL" | sed 's|tcp://||' | cut -d: -f2)
+              while ! bash -c "echo > /dev/tcp/$HOST/$PORT" 2>/dev/null; do
+                sleep 2; ELAPSED=$((ELAPSED+2))
+                if [ "$ELAPSED" -ge "$TIMEOUT" ]; then echo "Timed out"; exit 1; fi
+              done
+            else
+              while ! curl -sf --max-time 5 "$URL" > /dev/null 2>&1; do
+                sleep 2; ELAPSED=$((ELAPSED+2))
+                if [ "$ELAPSED" -ge "$TIMEOUT" ]; then echo "Timed out"; exit 1; fi
+              done
+            fi
+            echo "Service ready after ${ELAPSED}s"
+  install_helm:
+    steps:
+      - run:
+          name: Install Helm v3.17.3
+          command: |
+            curl -sSLf -o /tmp/helm.tar.gz \
+              https://get.helm.sh/helm-v3.17.3-linux-amd64.tar.gz
+            echo "ee88b3c851ae6466a3de507f7be73fe94d54cbf2987cbaa3d1a3832ea331f2cd  /tmp/helm.tar.gz" | sha256sum -c -
+            sudo tar -C /usr/local/bin --strip-components=1 -xzf /tmp/helm.tar.gz linux-amd64/helm
+            rm -f /tmp/helm.tar.gz
+  install_kind:
+    steps:
+      - run:
+          name: Install Kind v0.20.0
+          command: |
+            curl -sSLf -o /tmp/kind \
+              https://kind.sigs.k8s.io/dl/v0.20.0/kind-linux-amd64
+            echo "513a7213d6d3332dd9ef27c24dab35e5ef10a04fa27274fe1c14d8a246493ded  /tmp/kind" | sha256sum -c -
+            chmod +x /tmp/kind
+            sudo mv /tmp/kind /usr/local/bin/kind
   setup_litellm_enterprise_pip:
     steps:
       - run:
@@ -1516,27 +1566,21 @@ jobs:
       - attach_workspace:
           at: ~/project
       - setup_google_dns
-      # Install Helm
-      - run:
-          name: Install Helm
-          command: |
-            curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+      - install_helm
+      - install_kind
 
-      # Install kind
+      # Install kubectl (pinned version with official checksum verification)
       - run:
-          name: Install Kind
+          name: Install kubectl v1.31.4
           command: |
-            curl -Lo ./kind https://kind.sigs.k8s.io/dl/v0.20.0/kind-linux-amd64
-            chmod +x ./kind
-            sudo mv ./kind /usr/local/bin/kind
-
-      # Install kubectl
-      - run:
-          name: Install kubectl
-          command: |
-            curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
-            chmod +x kubectl
-            sudo mv kubectl /usr/local/bin/
+            curl -sSLf -o /tmp/kubectl \
+              https://dl.k8s.io/release/v1.31.4/bin/linux/amd64/kubectl
+            curl -sSLf -o /tmp/kubectl.sha256 \
+              https://dl.k8s.io/release/v1.31.4/bin/linux/amd64/kubectl.sha256
+            echo "$(cat /tmp/kubectl.sha256)  /tmp/kubectl" | sha256sum -c -
+            chmod +x /tmp/kubectl
+            sudo mv /tmp/kubectl /usr/local/bin/
+            rm -f /tmp/kubectl.sha256
 
       # Create kind cluster
       - run:
@@ -1682,12 +1726,6 @@ jobs:
             fi
             uv sync --frozen --all-groups --all-extras --python "$(which python)"
       - run:
-          name: Install dockerize
-          command: |
-            sudo wget https://github.com/jwilder/dockerize/releases/download/v0.6.1/dockerize-linux-amd64-v0.6.1.tar.gz
-            sudo tar -C /usr/local/bin -xzvf dockerize-linux-amd64-v0.6.1.tar.gz
-            sudo rm dockerize-linux-amd64-v0.6.1.tar.gz
-      - run:
           name: Start PostgreSQL Database
           command: |
             docker run -d \
@@ -1697,9 +1735,9 @@ jobs:
               -e POSTGRES_DB=litellm_test \
               -p 5432:5432 \
               postgres:14
-      - run:
-          name: Wait for PostgreSQL to be ready
-          command: dockerize -wait tcp://localhost:5432 -timeout 1m
+      - wait_for_service:
+          url: tcp://localhost:5432
+          timeout: "60"
       - attach_workspace:
           at: ~/project
       - run:
@@ -1721,9 +1759,9 @@ jobs:
               --config /app/config.yaml \
               --port 4000 \
               --use_prisma_db_push
-      - run:
-          name: Wait for schema seed to complete
-          command: dockerize -wait http://localhost:4001 -timeout 5m
+      - wait_for_service:
+          url: http://localhost:4001
+          timeout: "300"
       - run:
           name: Stop schema seed container
           command: docker stop schema-seed && docker rm schema-seed
@@ -1743,9 +1781,9 @@ jobs:
               litellm-docker-database:ci \
               --config /app/config.yaml \
               --port 4000
-      - run:
-          name: Wait for container to be ready
-          command: dockerize -wait http://localhost:4000 -timeout 1m
+      - wait_for_service:
+          url: http://localhost:4000
+          timeout: "60"
       - run:
           name: Check container logs for expected message
           command: |
@@ -1803,12 +1841,6 @@ jobs:
             fi
             uv sync --frozen --all-groups --all-extras --python "$(which python)"
       - run:
-          name: Install dockerize
-          command: |
-            wget https://github.com/jwilder/dockerize/releases/download/v0.6.1/dockerize-linux-amd64-v0.6.1.tar.gz
-            sudo tar -C /usr/local/bin -xzvf dockerize-linux-amd64-v0.6.1.tar.gz
-            rm dockerize-linux-amd64-v0.6.1.tar.gz
-      - run:
           name: Start PostgreSQL Database
           command: |
             docker run -d \
@@ -1818,9 +1850,9 @@ jobs:
               -e POSTGRES_DB=circle_test \
               -p 5432:5432 \
               postgres:14
-      - run:
-          name: Wait for PostgreSQL to be ready
-          command: dockerize -wait tcp://localhost:5432 -timeout 1m
+      - wait_for_service:
+          url: tcp://localhost:5432
+          timeout: "60"
       - run:
           name: Load Docker Database Image
           command: |
@@ -1872,9 +1904,9 @@ jobs:
           name: Start outputting logs
           command: docker logs -f my-app
           background: true
-      - run:
-          name: Wait for app to be ready
-          command: dockerize -wait http://localhost:4000 -timeout 5m
+      - wait_for_service:
+          url: http://localhost:4000
+          timeout: "300"
       - run:
           name: Run tests
           command: |
@@ -1895,10 +1927,8 @@ jobs:
       - checkout
       - setup_google_dns
       - run:
-          name: Install Docker CLI (In case it's not already installed)
+          name: Verify Docker is available
           command: |
-            curl -fsSL https://get.docker.com | sh
-            sudo usermod -aG docker $USER
             docker version
       - run:
           name: Install Python 3.10
@@ -1927,12 +1957,6 @@ jobs:
             fi
             uv sync --frozen --all-groups --all-extras --python "$(which python)"
       - run:
-          name: Install dockerize
-          command: |
-            wget https://github.com/jwilder/dockerize/releases/download/v0.6.1/dockerize-linux-amd64-v0.6.1.tar.gz
-            sudo tar -C /usr/local/bin -xzvf dockerize-linux-amd64-v0.6.1.tar.gz
-            rm dockerize-linux-amd64-v0.6.1.tar.gz
-      - run:
           name: Start PostgreSQL Database
           command: |
             docker run -d \
@@ -1942,9 +1966,9 @@ jobs:
               -e POSTGRES_DB=circle_test \
               -p 5432:5432 \
               postgres:14
-      - run:
-          name: Wait for PostgreSQL to be ready
-          command: dockerize -wait tcp://localhost:5432 -timeout 1m
+      - wait_for_service:
+          url: tcp://localhost:5432
+          timeout: "60"
       - attach_workspace:
           at: ~/project
       - run:
@@ -1999,9 +2023,9 @@ jobs:
           name: Start outputting logs
           command: docker logs -f my-app
           background: true
-      - run:
-          name: Wait for app to be ready
-          command: dockerize -wait http://localhost:4000 -timeout 5m
+      - wait_for_service:
+          url: http://localhost:4000
+          timeout: "300"
       - run:
           name: Run tests
           command: |
@@ -2022,10 +2046,8 @@ jobs:
       - checkout
       - setup_google_dns
       - run:
-          name: Install Docker CLI (In case it's not already installed)
+          name: Verify Docker is available
           command: |
-            curl -fsSL https://get.docker.com | sh
-            sudo usermod -aG docker $USER
             docker version
       - run:
           name: Install Python 3.9
@@ -2054,12 +2076,6 @@ jobs:
             fi
             uv sync --frozen --all-groups --all-extras --python "$(which python)"
       - run:
-          name: Install dockerize
-          command: |
-            wget https://github.com/jwilder/dockerize/releases/download/v0.6.1/dockerize-linux-amd64-v0.6.1.tar.gz
-            sudo tar -C /usr/local/bin -xzvf dockerize-linux-amd64-v0.6.1.tar.gz
-            rm dockerize-linux-amd64-v0.6.1.tar.gz
-      - run:
           name: Start PostgreSQL Database
           command: |
             docker run -d \
@@ -2069,9 +2085,9 @@ jobs:
               -e POSTGRES_DB=circle_test \
               -p 5432:5432 \
               postgres:14
-      - run:
-          name: Wait for PostgreSQL to be ready
-          command: dockerize -wait tcp://localhost:5432 -timeout 1m
+      - wait_for_service:
+          url: tcp://localhost:5432
+          timeout: "60"
       - attach_workspace:
           at: ~/project
       - run:
@@ -2112,20 +2128,12 @@ jobs:
               --port 4000 \
               --detailed_debug \
       - run:
-          name: Install curl and dockerize
-          command: |
-            sudo apt-get update
-            sudo apt-get install -y curl
-            sudo wget https://github.com/jwilder/dockerize/releases/download/v0.6.1/dockerize-linux-amd64-v0.6.1.tar.gz
-            sudo tar -C /usr/local/bin -xzvf dockerize-linux-amd64-v0.6.1.tar.gz
-            sudo rm dockerize-linux-amd64-v0.6.1.tar.gz
-      - run:
           name: Start outputting logs
           command: docker logs -f my-app
           background: true
-      - run:
-          name: Wait for app to be ready
-          command: dockerize -wait http://localhost:4000 -timeout 5m
+      - wait_for_service:
+          url: http://localhost:4000
+          timeout: "300"
       - run:
           name: Run tests
           command: |
@@ -2167,9 +2175,9 @@ jobs:
           command: docker logs -f my-app-3
           background: true
 
-      - run:
-          name: Wait for second app to be ready
-          command: dockerize -wait http://localhost:4000 -timeout 5m
+      - wait_for_service:
+          url: http://localhost:4000
+          timeout: "300"
 
       - run:
           name: Run second round of tests
@@ -2189,10 +2197,8 @@ jobs:
       - checkout
       - setup_google_dns
       - run:
-          name: Install Docker CLI (In case it's not already installed)
+          name: Verify Docker is available
           command: |
-            curl -fsSL https://get.docker.com | sh
-            sudo usermod -aG docker $USER
             docker version
       - run:
           name: Install Python 3.9
@@ -2221,12 +2227,6 @@ jobs:
             fi
             uv sync --frozen --all-groups --all-extras --python "$(which python)"
       - run:
-          name: Install dockerize
-          command: |
-            wget https://github.com/jwilder/dockerize/releases/download/v0.6.1/dockerize-linux-amd64-v0.6.1.tar.gz
-            sudo tar -C /usr/local/bin -xzvf dockerize-linux-amd64-v0.6.1.tar.gz
-            rm dockerize-linux-amd64-v0.6.1.tar.gz
-      - run:
           name: Start PostgreSQL Database
           command: |
             docker run -d \
@@ -2236,9 +2236,9 @@ jobs:
               -e POSTGRES_DB=circle_test \
               -p 5432:5432 \
               postgres:14
-      - run:
-          name: Wait for PostgreSQL to be ready
-          command: dockerize -wait tcp://localhost:5432 -timeout 1m
+      - wait_for_service:
+          url: tcp://localhost:5432
+          timeout: "60"
       - attach_workspace:
           at: ~/project
       - run:
@@ -2282,9 +2282,9 @@ jobs:
           name: Start outputting logs
           command: docker logs -f my-app
           background: true
-      - run:
-          name: Wait for app to be ready
-          command: dockerize -wait http://localhost:4000 -timeout 5m
+      - wait_for_service:
+          url: http://localhost:4000
+          timeout: "300"
       - run:
           name: Run tests
           command: |
@@ -2308,10 +2308,8 @@ jobs:
       - checkout
       - setup_google_dns
       - run:
-          name: Install Docker CLI (In case it's not already installed)
+          name: Verify Docker is available
           command: |
-            curl -fsSL https://get.docker.com | sh
-            sudo usermod -aG docker $USER
             docker version
       - run:
           name: Install Python 3.9
@@ -2340,12 +2338,6 @@ jobs:
             fi
             uv sync --frozen --all-groups --all-extras --python "$(which python)"
       - run:
-          name: Install dockerize
-          command: |
-            wget https://github.com/jwilder/dockerize/releases/download/v0.6.1/dockerize-linux-amd64-v0.6.1.tar.gz
-            sudo tar -C /usr/local/bin -xzvf dockerize-linux-amd64-v0.6.1.tar.gz
-            rm dockerize-linux-amd64-v0.6.1.tar.gz
-      - run:
           name: Start PostgreSQL Database
           command: |
             docker run -d \
@@ -2355,9 +2347,9 @@ jobs:
               -e POSTGRES_DB=circle_test \
               -p 5432:5432 \
               postgres:14
-      - run:
-          name: Wait for PostgreSQL to be ready
-          command: dockerize -wait tcp://localhost:5432 -timeout 1m
+      - wait_for_service:
+          url: tcp://localhost:5432
+          timeout: "60"
       - attach_workspace:
           at: ~/project
       - run:
@@ -2410,23 +2402,15 @@ jobs:
               --port 4001 \
               --detailed_debug
       - run:
-          name: Install curl and dockerize
-          command: |
-            sudo apt-get update
-            sudo apt-get install -y curl
-            sudo wget https://github.com/jwilder/dockerize/releases/download/v0.6.1/dockerize-linux-amd64-v0.6.1.tar.gz
-            sudo tar -C /usr/local/bin -xzvf dockerize-linux-amd64-v0.6.1.tar.gz
-            sudo rm dockerize-linux-amd64-v0.6.1.tar.gz
-      - run:
           name: Start outputting logs
           command: docker logs -f my-app
           background: true
-      - run:
-          name: Wait for instance 1 to be ready
-          command: dockerize -wait http://localhost:4000 -timeout 5m
-      - run:
-          name: Wait for instance 2 to be ready
-          command: dockerize -wait http://localhost:4001 -timeout 5m
+      - wait_for_service:
+          url: http://localhost:4000
+          timeout: "300"
+      - wait_for_service:
+          url: http://localhost:4001
+          timeout: "300"
       - run:
           name: Run tests
           command: |
@@ -2448,10 +2432,8 @@ jobs:
       - checkout
       - setup_google_dns
       - run:
-          name: Install Docker CLI (In case it's not already installed)
+          name: Verify Docker is available
           command: |
-            curl -fsSL https://get.docker.com | sh
-            sudo usermod -aG docker $USER
             docker version
             sudo systemctl restart docker
       - run:
@@ -2481,12 +2463,6 @@ jobs:
             fi
             uv sync --frozen --all-groups --all-extras --python "$(which python)"
       - run:
-          name: Install dockerize
-          command: |
-            wget https://github.com/jwilder/dockerize/releases/download/v0.6.1/dockerize-linux-amd64-v0.6.1.tar.gz
-            sudo tar -C /usr/local/bin -xzvf dockerize-linux-amd64-v0.6.1.tar.gz
-            rm dockerize-linux-amd64-v0.6.1.tar.gz
-      - run:
           name: Start PostgreSQL Database
           command: |
             docker run -d \
@@ -2496,9 +2472,9 @@ jobs:
               -e POSTGRES_DB=circle_test \
               -p 5432:5432 \
               postgres:14
-      - run:
-          name: Wait for PostgreSQL to be ready
-          command: dockerize -wait tcp://localhost:5432 -timeout 1m
+      - wait_for_service:
+          url: tcp://localhost:5432
+          timeout: "60"
       - attach_workspace:
           at: ~/project
       - run:
@@ -2525,20 +2501,12 @@ jobs:
               --port 4000 \
               --detailed_debug \
       - run:
-          name: Install curl and dockerize
-          command: |
-            sudo apt-get update
-            sudo apt-get install -y curl
-            sudo wget https://github.com/jwilder/dockerize/releases/download/v0.6.1/dockerize-linux-amd64-v0.6.1.tar.gz
-            sudo tar -C /usr/local/bin -xzvf dockerize-linux-amd64-v0.6.1.tar.gz
-            sudo rm dockerize-linux-amd64-v0.6.1.tar.gz
-      - run:
           name: Start outputting logs
           command: docker logs -f my-app
           background: true
-      - run:
-          name: Wait for app to be ready
-          command: dockerize -wait http://localhost:4000 -timeout 5m
+      - wait_for_service:
+          url: http://localhost:4000
+          timeout: "300"
       - run:
           name: Run tests
           command: |
@@ -2642,20 +2610,12 @@ jobs:
               --port 4000 \
               --detailed_debug \
       - run:
-          name: Install curl and dockerize
-          command: |
-            sudo apt-get update
-            sudo apt-get install -y curl
-            sudo wget https://github.com/jwilder/dockerize/releases/download/v0.6.1/dockerize-linux-amd64-v0.6.1.tar.gz
-            sudo tar -C /usr/local/bin -xzvf dockerize-linux-amd64-v0.6.1.tar.gz
-            sudo rm dockerize-linux-amd64-v0.6.1.tar.gz
-      - run:
           name: Start outputting logs
           command: docker logs -f my-app
           background: true
-      - run:
-          name: Wait for app to be ready
-          command: dockerize -wait http://localhost:4000 -timeout 5m
+      - wait_for_service:
+          url: http://localhost:4000
+          timeout: "300"
       - run:
           name: Run tests
           command: |
@@ -2705,12 +2665,6 @@ jobs:
             fi
             uv sync --frozen --all-groups --all-extras --python "$(which python)"
       - run:
-          name: Install dockerize
-          command: |
-            wget https://github.com/jwilder/dockerize/releases/download/v0.6.1/dockerize-linux-amd64-v0.6.1.tar.gz
-            sudo tar -C /usr/local/bin -xzvf dockerize-linux-amd64-v0.6.1.tar.gz
-            rm dockerize-linux-amd64-v0.6.1.tar.gz
-      - run:
           name: Start PostgreSQL Database
           command: |
             docker run -d \
@@ -2720,9 +2674,9 @@ jobs:
               -e POSTGRES_DB=circle_test \
               -p 5432:5432 \
               postgres:14
-      - run:
-          name: Wait for PostgreSQL to be ready
-          command: dockerize -wait tcp://localhost:5432 -timeout 1m
+      - wait_for_service:
+          url: tcp://localhost:5432
+          timeout: "60"
       - attach_workspace:
           at: ~/project
       - run:
@@ -2760,9 +2714,9 @@ jobs:
           name: Start outputting logs
           command: docker logs -f my-app
           background: true
-      - run:
-          name: Wait for app to be ready
-          command: dockerize -wait http://localhost:4000 -timeout 5m
+      - wait_for_service:
+          url: http://localhost:4000
+          timeout: "300"
       # Add Ruby installation and testing before the existing Node.js and Python tests
       - run:
           name: Install Ruby and Bundler
@@ -2841,10 +2795,8 @@ jobs:
       - checkout
       - setup_google_dns
       - run:
-          name: Install Docker CLI (In case it's not already installed)
+          name: Verify Docker is available
           command: |
-            curl -fsSL https://get.docker.com | sh
-            sudo usermod -aG docker $USER
             docker version
       - run:
           name: Install Python 3.10
@@ -2873,12 +2825,6 @@ jobs:
             fi
             uv sync --frozen --all-groups --all-extras --python "$(which python)"
       - run:
-          name: Install dockerize
-          command: |
-            wget https://github.com/jwilder/dockerize/releases/download/v0.6.1/dockerize-linux-amd64-v0.6.1.tar.gz
-            sudo tar -C /usr/local/bin -xzvf dockerize-linux-amd64-v0.6.1.tar.gz
-            rm dockerize-linux-amd64-v0.6.1.tar.gz
-      - run:
           name: Start PostgreSQL Database
           command: |
             docker run -d \
@@ -2888,9 +2834,9 @@ jobs:
               -e POSTGRES_DB=circle_test \
               -p 5432:5432 \
               postgres:14
-      - run:
-          name: Wait for PostgreSQL to be ready
-          command: dockerize -wait tcp://localhost:5432 -timeout 1m
+      - wait_for_service:
+          url: tcp://localhost:5432
+          timeout: "60"
       - attach_workspace:
           at: ~/project
       - run:
@@ -2921,9 +2867,9 @@ jobs:
           name: Start outputting logs
           command: docker logs -f my-app
           background: true
-      - run:
-          name: Wait for app to be ready
-          command: dockerize -wait http://localhost:4000 -timeout 5m
+      - wait_for_service:
+          url: http://localhost:4000
+          timeout: "300"
       - run:
           name: Run Claude Agent SDK E2E Tests
           command: |
@@ -3188,9 +3134,9 @@ jobs:
             find ../../litellm/proxy/_experimental/out -name '*.html' ! -name 'index.html' | while read -r f; do
               d="${f%.html}"; mkdir -p "$d"; mv "$f" "$d/index.html"
             done
-      - run:
-          name: Wait for PostgreSQL
-          command: dockerize -wait tcp://localhost:5432 -timeout 30s
+      - wait_for_service:
+          url: tcp://localhost:5432
+          timeout: "30"
       - run:
           name: Push Prisma schema
           command: uv run --no-sync python -m prisma db push --schema litellm/proxy/schema.prisma --accept-data-loss
@@ -3279,12 +3225,6 @@ jobs:
       - attach_workspace:
           at: ~/project
       - run:
-          name: Install dockerize
-          command: |
-            sudo wget https://github.com/jwilder/dockerize/releases/download/v0.6.1/dockerize-linux-amd64-v0.6.1.tar.gz
-            sudo tar -C /usr/local/bin -xzvf dockerize-linux-amd64-v0.6.1.tar.gz
-            sudo rm dockerize-linux-amd64-v0.6.1.tar.gz
-      - run:
           name: Start PostgreSQL Database
           command: |
             docker run -d \
@@ -3294,9 +3234,9 @@ jobs:
               -e POSTGRES_DB=litellm_schema_sync \
               -p 5432:5432 \
               postgres:14
-      - run:
-          name: Wait for PostgreSQL to be ready
-          command: dockerize -wait tcp://localhost:5432 -timeout 1m
+      - wait_for_service:
+          url: tcp://localhost:5432
+          timeout: "60"
       - run:
           name: Load Docker Database Image
           command: |
@@ -3320,9 +3260,9 @@ jobs:
           name: Start outputting logs
           command: docker logs -f schema-sync
           background: true
-      - run:
-          name: Wait for proxy to be ready (schema sync complete)
-          command: dockerize -wait http://localhost:4000 -timeout 5m
+      - wait_for_service:
+          url: http://localhost:4000
+          timeout: "300"
       - run:
           name: Stop schema sync container
           command: docker stop schema-sync
@@ -3339,12 +3279,6 @@ jobs:
           at: ~/project
       - setup_google_dns
       - run:
-          name: Install dockerize
-          command: |
-            wget https://github.com/jwilder/dockerize/releases/download/v0.6.1/dockerize-linux-amd64-v0.6.1.tar.gz
-            sudo tar -C /usr/local/bin -xzvf dockerize-linux-amd64-v0.6.1.tar.gz
-            rm dockerize-linux-amd64-v0.6.1.tar.gz
-      - run:
           name: Start PostgreSQL Database
           command: |
             docker run -d \
@@ -3354,9 +3288,9 @@ jobs:
               -e POSTGRES_DB=circle_test \
               -p 5432:5432 \
               postgres:14
-      - run:
-          name: Wait for PostgreSQL to be ready
-          command: dockerize -wait tcp://localhost:5432 -timeout 1m
+      - wait_for_service:
+          url: tcp://localhost:5432
+          timeout: "60"
       - run:
           name: Load Docker Database Image
           command: |
