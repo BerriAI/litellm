@@ -6,6 +6,7 @@ import sys
 from datetime import timezone
 
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 sys.path.insert(
@@ -103,45 +104,38 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.hooks.proxy_track_cost_callback import _ProxyDBLogger
-from litellm.proxy.proxy_server import app, prisma_client
+from litellm.proxy.management_endpoints import common_utils
+from litellm.proxy.proxy_server import app
 from litellm.proxy.spend_tracking import spend_management_endpoints
 from litellm.router import Router
 from litellm.types.utils import BudgetConfig
 
 
 @pytest.mark.asyncio
-async def test_is_admin_view_safe_true(monkeypatch):
-    # Force underlying check to return True
-    monkeypatch.setattr(
-        spend_management_endpoints,
-        "_user_has_admin_view",
-        lambda user_api_key_dict: True,
-    )
+async def test_is_admin_view_safe_true():
     auth = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin_user")
     assert spend_management_endpoints._is_admin_view_safe(auth) is True
-
-
-@pytest.mark.asyncio
-async def test_is_admin_view_safe_false(monkeypatch):
-    # Force underlying check to return False
-    monkeypatch.setattr(
-        spend_management_endpoints,
-        "_user_has_admin_view",
-        lambda user_api_key_dict: False,
+    auth_view = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY, user_id="admin_view"
     )
+    assert spend_management_endpoints._is_admin_view_safe(auth_view) is True
+
+
+@pytest.mark.asyncio
+async def test_is_admin_view_safe_false():
     auth = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="user_1")
     assert spend_management_endpoints._is_admin_view_safe(auth) is False
 
 
 @pytest.mark.asyncio
-async def test_is_admin_view_safe_exception(monkeypatch):
+async def test_is_admin_view_safe_exception():
     # Ensure exceptions are swallowed and return False
-    def raise_err(*args, **kwargs):
-        raise RuntimeError("boom")
+    class ExplodingAuth:
+        @property
+        def user_role(self):
+            raise RuntimeError("boom")
 
-    monkeypatch.setattr(spend_management_endpoints, "_user_has_admin_view", raise_err)
-    auth = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="user_1")
-    assert spend_management_endpoints._is_admin_view_safe(auth) is False
+    assert spend_management_endpoints._is_admin_view_safe(ExplodingAuth()) is False  # type: ignore[arg-type]
 
 
 @pytest.mark.asyncio
@@ -185,7 +179,7 @@ async def test_can_team_member_view_log_team_not_found(monkeypatch):
     prisma = MockPrisma()
     # Even if admin check would return True, no team means False
     monkeypatch.setattr(
-        spend_management_endpoints,
+        common_utils,
         "_is_user_team_admin",
         lambda user_api_key_dict, team_obj: True,
     )
@@ -198,9 +192,18 @@ async def test_can_team_member_view_log_team_not_found(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_can_team_member_view_log_not_admin(monkeypatch):
-    # Existing team but caller is not a team admin -> False
+    # Existing team but caller is not a team admin and no /spend/logs permission -> False
     class MockTeam:
-        pass
+        team_id = "team_x"
+        members_with_roles = [Member(user_id="user_1", role="user")]
+        team_member_permissions = None
+
+        def model_dump(self):
+            return {
+                "team_id": self.team_id,
+                "members_with_roles": [{"user_id": "user_1", "role": "user"}],
+                "team_member_permissions": self.team_member_permissions,
+            }
 
     class MockPrisma:
         class DB:
@@ -216,7 +219,7 @@ async def test_can_team_member_view_log_not_admin(monkeypatch):
 
     prisma = MockPrisma()
     monkeypatch.setattr(
-        spend_management_endpoints,
+        common_utils,
         "_is_user_team_admin",
         lambda user_api_key_dict, team_obj: False,
     )
@@ -231,7 +234,16 @@ async def test_can_team_member_view_log_not_admin(monkeypatch):
 async def test_can_team_member_view_log_admin(monkeypatch):
     # Existing team and caller is team admin -> True
     class MockTeam:
-        pass
+        team_id = "team_x"
+        members_with_roles = [Member(user_id="user_1", role="admin")]
+        team_member_permissions = None
+
+        def model_dump(self):
+            return {
+                "team_id": self.team_id,
+                "members_with_roles": [{"user_id": "user_1", "role": "admin"}],
+                "team_member_permissions": self.team_member_permissions,
+            }
 
     class MockPrisma:
         class DB:
@@ -246,11 +258,6 @@ async def test_can_team_member_view_log_admin(monkeypatch):
             self.db = self.DB()
 
     prisma = MockPrisma()
-    monkeypatch.setattr(
-        spend_management_endpoints,
-        "_is_user_team_admin",
-        lambda user_api_key_dict, team_obj: True,
-    )
     auth = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="user_1")
     allowed = await spend_management_endpoints._can_team_member_view_log(
         prisma, auth, "team_x"
@@ -278,6 +285,59 @@ def test_can_user_view_spend_log_false_without_user_id():
 def test_can_user_view_spend_log_false_for_other_roles():
     auth = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin")
     assert spend_management_endpoints._can_user_view_spend_log(auth) is False
+
+
+@pytest.mark.asyncio
+async def test_assert_user_can_view_request_id_rejects_both_users_none():
+    """
+    API keys with user_id=None must not be treated as owning a log whose user
+    field is None (avoid None == None bypass).
+    """
+
+    class MockRow:
+        user = None
+        team_id = None
+
+    class MockSpendLogs:
+        async def find_unique(self, where, include=None):
+            return MockRow()
+
+    class MockDB:
+        def __init__(self):
+            self.litellm_spendlogs = MockSpendLogs()
+
+    class MockPrisma:
+        def __init__(self):
+            self.db = MockDB()
+
+    auth = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id=None)
+    with pytest.raises(HTTPException) as exc_info:
+        await spend_management_endpoints._assert_user_can_view_request_id(
+            MockPrisma(), auth, "req-none-user"
+        )
+    assert exc_info.value.status_code == 403
+
+
+def test_ui_view_request_response_forbids_non_admin_without_db(client, monkeypatch):
+    """
+    Without prisma, non-admins cannot be authorized to read request/response
+    payloads (including from custom loggers); do not skip RBAC silently.
+    """
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="user_1",
+    )
+    try:
+        response = client.get(
+            "/spend/logs/ui/req-no-db",
+            headers={"Authorization": "Bearer sk-test"},
+        )
+        assert response.status_code == 403
+        body = response.json()
+        assert "database" in str(body).lower()
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
 
 
 ignored_keys = [
@@ -866,7 +926,16 @@ async def test_ui_view_spend_logs_team_admin_can_view_team_spend(client, monkeyp
         return mock_spend_logs
 
     class TeamTable:
+        team_id = "team_admin_team"
         members_with_roles = [Member(user_id="admin_user", role="admin")]
+        team_member_permissions = None
+
+        def model_dump(self):
+            return {
+                "team_id": self.team_id,
+                "members_with_roles": [{"user_id": "admin_user", "role": "admin"}],
+                "team_member_permissions": self.team_member_permissions,
+            }
 
     async def team_lookup(where):
         return TeamTable() if where == {"team_id": "team_admin_team"} else None
@@ -1644,9 +1713,6 @@ class TestSpendLogsPayload:
                 }
             )
 
-            print(f"payload: {payload}")
-            print(f"expected_payload: {expected_payload}")
-
             differences = _compare_nested_dicts(
                 payload, expected_payload, ignore_keys=ignored_keys
             )
@@ -2066,7 +2132,7 @@ async def test_provider_budget_over(disable_budget_sync):
     )
 
     with pytest.raises(Exception) as e:
-        response = await router.acompletion(
+        await router.acompletion(
             model="azure-gpt-4o",
             messages=[{"role": "user", "content": "Hello, world!"}],
         )
@@ -2473,3 +2539,225 @@ async def test_build_ui_spend_logs_response_dict_rows_session_counts():
         where={"session_id": {"in": [session_id]}},
         count={"session_id": True},
     )
+
+
+# ---------------------------------------------------------------------------
+# Tests for /spend/logs team-member permission
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_can_team_member_view_log_with_spend_logs_permission(monkeypatch):
+    """
+    Non-admin team member WITH /spend/logs permission should be allowed.
+    """
+
+    class MockTeam:
+        team_id = "team_abc"
+        members_with_roles = [Member(user_id="member_1", role="user")]
+        team_member_permissions = ["/spend/logs"]
+
+        def model_dump(self):
+            return {
+                "team_id": self.team_id,
+                "members_with_roles": [{"user_id": "member_1", "role": "user"}],
+                "team_member_permissions": self.team_member_permissions,
+            }
+
+    class MockPrisma:
+        class DB:
+            class TeamTable:
+                async def find_unique(self, where: dict):
+                    return MockTeam()
+
+            def __init__(self):
+                self.litellm_teamtable = self.TeamTable()
+
+        def __init__(self):
+            self.db = self.DB()
+
+    prisma = MockPrisma()
+    auth = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="member_1")
+    allowed = await spend_management_endpoints._can_team_member_view_log(
+        prisma, auth, "team_abc"
+    )
+    assert allowed is True
+
+
+@pytest.mark.asyncio
+async def test_can_team_member_view_log_without_spend_logs_permission(monkeypatch):
+    """
+    Non-admin team member WITHOUT /spend/logs permission should be denied.
+    """
+
+    class MockTeam:
+        team_id = "team_abc"
+        members_with_roles = [Member(user_id="member_1", role="user")]
+        team_member_permissions = ["/key/info"]
+
+        def model_dump(self):
+            return {
+                "team_id": self.team_id,
+                "members_with_roles": [{"user_id": "member_1", "role": "user"}],
+                "team_member_permissions": self.team_member_permissions,
+            }
+
+    class MockPrisma:
+        class DB:
+            class TeamTable:
+                async def find_unique(self, where: dict):
+                    return MockTeam()
+
+            def __init__(self):
+                self.litellm_teamtable = self.TeamTable()
+
+        def __init__(self):
+            self.db = self.DB()
+
+    prisma = MockPrisma()
+    auth = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="member_1")
+    allowed = await spend_management_endpoints._can_team_member_view_log(
+        prisma, auth, "team_abc"
+    )
+    assert allowed is False
+
+
+@pytest.mark.asyncio
+async def test_ui_view_spend_logs_team_member_with_spend_logs_permission(
+    client, monkeypatch
+):
+    """
+    A non-admin team member with /spend/logs permission should see team-wide
+    spend logs when filtering by that team_id.
+    """
+    mock_spend_logs = [
+        {
+            "id": "log1",
+            "request_id": "req1",
+            "api_key": "sk-key-1",
+            "user": "member_1",
+            "team_id": "team_perm",
+            "spend": 0.05,
+            "startTime": datetime.datetime.now(timezone.utc).isoformat(),
+            "model": "gpt-4",
+        },
+        {
+            "id": "log2",
+            "request_id": "req2",
+            "api_key": "sk-key-2",
+            "user": "member_2",
+            "team_id": "team_perm",
+            "spend": 0.10,
+            "startTime": datetime.datetime.now(timezone.utc).isoformat(),
+            "model": "gpt-4",
+        },
+    ]
+
+    def filter_by_team(where):
+        if "team_id" in where and where["team_id"] == "team_perm":
+            return mock_spend_logs
+        return []
+
+    class TeamTable:
+        team_id = "team_perm"
+        members_with_roles = [Member(user_id="member_1", role="user")]
+        team_member_permissions = ["/spend/logs"]
+
+        def model_dump(self):
+            return {
+                "team_id": self.team_id,
+                "members_with_roles": [{"user_id": "member_1", "role": "user"}],
+                "team_member_permissions": self.team_member_permissions,
+            }
+
+    async def team_lookup(where):
+        return TeamTable() if where == {"team_id": "team_perm"} else None
+
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.prisma_client",
+        make_ui_spend_logs_mock_prisma(mock_spend_logs, filter_by_team, team_lookup),
+    )
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER, user_id="member_1"
+    )
+
+    try:
+        start_date, end_date = _default_date_range()
+        response = client.get(
+            "/spend/logs/ui",
+            params={
+                "team_id": "team_perm",
+                "start_date": start_date,
+                "end_date": end_date,
+            },
+            headers={"Authorization": "Bearer sk-test"},
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total"] == 2
+        assert len(data["data"]) == 2
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
+async def test_ui_view_spend_logs_team_member_no_permission_blocked(
+    client, monkeypatch
+):
+    """
+    A non-admin team member WITHOUT /spend/logs permission should be
+    rejected when filtering by team_id.
+    """
+    mock_spend_logs = [
+        {
+            "id": "log1",
+            "request_id": "req1",
+            "api_key": "sk-key-1",
+            "user": "member_1",
+            "team_id": "team_noperm",
+            "spend": 0.05,
+            "startTime": datetime.datetime.now(timezone.utc).isoformat(),
+            "model": "gpt-4",
+        },
+    ]
+
+    def filter_fn(where):
+        return mock_spend_logs
+
+    class TeamTable:
+        team_id = "team_noperm"
+        members_with_roles = [Member(user_id="member_1", role="user")]
+        team_member_permissions = ["/key/info"]
+
+        def model_dump(self):
+            return {
+                "team_id": self.team_id,
+                "members_with_roles": [{"user_id": "member_1", "role": "user"}],
+                "team_member_permissions": self.team_member_permissions,
+            }
+
+    async def team_lookup(where):
+        return TeamTable() if where == {"team_id": "team_noperm"} else None
+
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.prisma_client",
+        make_ui_spend_logs_mock_prisma(mock_spend_logs, filter_fn, team_lookup),
+    )
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER, user_id="member_1"
+    )
+
+    try:
+        start_date, end_date = _default_date_range()
+        response = client.get(
+            "/spend/logs/ui",
+            params={
+                "team_id": "team_noperm",
+                "start_date": start_date,
+                "end_date": end_date,
+            },
+            headers={"Authorization": "Bearer sk-test"},
+        )
+        assert response.status_code == 403
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)

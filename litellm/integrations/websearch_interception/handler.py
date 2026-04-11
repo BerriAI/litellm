@@ -230,8 +230,15 @@ class WebSearchInterceptionLogger(CustomLogger):
                 # Keep other tools as-is
                 converted_tools.append(tool)
 
-        # Update tools in-place and return full kwargs
         kwargs["tools"] = converted_tools
+
+        if kwargs.get("stream"):
+            verbose_logger.debug(
+                "WebSearchInterception: deployment hook converting stream=True to stream=False"
+            )
+            kwargs["stream"] = False
+            kwargs["_websearch_interception_converted_stream"] = True
+
         return kwargs
 
     @classmethod
@@ -344,13 +351,12 @@ class WebSearchInterceptionLogger(CustomLogger):
             else:
                 converted_tools.append(tool)
 
-        # Update kwargs with converted tools
         kwargs["tools"] = converted_tools
         verbose_logger.debug(
             f"WebSearchInterception: Tools after conversion: {[t.get('name') for t in converted_tools]}"
         )
 
-        # Convert stream=True to stream=False for WebSearch interception
+        # Also convert here for direct callers that bypass the deployment hook.
         if kwargs.get("stream"):
             verbose_logger.debug(
                 "WebSearchInterception: Converting stream=True to stream=False"
