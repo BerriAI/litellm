@@ -106,8 +106,8 @@ class VectorStoreIndexRegistry:
 
 
 class VectorStoreRegistry:
-    def __init__(self, vector_stores: List[LiteLLM_ManagedVectorStore] = []):
-        self.vector_stores: List[LiteLLM_ManagedVectorStore] = vector_stores
+    def __init__(self, vector_stores: Optional[List[LiteLLM_ManagedVectorStore]] = None):
+        self.vector_stores: List[LiteLLM_ManagedVectorStore] = vector_stores or []
         self.vector_store_ids_to_vector_store_map: Dict[
             str, LiteLLM_ManagedVectorStore
         ] = {}

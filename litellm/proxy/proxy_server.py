@@ -5954,7 +5954,9 @@ def select_data_generator(
     )
 
 
-def get_litellm_model_info(model: dict = {}):
+def get_litellm_model_info(model: Optional[dict] = None):
+    if model is None:
+        model = {}
     model_info = model.get("model_info", {})
     model_to_lookup = model.get("litellm_params", {}).get("model", None)
     try:
