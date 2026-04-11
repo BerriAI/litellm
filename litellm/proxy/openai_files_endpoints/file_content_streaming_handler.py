@@ -1,16 +1,13 @@
-from typing import Any, AsyncIterator, Dict, Optional, cast
+from typing import TYPE_CHECKING, Any, AsyncIterator, Dict, Optional, cast
 
 from fastapi.responses import StreamingResponse
 
 import litellm
 from litellm.files.types import FileContentStreamingResult
-from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
-from litellm.proxy.utils import ProxyLogging
 
-from litellm.proxy.openai_files_endpoints.common_utils import (
-    prepare_data_with_credentials,
-)
+if TYPE_CHECKING:
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.utils import ProxyLogging
 
 
 class FileContentStreamingHandler:
@@ -28,8 +25,8 @@ class FileContentStreamingHandler:
     @staticmethod
     async def stream_file_content_with_logging(
         stream_iterator: AsyncIterator[bytes],
-        proxy_logging_obj: ProxyLogging,
-        user_api_key_dict: UserAPIKeyAuth,
+        proxy_logging_obj: "ProxyLogging",
+        user_api_key_dict: "UserAPIKeyAuth",
         data: Dict[str, Any],
     ):
         try:
@@ -58,10 +55,17 @@ class FileContentStreamingHandler:
         should_route: bool,
         original_file_id: Optional[str],
         credentials: Optional[Dict[str, Any]],
-        proxy_logging_obj: ProxyLogging,
-        user_api_key_dict: UserAPIKeyAuth,
+        proxy_logging_obj: "ProxyLogging",
+        user_api_key_dict: "UserAPIKeyAuth",
         version: str,
     ) -> StreamingResponse:
+        from litellm.proxy.common_request_processing import (
+            ProxyBaseLLMRequestProcessing,
+        )
+        from litellm.proxy.openai_files_endpoints.common_utils import (
+            prepare_data_with_credentials,
+        )
+
         effective_custom_llm_provider = custom_llm_provider
         if should_route:
             if credentials is None or credentials.get("custom_llm_provider") is None:
