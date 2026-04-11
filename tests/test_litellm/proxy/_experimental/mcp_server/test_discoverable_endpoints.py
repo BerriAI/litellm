@@ -10,7 +10,7 @@ from fastapi import HTTPException
 @pytest.fixture(autouse=True)
 def mock_mcp_client_ip():
     """Mock IPAddressUtils.get_mcp_client_ip to return None for all tests.
-    
+
     This bypasses IP-based access control in tests, since the MCP server's
     available_on_public_internet defaults to False and mock requests don't
     have proper client IP context.
@@ -145,9 +145,9 @@ async def test_authorize_endpoint_preserves_existing_query_params():
     location = response.headers["location"]
 
     # Must NOT have double '?' — existing params must be merged correctly
-    assert location.count("?") == 1, (
-        f"Expected exactly one '?' in URL but got {location.count('?')}: {location}"
-    )
+    assert (
+        location.count("?") == 1
+    ), f"Expected exactly one '?' in URL but got {location.count('?')}: {location}"
     assert "tenant=system" in location
     assert "client_id=test_client_id" in location
     assert "response_type=code" in location
@@ -1521,7 +1521,10 @@ async def test_oauth_callback_redirects_with_state():
 
         # Should redirect to the client callback URL with code and original state
         assert response.status_code == 302
-        assert "http://localhost:3000/ui/mcp/oauth/callback" in response.headers["location"]
+        assert (
+            "http://localhost:3000/ui/mcp/oauth/callback"
+            in response.headers["location"]
+        )
         assert "code=test_authorization_code_12345" in response.headers["location"]
         assert "state=test-uuid-state-123" in response.headers["location"]
 
@@ -1609,7 +1612,10 @@ async def test_oauth_authorize_includes_scopes_from_server_config():
         # Should redirect with scopes from server config
         assert response.status_code in (307, 302)
         redirect_url = response.headers["location"]
-        assert "scope=api+read_user+ai_workflows" in redirect_url or "scope=api%20read_user%20ai_workflows" in redirect_url
+        assert (
+            "scope=api+read_user+ai_workflows" in redirect_url
+            or "scope=api%20read_user%20ai_workflows" in redirect_url
+        )
 
 
 @pytest.mark.asyncio
@@ -1664,7 +1670,10 @@ async def test_oauth_authorize_prefers_request_scope_over_server_config():
         # Should use the explicit scope, not server config
         assert response.status_code in (307, 302)
         redirect_url = response.headers["location"]
-        assert "scope=custom_scope1+custom_scope2" in redirect_url or "scope=custom_scope1%20custom_scope2" in redirect_url
+        assert (
+            "scope=custom_scope1+custom_scope2" in redirect_url
+            or "scope=custom_scope1%20custom_scope2" in redirect_url
+        )
         assert "default_scope" not in redirect_url
 
 
@@ -1849,10 +1858,17 @@ async def test_token_exchange_persists_credentials_to_db():
     }
     mock_response.raise_for_status = MagicMock()
 
+    mock_server_record = MagicMock()
+    mock_server_record.server_id = "test-persist-server"
+    mock_server_record.credentials = (
+        None  # No existing credentials — first token exchange
+    )
+
     mock_prisma = MagicMock()
     mock_prisma.db.litellm_mcpservertable.update = AsyncMock(return_value=None)
-    # No existing record — first token exchange
-    mock_prisma.db.litellm_mcpservertable.find_unique = AsyncMock(return_value=None)
+    mock_prisma.db.litellm_mcpservertable.find_unique = AsyncMock(
+        return_value=mock_server_record
+    )
 
     with patch(
         "litellm.proxy._experimental.mcp_server.discoverable_endpoints.get_async_httpx_client"
@@ -1950,9 +1966,15 @@ async def test_token_exchange_persists_without_optional_fields():
     }
     mock_response.raise_for_status = MagicMock()
 
+    mock_server_record = MagicMock()
+    mock_server_record.server_id = "test-persist-minimal"
+    mock_server_record.credentials = None
+
     mock_prisma = MagicMock()
     mock_prisma.db.litellm_mcpservertable.update = AsyncMock(return_value=None)
-    mock_prisma.db.litellm_mcpservertable.find_unique = AsyncMock(return_value=None)
+    mock_prisma.db.litellm_mcpservertable.find_unique = AsyncMock(
+        return_value=mock_server_record
+    )
 
     with patch(
         "litellm.proxy._experimental.mcp_server.discoverable_endpoints.get_async_httpx_client"
@@ -2035,12 +2057,14 @@ async def test_token_refresh_preserves_existing_refresh_token():
 
     # Existing DB record has the original refresh_token
     mock_existing = MagicMock()
-    mock_existing.credentials = json.dumps({
-        "auth_value": "old_encrypted_access",
-        "refresh_token": "original_refresh_token_encrypted",
-        "client_id": "existing_client_id",
-        "type": "oauth2",
-    })
+    mock_existing.credentials = json.dumps(
+        {
+            "auth_value": "old_encrypted_access",
+            "refresh_token": "original_refresh_token_encrypted",
+            "client_id": "existing_client_id",
+            "type": "oauth2",
+        }
+    )
 
     mock_prisma = MagicMock()
     mock_prisma.db.litellm_mcpservertable.update = AsyncMock(return_value=None)
