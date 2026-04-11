@@ -127,10 +127,11 @@ class TestToolTransformationIntegration:
         }
         
         validated_tool = validate_dict(openai_tool, ChatCompletionTool)
-        
+
         # After validation, parameters should have type='object'
         assert validated_tool["function"]["parameters"]["type"] == "object"
         assert "properties" in validated_tool["function"]["parameters"]
+
 
     def test_should_transform_tool_with_existing_parameters(self):
         """Tool with parameters should preserve them while ensuring type='object'."""

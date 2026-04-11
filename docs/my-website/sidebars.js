@@ -356,6 +356,7 @@ const sidebars = {
             "proxy/debugging",
             "proxy/error_diagnosis",
             "proxy/deploy",
+            "proxy/docker_image_security",
             "proxy/health",
             "proxy/master_key_rotations",
             "proxy/model_management",
@@ -570,7 +571,8 @@ const sidebars = {
             "proxy/model_access",
             "proxy/model_access_groups",
             "proxy/access_groups",
-            "proxy/team_model_add"
+            "proxy/team_model_add",
+            "proxy/credential_routing"
           ]
         },
         {

@@ -238,7 +238,7 @@ router_settings:
 | public_routes | List[str] | (Enterprise Feature) Control list of public routes |
 | alert_types | List[str] | Control list of alert types to send to slack (Doc on alert types)[./alerting.md] |
 | enforced_params | List[str] | (Enterprise Feature) List of params that must be included in all requests to the proxy |
-| enable_oauth2_auth | boolean | (Enterprise Feature) If true, enables oauth2.0 authentication |
+| enable_oauth2_auth | boolean | (Enterprise Feature) If true, enables oauth2.0 authentication on LLM + info routes |
 | use_x_forwarded_for | str | If true, uses the X-Forwarded-For header to get the client IP address |
 | service_account_settings | List[Dict[str, Any]] | Set `service_account_settings` if you want to create settings that only apply to service account keys (Doc on service accounts)[./service_accounts.md] | 
 | image_generation_model | str | The default model to use for image generation - ignores model set in request |
@@ -597,10 +597,13 @@ router_settings:
 | LITELLM_MCP_TOOL_LISTING_TIMEOUT | Timeout in seconds for listing tools from an MCP server. Default is 30
 | LITELLM_MCP_METADATA_TIMEOUT | HTTP client timeout in seconds for OAuth metadata fetching. Default is 10
 | LITELLM_MCP_HEALTH_CHECK_TIMEOUT | Health check timeout in seconds for MCP servers. Default is 10
+| LITELLM_MCP_STDIO_EXTRA_COMMANDS | Comma-separated extra command basenames allowed for MCP stdio transport beyond the built-in allowlist. Example: `my-mcp-bin`. Empty by default
 | MCP_OAUTH2_TOKEN_CACHE_DEFAULT_TTL | Default TTL in seconds for MCP OAuth2 token cache. Default is 3600
 | MCP_OAUTH2_TOKEN_CACHE_MAX_SIZE | Maximum number of entries in MCP OAuth2 token cache. Default is 200
 | MCP_OAUTH2_TOKEN_CACHE_MIN_TTL | Minimum TTL in seconds for MCP OAuth2 token cache. Default is 10
 | MCP_OAUTH2_TOKEN_EXPIRY_BUFFER_SECONDS | Seconds to subtract from token expiry when computing cache TTL. Default is 60
+| MCP_PER_USER_TOKEN_DEFAULT_TTL | Default TTL in seconds for per-user MCP OAuth tokens stored in Redis. Default is 43200 (12 hours)
+| MCP_PER_USER_TOKEN_EXPIRY_BUFFER_SECONDS | Seconds to subtract from per-user MCP OAuth token expiry when computing Redis TTL. Default is 60
 | DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT | Default token count for mock response completions. Default is 20
 | DEFAULT_MOCK_RESPONSE_PROMPT_TOKEN_COUNT | Default token count for mock response prompts. Default is 10
 | DEFAULT_MODEL_CREATED_AT_TIME | Default creation timestamp for models. Default is 1677610602
@@ -1032,6 +1035,7 @@ router_settings:
 | SENDGRID_SENDER_EMAIL | Email address used as the sender in SendGrid email transactions 
 | SPEND_LOGS_URL | URL for retrieving spend logs
 | SPEND_LOG_CLEANUP_BATCH_SIZE | Number of logs deleted per batch during cleanup. Default is 1000
+| STALE_OBJECT_CLEANUP_BATCH_SIZE | Max number of stale managed objects updated per cleanup cycle. Default is 1000
 | SSL_CERTIFICATE | Path to the SSL certificate file
 | SSL_ECDH_CURVE | ECDH curve for SSL/TLS key exchange (e.g., 'X25519' to disable PQC).
 | SSL_SECURITY_LEVEL | [BETA] Security level for SSL/TLS connections. E.g. `DEFAULT@SECLEVEL=1`
