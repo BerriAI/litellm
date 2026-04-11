@@ -3425,16 +3425,23 @@ class PrometheusLogger(CustomLogger):
     @staticmethod
     def _mount_metrics_endpoint():
         """
-        Mount the Prometheus metrics endpoint with optional authentication.
+        Mount the Prometheus metrics endpoint with authentication.
 
-        Args:
-            require_auth (bool, optional): Whether to require authentication for the metrics endpoint.
-                                        Defaults to False.
+        Authentication is enabled by default (require_auth_for_metrics_endpoint: True).
+        Set 'require_auth_for_metrics_endpoint: false' in litellm_settings to disable.
         """
         from prometheus_client import make_asgi_app
 
         from litellm._logging import verbose_proxy_logger
         from litellm.proxy.proxy_server import app
+
+        # Security warning for metrics endpoint (fixes #24530)
+        if not litellm.require_auth_for_metrics_endpoint:
+            verbose_proxy_logger.warning(
+                "⚠️  SECURITY WARNING: /metrics endpoint is exposed without authentication. "
+                "This may leak multi-tenant PII including team aliases, user emails, client IPs, and user agents. "
+                "Set 'require_auth_for_metrics_endpoint: true' in litellm_settings to enable authentication."
+            )
 
         # Create metrics ASGI app
         if "PROMETHEUS_MULTIPROC_DIR" in os.environ:
@@ -3448,9 +3455,16 @@ class PrometheusLogger(CustomLogger):
 
         # Mount the metrics app to the app
         app.mount("/metrics", metrics_app)
-        verbose_proxy_logger.debug(
-            "Starting Prometheus Metrics on /metrics (no authentication)"
-        )
+
+        # Log based on authentication status
+        if litellm.require_auth_for_metrics_endpoint:
+            verbose_proxy_logger.debug(
+                "Starting Prometheus Metrics on /metrics (authentication required)"
+            )
+        else:
+            verbose_proxy_logger.debug(
+                "Starting Prometheus Metrics on /metrics (authentication disabled)"
+            )
 
 
 def prometheus_label_factory(
