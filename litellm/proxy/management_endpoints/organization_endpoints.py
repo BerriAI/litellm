@@ -46,6 +46,54 @@ from litellm.utils import _update_dictionary
 router = APIRouter()
 
 
+async def _verify_org_access(
+    organization_id: str,
+    user_api_key_dict: UserAPIKeyAuth,
+    prisma_client: PrismaClient,
+) -> None:
+    """
+    Verify the caller is either a proxy admin or an org admin of the given organization.
+
+    Raises HTTPException(403) if the caller does not have access.
+    """
+    if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN:
+        return
+
+    if not user_api_key_dict.user_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have access to this organization",
+        )
+
+    from litellm.proxy.auth.auth_checks import get_user_object
+    from litellm.proxy.proxy_server import proxy_logging_obj, user_api_key_cache
+
+    caller_user = await get_user_object(
+        user_id=user_api_key_dict.user_id,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        user_id_upsert=False,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+    if caller_user is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have access to this organization",
+        )
+
+    for m in caller_user.organization_memberships or []:
+        if (
+            m.organization_id == organization_id
+            and m.user_role == LitellmUserRoles.ORG_ADMIN.value
+        ):
+            return
+
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="You do not have access to this organization",
+    )
+
+
 def handle_nested_budget_structure_in_organization_update_request(
     raw_data: dict,
 ) -> dict:
@@ -717,7 +765,10 @@ async def list_organization(
     dependencies=[Depends(user_api_key_auth)],
     response_model=LiteLLM_OrganizationTableWithMembers,
 )
-async def info_organization(organization_id: str):
+async def info_organization(
+    organization_id: str,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
     """
     Get the org specific information
     """
@@ -725,6 +776,13 @@ async def info_organization(organization_id: str):
 
     if prisma_client is None:
         raise HTTPException(status_code=500, detail={"error": "No db connected"})
+
+    # Verify caller has access to this organization
+    await _verify_org_access(
+        organization_id=organization_id,
+        user_api_key_dict=user_api_key_dict,
+        prisma_client=prisma_client,
+    )
 
     response: Optional[
         LiteLLM_OrganizationTableWithMembers
