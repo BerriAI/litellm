@@ -253,6 +253,9 @@ def process_response_headers(response_headers: Union[httpx.Headers, dict]) -> di
         ):  # return raw provider headers (incl. openai-compatible ones)
             processed_headers[k] = v
         else:
+            # Preserve original header name so consumers can look it up
+            # by the key the vendor actually sent (e.g. TRAFFIC-TYPE).
+            additional_headers[k] = v
             additional_headers["{}-{}".format("llm_provider", k)] = v
 
     additional_headers = {

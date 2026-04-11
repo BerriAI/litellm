@@ -56,9 +56,10 @@ def process_azure_headers(headers: Union[httpx.Headers, dict]) -> dict:
         openai_headers["x-ratelimit-remaining-tokens"] = headers[
             "x-ratelimit-remaining-tokens"
         ]
-    llm_response_headers = {
-        "{}-{}".format("llm_provider", k): v for k, v in headers.items()
-    }
+    llm_response_headers = {}
+    for k, v in headers.items():
+        llm_response_headers[k] = v
+        llm_response_headers["{}-{}".format("llm_provider", k)] = v
 
     return {**llm_response_headers, **openai_headers}
 

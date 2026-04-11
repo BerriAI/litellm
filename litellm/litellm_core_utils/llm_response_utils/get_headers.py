@@ -41,14 +41,21 @@ def get_response_headers(_response_headers: Optional[dict] = None) -> dict:
 
 def _get_llm_provider_headers(response_headers: dict) -> dict:
     """
-    Adds a llm_provider-{header} to all headers that are not already prefixed with llm_provider
+    Forward all headers as llm_provider-{header} while also preserving originals.
 
-    Forward all headers as llm_provider-{header}
+    Every vendor header is stored twice:
+      1. Under its original key (e.g. ``TRAFFIC-TYPE``) so consumers
+         can look it up by the name the vendor actually sent.
+      2. Under a ``llm_provider-`` prefixed key (e.g.
+         ``llm_provider-TRAFFIC-TYPE``) for backwards-compatibility with
+         existing litellm consumers that rely on the prefix convention.
 
+    Headers that are already prefixed with ``llm_provider`` are kept as-is.
     """
     llm_provider_headers = {}
     for k, v in response_headers.items():
         if "llm_provider" not in k:
+            llm_provider_headers[k] = v
             _key = "{}-{}".format("llm_provider", k)
             llm_provider_headers[_key] = v
         else:
