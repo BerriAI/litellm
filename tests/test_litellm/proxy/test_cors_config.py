@@ -77,3 +77,15 @@ def test_cors_origins_skips_blank_entries():
     origins, allow_credentials = _compute_cors_config("https://a.com,,https://b.com,")
     assert origins == ["https://a.com", "https://b.com"]
     assert allow_credentials is True
+
+
+def test_proxy_server_cors_invariant():
+    """should verify that proxy_server.allow_cors_credentials is always consistent
+    with proxy_server.origins — catches any future drift between the two variables."""
+    import litellm.proxy.proxy_server as proxy_server
+
+    assert proxy_server.allow_cors_credentials == ("*" not in proxy_server.origins), (
+        f"Invariant broken: allow_cors_credentials={proxy_server.allow_cors_credentials} "
+        f"but origins={proxy_server.origins}. "
+        "When origins contains '*', allow_credentials must be False."
+    )
