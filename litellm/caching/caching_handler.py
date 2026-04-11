@@ -98,9 +98,9 @@ class LLMCachingHandler:
         self.request_kwargs = request_kwargs
         self.original_function = original_function
         self.start_time = start_time
-        if litellm.cache is not None and isinstance(litellm.cache.cache, RedisCache):
+        if litellm.cache is not None and isinstance(getattr(litellm.cache, "cache", None), RedisCache):
             self.dual_cache: Optional[DualCache] = DualCache(
-                redis_cache=litellm.cache.cache,
+                redis_cache=getattr(litellm.cache, "cache", None),
                 in_memory_cache=in_memory_cache_obj,
             )
         else:
@@ -225,7 +225,7 @@ class LLMCachingHandler:
                     and isinstance(cached_result, list)
                     and litellm.cache is not None
                     and not isinstance(
-                        litellm.cache.cache, S3Cache
+                        getattr(litellm.cache, "cache", None), S3Cache
                     )  # s3 doesn't support bulk writing. Exclude.
                 ):
                     (
@@ -842,7 +842,7 @@ class LLMCachingHandler:
                     isinstance(result, EmbeddingResponse)
                     and litellm.cache is not None
                     and not isinstance(
-                        litellm.cache.cache, S3Cache
+                        getattr(litellm.cache, "cache", None), S3Cache
                     )  # s3 doesn't support bulk writing. Exclude.
                 ):
                     asyncio.create_task(
