@@ -26,7 +26,6 @@ from typing import TYPE_CHECKING, Any, List, Optional, Tuple, Union
 
 import httpx
 
-import litellm
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
 from litellm.llms.oci.common_utils import (
@@ -124,11 +123,11 @@ class OCIEmbedConfig(BaseEmbeddingConfig):
         litellm_params: dict,
         stream: Optional[bool] = None,
     ) -> str:
-        # If the caller provides a full endpoint URL, use it as-is.
-        # Otherwise construct the standard OCI GenAI embedText endpoint from the region.
-        resolved_base = api_base or litellm.api_base
-        if resolved_base:
-            return resolved_base.rstrip("/")
+        # If the caller provides an explicit api_base, use it as-is.
+        # Do NOT fall back to litellm.api_base — it may belong to another provider
+        # and would produce a bare URL without the /actions/embedText path.
+        if api_base:
+            return api_base.rstrip("/")
         base = get_oci_base_url(optional_params, None)
         return f"{base}/{OCI_API_VERSION}/actions/embedText"
 
