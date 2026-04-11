@@ -1146,7 +1146,17 @@ if _cors_origins_env is None or _cors_origins_env.strip() == "":
 else:
     origins = [o.strip() for o in _cors_origins_env.split(",") if o.strip()]
 
-allow_cors_credentials = "*" not in origins
+# Disable credentials by default when wildcard origins are used — combining
+# allow_origins=["*"] with allow_credentials=True causes Starlette to reflect
+# the incoming Origin header, allowing any site to make credentialed requests.
+# Set LITELLM_CORS_ALLOW_CREDENTIALS=true to explicitly restore the old behaviour
+# (e.g. for non-browser clients that relied on the Access-Control-Allow-Credentials
+# header being present regardless of origin).
+_cors_credentials_env = os.getenv("LITELLM_CORS_ALLOW_CREDENTIALS")
+if _cors_credentials_env is not None:
+    allow_cors_credentials = _cors_credentials_env.strip().lower() == "true"
+else:
+    allow_cors_credentials = "*" not in origins
 
 
 # get current directory

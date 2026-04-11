@@ -4,6 +4,12 @@ from litellm import verbose_logger
 
 _db = Any
 
+# Markers that indicate a view/relation does not yet exist in the database.
+# Keeping these in one place avoids repeating the check across all view blocks
+# and prevents overly broad matches (e.g. bare 'undefined' would also match
+# 'undefined function' or 'column undefined_col referenced in query').
+_VIEW_NOT_FOUND_MARKERS = ("does not exist", "no such table", "undefined table")
+
 
 async def create_missing_views(db: _db):  # noqa: PLR0915
     """
@@ -25,7 +31,7 @@ async def create_missing_views(db: _db):  # noqa: PLR0915
         verbose_logger.debug("LiteLLM_VerificationTokenView Exists!")
     except Exception as e:
         error_msg = str(e).lower()
-        if "does not exist" not in error_msg and "undefined" not in error_msg:
+        if not any(marker in error_msg for marker in _VIEW_NOT_FOUND_MARKERS):
             raise
         # If an error occurs, the view does not exist, so create it
         await db.execute_raw("""
@@ -49,7 +55,7 @@ async def create_missing_views(db: _db):  # noqa: PLR0915
         verbose_logger.debug("MonthlyGlobalSpend Exists!")
     except Exception as e:
         error_msg = str(e).lower()
-        if "does not exist" not in error_msg and "undefined" not in error_msg:
+        if not any(marker in error_msg for marker in _VIEW_NOT_FOUND_MARKERS):
             raise
         sql_query = """
         CREATE OR REPLACE VIEW "MonthlyGlobalSpend" AS 
@@ -72,7 +78,7 @@ async def create_missing_views(db: _db):  # noqa: PLR0915
         verbose_logger.debug("Last30dKeysBySpend Exists!")
     except Exception as e:
         error_msg = str(e).lower()
-        if "does not exist" not in error_msg and "undefined" not in error_msg:
+        if not any(marker in error_msg for marker in _VIEW_NOT_FOUND_MARKERS):
             raise
         sql_query = """
         CREATE OR REPLACE VIEW "Last30dKeysBySpend" AS
@@ -103,7 +109,7 @@ async def create_missing_views(db: _db):  # noqa: PLR0915
         verbose_logger.debug("Last30dModelsBySpend Exists!")
     except Exception as e:
         error_msg = str(e).lower()
-        if "does not exist" not in error_msg and "undefined" not in error_msg:
+        if not any(marker in error_msg for marker in _VIEW_NOT_FOUND_MARKERS):
             raise
         sql_query = """
         CREATE OR REPLACE VIEW "Last30dModelsBySpend" AS
@@ -128,7 +134,7 @@ async def create_missing_views(db: _db):  # noqa: PLR0915
         verbose_logger.debug("MonthlyGlobalSpendPerKey Exists!")
     except Exception as e:
         error_msg = str(e).lower()
-        if "does not exist" not in error_msg and "undefined" not in error_msg:
+        if not any(marker in error_msg for marker in _VIEW_NOT_FOUND_MARKERS):
             raise
         sql_query = """
             CREATE OR REPLACE VIEW "MonthlyGlobalSpendPerKey" AS 
@@ -154,7 +160,7 @@ async def create_missing_views(db: _db):  # noqa: PLR0915
         verbose_logger.debug("MonthlyGlobalSpendPerUserPerKey Exists!")
     except Exception as e:
         error_msg = str(e).lower()
-        if "does not exist" not in error_msg and "undefined" not in error_msg:
+        if not any(marker in error_msg for marker in _VIEW_NOT_FOUND_MARKERS):
             raise
         sql_query = """
             CREATE OR REPLACE VIEW "MonthlyGlobalSpendPerUserPerKey" AS 
@@ -181,7 +187,7 @@ async def create_missing_views(db: _db):  # noqa: PLR0915
         verbose_logger.debug("DailyTagSpend Exists!")
     except Exception as e:
         error_msg = str(e).lower()
-        if "does not exist" not in error_msg and "undefined" not in error_msg:
+        if not any(marker in error_msg for marker in _VIEW_NOT_FOUND_MARKERS):
             raise
         sql_query = """
         CREATE OR REPLACE VIEW "DailyTagSpend" AS
@@ -202,7 +208,7 @@ async def create_missing_views(db: _db):  # noqa: PLR0915
         verbose_logger.debug("Last30dTopEndUsersSpend Exists!")
     except Exception as e:
         error_msg = str(e).lower()
-        if "does not exist" not in error_msg and "undefined" not in error_msg:
+        if not any(marker in error_msg for marker in _VIEW_NOT_FOUND_MARKERS):
             raise
         sql_query = """
         CREATE VIEW "Last30dTopEndUsersSpend" AS

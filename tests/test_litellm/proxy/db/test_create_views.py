@@ -110,3 +110,46 @@ async def test_create_views_skips_creation_when_view_exists():
     await create_missing_views(mock_db)
 
     mock_db.execute_raw.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_create_views_reraises_undefined_function_error():
+    """should re-raise 'undefined function' errors — bare 'undefined' is too broad
+    and would previously misclassify DB function errors as missing-view signals."""
+    from litellm.proxy.db.create_views import create_missing_views
+
+    mock_db = MagicMock()
+    mock_db.query_raw = AsyncMock(
+        side_effect=Exception("ERROR: undefined function pg_get_viewdef()")
+    )
+    mock_db.execute_raw = AsyncMock()
+
+    with pytest.raises(Exception, match="undefined function"):
+        await create_missing_views(mock_db)
+
+    mock_db.execute_raw.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_create_views_creates_view_on_undefined_table_error():
+    """should treat 'undefined table' as a missing-view signal and attempt creation."""
+    from litellm.proxy.db.create_views import create_missing_views
+
+    mock_db = MagicMock()
+    mock_db.query_raw = AsyncMock(
+        side_effect=[
+            Exception('undefined table "LiteLLM_VerificationTokenView"'),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        ]
+    )
+    mock_db.execute_raw = AsyncMock(return_value=None)
+
+    await create_missing_views(mock_db)
+
+    mock_db.execute_raw.assert_called_once()
