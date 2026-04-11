@@ -208,9 +208,9 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
                 )
             )
             if transformed_context_management is not None:
-                anthropic_messages_optional_request_params[
-                    "context_management"
-                ] = transformed_context_management
+                anthropic_messages_optional_request_params["context_management"] = (
+                    transformed_context_management
+                )
 
         ####### get required params for all anthropic messages requests ######
         verbose_logger.debug(f"TRANSFORMATION DEBUG - Messages: {messages}")
