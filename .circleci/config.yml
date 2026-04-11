@@ -20,7 +20,12 @@ commands:
     steps:
       - run:
           name: "Install local version of litellm-enterprise"
-          command: uv sync --frozen --package litellm-enterprise --python "$(which python)"
+          command: |
+            # litellm-enterprise is a uv workspace member and is already installed
+            # by the main `uv sync --all-groups --all-extras`.  Do NOT run
+            # `uv sync --package litellm-enterprise` here — that overwrites the
+            # shared .venv and strips out dev/test deps (pytest, prisma, etc.).
+            uv run --no-sync python -c "import litellm_enterprise; print('litellm-enterprise OK:', litellm_enterprise.__file__)"
   setup_litellm_test_deps:
     steps:
       - checkout
@@ -1610,7 +1615,7 @@ jobs:
             fi
             uv sync --frozen --all-groups --all-extras --python "$(which python)"
       - run: uv run --no-sync python -c "from litellm import *" || (echo '🚨 import failed, this means you introduced unprotected imports! 🚨'; exit 1)
-      - run: ruff check ./litellm
+      - run: uv run --no-sync ruff check ./litellm
       # - run: python ./tests/documentation_tests/test_general_setting_keys.py
       - run: uv run --no-sync python ./tests/code_coverage_tests/check_licenses.py
       - run: uv run --no-sync python ./tests/code_coverage_tests/check_provider_folders_documented.py
