@@ -1456,6 +1456,16 @@ async def _get_spend_report_for_time_range(
         )
         return None
 
+    # Normalize string inputs to tz-aware UTC datetimes so Prisma serializes
+    # them with an explicit +00:00 suffix. Raw strings get bound as untyped
+    # text, which forces Postgres to parse `::timestamptz` using the DB
+    # session timezone and drifts the window by the offset even with the
+    # AT TIME ZONE 'UTC' wrap below.
+    start_date_obj = datetime.strptime(start_date, "%Y-%m-%d").replace(
+        tzinfo=timezone.utc
+    )
+    end_date_obj = datetime.strptime(end_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+
     try:
         sql_query = """
         SELECT
@@ -1466,13 +1476,16 @@ async def _get_spend_report_for_time_range(
         LEFT JOIN
             "LiteLLM_TeamTable" t ON s.team_id = t.team_id
         WHERE
-            s."startTime" >= $1::date AND s."startTime" < ($2::date + INTERVAL '1 day')
+            s."startTime" >= ($1::timestamptz AT TIME ZONE 'UTC')
+            AND s."startTime" <  (($2::timestamptz + INTERVAL '1 day') AT TIME ZONE 'UTC')
         GROUP BY
             t.team_alias
         ORDER BY
             total_spend DESC;
         """
-        response = await prisma_client.db.query_raw(sql_query, start_date, end_date)
+        response = await prisma_client.db.query_raw(
+            sql_query, start_date_obj, end_date_obj
+        )
 
         # get spend per tag for today
         sql_query = """
@@ -1487,7 +1500,7 @@ async def _get_spend_report_for_time_range(
         """
 
         spend_per_tag = await prisma_client.db.query_raw(
-            sql_query, start_date, end_date
+            sql_query, start_date_obj, end_date_obj
         )
 
         return response, spend_per_tag
