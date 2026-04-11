@@ -248,7 +248,7 @@ class TestTransformationCoverage:
     """Covers transformation.py lines 104-108, 174-183, 428-432."""
 
     def test_init_sets_has_custom_stream_wrapper(self):
-        """Lines 104-108: __init__ sets has_custom_stream_wrapper."""
+        """__init__ sets has_custom_stream_wrapper."""
         from litellm.llms.oci.chat.transformation import OCIChatConfig
 
         config = OCIChatConfig()
@@ -292,7 +292,7 @@ class TestTransformationCoverage:
         assert result.get("custom_unknown_param") == "value"
 
     def test_transform_response_error_key_raises(self):
-        """Lines 423-427: response with 'error' key raises OCIError."""
+        """Response with 'error' key raises OCIError."""
         from litellm.llms.oci.chat.transformation import OCIChatConfig
         from litellm.llms.oci.common_utils import OCIError
         from litellm.types.utils import ModelResponse
@@ -304,6 +304,33 @@ class TestTransformationCoverage:
         raw_response.headers = {}
 
         with pytest.raises(OCIError, match="something went wrong"):
+            config.transform_response(
+                model="oci/meta.llama-3.3-70b-instruct",
+                raw_response=raw_response,
+                model_response=ModelResponse(),
+                logging_obj=MagicMock(),
+                request_data={},
+                messages=[{"role": "user", "content": "hi"}],
+                optional_params={"oci_region": "us-chicago-1"},
+                litellm_params={},
+                encoding=None,
+                api_key=None,
+                json_mode=False,
+            )
+
+    def test_transform_response_non_dict_raises(self):
+        """Non-dict response raises OCIError."""
+        from litellm.llms.oci.chat.transformation import OCIChatConfig
+        from litellm.llms.oci.common_utils import OCIError
+        from litellm.types.utils import ModelResponse
+
+        config = OCIChatConfig()
+        raw_response = MagicMock()
+        raw_response.json.return_value = ["not", "a", "dict"]
+        raw_response.status_code = 200
+        raw_response.headers = {}
+
+        with pytest.raises(OCIError, match="Invalid response format"):
             config.transform_response(
                 model="oci/meta.llama-3.3-70b-instruct",
                 raw_response=raw_response,
@@ -519,6 +546,67 @@ class TestTransformationRemainingCoverage:
             optional_params={"maxTokens": 100},
         )
         assert result.get("maxTokens") == 100
+
+    def test_sync_stream_wrapper_client_none_creates_default(self):
+        """Line 464: when client=None, _get_httpx_client is called."""
+        from litellm.llms.oci.chat.transformation import OCIChatConfig
+
+        config = OCIChatConfig()
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.iter_text.return_value = iter(['{"text":"hi"}'])
+
+        mock_created_client = MagicMock()
+        mock_created_client.post.return_value = mock_response
+
+        with patch(
+            "litellm.llms.oci.chat.transformation._get_httpx_client",
+            return_value=mock_created_client,
+        ) as mock_factory:
+            config.get_sync_custom_stream_wrapper(
+                model="oci/meta.llama-3.3-70b-instruct",
+                custom_llm_provider="oci",
+                logging_obj=MagicMock(),
+                api_base="https://example.com",
+                headers={},
+                data={},
+                messages=[],
+                client=None,
+            )
+            mock_factory.assert_called_once_with(params={})
+
+    @pytest.mark.asyncio
+    async def test_async_stream_wrapper_client_none_creates_default(self):
+        """Line 512: when client=None, get_async_httpx_client is called."""
+        from litellm.llms.oci.chat.transformation import OCIChatConfig
+
+        config = OCIChatConfig()
+
+        async def mock_aiter_text():
+            yield '{"text":"hi"}'
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.aiter_text = mock_aiter_text
+
+        mock_created_client = AsyncMock()
+        mock_created_client.post.return_value = mock_response
+
+        with patch(
+            "litellm.llms.oci.chat.transformation.get_async_httpx_client",
+            return_value=mock_created_client,
+        ) as mock_factory:
+            await config.get_async_custom_stream_wrapper(
+                model="oci/meta.llama-3.3-70b-instruct",
+                custom_llm_provider="oci",
+                logging_obj=MagicMock(),
+                api_base="https://example.com",
+                headers={},
+                data={},
+                messages=[],
+                client=None,
+            )
+            mock_factory.assert_called_once()
 
     def test_sync_stream_wrapper_happy_path(self):
         """Lines 461-493: sync streaming wrapper posts and returns OCIStreamWrapper."""
@@ -754,6 +842,69 @@ class TestTransformationRemainingCoverage:
 
 class TestCommonUtilsRemainingCoverage:
     """Covers common_utils.py lines 19-20, 24-25, 70, 128, 144, 328."""
+
+    def test_cryptography_import_failure_sets_flag_false(self):
+        """Lines 19-20: when cryptography is not installed, _CRYPTOGRAPHY_AVAILABLE = False."""
+        import subprocess
+        import sys
+
+        code = (
+            "import builtins\n"
+            "real_import = builtins.__import__\n"
+            "def fake(name, *a, **kw):\n"
+            "    if 'cryptography' in name: raise ImportError('mocked')\n"
+            "    return real_import(name, *a, **kw)\n"
+            "builtins.__import__ = fake\n"
+            "import litellm.llms.oci.common_utils as mod\n"
+            "assert mod._CRYPTOGRAPHY_AVAILABLE is False, "
+            "f'Expected False, got {mod._CRYPTOGRAPHY_AVAILABLE}'\n"
+        )
+        result = subprocess.run(
+            [sys.executable, "-c", code],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        assert result.returncode == 0, f"Subprocess failed: {result.stderr}"
+
+    def test_litellm_version_import_failure_sets_fallback(self):
+        """Lines 24-25: when litellm._version is missing, _litellm_version = '0.0.0'."""
+        import subprocess
+        import sys
+
+        code = (
+            "import builtins, sys\n"
+            "real_import = builtins.__import__\n"
+            "def fake(name, *a, **kw):\n"
+            "    if name == 'litellm._version': raise ImportError('mocked')\n"
+            "    return real_import(name, *a, **kw)\n"
+            "builtins.__import__ = fake\n"
+            "sys.modules.pop('litellm._version', None)\n"
+            "import litellm.llms.oci.common_utils as mod\n"
+            "assert mod._litellm_version == '0.0.0', "
+            "f'Expected 0.0.0, got {mod._litellm_version}'\n"
+        )
+        result = subprocess.run(
+            [sys.executable, "-c", code],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        assert result.returncode == 0, f"Subprocess failed: {result.stderr}"
+
+    def test_protocol_do_request_sign_body_reachable(self):
+        """Line 70: Protocol pass body is reachable via super() call."""
+        from litellm.llms.oci.common_utils import OCISignerProtocol
+
+        class SubSigner(OCISignerProtocol):
+            def do_request_sign(self, request, *, enforce_content_headers=False):
+                # Call the Protocol's own method body (the pass statement)
+                OCISignerProtocol.do_request_sign(
+                    self, request, enforce_content_headers=enforce_content_headers
+                )
+
+        signer = SubSigner()
+        signer.do_request_sign(MagicMock())  # should not raise
 
     def test_load_private_key_from_str_happy_path(self):
         """Line 128: successful return from load_private_key_from_str."""
