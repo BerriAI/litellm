@@ -183,13 +183,16 @@ class QdrantSemanticCache(BaseCache):
             prompt += message["content"]
 
         # create an embedding for prompt
+        embedding_kwargs: dict[str, Any] = {
+            "model": self.embedding_model,
+            "input": prompt,
+            "cache": {"no-store": True, "no-cache": True},
+        }
+        if getattr(self, "embed_api_base", None) is not None:
+            embedding_kwargs["api_base"] = self.embed_api_base
         embedding_response = cast(
             EmbeddingResponse,
-            litellm.embedding(
-                model=self.embedding_model,
-                input=prompt,
-                cache={"no-store": True, "no-cache": True},
-            ),
+            litellm.embedding(**embedding_kwargs),
         )
 
         # get the embedding
@@ -227,13 +230,16 @@ class QdrantSemanticCache(BaseCache):
             prompt += message["content"]
 
         # convert to embedding
+        embedding_kwargs: dict[str, Any] = {
+            "model": self.embedding_model,
+            "input": prompt,
+            "cache": {"no-store": True, "no-cache": True},
+        }
+        if getattr(self, "embed_api_base", None) is not None:
+            embedding_kwargs["api_base"] = self.embed_api_base
         embedding_response = cast(
             EmbeddingResponse,
-            litellm.embedding(
-                model=self.embedding_model,
-                input=prompt,
-                cache={"no-store": True, "no-cache": True},
-            ),
+            litellm.embedding(**embedding_kwargs),
         )
 
         # get the embedding

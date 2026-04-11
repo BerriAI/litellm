@@ -9,57 +9,15 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 
-def test_proxy_init_cache_does_not_crash_on_non_redis_cache():
+def test_caching_handler_init_does_not_crash_on_non_redis_cache():
     """
-    Test that proxy cache initialization does not crash for non-Redis backends.
-    Verifies that accessing litellm.cache.cache via getattr prevents AttributeError
-    when the cache type is qdrant-semantic.
-    """
-    import litellm
-    from litellm.caching.caching import Cache
-
-    with patch("litellm.llms.custom_httpx.http_handler._get_httpx_client") as mock_sync_client, \
-         patch("litellm.llms.custom_httpx.http_handler.get_async_httpx_client"):
-
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_response.json.return_value = {"result": {"exists": True}}
-
-        mock_sync_client_instance = MagicMock()
-        mock_sync_client_instance.get.return_value = mock_response
-        mock_sync_client.return_value = mock_sync_client_instance
-
-        # Create a qdrant-semantic cache (has no inner .cache attribute like Redis does)
-        cache = Cache(
-            type="qdrant-semantic",
-            qdrant_api_base="http://test.qdrant.local",
-            qdrant_api_key="test_key",
-            qdrant_collection_name="test_collection",
-            similarity_threshold=0.8,
-        )
-        litellm.cache = cache
-
-        # This should not raise AttributeError
-        from litellm.caching.redis_cache import RedisCache
-        from litellm.caching.redis_cluster_cache import RedisClusterCache
-
-        inner = getattr(litellm.cache, "cache", None)
-        result = isinstance(inner, (RedisCache, RedisClusterCache))
-        assert result is False
-
-        # Cleanup
-        litellm.cache = None
-
-
-def test_caching_handler_does_not_crash_on_non_redis_cache():
-    """
-    Test that CachingHandlerResponse isinstance checks do not crash for non-Redis backends.
-    Verifies that getattr prevents AttributeError when cache type is qdrant-semantic.
+    Test that LLMCachingHandler.__init__ does not crash for non-Redis backends.
+    Verifies that the production code path handles Qdrant semantic cache without
+    raising AttributeError on litellm.cache.cache.
     """
     import litellm
     from litellm.caching.caching import Cache
-    from litellm.caching.redis_cache import RedisCache
-    from litellm.caching.s3_cache import S3Cache
+    from litellm.caching.caching_handler import LLMCachingHandler
 
     with patch("litellm.llms.custom_httpx.http_handler._get_httpx_client") as mock_sync_client, \
          patch("litellm.llms.custom_httpx.http_handler.get_async_httpx_client"):
@@ -81,10 +39,13 @@ def test_caching_handler_does_not_crash_on_non_redis_cache():
         )
         litellm.cache = cache
 
-        # These isinstance checks should not raise AttributeError
-        inner = getattr(litellm.cache, "cache", None)
-        assert not isinstance(inner, RedisCache)
-        assert not isinstance(inner, S3Cache)
+        # This should not raise AttributeError — exercises the actual production code
+        handler = LLMCachingHandler(
+            original_function=MagicMock(),
+            request_kwargs={"messages": [{"content": "test"}]},
+            start_time=None,
+        )
+        assert handler.dual_cache is None
 
         # Cleanup
         litellm.cache = None

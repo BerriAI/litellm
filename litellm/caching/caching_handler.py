@@ -98,9 +98,10 @@ class LLMCachingHandler:
         self.request_kwargs = request_kwargs
         self.original_function = original_function
         self.start_time = start_time
-        if litellm.cache is not None and isinstance(getattr(litellm.cache, "cache", None), RedisCache):
+        inner_cache = getattr(litellm.cache, "cache", None)
+        if litellm.cache is not None and isinstance(inner_cache, RedisCache):
             self.dual_cache: Optional[DualCache] = DualCache(
-                redis_cache=getattr(litellm.cache, "cache", None),
+                redis_cache=inner_cache,
                 in_memory_cache=in_memory_cache_obj,
             )
         else:
