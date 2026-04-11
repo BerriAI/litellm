@@ -1186,6 +1186,156 @@ async def test_bedrock_guardrail_blocked_content_with_masking_enabled():
         # Verify exception details
         assert exc_info.value.status_code == 400
         assert "Violated guardrail policy" in str(exc_info.value.detail)
-        
+
         print("✅ BLOCKED content with masking enabled raises exception correctly")
+
+
+# ---------------------------------------------------------------------------
+# L3: _extract_blocked_assessments + _get_http_exception_for_blocked_guardrail
+# Regression coverage for case 2026-04-10-internal-bedrock-guardrail-streaming-error.
+# ---------------------------------------------------------------------------
+
+
+def _make_guardrail() -> BedrockGuardrail:
+    return BedrockGuardrail(
+        guardrail_name="bedrock-pii-guard",
+        guardrailIdentifier="amgllac6xf3r",
+        guardrailVersion="1",
+    )
+
+
+def test_extract_blocked_assessments_pii_entity():
+    """L3: PII entity match (BLOCKED) is surfaced with category, type, and matched term."""
+    g = _make_guardrail()
+    response = {
+        "action": "GUARDRAIL_INTERVENED",
+        "assessments": [
+            {
+                "sensitiveInformationPolicy": {
+                    "piiEntities": [
+                        {"type": "NAME", "action": "BLOCKED", "match": "Jack"},
+                        {"type": "EMAIL", "action": "ANONYMIZED", "match": "x@y.z"},
+                    ]
+                }
+            }
+        ],
+    }
+    blocked = g._extract_blocked_assessments(response)
+    assert len(blocked) == 1
+    assert blocked[0]["policy"] == "sensitiveInformationPolicy"
+    matches = blocked[0]["matches"]
+    assert len(matches) == 1  # only the BLOCKED one is surfaced
+    assert matches[0]["category"] == "piiEntities"
+    assert matches[0]["type"] == "NAME"
+    assert matches[0]["match"] == "Jack"
+
+
+def test_extract_blocked_assessments_multiple_policies():
+    """L3: multiple policies fired in one assessment must all be reported."""
+    g = _make_guardrail()
+    response = {
+        "action": "GUARDRAIL_INTERVENED",
+        "assessments": [
+            {
+                "topicPolicy": {
+                    "topics": [
+                        {"name": "Investment", "type": "DENY", "action": "BLOCKED"}
+                    ]
+                },
+                "contentPolicy": {
+                    "filters": [
+                        {
+                            "type": "VIOLENCE",
+                            "confidence": "HIGH",
+                            "filterStrength": "HIGH",
+                            "action": "BLOCKED",
+                        }
+                    ]
+                },
+                "wordPolicy": {
+                    "customWords": [{"match": "forbidden", "action": "BLOCKED"}]
+                },
+            }
+        ],
+    }
+    blocked = g._extract_blocked_assessments(response)
+    policies = {entry["policy"] for entry in blocked}
+    assert policies == {"topicPolicy", "contentPolicy", "wordPolicy"}
+
+
+def test_extract_blocked_assessments_only_anonymized_returns_empty():
+    """L3: if all matches are ANONYMIZED (not BLOCKED), the list is empty."""
+    g = _make_guardrail()
+    response = {
+        "action": "GUARDRAIL_INTERVENED",
+        "assessments": [
+            {
+                "sensitiveInformationPolicy": {
+                    "piiEntities": [
+                        {"type": "NAME", "action": "ANONYMIZED", "match": "Jack"}
+                    ]
+                }
+            }
+        ],
+    }
+    assert g._extract_blocked_assessments(response) == []
+
+
+def test_extract_blocked_assessments_no_assessments():
+    """L3: response with no assessments returns an empty list, not an error."""
+    g = _make_guardrail()
+    assert g._extract_blocked_assessments({"action": "NONE"}) == []
+    assert g._extract_blocked_assessments({"assessments": None}) == []
+
+
+def test_get_http_exception_includes_assessments_and_identifier():
+    """L3: end-to-end — _get_http_exception_for_blocked_guardrail emits the new fields."""
+    g = _make_guardrail()
+    response = {
+        "action": "GUARDRAIL_INTERVENED",
+        "outputs": [{"text": "Sorry, the model cannot answer this question."}],
+        "assessments": [
+            {
+                "sensitiveInformationPolicy": {
+                    "piiEntities": [
+                        {"type": "NAME", "action": "BLOCKED", "match": "Jack"}
+                    ]
+                }
+            }
+        ],
+    }
+    exc = g._get_http_exception_for_blocked_guardrail(response)
+    assert isinstance(exc, HTTPException)
+    assert exc.status_code == 400
+    assert exc.detail["error"] == "Violated guardrail policy"
+    assert (
+        exc.detail["bedrock_guardrail_response"]
+        == "Sorry, the model cannot answer this question."
+    )
+    assert exc.detail["guardrailIdentifier"] == "amgllac6xf3r"
+    assert exc.detail["guardrailVersion"] == "1"
+    assert exc.detail["assessments"][0]["policy"] == "sensitiveInformationPolicy"
+    assert exc.detail["assessments"][0]["matches"][0]["type"] == "NAME"
+
+
+def test_get_http_exception_no_blocked_assessments_omits_field():
+    """L3: when no assessments are blocked, the `assessments` key is omitted entirely."""
+    g = _make_guardrail()
+    response = {
+        "action": "GUARDRAIL_INTERVENED",
+        "outputs": [{"text": "blocked"}],
+        "assessments": [
+            {
+                "sensitiveInformationPolicy": {
+                    "piiEntities": [
+                        {"type": "NAME", "action": "ANONYMIZED", "match": "Jack"}
+                    ]
+                }
+            }
+        ],
+    }
+    exc = g._get_http_exception_for_blocked_guardrail(response)
+    assert isinstance(exc, HTTPException)
+    assert "assessments" not in exc.detail
+    assert exc.detail["guardrailIdentifier"] == "amgllac6xf3r"
 

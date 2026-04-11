@@ -123,10 +123,13 @@ class ChunkProcessor:
         finish_reason = "stop"
         for chunk in chunks:
             if "choices" in chunk and len(chunk["choices"]) > 0:
+                chunk_finish_reason = None
                 if hasattr(chunk["choices"][0], "finish_reason"):
-                    finish_reason = chunk["choices"][0].finish_reason
+                    chunk_finish_reason = chunk["choices"][0].finish_reason
                 elif "finish_reason" in chunk["choices"][0]:
-                    finish_reason = chunk["choices"][0]["finish_reason"]
+                    chunk_finish_reason = chunk["choices"][0]["finish_reason"]
+                if chunk_finish_reason is not None:
+                    finish_reason = chunk_finish_reason
 
         # Initialize the response dictionary
         response = ModelResponse(
