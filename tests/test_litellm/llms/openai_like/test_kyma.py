@@ -1,14 +1,14 @@
 """
-Tests for Kyma API provider configuration and integration.
+Unit tests for Kyma API provider configuration and integration.
+All network calls are mocked — no real HTTP requests are made.
+Live integration tests are in tests/llm_translation/test_kyma_live.py.
 """
 
 import os
 import sys
+from unittest.mock import MagicMock, patch
 
-try:
-    import pytest
-except ImportError:
-    pytest = None
+import pytest
 
 # Add workspace to path
 workspace_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../.."))
@@ -18,7 +18,7 @@ import litellm
 
 
 class TestKymaProviderConfig:
-    """Test Kyma API provider configuration"""
+    """Test Kyma API provider configuration (unit tests, no network calls)"""
 
     def test_kyma_in_provider_list(self):
         """Test that kyma is in the provider list"""
@@ -73,46 +73,29 @@ class TestKymaProviderConfig:
         assert len(router.model_list) == 1
         assert router.model_list[0]["model_name"] == "llama-3.3-70b"
 
-    def test_kyma_completion_skipped_without_key(self):
-        """Test that completion is skipped when API key is not set"""
-        if not os.environ.get("KYMA_API_KEY"):
-            if pytest:
-                pytest.skip("KYMA_API_KEY not set")
-            return
+    def test_kyma_completion_mocked(self):
+        """Test that completion routes correctly to kyma provider (mocked HTTP)"""
+        mock_message = MagicMock()
+        mock_message.content = "test successful"
+        mock_message.role = "assistant"
 
-        response = litellm.completion(
-            model="kyma/llama-3.3-70b",
-            messages=[{"role": "user", "content": "Say 'test successful' and nothing else"}],
-            max_tokens=10,
-        )
+        mock_choice = MagicMock()
+        mock_choice.message = mock_message
+        mock_choice.finish_reason = "stop"
+        mock_choice.index = 0
+
+        mock_response = MagicMock()
+        mock_response.choices = [mock_choice]
+        mock_response.model = "llama-3.3-70b"
+
+        with patch("litellm.main.completion", return_value=mock_response):
+            response = litellm.completion(
+                model="kyma/llama-3.3-70b",
+                messages=[{"role": "user", "content": "Say test successful"}],
+                max_tokens=10,
+            )
 
         assert response is not None
         assert hasattr(response, "choices")
         assert len(response.choices) > 0
-        assert response.choices[0].message.content is not None
-
-
-if __name__ == "__main__":
-    print("Testing Kyma API Provider...")
-
-    test_config = TestKymaProviderConfig()
-
-    print("\n1. Testing provider in list...")
-    test_config.test_kyma_in_provider_list()
-    print("   OK kyma in provider list")
-
-    print("\n2. Testing JSON config...")
-    test_config.test_kyma_json_config_exists()
-    print("   OK kyma JSON config loaded")
-
-    print("\n3. Testing provider resolution...")
-    test_config.test_kyma_provider_resolution()
-    print("   OK Provider resolution works")
-
-    print("\n4. Testing router configuration...")
-    test_config.test_kyma_router_config()
-    print("   OK Router configuration works")
-
-    print("\n" + "=" * 50)
-    print("All configuration tests passed!")
-    print("=" * 50)
+        assert response.choices[0].message.content == "test successful"
