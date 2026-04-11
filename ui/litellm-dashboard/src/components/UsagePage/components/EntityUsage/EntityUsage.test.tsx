@@ -45,6 +45,10 @@ vi.mock("../../../EntityUsageExport", () => ({
   UsageExportHeader: () => <div>Usage Export Header</div>,
 }));
 
+vi.mock("../../../common_components/team_multi_select", () => ({
+  default: () => <div>Team Multi Select</div>,
+}));
+
 // Mock useTeams hook
 vi.mock("@/app/(dashboard)/hooks/useTeams", () => ({
   default: vi.fn(() => ({

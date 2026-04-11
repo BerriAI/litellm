@@ -454,6 +454,10 @@ class TestAgentHealthCheck:
         self.admin_client = _make_app_with_role(LitellmUserRoles.PROXY_ADMIN)
         self.mock_registry = MagicMock()
         monkeypatch.setattr(ar_mod, "global_agent_registry", self.mock_registry)
+        # Ensure prisma_client is None so the endpoint skips DB queries.
+        # In CI with parallel workers, a MagicMock can leak from other test
+        # scopes, causing "object MagicMock can't be used in 'await'" errors.
+        monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
 
     def _make_agent(self, agent_id: str, url: str | None = None) -> AgentResponse:
         card = _sample_agent_card_params()

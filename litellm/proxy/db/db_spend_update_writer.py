@@ -28,7 +28,7 @@ from typing import (
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching import DualCache, RedisCache
-from litellm.constants import DB_SPEND_UPDATE_JOB_NAME
+from litellm.constants import DB_SPEND_UPDATE_JOB_NAME,DB_DAILY_TAG_SPEND_UPDATE_JOB_NAME
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.proxy._types import (
     DB_CONNECTION_ERROR_TYPES,
@@ -797,7 +797,6 @@ class DBSpendUpdateWriter:
             daily_org_spend_update_queue=self.daily_org_spend_update_queue,
             daily_end_user_spend_update_queue=self.daily_end_user_spend_update_queue,
             daily_agent_spend_update_queue=self.daily_agent_spend_update_queue,
-            daily_tag_spend_update_queue=self.daily_tag_spend_update_queue,
         )
 
         # Only commit from redis to db if this pod is the leader
@@ -814,7 +813,6 @@ class DBSpendUpdateWriter:
                     daily_org_spend_update_transactions,
                     daily_end_user_spend_update_transactions,
                     daily_agent_spend_update_transactions,
-                    daily_tag_spend_update_transactions,
                 ) = (
                     await self.redis_update_buffer.get_all_transactions_from_redis_buffer_pipeline()
                 )
@@ -890,13 +888,6 @@ class DBSpendUpdateWriter:
                         daily_spend_transactions=daily_org_spend_update_transactions,
                     )
 
-                if daily_tag_spend_update_transactions is not None:
-                    await DBSpendUpdateWriter.update_daily_tag_spend(
-                        n_retry_times=n_retry_times,
-                        prisma_client=prisma_client,
-                        proxy_logging_obj=proxy_logging_obj,
-                        daily_spend_transactions=daily_tag_spend_update_transactions,
-                    )
                 if daily_end_user_spend_update_transactions is not None:
                     await DBSpendUpdateWriter.update_daily_end_user_spend(
                         n_retry_times=n_retry_times,
@@ -991,19 +982,7 @@ class DBSpendUpdateWriter:
             daily_spend_transactions=daily_org_spend_update_transactions,
         )
 
-        ################## Daily Tag Spend Update Transactions ##################
-        # Aggregate all in memory daily tag spend transactions and commit to db
-        daily_tag_spend_update_transactions = cast(
-            Dict[str, DailyTagSpendTransaction],
-            await self.daily_tag_spend_update_queue.flush_and_get_aggregated_daily_spend_update_transactions(),
-        )
-
-        await DBSpendUpdateWriter.update_daily_tag_spend(
-            n_retry_times=n_retry_times,
-            prisma_client=prisma_client,
-            proxy_logging_obj=proxy_logging_obj,
-            daily_spend_transactions=daily_tag_spend_update_transactions,
-        )
+        # NOTE: Daily tag spend is committed by a separate scheduler job.
 
         ################## Daily End-User Spend Update Transactions ##################
         # Aggregate all in memory daily end-user spend transactions and commit to db
@@ -1032,9 +1011,74 @@ class DBSpendUpdateWriter:
             proxy_logging_obj=proxy_logging_obj,
             daily_spend_transactions=daily_agent_spend_update_transactions,
         )
-
+        
         ################## Tool Registry Upserts ##################
         await self._flush_tool_discovery_queue(prisma_client=prisma_client)
+
+    async def _commit_daily_tag_spend_to_db(
+        self,
+        prisma_client: PrismaClient,
+        n_retry_times: int,
+        proxy_logging_obj: ProxyLogging,
+    ):
+        """
+        Commit only tag spend updates to database.
+        This is called by a separate scheduler job at a longer interval.
+        """
+        daily_tag_spend_update_transactions = cast(
+            Dict[str, DailyTagSpendTransaction],
+            await self.daily_tag_spend_update_queue.flush_and_get_aggregated_daily_spend_update_transactions(),
+        )
+
+        if daily_tag_spend_update_transactions:
+            await DBSpendUpdateWriter.update_daily_tag_spend(
+                n_retry_times=n_retry_times,
+                prisma_client=prisma_client,
+                proxy_logging_obj=proxy_logging_obj,
+                daily_spend_transactions=daily_tag_spend_update_transactions,
+            )
+
+    async def _commit_daily_tag_spend_to_db_with_redis(
+        self,
+        prisma_client: PrismaClient,
+        n_retry_times: int,
+        proxy_logging_obj: ProxyLogging,
+    ):
+        """
+        Commit daily tag spend updates using Redis buffering.
+
+        This lets the dedicated daily tag scheduler drain both in-memory and
+        Redis-backed tag transactions.
+        """
+        await self.redis_update_buffer.store_in_memory_daily_tag_spend_updates_in_redis(
+            daily_tag_spend_update_queue=self.daily_tag_spend_update_queue,
+        )
+
+        if await self.pod_lock_manager.acquire_lock(
+            cronjob_id=DB_DAILY_TAG_SPEND_UPDATE_JOB_NAME,
+        ):
+            verbose_proxy_logger.debug("acquired lock for daily tag spend updates")
+            try:
+                daily_tag_spend_update_transactions = await self.redis_update_buffer.get_all_daily_tag_spend_update_transactions_from_redis_buffer()
+
+                if daily_tag_spend_update_transactions:
+                    await DBSpendUpdateWriter.update_daily_tag_spend(
+                        n_retry_times=n_retry_times,
+                        prisma_client=prisma_client,
+                        proxy_logging_obj=proxy_logging_obj,
+                        daily_spend_transactions=daily_tag_spend_update_transactions,
+                    )
+            except Exception as e:
+                verbose_proxy_logger.error(
+                    "Spend tracking - failed to commit daily tag spend updates from Redis to DB. "
+                    "Data already popped from Redis may be lost. Error: %s\n%s",
+                    str(e),
+                    traceback.format_exc(),
+                )
+            finally:
+                await self.pod_lock_manager.release_lock(
+                    cronjob_id=DB_DAILY_TAG_SPEND_UPDATE_JOB_NAME,
+                )
 
     async def _flush_tool_discovery_queue(
         self,

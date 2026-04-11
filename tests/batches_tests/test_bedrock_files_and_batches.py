@@ -70,7 +70,7 @@ async def test_async_file_and_batch():
         #########################################################
         # bedrock specific params
         #########################################################
-        model="us.anthropic.claude-3-5-sonnet-20240620-v1:0",
+        model="us.anthropic.claude-haiku-4-5-20251001-v1:0",
         aws_batch_role_arn="arn:aws:iam::888602223428:role/service-role/AmazonBedrockExecutionRoleForAgents_BB9HNW6V4CV"
     )
     print("CREATED BATCH RESPONSE=", create_batch_response)
@@ -79,7 +79,7 @@ async def test_async_file_and_batch():
     retrieve_batch_response = await litellm.aretrieve_batch(
         batch_id=create_batch_response.id,
         custom_llm_provider="bedrock",
-        model="us.anthropic.claude-3-5-sonnet-20240620-v1:0",
+        model="us.anthropic.claude-haiku-4-5-20251001-v1:0",
     )
     print("RETRIEVED BATCH RESPONSE=", retrieve_batch_response)
     
@@ -144,7 +144,7 @@ async def test_bedrock_retrieve_batch():
     mock_bedrock_response = {
         "jobArn": "arn:aws:bedrock:us-west-2:123456789012:model-invocation-job/test-job-123",
         "jobName": "test-job-123",
-        "modelId": "us.anthropic.claude-3-5-sonnet-20240620-v1:0",
+        "modelId": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
         "roleArn": "arn:aws:iam::123456789012:role/service-role/AmazonBedrockExecutionRoleForAgents_TEST",
         "status": "InProgress",
         "message": "Job is in progress",
@@ -178,7 +178,7 @@ async def test_bedrock_retrieve_batch():
         batch_response = await litellm.aretrieve_batch(
             batch_id="arn:aws:bedrock:us-west-2:123456789012:model-invocation-job/test-job-123",
             custom_llm_provider="bedrock",
-            model="us.anthropic.claude-3-5-sonnet-20240620-v1:0",
+            model="us.anthropic.claude-haiku-4-5-20251001-v1:0",
         )
         
         print("MOCKED BATCH RESPONSE=", batch_response)
@@ -226,7 +226,7 @@ def test_bedrock_batch_with_encryption_key_in_post_request():
             endpoint="/v1/chat/completions",
             input_file_id="s3://test-bucket/input/test.jsonl",
             custom_llm_provider="bedrock",
-            model="us.anthropic.claude-3-5-sonnet-20240620-v1:0",
+            model="us.anthropic.claude-haiku-4-5-20251001-v1:0",
             s3_encryption_key_id=test_kms_key_id,
             aws_batch_role_arn="arn:aws:iam::123456789012:role/test-role"
         )

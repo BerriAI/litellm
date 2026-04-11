@@ -44,7 +44,7 @@ def test_map_team_model_should_not_iterate_aliases_for_non_alias_team_model_name
         {f"alias-{idx}": "gpt-4" for idx in range(200)}
     )
 
-    assert (
-        router.map_team_model(team_model_name="team-model", team_id="team-1")
-        == "gpt-3.5-turbo"
-    )
+    # map_team_model should return the public name unchanged (not the internal UUID name)
+    # so the router can find all sibling deployments via team_id filtering
+    result = router.map_team_model(team_model_name="team-model", team_id="team-1")
+    assert result == "team-model", f"Expected public name 'team-model', got {result}"

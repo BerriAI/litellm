@@ -13,6 +13,7 @@ Supported Providers:
 - Deepseek (`deepseek/`)
 - Anthropic API (`anthropic/`)
 - Bedrock (Anthropic + Deepseek + GPT-OSS) (`bedrock/`)
+- OpenAI Responses API (`openai/responses/`)
 - Vertex AI (Anthropic) (`vertexai/`)
 - OpenRouter (`openrouter/`)
 - XAI (`xai/`)

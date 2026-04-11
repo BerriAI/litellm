@@ -95,7 +95,7 @@ Here's how to call Bedrock with the LiteLLM Proxy Server
 model_list:
   - model_name: bedrock-claude-3-5-sonnet
     litellm_params:
-      model: bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0
+      model: bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0
       aws_access_key_id: os.environ/AWS_ACCESS_KEY_ID
       aws_secret_access_key: os.environ/AWS_SECRET_ACCESS_KEY
       aws_region_name: os.environ/AWS_REGION_NAME
@@ -337,7 +337,7 @@ os.environ["AWS_SECRET_ACCESS_KEY"] = ""
 os.environ["AWS_REGION_NAME"] = ""
 
 response = completion(
-    model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+    model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
     messages=[{"role": "user", "content": "Hello, how are you?"}],
     requestMetadata={
         "cost_center": "engineering",
@@ -354,7 +354,7 @@ response = completion(
 model_list:
   - model_name: bedrock-claude-v1
     litellm_params:
-      model: bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0
+      model: bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0
       requestMetadata:
         cost_center: "engineering"
 ```
@@ -1543,7 +1543,7 @@ file_data = response.content
 encoded_file = base64.b64encode(file_data).decode("utf-8")
 
 # model
-model = "bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0"
+model = "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0"
 
 image_content = [
     {"type": "text", "text": "What's this file about?"},
@@ -1574,7 +1574,7 @@ assert response is not None
 model_list:
   - model_name: bedrock-model
     litellm_params:
-      model: bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0
+      model: bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0
       aws_access_key_id: os.environ/AWS_ACCESS_KEY_ID
       aws_secret_access_key: os.environ/AWS_SECRET_ACCESS_KEY
       aws_region_name: os.environ/AWS_REGION_NAME
@@ -1631,7 +1631,7 @@ encoded_file = base64.b64encode(file_data).decode("utf-8")
 base64_url = f"data:application/pdf;base64,{encoded_file}"
 
 # model
-model = "bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0"
+model = "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0"
 
 image_content = [
     {"type": "text", "text": "What's this file about?"},
@@ -1660,7 +1660,7 @@ assert response is not None
 model_list:
   - model_name: bedrock-model
     litellm_params:
-      model: bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0
+      model: bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0
       aws_access_key_id: os.environ/AWS_ACCESS_KEY_ID
       aws_secret_access_key: os.environ/AWS_SECRET_ACCESS_KEY
       aws_region_name: os.environ/AWS_REGION_NAME
@@ -1941,7 +1941,7 @@ Here's an example of using a bedrock model with LiteLLM. For a complete list, re
 | GPT-OSS 120B | `completion(model='bedrock/converse/openai.gpt-oss-120b-1:0', messages=messages)` | `os.environ['AWS_ACCESS_KEY_ID']`, `os.environ['AWS_SECRET_ACCESS_KEY']`, `os.environ['AWS_REGION_NAME']` |
 | Deepseek R1    | `completion(model='bedrock/us.deepseek.r1-v1:0', messages=messages)`   | `os.environ['AWS_ACCESS_KEY_ID']`, `os.environ['AWS_SECRET_ACCESS_KEY']`           |
 | Anthropic Claude Sonnet 4.5    | `completion(model='bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0', messages=messages)`   | `os.environ['AWS_ACCESS_KEY_ID']`, `os.environ['AWS_SECRET_ACCESS_KEY']`           |
-| Anthropic Claude-V3.5 Sonnet    | `completion(model='bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0', messages=messages)`   | `os.environ['AWS_ACCESS_KEY_ID']`, `os.environ['AWS_SECRET_ACCESS_KEY']`           |
+| Anthropic Claude-V3.5 Sonnet    | `completion(model='bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0', messages=messages)`   | `os.environ['AWS_ACCESS_KEY_ID']`, `os.environ['AWS_SECRET_ACCESS_KEY']`           |
 | Anthropic Claude-V3  sonnet    | `completion(model='bedrock/anthropic.claude-3-sonnet-20240229-v1:0', messages=messages)`   | `os.environ['AWS_ACCESS_KEY_ID']`, `os.environ['AWS_SECRET_ACCESS_KEY']`           |
 | Anthropic Claude-V3 Haiku     | `completion(model='bedrock/anthropic.claude-3-haiku-20240307-v1:0', messages=messages)`   | `os.environ['AWS_ACCESS_KEY_ID']`, `os.environ['AWS_SECRET_ACCESS_KEY']`           |
 | Anthropic Claude-V3 Opus     | `completion(model='bedrock/anthropic.claude-3-opus-20240229-v1:0', messages=messages)`   | `os.environ['AWS_ACCESS_KEY_ID']`, `os.environ['AWS_SECRET_ACCESS_KEY']`           |
@@ -2051,7 +2051,7 @@ os.environ["AWS_SECRET_ACCESS_KEY"] = ""
 os.environ["AWS_REGION_NAME"] = ""
 
 response = completion(
-    model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+    model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
     messages=[{"role": "user", "content": "Hello, how are you?"}],
     model_id="arn:aws:bedrock:eu-central-1:000000000000:application-inference-profile/a0a0a0a0a0a0",
 )
@@ -2068,7 +2068,7 @@ print(response)
 model_list:
   - model_name: anthropic-claude-3-5-sonnet
     litellm_params:
-      model: bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0
+      model: bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0
       # You have to set the ARN application inference profile in the model_id parameter
       model_id: arn:aws:bedrock:eu-central-1:000000000000:application-inference-profile/a0a0a0a0a0a0
 ```

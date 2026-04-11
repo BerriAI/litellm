@@ -54,8 +54,9 @@ def client_no_auth():
 
 
 @pytest.mark.skipif(
-    os.environ.get("AZURE_API_KEY") is None or os.environ.get("OPENAI_API_KEY") is None,
-    reason="AZURE_API_KEY or OPENAI_API_KEY not set - skipping integration test"
+    os.environ.get("AZURE_AI_API_KEY") is None
+    or os.environ.get("OPENAI_API_KEY") is None,
+    reason="AZURE_AI_API_KEY or OPENAI_API_KEY not set - skipping integration test",
 )
 def test_chat_completion(client_no_auth):
     global headers
@@ -69,9 +70,9 @@ def test_chat_completion(client_no_auth):
                 model_name="user-azure-instance",
                 litellm_params=CompletionRequest(
                     model="azure/gpt-4.1-mini",
-                    api_key=os.getenv("AZURE_API_KEY"),
+                    api_key=os.getenv("AZURE_AI_API_KEY"),
                     api_version=os.getenv("AZURE_API_VERSION"),
-                    api_base=os.getenv("AZURE_API_BASE"),
+                    api_base=os.getenv("AZURE_AI_API_BASE"),
                     timeout=10,
                 ),
                 tpm=240000,

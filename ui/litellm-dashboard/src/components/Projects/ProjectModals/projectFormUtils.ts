@@ -25,6 +25,9 @@ export function buildProjectApiParams(values: ProjectFormValues) {
     models: values.models ?? [],
     max_budget: values.max_budget,
     blocked: values.isBlocked ?? false,
+    ...(values.guardrails && values.guardrails.length > 0 && {
+      guardrails: values.guardrails,
+    }),
     ...(Object.keys(modelRpmLimit).length > 0 && {
       model_rpm_limit: modelRpmLimit,
     }),

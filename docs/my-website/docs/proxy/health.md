@@ -314,6 +314,12 @@ general_settings:
   health_check_details: False
 ```
 
+## Health Check Driven Routing
+
+Route traffic away from unhealthy deployments proactively — before user requests hit them. Supports per-error-type failure thresholds, transient error suppression, and automatic safety nets.
+
+See the full guide: [Health Check Driven Routing](./health_check_routing.md)
+
 ## Health Check Timeout
 
 The health check timeout is set in `litellm/constants.py` and defaults to 60 seconds.

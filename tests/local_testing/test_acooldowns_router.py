@@ -31,7 +31,7 @@ def _make_model_list():
                 "model": "azure/gpt-4.1-mini",
                 "api_key": "bad-key",
                 "api_version": os.getenv("AZURE_API_VERSION"),
-                "api_base": os.getenv("AZURE_API_BASE"),
+                "api_base": os.getenv("AZURE_AI_API_BASE"),
             },
             "tpm": 240000,
             "rpm": 1800,

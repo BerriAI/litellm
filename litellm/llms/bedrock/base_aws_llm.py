@@ -156,24 +156,24 @@ class BaseAWSLLM:
 
         verbose_logger.debug(
             "in get credentials\n"
-            "aws_access_key_id=%s\n"
-            "aws_secret_access_key=%s\n"
-            "aws_session_token=%s\n"
+            "aws_access_key_id=[set=%s]\n"
+            "aws_secret_access_key=[set=%s]\n"
+            "aws_session_token=[set=%s]\n"
             "aws_region_name=%s\n"
             "aws_session_name=%s\n"
             "aws_profile_name=%s\n"
             "aws_role_name=%s\n"
-            "aws_web_identity_token=%s\n"
+            "aws_web_identity_token=[set=%s]\n"
             "aws_sts_endpoint=%s\n"
             "aws_external_id=%s",
-            aws_access_key_id,
-            aws_secret_access_key,
-            aws_session_token,
+            aws_access_key_id is not None,
+            aws_secret_access_key is not None,
+            aws_session_token is not None,
             aws_region_name,
             aws_session_name,
             aws_profile_name,
             aws_role_name,
-            aws_web_identity_token,
+            aws_web_identity_token is not None,
             aws_sts_endpoint,
             aws_external_id,
         )

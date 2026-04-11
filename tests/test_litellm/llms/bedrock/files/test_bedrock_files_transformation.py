@@ -16,76 +16,86 @@ class TestBedrockFilesTransformation:
     def test_transform_openai_jsonl_content_to_bedrock_jsonl_content(self):
         """
         Test transformation of OpenAI JSONL format to Bedrock batch format.
-        
-        Validates that the transformation correctly converts OpenAI batch completion 
+
+        Validates that the transformation correctly converts OpenAI batch completion
         format to Bedrock's expected batch format with proper recordId and modelInput structure.
         """
         # Initialize the transformation class
         transformation = BedrockJsonlFilesTransformation()
-        
+
         # Load input JSONL file
         input_file_path = os.path.join(
-            os.path.dirname(__file__), 
-            "input_batch_completions.jsonl"
+            os.path.dirname(__file__), "input_batch_completions.jsonl"
         )
-        
+
         # Read and parse the JSONL content
         openai_jsonl_content = []
-        with open(input_file_path, 'r') as f:
+        with open(input_file_path, "r") as f:
             for line in f:
                 if line.strip():
                     openai_jsonl_content.append(json.loads(line))
-        
+
         # Transform the content
-        bedrock_jsonl_content = transformation._transform_openai_jsonl_content_to_bedrock_jsonl_content(
-            openai_jsonl_content=openai_jsonl_content
+        bedrock_jsonl_content = (
+            transformation._transform_openai_jsonl_content_to_bedrock_jsonl_content(
+                openai_jsonl_content=openai_jsonl_content
+            )
         )
-        
+
         # Print the transformation results for validation
         print("\n=== INPUT (OpenAI format) ===")
         for i, content in enumerate(openai_jsonl_content):
             print(f"Record {i+1}:")
             print(json.dumps(content, indent=2))
             print()
-        
+
         print("\n=== OUTPUT (Bedrock format) ===")
         for i, content in enumerate(bedrock_jsonl_content):
             print(f"Record {i+1}:")
             print(json.dumps(content, indent=2))
             print()
-        
+
         # Basic validation
-        assert len(bedrock_jsonl_content) == len(openai_jsonl_content), "Should have same number of records"
-        
+        assert len(bedrock_jsonl_content) == len(
+            openai_jsonl_content
+        ), "Should have same number of records"
+
         # Check structure of transformed records
         for i, record in enumerate(bedrock_jsonl_content):
             assert "recordId" in record, f"Record {i+1} should have recordId"
             assert "modelInput" in record, f"Record {i+1} should have modelInput"
-            
+
             # Check recordId matches custom_id from input
             expected_custom_id = openai_jsonl_content[i].get("custom_id")
-            assert record["recordId"] == expected_custom_id, f"Record {i+1} recordId should match custom_id"
-            
+            assert (
+                record["recordId"] == expected_custom_id
+            ), f"Record {i+1} recordId should match custom_id"
+
             # Check modelInput has expected structure
             model_input = record["modelInput"]
-            assert isinstance(model_input, dict), f"Record {i+1} modelInput should be a dictionary"
-            
+            assert isinstance(
+                model_input, dict
+            ), f"Record {i+1} modelInput should be a dictionary"
+
             # For Anthropic models, should have anthropic_version and messages
             if "anthropic.claude" in openai_jsonl_content[i]["body"]["model"]:
-                assert "anthropic_version" in model_input, f"Record {i+1} should have anthropic_version"
+                assert (
+                    "anthropic_version" in model_input
+                ), f"Record {i+1} should have anthropic_version"
                 assert "messages" in model_input, f"Record {i+1} should have messages"
-                assert "max_tokens" in model_input, f"Record {i+1} should have max_tokens"
-        
+                assert (
+                    "max_tokens" in model_input
+                ), f"Record {i+1} should have max_tokens"
+
         # Write expected output to file for reference
         expected_output_path = os.path.join(
-            os.path.dirname(__file__), 
-            "expected_bedrock_batch_completions.jsonl"
+            os.path.dirname(__file__), "expected_bedrock_batch_completions.jsonl"
         )
-        
-        with open(expected_output_path, 'w') as f:
+
+        with open(expected_output_path, "w") as f:
             for record in bedrock_jsonl_content:
-                f.write(json.dumps(record) + '\n')
-        
+                f.write(json.dumps(record) + "\n")
+
         print(f"\n=== Expected output written to: {expected_output_path} ===")
 
     def test_nova_text_only_uses_converse_format(self):
@@ -128,17 +138,17 @@ class TestBedrockFilesTransformation:
         model_input = record["modelInput"]
 
         # Must have inferenceConfig with maxTokens, NOT top-level max_tokens
-        assert "inferenceConfig" in model_input, (
-            "Nova modelInput must contain inferenceConfig"
-        )
+        assert (
+            "inferenceConfig" in model_input
+        ), "Nova modelInput must contain inferenceConfig"
         assert model_input["inferenceConfig"]["maxTokens"] == 50
         assert model_input["inferenceConfig"]["temperature"] == 0.7
-        assert "max_tokens" not in model_input, (
-            "max_tokens must NOT be at the top level for Nova"
-        )
-        assert "temperature" not in model_input, (
-            "temperature must NOT be at the top level for Nova"
-        )
+        assert (
+            "max_tokens" not in model_input
+        ), "max_tokens must NOT be at the top level for Nova"
+        assert (
+            "temperature" not in model_input
+        ), "temperature must NOT be at the top level for Nova"
 
         # Must have messages
         assert "messages" in model_input
@@ -215,22 +225,18 @@ class TestBedrockFilesTransformation:
             if "image" in block:
                 has_image = True
                 # Verify Converse image format
-                assert "format" in block["image"], (
-                    "Image block must have format field"
-                )
-                assert "source" in block["image"], (
-                    "Image block must have source field"
-                )
-                assert "bytes" in block["image"]["source"], (
-                    "Image source must have bytes field"
-                )
+                assert "format" in block["image"], "Image block must have format field"
+                assert "source" in block["image"], "Image block must have source field"
+                assert (
+                    "bytes" in block["image"]["source"]
+                ), "Image source must have bytes field"
             # Must NOT have OpenAI-style image_url
-            assert "image_url" not in block, (
-                "image_url must not appear in Converse format"
-            )
-            assert block.get("type") != "image_url", (
-                "type=image_url must not appear in Converse format"
-            )
+            assert (
+                "image_url" not in block
+            ), "image_url must not appear in Converse format"
+            assert (
+                block.get("type") != "image_url"
+            ), "type=image_url must not appear in Converse format"
 
         assert has_text, "Should have a text content block"
         assert has_image, "Should have an image content block"
@@ -250,7 +256,7 @@ class TestBedrockFilesTransformation:
                 "method": "POST",
                 "url": "/v1/chat/completions",
                 "body": {
-                    "model": "us.anthropic.claude-3-5-sonnet-20240620-v1:0",
+                    "model": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
                     "messages": [
                         {"role": "system", "content": "You are helpful."},
                         {"role": "user", "content": "Hello!"},
@@ -314,12 +320,10 @@ class TestBedrockFilesTransformation:
             data=create_file_data,
         )
 
-        assert "us-gov-west-1" in url, (
-            f"Expected us-gov-west-1 in URL but got: {url}"
-        )
-        assert "us-west-2" not in url, (
-            f"us-west-2 must not appear when s3_region_name is set, got: {url}"
-        )
+        assert "us-gov-west-1" in url, f"Expected us-gov-west-1 in URL but got: {url}"
+        assert (
+            "us-west-2" not in url
+        ), f"us-west-2 must not appear when s3_region_name is set, got: {url}"
         assert "litellm-batch-352026" in url
 
     def test_transform_create_file_request_injects_s3_region_for_signing(self):
@@ -370,9 +374,9 @@ class TestBedrockFilesTransformation:
                 litellm_params=litellm_params,
             )
 
-        assert captured_optional_params.get("aws_region_name") == "us-gov-west-1", (
-            "s3_region_name must be forwarded as aws_region_name for SigV4 signing"
-        )
+        assert (
+            captured_optional_params.get("aws_region_name") == "us-gov-west-1"
+        ), "s3_region_name must be forwarded as aws_region_name for SigV4 signing"
 
     def test_s3_region_name_wins_over_aws_region_name_for_signing(self):
         """
@@ -426,9 +430,9 @@ class TestBedrockFilesTransformation:
                 litellm_params=litellm_params,
             )
 
-        assert captured_optional_params.get("aws_region_name") == "us-gov-west-1", (
-            "s3_region_name must override aws_region_name for SigV4 signing"
-        )
+        assert (
+            captured_optional_params.get("aws_region_name") == "us-gov-west-1"
+        ), "s3_region_name must override aws_region_name for SigV4 signing"
 
     def test_openai_passthrough_still_works(self):
         """
@@ -465,4 +469,3 @@ class TestBedrockFilesTransformation:
         assert "messages" in model_input
         assert "max_tokens" in model_input
         assert model_input["max_tokens"] == 10
-

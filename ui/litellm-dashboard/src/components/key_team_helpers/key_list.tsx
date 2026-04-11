@@ -15,6 +15,10 @@ export interface Team {
   keys: KeyResponse[];
   members_with_roles: Member[];
   spend: number;
+  access_group_ids?: string[];
+  access_group_models?: string[];
+  access_group_mcp_server_ids?: string[];
+  access_group_agent_ids?: string[];
 }
 
 export interface KeyResponse {

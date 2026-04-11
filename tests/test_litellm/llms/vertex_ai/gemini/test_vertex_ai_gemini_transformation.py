@@ -127,6 +127,24 @@ def test_vertex_ai_includes_labels():
     assert result["labels"] == {"project": "test", "team": "ai"}
 
 
+def test_service_tier_forwarded_to_vertex_ai():
+    """Test that service_tier in optional_params is mapped to serviceTier in request body."""
+    messages = [{"role": "user", "content": "test"}]
+    optional_params = {"service_tier": "flex"}
+    litellm_params = {}
+
+    result = _transform_request_body(
+        messages=messages,
+        model="gemini-2.5-pro",
+        optional_params=optional_params,
+        custom_llm_provider="vertex_ai",
+        litellm_params=litellm_params,
+        cached_content=None,
+    )
+
+    assert "serviceTier" in result
+    assert result["serviceTier"] == "flex"
+
 
 def test_extra_body_cache_not_forwarded_to_vertex_ai():
     """

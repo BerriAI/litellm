@@ -12,6 +12,6 @@ echo "[post-create] Generating Prisma client"
 poetry run prisma generate
 
 echo "[post-create] Installing npm dependencies"
-cd ui/litellm-dashboard && npm install --no-audit --no-fund
+cd ui/litellm-dashboard && npm ci
 
 echo "[post-create] Done"

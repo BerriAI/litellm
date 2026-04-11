@@ -581,6 +581,90 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 
 See [OpenAI Reasoning documentation](https://platform.openai.com/docs/guides/reasoning) for more details on organization verification requirements.
 
+### Multi-turn Conversations with `reasoning_items`
+
+For multi-turn conversations you need `reasoning_items`: structured blocks that include the `encrypted_content` token OpenAI uses to restore reasoning state on the next request. Pass `include=["reasoning.encrypted_content"]` on every call where you want that token returned.
+
+<Tabs>
+<TabItem value="non-streaming" label="Non-Streaming">
+
+```python showLineNumbers title="Non-streaming: round-trip reasoning_items"
+import litellm
+
+messages = [{"role": "user", "content": "Solve this step by step: 2 + 2"}]
+
+# Turn 1 — get reasoning_items (encrypted_content);
+response = litellm.completion(
+    model="openai/responses/gpt-5-mini",
+    messages=messages,
+    reasoning_effort="low",
+    include=["reasoning.encrypted_content"],
+)
+
+assistant_msg = response.choices[0].message
+
+# Turn 2 — pass reasoning_items back; LiteLLM converts to the correct Responses API format
+messages.append({
+    "role": "assistant",
+    "content": assistant_msg.content,
+    "reasoning_items": assistant_msg.reasoning_items,
+})
+messages.append({"role": "user", "content": "Now summarize your reasoning."})
+
+response2 = litellm.completion(
+    model="openai/responses/gpt-5-mini",
+    messages=messages,
+    reasoning_effort="low",
+    include=["reasoning.encrypted_content"],
+)
+```
+
+</TabItem>
+<TabItem value="streaming" label="Streaming">
+
+`reasoning_items` (with `encrypted_content`) arrive on the final chunk when the full response completes:
+
+```python showLineNumbers title="Streaming: collect and round-trip reasoning_items"
+import litellm
+
+messages = [{"role": "user", "content": "Solve this step by step: 2 + 2"}]
+
+collected_content = []
+collected_reasoning_items = []
+
+stream = litellm.completion(
+    model="openai/responses/gpt-5-mini",
+    messages=messages,
+    stream=True,
+    reasoning_effort="low",
+    include=["reasoning.encrypted_content"],
+)
+
+for chunk in stream:
+    delta = chunk.choices[0].delta
+    if delta.content:
+        collected_content.append(delta.content)
+    if getattr(delta, "reasoning_items", None):
+        collected_reasoning_items.extend(delta.reasoning_items)
+
+messages.append({
+    "role": "assistant",
+    "content": "".join(collected_content),
+    "reasoning_items": collected_reasoning_items or None,
+})
+messages.append({"role": "user", "content": "Continue the conversation."})
+
+response2 = litellm.completion(
+    model="openai/responses/gpt-5-mini",
+    messages=messages,
+    reasoning_effort="low",
+    include=["reasoning.encrypted_content"],
+)
+```
+
+</TabItem>
+</Tabs>
+
 ### Verbosity Control for GPT-5 Models
 
 The `verbosity` parameter controls the length and detail of responses from GPT-5 family models. It accepts three values: `"low"`, `"medium"`, or `"high"`.

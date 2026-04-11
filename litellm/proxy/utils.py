@@ -1898,9 +1898,9 @@ class ProxyLogging:
                     normalized_call_type = CallTypes.aembedding.value
             if normalized_call_type is not None:
                 litellm_logging_obj.call_type = normalized_call_type
-                litellm_logging_obj.model_call_details["call_type"] = (
-                    normalized_call_type
-                )
+                litellm_logging_obj.model_call_details[
+                    "call_type"
+                ] = normalized_call_type
             # Pass-through endpoints are logged via the callback loop's
             # async_post_call_failure_hook — skip pre_call and failure handlers.
             if litellm_logging_obj.call_type == CallTypes.pass_through.value:
@@ -2235,6 +2235,32 @@ class ProxyLogging:
         async for chunk in current_response:
             yield chunk
 
+        # Fire deferred logging AFTER all guardrail end-of-stream blocks
+        # completed.  unified_guardrail writes guardrail_information during
+        # its end-of-stream block (inside current_response), so by the time
+        # we reach this point the metadata is fully populated.
+        ProxyLogging._fire_deferred_stream_logging(request_data)
+
+    @staticmethod
+    def _fire_deferred_stream_logging(request_data: dict) -> None:
+        """
+        Fire the deferred streaming logging callback after the full streaming
+        pipeline (including guardrail end-of-stream blocks) has completed.
+
+        CSW.__anext__ stores the callback and args on logging_obj instead of
+        scheduling via create_task (which would race with unified_guardrail's
+        end-of-stream block).  This method retrieves and fires them.
+        """
+        logging_obj = request_data.get("litellm_logging_obj")
+        if logging_obj is None:
+            return
+        _deferred_cb = getattr(logging_obj, "_on_deferred_stream_complete", None)
+        _args = getattr(logging_obj, "_deferred_stream_complete_args", None)
+        if _deferred_cb is not None and _args is not None:
+            logging_obj._on_deferred_stream_complete = None
+            logging_obj._deferred_stream_complete_args = None
+            asyncio.create_task(_deferred_cb(*_args))
+
     def _init_response_taking_too_long_task(self, data: Optional[dict] = None):
         """
         Initialize the response taking too long task if user is using slack alerting
@@ -2498,7 +2524,8 @@ class PrismaClient:
             required_view = "LiteLLM_VerificationTokenView"
             expected_views_str = ", ".join(f"'{view}'" for view in expected_views)
             pg_schema = os.getenv("DATABASE_SCHEMA", "public")
-            ret = await self.db.query_raw(f"""
+            ret = await self.db.query_raw(
+                f"""
                 WITH existing_views AS (
                     SELECT viewname
                     FROM pg_views
@@ -2510,7 +2537,8 @@ class PrismaClient:
                     (SELECT COUNT(*) FROM existing_views) AS view_count,
                     ARRAY_AGG(viewname) AS view_names
                 FROM existing_views
-                """)
+                """
+            )
             expected_total_views = len(expected_views)
             if ret[0]["view_count"] == expected_total_views:
                 verbose_proxy_logger.info("All necessary views exist!")
@@ -2519,7 +2547,8 @@ class PrismaClient:
                 ## check if required view exists ##
                 if ret[0]["view_names"] and required_view not in ret[0]["view_names"]:
                     await self.health_check()  # make sure we can connect to db
-                    await self.db.execute_raw("""
+                    await self.db.execute_raw(
+                        """
                             CREATE VIEW "LiteLLM_VerificationTokenView" AS
                             SELECT
                             v.*,
@@ -2529,7 +2558,8 @@ class PrismaClient:
                             t.rpm_limit AS team_rpm_limit
                             FROM "LiteLLM_VerificationToken" v
                             LEFT JOIN "LiteLLM_TeamTable" t ON v.team_id = t.team_id;
-                        """)
+                        """
+                    )
 
                     verbose_proxy_logger.info(
                         "LiteLLM_VerificationTokenView Created in DB!"
@@ -2615,7 +2645,7 @@ class PrismaClient:
             raise e
 
     async def _query_first_with_cached_plan_fallback(
-        self, sql_query: str
+        self, sql_query: str, *args
     ) -> Optional[dict]:
         """
         Execute a query with automatic fallback for PostgreSQL cached plan errors.
@@ -2634,7 +2664,7 @@ class PrismaClient:
             Original exception if not a cached plan error
         """
         try:
-            return await self.db.query_first(query=sql_query)
+            return await self.db.query_first(sql_query, *args)
         except Exception as e:
             error_str = str(e)
             if "cached plan must not change result type" in error_str:
@@ -2649,7 +2679,7 @@ class PrismaClient:
                     "retrying with fresh plan. This may occur during rolling deployments "
                     "when schema changes are applied."
                 )
-                return await self.db.query_first(query=sql_query_retry)
+                return await self.db.query_first(sql_query_retry, *args)
             else:
                 raise
 
@@ -2948,7 +2978,7 @@ class PrismaClient:
                             detail={"error": f"No token passed in. Token={token}"},
                         )
 
-                    sql_query = f"""
+                    sql_query = """
                         SELECT 
                             v.*,
                             t.spend AS team_spend, 
@@ -2964,6 +2994,7 @@ class PrismaClient:
                             t.members_with_roles AS team_members_with_roles,
                             t.object_permission_id AS team_object_permission_id,
                             t.organization_id as org_id,
+                            p.project_alias AS project_alias,
                             tm.spend AS team_member_spend,
                             m.aliases AS team_model_aliases,
                             -- Added comma to separate b.* columns
@@ -2973,6 +3004,7 @@ class PrismaClient:
                             b.model_max_budget as litellm_budget_table_model_max_budget,
                             b.soft_budget as litellm_budget_table_soft_budget,
                             o.metadata as organization_metadata,
+                            o.organization_alias as organization_alias,
                             b2.max_budget as organization_max_budget,
                             b2.tpm_limit as organization_tpm_limit,
                             b2.rpm_limit as organization_rpm_limit
@@ -2981,13 +3013,14 @@ class PrismaClient:
                         LEFT JOIN "LiteLLM_TeamMembership" AS tm ON v.team_id = tm.team_id AND tm.user_id = v.user_id
                         LEFT JOIN "LiteLLM_ModelTable" m ON t.model_id = m.id
                         LEFT JOIN "LiteLLM_BudgetTable" AS b ON v.budget_id = b.budget_id
+                        LEFT JOIN "LiteLLM_ProjectTable" AS p ON v.project_id = p.project_id
                         LEFT JOIN "LiteLLM_OrganizationTable" AS o ON v.organization_id = o.organization_id
                         LEFT JOIN "LiteLLM_BudgetTable" AS b2 ON o.budget_id = b2.budget_id
-                        WHERE v.token = '{token}'
+                        WHERE v.token = $1
                     """
 
                     response = await self._query_first_with_cached_plan_fallback(
-                        sql_query
+                        sql_query, hashed_token
                     )
 
                     # If not found in main table, check deprecated keys (grace period)
@@ -3261,7 +3294,7 @@ class PrismaClient:
             if update_key_values is not None:
                 update_key_values = self.jsonify_object(data=update_key_values)
             if token is not None:
-                print_verbose(f"token: {token}")
+                print_verbose(f"token: [set={token is not None}]")
                 # check if plain text or hash
                 token = _hash_token_if_needed(token=token)
                 db_data["token"] = token
@@ -4548,6 +4581,72 @@ def hash_token(token: str):
     return hashed_token
 
 
+def hash_password(password: str) -> str:
+    """Hash a password using scrypt with a random salt."""
+    import base64
+    import hashlib
+    import os
+
+    salt = os.urandom(16)
+    dk = hashlib.scrypt(password.encode(), salt=salt, n=16384, r=8, p=1, dklen=32)
+    return "scrypt:" + base64.b64encode(salt + dk).decode()
+
+
+def verify_password(password: str, stored: str) -> bool:
+    """Verify a password against a stored hash. Supports scrypt and SHA256."""
+    import base64
+    import hashlib
+    import secrets
+
+    if stored.startswith("scrypt:"):
+        try:
+            raw = base64.b64decode(stored[7:])
+            salt, dk = raw[:16], raw[16:]
+            dk2 = hashlib.scrypt(
+                password.encode(), salt=salt, n=16384, r=8, p=1, dklen=32
+            )
+            return secrets.compare_digest(dk, dk2)
+        except Exception:
+            return False
+    # SHA256 fallback (not vulnerable to pass-the-hash: checks sha256(input) == stored)
+    if len(stored) == 64 and all(c in "0123456789abcdef" for c in stored):
+        return secrets.compare_digest(
+            hashlib.sha256(password.encode()).hexdigest().encode(), stored.encode()
+        )
+    return False
+
+
+async def migrate_passwords_to_scrypt_async(prisma_client) -> str:
+    """
+    Migrate plaintext passwords in the DB to scrypt. SHA256 passwords
+    are left alone (they migrate on next login via the SHA256 fallback).
+    Skips quickly if no plaintext passwords exist.
+    """
+    all_with_pw = await prisma_client.db.litellm_usertable.find_many(
+        where={"password": {"not": None}},
+    )
+
+    def _is_sha256_hex(s: str) -> bool:
+        return len(s) == 64 and all(c in "0123456789abcdef" for c in s)
+
+    plaintext_users = [
+        u
+        for u in all_with_pw
+        if u.password
+        and not u.password.startswith("scrypt:")
+        and not _is_sha256_hex(u.password)
+    ]
+    if not plaintext_users:
+        return "No plaintext passwords found"
+
+    for user in plaintext_users:
+        await prisma_client.db.litellm_usertable.update(
+            where={"user_id": user.user_id},
+            data={"password": hash_password(user.password)},
+        )
+    return f"Migrated {len(plaintext_users)} plaintext passwords to scrypt"
+
+
 def _hash_token_if_needed(token: str) -> str:
     """
     Hash the token if it's a string and starts with "sk-"
@@ -4729,6 +4828,9 @@ async def update_spend(  # noqa: PLR0915
 
     Triggered every minute.
 
+    NOTE: This job now skips tag spend updates, which are handled by a separate
+    scheduler job (update_daily_tag_spend) at a longer interval to reduce contention.
+
     Requires:
     user_id_list: dict,
     keys_list: list,
@@ -4759,6 +4861,46 @@ async def update_spend(  # noqa: PLR0915
             db_writer_client=db_writer_client,
             proxy_logging_obj=proxy_logging_obj,
         )
+
+
+async def update_daily_tag_spend(
+    prisma_client: PrismaClient,
+    proxy_logging_obj: ProxyLogging,
+):
+    """
+    Separate scheduler job to commit daily tag spend updates.
+    
+    Runs at a longer interval (2.3x default) than the main update_spend job
+    to reduce query contention for DailyTagSpend table.
+    
+    This is called by a dedicated scheduler job and does NOT process:
+    - Regular spend updates (user, key, team, org)
+    - End-user spend
+    - Agent spend
+    - Spend logs
+    
+    Only processes tag spend transactions from the daily_tag_spend_update_queue.
+    
+    Args:
+        prisma_client: PrismaClient instance
+        proxy_logging_obj: ProxyLogging instance for error handling
+    """
+    n_retry_times = 3
+    try:
+        if proxy_logging_obj.db_spend_update_writer.redis_update_buffer._should_commit_spend_updates_to_redis():
+            await proxy_logging_obj.db_spend_update_writer._commit_daily_tag_spend_to_db_with_redis(
+                prisma_client=prisma_client,
+                n_retry_times=n_retry_times,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+        else:
+            await proxy_logging_obj.db_spend_update_writer._commit_daily_tag_spend_to_db(
+                prisma_client=prisma_client,
+                n_retry_times=n_retry_times,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+    except Exception as e:
+        verbose_proxy_logger.error(f"Error updating daily tag spend: {e}")
 
 
 async def update_spend_logs_job(
@@ -5152,11 +5294,12 @@ def handle_exception_on_proxy(e: Exception) -> ProxyException:
         )
     elif isinstance(e, ProxyException):
         return e
+    _status_code = getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR)
     return ProxyException(
-        message="Internal Server Error, " + str(e),
+        message=str(e),
         type=ProxyErrorTypes.internal_server_error,
         param=getattr(e, "param", "None"),
-        code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        code=_status_code,
     )
 
 

@@ -1115,7 +1115,10 @@ async def delete_file(
                 file_id=original_file_id,
             )
 
-            response = await litellm.afile_delete(**data)  # type: ignore
+            response = await litellm.afile_delete(
+                custom_llm_provider=credentials["custom_llm_provider"],  # type: ignore
+                **data,
+            )  # type: ignore
 
             verbose_proxy_logger.debug(
                 f"Deleted file using model: {model_used}"

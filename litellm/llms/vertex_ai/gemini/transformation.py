@@ -763,6 +763,16 @@ def _transform_request_body(  # noqa: PLR0915
             data["generationConfig"] = generation_config
         if cached_content is not None:
             data["cachedContent"] = cached_content
+
+        if service_tier := optional_params.pop("service_tier", None):
+            if isinstance(service_tier, str):
+                if service_tier.lower() == "default":
+                    data["serviceTier"] = "standard"
+                else:
+                    data["serviceTier"] = service_tier.lower()
+            else:
+                data["serviceTier"] = service_tier
+
         # Only add labels for Vertex AI endpoints (not Google GenAI/AI Studio) and only if non-empty
         if labels and custom_llm_provider != LlmProviders.GEMINI:
             data["labels"] = labels

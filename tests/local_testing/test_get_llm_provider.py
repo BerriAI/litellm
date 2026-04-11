@@ -229,10 +229,10 @@ def test_nova_bedrock_converse():
 
 def test_bedrock_invoke_anthropic():
     model, custom_llm_provider, dynamic_api_key, api_base = litellm.get_llm_provider(
-        model="bedrock/invoke/anthropic.claude-3-5-sonnet-20240620-v1:0",
+        model="bedrock/invoke/anthropic.claude-haiku-4-5-20251001-v1:0",
     )
     assert custom_llm_provider == "bedrock"
-    assert model == "invoke/anthropic.claude-3-5-sonnet-20240620-v1:0"
+    assert model == "invoke/anthropic.claude-haiku-4-5-20251001-v1:0"
 
 
 @pytest.mark.parametrize("model", ["xai/grok-2-vision-latest", "grok-2-vision-latest"])

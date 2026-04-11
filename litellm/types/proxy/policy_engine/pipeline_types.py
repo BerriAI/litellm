@@ -18,17 +18,23 @@ class PipelineStep(BaseModel):
     """
     A single step in a guardrail pipeline.
 
-    Each step runs a guardrail and takes an action based on pass/fail.
+    Each step runs a guardrail and takes an action based on pass, policy fail,
+    or technical/API error (see pipeline executor outcome types).
     """
 
     guardrail: str = Field(description="Name of the guardrail to run.")
     on_fail: str = Field(
         default="block",
-        description="Action when guardrail rejects: next | block | allow | modify_response",
+        description="Action when guardrail rejects content (policy intervention): next | block | allow | modify_response",
     )
     on_pass: str = Field(
         default="allow",
         description="Action when guardrail passes: next | block | allow | modify_response",
+    )
+    on_error: Optional[str] = Field(
+        default=None,
+        description="Action when the guardrail raises a technical error (timeouts, "
+        "unreachable provider, non-intervention HTTP errors). If omitted, uses on_fail.",
     )
     pass_data: bool = Field(
         default=False,
@@ -41,9 +47,11 @@ class PipelineStep(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    @field_validator("on_fail", "on_pass")
+    @field_validator("on_fail", "on_pass", "on_error")
     @classmethod
-    def validate_action(cls, v: str) -> str:
+    def validate_action(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return None
         if v not in VALID_PIPELINE_ACTIONS:
             raise ValueError(
                 f"Invalid action '{v}'. Must be one of: {sorted(VALID_PIPELINE_ACTIONS)}"

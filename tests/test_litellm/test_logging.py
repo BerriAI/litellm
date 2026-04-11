@@ -177,6 +177,72 @@ def test_json_formatter_parses_embedded_python_dict_repr():
     assert obj["model_info"]["db_model"] is False
 
 
+def test_json_formatter_includes_component_field():
+    """
+    Test that JsonFormatter always emits a 'component' field equal to the logger name.
+    This allows filtering by component (e.g. "LiteLLM Proxy") in Datadog / third-party log services.
+    """
+    formatter = JsonFormatter()
+    for logger_name in ("LiteLLM Proxy", "LiteLLM Router", "LiteLLM"):
+        record = logging.LogRecord(
+            name=logger_name,
+            level=logging.ERROR,
+            pathname="proxy_server.py",
+            lineno=42,
+            msg="something went wrong",
+            args=(),
+            exc_info=None,
+        )
+        output = formatter.format(record)
+        obj = json.loads(output)
+        assert obj["component"] == logger_name, (
+            f"Expected component={logger_name!r}, got {obj.get('component')!r}"
+        )
+
+
+def test_json_formatter_includes_logger_field():
+    """
+    Test that JsonFormatter always emits a 'logger' field with filename:lineno.
+    This allows pinpointing the exact source of a log line in third-party services.
+    """
+    formatter = JsonFormatter()
+    record = logging.LogRecord(
+        name="LiteLLM Proxy",
+        level=logging.INFO,
+        pathname="/app/litellm/proxy/proxy_server.py",
+        lineno=123,
+        msg="request received",
+        args=(),
+        exc_info=None,
+    )
+    output = formatter.format(record)
+    obj = json.loads(output)
+    assert obj["logger"] == "proxy_server.py:123", (
+        f"Expected logger='proxy_server.py:123', got {obj['logger']!r}"
+    )
+
+
+def test_json_formatter_extra_component_not_overwritten():
+    """
+    User-supplied extra={"component": "..."} must not be silently dropped.
+    """
+    formatter = JsonFormatter()
+    record = logging.LogRecord(
+        name="LiteLLM Proxy",
+        level=logging.INFO,
+        pathname="proxy_server.py",
+        lineno=1,
+        msg="event",
+        args=(),
+        exc_info=None,
+    )
+    record.component = "auth-service"
+    obj = json.loads(formatter.format(record))
+    assert obj["component"] == "auth-service", (
+        f"User-supplied component was overwritten, got {obj['component']!r}"
+    )
+
+
 def test_initialize_loggers_with_handler_sets_propagate_false():
     """
     Test that the initialize_loggers_with_handler function sets propagate to False for all loggers

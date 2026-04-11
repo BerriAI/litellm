@@ -242,7 +242,7 @@ describe("MCPServerPermissions", () => {
     );
 
     // Verify empty state message
-    expect(screen.getByText("No MCP servers or access groups configured")).toBeInTheDocument();
+    expect(screen.getByText("No MCP servers, access groups, or toolsets configured")).toBeInTheDocument();
 
     // Verify count badge shows 0
     expect(screen.getByText("0")).toBeInTheDocument();

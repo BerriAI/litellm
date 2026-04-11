@@ -246,7 +246,7 @@ class TestSharedHealthCheckManager:
         model_list = [{"model_name": "test-model", "litellm_params": {"model": "test-model"}}]
         
         with patch("litellm.proxy.health_check_utils.shared_health_check_manager.perform_health_check") as mock_perform:
-            healthy, unhealthy = await shared_health_manager.perform_shared_health_check(
+            healthy, unhealthy, _ = await shared_health_manager.perform_shared_health_check(
                 model_list, details=True
             )
         
@@ -268,9 +268,9 @@ class TestSharedHealthCheckManager:
         expected_unhealthy = []
         
         with patch("litellm.proxy.health_check_utils.shared_health_check_manager.perform_health_check") as mock_perform:
-            mock_perform.return_value = (expected_healthy, expected_unhealthy)
+            mock_perform.return_value = (expected_healthy, expected_unhealthy, {})
             
-            healthy, unhealthy = await shared_health_manager.perform_shared_health_check(
+            healthy, unhealthy, _ = await shared_health_manager.perform_shared_health_check(
                 model_list, details=True
             )
         
@@ -302,7 +302,7 @@ class TestSharedHealthCheckManager:
         model_list = [{"model_name": "test-model", "litellm_params": {"model": "test-model"}}]
         
         with patch("asyncio.sleep") as mock_sleep:  # Mock sleep to avoid actual delay
-            healthy, unhealthy = await shared_health_manager.perform_shared_health_check(
+            healthy, unhealthy, _ = await shared_health_manager.perform_shared_health_check(
                 model_list, details=True
             )
         
@@ -324,9 +324,9 @@ class TestSharedHealthCheckManager:
         
         with patch("asyncio.sleep") as mock_sleep, \
              patch("litellm.proxy.health_check_utils.shared_health_check_manager.perform_health_check") as mock_perform:
-            mock_perform.return_value = (expected_healthy, expected_unhealthy)
+            mock_perform.return_value = (expected_healthy, expected_unhealthy, {})
             
-            healthy, unhealthy = await shared_health_manager.perform_shared_health_check(
+            healthy, unhealthy, _ = await shared_health_manager.perform_shared_health_check(
                 model_list, details=True
             )
         

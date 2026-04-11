@@ -325,6 +325,7 @@ const sidebars = {
                 "mcp_control",
                 "mcp_cost",
                 "mcp_guardrail",
+                "mcp_toolsets",
                 {
                   type: "link",
                   label: "MCP Troubleshooting Guide",
@@ -348,6 +349,7 @@ const sidebars = {
             "proxy/debugging",
             "proxy/error_diagnosis",
             "proxy/deploy",
+            "proxy/docker_image_security",
             "proxy/health",
             "proxy/master_key_rotations",
             "proxy/model_management",
@@ -452,6 +454,7 @@ const sidebars = {
           items: [
             "proxy/virtual_keys",
             "proxy/token_auth",
+            "proxy/jwt_key_mapping",
             "proxy/service_accounts",
             "proxy/access_control",
             "proxy/cli_sso",
@@ -561,7 +564,8 @@ const sidebars = {
             "proxy/model_access",
             "proxy/model_access_groups",
             "proxy/access_groups",
-            "proxy/team_model_add"
+            "proxy/team_model_add",
+            "proxy/credential_routing"
           ]
         },
         {
@@ -850,6 +854,7 @@ const sidebars = {
           items: [
             "providers/gemini",
             "providers/gemini/videos",
+            "providers/gemini/music",
             "providers/google_ai_studio/files",
             "providers/google_ai_studio/image_gen",
             "providers/google_ai_studio/realtime",
@@ -1049,7 +1054,8 @@ const sidebars = {
         "proxy/fallback_management",
         "proxy/tag_routing",
         "proxy/timeout",
-        "wildcard_routing"
+        "wildcard_routing",
+        "proxy/health_check_routing"
       ],
     },
     {

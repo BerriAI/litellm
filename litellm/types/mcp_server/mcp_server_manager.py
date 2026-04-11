@@ -54,6 +54,8 @@ class MCPServer(BaseModel):
     aws_session_token: Optional[str] = None
     aws_region_name: Optional[str] = None
     aws_service_name: Optional[str] = None  # defaults to "bedrock-agentcore"
+    aws_role_name: Optional[str] = None  # IAM role ARN for STS AssumeRole
+    aws_session_name: Optional[str] = None  # session name for CloudTrail auditing
     # Stdio-specific fields
     command: Optional[str] = None
     args: Optional[List[str]] = None
@@ -69,6 +71,15 @@ class MCPServer(BaseModel):
     # OAuth2 flow type.  Defaults to None (interactive / authorization_code).
     # Set to "client_credentials" to enable M2M token fetching.
     oauth2_flow: Optional[Literal["client_credentials", "authorization_code"]] = None
+    # Per-user OAuth server-side storage config.
+    # token_validation: key-value pairs that must match fields in the OAuth token
+    # response (supports dot-notation for nested fields, e.g. "team.enterprise_id").
+    # Tokens that fail validation are rejected before storage.
+    token_validation: Optional[Dict[str, Any]] = None
+    # Optional TTL override (seconds) for the Redis per-user token cache.
+    # Defaults to the token's expires_in minus the expiry buffer, or
+    # MCP_PER_USER_TOKEN_DEFAULT_TTL when expires_in is absent.
+    token_storage_ttl_seconds: Optional[int] = None
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     @property

@@ -149,6 +149,19 @@ Apply formatting (auto-fixes issues):
 make format
 ```
 
+> **Black formatting is enforced in CI.** All PRs must pass the Black formatting check.
+>
+> - **AI coding agents** (Claude Code, Copilot, Cursor, etc.): `AGENTS.md` and `CLAUDE.md` instruct agents to run `poetry run black .` before committing.
+> - **VS Code users**: Install the [Black Formatter extension](https://marketplace.visualstudio.com/items?itemName=ms-python.black-formatter) and enable format-on-save:
+>   ```json
+>   {
+>     "[python]": {
+>       "editor.defaultFormatter": "ms-python.black-formatter",
+>       "editor.formatOnSave": true
+>     }
+>   }
+>   ```
+
 ### CI Compatibility
 
 To ensure your changes will pass CI, run the exact same checks locally:

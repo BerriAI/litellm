@@ -47,6 +47,8 @@ async def new_budget(
     - model_max_budget: Optional[dict] - Specify max budget for a given model. Example: {"openai/gpt-4o-mini": {"max_budget": 100.0, "budget_duration": "1d", "tpm_limit": 100000, "rpm_limit": 100000}}
     - budget_reset_at: Optional[datetime] - Datetime when the initial budget is reset. Default is now.
     """
+    from prisma.errors import UniqueViolationError
+
     from litellm.proxy.proxy_server import litellm_proxy_admin_name, prisma_client
 
     if prisma_client is None:
@@ -90,13 +92,23 @@ async def new_budget(
 
     budget_obj_json = budget_obj.model_dump(exclude_none=True)
     budget_obj_jsonified = jsonify_object(budget_obj_json)  # json dump any dictionaries
-    response = await prisma_client.db.litellm_budgettable.create(
-        data={
-            **budget_obj_jsonified,  # type: ignore
-            "created_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
-            "updated_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
-        }  # type: ignore
-    )
+    try:
+        response = await prisma_client.db.litellm_budgettable.create(
+            data={
+                **budget_obj_jsonified,  # type: ignore
+                "created_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
+                "updated_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
+            }  # type: ignore
+        )
+    except Exception as e:
+        if not isinstance(e, UniqueViolationError):
+            raise
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": f"Budget with id '{budget_obj.budget_id}' already exists."
+            },
+        )
 
     return response
 

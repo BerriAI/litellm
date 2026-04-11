@@ -359,27 +359,38 @@ async def test_auth_with_allowed_routes(route, should_raise_error):
 
 
 @pytest.mark.parametrize(
-    "route, user_role, expected_result",
+    "route, user_role, should_be_allowed",
     [
-        # Proxy Admin checks
+        # Admin can access everything
+        ("/config/update", "proxy_admin", True),
         ("/global/spend/logs", "proxy_admin", True),
-        ("/key/delete", "proxy_admin", False),
-        ("/key/generate", "proxy_admin", False),
-        ("/key/regenerate", "proxy_admin", False),
-        # Internal User checks - allowed routes
+        ("/global/activity/cache_hits", "proxy_admin", True),
+        # Internal User - allowed read-only routes
         ("/global/spend/logs", "internal_user", True),
-        ("/key/delete", "internal_user", False),
-        ("/key/generate", "internal_user", False),
-        ("/key/82akk800000000jjsk/regenerate", "internal_user", False),
-        # Internal User Viewer
-        ("/key/generate", "internal_user_viewer", False),
-        # Internal User checks - disallowed routes
+        ("/spend/logs/ui", "internal_user", True),
+        ("/global/activity/cache_hits", "internal_user", True),
+        ("/health/services", "internal_user", True),
+        # Internal User - BLOCKED from admin routes (security fix)
+        ("/config/update", "internal_user", False),
+        ("/config/pass_through_endpoint", "internal_user", False),
+        ("/config/field/update", "internal_user", False),
         ("/organization/member_add", "internal_user", False),
+        # Internal User Viewer - allowed spend routes only
+        ("/spend/logs/ui", "internal_user_viewer", True),
+        ("/global/spend/all_tag_names", "internal_user_viewer", True),
+        # Internal User Viewer - blocked from admin routes
+        ("/config/update", "internal_user_viewer", False),
+        ("/key/generate", "internal_user_viewer", False),
     ],
 )
-def test_is_ui_route_allowed(route, user_role, expected_result):
-    from litellm.proxy.auth.auth_checks import _is_ui_route
-    from litellm.proxy._types import LiteLLM_UserTable
+def test_ui_token_route_access(route, user_role, should_be_allowed):
+    """
+    Verify that UI tokens (team_id=litellm-dashboard) go through the same
+    RBAC checks as API tokens. Non-admin dashboard users must not be able
+    to access admin-only routes like /config/update.
+    """
+    from litellm.proxy.auth.auth_checks import _is_api_route_allowed
+    from litellm.proxy._types import LiteLLM_UserTable, UserAPIKeyAuth
 
     user_obj = LiteLLM_UserTable(
         user_id="3b803c0e-666e-4e99-bd5c-6e534c07e297",
@@ -395,18 +406,36 @@ def test_is_ui_route_allowed(route, user_role, expected_result):
         organization_memberships=[],
     )
 
-    received_args: dict = {
-        "route": route,
-        "user_obj": user_obj,
-    }
-    try:
-        assert _is_ui_route(**received_args) == expected_result
-    except Exception as e:
-        # If expected result is False, we expect an error
-        if expected_result is False:
-            pass
-        else:
-            raise e
+    valid_token = UserAPIKeyAuth(
+        user_id="3b803c0e-666e-4e99-bd5c-6e534c07e297",
+        team_id="litellm-dashboard",
+        user_role=user_role,
+    )
+
+    from starlette.datastructures import URL
+    from fastapi import Request
+
+    request = Request(scope={"type": "http"})
+    request._url = URL(url=route)
+
+    if should_be_allowed:
+        result = _is_api_route_allowed(
+            route=route,
+            request=request,
+            request_data={},
+            valid_token=valid_token,
+            user_obj=user_obj,
+        )
+        assert result is True
+    else:
+        with pytest.raises(Exception):
+            _is_api_route_allowed(
+                route=route,
+                request=request,
+                request_data={},
+                valid_token=valid_token,
+                user_obj=user_obj,
+            )
 
 
 @pytest.mark.parametrize(
@@ -684,7 +713,7 @@ async def test_soft_budget_alert():
 
 
 def test_is_allowed_route():
-    from litellm.proxy.auth.auth_checks import _is_allowed_route
+    from litellm.proxy.auth.auth_checks import _is_api_route_allowed
     from litellm.proxy._types import UserAPIKeyAuth
     import datetime
 
@@ -692,7 +721,6 @@ def test_is_allowed_route():
 
     args = {
         "route": "/embeddings",
-        "token_type": "api",
         "request": request,
         "request_data": {"input": ["hello world"], "model": "embedding-small"},
         "valid_token": UserAPIKeyAuth(
@@ -752,7 +780,7 @@ def test_is_allowed_route():
         "user_obj": None,
     }
 
-    assert _is_allowed_route(**args)
+    assert _is_api_route_allowed(**args)
 
 
 @pytest.mark.parametrize(
@@ -836,7 +864,6 @@ async def test_user_api_key_auth_websocket():
     with patch(
         "litellm.proxy.auth.user_api_key_auth.user_api_key_auth", autospec=True
     ) as mock_user_api_key_auth:
-
         # Make the call to the WebSocket function
         await user_api_key_auth_websocket(mock_websocket)
 
@@ -845,10 +872,14 @@ async def test_user_api_key_auth_websocket():
 
         # Get the request object that was passed to user_api_key_auth
         request_arg = mock_user_api_key_auth.call_args.kwargs["request"]
-        
+
         # Verify that the request has headers set
-        assert hasattr(request_arg, "headers"), "Request object should have headers attribute"
-        assert "authorization" in request_arg.headers, "Request headers should contain authorization"
+        assert hasattr(
+            request_arg, "headers"
+        ), "Request object should have headers attribute"
+        assert (
+            "authorization" in request_arg.headers
+        ), "Request headers should contain authorization"
         assert request_arg.headers["authorization"] == "Bearer some_api_key"
 
         assert (
@@ -1036,7 +1067,10 @@ async def test_jwt_non_admin_team_route_access(monkeypatch):
 
     # Create request
     request = Request(
-        scope={"type": "http", "headers": [(b"authorization", b"Bearer fake.jwt.token")]}
+        scope={
+            "type": "http",
+            "headers": [(b"authorization", b"Bearer fake.jwt.token")],
+        }
     )
     request._url = URL(url="/team/new")
 
@@ -1101,14 +1135,14 @@ async def test_x_litellm_api_key():
     ignored_key = "aj12445"
 
     # Create request with headers as bytes
-    request = Request(
-        scope={
-            "type": "http"
-        }
-    )
+    request = Request(scope={"type": "http"})
     request._url = URL(url="/chat/completions")
 
-    valid_token = await user_api_key_auth(request=request, api_key="Bearer " + ignored_key, custom_litellm_key_header=master_key)
+    valid_token = await user_api_key_auth(
+        request=request,
+        api_key="Bearer " + ignored_key,
+        custom_litellm_key_header=master_key,
+    )
     assert valid_token.token == hash_token(master_key)
 
 
@@ -1123,7 +1157,9 @@ async def test_user_api_key_from_query_param():
     from litellm.proxy.proxy_server import hash_token, user_api_key_cache
 
     user_key = "sk-query-1234"
-    user_api_key_cache.set_cache(key=hash_token(user_key), value=UserAPIKeyAuth(token=hash_token(user_key)))
+    user_api_key_cache.set_cache(
+        key=hash_token(user_key), value=UserAPIKeyAuth(token=hash_token(user_key))
+    )
 
     setattr(litellm.proxy.proxy_server, "user_api_key_cache", user_api_key_cache)
     setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
@@ -1136,7 +1172,9 @@ async def test_user_api_key_from_query_param():
             "query_string": f"alt=sse&key={user_key}".encode(),
         }
     )
-    request._url = URL(url=f"/v1beta/models/gemini:streamGenerateContent?alt=sse&key={user_key}")
+    request._url = URL(
+        url=f"/v1beta/models/gemini:streamGenerateContent?alt=sse&key={user_key}"
+    )
 
     async def return_body():
         return b"{}"
@@ -1145,4 +1183,3 @@ async def test_user_api_key_from_query_param():
 
     valid_token = await user_api_key_auth(request=request, api_key="")
     assert valid_token.token == hash_token(user_key)
-

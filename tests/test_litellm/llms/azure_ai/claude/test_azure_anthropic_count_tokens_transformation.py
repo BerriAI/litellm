@@ -3,6 +3,7 @@ Tests for Azure AI Anthropic CountTokens transformation.
 
 Verifies that the CountTokens API uses the correct authentication headers.
 """
+
 import os
 import sys
 
@@ -40,7 +41,7 @@ class TestAzureAIAnthropicCountTokensConfig:
         assert headers["anthropic-version"] == "2023-06-01"
         assert "anthropic-beta" in headers
 
-    def test_get_required_headers_includes_azure_api_key(self):
+    def test_get_required_headers_includes_AZURE_AI_API_KEY(self):
         """
         Test that get_required_headers includes Azure api-key header.
 

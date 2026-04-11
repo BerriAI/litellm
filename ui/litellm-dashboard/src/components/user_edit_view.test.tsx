@@ -1,6 +1,6 @@
-import { screen, waitFor } from "@testing-library/react";
+import { cleanup, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders } from "../../tests/test-utils";
 import { UserEditView } from "./user_edit_view";
 
@@ -138,6 +138,15 @@ describe("UserEditView", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    // Tremor's internal Tooltip sets a setTimeout that fires after teardown,
+    // causing "window is not defined". Flush pending timers before cleanup.
+    vi.useFakeTimers();
+    vi.runAllTimers();
+    vi.useRealTimers();
+    cleanup();
   });
 
   it("should render", async () => {

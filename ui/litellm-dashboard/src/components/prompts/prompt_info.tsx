@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import {
   Card,
   Title,
@@ -11,19 +11,25 @@ import {
   TabList,
   TabPanel,
   TabPanels,
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeaderCell,
+  TableRow,
 } from "@tremor/react";
 import { Button, Modal } from "antd";
 import { ArrowLeftIcon, TrashIcon, PencilIcon } from "@heroicons/react/outline";
-import { getPromptInfo, PromptSpec, PromptTemplateBase, deletePromptCall } from "@/components/networking";
+import { getPromptInfo, getPromptVersions, PromptSpec, PromptTemplateBase, deletePromptCall } from "@/components/networking";
 import { copyToClipboard as utilCopyToClipboard } from "@/utils/dataUtils";
 import { CheckIcon, CopyIcon } from "lucide-react";
 import NotificationsManager from "../molecules/notifications_manager";
 import PromptCodeSnippets from "./prompt_editor_view/PromptCodeSnippets";
-import { 
-  extractModel, 
-  extractTemplateVariables, 
-  getBasePromptId, 
-  getCurrentVersion 
+import {
+  extractModel,
+  extractTemplateVariables,
+  getBasePromptId,
+  getCurrentVersion
 } from "./prompt_utils";
 
 export interface PromptInfoProps {
@@ -44,14 +50,31 @@ const PromptInfoView: React.FC<PromptInfoProps> = ({ promptId, onClose, accessTo
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
 
-  const fetchPromptInfo = async () => {
+  // Environment and version state
+  const [environments, setEnvironments] = useState<string[]>([]);
+  const [selectedEnv, setSelectedEnv] = useState<string | null>(null);
+  const [versionHistory, setVersionHistory] = useState<PromptSpec[]>([]);
+  const [selectedVersion, setSelectedVersion] = useState<number | null>(null);
+  const [loadingVersions, setLoadingVersions] = useState(false);
+
+  // Initial fetch — no environment filter, gets default + all environments list
+  const fetchPromptInfo = async (environment?: string) => {
     try {
       setLoading(true);
       if (!accessToken) return;
-      const response = await getPromptInfo(accessToken, promptId);
+      const response = await getPromptInfo(accessToken, promptId, environment);
       setPromptData(response.prompt_spec);
       setPromptTemplate(response.raw_prompt_template);
-      setRawApiResponse(response); // Store the raw response for the Raw JSON tab
+      setRawApiResponse(response);
+
+      // Set environments from response
+      if (response.environments && response.environments.length > 0) {
+        setEnvironments(response.environments);
+        if (!selectedEnv) {
+          setSelectedEnv(response.prompt_spec.environment || response.environments[0]);
+        }
+      }
+      setSelectedVersion(response.prompt_spec.version || null);
     } catch (error) {
       NotificationsManager.fromBackend("Failed to load prompt information");
       console.error("Error fetching prompt info:", error);
@@ -60,11 +83,46 @@ const PromptInfoView: React.FC<PromptInfoProps> = ({ promptId, onClose, accessTo
     }
   };
 
+  // Fetch version history for selected environment
+  const fetchVersionHistory = async (env: string) => {
+    if (!accessToken) return;
+    setLoadingVersions(true);
+    try {
+      const response = await getPromptVersions(accessToken, promptId, env);
+      setVersionHistory(response.prompts || []);
+    } catch {
+      setVersionHistory([]);
+    } finally {
+      setLoadingVersions(false);
+    }
+  };
+
+  const isInitialMount = useRef(true);
+
   useEffect(() => {
+    setSelectedEnv(null);
+    setEnvironments([]);
+    setVersionHistory([]);
     fetchPromptInfo();
   }, [promptId, accessToken]);
 
-  if (loading) {
+  // When environment changes (user clicks tab), re-fetch — skip initial mount
+  useEffect(() => {
+    if (isInitialMount.current) {
+      isInitialMount.current = false;
+      // Still fetch version history on initial mount once selectedEnv is set
+      if (selectedEnv && accessToken) {
+        fetchVersionHistory(selectedEnv);
+      }
+      return;
+    }
+    if (selectedEnv && accessToken) {
+      fetchPromptInfo(selectedEnv);
+      fetchVersionHistory(selectedEnv);
+    }
+  }, [selectedEnv]);
+
+  if (loading && !promptData) {
     return <div className="p-4">Loading...</div>;
   }
 
@@ -72,7 +130,6 @@ const PromptInfoView: React.FC<PromptInfoProps> = ({ promptId, onClose, accessTo
     return <div className="p-4">Prompt not found</div>;
   }
 
-  // Format date helper function
   const formatDate = (dateString?: string) => {
     if (!dateString) return "-";
     const date = new Date(dateString);
@@ -95,13 +152,12 @@ const PromptInfoView: React.FC<PromptInfoProps> = ({ promptId, onClose, accessTo
 
   const handleDeleteConfirm = async () => {
     if (!accessToken || !promptData) return;
-
     setIsDeleting(true);
     try {
       await deletePromptCall(accessToken, basePromptId);
       NotificationsManager.success(`Prompt "${basePromptId}" deleted successfully`);
-      onDelete?.(); // Call the callback to refresh the parent component
-      onClose(); // Close the info view
+      onDelete?.();
+      onClose();
     } catch (error) {
       console.error("Error deleting prompt:", error);
       NotificationsManager.fromBackend("Failed to delete prompt");
@@ -115,10 +171,27 @@ const PromptInfoView: React.FC<PromptInfoProps> = ({ promptId, onClose, accessTo
     setShowDeleteConfirm(false);
   };
 
-  // Use utility functions to extract prompt data
+  const handleVersionClick = async (version: PromptSpec) => {
+    if (!accessToken || !selectedEnv) return;
+    // Fetch specific version's info
+    const versionNum = version.version || 1;
+    setSelectedVersion(versionNum);
+    try {
+      const versionedId = `${promptId}.v${versionNum}`;
+      const response = await getPromptInfo(accessToken, versionedId, selectedEnv);
+      setPromptData(response.prompt_spec);
+      setPromptTemplate(response.raw_prompt_template);
+      setRawApiResponse(response);
+    } catch {
+      NotificationsManager.fromBackend(`Failed to load version v${versionNum}`);
+    }
+  };
+
   const promptModel = promptData ? extractModel(promptData) || "gpt-4o" : "gpt-4o";
   const basePromptId = getBasePromptId(promptData);
   const currentVersion = getCurrentVersion(promptData);
+  const latestVersion = versionHistory.length > 0 ? Math.max(...versionHistory.map(v => v.version || 1)) : null;
+  const isViewingOldVersion = latestVersion !== null && selectedVersion !== null && selectedVersion < latestVersion;
 
   return (
     <div className="p-4">
@@ -174,32 +247,75 @@ const PromptInfoView: React.FC<PromptInfoProps> = ({ promptId, onClose, accessTo
         </div>
       </div>
 
+      {/* Environment Tabs */}
+      {environments.length > 0 && (
+        <div className="flex gap-2 mb-4">
+          {[...environments].sort((a, b) => {
+            const order: Record<string, number> = { development: 0, staging: 1, production: 2 };
+            return (order[a] ?? 99) - (order[b] ?? 99);
+          }).map((env) => (
+            <button
+              key={env}
+              onClick={() => {
+                setSelectedEnv(env);
+                setSelectedVersion(null);
+              }}
+              className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${
+                selectedEnv === env
+                  ? env === "production"
+                    ? "bg-red-100 text-red-800 border-2 border-red-300"
+                    : env === "staging"
+                    ? "bg-yellow-100 text-yellow-800 border-2 border-yellow-300"
+                    : "bg-green-100 text-green-800 border-2 border-green-300"
+                  : "bg-gray-100 text-gray-600 border-2 border-transparent hover:bg-gray-200"
+              }`}
+            >
+              {env}
+              {versionHistory.length > 0 && selectedEnv === env && (
+                <span className="ml-1 text-xs opacity-75">
+                  (v{latestVersion})
+                </span>
+              )}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* Old version banner */}
+      {isViewingOldVersion && (
+        <div className="mb-4 p-3 bg-amber-50 border border-amber-200 rounded-lg flex items-center justify-between">
+          <Text className="text-amber-800">
+            Viewing v{selectedVersion} — not the latest version (v{latestVersion})
+          </Text>
+          <TremorButton
+            variant="light"
+            size="xs"
+            onClick={() => {
+              const latest = versionHistory.find(v => v.version === latestVersion);
+              if (latest) handleVersionClick(latest);
+            }}
+          >
+            Go to latest
+          </TremorButton>
+        </div>
+      )}
+
       <TabGroup>
         <TabList className="mb-4">
           <Tab key="overview">Overview</Tab>
           {promptTemplate ? <Tab key="prompt-template">Prompt Template</Tab> : <></>}
-          {isAdmin ? <Tab key="details">Details</Tab> : <></>}
           <Tab key="raw-json">Raw JSON</Tab>
         </TabList>
 
         <TabPanels>
           {/* Overview Panel */}
           <TabPanel>
-            <Grid numItems={1} numItemsSm={2} numItemsLg={3} className="gap-6">
-              <Card>
-                <Text>Prompt ID</Text>
-                <div className="mt-2">
-                  <Title className="font-mono text-sm">{basePromptId}</Title>
-                </div>
-              </Card>
-
+            <Grid numItems={1} numItemsSm={2} numItemsLg={4} className="gap-4">
               <Card>
                 <Text>Version</Text>
                 <div className="mt-2">
                   <Title>{currentVersion}</Title>
-                  <Badge color="blue" className="mt-1">
-                    v{currentVersion}
-                  </Badge>
+                  <Badge color="blue" className="mt-1">v{currentVersion}</Badge>
                 </div>
               </Card>
 
@@ -207,31 +323,98 @@ const PromptInfoView: React.FC<PromptInfoProps> = ({ promptId, onClose, accessTo
                 <Text>Prompt Type</Text>
                 <div className="mt-2">
                   <Title>{promptData.prompt_info?.prompt_type || "-"}</Title>
-                  <Badge color="blue" className="mt-1">
-                    {promptData.prompt_info?.prompt_type || "Unknown"}
-                  </Badge>
+                </div>
+              </Card>
+
+              <Card>
+                <Text>Created By</Text>
+                <div className="mt-2">
+                  <Title className="text-sm">{promptData.created_by || "-"}</Title>
                 </div>
               </Card>
 
               <Card>
                 <Text>Created At</Text>
                 <div className="mt-2">
-                  <Title>{formatDate(promptData.created_at)}</Title>
-                  <Text>Last Updated: {formatDate(promptData.updated_at)}</Text>
+                  <Title className="text-sm">{formatDate(promptData.created_at)}</Title>
+                  <Text className="text-xs">Updated: {formatDate(promptData.updated_at)}</Text>
                 </div>
               </Card>
             </Grid>
 
-            {promptData.litellm_params && Object.keys(promptData.litellm_params).length > 0 && (
-              <Card className="mt-6">
-                <Text className="font-medium">LiteLLM Parameters</Text>
-                <div className="mt-2 p-3 bg-gray-50 rounded-md">
-                  <pre className="text-xs text-gray-800 whitespace-pre-wrap">
-                    {JSON.stringify(promptData.litellm_params, null, 2)}
-                  </pre>
-                </div>
-              </Card>
-            )}
+            {/* Version History Table */}
+            <Card className="mt-6">
+              <Title className="mb-3">Version History — {selectedEnv}</Title>
+              {loadingVersions ? (
+                <Text>Loading versions...</Text>
+              ) : versionHistory.length > 0 ? (
+                <Table>
+                  <TableHead>
+                    <TableRow>
+                      <TableHeaderCell>Version</TableHeaderCell>
+                      <TableHeaderCell>Created By</TableHeaderCell>
+                      <TableHeaderCell>Date</TableHeaderCell>
+                      <TableHeaderCell>Actions</TableHeaderCell>
+                    </TableRow>
+                  </TableHead>
+                  <TableBody>
+                    {versionHistory.map((v) => {
+                      const vNum = v.version || 1;
+                      const isSelected = vNum === selectedVersion;
+                      const isLatest = vNum === latestVersion;
+                      return (
+                        <TableRow
+                          key={vNum}
+                          className={`cursor-pointer hover:bg-blue-50 transition-colors ${
+                            isSelected ? "bg-blue-50" : ""
+                          }`}
+                          onClick={() => handleVersionClick(v)}
+                        >
+                          <TableCell>
+                            <span className={isSelected ? "font-bold" : ""}>
+                              v{vNum}
+                            </span>
+                            {isLatest && (
+                              <Badge color="blue" className="ml-2" size="xs">latest</Badge>
+                            )}
+                          </TableCell>
+                          <TableCell>
+                            <span className="text-sm">{v.created_by || "-"}</span>
+                          </TableCell>
+                          <TableCell>
+                            <span className="text-sm">{formatDate(v.created_at)}</span>
+                          </TableCell>
+                          <TableCell>
+                            <TremorButton
+                              icon={PencilIcon}
+                              variant="light"
+                              size="xs"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                // Build a response-like object for the editor
+                                const editData = {
+                                  prompt_spec: {
+                                    ...v,
+                                    prompt_id: basePromptId,
+                                    environment: selectedEnv,
+                                  },
+                                  raw_prompt_template: isSelected ? promptTemplate : null,
+                                };
+                                onEdit?.(editData);
+                              }}
+                            >
+                              Edit
+                            </TremorButton>
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })}
+                  </TableBody>
+                </Table>
+              ) : (
+                <Text className="text-gray-400">No versions found in {selectedEnv}</Text>
+              )}
+            </Card>
           </TabPanel>
 
           {/* Prompt Template Panel */}
@@ -278,54 +461,6 @@ const PromptInfoView: React.FC<PromptInfoProps> = ({ promptId, onClose, accessTo
                       </div>
                     </div>
                   )}
-                </div>
-              </Card>
-            </TabPanel>
-          )}
-
-          {/* Details Panel (only for admins) */}
-          {isAdmin && (
-            <TabPanel>
-              <Card>
-                <Title className="mb-4">Prompt Details</Title>
-                <div className="space-y-4">
-                  <div>
-                    <Text className="font-medium">Prompt ID</Text>
-                    <div className="font-mono text-sm bg-gray-50 p-2 rounded">{basePromptId}</div>
-                  </div>
-
-                  <div>
-                    <Text className="font-medium">Prompt Type</Text>
-                    <div>{promptData.prompt_info?.prompt_type || "-"}</div>
-                  </div>
-
-                  <div>
-                    <Text className="font-medium">Created At</Text>
-                    <div>{formatDate(promptData.created_at)}</div>
-                  </div>
-
-                  <div>
-                    <Text className="font-medium">Last Updated</Text>
-                    <div>{formatDate(promptData.updated_at)}</div>
-                  </div>
-
-                  <div>
-                    <Text className="font-medium">LiteLLM Parameters</Text>
-                    <div className="mt-2 p-3 bg-gray-50 rounded-md border">
-                      <pre className="text-xs text-gray-800 whitespace-pre-wrap overflow-auto max-h-96">
-                        {JSON.stringify(promptData.litellm_params, null, 2)}
-                      </pre>
-                    </div>
-                  </div>
-
-                  <div>
-                    <Text className="font-medium">Prompt Info</Text>
-                    <div className="mt-2 p-3 bg-gray-50 rounded-md border">
-                      <pre className="text-xs text-gray-800 whitespace-pre-wrap">
-                        {JSON.stringify(promptData.prompt_info, null, 2)}
-                      </pre>
-                    </div>
-                  </div>
                 </div>
               </Card>
             </TabPanel>

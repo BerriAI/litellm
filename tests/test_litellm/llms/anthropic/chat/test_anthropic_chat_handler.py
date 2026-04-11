@@ -1,12 +1,41 @@
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
 
 from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
-from litellm.llms.anthropic.chat.handler import ModelResponseIterator
+from litellm.llms.anthropic.chat.handler import ModelResponseIterator, make_call
 from litellm.types.llms.openai import (
     ChatCompletionToolCallChunk,
     ChatCompletionToolCallFunctionChunk,
 )
 from litellm.types.responses.main import OutputCodeInterpreterCall
+
+
+@pytest.mark.asyncio
+async def test_make_call_passes_logging_obj_to_client_post():
+    """make_call must pass logging_obj to client.post so track_llm_api_timing can set llm_api_duration_ms for litellm_overhead_time_ms."""
+    mock_client = AsyncMock()
+    mock_response = MagicMock()
+    mock_response.aiter_lines = MagicMock(return_value=iter([b'data: {"type":"message_start"}\n', b'data: {"type":"message_delta"}\n']))
+    mock_client.post.return_value = mock_response
+
+    logging_obj = MagicMock()
+
+    await make_call(
+        client=mock_client,
+        api_base="https://api.anthropic.com/v1/messages",
+        headers={},
+        data="{}",
+        model="claude-3-5-haiku",
+        messages=[{"role": "user", "content": "Hi"}],
+        logging_obj=logging_obj,
+        timeout=60.0,
+        json_mode=False,
+    )
+
+    mock_client.post.assert_called_once()
+    call_kwargs = mock_client.post.call_args[1]
+    assert call_kwargs.get("logging_obj") is logging_obj
 
 
 def test_redacted_thinking_content_block_delta():

@@ -30,13 +30,17 @@ vi.mock("papaparse", () => ({
 }));
 
 describe("EntityUsageExport utils", () => {
+  // Entity keys match team_ids because that's how the backend shapes team exports
+  // (breakdown.entities is keyed by team_id). The fix under test uses the entity key
+  // directly for display, so the key_alias/team_id in api_key_breakdown metadata is
+  // no longer consulted — it's retained here only to mirror real payload shape.
   const mockSpendData: EntitySpendData = {
     results: [
       {
         date: "2025-01-01",
         breakdown: {
           entities: {
-            entity1: {
+            "team-1": {
               metrics: {
                 spend: 10.5,
                 api_requests: 100,
@@ -64,7 +68,7 @@ describe("EntityUsageExport utils", () => {
                 },
               },
             },
-            entity2: {
+            "team-2": {
               metrics: {
                 spend: 20.3,
                 api_requests: 200,
@@ -99,7 +103,7 @@ describe("EntityUsageExport utils", () => {
         date: "2025-01-02",
         breakdown: {
           entities: {
-            entity1: {
+            "team-1": {
               metrics: {
                 spend: 15.2,
                 api_requests: 150,
@@ -184,14 +188,16 @@ describe("EntityUsageExport utils", () => {
       expect(entity1?.metrics.cache_creation_input_tokens).toBe(75);
     });
 
-    it("should use key alias when available", () => {
+    it("should use entity key as alias when no team alias map is provided", () => {
+      // Non-team exports (tags, orgs, customers, …) pass no teamAliasMap.
+      // For teams, this is also the fallback when a team is missing from the map.
       const result = getEntityBreakdown(mockSpendData);
       const entity1 = result.find((e) => e.metadata.id === "team-1");
 
-      expect(entity1?.metadata.alias).toBe("alias-1");
+      expect(entity1?.metadata.alias).toBe("team-1");
     });
 
-    it("should use team alias map when key alias is not available", () => {
+    it("should use team alias map to resolve alias from entity key", () => {
       const spendDataWithoutAlias: EntitySpendData = {
         ...mockSpendData,
         results: [
@@ -199,7 +205,7 @@ describe("EntityUsageExport utils", () => {
             date: "2025-01-01",
             breakdown: {
               entities: {
-                entity1: {
+                "team-1": {
                   metrics: {
                     spend: 10.5,
                     api_requests: 100,
@@ -299,7 +305,7 @@ describe("EntityUsageExport utils", () => {
             date: "2025-01-01",
             breakdown: {
               entities: {
-                entity1: {
+                "team-1": {
                   metrics: {
                     spend: 10.5,
                     api_requests: 100,
@@ -379,15 +385,17 @@ describe("EntityUsageExport utils", () => {
       }
     });
 
-    it("should use dash when team id is not available", () => {
-      const spendDataWithoutTeamId: EntitySpendData = {
+    it("should fall back to the entity key when there is no team alias mapping", () => {
+      // e.g. tag/org/customer exports where teamAliasMap has no entry for the entity,
+      // or a team that isn't in the alias map — the entity key itself is the label.
+      const spendDataWithoutAlias: EntitySpendData = {
         ...mockSpendData,
         results: [
           {
             date: "2025-01-01",
             breakdown: {
               entities: {
-                entity1: {
+                "my-tag": {
                   metrics: {
                     spend: 10.5,
                     api_requests: 100,
@@ -406,11 +414,11 @@ describe("EntityUsageExport utils", () => {
         metadata: mockSpendData.metadata,
       };
 
-      const result = generateDailyData(spendDataWithoutTeamId, "Team");
+      const result = generateDailyData(spendDataWithoutAlias, "Tag");
       const entry = result[0];
 
-      expect(entry["Team ID"]).toBe("-");
-      expect(entry["Team"]).toBe("-");
+      expect(entry["Tag ID"]).toBe("my-tag");
+      expect(entry["Tag"]).toBe("my-tag");
     });
 
     it("should format spend values correctly", () => {
@@ -471,7 +479,7 @@ describe("EntityUsageExport utils", () => {
           date: "2025-01-01",
           breakdown: {
             entities: {
-              entity1: {
+              "team-1": {
                 metrics: {
                   spend: 10.5,
                   api_requests: 100,
@@ -514,7 +522,7 @@ describe("EntityUsageExport utils", () => {
                   },
                 },
               },
-              entity2: {
+              "team-2": {
                 metrics: {
                   spend: 20.3,
                   api_requests: 200,
@@ -549,7 +557,7 @@ describe("EntityUsageExport utils", () => {
           date: "2025-01-02",
           breakdown: {
             entities: {
-              entity1: {
+              "team-1": {
                 metrics: {
                   spend: 15.2,
                   api_requests: 150,
@@ -979,7 +987,7 @@ describe("EntityUsageExport utils", () => {
           date: "2025-01-01",
           breakdown: {
             entities: {
-              entity1: {
+              "team-1": {
                 metrics: {
                   spend: 10.5,
                   api_requests: 100,

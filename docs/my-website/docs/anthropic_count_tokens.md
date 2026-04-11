@@ -96,7 +96,7 @@ model_list:
 
   - model_name: claude-bedrock
     litellm_params:
-      model: bedrock/anthropic.claude-3-5-sonnet-20241022-v2:0
+      model: bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0
       aws_region_name: us-west-2
 ```
 

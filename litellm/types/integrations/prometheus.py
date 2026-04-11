@@ -1,7 +1,7 @@
 import re
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Dict, List, Literal, Optional, Tuple
+from typing import Any, ClassVar, Dict, List, Literal, Optional, Tuple
 
 from pydantic import BaseModel, Field, field_validator
 from typing_extensions import Annotated
@@ -159,6 +159,23 @@ LATENCY_BUCKETS = (
     float("inf"),
 )
 
+# Batch jobs can run for minutes to hours; buckets span 1 min → 24 h.
+BATCH_DURATION_BUCKETS = (
+    60.0,
+    120.0,
+    300.0,
+    600.0,
+    900.0,
+    1800.0,
+    3600.0,
+    7200.0,
+    14400.0,
+    28800.0,
+    43200.0,
+    86400.0,
+    float("inf"),
+)
+
 
 class UserAPIKeyLabelNames(Enum):
     END_USER = "end_user"
@@ -185,6 +202,8 @@ class UserAPIKeyLabelNames(Enum):
     USER_AGENT = "user_agent"
     CALLBACK_NAME = "callback_name"
     STREAM = "stream"
+    ORG_ID = "org_id"
+    ORG_ALIAS = "org_alias"
 
 
 DEFINED_PROMETHEUS_METRICS = Literal[
@@ -207,6 +226,9 @@ DEFINED_PROMETHEUS_METRICS = Literal[
     "litellm_remaining_team_budget_metric",
     "litellm_team_max_budget_metric",
     "litellm_team_budget_remaining_hours_metric",
+    "litellm_remaining_org_budget_metric",
+    "litellm_org_max_budget_metric",
+    "litellm_org_budget_remaining_hours_metric",
     "litellm_remaining_api_key_budget_metric",
     "litellm_api_key_max_budget_metric",
     "litellm_api_key_budget_remaining_hours_metric",
@@ -238,6 +260,16 @@ DEFINED_PROMETHEUS_METRICS = Literal[
     "litellm_llm_api_failed_requests_metric",
     "litellm_callback_logging_failures_metric",
     "litellm_in_flight_requests",
+    # Managed batch metrics
+    "litellm_managed_batch_created_total",
+    "litellm_managed_file_size_bytes",
+    "litellm_managed_batch_duration_seconds",
+    "litellm_managed_file_created_total",
+    "litellm_managed_file_deleted_total",
+    "litellm_check_batch_cost_jobs_polled",
+    "litellm_check_batch_cost_jobs_processed_total",
+    "litellm_check_batch_cost_errors_total",
+    "litellm_check_batch_cost_last_run_timestamp",
 ]
 
 
@@ -490,6 +522,21 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.TEAM_ALIAS.value,
     ]
 
+    litellm_remaining_org_budget_metric = [
+        UserAPIKeyLabelNames.ORG_ID.value,
+        UserAPIKeyLabelNames.ORG_ALIAS.value,
+    ]
+
+    litellm_org_max_budget_metric = [
+        UserAPIKeyLabelNames.ORG_ID.value,
+        UserAPIKeyLabelNames.ORG_ALIAS.value,
+    ]
+
+    litellm_org_budget_remaining_hours_metric = [
+        UserAPIKeyLabelNames.ORG_ID.value,
+        UserAPIKeyLabelNames.ORG_ALIAS.value,
+    ]
+
     litellm_remaining_api_key_budget_metric = [
         UserAPIKeyLabelNames.API_KEY_HASH.value,
         UserAPIKeyLabelNames.API_KEY_ALIAS.value,
@@ -618,6 +665,61 @@ class PrometheusMetricLabels:
     litellm_cache_misses_metric = _cache_metric_labels
     litellm_cached_tokens_metric = _cache_metric_labels
 
+    # Metrics whose emission paths supply org context (used by get_labels)
+    _org_label_metrics: ClassVar[frozenset] = frozenset(
+        {
+            "litellm_llm_api_latency_metric",
+            "litellm_llm_api_time_to_first_token_metric",
+            "litellm_request_total_latency_metric",
+            "litellm_request_queue_time_seconds",
+            "litellm_proxy_total_requests_metric",
+            "litellm_proxy_failed_requests_metric",
+            "litellm_deployment_latency_per_output_token",
+            "litellm_requests_metric",
+            "litellm_spend_metric",
+            "litellm_input_tokens_metric",
+            "litellm_total_tokens_metric",
+            "litellm_output_tokens_metric",
+        }
+    )
+
+    # Managed batch metrics
+    _batch_user_labels = [
+        UserAPIKeyLabelNames.v1_LITELLM_MODEL_NAME.value,
+        UserAPIKeyLabelNames.API_PROVIDER.value,
+        UserAPIKeyLabelNames.USER.value,
+        UserAPIKeyLabelNames.USER_EMAIL.value,
+        UserAPIKeyLabelNames.API_KEY_ALIAS.value,
+    ]
+
+    litellm_managed_batch_created_total = _batch_user_labels
+
+    litellm_managed_file_size_bytes: List[
+        str
+    ] = []  # labels: purpose, file_type, model, api_provider, user (custom)
+
+    litellm_managed_batch_duration_seconds = [
+        UserAPIKeyLabelNames.v1_LITELLM_MODEL_NAME.value,
+        UserAPIKeyLabelNames.API_PROVIDER.value,
+    ]
+
+    litellm_managed_file_created_total = _batch_user_labels
+
+    litellm_managed_file_deleted_total: List[
+        str
+    ] = []  # only "result" label, added at metric creation
+
+    litellm_check_batch_cost_jobs_polled: List[str] = []
+
+    litellm_check_batch_cost_jobs_processed_total = [
+        UserAPIKeyLabelNames.v1_LITELLM_MODEL_NAME.value,
+        UserAPIKeyLabelNames.API_PROVIDER.value,
+    ]
+
+    litellm_check_batch_cost_errors_total: List[str] = []  # label: error_type (custom)
+
+    litellm_check_batch_cost_last_run_timestamp: List[str] = []
+
     @staticmethod
     def get_labels(label_name: DEFINED_PROMETHEUS_METRICS) -> List[str]:
         default_labels = getattr(PrometheusMetricLabels, label_name)
@@ -646,6 +748,14 @@ class PrometheusMetricLabels:
             and UserAPIKeyLabelNames.STREAM.value not in default_labels
         ):
             custom_labels.append(UserAPIKeyLabelNames.STREAM.value)
+
+        if label_name in PrometheusMetricLabels._org_label_metrics:
+            for label in [
+                UserAPIKeyLabelNames.ORG_ID.value,
+                UserAPIKeyLabelNames.ORG_ALIAS.value,
+            ]:
+                if label not in default_labels and label not in custom_labels:
+                    custom_labels.append(label)
 
         return default_labels + custom_labels
 
@@ -720,6 +830,12 @@ class UserAPIKeyLabelValues(BaseModel):
     ] = None
     stream: Annotated[
         Optional[str], Field(..., alias=UserAPIKeyLabelNames.STREAM.value)
+    ] = None
+    org_id: Annotated[
+        Optional[str], Field(..., alias=UserAPIKeyLabelNames.ORG_ID.value)
+    ] = None
+    org_alias: Annotated[
+        Optional[str], Field(..., alias=UserAPIKeyLabelNames.ORG_ALIAS.value)
     ] = None
 
     @field_validator("stream", mode="before")

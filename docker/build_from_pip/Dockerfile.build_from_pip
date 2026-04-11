@@ -1,19 +1,17 @@
-FROM python:3.13-alpine
+FROM python:3.13-slim@sha256:739e7213785e88c0f702dcdc12c0973afcbd606dbf021a589cab77d6b00b579d
 
 WORKDIR /app
 
 ENV HOME=/home/litellm
 ENV PATH="${HOME}/venv/bin:$PATH"
 
-# Install runtime dependencies
-# Note: Using Python 3.13 for compatibility with ddtrace and other packages
-# rust and cargo are required for building ddtrace from source
-# musl-dev and libffi-dev are needed for some Python packages on Alpine
-RUN apk update && \
-    apk add --no-cache gcc musl-dev libffi-dev openssl openssl-dev rust cargo
+# Install runtime dependencies needed for building native extensions
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends gcc libffi-dev && \
+    rm -rf /var/lib/apt/lists/*
 
 RUN python -m venv ${HOME}/venv
-RUN ${HOME}/venv/bin/pip install --no-cache-dir --upgrade pip
+RUN ${HOME}/venv/bin/pip install --no-cache-dir --upgrade pip==26.0.1
 
 COPY docker/build_from_pip/requirements.txt .
 RUN --mount=type=cache,target=${HOME}/.cache/pip \

@@ -275,12 +275,11 @@ class AzureBlobStorageLogger(CustomBatchLogger):
         """
         Gets Azure AD token to use for Azure Storage API requests
         """
-        verbose_logger.debug("Getting Azure AD Token from Azure Storage")
         verbose_logger.debug(
-            "tenant_id %s, client_id %s, client_secret %s",
+            "Getting Azure AD Token from Azure Storage, tenant_id=%s, client_id=%s, client_secret=[set=%s]",
             tenant_id,
             client_id,
-            client_secret,
+            client_secret is not None,
         )
         if tenant_id is None:
             raise ValueError(

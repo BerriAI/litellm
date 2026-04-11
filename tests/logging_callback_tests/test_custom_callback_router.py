@@ -267,7 +267,10 @@ class CompletionCustomHandler(
         try:
             print("CompletionCustomHandler.async_log_success_event, kwargs: ", kwargs)
             self.states.append("async_success")
-            print("############### CompletionCustomHandler async success, kwargs: ", kwargs)
+            print(
+                "############### CompletionCustomHandler async success, kwargs: ",
+                kwargs,
+            )
             ## START TIME
             assert isinstance(start_time, datetime)
             ## END TIME
@@ -396,9 +399,9 @@ async def test_async_chat_azure():
                 "model_name": "gpt-4.1-nano",  # openai model name
                 "litellm_params": {  # params for litellm completion/embedding call
                     "model": "azure/gpt-4.1-mini",
-                    "api_key": os.getenv("AZURE_API_KEY"),
+                    "api_key": os.getenv("AZURE_AI_API_KEY"),
                     "api_version": os.getenv("AZURE_API_VERSION"),
-                    "api_base": os.getenv("AZURE_API_BASE"),
+                    "api_base": os.getenv("AZURE_AI_API_BASE"),
                 },
                 "model_info": {"base_model": "azure/gpt-4.1-mini"},
                 "tpm": 240000,
@@ -443,7 +446,7 @@ async def test_async_chat_azure():
                     "model": "azure/gpt-4o-new-test",
                     "api_key": "my-bad-key",
                     "api_version": os.getenv("AZURE_API_VERSION"),
-                    "api_base": os.getenv("AZURE_API_BASE"),
+                    "api_base": os.getenv("AZURE_AI_API_BASE"),
                 },
                 "tpm": 240000,
                 "rpm": 1800,
@@ -483,9 +486,9 @@ async def test_async_embedding_azure():
                 "model_name": "azure-embedding-model",  # openai model name
                 "litellm_params": {  # params for litellm completion/embedding call
                     "model": "azure/text-embedding-ada-002",
-                    "api_key": os.getenv("AZURE_API_KEY"),
+                    "api_key": os.getenv("AZURE_AI_API_KEY"),
                     "api_version": os.getenv("AZURE_API_VERSION"),
-                    "api_base": os.getenv("AZURE_API_BASE"),
+                    "api_base": os.getenv("AZURE_AI_API_BASE"),
                 },
                 "tpm": 240000,
                 "rpm": 1800,
@@ -506,7 +509,7 @@ async def test_async_embedding_azure():
                     "model": "azure/text-embedding-ada-002",
                     "api_key": "my-bad-key",
                     "api_version": os.getenv("AZURE_API_VERSION"),
-                    "api_base": os.getenv("AZURE_API_BASE"),
+                    "api_base": os.getenv("AZURE_AI_API_BASE"),
                 },
                 "tpm": 240000,
                 "rpm": 1800,
@@ -549,7 +552,7 @@ async def test_async_chat_azure_with_fallbacks():
                     "model": "azure/gpt-4.1-mini",
                     "api_key": "my-bad-key",
                     "api_version": os.getenv("AZURE_API_VERSION"),
-                    "api_base": os.getenv("AZURE_API_BASE"),
+                    "api_base": os.getenv("AZURE_AI_API_BASE"),
                 },
                 "tpm": 240000,
                 "rpm": 1800,
@@ -608,9 +611,9 @@ async def test_async_completion_azure_caching():
             "model_name": "gpt-4.1-nano",  # openai model name
             "litellm_params": {  # params for litellm completion/embedding call
                 "model": "azure/gpt-4.1-mini",
-                "api_key": os.getenv("AZURE_API_KEY"),
+                "api_key": os.getenv("AZURE_AI_API_KEY"),
                 "api_version": os.getenv("AZURE_API_VERSION"),
-                "api_base": os.getenv("AZURE_API_BASE"),
+                "api_base": os.getenv("AZURE_AI_API_BASE"),
             },
             "tpm": 240000,
             "rpm": 1800,
@@ -664,23 +667,23 @@ async def test_async_completion_azure_caching_streaming():
     )
     litellm.callbacks = [customHandler_caching]
     unique_time = uuid.uuid4()
-    
+
     # Use Router instead of direct litellm.acompletion to get router-specific metadata
     model_list = [
         {
             "model_name": "gpt-4.1-nano",
             "litellm_params": {
                 "model": "azure/gpt-4.1-mini",
-                "api_key": os.getenv("AZURE_API_KEY"),
+                "api_key": os.getenv("AZURE_AI_API_KEY"),
                 "api_version": os.getenv("AZURE_API_VERSION"),
-                "api_base": os.getenv("AZURE_API_BASE"),
+                "api_base": os.getenv("AZURE_AI_API_BASE"),
             },
             "tpm": 240000,
             "rpm": 1800,
         },
     ]
     router = Router(model_list=model_list)
-    
+
     response1 = await router.acompletion(
         model="gpt-4.1-nano",
         messages=[
@@ -725,12 +728,16 @@ async def test_async_embedding_azure_caching():
         port=os.environ["REDIS_PORT"],
         password=os.environ["REDIS_PASSWORD"],
     )
-    router = Router(model_list=[{
-        "model_name": "text-embedding-ada-002",
-        "litellm_params": {
-            "model": "openai/text-embedding-ada-002",
-        },
-    }])
+    router = Router(
+        model_list=[
+            {
+                "model_name": "text-embedding-ada-002",
+                "litellm_params": {
+                    "model": "openai/text-embedding-ada-002",
+                },
+            }
+        ]
+    )
     litellm.callbacks = [customHandler_caching]
     unique_time = time.time()
     response1 = await router.aembedding(
@@ -818,4 +825,3 @@ async def test_rate_limit_error_callback():
 
         assert "original_model_group" in mock_client.call_args.kwargs
         assert mock_client.call_args.kwargs["original_model_group"] == "my-test-gpt"
-

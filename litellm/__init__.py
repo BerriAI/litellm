@@ -318,6 +318,7 @@ return_response_headers: bool = (
     False  # get response headers from LLM Api providers - example x-remaining-requests,
 )
 enable_json_schema_validation: bool = False
+enable_model_config_credential_overrides: bool = False
 enable_key_alias_format_validation: bool = (
     False  # opt-in validation of key_alias format on /key/generate and /key/update
 )
@@ -1838,6 +1839,7 @@ if TYPE_CHECKING:
     )
     from .llms.v0.chat.transformation import V0ChatConfig as V0ChatConfig
     from .llms.oci.chat.transformation import OCIChatConfig as OCIChatConfig
+    from .llms.oci.embed.transformation import OCIEmbeddingConfig as OCIEmbeddingConfig
     from .llms.morph.chat.transformation import MorphChatConfig as MorphChatConfig
     from .llms.ragflow.chat.transformation import RAGFlowConfig as RAGFlowConfig
     from .llms.lambda_ai.chat.transformation import (

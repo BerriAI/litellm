@@ -110,6 +110,34 @@ def test_watsonx_provider_fields():
     assert "zen_api_key" in field_keys
 
 
+def test_azure_provider_fields_include_entra_id():
+    """Azure provider must expose Entra ID (Service Principal) credential fields so
+    the UI can input tenant_id / client_id / client_secret as an alternative to api_key."""
+    app = FastAPI()
+    app.include_router(router)
+    client = TestClient(app)
+
+    response = client.get("/public/providers/fields")
+    providers = response.json()
+
+    azure = next((p for p in providers if p["provider"] == "Azure"), None)
+    assert azure is not None
+
+    fields_by_key = {f["key"]: f for f in azure["credential_fields"]}
+    # API-key auth still supported
+    assert "api_key" in fields_by_key
+    # Entra ID fields
+    assert "tenant_id" in fields_by_key
+    assert "client_id" in fields_by_key
+    assert "client_secret" in fields_by_key
+    # client_secret must be masked in the UI
+    assert fields_by_key["client_secret"]["field_type"] == "password"
+    # Entra ID is an alternative to api_key, so none of these are individually required
+    assert fields_by_key["tenant_id"]["required"] is False
+    assert fields_by_key["client_id"]["required"] is False
+    assert fields_by_key["client_secret"]["required"] is False
+
+
 def test_public_model_hub_with_healthy_model():
     """Test that health information is populated for a healthy model"""
     app = FastAPI()

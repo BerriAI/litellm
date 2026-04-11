@@ -160,6 +160,67 @@ class TestAgentCoreJsonResponseParsing:
         assert parsed["content"] == ""
         assert parsed["final_message"] == response_json["result"]
 
+    def test_parse_json_a2a_jsonrpc_nested_message(self, config):
+        """Strategy 0: A2A JSON-RPC with result.message.parts[] format."""
+        response_json = {
+            "jsonrpc": "2.0",
+            "id": "test_id",
+            "result": {
+                "message": {
+                    "role": "agent",
+                    "parts": [{"kind": "text", "text": "1 + 1 = 2"}],
+                    "messageId": "123",
+                }
+            },
+        }
+        parsed = config._parse_json_response(response_json)
+        assert parsed["content"] == "1 + 1 = 2"
+        assert parsed["usage"] is None
+
+    def test_parse_json_a2a_jsonrpc_direct_parts(self, config):
+        """Strategy 0: A2A JSON-RPC with result.parts[] format (direct message)."""
+        response_json = {
+            "jsonrpc": "2.0",
+            "id": "test_id",
+            "result": {
+                "kind": "message",
+                "parts": [{"kind": "text", "text": "Direct response"}],
+            },
+        }
+        parsed = config._parse_json_response(response_json)
+        assert parsed["content"] == "Direct response"
+        assert parsed["usage"] is None
+
+    def test_parse_json_a2a_jsonrpc_multi_parts(self, config):
+        """Strategy 0: A2A JSON-RPC with multiple text parts concatenated."""
+        response_json = {
+            "jsonrpc": "2.0",
+            "id": "test_id",
+            "result": {
+                "message": {
+                    "role": "agent",
+                    "parts": [
+                        {"kind": "text", "text": "First part"},
+                        {"kind": "text", "text": "Second part"},
+                    ],
+                }
+            },
+        }
+        parsed = config._parse_json_response(response_json)
+        assert parsed["content"] == "First part Second part"
+        assert parsed["usage"] is None
+
+    def test_parse_json_a2a_jsonrpc_empty_falls_through(self, config):
+        """Strategy 0: A2A JSON-RPC with empty result falls through to Strategy 3."""
+        response_json = {
+            "jsonrpc": "2.0",
+            "id": "test_id",
+            "result": "plain text fallback",
+        }
+        parsed = config._parse_json_response(response_json)
+        assert parsed["content"] == "plain text fallback"
+        assert parsed["usage"] is None
+
 
 class TestAgentCoreNonStreamingJsonFormats:
     """Tests for _get_parsed_response with different JSON formats (non-streaming path)."""

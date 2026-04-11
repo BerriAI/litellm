@@ -20,7 +20,7 @@ base64_image = encode_image(image_path)
 
 
 response = client.responses.create(
-    model="bedrock/us.anthropic.claude-3-5-sonnet-20241022-v2:0",
+    model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
     input=[
         {
             "role": "user",
@@ -43,7 +43,7 @@ print("sleeping for 20 seconds...")
 time.sleep(20)
 print("making follow up request for existing id")
 response2 = client.responses.create(
-    model="bedrock/us.anthropic.claude-3-5-sonnet-20241022-v2:0",
+    model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
     previous_response_id=response.id,
     input="ok, and what objects are in the image?"
 )

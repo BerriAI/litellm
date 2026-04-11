@@ -192,7 +192,7 @@ class SharedHealthCheckManager:
         model_list: List[Dict[str, Any]],
         details: bool = True,
         max_concurrency: Optional[int] = None,
-    ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], Dict[str, Any]]:
         """
         Perform health check with shared state coordination.
 
@@ -217,6 +217,7 @@ class SharedHealthCheckManager:
             return (
                 cached_results.get("healthy_endpoints", []),
                 cached_results.get("unhealthy_endpoints", []),
+                {},
             )
 
         # No recent cache, try to acquire lock
@@ -231,7 +232,11 @@ class SharedHealthCheckManager:
                     len(model_list),
                 )
 
-                healthy_endpoints, unhealthy_endpoints = await perform_health_check(
+                (
+                    healthy_endpoints,
+                    unhealthy_endpoints,
+                    exceptions_by_model_id,
+                ) = await perform_health_check(
                     model_list=model_list,
                     details=details,
                     max_concurrency=max_concurrency,
@@ -242,7 +247,7 @@ class SharedHealthCheckManager:
                     healthy_endpoints, unhealthy_endpoints
                 )
 
-                return healthy_endpoints, unhealthy_endpoints
+                return healthy_endpoints, unhealthy_endpoints, exceptions_by_model_id
 
             finally:
                 # Always release the lock
@@ -262,6 +267,7 @@ class SharedHealthCheckManager:
                 return (
                     cached_results.get("healthy_endpoints", []),
                     cached_results.get("unhealthy_endpoints", []),
+                    {},
                 )
 
             # Still no cache, fall back to local health check

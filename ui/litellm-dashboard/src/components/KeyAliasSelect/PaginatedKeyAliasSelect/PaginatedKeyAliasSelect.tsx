@@ -12,6 +12,7 @@ export interface PaginatedKeyAliasSelectProps {
   pageSize?: number;
   allowClear?: boolean;
   disabled?: boolean;
+  allFilters?: { [key: string]: string };
 }
 
 const SCROLL_THRESHOLD = 0.8;
@@ -25,11 +26,14 @@ export const PaginatedKeyAliasSelect = ({
   pageSize = 50,
   allowClear = true,
   disabled = false,
+  allFilters,
 }: PaginatedKeyAliasSelectProps) => {
   const [searchInput, setSearchInput] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useDebouncedState("", {
     wait: DEBOUNCE_MS,
   });
+
+  const teamId = allFilters?.["Team ID"] || undefined;
 
   const {
     data,
@@ -37,7 +41,7 @@ export const PaginatedKeyAliasSelect = ({
     hasNextPage,
     isFetchingNextPage,
     isLoading,
-  } = useInfiniteKeyAliases(pageSize, debouncedSearch || undefined);
+  } = useInfiniteKeyAliases(pageSize, debouncedSearch || undefined, teamId);
 
   const options = useMemo(() => {
     if (!data?.pages) return [];

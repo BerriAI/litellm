@@ -4,7 +4,7 @@ from typing import AsyncGenerator
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from fastapi import Request, status
+from fastapi import HTTPException, Request, status
 from fastapi.responses import JSONResponse, StreamingResponse
 
 import litellm
@@ -899,6 +899,33 @@ class TestCommonRequestProcessingHelpers:
         assert content[0] == f"data: {json.dumps(expected_error_data)}\n\n"
         assert content[1] == "data: [DONE]\n\n"
 
+    async def test_create_streaming_response_generator_raises_http_exception(
+        self,
+    ):
+        """
+        Test that when a generator raises HTTPException, the response preserves
+        the original status code instead of hardcoding 500.
+        """
+        mock_gen = AsyncMock()
+        mock_gen.__anext__.side_effect = HTTPException(
+            status_code=400, detail="Content blocked by guardrail"
+        )
+
+        response = await create_response(mock_gen, "text/event-stream", {})
+        assert response.status_code == 400
+        content = await self.consume_stream(response)
+        import json
+
+        expected_error_data = {
+            "error": {
+                "message": "Content blocked by guardrail",
+                "code": 400,
+            }
+        }
+        assert len(content) == 2
+        assert content[0] == f"data: {json.dumps(expected_error_data)}\n\n"
+        assert content[1] == "data: [DONE]\n\n"
+
     async def test_create_streaming_response_first_chunk_error_string_code(self):
         """
         Test that when the first chunk contains a string error code, a JSON error response is returned
@@ -1430,6 +1457,83 @@ class TestOverrideOpenAIResponseModel:
         )
         assert response_obj.model == actual_model_used
         assert response_obj.model != requested_model
+
+    def test_override_model_uses_winning_model_for_fastest_response(self):
+        """
+        Test that when fastest_response batch completion is used with a
+        comma-separated model list, the response model is set to the winning
+        model's group name (not the comma-separated list).
+        """
+        requested_model = "openai/gpt-4o,gemini/gemini-2.5-flash"
+        winning_model_group = "gemini/gemini-2.5-flash"
+        downstream_model = "gemini-2.5-flash"
+
+        response_obj = MagicMock()
+        response_obj.model = downstream_model
+        response_obj._hidden_params = {
+            "fastest_response_batch_completion": True,
+            "additional_headers": {
+                "x-litellm-model-group": winning_model_group,
+            },
+        }
+
+        _override_openai_response_model(
+            response_obj=response_obj,
+            requested_model=requested_model,
+            log_context="test_context",
+        )
+
+        assert response_obj.model == winning_model_group
+        assert response_obj.model != requested_model
+
+    def test_override_model_preserves_response_when_fastest_response_no_model_group(
+        self,
+    ):
+        """
+        Test that when fastest_response is set but no model group header is
+        available, the actual downstream model is preserved.
+        """
+        requested_model = "openai/gpt-4o,gemini/gemini-2.5-flash"
+        downstream_model = "gpt-4o-2024-08-06"
+
+        response_obj = MagicMock()
+        response_obj.model = downstream_model
+        response_obj._hidden_params = {
+            "fastest_response_batch_completion": True,
+            "additional_headers": {},
+        }
+
+        _override_openai_response_model(
+            response_obj=response_obj,
+            requested_model=requested_model,
+            log_context="test_context",
+        )
+
+        assert response_obj.model == downstream_model
+
+    def test_override_model_normal_when_fastest_response_not_set(self):
+        """
+        Test that when fastest_response_batch_completion is not set, the
+        normal override behavior applies (model is set to requested_model).
+        """
+        requested_model = "openai/gpt-4o"
+        downstream_model = "gpt-4o-2024-08-06"
+
+        response_obj = MagicMock()
+        response_obj.model = downstream_model
+        response_obj._hidden_params = {
+            "additional_headers": {
+                "x-litellm-model-group": "openai/gpt-4o",
+            },
+        }
+
+        _override_openai_response_model(
+            response_obj=response_obj,
+            requested_model=requested_model,
+            log_context="test_context",
+        )
+
+        assert response_obj.model == requested_model
 
 
 class TestIsAzureModelRouterRequest:

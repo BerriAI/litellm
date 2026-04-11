@@ -28,12 +28,35 @@ from litellm.types.agents import (
     MakeAgentsPublicRequest,
     PatchAgentRequest,
 )
+from litellm.litellm_core_utils.litellm_logging import _get_masked_values
 from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
     SpendAnalyticsPaginatedResponse,
 )
 
 router = APIRouter()
+
+
+def _redact_sensitive_agent_fields(
+    agents: List[AgentResponse],
+) -> List[AgentResponse]:
+    """
+    Return copies of the given agents with sensitive configuration fields
+    redacted.  The original objects are not modified.
+    """
+    redacted: List[AgentResponse] = []
+    for agent in agents:
+        copy = agent.model_copy(deep=True)
+        copy.static_headers = None
+        copy.extra_headers = None
+        if copy.litellm_params:
+            copy.litellm_params = _get_masked_values(
+                copy.litellm_params,
+                unmasked_length=4,
+                number_of_asterisks=4,
+            )
+        redacted.append(copy)
+    return redacted
 
 
 def _check_agent_management_permission(user_api_key_dict: UserAPIKeyAuth) -> None:
@@ -182,6 +205,14 @@ async def get_agents(
             ] = litellm.public_agent_groups is not None and (
                 agent.agent_id in litellm.public_agent_groups
             )
+
+        # Redact sensitive fields for non-admin users
+        is_admin = (
+            user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
+            or user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
+        )
+        if not is_admin:
+            returned_agents = _redact_sensitive_agent_fields(returned_agents)
 
         if health_check:
             agents_with_url = [
@@ -398,6 +429,14 @@ async def get_agent_by_id(
             raise HTTPException(
                 status_code=404, detail=f"Agent with ID {agent_id} not found"
             )
+
+        # Redact sensitive fields for non-admin users
+        is_admin = (
+            user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
+            or user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
+        )
+        if not is_admin:
+            agent = _redact_sensitive_agent_fields([agent])[0]
 
         return agent
     except HTTPException:

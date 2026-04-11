@@ -155,6 +155,14 @@ const FailIcon: React.FC = () => (
   </svg>
 );
 
+const ApiFailureIcon: React.FC = () => (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#d97706" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+    <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+    <line x1="12" y1="9" x2="12" y2="13" />
+    <line x1="12" y1="17" x2="12.01" y2="17" />
+  </svg>
+);
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Connector
 // ─────────────────────────────────────────────────────────────────────────────
@@ -337,6 +345,41 @@ const StepCard: React.FC<StepCardProps> = ({
           options={ACTION_OPTIONS}
         />
         {step.on_fail === "modify_response" && (
+          <div style={{ marginTop: 8 }}>
+            <label style={{ fontSize: 12, fontWeight: 500, color: "#6b7280", display: "block", marginBottom: 6 }}>
+              Custom Response Message
+            </label>
+            <TextInput
+              placeholder="Enter custom response..."
+              value={step.modify_response_message || ""}
+              onChange={(e) => onChange({ modify_response_message: e.target.value || null })}
+            />
+          </div>
+        )}
+      </div>
+
+      {/* ON API FAILURE (technical / provider outage) — optional; defaults to ON FAIL */}
+      <div style={{ borderTop: "1px solid #f0f0f0", padding: "14px 20px" }}>
+        <div className="flex items-center gap-2" style={{ marginBottom: 8 }}>
+          <ApiFailureIcon />
+          <span style={{ fontSize: 13, fontWeight: 600, color: "#374151" }}>ON API FAILURE</span>
+        </div>
+        <label style={{ fontSize: 12, fontWeight: 500, color: "#6b7280", display: "block", marginBottom: 6 }}>
+          Action
+        </label>
+        <Select
+          style={{ width: "100%" }}
+          placeholder="Same as ON FAIL"
+          allowClear
+          value={step.on_error ?? undefined}
+          onChange={(value) =>
+            onChange({
+              on_error: value === undefined || value === null ? undefined : (value as PipelineStep["on_error"]),
+            })
+          }
+          options={ACTION_OPTIONS}
+        />
+        {step.on_error === "modify_response" && step.on_fail !== "modify_response" && (
           <div style={{ marginTop: 8 }}>
             <label style={{ fontSize: 12, fontWeight: 500, color: "#6b7280", display: "block", marginBottom: 6 }}>
               Custom Response Message
@@ -566,13 +609,19 @@ export const PipelineInfoDisplay: React.FC<PipelineInfoDisplayProps> = ({ pipeli
           {/* Divider */}
           <div style={{ borderTop: "1px solid #f3f4f6", marginBottom: 10 }} />
 
-          {/* Pass / Fail */}
-          <div className="flex items-center gap-6" style={{ fontSize: 13, color: "#374151" }}>
+          {/* Pass / Fail / API failure */}
+          <div className="flex flex-col gap-2" style={{ fontSize: 13, color: "#374151" }}>
             <span className="flex items-center gap-1.5">
               <PassIcon /> Pass &#8594; {ACTION_LABELS[step.on_pass] || step.on_pass}
             </span>
             <span className="flex items-center gap-1.5">
-              <FailIcon /> Fail &#8594; {ACTION_LABELS[step.on_fail] || step.on_fail}
+              <FailIcon /> On fail &#8594; {ACTION_LABELS[step.on_fail] || step.on_fail}
+            </span>
+            <span className="flex items-center gap-1.5">
+              <ApiFailureIcon /> On API failure &#8594;{" "}
+              {step.on_error != null
+                ? ACTION_LABELS[step.on_error] || step.on_error
+                : `${ACTION_LABELS[step.on_fail] || step.on_fail} (same as on fail)`}
             </span>
           </div>
         </div>

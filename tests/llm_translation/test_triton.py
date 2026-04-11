@@ -50,6 +50,138 @@ def test_split_embedding_by_shape_fails_with_shape_value_error():
         )
 
 
+def test_triton_embedding_response_sets_usage_with_token_counter():
+    config = TritonEmbeddingConfig()
+    mock_http_response = MagicMock()
+    mock_http_response.status_code = 200
+    mock_http_response.json.return_value = {
+        "model_name": "gte-base-en-v1",
+        "outputs": [
+            {
+                "name": "embedding",
+                "shape": [1, 2],
+                "data": [0.1, 0.2],
+            }
+        ],
+    }
+    model_response = litellm.EmbeddingResponse()
+    request_data = {
+        "inputs": [
+            {
+                "name": "input_text",
+                "shape": [1],
+                "datatype": "BYTES",
+                "data": ["hello from triton"],
+            }
+        ]
+    }
+
+    with patch(
+        "litellm.llms.triton.embedding.transformation.token_counter",
+        return_value=7,
+    ):
+        transformed = config.transform_embedding_response(
+            model="triton/gte-base-en-v1",
+            raw_response=mock_http_response,
+            model_response=model_response,
+            logging_obj=MagicMock(),
+            request_data=request_data,
+        )
+
+    assert transformed.usage is not None
+    assert transformed.usage.prompt_tokens == 7
+    assert transformed.usage.completion_tokens == 0
+    assert transformed.usage.total_tokens == 7
+
+
+def test_triton_embedding_response_sets_usage_with_word_count_fallback():
+    config = TritonEmbeddingConfig()
+    mock_http_response = MagicMock()
+    mock_http_response.status_code = 200
+    mock_http_response.json.return_value = {
+        "model_name": "gte-base-en-v1",
+        "outputs": [
+            {
+                "name": "embedding",
+                "shape": [1, 2],
+                "data": [0.1, 0.2],
+            }
+        ],
+    }
+    model_response = litellm.EmbeddingResponse()
+    request_data = {
+        "inputs": [
+            {
+                "name": "input_text",
+                "shape": [1],
+                "datatype": "BYTES",
+                "data": ["hello from triton"],
+            }
+        ]
+    }
+
+    with patch(
+        "litellm.llms.triton.embedding.transformation.token_counter",
+        side_effect=Exception("tokenizer error"),
+    ):
+        transformed = config.transform_embedding_response(
+            model="triton/gte-base-en-v1",
+            raw_response=mock_http_response,
+            model_response=model_response,
+            logging_obj=MagicMock(),
+            request_data=request_data,
+        )
+
+    assert transformed.usage is not None
+    assert transformed.usage.prompt_tokens == 3
+    assert transformed.usage.completion_tokens == 0
+    assert transformed.usage.total_tokens == 3
+
+
+def test_triton_embedding_batch_usage_sums_per_input_token_counts():
+    """Batch inputs must not be joined before token counting (avoids extra newline tokens)."""
+    config = TritonEmbeddingConfig()
+    mock_http_response = MagicMock()
+    mock_http_response.status_code = 200
+    mock_http_response.json.return_value = {
+        "model_name": "gte-base-en-v1",
+        "outputs": [
+            {
+                "name": "embedding",
+                "shape": [2, 2],
+                "data": [0.1, 0.2, 0.3, 0.4],
+            }
+        ],
+    }
+    model_response = litellm.EmbeddingResponse()
+    request_data = {
+        "inputs": [
+            {
+                "name": "input_text",
+                "shape": [2],
+                "datatype": "BYTES",
+                "data": ["first input", "second input"],
+            }
+        ]
+    }
+
+    with patch(
+        "litellm.llms.triton.embedding.transformation.token_counter",
+        side_effect=[5, 7],
+    ):
+        transformed = config.transform_embedding_response(
+            model="triton/gte-base-en-v1",
+            raw_response=mock_http_response,
+            model_response=model_response,
+            logging_obj=MagicMock(),
+            request_data=request_data,
+        )
+
+    assert transformed.usage is not None
+    assert transformed.usage.prompt_tokens == 12
+    assert transformed.usage.total_tokens == 12
+
+
 @pytest.mark.parametrize("stream", [True, False])
 def test_completion_triton_generate_api(stream):
     try:

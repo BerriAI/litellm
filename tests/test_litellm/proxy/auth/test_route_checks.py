@@ -124,6 +124,34 @@ def test_virtual_key_mcp_routes_allows_v1_mcp_server():
     assert result is True
 
 
+@pytest.mark.parametrize(
+    "route",
+    [
+        "/v1/mcp/server/register",
+        "/v1/mcp/server/health",
+        "/v1/mcp/server/submissions",
+        "/v1/mcp/server/abc123",
+        "/v1/mcp/server/abc123/approve",
+        "/v1/mcp/server/oauth/session",
+        "/v1/mcp/server/oauth/abc123/authorize",
+    ],
+)
+def test_virtual_key_mcp_routes_allows_v1_mcp_server_subpaths(route):
+    """Regression test: mcp_routes must allow /v1/mcp/server sub-paths (register, health, oauth, etc.)."""
+
+    valid_token = UserAPIKeyAuth(
+        user_id="test_user",
+        allowed_routes=["mcp_routes"],
+    )
+
+    result = RouteChecks.is_virtual_key_allowed_to_call_route(
+        route=route,
+        valid_token=valid_token,
+    )
+
+    assert result is True
+
+
 def test_virtual_key_allowed_routes_with_litellm_routes_member_name_denied():
     """Test that virtual key is denied when route is not in the allowed LiteLLMRoutes group"""
 

@@ -202,6 +202,7 @@ export interface Model {
 
 interface PromptInfo {
   prompt_type: string;
+  environment?: string;
 }
 
 export interface PromptSpec {
@@ -211,6 +212,8 @@ export interface PromptSpec {
   created_at?: string;
   updated_at?: string;
   version?: number; // Explicit version number for version history
+  environment?: string;
+  created_by?: string;
 }
 
 export interface PromptTemplateBase {
@@ -222,6 +225,7 @@ export interface PromptTemplateBase {
 interface PromptInfoResponse {
   prompt_spec: PromptSpec;
   raw_prompt_template: PromptTemplateBase | null;
+  environments?: string[];
 }
 
 export interface ListPromptsResponse {
@@ -3263,6 +3267,7 @@ export const keyAliasesCall = async (
   page: number = 1,
   size: number = 50,
   search?: string,
+  team_id?: string,
 ): Promise<PaginatedKeyAliasResponse> => {
   /**
    * Get key aliases from proxy with pagination and optional search
@@ -3273,6 +3278,7 @@ export const keyAliasesCall = async (
         page: String(page),
         size: String(size),
         ...(search ? { search } : {}),
+        ...(team_id ? { team_id } : {}),
       }),
     );
     let url = proxyBaseUrl ? `${proxyBaseUrl}/key/aliases` : `/key/aliases`;
@@ -6035,9 +6041,15 @@ export const estimateAttachmentImpactCall = async (
   }
 };
 
-export const getPromptsList = async (accessToken: string): Promise<ListPromptsResponse> => {
+export const getPromptsList = async (
+  accessToken: string,
+  environment?: string,
+): Promise<ListPromptsResponse> => {
   try {
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/prompts/list` : `/prompts/list`;
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/prompts/list` : `/prompts/list`;
+    if (environment) {
+      url += `?environment=${encodeURIComponent(environment)}`;
+    }
     const response = await fetch(url, {
       method: "GET",
       headers: {
@@ -6061,9 +6073,12 @@ export const getPromptsList = async (accessToken: string): Promise<ListPromptsRe
   }
 };
 
-export const getPromptInfo = async (accessToken: string, promptId: string): Promise<PromptInfoResponse> => {
+export const getPromptInfo = async (accessToken: string, promptId: string, environment?: string): Promise<PromptInfoResponse> => {
   try {
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/prompts/${promptId}/info` : `/prompts/${promptId}/info`;
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/prompts/${promptId}/info` : `/prompts/${promptId}/info`;
+    if (environment) {
+      url += `?environment=${encodeURIComponent(environment)}`;
+    }
     const response = await fetch(url, {
       method: "GET",
       headers: {
@@ -6087,9 +6102,12 @@ export const getPromptInfo = async (accessToken: string, promptId: string): Prom
   }
 };
 
-export const getPromptVersions = async (accessToken: string, promptId: string): Promise<ListPromptsResponse> => {
+export const getPromptVersions = async (accessToken: string, promptId: string, environment?: string): Promise<ListPromptsResponse> => {
   try {
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/prompts/${promptId}/versions` : `/prompts/${promptId}/versions`;
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/prompts/${promptId}/versions` : `/prompts/${promptId}/versions`;
+    if (environment) {
+      url += `?environment=${encodeURIComponent(environment)}`;
+    }
     const response = await fetch(url, {
       method: "GET",
       headers: {
@@ -6653,6 +6671,99 @@ export const deleteMCPServer = async (accessToken: string, serverId: string) => 
     }
   } catch (error) {
     console.error("Failed to delete key:", error);
+    throw error;
+  }
+};
+
+export const fetchMCPToolsets = async (accessToken: string): Promise<any[]> => {
+  try {
+    const url = (proxyBaseUrl ? `${proxyBaseUrl}` : "") + `/v1/mcp/toolset`;
+    const response = await fetch(url, {
+      method: HTTP_REQUEST.GET,
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+    return await response.json();
+  } catch (error) {
+    console.error("Failed to fetch MCP toolsets:", error);
+    throw error;
+  }
+};
+
+export const createMCPToolset = async (accessToken: string, formValues: Record<string, any>) => {
+  try {
+    const url = (proxyBaseUrl ? `${proxyBaseUrl}` : "") + `/v1/mcp/toolset`;
+    const response = await fetch(url, {
+      method: HTTP_REQUEST.POST,
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(formValues),
+    });
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+    return await response.json();
+  } catch (error) {
+    console.error("Failed to create MCP toolset:", error);
+    throw error;
+  }
+};
+
+export const updateMCPToolset = async (accessToken: string, formValues: Record<string, any>) => {
+  try {
+    const url = (proxyBaseUrl ? `${proxyBaseUrl}` : "") + `/v1/mcp/toolset`;
+    const response = await fetch(url, {
+      method: HTTP_REQUEST.PUT,
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(formValues),
+    });
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+    return await response.json();
+  } catch (error) {
+    console.error("Failed to update MCP toolset:", error);
+    throw error;
+  }
+};
+
+export const deleteMCPToolset = async (accessToken: string, toolsetId: string) => {
+  try {
+    const url = (proxyBaseUrl ? `${proxyBaseUrl}` : "") + `/v1/mcp/toolset/${toolsetId}`;
+    const response = await fetch(url, {
+      method: HTTP_REQUEST.DELETE,
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+  } catch (error) {
+    console.error("Failed to delete MCP toolset:", error);
     throw error;
   }
 };
@@ -7288,12 +7399,11 @@ export const getTeamPermissionsCall = async (accessToken: string, teamId: string
     if (!response.ok) {
       const errorData = await response.json();
       const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
+      console.error("Available permissions fetch failed:", errorMessage);
+      return { all_available_permissions: [], team_member_permissions: [] };
     }
 
     const data = await response.json();
-    console.log("Team permissions response:", data);
     return data;
   } catch (error) {
     console.error("Failed to get team permissions:", error);

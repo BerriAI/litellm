@@ -246,7 +246,7 @@ You can also call the Azure Responses API via the `/chat/completions` endpoint.
 from litellm import completion
 import os 
 
-os.environ["AZURE_API_BASE"] = "https://my-endpoint-sweden-berri992.openai.azure.com/"
+os.environ["AZURE_API_BASE"] = "https://my-azure-endpoint.openai.azure.com/"
 os.environ["AZURE_API_VERSION"] = "2023-03-15-preview"
 os.environ["AZURE_API_KEY"] = "my-api-key"
 
@@ -268,7 +268,7 @@ model_list:
     litellm_params:
       model: azure/responses/my-custom-o1-pro
       api_key: os.environ/AZURE_API_KEY
-      api_base: https://my-endpoint-sweden-berri992.openai.azure.com/
+      api_base: https://my-azure-endpoint.openai.azure.com/
       api_version: 2023-03-15-preview
 ```
 
