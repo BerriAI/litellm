@@ -1,4 +1,4 @@
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Union
 
 from pydantic import Field
 from typing_extensions import TypedDict
@@ -79,9 +79,11 @@ class JavelinGuardResponse(TypedDict):
     assessments: List[
         Dict[
             str,
-            JavelinPromptInjectionAssessment
-            | JavelinTrustSafetyAssessment
-            | JavelinLanguageDetectionAssessment,
+            Union[
+                JavelinPromptInjectionAssessment,
+                JavelinTrustSafetyAssessment,
+                JavelinLanguageDetectionAssessment,
+            ],
         ]
     ]
 
