@@ -118,7 +118,7 @@ class FileContentStreamingResponse:
         return response
 
     def _sync_hidden_params(self) -> None:
-        litellm_params = {}
+        litellm_params: dict[str, Any] = {}
         if self.logging_obj is not None:
             litellm_params = (
                 self.logging_obj.model_call_details.get("litellm_params", {}) or {}
