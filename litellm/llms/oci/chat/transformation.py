@@ -101,11 +101,7 @@ class OCIChatConfig(BaseConfig):
     """LiteLLM BaseConfig implementation for OCI Generative AI chat."""
 
     def __init__(self) -> None:
-        locals_ = locals().copy()
-        for key, value in locals_.items():
-            if key != "self" and value is not None:
-                setattr(self.__class__, key, value)
-        setattr(self.__class__, "has_custom_stream_wrapper", True)
+        self.__class__.has_custom_stream_wrapper = True
 
         self.openai_to_oci_generic_param_map = {
             "stream": "isStream",
@@ -625,14 +621,14 @@ class OCIChatConfig(BaseConfig):
     ) -> ModelResponse:
         response_json = raw_response.json()
 
-        if response_json.get("error") is not None:
-            raise OCIError(
-                message=str(response_json["error"]),
-                status_code=raw_response.status_code,
-            )
         if not isinstance(response_json, dict):
             raise OCIError(
                 message="Invalid response format from OCI",
+                status_code=raw_response.status_code,
+            )
+        if response_json.get("error") is not None:
+            raise OCIError(
+                message=str(response_json["error"]),
                 status_code=raw_response.status_code,
             )
 
