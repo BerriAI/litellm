@@ -1103,11 +1103,11 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
         data[_metadata_variable_name]["disable_global_guardrails"] = team_metadata[
             "disable_global_guardrails"
         ]
-    if "disabled_global_guardrails" in team_metadata and isinstance(
-        team_metadata["disabled_global_guardrails"], list
+    if "opted_out_global_guardrails" in team_metadata and isinstance(
+        team_metadata["opted_out_global_guardrails"], list
     ):
-        data[_metadata_variable_name]["disabled_global_guardrails"] = team_metadata[
-            "disabled_global_guardrails"
+        data[_metadata_variable_name]["opted_out_global_guardrails"] = team_metadata[
+            "opted_out_global_guardrails"
         ]
     if "spend_logs_metadata" in team_metadata and isinstance(
         team_metadata["spend_logs_metadata"], dict
