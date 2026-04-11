@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 from litellm._logging import verbose_router_logger
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.router_strategy.utils import extract_text_from_input
 
 if TYPE_CHECKING:
     from semantic_router.routers.base import Route
@@ -81,44 +82,6 @@ class AutoRouter(CustomLogger):
             )
         return auto_router_routes
 
-    @staticmethod
-    def _extract_text_from_input(input: Union[str, List]) -> Optional[str]:
-        """
-        Extract plain text from a Responses API ``input`` field.
-
-        Handles bare strings, ``{type: "text", text: ...}`` items, and
-        ``{type: "message", content: ...}`` items (where ``content`` may
-        itself be a string or a list of ``{type, text}`` parts).
-        """
-        if isinstance(input, str):
-            return input.strip() or None
-
-        if not isinstance(input, list):
-            return None
-
-        parts: List[str] = []
-        for item in input:
-            if isinstance(item, str):
-                parts.append(item)
-            elif isinstance(item, dict):
-                item_type = item.get("type", "")
-                if item_type == "text":
-                    text = item.get("text") or ""
-                    if text:
-                        parts.append(text)
-                elif item_type == "message":
-                    content = item.get("content") or ""
-                    if isinstance(content, str):
-                        if content:
-                            parts.append(content)
-                    elif isinstance(content, list):
-                        for part in content:
-                            if isinstance(part, dict) and part.get("type") == "text":
-                                t = part.get("text") or ""
-                                if t:
-                                    parts.append(t)
-        return " ".join(parts).strip() or None
-
     async def async_pre_routing_hook(
         self,
         model: str,
@@ -132,12 +95,6 @@ class AutoRouter(CustomLogger):
 
         Used for the litellm auto-router to modify the request before the routing decision is made.
         """
-        from semantic_router.routers import SemanticRouter
-        from semantic_router.schema import RouteChoice
-
-        from litellm.router_strategy.auto_router.litellm_encoder import (
-            LiteLLMRouterEncoder,
-        )
         from litellm.types.router import PreRoutingHookResponse
 
         has_messages = messages is not None and len(messages) > 0
@@ -146,6 +103,23 @@ class AutoRouter(CustomLogger):
         if not has_messages and not has_input:
             # do nothing, return same inputs
             return None
+
+        # Responses API: if input is present but yields no usable text, fall
+        # back to the default model without touching the semantic router.
+        if not has_messages and has_input:
+            extracted_early = extract_text_from_input(input)  # type: ignore[arg-type]
+            if extracted_early is None:
+                return PreRoutingHookResponse(
+                    model=self.default_model,
+                    messages=messages,
+                )
+
+        from semantic_router.routers import SemanticRouter
+        from semantic_router.schema import RouteChoice
+
+        from litellm.router_strategy.auto_router.litellm_encoder import (
+            LiteLLMRouterEncoder,
+        )
 
         if self.routelayer is None:
             #######################
@@ -164,8 +138,8 @@ class AutoRouter(CustomLogger):
             user_message_dict: Dict[str, str] = messages[-1]  # type: ignore[index]
             message_content: str = user_message_dict.get("content", "")
         else:
-            # Responses API: extract plain text from ``input``
-            message_content = self._extract_text_from_input(input) or ""  # type: ignore[arg-type]
+            # extracted_early is guaranteed non-None here (None case returned above)
+            message_content = extracted_early  # type: ignore[assignment]
         route_choice: Optional[Union[RouteChoice, List[RouteChoice]]] = self.routelayer(
             text=message_content
         )

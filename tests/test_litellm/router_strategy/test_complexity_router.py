@@ -24,6 +24,7 @@ from litellm.router_strategy.complexity_router.config import (
     ComplexityRouterConfig,
     ComplexityTier,
 )
+from litellm.router_strategy.utils import extract_text_from_input
 
 
 @pytest.fixture
@@ -699,34 +700,37 @@ class TestEdgeCases:
 
 
 class TestExtractTextFromInput:
-    """Tests for ComplexityRouter._extract_text_from_input."""
+    """Tests for the shared extract_text_from_input utility."""
 
-    def test_plain_string(self, complexity_router):
+    def test_plain_string(self):
         """A plain string is returned as-is."""
-        assert complexity_router._extract_text_from_input("Hello world") == "Hello world"
+        assert extract_text_from_input("Hello world") == "Hello world"
 
-    def test_empty_string(self, complexity_router):
+    def test_empty_string(self):
         """An empty / whitespace-only string returns None."""
-        assert complexity_router._extract_text_from_input("") is None
-        assert complexity_router._extract_text_from_input("   ") is None
+        assert extract_text_from_input("") is None
+        assert extract_text_from_input("   ") is None
 
-    def test_text_type_item(self, complexity_router):
+    def test_text_type_item(self):
         """A list with a single {type: text, text: ...} item."""
-        result = complexity_router._extract_text_from_input(
-            [{"type": "text", "text": "Hello world"}]
-        )
+        result = extract_text_from_input([{"type": "text", "text": "Hello world"}])
         assert result == "Hello world"
 
-    def test_message_type_item_string_content(self, complexity_router):
+    def test_plain_string_item_in_list(self):
+        """A list containing a bare string item is appended directly."""
+        result = extract_text_from_input(["Hello", "world"])
+        assert result == "Hello world"
+
+    def test_message_type_item_string_content(self):
         """A list with a {type: message, content: str} item."""
-        result = complexity_router._extract_text_from_input(
+        result = extract_text_from_input(
             [{"type": "message", "role": "user", "content": "Hello world"}]
         )
         assert result == "Hello world"
 
-    def test_message_type_item_list_content(self, complexity_router):
+    def test_message_type_item_list_content(self):
         """A {type: message} item whose content is a list of text parts."""
-        result = complexity_router._extract_text_from_input(
+        result = extract_text_from_input(
             [
                 {
                     "type": "message",
@@ -741,9 +745,9 @@ class TestExtractTextFromInput:
         )
         assert result == "Hello world"
 
-    def test_multiple_items_concatenated(self, complexity_router):
+    def test_multiple_items_concatenated(self):
         """Multiple text items are joined with spaces."""
-        result = complexity_router._extract_text_from_input(
+        result = extract_text_from_input(
             [
                 {"type": "text", "text": "Hello"},
                 {"type": "text", "text": "world"},
@@ -751,20 +755,20 @@ class TestExtractTextFromInput:
         )
         assert result == "Hello world"
 
-    def test_empty_list(self, complexity_router):
+    def test_empty_list(self):
         """An empty list returns None."""
-        assert complexity_router._extract_text_from_input([]) is None
+        assert extract_text_from_input([]) is None
 
-    def test_list_with_no_text(self, complexity_router):
+    def test_list_with_no_text(self):
         """A list with only non-text items returns None."""
-        result = complexity_router._extract_text_from_input(
+        result = extract_text_from_input(
             [{"type": "image_url", "image_url": {"url": "data:..."}}]
         )
         assert result is None
 
-    def test_non_list_non_string(self, complexity_router):
+    def test_non_list_non_string(self):
         """Non-string, non-list input returns None."""
-        assert complexity_router._extract_text_from_input(42) is None  # type: ignore[arg-type]
+        assert extract_text_from_input(42) is None  # type: ignore[arg-type]
 
 
 class TestPreRoutingHookResponsesAPI:
