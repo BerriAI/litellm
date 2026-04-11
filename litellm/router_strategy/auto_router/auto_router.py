@@ -81,6 +81,44 @@ class AutoRouter(CustomLogger):
             )
         return auto_router_routes
 
+    @staticmethod
+    def _extract_text_from_input(input: Union[str, List]) -> Optional[str]:
+        """
+        Extract plain text from a Responses API ``input`` field.
+
+        Handles bare strings, ``{type: "text", text: ...}`` items, and
+        ``{type: "message", content: ...}`` items (where ``content`` may
+        itself be a string or a list of ``{type, text}`` parts).
+        """
+        if isinstance(input, str):
+            return input.strip() or None
+
+        if not isinstance(input, list):
+            return None
+
+        parts: List[str] = []
+        for item in input:
+            if isinstance(item, str):
+                parts.append(item)
+            elif isinstance(item, dict):
+                item_type = item.get("type", "")
+                if item_type == "text":
+                    text = item.get("text") or ""
+                    if text:
+                        parts.append(text)
+                elif item_type == "message":
+                    content = item.get("content") or ""
+                    if isinstance(content, str):
+                        if content:
+                            parts.append(content)
+                    elif isinstance(content, list):
+                        for part in content:
+                            if isinstance(part, dict) and part.get("type") == "text":
+                                t = part.get("text") or ""
+                                if t:
+                                    parts.append(t)
+        return " ".join(parts).strip() or None
+
     async def async_pre_routing_hook(
         self,
         model: str,
@@ -102,7 +140,10 @@ class AutoRouter(CustomLogger):
         )
         from litellm.types.router import PreRoutingHookResponse
 
-        if messages is None:
+        has_messages = messages is not None and len(messages) > 0
+        has_input = input is not None
+
+        if not has_messages and not has_input:
             # do nothing, return same inputs
             return None
 
@@ -119,8 +160,12 @@ class AutoRouter(CustomLogger):
                 auto_sync=self.auto_sync_value,
             )
 
-        user_message: Dict[str, str] = messages[-1]
-        message_content: str = user_message.get("content", "")
+        if has_messages:
+            user_message_dict: Dict[str, str] = messages[-1]  # type: ignore[index]
+            message_content: str = user_message_dict.get("content", "")
+        else:
+            # Responses API: extract plain text from ``input``
+            message_content = self._extract_text_from_input(input) or ""  # type: ignore[arg-type]
         route_choice: Optional[Union[RouteChoice, List[RouteChoice]]] = self.routelayer(
             text=message_content
         )

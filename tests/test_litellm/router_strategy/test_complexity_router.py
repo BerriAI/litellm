@@ -698,6 +698,186 @@ class TestEdgeCases:
         assert any("multi-step" in s.lower() for s in signals), f"Expected multi-step signal, got {signals}"
 
 
+class TestExtractTextFromInput:
+    """Tests for ComplexityRouter._extract_text_from_input."""
+
+    def test_plain_string(self, complexity_router):
+        """A plain string is returned as-is."""
+        assert complexity_router._extract_text_from_input("Hello world") == "Hello world"
+
+    def test_empty_string(self, complexity_router):
+        """An empty / whitespace-only string returns None."""
+        assert complexity_router._extract_text_from_input("") is None
+        assert complexity_router._extract_text_from_input("   ") is None
+
+    def test_text_type_item(self, complexity_router):
+        """A list with a single {type: text, text: ...} item."""
+        result = complexity_router._extract_text_from_input(
+            [{"type": "text", "text": "Hello world"}]
+        )
+        assert result == "Hello world"
+
+    def test_message_type_item_string_content(self, complexity_router):
+        """A list with a {type: message, content: str} item."""
+        result = complexity_router._extract_text_from_input(
+            [{"type": "message", "role": "user", "content": "Hello world"}]
+        )
+        assert result == "Hello world"
+
+    def test_message_type_item_list_content(self, complexity_router):
+        """A {type: message} item whose content is a list of text parts."""
+        result = complexity_router._extract_text_from_input(
+            [
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "Hello"},
+                        {"type": "image_url", "image_url": {"url": "data:..."}},
+                        {"type": "text", "text": "world"},
+                    ],
+                }
+            ]
+        )
+        assert result == "Hello world"
+
+    def test_multiple_items_concatenated(self, complexity_router):
+        """Multiple text items are joined with spaces."""
+        result = complexity_router._extract_text_from_input(
+            [
+                {"type": "text", "text": "Hello"},
+                {"type": "text", "text": "world"},
+            ]
+        )
+        assert result == "Hello world"
+
+    def test_empty_list(self, complexity_router):
+        """An empty list returns None."""
+        assert complexity_router._extract_text_from_input([]) is None
+
+    def test_list_with_no_text(self, complexity_router):
+        """A list with only non-text items returns None."""
+        result = complexity_router._extract_text_from_input(
+            [{"type": "image_url", "image_url": {"url": "data:..."}}]
+        )
+        assert result is None
+
+    def test_non_list_non_string(self, complexity_router):
+        """Non-string, non-list input returns None."""
+        assert complexity_router._extract_text_from_input(42) is None  # type: ignore[arg-type]
+
+
+class TestPreRoutingHookResponsesAPI:
+    """Tests for async_pre_routing_hook with the Responses API ``input`` field."""
+
+    @pytest.mark.asyncio
+    async def test_responses_api_plain_string_simple(self, complexity_router):
+        """Responses API with a simple plain-string input routes to SIMPLE tier."""
+        result = await complexity_router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs={},
+            messages=None,
+            input="Hello!",
+        )
+        assert result is not None
+        assert result.model == "gpt-4o-mini"
+
+    @pytest.mark.asyncio
+    async def test_responses_api_plain_string_reasoning(self, complexity_router):
+        """Responses API routes a reasoning-heavy input to REASONING tier."""
+        result = await complexity_router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs={},
+            messages=None,
+            input=(
+                "Let's think step by step and reason through this: "
+                "analyze the architecture carefully."
+            ),
+        )
+        assert result is not None
+        assert result.model == "o1-preview"
+
+    @pytest.mark.asyncio
+    async def test_responses_api_text_type_item(self, complexity_router):
+        """Responses API with a list of text-type items routes correctly."""
+        result = await complexity_router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs={},
+            messages=None,
+            input=[{"type": "text", "text": "Hello!"}],
+        )
+        assert result is not None
+        assert result.model == "gpt-4o-mini"
+
+    @pytest.mark.asyncio
+    async def test_responses_api_message_type_item(self, complexity_router):
+        """Responses API with a message-type item (list content) routes correctly."""
+        result = await complexity_router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs={},
+            messages=None,
+            input=[
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "text", "text": "Hello!"}],
+                }
+            ],
+        )
+        assert result is not None
+        assert result.model == "gpt-4o-mini"
+
+    @pytest.mark.asyncio
+    async def test_responses_api_no_messages_no_input_returns_none(
+        self, complexity_router
+    ):
+        """When both messages and input are absent, the hook skips routing."""
+        result = await complexity_router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs={},
+            messages=None,
+            input=None,
+        )
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_responses_api_empty_input_returns_default(self, complexity_router):
+        """An empty string input falls back to the default model."""
+        result = await complexity_router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs={},
+            messages=None,
+            input="",
+        )
+        assert result is not None
+        assert result.model in [
+            "gpt-4o-mini",
+            "gpt-4o",
+            "claude-sonnet-4-20250514",
+            "o1-preview",
+        ]
+
+    @pytest.mark.asyncio
+    async def test_messages_take_priority_over_input(self, complexity_router):
+        """When both messages and input are present, messages are used."""
+        # messages says REASONING but input says SIMPLE — messages should win
+        result = await complexity_router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs={},
+            messages=[
+                {
+                    "role": "user",
+                    "content": (
+                        "Think step by step and reason through: design a distributed system."
+                    ),
+                }
+            ],
+            input="Hello!",
+        )
+        assert result is not None
+        assert result.model == "o1-preview"
+
+
 class TestRouterComplexityDeploymentMethods:
     """Tests for Router._is_complexity_router_deployment and Router.init_complexity_router_deployment."""
 

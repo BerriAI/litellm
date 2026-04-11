@@ -3846,6 +3846,7 @@ class Router:
                     model=model,
                     request_kwargs=kwargs,
                     messages=kwargs.get("messages", None),
+                    input=kwargs.get("input", None),
                     specific_deployment=kwargs.pop("specific_deployment", None),
                 )
             except Exception as e:

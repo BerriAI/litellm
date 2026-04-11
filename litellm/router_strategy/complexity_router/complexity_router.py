@@ -331,6 +331,52 @@ class ComplexityRouter(CustomLogger):
             f"No model configured for tier {tier_key} and no default_model set"
         )
 
+    @staticmethod
+    def _extract_text_from_input(input: Union[str, List]) -> Optional[str]:
+        """
+        Extract plain text from a Responses API ``input`` field.
+
+        The Responses API accepts either a bare string or a list of input
+        items (``ResponseInputParam``).  Each item may be:
+
+        * A plain ``str``.
+        * A dict with ``type="text"`` and a ``text`` key.
+        * A dict with ``type="message"`` whose ``content`` is itself a list
+          of content parts (same ``{type, text}`` shape).
+
+        Returns the concatenated text, or ``None`` when nothing extractable
+        is found.
+        """
+        if isinstance(input, str):
+            return input.strip() or None
+
+        if not isinstance(input, list):
+            return None
+
+        parts: List[str] = []
+        for item in input:
+            if isinstance(item, str):
+                parts.append(item)
+            elif isinstance(item, dict):
+                item_type = item.get("type", "")
+                if item_type == "text":
+                    text = item.get("text") or ""
+                    if text:
+                        parts.append(text)
+                elif item_type == "message":
+                    # { type: "message", role: "...", content: str | list }
+                    content = item.get("content") or ""
+                    if isinstance(content, str):
+                        if content:
+                            parts.append(content)
+                    elif isinstance(content, list):
+                        for part in content:
+                            if isinstance(part, dict) and part.get("type") == "text":
+                                t = part.get("text") or ""
+                                if t:
+                                    parts.append(t)
+        return " ".join(parts).strip() or None
+
     async def async_pre_routing_hook(
         self,
         model: str,
@@ -343,12 +389,14 @@ class ComplexityRouter(CustomLogger):
         Pre-routing hook called before the routing decision.
 
         Classifies the request by complexity and returns the appropriate model.
+        Supports both the Chat Completions API (``messages``) and the Responses
+        API (``input``).
 
         Args:
             model: The original model name requested.
             request_kwargs: The request kwargs.
-            messages: The messages in the request.
-            input: Optional input for embeddings.
+            messages: The messages in the request (Chat Completions API).
+            input: The input field from a Responses API request.
             specific_deployment: Whether a specific deployment was requested.
 
         Returns:
@@ -356,9 +404,12 @@ class ComplexityRouter(CustomLogger):
         """
         from litellm.types.router import PreRoutingHookResponse
 
-        if messages is None or len(messages) == 0:
+        has_messages = messages is not None and len(messages) > 0
+        has_input = input is not None
+
+        if not has_messages and not has_input:
             verbose_router_logger.debug(
-                "ComplexityRouter: No messages provided, skipping routing"
+                "ComplexityRouter: No messages or input provided, skipping routing"
             )
             return None
 
@@ -366,22 +417,29 @@ class ComplexityRouter(CustomLogger):
         user_message: Optional[str] = None
         system_prompt: Optional[str] = None
 
-        for msg in reversed(messages):
-            role = msg.get("role", "")
-            content = msg.get("content") or ""
-            # content may be a list of content parts (e.g. [{"type": "text", "text": "..."}])
-            if isinstance(content, list):
-                text_parts = [
-                    part.get("text", "")
-                    for part in content
-                    if isinstance(part, dict) and part.get("type") == "text"
-                ]
-                content = " ".join(text_parts).strip()
-            if isinstance(content, str) and content:
-                if role == "user" and user_message is None:
-                    user_message = content
-                elif role == "system" and system_prompt is None:
-                    system_prompt = content
+        if has_messages:
+            for msg in reversed(messages):  # type: ignore[arg-type]
+                role = msg.get("role", "")
+                content = msg.get("content") or ""
+                # content may be a list of content parts (e.g. [{"type": "text", "text": "..."}])
+                if isinstance(content, list):
+                    text_parts = [
+                        part.get("text", "")
+                        for part in content
+                        if isinstance(part, dict) and part.get("type") == "text"
+                    ]
+                    content = " ".join(text_parts).strip()
+                if isinstance(content, str) and content:
+                    if role == "user" and user_message is None:
+                        user_message = content
+                    elif role == "system" and system_prompt is None:
+                        system_prompt = content
+        elif has_input:
+            # Responses API: extract text from the input field
+            user_message = self._extract_text_from_input(input)  # type: ignore[arg-type]
+            verbose_router_logger.debug(
+                f"ComplexityRouter: extracted text from Responses API input: {user_message!r}"
+            )
 
         if user_message is None:
             verbose_router_logger.debug(
