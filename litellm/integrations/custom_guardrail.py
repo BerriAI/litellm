@@ -266,6 +266,15 @@ class CustomGuardrail(CustomLogger):
             return metadata["disable_global_guardrails"]
         return False
 
+    def get_disabled_global_guardrails_from_metadata(self, data: dict) -> List[str]:
+        """
+        Returns the list of global guardrail names the team/key has opted out of.
+        """
+        if "disabled_global_guardrails" in data:
+            return data["disabled_global_guardrails"] or []
+        metadata = data.get("litellm_metadata") or data.get("metadata", {})
+        return metadata.get("disabled_global_guardrails") or []
+
     def _is_valid_response_type(self, result: Any) -> bool:
         """
         Check if result is a valid LLMResponseTypes instance.
@@ -406,6 +415,7 @@ class CustomGuardrail(CustomLogger):
         """
         requested_guardrails = self.get_guardrail_from_metadata(data)
         disable_global_guardrail = self.get_disable_global_guardrail(data)
+        disabled_global_guardrails = self.get_disabled_global_guardrails_from_metadata(data)
         verbose_logger.debug(
             "inside should_run_guardrail for guardrail=%s event_type= %s guardrail_supported_event_hooks= %s requested_guardrails= %s self.default_on= %s",
             self.guardrail_name,
@@ -414,6 +424,9 @@ class CustomGuardrail(CustomLogger):
             requested_guardrails,
             self.default_on,
         )
+        if self.default_on is True and self.guardrail_name in disabled_global_guardrails:
+            return False
+
         if self.default_on is True and disable_global_guardrail is not True:
             if self._event_hook_is_event_type(event_type):
                 if isinstance(self.event_hook, Mode):
