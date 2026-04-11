@@ -19,7 +19,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.proxy._types import *
-from litellm.proxy.auth.auth_checks import can_user_call_model
+from litellm.proxy.auth.auth_checks import can_user_call_model, get_user_object
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.management_endpoints.budget_management_endpoints import (
     new_budget,
@@ -65,7 +65,6 @@ async def _verify_org_access(
             detail="You do not have access to this organization",
         )
 
-    from litellm.proxy.auth.auth_checks import get_user_object
     from litellm.proxy.proxy_server import proxy_logging_obj, user_api_key_cache
 
     caller_user = await get_user_object(
@@ -815,7 +814,10 @@ async def info_organization(
     tags=["organization management"],
     dependencies=[Depends(user_api_key_auth)],
 )
-async def deprecated_info_organization(data: OrganizationRequest):
+async def deprecated_info_organization(
+    data: OrganizationRequest,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
     """
     DEPRECATED: Use GET /organization/info instead
     """
@@ -831,6 +833,15 @@ async def deprecated_info_organization(data: OrganizationRequest):
                 "error": f"Specify list of organization id's to query. Passed in={data.organizations}"
             },
         )
+
+    # Verify caller has access to each requested organization
+    for org_id in data.organizations:
+        await _verify_org_access(
+            organization_id=org_id,
+            user_api_key_dict=user_api_key_dict,
+            prisma_client=prisma_client,
+        )
+
     response = await prisma_client.db.litellm_organizationtable.find_many(
         where={"organization_id": {"in": data.organizations}},
         include={"litellm_budget_table": True},

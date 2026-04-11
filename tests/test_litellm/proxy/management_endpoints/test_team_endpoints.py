@@ -37,11 +37,13 @@ from litellm.proxy.management_endpoints.team_endpoints import (
     _save_deleted_team_records,
     _transform_teams_to_deleted_records,
     _validate_and_populate_member_user_info,
+    _verify_team_access,
     delete_team,
     list_available_teams,
     router,
     team_member_add_duplication_check,
     team_member_delete,
+    update_team,
     validate_team_org_change,
 )
 from litellm.proxy.management_helpers.team_member_permission_checks import (
@@ -6876,3 +6878,94 @@ class TestBatchResolveAccessGroupResources:
         call_args = fake_find_many.call_args
         assert len(call_args.kwargs["where"]["access_group_id"]["in"]) == 1
         assert "ag-1" in result
+
+
+@pytest.mark.asyncio
+async def test_verify_team_access_denies_unauthorized_user():
+    """
+    Test that _verify_team_access raises 403 when the caller is not a proxy admin,
+    not a team admin, and not an org admin for the team's organization.
+    """
+    team_obj = LiteLLM_TeamTable(
+        team_id="team-123",
+        team_alias="test-team",
+        members_with_roles=[
+            Member(role="admin", user_id="other_admin_user"),
+        ],
+        organization_id="org-456",
+    )
+
+    # Caller is an internal user with no admin role and not in the team
+    caller = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="unauthorized_user",
+    )
+
+    with patch(
+        "litellm.proxy.management_endpoints.team_endpoints._is_user_org_admin_for_team",
+        new_callable=AsyncMock,
+        return_value=False,
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await _verify_team_access(
+                team_obj=team_obj,
+                user_api_key_dict=caller,
+            )
+        assert exc_info.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_update_team_rejects_unauthorized_caller():
+    """
+    Test that /team/update returns 403 when the caller is not a proxy admin,
+    not a team admin, and not an org admin — exercising the _verify_team_access
+    guard added to the update_team endpoint.
+    """
+    from unittest.mock import Mock
+
+    from fastapi import Request
+
+    mock_request = Mock(spec=Request)
+    caller = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="unauthorized_user",
+    )
+
+    from litellm.proxy._types import UpdateTeamRequest
+
+    with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma_client, patch(
+        "litellm.proxy.proxy_server.llm_router"
+    ), patch("litellm.proxy.proxy_server.user_api_key_cache"), patch(
+        "litellm.proxy.proxy_server.proxy_logging_obj"
+    ), patch(
+        "litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"
+    ), patch(
+        "litellm.proxy.management_endpoints.team_endpoints._is_user_org_admin_for_team",
+        new_callable=AsyncMock,
+        return_value=False,
+    ):
+        mock_existing_team = MagicMock()
+        mock_existing_team.model_dump.return_value = {
+            "team_id": "team-123",
+            "team_alias": "test-team",
+            "members_with_roles": [
+                {"role": "admin", "user_id": "other_admin_user"},
+            ],
+            "organization_id": "org-456",
+        }
+        mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(
+            return_value=mock_existing_team
+        )
+
+        update_request = UpdateTeamRequest(
+            team_id="team-123",
+            team_alias="updated-alias",
+        )
+
+        with pytest.raises(ProxyException) as exc_info:
+            await update_team(
+                data=update_request,
+                http_request=mock_request,
+                user_api_key_dict=caller,
+            )
+        assert exc_info.value.code == "403"
