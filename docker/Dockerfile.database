@@ -84,6 +84,11 @@ COPY --from=builder /wheels/ /wheels/
 # Install the built wheel using pip; again using a wildcard if it's the only file
 RUN pip install *.whl /wheels/* --no-index --find-links=/wheels/ --no-deps && rm -f *.whl && rm -rf /wheels
 
+# Copy local litellm-proxy-extras migrations into installed package
+# (PyPI version 0.4.65 may lag behind migrations needed for new schema columns)
+RUN SITE_PACKAGES=$(python3 -c "import site; print(site.getsitepackages()[0])") && \
+    cp -r /app/litellm-proxy-extras/litellm_proxy_extras/migrations/ "$SITE_PACKAGES/litellm_proxy_extras/migrations/"
+
 # SECURITY FIX: nodejs-wheel-binaries (pip package used by Prisma) bundles a complete
 # npm with old vulnerable deps at /usr/lib/python3.*/site-packages/nodejs_wheel/.
 # Patch every copy of tar, glob, and brace-expansion inside that tree.
