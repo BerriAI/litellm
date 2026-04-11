@@ -277,13 +277,18 @@ function CreateKeyPageContent() {
     // Check for a stored return URL
     const returnUrl = consumeReturnUrl();
     if (returnUrl && isValidReturnUrl(returnUrl)) {
+      // Inline origin check: only redirect to same-origin URLs to prevent open redirect.
+      const safeUrl = new URL(returnUrl, window.location.origin);
+      if (safeUrl.origin !== window.location.origin) {
+        return;
+      }
       const currentUrl = window.location.href;
       const normalizedReturnUrl = normalizeUrlForCompare(returnUrl);
       const normalizedCurrentUrl = normalizeUrlForCompare(currentUrl);
       // Only redirect if the return URL is different from the current URL
       // This prevents infinite redirect loops
       if (normalizedReturnUrl !== normalizedCurrentUrl) {
-        window.location.replace(returnUrl);
+        window.location.replace(safeUrl.href);
       }
     }
   }, [authLoading, token]);

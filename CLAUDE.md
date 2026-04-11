@@ -20,6 +20,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - `make format` - Apply Black code formatting
 - `make lint-ruff` - Run Ruff linting only
 - `make lint-mypy` - Run MyPy type checking only
+- **Before committing, always run `poetry run black .` to format your code.** Black formatting is enforced in CI.
 
 ### Single Test Files
 - `poetry run pytest tests/path/to/test_file.py -v` - Run specific test file

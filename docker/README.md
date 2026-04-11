@@ -13,19 +13,19 @@ To build and run the application, you will use the `docker-compose.yml` file loc
 
 ### 1. Set the Master Key
 
-The application requires a `MASTER_KEY` for signing and validating tokens. You must set this key as an environment variable before running the application.
+The application requires a `LITELLM_MASTER_KEY` for signing and validating tokens. You must set this key as an environment variable before running the application.
 
 Create a `.env` file in the root of the project and add the following line:
 
 ```
-MASTER_KEY=your-secret-key
+LITELLM_MASTER_KEY=your-secret-key
 ```
 
 Replace `your-secret-key` with a strong, randomly generated secret.
 
 ### 2. Build and Run the Containers
 
-Once you have set the `MASTER_KEY`, you can build and run the containers using the following command:
+Once you have set the `LITELLM_MASTER_KEY`, you can build and run the containers using the following command:
 
 ```bash
 docker compose up -d --build
@@ -89,4 +89,4 @@ This command should succeed (showing engine versions) even with `--network none`
 ## Troubleshooting
 
 -   **`build_admin_ui.sh: not found`**: This error can occur if the Docker build context is not set correctly. Ensure that you are running the `docker-compose` command from the root of the project.
--   **`Master key is not initialized`**: This error means the `MASTER_key` environment variable is not set. Make sure you have created a `.env` file in the project root with the `MASTER_KEY` defined.
+-   **`Master key is not initialized`**: This error means the `LITELLM_MASTER_KEY` environment variable is not set. Make sure you have created a `.env` file in the project root with the `LITELLM_MASTER_KEY` defined.
