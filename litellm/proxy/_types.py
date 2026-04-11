@@ -4157,6 +4157,25 @@ class JWTRoutingOverride(BaseModel):
     }
 
 
+class UnregisteredJWTClientBehavior(str, enum.Enum):
+    """
+    Controls what happens when `virtual_key_claim_field` is configured but the
+    JWT claim value has no registered mapping in `litellm_jwtkeymapping`.
+
+    - fallback_team_mapping: Fall through to standard team-based JWT auth (default,
+      backward-compatible).
+    - reject: Immediately return HTTP 403. Use this when every valid JWT client
+      must have a pre-registered virtual key — unknown callers are denied.
+    - auto_register: Automatically create a new virtual key and mapping on first
+      encounter. The new key has no budget/model restrictions; admins can tighten
+      it later via /jwt_client/update.
+    """
+
+    FALLBACK_TEAM_MAPPING = "fallback_team_mapping"
+    REJECT = "reject"
+    AUTO_REGISTER = "auto_register"
+
+
 class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
     """
     A class to define the roles and permissions for a LiteLLM Proxy w/ JWT Auth.
@@ -4257,6 +4276,15 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
         default=300,
         description="TTL (seconds) for caching JWT-to-virtual-key mapping lookups.",
     )
+    unregistered_jwt_client_behavior: UnregisteredJWTClientBehavior = Field(
+        default=UnregisteredJWTClientBehavior.FALLBACK_TEAM_MAPPING,
+        description=(
+            "What to do when virtual_key_claim_field is set but the JWT claim value "
+            "has no registered mapping. 'fallback_team_mapping' (default): fall through "
+            "to team-based JWT auth. 'reject': return HTTP 403. "
+            "'auto_register': auto-create a virtual key and mapping on first encounter."
+        ),
+    )
     routing_overrides: Optional[List[JWTRoutingOverride]] = Field(
         default=None,
         description="Optional claim-based routing overrides for JWT-shaped tokens. Matching rules route requests to oauth2 before default JWT flow.",
@@ -4264,6 +4292,13 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
     #########################################################
 
     def __init__(self, **kwargs: Any) -> None:
+        # Backward-compat: jwt_client_id_field was renamed to virtual_key_claim_field
+        if "jwt_client_id_field" in kwargs:
+            if "virtual_key_claim_field" not in kwargs:
+                kwargs["virtual_key_claim_field"] = kwargs.pop("jwt_client_id_field")
+            else:
+                kwargs.pop("jwt_client_id_field")
+
         # get the attribute names for this Pydantic model
         allowed_keys = LiteLLM_JWTAuth.__annotations__.keys()
 
