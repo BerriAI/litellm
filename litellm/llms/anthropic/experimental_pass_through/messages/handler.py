@@ -187,11 +187,9 @@ async def anthropic_messages(
     """
     Async: Make llm api request in Anthropic /messages API spec
     """
-    # Save original stream flag before pre-request hooks can convert it.
-    # The websearch interception hook converts stream=True → stream=False
-    # for the agentic loop, but the short-circuit path needs to know
-    # whether the caller originally requested streaming.
-    original_stream = stream
+    original_stream = stream or kwargs.get(
+        "_websearch_interception_converted_stream", False
+    )
 
     # Execute pre-request hooks to allow CustomLoggers to modify request
     request_kwargs = await _execute_pre_request_hooks(
