@@ -63,7 +63,8 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
     isLoading: isProviderMetadataLoading,
     error: providerMetadataError,
   } = useProviderFields();
-  const { data: guardrailsList, isLoading: isGuardrailsLoading, error: guardrailsError } = useGuardrails();
+  const { data: guardrailsData, isLoading: isGuardrailsLoading, error: guardrailsError } = useGuardrails();
+  const guardrailsList = guardrailsData?.guardrails.map((g) => g.guardrail_name);
   const { data: tagsList, isLoading: isTagsLoading, error: tagsError } = useTags();
 
   const handleTestConnection = async () => {

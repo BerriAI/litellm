@@ -74,7 +74,7 @@ describe("useGuardrails", () => {
       expect(result.current.isSuccess).toBe(true);
     });
 
-    expect(result.current.data).toEqual(expectedGuardrailNames);
+    expect(result.current.data?.guardrails.map((g) => g.guardrail_name)).toEqual(expectedGuardrailNames);
     expect(result.current.error).toBeNull();
     expect(getGuardrailsList).toHaveBeenCalledWith("test-access-token");
     expect(getGuardrailsList).toHaveBeenCalledTimes(1);
@@ -228,7 +228,7 @@ describe("useGuardrails", () => {
       expect(result.current.isSuccess).toBe(true);
     });
 
-    expect(result.current.data).toEqual([]);
+    expect(result.current.data?.guardrails).toEqual([]);
     expect(getGuardrailsList).toHaveBeenCalledWith("test-access-token");
   });
 
@@ -265,9 +265,10 @@ describe("useGuardrails", () => {
       expect(result.current.isSuccess).toBe(true);
     });
 
-    expect(result.current.data).toEqual(expectedNames);
-    expect(result.current.data).toHaveLength(2);
-    expect(result.current.data).toContain("custom-guardrail-1");
-    expect(result.current.data).toContain("custom-guardrail-2");
+    const names = result.current.data?.guardrails.map((g) => g.guardrail_name);
+    expect(names).toEqual(expectedNames);
+    expect(names).toHaveLength(2);
+    expect(names).toContain("custom-guardrail-1");
+    expect(names).toContain("custom-guardrail-2");
   });
 });
