@@ -202,12 +202,17 @@ const AttachmentTable: React.FC<AttachmentTableProps> = ({
             <ImpactPopover attachment={attachment} accessToken={accessToken} />
             {isAdmin && (
               <Tooltip title="Delete attachment">
-                <Icon
-                  icon={TrashIcon}
-                  size="sm"
-                  onClick={() => onDeleteClick(attachment.attachment_id)}
-                  className="cursor-pointer hover:text-red-500"
-                />
+                <button
+                  type="button"
+                  aria-label="Delete attachment"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onDeleteClick(attachment.attachment_id);
+                  }}
+                  className="inline-flex items-center justify-center p-0 border-0 bg-transparent text-inherit cursor-pointer hover:text-red-500"
+                >
+                  <Icon icon={TrashIcon} size="sm" />
+                </button>
               </Tooltip>
             )}
           </div>
