@@ -565,9 +565,9 @@ class ResetBudgetJob:
         reset_at_str = window.get("reset_at")
         if not reset_at_str:
             return False
-        reset_at = datetime.fromisoformat(
-            reset_at_str.replace("Z", "+00:00")
-        ).replace(tzinfo=None)
+        reset_at = datetime.fromisoformat(reset_at_str.replace("Z", "+00:00")).replace(
+            tzinfo=None
+        )
         if reset_at > now:
             return False
         spend_counter_cache.in_memory_cache.set_cache(key=counter_key, value=0.0)
@@ -591,6 +591,8 @@ class ResetBudgetJob:
         reset_at <= now. Only the expired windows are reset; other windows are untouched.
         """
 
+        from litellm.proxy.proxy_server import spend_counter_cache
+
         now = datetime.utcnow()
 
         # --- Keys ---
@@ -605,9 +607,11 @@ class ResetBudgetJob:
                 windows: list = raw if isinstance(raw, list) else json.loads(raw)
                 changed = False
                 for window in windows:
-                    counter_key = f"spend:key:{key.token}:window:{window['budget_duration']}"
+                    counter_key = (
+                        f"spend:key:{key.token}:window:{window['budget_duration']}"
+                    )
                     if await ResetBudgetJob._reset_expired_window(
-                        window, counter_key, ProxyLogging.spend_counter_cache, now
+                        window, counter_key, spend_counter_cache, now
                     ):
                         changed = True
                 if changed:
@@ -632,7 +636,9 @@ class ResetBudgetJob:
                 windows = raw if isinstance(raw, list) else json.loads(raw)
                 changed = False
                 for window in windows:
-                    counter_key = f"spend:team:{team.team_id}:window:{window['budget_duration']}"
+                    counter_key = (
+                        f"spend:team:{team.team_id}:window:{window['budget_duration']}"
+                    )
                     if await ResetBudgetJob._reset_expired_window(
                         window, counter_key, spend_counter_cache, now
                     ):
