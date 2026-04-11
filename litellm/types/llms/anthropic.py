@@ -126,7 +126,7 @@ class AnthropicToolSearchToolBM25(TypedDict, total=False):
     input_examples: Optional[List[Dict[str, Any]]]
 
 
-ANTHROPIC_ADVISOR_TOOL_TYPE = "advisor_20260301"
+ANTHROPIC_ADVISOR_TOOL_TYPE: Literal["advisor_20260301"] = "advisor_20260301"
 
 
 class AnthropicAdvisorTool(TypedDict, total=False):
