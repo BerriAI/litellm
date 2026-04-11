@@ -61,18 +61,29 @@ def _build_url(
 ) -> str:
     """Build the full URL by substituting path parameters.
 
-    The api_base from get_complete_url already includes /containers,
-    so we need to strip that prefix from the path_template.
+    The api_base from get_complete_url already includes /containers and may include
+    query parameters. We need to parse the URL, append the path, then preserve the
+    query parameters.
     """
     # api_base ends with /containers, path_template starts with /containers
     # So we need to strip /containers from the path
     if path_template.startswith("/containers"):
         path_template = path_template[len("/containers") :]
 
-    url = f"{api_base.rstrip('/')}{path_template}"
+    # Substitute path parameters
     for param, value in path_params.items():
-        url = url.replace(f"{{{param}}}", value)
-    return url
+        path_template = path_template.replace(f"{{{param}}}", value)
+
+    # Parse the api_base to extract existing query params
+    parsed_base = httpx.URL(api_base)
+    
+    # Append the path to the existing path (before query params)
+    new_path = f"{parsed_base.path.rstrip('/')}{path_template}"
+    
+    # Rebuild URL with new path, preserving query params
+    final_url = parsed_base.copy_with(path=new_path)
+    
+    return str(final_url)
 
 
 def _build_query_params(
