@@ -13,10 +13,10 @@ from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import *
 from litellm.proxy._types import ProviderBudgetResponse, ProviderBudgetResponseObject
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.management_endpoints.common_utils import (
-    _is_user_team_admin,
-    _user_has_admin_view,
-)
+
+# NOTE: Avoid module-level import from common_utils: proxy_server imports this
+# module while common_utils may pull proxy_server during init, which can leave
+# those names undefined. Import the helpers locally where they are used.
 from litellm.proxy.spend_tracking.spend_tracking_utils import (
     get_spend_by_team_and_customer,
 )
@@ -1912,6 +1912,7 @@ async def ui_view_spend_logs(  # noqa: PLR0915
             if max_spend is not None:
                 where_conditions["spend"]["lte"] = max_spend
         is_admin_view = _is_admin_view_safe(user_api_key_dict=user_api_key_dict)
+        permitted_team_ids: Optional[List[str]] = None
         if not is_admin_view:
             if team_id is not None:
                 can_view_team = await _can_team_member_view_log(
@@ -1929,9 +1930,26 @@ async def ui_view_spend_logs(  # noqa: PLR0915
                         },
                     )
                 where_conditions["team_id"] = team_id
+                where_conditions.pop("user", None)
             else:
                 if _can_user_view_spend_log(user_api_key_dict=user_api_key_dict):
-                    where_conditions["user"] = user_api_key_dict.user_id
+                    try:
+                        permitted_team_ids = (
+                            await _get_permitted_team_ids_for_spend_logs(
+                                prisma_client=prisma_client,
+                                user_api_key_dict=user_api_key_dict,
+                            )
+                        )
+                    except Exception:
+                        permitted_team_ids = []
+                    if permitted_team_ids:
+                        where_conditions.pop("user", None)
+                        where_conditions["OR"] = [
+                            {"user": user_api_key_dict.user_id},
+                            {"team_id": {"in": permitted_team_ids}},
+                        ]
+                    else:
+                        where_conditions["user"] = user_api_key_dict.user_id
                     where_conditions.pop("team_id", None)
         # Calculate skip value for pagination
         skip = (page - 1) * page_size
@@ -1981,6 +1999,14 @@ async def ui_view_spend_logs(  # noqa: PLR0915
                 sql_conditions.append(f"{sql_col} = ${p}")
                 sql_params.append(val)
                 p += 1
+
+        # Multi-team OR filter: (user = $X OR team_id = ANY($Y))
+        if permitted_team_ids is not None and len(permitted_team_ids) > 0:
+            or_clause = f'("user" = ${p} OR team_id = ANY(${p + 1}::text[]))'
+            sql_params.append(user_api_key_dict.user_id)
+            sql_params.append(permitted_team_ids)
+            p += 2
+            sql_conditions.append(or_clause)
 
         # Status filter
         if status_filter is not None:
@@ -2081,6 +2107,7 @@ async def ui_view_request_response_for_request_id(
         default=None,
         description="Time till which to view key spend",
     ),
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
     View request / response for a specific request_id
@@ -2088,6 +2115,25 @@ async def ui_view_request_response_for_request_id(
     - goes through all callbacks, checks if any of them have a @property -> has_request_response_payload
     - if so, it will return the request and response payload
     """
+    from litellm.proxy.proxy_server import prisma_client
+
+    if not _is_admin_view_safe(user_api_key_dict=user_api_key_dict):
+        if prisma_client is None:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={
+                    "error": (
+                        "Cannot authorize spend log access without a database "
+                        "connection. Connect a database or use a proxy admin key."
+                    )
+                },
+            )
+        await _assert_user_can_view_request_id(
+            prisma_client=prisma_client,
+            user_api_key_dict=user_api_key_dict,
+            request_id=request_id,
+        )
+
     custom_loggers = (
         litellm.logging_callback_manager.get_active_additional_logging_utils_from_custom_logger()
     )
@@ -2116,8 +2162,6 @@ async def ui_view_request_response_for_request_id(
     # response, and proxy_server_request for performance. When no custom
     # logger (S3, GCS, etc.) is configured, we still need to serve these
     # fields from the DB for the detail/drawer view.
-    from litellm.proxy.proxy_server import prisma_client
-
     if prisma_client is not None:
         sql_query = """
             SELECT messages, response, proxy_server_request
@@ -3452,10 +3496,16 @@ def _build_status_filter_condition(status_filter: Optional[str]) -> Dict[str, An
 def _is_admin_view_safe(user_api_key_dict: UserAPIKeyAuth) -> bool:
     """
     Safely determine if the current user has admin view permissions.
-    Wraps the underlying check and defaults to False on any exception.
+    Defaults to False on any exception.
     """
     try:
-        return _user_has_admin_view(user_api_key_dict=user_api_key_dict)
+        user_role = getattr(user_api_key_dict, "user_role", None)
+        if user_role is None:
+            return False
+        return user_role in (
+            LitellmUserRoles.PROXY_ADMIN,
+            LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
+        )
     except Exception:
         return False
 
@@ -3467,16 +3517,29 @@ async def _can_team_member_view_log(
 ) -> bool:
     """
     Check if the requesting user can view spend logs for the given team.
-    Returns True only if the team exists and the user is a team admin.
+    Returns True if the team exists and the user is either a team admin or
+    a team member with the ``/spend/logs`` permission.
     """
+    from litellm.proxy.management_endpoints.common_utils import (
+        _is_user_team_admin,
+        _team_member_has_permission,
+    )
+
     if team_id is None:
         return False
-    team_obj = await prisma_client.db.litellm_teamtable.find_unique(
+    team_row = await prisma_client.db.litellm_teamtable.find_unique(
         where={"team_id": team_id}
     )
-    if team_obj is None:
+    if team_row is None:
         return False
-    return _is_user_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team_obj)
+    team_obj = LiteLLM_TeamTable(**team_row.model_dump())
+    if _is_user_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team_obj):
+        return True
+    return _team_member_has_permission(
+        user_api_key_dict=user_api_key_dict,
+        team_obj=team_obj,
+        permission=KeyManagementRoutes.SPEND_LOGS.value,
+    )
 
 
 def _can_user_view_spend_log(user_api_key_dict: UserAPIKeyAuth) -> bool:
@@ -3493,3 +3556,87 @@ def _can_user_view_spend_log(user_api_key_dict: UserAPIKeyAuth) -> bool:
         )
         and user_id is not None
     )
+
+
+async def _assert_user_can_view_request_id(
+    prisma_client,
+    user_api_key_dict: UserAPIKeyAuth,
+    request_id: str,
+) -> None:
+    """
+    Verify the requesting non-admin user is allowed to view this spend-log row.
+    Allowed when the log belongs to the user directly, or to one of their
+    permitted teams (admin or ``/spend/logs`` permission).
+    Raises HTTP 403 if not.
+    """
+    row = await prisma_client.db.litellm_spendlogs.find_unique(
+        where={"request_id": request_id},
+        include=None,
+    )
+    if row is None:
+        return
+
+    if row.user is not None and row.user == user_api_key_dict.user_id:
+        return
+
+    if row.team_id:
+        can_view = await _can_team_member_view_log(
+            prisma_client=prisma_client,
+            user_api_key_dict=user_api_key_dict,
+            team_id=row.team_id,
+        )
+        if can_view:
+            return
+
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail={
+            "error": "Not authorized to view spend log for request_id={}".format(
+                request_id
+            )
+        },
+    )
+
+
+async def _get_permitted_team_ids_for_spend_logs(
+    prisma_client,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> List[str]:
+    """
+    Return team IDs where the user is either a team admin or has the
+    ``/spend/logs`` permission, allowing them to view team-wide spend logs.
+    """
+    # Imported here to avoid circular import: proxy_server imports this module.
+    from litellm.proxy.auth.auth_checks import get_user_object
+    from litellm.proxy.management_endpoints.common_utils import (
+        _is_user_team_admin,
+        _team_member_has_permission,
+    )
+    from litellm.proxy.proxy_server import proxy_logging_obj, user_api_key_cache
+
+    user_obj = await get_user_object(
+        user_id=user_api_key_dict.user_id,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        user_id_upsert=False,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+    if user_obj is None or not user_obj.teams:
+        return []
+
+    team_rows = await prisma_client.db.litellm_teamtable.find_many(
+        where={"team_id": {"in": user_obj.teams}}
+    )
+
+    permitted: List[str] = []
+    for team_row in team_rows:
+        team_obj = LiteLLM_TeamTable(**team_row.model_dump())
+        if _is_user_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team_obj):
+            permitted.append(team_obj.team_id)
+        elif _team_member_has_permission(
+            user_api_key_dict=user_api_key_dict,
+            team_obj=team_obj,
+            permission=KeyManagementRoutes.SPEND_LOGS.value,
+        ):
+            permitted.append(team_obj.team_id)
+    return permitted
