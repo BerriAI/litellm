@@ -1,9 +1,10 @@
-from typing import TYPE_CHECKING, Any, AsyncIterator, Dict, Optional, cast
+from typing import TYPE_CHECKING, Any, AsyncIterator, Dict, Optional, Tuple, cast
 
 from fastapi.responses import StreamingResponse
 
 import litellm
-from litellm.files.types import FileContentStreamingResult
+from litellm.files.types import FileContentProvider, FileContentStreamingResult
+from litellm.types.utils import OPENAI_COMPATIBLE_BATCH_AND_FILES_PROVIDERS
 
 if TYPE_CHECKING:
     from litellm.proxy._types import UserAPIKeyAuth
@@ -12,14 +13,60 @@ if TYPE_CHECKING:
 
 class FileContentStreamingHandler:
     @staticmethod
+    def resolve_streaming_request_params(
+        *,
+        custom_llm_provider: str,
+        file_id: str,
+        data: Dict[str, Any],
+        should_route: bool,
+        original_file_id: Optional[str],
+        credentials: Optional[Dict[str, Any]],
+    ) -> Tuple[str, str, Dict[str, Any]]:
+        """
+        Resolve the provider, file ID, and request payload to use for streaming.
+
+        For model-routed requests, this derives the effective provider from
+        credentials, applies `prepare_data_with_credentials()` to a copied
+        payload, swaps in the decoded/original file ID, and removes `model`
+        so `afile_content()` does not re-resolve the provider. This helper
+        does not mutate the passed-in `data` dictionary. Non-routed requests
+        return the original provider, file ID, and data unchanged.
+        """
+        if should_route and credentials is not None:
+            from litellm.proxy.openai_files_endpoints.common_utils import (
+                prepare_data_with_credentials,
+            )
+
+            resolved_streaming_data = dict(data)
+            prepare_data_with_credentials(
+                data=resolved_streaming_data,
+                credentials=credentials,
+                file_id=original_file_id,
+            )
+            resolved_streaming_data.pop("model", None)
+            resolved_streaming_provider = cast(
+                str, credentials["custom_llm_provider"]
+            )
+            resolved_custom_llm_provider = resolved_streaming_provider
+            resolved_file_id = cast(str, resolved_streaming_data["file_id"])
+        else:
+            resolved_streaming_data = data
+            resolved_custom_llm_provider = custom_llm_provider
+            resolved_file_id = file_id
+
+        return (
+            resolved_custom_llm_provider,
+            resolved_file_id,
+            resolved_streaming_data,
+        )
+
+    @staticmethod
     def should_stream_file_content(
         *,
         custom_llm_provider: str,
-        is_base64_unified_file_id: Any,
     ) -> bool:
         return (
-            custom_llm_provider == "openai"
-            and bool(is_base64_unified_file_id) is False
+            custom_llm_provider in OPENAI_COMPATIBLE_BATCH_AND_FILES_PROVIDERS
         )
 
     @staticmethod
@@ -52,9 +99,6 @@ class FileContentStreamingHandler:
         custom_llm_provider: str,
         file_id: str,
         data: Dict[str, Any],
-        should_route: bool,
-        original_file_id: Optional[str],
-        credentials: Optional[Dict[str, Any]],
         proxy_logging_obj: "ProxyLogging",
         user_api_key_dict: "UserAPIKeyAuth",
         version: str,
@@ -62,28 +106,13 @@ class FileContentStreamingHandler:
         from litellm.proxy.common_request_processing import (
             ProxyBaseLLMRequestProcessing,
         )
-        from litellm.proxy.openai_files_endpoints.common_utils import (
-            prepare_data_with_credentials,
-        )
-
-        effective_custom_llm_provider = custom_llm_provider
-        if should_route:
-            if credentials is None or credentials.get("custom_llm_provider") is None:
-                raise ValueError(
-                    "Model-based file routing requires credentials with custom_llm_provider"
-                )
-            prepare_data_with_credentials(
-                data=data,
-                credentials=credentials,
-                file_id=original_file_id,
-            )
-            effective_custom_llm_provider = cast(str, credentials["custom_llm_provider"])
-
         stream_result = cast(
             FileContentStreamingResult,
             await litellm.afile_content(
                 **{
-                    "custom_llm_provider": effective_custom_llm_provider,
+                    "custom_llm_provider": cast(
+                        FileContentProvider, custom_llm_provider
+                    ),
                     "file_id": file_id,
                     "stream": True,
                     **data,
