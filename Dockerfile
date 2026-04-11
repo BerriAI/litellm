@@ -24,6 +24,19 @@ COPY . .
 # Convert Windows line endings to Unix and make executable
 RUN sed -i 's/\r$//' docker/build_admin_ui.sh && chmod +x docker/build_admin_ui.sh && ./docker/build_admin_ui.sh
 
+# Pre-restructure UI: move root-level {page}.html → {page}/index.html so
+# Starlette StaticFiles can serve extensionless routes (e.g. /ui/chat).
+# Must run before building the wheel since the out/ dir is included in the package.
+RUN cd litellm/proxy/_experimental/out && \
+    for html_file in *.html; do \
+      if [ "$html_file" != "index.html" ] && [ "$html_file" != "404.html" ] && [ -f "$html_file" ]; then \
+        folder_name="${html_file%.html}" && \
+        mkdir -p "$folder_name" && \
+        mv "$html_file" "$folder_name/index.html"; \
+      fi; \
+    done && \
+    touch .litellm_ui_ready
+
 # Build the package
 RUN rm -rf dist/* && python -m build
 
