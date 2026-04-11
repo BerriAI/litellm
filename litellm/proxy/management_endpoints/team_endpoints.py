@@ -989,7 +989,7 @@ async def new_team(  # noqa: PLR0915
                     budget_duration=w["budget_duration"]
                 ).isoformat()
                 initialized_windows.append(w)
-            complete_team_data.budget_limits = initialized_windows
+            complete_team_data.budget_limits = initialized_windows  # type: ignore[assignment]
 
         ## Add Team Member Budget Table
         members_with_roles: List[Member] = []
@@ -1558,12 +1558,12 @@ async def update_team(  # noqa: PLR0915
             updated_kv["router_settings"] = safe_dumps(updated_kv["router_settings"])
 
         updated_kv = prisma_client.jsonify_team_object(db_data=updated_kv)
-        team_row: Optional[LiteLLM_TeamTable] = (
-            await prisma_client.db.litellm_teamtable.update(
-                where={"team_id": data.team_id},
-                data=updated_kv,
-                include={"litellm_model_table": True},  # type: ignore
-            )
+        team_row: Optional[
+            LiteLLM_TeamTable
+        ] = await prisma_client.db.litellm_teamtable.update(
+            where={"team_id": data.team_id},
+            data=updated_kv,
+            include={"litellm_model_table": True},  # type: ignore
         )
 
         if team_row is None or team_row.team_id is None:
@@ -2329,13 +2329,13 @@ async def team_member_delete(
         )
 
         # Fetch keys before deletion to persist them
-        keys_to_delete: List[LiteLLM_VerificationToken] = (
-            await prisma_client.db.litellm_verificationtoken.find_many(
-                where={
-                    "user_id": {"in": list(user_ids_to_delete)},
-                    "team_id": data.team_id,
-                }
-            )
+        keys_to_delete: List[
+            LiteLLM_VerificationToken
+        ] = await prisma_client.db.litellm_verificationtoken.find_many(
+            where={
+                "user_id": {"in": list(user_ids_to_delete)},
+                "team_id": data.team_id,
+            }
         )
 
         if keys_to_delete:
@@ -2721,10 +2721,10 @@ async def delete_team(
     team_rows: List[LiteLLM_TeamTable] = []
     for team_id in data.team_ids:
         try:
-            team_row_base: Optional[BaseModel] = (
-                await prisma_client.db.litellm_teamtable.find_unique(
-                    where={"team_id": team_id}
-                )
+            team_row_base: Optional[
+                BaseModel
+            ] = await prisma_client.db.litellm_teamtable.find_unique(
+                where={"team_id": team_id}
             )
             if team_row_base is None:
                 raise Exception
@@ -2783,10 +2783,10 @@ async def delete_team(
         _persist_deleted_verification_tokens,
     )
 
-    keys_to_delete: List[LiteLLM_VerificationToken] = (
-        await prisma_client.db.litellm_verificationtoken.find_many(
-            where={"team_id": {"in": data.team_ids}}
-        )
+    keys_to_delete: List[
+        LiteLLM_VerificationToken
+    ] = await prisma_client.db.litellm_verificationtoken.find_many(
+        where={"team_id": {"in": data.team_ids}}
     )
 
     if keys_to_delete:
@@ -2971,9 +2971,7 @@ async def _resolve_team_access_group_resources(_team_info: Any) -> None:
     info response by resolving inherited resources from its access groups."""
     if not _team_info.access_group_ids:
         return
-    ag_lookup = await _batch_resolve_access_group_resources(
-        _team_info.access_group_ids
-    )
+    ag_lookup = await _batch_resolve_access_group_resources(_team_info.access_group_ids)
     models, mcp_ids, agent_ids = set(), set(), set()
     for ag_id in _team_info.access_group_ids:
         if ag_id in ag_lookup:
@@ -3025,11 +3023,11 @@ async def team_info(
             )
 
         try:
-            team_info: Optional[BaseModel] = (
-                await prisma_client.db.litellm_teamtable.find_unique(
-                    where={"team_id": team_id},
-                    include={"object_permission": True},
-                )
+            team_info: Optional[
+                BaseModel
+            ] = await prisma_client.db.litellm_teamtable.find_unique(
+                where={"team_id": team_id},
+                include={"object_permission": True},
             )
             if team_info is None:
                 raise Exception
@@ -3481,9 +3479,7 @@ async def _enforce_list_team_v2_access(
         if organization_id and organization_id not in org_admin_org_ids:
             raise HTTPException(
                 status_code=403,
-                detail={
-                    "error": "You can only view teams within your organizations."
-                },
+                detail={"error": "You can only view teams within your organizations."},
             )
         verbose_proxy_logger.debug(
             "list_team_v2: org admin access for user=%s, org_ids=%s, user_id_filter=%s",
@@ -3674,8 +3670,7 @@ async def list_team_v2(
     # Resolve resources inherited from access groups (single batch query)
     if not use_deleted_table:
         team_items_with_ag = [
-            t for t in team_list
-            if isinstance(t, TeamListItem) and t.access_group_ids
+            t for t in team_list if isinstance(t, TeamListItem) and t.access_group_ids
         ]
         if team_items_with_ag:
             all_ag_ids = [
@@ -3686,7 +3681,7 @@ async def list_team_v2(
             ag_lookup = await _batch_resolve_access_group_resources(all_ag_ids)
             for team_item in team_items_with_ag:
                 models, mcp_ids, agent_ids = set(), set(), set()
-                for ag_id in (team_item.access_group_ids or []):
+                for ag_id in team_item.access_group_ids or []:
                     if ag_id in ag_lookup:
                         models.update(ag_lookup[ag_id]["models"])
                         mcp_ids.update(ag_lookup[ag_id]["mcp_server_ids"])
@@ -3869,7 +3864,9 @@ async def list_team(
         except Exception as e:
             team_exception = """Invalid team object for team_id: {}. team_object={}.
             Error: {}
-            """.format(team.team_id, team.model_dump(), str(e))
+            """.format(
+                team.team_id, team.model_dump(), str(e)
+            )
             verbose_proxy_logger.exception(team_exception)
             continue
     # Sort the responses by team_alias
