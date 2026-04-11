@@ -203,6 +203,7 @@ add_user_information_to_llm_headers: Optional[
     bool
 ] = None  # adds user_id, team_id, token hash (params from StandardLoggingMetadata) to request headers
 store_audit_logs = False  # Enterprise feature, allow users to see audit logs
+skip_system_message_in_guardrail: bool = False
 ### end of callbacks #############
 
 email: Optional[
