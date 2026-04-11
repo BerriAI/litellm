@@ -646,14 +646,15 @@ async def _resolve_jwt_to_virtual_key(
             proxy_logging_obj=proxy_logging_obj,
         )
 
-    if prisma_client is None:
-        return None
-
-    token_hash = await get_jwt_key_mapping_object(
-        jwt_claim_name=virtual_key_claim_field,
-        jwt_claim_value=str(claim_value),
-        prisma_client=prisma_client,
-    )
+    # Resolve the mapping from DB, or treat prisma_client=None as a definitive
+    # miss (no DB → no mapping can exist → apply no-match policy below).
+    token_hash: Optional[str] = None
+    if prisma_client is not None:
+        token_hash = await get_jwt_key_mapping_object(
+            jwt_claim_name=virtual_key_claim_field,
+            jwt_claim_value=str(claim_value),
+            prisma_client=prisma_client,
+        )
 
     if token_hash is not None:
         await user_api_key_cache.async_set_cache(
@@ -669,7 +670,7 @@ async def _resolve_jwt_to_virtual_key(
             proxy_logging_obj=proxy_logging_obj,
         )
 
-    # No mapping found — apply no-match policy
+    # No mapping found (DB miss or no DB) — apply no-match policy.
     behavior = jwt_handler.litellm_jwtauth.unregistered_jwt_client_behavior
 
     if behavior == UnregisteredJWTClientBehavior.REJECT:
@@ -686,6 +687,14 @@ async def _resolve_jwt_to_virtual_key(
         )
 
     if behavior == UnregisteredJWTClientBehavior.AUTO_REGISTER:
+        if prisma_client is None:
+            raise HTTPException(
+                status_code=500,
+                detail=(
+                    "JWT Key Mapping: AUTO_REGISTER requires a database connection. "
+                    "Configure a database or change unregistered_jwt_client_behavior."
+                ),
+            )
         return await _auto_register_jwt_mapping(
             virtual_key_claim_field=virtual_key_claim_field,
             claim_value=str(claim_value),

@@ -732,6 +732,95 @@ async def test_auto_register_race_condition_unique_conflict():
 
 
 # ──────────────────────────────────────────────
+# Tests: prisma_client=None does not bypass no-match policy
+# ──────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_reject_behavior_enforced_when_prisma_client_is_none():
+    """
+    When prisma_client is None and behavior is REJECT, a 403 must be raised —
+    not silently fallen through to team auth.
+    """
+    from litellm.proxy._types import UnregisteredJWTClientBehavior
+
+    jwt_handler = JWTHandler()
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(
+        virtual_key_claim_field="email",
+        unregistered_jwt_client_behavior=UnregisteredJWTClientBehavior.REJECT,
+    )
+    jwt_claims = {"email": "unknown@example.com"}
+
+    user_api_key_cache = DualCache()
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _resolve_jwt_to_virtual_key(
+            jwt_claims=jwt_claims,
+            jwt_handler=jwt_handler,
+            prisma_client=None,  # no DB
+            user_api_key_cache=user_api_key_cache,
+            parent_otel_span=None,
+            proxy_logging_obj=None,
+        )
+    assert exc_info.value.status_code == 403
+    assert "unknown@example.com" in exc_info.value.detail
+
+
+@pytest.mark.asyncio
+async def test_fallback_team_mapping_returns_none_when_prisma_client_is_none():
+    """
+    When prisma_client is None and behavior is FALLBACK_TEAM_MAPPING, the
+    function must return None (fall through to team auth) — not raise.
+    """
+    from litellm.proxy._types import UnregisteredJWTClientBehavior
+
+    jwt_handler = JWTHandler()
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(
+        virtual_key_claim_field="email",
+        unregistered_jwt_client_behavior=UnregisteredJWTClientBehavior.FALLBACK_TEAM_MAPPING,
+    )
+    jwt_claims = {"email": "anyone@example.com"}
+
+    result = await _resolve_jwt_to_virtual_key(
+        jwt_claims=jwt_claims,
+        jwt_handler=jwt_handler,
+        prisma_client=None,
+        user_api_key_cache=DualCache(),
+        parent_otel_span=None,
+        proxy_logging_obj=None,
+    )
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_auto_register_raises_500_when_prisma_client_is_none():
+    """
+    AUTO_REGISTER without a DB connection must raise HTTP 500 with a clear
+    message — it cannot create keys without a database.
+    """
+    from litellm.proxy._types import UnregisteredJWTClientBehavior
+
+    jwt_handler = JWTHandler()
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(
+        virtual_key_claim_field="sub",
+        unregistered_jwt_client_behavior=UnregisteredJWTClientBehavior.AUTO_REGISTER,
+    )
+    jwt_claims = {"sub": "new-user-42"}
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _resolve_jwt_to_virtual_key(
+            jwt_claims=jwt_claims,
+            jwt_handler=jwt_handler,
+            prisma_client=None,
+            user_api_key_cache=DualCache(),
+            parent_otel_span=None,
+            proxy_logging_obj=None,
+        )
+    assert exc_info.value.status_code == 500
+    assert "AUTO_REGISTER requires a database" in exc_info.value.detail
+
+
+# ──────────────────────────────────────────────
 # Tests: backward-compat alias jwt_client_id_field
 # ──────────────────────────────────────────────
 
