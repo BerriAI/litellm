@@ -987,11 +987,11 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 if mcp_servers:
                     optional_params["mcp_servers"] = mcp_servers
             elif param == "tool_choice" or param == "parallel_tool_calls":
-                _tool_choice: Optional[AnthropicMessagesToolChoice] = (
-                    self._map_tool_choice(
-                        tool_choice=non_default_params.get("tool_choice"),
-                        parallel_tool_use=non_default_params.get("parallel_tool_calls"),
-                    )
+                _tool_choice: Optional[
+                    AnthropicMessagesToolChoice
+                ] = self._map_tool_choice(
+                    tool_choice=non_default_params.get("tool_choice"),
+                    parallel_tool_use=non_default_params.get("parallel_tool_calls"),
                 )
 
                 if _tool_choice is not None:
@@ -1089,9 +1089,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                         self.map_openai_context_management_to_anthropic(value)
                     )
                     if anthropic_context_management is not None:
-                        optional_params["context_management"] = (
-                            anthropic_context_management
-                        )
+                        optional_params[
+                            "context_management"
+                        ] = anthropic_context_management
             elif param == "speed" and isinstance(value, str):
                 # Pass through Anthropic-specific speed parameter for fast mode
                 optional_params["speed"] = value
@@ -1165,9 +1165,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                         text=system_message_block["content"],
                     )
                     if "cache_control" in system_message_block:
-                        anthropic_system_message_content["cache_control"] = (
-                            system_message_block["cache_control"]
-                        )
+                        anthropic_system_message_content[
+                            "cache_control"
+                        ] = system_message_block["cache_control"]
                     anthropic_system_message_list.append(
                         anthropic_system_message_content
                     )
@@ -1191,9 +1191,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                             )
                         )
                         if "cache_control" in _content:
-                            anthropic_system_message_content["cache_control"] = (
-                                _content["cache_control"]
-                            )
+                            anthropic_system_message_content[
+                                "cache_control"
+                            ] = _content["cache_control"]
 
                         anthropic_system_message_list.append(
                             anthropic_system_message_content
@@ -1479,22 +1479,31 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             **optional_params,
         }
 
-        ## Handle output_config (Anthropic-specific parameter)
-        if "output_config" in optional_params:
-            output_config = optional_params.get("output_config")
-            if output_config and isinstance(output_config, dict):
-                effort = output_config.get("effort")
-                if effort and effort not in ["high", "medium", "low", "max"]:
-                    raise ValueError(
-                        f"Invalid effort value: {effort}. Must be one of: 'high', 'medium', 'low', 'max'"
-                    )
-                if effort == "max" and not self._is_opus_4_6_model(model):
-                    raise ValueError(
-                        f"effort='max' is only supported by Claude Opus 4.6. Got model: {model}"
-                    )
-                data["output_config"] = output_config
+        self._apply_output_config(
+            data=data, model=model, optional_params=optional_params
+        )
 
         return data
+
+    def _apply_output_config(
+        self, data: dict, model: str, optional_params: dict
+    ) -> None:
+        """Validate and apply output_config to the request data."""
+        if "output_config" not in optional_params:
+            return
+        output_config = optional_params.get("output_config")
+        if not output_config or not isinstance(output_config, dict):
+            return
+        effort = output_config.get("effort")
+        if effort and effort not in ["high", "medium", "low", "max"]:
+            raise ValueError(
+                f"Invalid effort value: {effort}. Must be one of: 'high', 'medium', 'low', 'max'"
+            )
+        if effort == "max" and not self._is_opus_4_6_model(model):
+            raise ValueError(
+                f"effort='max' is only supported by Claude Opus 4.6. Got model: {model}"
+            )
+        data["output_config"] = output_config
 
     def _transform_response_for_json_mode(
         self,
@@ -1516,7 +1525,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 )
         return _message
 
-    def extract_response_content(self, completion_response: dict) -> Tuple[
+    def extract_response_content(
+        self, completion_response: dict
+    ) -> Tuple[
         str,
         Optional[List[Any]],
         Optional[
@@ -1810,9 +1821,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             code_interpreter_results = self._build_code_interpreter_results(
                 tool_results, code_by_id, container_id
             )
-            provider_specific_fields["code_interpreter_results"] = (
-                code_interpreter_results
-            )
+            provider_specific_fields[
+                "code_interpreter_results"
+            ] = code_interpreter_results
 
         container = completion_response.get("container")
         if container is not None:
