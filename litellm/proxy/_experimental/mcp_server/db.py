@@ -84,6 +84,11 @@ def _prepare_mcp_server_data(
     # but be explicit to ensure a False value is always written to the DB).
     data_dict["is_byok"] = getattr(data, "is_byok", False)
 
+    # token_validation is a JSON dict — serialize it
+    token_validation = getattr(data, "token_validation", None)
+    if token_validation is not None:
+        data_dict["token_validation"] = safe_dumps(token_validation)
+
     return data_dict
 
 
@@ -190,12 +195,12 @@ async def get_mcp_server(
     """
     Returns the matching mcp server from the db iff exists
     """
-    mcp_server: Optional[
-        LiteLLM_MCPServerTable
-    ] = await prisma_client.db.litellm_mcpservertable.find_unique(
-        where={
-            "server_id": server_id,
-        }
+    mcp_server: Optional[LiteLLM_MCPServerTable] = (
+        await prisma_client.db.litellm_mcpservertable.find_unique(
+            where={
+                "server_id": server_id,
+            }
+        )
     )
     return mcp_server
 
@@ -206,12 +211,12 @@ async def get_mcp_servers(
     """
     Returns the matching mcp servers from the db with the server_ids
     """
-    _mcp_servers: List[
-        LiteLLM_MCPServerTable
-    ] = await prisma_client.db.litellm_mcpservertable.find_many(
-        where={
-            "server_id": {"in": server_ids},
-        }
+    _mcp_servers: List[LiteLLM_MCPServerTable] = (
+        await prisma_client.db.litellm_mcpservertable.find_many(
+            where={
+                "server_id": {"in": server_ids},
+            }
+        )
     )
     final_mcp_servers: List[LiteLLM_MCPServerTable] = []
     for _mcp_server in _mcp_servers:

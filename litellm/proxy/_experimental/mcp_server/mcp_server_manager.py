@@ -693,6 +693,13 @@ class MCPServerManager:
             aws_service_name=aws_creds.get("aws_service_name"),
             aws_role_name=aws_creds.get("aws_role_name"),
             aws_session_name=aws_creds.get("aws_session_name"),
+            # OAuth token validation rules persisted in the DB
+            token_validation=_deserialize_json_dict(
+                getattr(mcp_server, "token_validation", None)
+            ),
+            token_storage_ttl_seconds=getattr(
+                mcp_server, "token_storage_ttl_seconds", None
+            ),
         )
         return new_server
 

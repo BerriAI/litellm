@@ -113,6 +113,23 @@ def _prepare_request_data_and_content(
     return request_data, request_content
 
 
+def _is_connection_reset_error(e: Exception) -> bool:
+    error_text = getattr(e, "text", str(e))
+    error_response = getattr(e, "response", None)
+    if error_response and hasattr(error_response, "text"):
+        error_text = getattr(error_response, "text", error_text)
+
+    if isinstance(error_text, bytes):
+        error_text = error_text.decode("utf-8", errors="ignore")
+
+    normalized_error_text = str(error_text).lower()
+    return (
+        "errno 104" in normalized_error_text
+        or "connection reset by peer" in normalized_error_text
+        or "connection reset" in normalized_error_text
+    )
+
+
 # Cache for SSL contexts to avoid creating duplicate contexts with the same configuration
 # Key: tuple of (cafile, ssl_security_level, ssl_ecdh_curve)
 # Value: ssl.SSLContext
@@ -482,7 +499,14 @@ class AsyncHTTPHandler:
                     params=params,
                     headers=headers,
                     stream=stream,
+                    content=content,
                 )
+            except Exception as retry_error:
+                verbose_logger.debug(
+                    "httpx.ConnectError retry failed in AsyncHTTPHandler.post(): %s",
+                    str(retry_error),
+                )
+                raise
             finally:
                 await new_client.aclose()
         except httpx.TimeoutException as e:
@@ -512,6 +536,32 @@ class AsyncHTTPHandler:
 
             raise e
         except Exception as e:
+            if _is_connection_reset_error(e):
+                verbose_logger.debug(
+                    "Detected connection reset error in AsyncHTTPHandler.post(); retrying with a new client"
+                )
+                new_client = self.create_client(
+                    timeout=timeout, event_hooks=self.event_hooks
+                )
+                try:
+                    return await self.single_connection_post_request(
+                        url=url,
+                        client=new_client,
+                        data=data,
+                        json=json,
+                        params=params,
+                        headers=headers,
+                        stream=stream,
+                        content=content,
+                    )
+                except Exception as retry_error:
+                    verbose_logger.debug(
+                        "Connection reset retry failed in AsyncHTTPHandler.post(): %s",
+                        str(retry_error),
+                    )
+                    raise
+                finally:
+                    await new_client.aclose()
             raise e
 
     async def put(
@@ -886,9 +936,9 @@ class AsyncHTTPHandler:
         if AIOHTTP_CONNECTOR_LIMIT > 0:
             transport_connector_kwargs["limit"] = AIOHTTP_CONNECTOR_LIMIT
         if AIOHTTP_CONNECTOR_LIMIT_PER_HOST > 0:
-            transport_connector_kwargs[
-                "limit_per_host"
-            ] = AIOHTTP_CONNECTOR_LIMIT_PER_HOST
+            transport_connector_kwargs["limit_per_host"] = (
+                AIOHTTP_CONNECTOR_LIMIT_PER_HOST
+            )
 
         return LiteLLMAiohttpTransport(
             client=lambda: ClientSession(

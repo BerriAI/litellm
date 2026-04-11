@@ -1,8 +1,118 @@
-import React from "react";
+import React, { useState } from "react";
 import { Form, Input, InputNumber, Select, Tooltip } from "antd";
-import { InfoCircleOutlined } from "@ant-design/icons";
+import { InfoCircleOutlined, PlusOutlined, CloseOutlined } from "@ant-design/icons";
 import { Button, TextInput } from "@tremor/react";
 import { OAUTH_FLOW } from "./types";
+
+const CLAIM_PRESETS = [
+  { label: "Slack enterprise", field: "enterprise_id", placeholder: "e.g. E04XXXXXXX" },
+  { label: "Jira cloud", field: "cloud_id", placeholder: "e.g. abc-123" },
+  { label: "GitHub Enterprise", field: "enterprise", placeholder: "e.g. my-org" },
+];
+
+interface ClaimRow { field: string; value: string }
+
+interface TokenClaimsBuilderProps {
+  value?: string; // JSON string from antd Form
+  onChange?: (v: string) => void;
+}
+
+const TokenClaimsBuilder: React.FC<TokenClaimsBuilderProps> = ({ value, onChange }) => {
+  const parse = (v?: string): ClaimRow[] => {
+    if (!v || v.trim() === "") return [];
+    try {
+      const obj = JSON.parse(v);
+      return Object.entries(obj).map(([field, val]) => ({ field, value: String(val) }));
+    } catch {
+      return [];
+    }
+  };
+
+  const [rows, setRows] = useState<ClaimRow[]>(() => parse(value));
+
+  const emit = (next: ClaimRow[]) => {
+    setRows(next);
+    const nonempty = next.filter(r => r.field.trim() !== "");
+    if (nonempty.length === 0) { onChange?.(""); return; }
+    const obj: Record<string, string> = {};
+    nonempty.forEach(r => { obj[r.field.trim()] = r.value; });
+    onChange?.(JSON.stringify(obj));
+  };
+
+  const update = (i: number, key: keyof ClaimRow, val: string) =>
+    emit(rows.map((r, idx) => idx === i ? { ...r, [key]: val } : r));
+
+  const remove = (i: number) => emit(rows.filter((_, idx) => idx !== i));
+
+  const addPreset = (field: string) => {
+    if (rows.some(r => r.field === field)) return;
+    emit([...rows, { field, value: "" }]);
+  };
+
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap gap-2">
+        <span className="text-xs text-gray-400 self-center">Quick add:</span>
+        {CLAIM_PRESETS.map(p => (
+          <button
+            key={p.field}
+            type="button"
+            onClick={() => addPreset(p.field)}
+            disabled={rows.some(r => r.field === p.field)}
+            className="px-2 py-0.5 text-xs rounded-full border border-blue-300 text-blue-600 hover:bg-blue-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+          >
+            {p.label}
+          </button>
+        ))}
+      </div>
+
+      {rows.length > 0 && (
+        <div className="rounded-lg border border-gray-200 overflow-hidden">
+          <div className="grid grid-cols-[1fr_1fr_32px] bg-gray-50 border-b border-gray-200 px-3 py-1.5">
+            <span className="text-xs font-medium text-gray-500">Token field</span>
+            <span className="text-xs font-medium text-gray-500">Required value</span>
+            <span />
+          </div>
+          {rows.map((row, i) => {
+            const preset = CLAIM_PRESETS.find(p => p.field === row.field);
+            return (
+              <div key={i} className="grid grid-cols-[1fr_1fr_32px] items-center px-3 py-2 gap-2 border-b border-gray-100 last:border-b-0 hover:bg-gray-50">
+                <input
+                  className="w-full text-sm border border-gray-200 rounded px-2 py-1 focus:outline-none focus:border-blue-400"
+                  placeholder="e.g. enterprise_id"
+                  value={row.field}
+                  onChange={e => update(i, "field", e.target.value)}
+                />
+                <input
+                  className="w-full text-sm border border-gray-200 rounded px-2 py-1 focus:outline-none focus:border-blue-400"
+                  placeholder={preset?.placeholder ?? "required value"}
+                  value={row.value}
+                  onChange={e => update(i, "value", e.target.value)}
+                />
+                <button
+                  type="button"
+                  onClick={() => remove(i)}
+                  className="flex items-center justify-center w-6 h-6 rounded hover:bg-red-50 text-gray-400 hover:text-red-500 transition-colors"
+                >
+                  <CloseOutlined style={{ fontSize: 11 }} />
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      <button
+        type="button"
+        onClick={() => emit([...rows, { field: "", value: "" }])}
+        className="flex items-center gap-1 text-xs text-blue-600 hover:text-blue-800 transition-colors"
+      >
+        <PlusOutlined style={{ fontSize: 11 }} />
+        Add claim
+      </button>
+    </div>
+  );
+};
 
 interface OAuthFlowStatus {
   startOAuthFlow: () => void;
@@ -154,30 +264,13 @@ const OAuthFormFields: React.FC<OAuthFormFieldsProps> = ({
           <Form.Item
             label={
               <FieldLabel
-                label="Token Validation Rules (optional)"
-                tooltip='JSON object of key-value rules checked against the OAuth token response before storing. Supports dot-notation for nested fields (e.g. {"organization": "my-org", "team.id": "123"}). Tokens that fail validation are rejected with HTTP 403.'
+                label="Required Token Claims (optional)"
+                tooltip="Block personal accounts by requiring specific fields in the OAuth token response. For example, require enterprise_id to match your Slack workspace. Tokens that don't match are rejected with HTTP 403."
               />
             }
             name="token_validation_json"
-            rules={[
-              {
-                validator: (_: any, value: string) => {
-                  if (!value || value.trim() === "") return Promise.resolve();
-                  try {
-                    JSON.parse(value);
-                    return Promise.resolve();
-                  } catch {
-                    return Promise.reject(new Error("Must be valid JSON"));
-                  }
-                },
-              },
-            ]}
           >
-            <Input.TextArea
-              placeholder={'{\n  "organization": "my-org",\n  "team.id": "123"\n}'}
-              rows={4}
-              className="font-mono text-sm rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
-            />
+            <TokenClaimsBuilder />
           </Form.Item>
           <Form.Item
             label={
