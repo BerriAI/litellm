@@ -1432,6 +1432,8 @@ class NewUserRequest(GenerateRequestBase):
     def validate_password(cls, v: Optional[str]) -> Optional[str]:
         if v is not None and len(v) < 8:
             raise ValueError("password must be at least 8 characters")
+        if v is not None and len(v) > 128:
+            raise ValueError("password must be at most 128 characters")
         return v
 
 
