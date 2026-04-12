@@ -2297,7 +2297,10 @@ async def view_spend_logs(  # noqa: PLR0915
             }
 
             if api_key is not None and isinstance(api_key, str):
-                filter_query["api_key"] = api_key  # type: ignore
+                if api_key.startswith("sk-"):
+                    filter_query["api_key"] = prisma_client.hash_token(token=api_key)  # type: ignore
+                else:
+                    filter_query["api_key"] = api_key  # type: ignore
             if request_id is not None and isinstance(request_id, str):
                 filter_query["request_id"] = request_id  # type: ignore
             if user_id is not None and isinstance(user_id, str):
