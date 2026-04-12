@@ -40,15 +40,15 @@ from litellm.proxy.middleware.in_flight_requests_middleware import (
 #### Health ENDPOINTS ####
 
 
-def _reject_os_environ_references(params: dict) -> dict:
+def _reject_os_environ_references(params: dict) -> None:
     """
     Validate that the provided params do not contain any ``os.environ/``
     references. Values with that prefix are expected to come only from
     server-side configuration (already resolved before reaching here). If a
-    request-supplied value still carries the prefix, reject it.
+    request-supplied value still carries the prefix, raise ``HTTPException``.
     """
     if not isinstance(params, dict):
-        return params
+        return
 
     stack: list[object] = [params]
     seen: set[int] = {id(params)}
@@ -73,8 +73,6 @@ def _reject_os_environ_references(params: dict) -> dict:
             if isinstance(value, (dict, list)) and id(value) not in seen:
                 seen.add(id(value))
                 stack.append(value)
-
-    return params
 
 
 def get_callback_identifier(callback):
