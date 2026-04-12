@@ -5,7 +5,7 @@ import os
 import time
 import traceback
 from datetime import datetime, timedelta
-from typing import Any, Dict, Literal, Optional, Union, cast
+from typing import Any, Dict, Iterable, Literal, Optional, Union, cast
 
 import fastapi
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
@@ -56,13 +56,13 @@ def _reject_os_environ_references(params: dict) -> None:
     while stack:
         src = stack.pop()
         if isinstance(src, dict):
-            iterable = src.values()
+            values: Iterable[object] = src.values()
         elif isinstance(src, list):
-            iterable = src
+            values = src
         else:
             continue
 
-        for value in iterable:
+        for value in values:
             if isinstance(value, str) and value.startswith("os.environ/"):
                 raise HTTPException(
                     status_code=400,
