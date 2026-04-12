@@ -5,6 +5,7 @@ sys.path.insert(
     0, os.path.abspath("../../")
 )  # Adds the parent directory to the system path
 
+import httpx
 import pytest
 from litellm.llms.azure.common_utils import process_azure_headers
 from httpx import Headers
@@ -528,6 +529,67 @@ async def test_async_azure_max_retries_0(
         ].max_retries
         == max_retries
     )
+
+
+_AZURE_TEST_HTTPS_TIMEOUT = httpx.Timeout(40.0, connect=8.0)
+
+
+# Parametrize outermost so ``@patch`` injects the mock; otherwise pytest treats the mock name as a fixture.
+@pytest.mark.parametrize(
+    ("timeout_in", "expected_at_sdk", "force_unsupported_httpx_timeout"),
+    [
+        # `elif not isinstance(timeout, httpx.Timeout): float(timeout)`
+        (360.0, 360.0, False),
+        # ``httpx.Timeout`` + ``supports_httpx_timeout("azure")`` True: neither branch in main.py mutates timeout
+        (_AZURE_TEST_HTTPS_TIMEOUT, _AZURE_TEST_HTTPS_TIMEOUT, False),
+        # `if isinstance(timeout, httpx.Timeout) and not supports_httpx_timeout: timeout.read or 600`
+        (
+            httpx.Timeout(90.0, connect=2.0),
+            90.0,
+            True,
+        ),
+    ],
+)
+@patch("litellm.main.azure_chat_completions.make_azure_openai_chat_completion_request")
+@pytest.mark.asyncio
+async def test_azure_acompletion_completion_timeout_branches(
+    make_azure_openai_chat_completion_request,
+    timeout_in,
+    expected_at_sdk,
+    force_unsupported_httpx_timeout,
+):
+    """
+    Covers ``main.py`` timeout normalization for Azure async chat:
+    numeric ``float()`` branch, full ``httpx.Timeout`` when Azure is httpx-timeout-capable, and
+    collapse to ``.read`` when ``supports_httpx_timeout`` is forced false.
+    """
+    import litellm
+    from litellm import acompletion
+    from unittest.mock import patch
+
+    litellm.in_memory_llm_clients_cache.flush_cache()
+
+    async def _call():
+        await acompletion(
+            model="azure/gpt-4.1-mini",
+            messages=[{"role": "user", "content": "Hello world"}],
+            timeout=timeout_in,
+            stream=False,
+            max_retries=0,
+        )
+
+    try:
+        if force_unsupported_httpx_timeout:
+            with patch("litellm.main.supports_httpx_timeout", return_value=False):
+                await _call()
+        else:
+            await _call()
+    except Exception:
+        pass
+
+    make_azure_openai_chat_completion_request.assert_called_once()
+    got = make_azure_openai_chat_completion_request.call_args.kwargs["timeout"]
+    assert got == expected_at_sdk
 
 
 @pytest.mark.parametrize("max_retries", [0, 4])
