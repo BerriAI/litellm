@@ -28,6 +28,8 @@ class VercelAIGatewayConfig(OpenAIGPTConfig):
         base_params = super().get_supported_openai_params(model)
         if "extra_body" not in base_params:
             base_params.append("extra_body")
+        if "reasoning_effort" not in base_params:
+            base_params.append("reasoning_effort")
         return base_params
 
     def _get_openai_compatible_provider_info(
@@ -56,16 +58,20 @@ class VercelAIGatewayConfig(OpenAIGPTConfig):
             non_default_params, optional_params, model, drop_params
         )
 
-        # Vercel AI Gateway-only parameters
-        extra_body = {}
+        # Vercel AI Gateway-only parameters — seed from any extra_body the super call already set
+        extra_body = mapped_openai_params.pop("extra_body", {})
         provider_options = non_default_params.pop("providerOptions", None)
 
         if provider_options is not None:
             extra_body["providerOptions"] = provider_options
 
-        mapped_openai_params[
-            "extra_body"
-        ] = extra_body  # openai client supports `extra_body` param
+        reasoning_effort = mapped_openai_params.pop("reasoning_effort", None)
+        if reasoning_effort is not None:
+            extra_body["reasoning"] = {"effort": reasoning_effort, "enabled": True}
+
+        mapped_openai_params["extra_body"] = (
+            extra_body  # openai client supports `extra_body` param
+        )
         return mapped_openai_params
 
     def transform_request(
