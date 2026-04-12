@@ -129,8 +129,6 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
 
                 if should_start_new_block and not self.sent_content_block_finish:
                     # Queue the sequence: content_block_stop -> content_block_start
-                    # The trigger chunk itself is not emitted as a delta since the
-                    # content_block_start already carries the relevant information.
                     self.chunk_queue.append(
                         {
                             "type": "content_block_stop",
@@ -144,6 +142,9 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                             "content_block": self.current_content_block_start,
                         }
                     )
+                    # Also queue the processed chunk if it carries meaningful streaming chunk, so dropping it loses the arguments.
+                    if self._has_meaningful_delta(processed_chunk):
+                        self.chunk_queue.append(processed_chunk)
                     self.sent_content_block_finish = False
                     return self.chunk_queue.popleft()
 
@@ -305,8 +306,6 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 if not self.queued_usage_chunk:
                     if should_start_new_block and not self.sent_content_block_finish:
                         # Queue the sequence: content_block_stop -> content_block_start
-                        # The trigger chunk itself is not emitted as a delta since the
-                        # content_block_start already carries the relevant information.
 
                         # 1. Stop current content block
                         self.chunk_queue.append(
@@ -324,6 +323,11 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                                 "content_block": self.current_content_block_start,
                             }
                         )
+
+                        # 3. Also queue the processed chunk if it carries meaningful delta data (e.g. tool-call arguments).
+                        # AI Providers deliver name+arguments in a single streaming chunk, so dropping it loses the arguments.
+                        if self._has_meaningful_delta(processed_chunk):
+                            self.chunk_queue.append(processed_chunk)
 
                         # Reset state for new block
                         self.sent_content_block_finish = False
@@ -423,6 +427,27 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
             else:
                 # For non-dict chunks, forward the original value unchanged
                 yield chunk
+
+    def _has_meaningful_delta(self, processed_chunk: Any) -> bool:
+        """
+        Check if a processed chunk contains meaningful delta content that
+        should be emitted alongside a content_block_start event.
+
+        AI Providers deliver complete tool calls (name + arguments) in a single streaming chunk.  Without emitting the delta, the arguments are silently dropped.
+        """
+        if processed_chunk.get("type") != "content_block_delta":
+            return False
+        delta = processed_chunk.get("delta", {})
+        delta_type = delta.get("type", "")
+        if delta_type == "input_json_delta":
+            return bool(delta.get("partial_json"))
+        elif delta_type == "text_delta":
+            return bool(delta.get("text"))
+        elif delta_type == "thinking_delta":
+            return bool(delta.get("thinking"))
+        elif delta_type == "signature_delta":
+            return bool(delta.get("signature"))
+        return False
 
     def _increment_content_block_index(self):
         self.current_content_block_index += 1
