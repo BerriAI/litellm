@@ -32,7 +32,7 @@ os.environ["AWS_REGION_NAME"] = ""
 file_url = "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf"
 
 # model
-model = "bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0"
+model = "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0"
 
 file_content = [
     {"type": "text", "text": "What's this file about?"},
@@ -63,7 +63,7 @@ assert response is not None
 model_list:
   - model_name: bedrock-model
     litellm_params:
-      model: bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0
+      model: bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0
       aws_access_key_id: os.environ/AWS_ACCESS_KEY_ID
       aws_secret_access_key: os.environ/AWS_SECRET_ACCESS_KEY
       aws_region_name: os.environ/AWS_REGION_NAME
@@ -122,7 +122,7 @@ encoded_file = base64.b64encode(file_data).decode("utf-8")
 base64_url = f"data:application/pdf;base64,{encoded_file}"
 
 # model
-model = "bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0"
+model = "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0"
 
 file_content = [
     {"type": "text", "text": "What's this file about?"},
@@ -153,7 +153,7 @@ assert response is not None
 model_list:
   - model_name: bedrock-model
     litellm_params:
-      model: bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0
+      model: bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0
       aws_access_key_id: os.environ/AWS_ACCESS_KEY_ID
       aws_secret_access_key: os.environ/AWS_SECRET_ACCESS_KEY
       aws_region_name: os.environ/AWS_REGION_NAME
@@ -210,7 +210,7 @@ os.environ["AWS_REGION_NAME"] = ""
 file_url = "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf"
 
 # model
-model = "bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0"
+model = "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0"
 
 file_content = [
     {"type": "text", "text": "What's this file about?"},
@@ -242,7 +242,7 @@ assert response is not None
 model_list:
   - model_name: bedrock-model
     litellm_params:
-      model: bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0
+      model: bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0
       aws_access_key_id: os.environ/AWS_ACCESS_KEY_ID
       aws_secret_access_key: os.environ/AWS_SECRET_ACCESS_KEY
       aws_region_name: os.environ/AWS_REGION_NAME
@@ -350,10 +350,10 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 <Tabs>
 <TabItem label="SDK" value="sdk">
 
-Use `litellm.supports_pdf_input(model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0")` -> returns `True` if model can accept pdf input
+Use `litellm.supports_pdf_input(model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0")` -> returns `True` if model can accept pdf input
 
 ```python
-assert litellm.supports_pdf_input(model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0") == True
+assert litellm.supports_pdf_input(model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0") == True
 ```
 </TabItem>
 
@@ -365,7 +365,7 @@ assert litellm.supports_pdf_input(model="bedrock/anthropic.claude-3-5-sonnet-202
 model_list:
   - model_name: bedrock-model # model group name
     litellm_params:
-      model: bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0
+      model: bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0
       aws_access_key_id: os.environ/AWS_ACCESS_KEY_ID
       aws_secret_access_key: os.environ/AWS_SECRET_ACCESS_KEY
       aws_region_name: os.environ/AWS_REGION_NAME

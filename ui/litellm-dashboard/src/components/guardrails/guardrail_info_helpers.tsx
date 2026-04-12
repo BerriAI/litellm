@@ -149,3 +149,19 @@ export const getGuardrailLogoAndName = (guardrailValue: string): { logo: string;
 
   return { logo: logo || "", displayName: displayName || guardrailValue };
 };
+
+/** Tri-state UI value for `litellm_params.skip_system_message_in_guardrail` (inherit = use global). */
+export type SkipSystemMessageChoice = "inherit" | "yes" | "no";
+
+export function skipSystemMessageToChoice(v: boolean | null | undefined): SkipSystemMessageChoice {
+  if (v === true) return "yes";
+  if (v === false) return "no";
+  return "inherit";
+}
+
+/** Create flow: omit key when inheriting global default. */
+export function choiceToSkipSystemForCreate(choice: SkipSystemMessageChoice | undefined): boolean | undefined {
+  if (choice === "yes") return true;
+  if (choice === "no") return false;
+  return undefined;
+}

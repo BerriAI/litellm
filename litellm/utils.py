@@ -243,8 +243,6 @@ from typing import (
     get_args,
 )
 
-from openai import OpenAIError as OriginalError
-
 # These are lazy loaded via __getattr__
 from litellm.llms.base_llm.base_utils import (
     BaseLLMModelInfo,
@@ -1810,6 +1808,11 @@ def client(original_function):  # noqa: PLR0915
             modified_kwargs = await async_pre_call_deployment_hook(kwargs, call_type)
             if modified_kwargs is not None:
                 kwargs = modified_kwargs
+
+            # Sync logging_obj.stream after deployment hooks (they may convert it).
+            _hook_stream = kwargs.get("stream")
+            if _hook_stream is not None and logging_obj.stream != _hook_stream:
+                logging_obj.stream = _hook_stream
 
             kwargs["litellm_logging_obj"] = logging_obj
             ## LOAD CREDENTIALS
@@ -4875,6 +4878,19 @@ def calculate_max_parallel_requests(
     return None
 
 
+def _get_deployment_order(deployment: Union[Dict, Any]) -> Optional[int]:
+    """
+    Returns the routing order for a deployment.
+
+    Checks litellm_params first (static config), then model_info (dynamic/team
+    models added via API where order lives in model_info, not litellm_params).
+    """
+    order = deployment.get("litellm_params", {}).get("order")
+    if order is None:
+        order = deployment.get("model_info", {}).get("order")
+    return order
+
+
 def _get_order_filtered_deployments(
     healthy_deployments: List[Dict], target_order: Optional[int] = None
 ) -> List:
@@ -4882,7 +4898,7 @@ def _get_order_filtered_deployments(
         filtered = [
             d
             for d in healthy_deployments
-            if d["litellm_params"].get("order") == target_order
+            if _get_deployment_order(d) == target_order
         ]
         if filtered:
             return filtered
@@ -4890,20 +4906,19 @@ def _get_order_filtered_deployments(
         return healthy_deployments
 
     # Default: pick min order group
-    min_order = min(
-        (
-            deployment["litellm_params"]["order"]
-            for deployment in healthy_deployments
-            if "order" in deployment["litellm_params"]
-        ),
-        default=None,
-    )
+    _valid_orders: List[int] = [
+        o
+        for deployment in healthy_deployments
+        for o in [_get_deployment_order(deployment)]
+        if o is not None
+    ]
+    min_order: Optional[int] = min(_valid_orders) if _valid_orders else None
 
     if min_order is not None:
         filtered_deployments = [
             deployment
             for deployment in healthy_deployments
-            if deployment["litellm_params"].get("order") == min_order
+            if _get_deployment_order(deployment) == min_order
         ]
 
         return filtered_deployments
@@ -8314,6 +8329,10 @@ class ProviderConfigManager:
             return SagemakerEmbeddingConfig.get_model_config(model)
         elif litellm.LlmProviders.PERPLEXITY == provider:
             return litellm.PerplexityEmbeddingConfig()
+        elif litellm.LlmProviders.OCI == provider:
+            from litellm.llms.oci.embed.transformation import OCIEmbeddingConfig
+
+            return OCIEmbeddingConfig()
         return None
 
     @staticmethod
@@ -8939,6 +8958,12 @@ class ProviderConfigManager:
             )
 
             return OpenAIContainerConfig()
+        if provider in (LlmProviders.AZURE, LlmProviders.AZURE_TEXT):
+            from litellm.llms.azure.containers.transformation import (
+                AzureContainerConfig,
+            )
+
+            return AzureContainerConfig()
         return None
 
     @staticmethod
@@ -9030,11 +9055,11 @@ class ProviderConfigManager:
 
             return get_stability_image_edit_config(model)
         elif LlmProviders.BEDROCK == provider:
-            from litellm.llms.bedrock.image_edit.stability_transformation import (
-                BedrockStabilityImageEditConfig,
+            from litellm.llms.bedrock.image_edit.amazon_nova_canvas_image_edit_transformation import (
+                get_bedrock_image_edit_config_for_model,
             )
 
-            return BedrockStabilityImageEditConfig()
+            return get_bedrock_image_edit_config_for_model(model)
         elif LlmProviders.OPENROUTER == provider:
             from litellm.llms.openrouter.image_edit import (
                 get_openrouter_image_edit_config,

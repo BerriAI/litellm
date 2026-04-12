@@ -794,3 +794,123 @@ video {
     max-width: calc(9 / 12 * 100%) !important;
   }
 }
+
+/* =========================================
+   BLOG — Ramp-style aesthetic
+   ========================================= */
+
+/* Hide blog sidebar on post pages */
+.blog-post-page aside.col {
+  display: none !important;
+}
+
+/* Make blog post content full-width + constrained */
+.blog-post-page main.col--7 {
+  --ifm-col-width: 100% !important;
+  max-width: 820px !important;
+  margin: 0 auto !important;
+  flex: 0 0 100% !important;
+}
+
+/* Clean post header */
+.blog-wrapper article header h1 {
+  font-size: 2rem;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  line-height: 1.25;
+  color: #111827;
+  margin-bottom: 0.75rem;
+}
+
+/* Author / date line */
+.blog-wrapper article header .avatar,
+.blog-wrapper article header [class*='blogPostData'] {
+  margin-top: 0.75rem;
+}
+
+/* Clean prose body */
+.blog-wrapper article .markdown {
+  font-size: 0.95rem;
+  line-height: 1.7;
+  color: #374151;
+}
+
+.blog-wrapper article .markdown h2 {
+  font-size: 1.35rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  margin-top: 2.5rem;
+  margin-bottom: 0.75rem;
+  color: #111827;
+}
+
+.blog-wrapper article .markdown h3 {
+  font-size: 1.1rem;
+  font-weight: 600;
+  margin-top: 2rem;
+  margin-bottom: 0.5rem;
+  color: #111827;
+}
+
+.blog-wrapper article .markdown p {
+  margin-bottom: 1.25rem;
+}
+
+.blog-wrapper article .markdown a {
+  color: #0ea5e9;
+  text-decoration: none;
+}
+
+.blog-wrapper article .markdown a:hover {
+  text-decoration: underline;
+}
+
+.blog-wrapper article .markdown code {
+  font-size: 0.85em;
+  background: #f3f4f6;
+  border: 1px solid #e5e7eb;
+  border-radius: 4px;
+  padding: 0.15em 0.4em;
+  color: #111827;
+}
+
+.blog-wrapper article .markdown pre {
+  background: #ffffff !important;
+  border: 1px solid #e5e7eb !important;
+  border-radius: 8px;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+}
+
+.blog-wrapper article .markdown pre code {
+  background: transparent;
+  border: none;
+  padding: 0;
+  color: inherit;
+}
+
+/* Hide tags section at bottom of blog posts */
+.blog-wrapper footer [class*='blogPostTags'],
+.blog-wrapper footer [class*='tags'] {
+  display: none;
+}
+
+/* Nav buttons (prev/next) at bottom - keep clean */
+.blog-wrapper .pagination-nav__label {
+  font-size: 0.85rem;
+}
+
+[data-theme='dark'] .blog-wrapper article header h1,
+[data-theme='dark'] .blog-wrapper article .markdown h2,
+[data-theme='dark'] .blog-wrapper article .markdown h3 {
+  color: #f9fafb;
+}
+
+[data-theme='dark'] .blog-wrapper article .markdown {
+  color: #d1d5db;
+}
+
+[data-theme='dark'] .blog-wrapper article .markdown code {
+  background: #1f2937;
+  border-color: #374151;
+  color: #f9fafb;
+}

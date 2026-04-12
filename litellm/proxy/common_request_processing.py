@@ -9,6 +9,7 @@ from typing import (
     Any,
     AsyncGenerator,
     Callable,
+    Dict,
     Literal,
     Optional,
     Tuple,
@@ -63,6 +64,37 @@ else:
     ProxyConfig = Any
 from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
 from litellm.types.utils import ModelResponse, ModelResponseStream, Usage
+
+
+def _serialize_http_exception_detail(
+    detail: Any,
+) -> Tuple[str, Optional[dict]]:
+    """
+    Convert an HTTPException.detail value into (message, structured_fields)
+    for ProxyException / SSE error frames.
+
+    Dict-detail HTTPExceptions raised by guardrails were previously str()-mangled
+    into a Python repr blob, producing unparseable error responses on both the
+    streaming and non-streaming proxy surfaces. This helper extracts a clean
+    human-readable message while preserving the full payload as structured
+    fields, so the dominant guardrail shapes (`{"error": "..."}` flat and
+    `{"error": {"message": "..."}}` nested) both round-trip cleanly.
+    """
+    if isinstance(detail, str):
+        return detail, None
+    if isinstance(detail, dict):
+        err = detail.get("error")
+        if isinstance(err, str):
+            return err, detail
+        if isinstance(err, dict):
+            nested_msg = err.get("message")
+            if isinstance(nested_msg, str):
+                return nested_msg, detail
+        msg = detail.get("message")
+        if isinstance(msg, str):
+            return msg, detail
+        return json.dumps(detail), detail
+    return str(detail), None
 
 
 async def _parse_event_data_for_error(event_line: Union[str, bytes]) -> Optional[int]:
@@ -221,16 +253,37 @@ async def create_response(
             f"Error consuming first chunk from generator: {e}"
         )
 
-        # Fallback to a generic error stream
+        # Preserve status code from HTTPException (e.g., guardrail blocks)
+        error_status = getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR)
+        raw_detail = getattr(e, "detail", "Error processing stream start")
+        message, structured_fields = _serialize_http_exception_detail(raw_detail)
+
+        existing_fields = getattr(e, "provider_specific_fields", None) or {}
+        if structured_fields:
+            merged_fields: Optional[dict] = {**existing_fields, **structured_fields}
+        else:
+            merged_fields = existing_fields or None
+
+        # Match ProxyException.to_dict() shape so streaming and non-streaming
+        # error frames are byte-identical.
+        error_obj: Dict[str, Any] = {
+            "message": message,
+            "type": getattr(e, "type", "None"),
+            "param": getattr(e, "param", "None"),
+            "code": str(error_status),
+        }
+        if merged_fields:
+            error_obj["provider_specific_fields"] = merged_fields
+
         async def error_gen_message() -> AsyncGenerator[str, None]:
-            yield f"data: {json.dumps({'error': {'message': 'Error processing stream start', 'code': status.HTTP_500_INTERNAL_SERVER_ERROR}})}\n\n"
+            yield f"data: {json.dumps({'error': error_obj})}\n\n"
             yield "data: [DONE]\n\n"
 
         return StreamingResponse(
             error_gen_message(),
             media_type=media_type,
             headers=headers,
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            status_code=error_status,
         )
 
     async def combined_generator() -> AsyncGenerator[str, None]:
@@ -1079,11 +1132,13 @@ class ProxyBaseLLMRequestProcessing:
                         "_litellm_client_requested_model"
                     ] = requested_model_from_client
 
-                # Streaming: attach a closure that CSW.__anext__ will call
-                # at stream end instead of firing logging directly.  The
-                # closure runs ONLY guardrail hooks (not all callbacks) on
-                # the assembled response so guardrail_information is
-                # populated, then fires both logging handlers.
+                # Streaming: attach a closure that fires after all guardrail
+                # end-of-stream blocks complete.  CSW.__anext__ stores the
+                # assembled response on logging_obj; the outer consumer
+                # (ProxyLogging._fire_deferred_stream_logging) fires the
+                # closure after the full streaming pipeline finishes.
+                # The closure runs non-apply_guardrail hooks on the
+                # assembled response, then fires both logging handlers.
                 # Only for CustomStreamWrapper — raw async generators from
                 # passthrough routes bypass CSW and would orphan the closure.
                 from litellm.litellm_core_utils.streaming_handler import (
@@ -1403,16 +1458,19 @@ class ProxyBaseLLMRequestProcessing:
         cache_hit: Any,
     ) -> None:
         """
-        Run only post-call guardrail hooks on an assembled streaming response,
-        then fire both async and sync logging handlers.
+        Run non-streaming post-call guardrail hooks on an assembled streaming
+        response, then fire both async and sync logging handlers.
 
-        Called by CSW.__anext__ at stream end via a closure stored on
-        logging_obj._on_deferred_stream_complete.
+        Called by ProxyLogging._fire_deferred_stream_logging after the full
+        streaming pipeline (including unified_guardrail end-of-stream blocks)
+        has completed.
+
+        Guardrails with apply_guardrail are skipped — they already ran via
+        unified_guardrail's streaming iterator.  Only guardrails that override
+        async_post_call_success_hook directly (without apply_guardrail) run
+        here.
 
         This is audit-only — content has already been delivered to the client.
-        Blocking guardrails that raise HTTPException cannot prevent content
-        delivery for streaming.  Per-chunk filtering should use
-        async_post_call_streaming_hook instead.
 
         Extracted as a static method so tests can call the production
         implementation directly rather than reimplementing the closure.
@@ -1425,7 +1483,6 @@ class ProxyBaseLLMRequestProcessing:
             from litellm.proxy.utils import (
                 _check_and_merge_model_level_guardrails,
             )
-            from litellm.proxy.utils import unified_guardrail as _unified_guardrail
 
             guardrail_data = _check_and_merge_model_level_guardrails(
                 data=captured_data, llm_router=_global_llm_router
@@ -1441,14 +1498,12 @@ class ProxyBaseLLMRequestProcessing:
                 try:
                     guardrail_result = None
                     if "apply_guardrail" in type(cb).__dict__:
-                        guardrail_data["guardrail_to_apply"] = cb
-                        guardrail_result = (
-                            await _unified_guardrail.async_post_call_success_hook(
-                                user_api_key_dict=captured_user_api_key_dict,
-                                data=guardrail_data,
-                                response=_response,
-                            )
-                        )
+                        # Skip — apply_guardrail guardrails already ran via
+                        # unified_guardrail's end-of-stream block in the
+                        # streaming iterator pipeline.  Running them again
+                        # here would duplicate the guardrail API call
+                        # (e.g. double OpenAI Moderation charges).
+                        continue
                     else:
                         guardrail_result = await cb.async_post_call_success_hook(
                             user_api_key_dict=captured_user_api_key_dict,
@@ -1586,12 +1641,19 @@ class ProxyBaseLLMRequestProcessing:
             pass
 
         if isinstance(e, HTTPException):
+            raw_detail = getattr(e, "detail", str(e))
+            message, structured_fields = _serialize_http_exception_detail(raw_detail)
+            existing_fields = getattr(e, "provider_specific_fields", None) or {}
+            if structured_fields:
+                merged_fields: Optional[dict] = {**existing_fields, **structured_fields}
+            else:
+                merged_fields = existing_fields or None
             raise ProxyException(
-                message=getattr(e, "detail", str(e)),
+                message=message,
                 type=getattr(e, "type", "None"),
                 param=getattr(e, "param", "None"),
                 code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
-                provider_specific_fields=getattr(e, "provider_specific_fields", None),
+                provider_specific_fields=merged_fields,
                 headers=headers,
             )
         elif isinstance(e, httpx.HTTPStatusError):

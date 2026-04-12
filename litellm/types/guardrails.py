@@ -607,6 +607,16 @@ class BaseLitellmParams(
         description="When True, guardrails only receive the latest message for the relevant role (e.g., newest user input pre-call, newest assistant output post-call)",
     )
 
+    skip_system_message_in_guardrail: Optional[bool] = Field(
+        default=None,
+        description=(
+            "When True, unified guardrails skip system-role messages when building "
+            "evaluation inputs (texts and structured_messages). When False, system "
+            "messages are included even if litellm_settings sets a global skip. When "
+            "None, use the global litellm.skip_system_message_in_guardrail setting."
+        ),
+    )
+
     # Lakera specific params
     category_thresholds: Optional[LakeraCategoryThresholds] = Field(
         default=None,

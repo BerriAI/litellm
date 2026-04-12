@@ -325,6 +325,7 @@ const sidebars = {
                 "mcp_control",
                 "mcp_cost",
                 "mcp_guardrail",
+                "mcp_toolsets",
                 {
                   type: "link",
                   label: "MCP Troubleshooting Guide",
@@ -348,6 +349,7 @@ const sidebars = {
             "proxy/debugging",
             "proxy/error_diagnosis",
             "proxy/deploy",
+            "proxy/docker_image_security",
             "proxy/health",
             "proxy/master_key_rotations",
             "proxy/model_management",
@@ -452,6 +454,7 @@ const sidebars = {
           items: [
             "proxy/virtual_keys",
             "proxy/token_auth",
+            "proxy/jwt_key_mapping",
             "proxy/service_accounts",
             "proxy/access_control",
             "proxy/cli_sso",
@@ -561,7 +564,8 @@ const sidebars = {
             "proxy/model_access",
             "proxy/model_access_groups",
             "proxy/access_groups",
-            "proxy/team_model_add"
+            "proxy/team_model_add",
+            "proxy/credential_routing"
           ]
         },
         {
@@ -857,6 +861,7 @@ const sidebars = {
           ]
         },
         "providers/anthropic",
+        "providers/anthropic_tool_search",
         "providers/aws_sagemaker",
         {
           type: "category",
@@ -1050,19 +1055,11 @@ const sidebars = {
         "proxy/fallback_management",
         "proxy/tag_routing",
         "proxy/timeout",
-        "wildcard_routing"
+        "wildcard_routing",
+        "proxy/health_check_routing"
       ],
     },
-    {
-      type: "category",
-      label: "Load Testing",
-      items: [
-        "benchmarks",
-        "load_test_advanced",
-        "load_test_sdk",
-        "load_test_rpm",
-      ]
-    },
+    "benchmarks",
     {
       type: "category",
       label: "Contributing",
@@ -1091,6 +1088,9 @@ const sidebars = {
         "data_retention",
         "proxy/security_encryption_faq",
         "migration_policy",
+        "load_test_advanced",
+        "load_test_sdk",
+        "load_test_rpm",
         {
           type: "category",
           label: "❤️ 🚅 Projects built on LiteLLM",
@@ -1227,6 +1227,7 @@ const learnSidebar = {
             "completion/web_fetch",
             "completion/computer_use",
             "guides/code_interpreter",
+            "completion/anthropic_advisor_tool",
             "completion/message_sanitization",
           ],
         },
