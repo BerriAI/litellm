@@ -1341,9 +1341,7 @@ async def test_get_all_team_models_with_access_groups():
     mock_db.litellm_teamtable = mock_litellm_teamtable
     mock_litellm_teamtable.find_many = AsyncMock(return_value=[mock_team1])
     mock_db.litellm_accessgrouptable = MagicMock()
-    mock_db.litellm_accessgrouptable.find_many = AsyncMock(
-        return_value=[mock_ag_row]
-    )
+    mock_db.litellm_accessgrouptable.find_many = AsyncMock(return_value=[mock_ag_row])
 
     mock_router = MagicMock()
 
@@ -3414,113 +3412,139 @@ def test_should_load_db_object_with_supported_db_objects():
 @pytest.mark.asyncio
 async def test_tag_cache_update_called():
     """
-    Test that update_cache updates tag cache when tags are provided.
+    Test that update_cache does NOT write tag objects back to the pipeline
+    (stale resurrection fix: _update_tag_cache is a no-op).
     """
     from litellm.caching.caching import DualCache
-    from litellm.proxy.proxy_server import user_api_key_cache
 
     cache = DualCache()
-
-    setattr(
-        litellm.proxy.proxy_server,
-        "user_api_key_cache",
-        cache,
-    )
-
-    mock_tag_obj = {
-        "tag_name": "test-tag",
-        "spend": 10.0,
-    }
+    setattr(litellm.proxy.proxy_server, "user_api_key_cache", cache)
 
     with patch.object(
-        cache, "async_get_cache", new=AsyncMock(return_value=mock_tag_obj)
-    ) as mock_get_cache:
-        with patch.object(
-            cache, "async_set_cache_pipeline", new=AsyncMock()
-        ) as mock_set_cache:
-            await litellm.proxy.proxy_server.update_cache(
-                token=None,
-                user_id=None,
-                end_user_id=None,
-                team_id=None,
-                response_cost=5.0,
-                parent_otel_span=None,
-                tags=["test-tag"],
-            )
+        cache, "async_set_cache_pipeline", new=AsyncMock()
+    ) as mock_set_cache:
+        await litellm.proxy.proxy_server.update_cache(
+            token=None,
+            user_id=None,
+            end_user_id=None,
+            team_id=None,
+            response_cost=5.0,
+            parent_otel_span=None,
+            tags=["test-tag"],
+        )
 
-            await asyncio.sleep(0.1)
+        await asyncio.sleep(0.1)
 
-            mock_get_cache.assert_awaited_once_with(key="tag:test-tag")
-            mock_set_cache.assert_awaited_once()
-
-            call_args = mock_set_cache.call_args
-            cache_list = call_args.kwargs["cache_list"]
-
-            assert len(cache_list) == 1
-            cache_key, cache_value = cache_list[0]
-            assert cache_key == "tag:test-tag"
-            assert cache_value["spend"] == 15.0
+        mock_set_cache.assert_awaited_once()
+        cache_list = mock_set_cache.call_args.kwargs["cache_list"]
+        tag_keys = {k for k, _ in cache_list if k.startswith("tag:")}
+        assert tag_keys == set(), (
+            f"Tag object was written back to cache: {tag_keys} "
+            f"— this causes stale resurrection in multi-pod deployments"
+        )
 
 
 @pytest.mark.asyncio
 async def test_tag_cache_update_multiple_tags():
     """
-    Test that multiple tags are updated in cache.
+    Test that update_cache does NOT write any tag objects back for multiple tags
+    (stale resurrection fix: _update_tag_cache is a no-op).
     """
     from litellm.caching.caching import DualCache
-    from litellm.proxy.proxy_server import user_api_key_cache
 
     cache = DualCache()
+    setattr(litellm.proxy.proxy_server, "user_api_key_cache", cache)
 
-    setattr(
-        litellm.proxy.proxy_server,
-        "user_api_key_cache",
-        cache,
+    with patch.object(
+        cache, "async_set_cache_pipeline", new=AsyncMock()
+    ) as mock_set_cache:
+        await litellm.proxy.proxy_server.update_cache(
+            token=None,
+            user_id=None,
+            end_user_id=None,
+            team_id=None,
+            response_cost=5.0,
+            parent_otel_span=None,
+            tags=["tag1", "tag2"],
+        )
+
+        await asyncio.sleep(0.1)
+
+        mock_set_cache.assert_awaited_once()
+        cache_list = mock_set_cache.call_args.kwargs["cache_list"]
+        tag_keys = {k for k, _ in cache_list if k.startswith("tag:")}
+        assert tag_keys == set(), (
+            f"Tag objects were written back to cache: {tag_keys} "
+            f"— this causes stale resurrection in multi-pod deployments"
+        )
+
+
+@pytest.mark.asyncio
+async def test_update_cache_no_entity_object_writeback():
+    """
+    Regression test for stale resurrection bug:
+    update_cache() must NOT write key/user/end-user/team/tag objects back to the
+    user_api_key_cache pipeline. Only the global proxy spend counter (a numeric
+    value) may be written. Writing stale objects back overwrites a freshly-loaded
+    DB value on another pod, causing budget checks to use wrong spend totals.
+    """
+    from unittest.mock import AsyncMock, patch
+
+    from litellm.caching.caching import DualCache
+
+    cache = DualCache()
+    setattr(litellm.proxy.proxy_server, "user_api_key_cache", cache)
+
+    hashed_token = "hashed-test-token"
+    fake_key = MagicMock()
+    fake_key.spend = 10.0
+    fake_key.soft_budget_cooldown = False
+    fake_key.litellm_budget_table = None
+
+    litellm_proxy_admin_name = getattr(
+        litellm.proxy.proxy_server, "litellm_proxy_admin_name", "default_user_id"
     )
 
-    mock_tag1_obj = {"tag_name": "tag1", "spend": 10.0}
-    mock_tag2_obj = {"tag_name": "tag2", "spend": 20.0}
-
-    async def mock_get_cache_side_effect(key):
-        if key == "tag:tag1":
-            return mock_tag1_obj
-        elif key == "tag:tag2":
-            return mock_tag2_obj
+    async def fake_get_cache(key):
+        if key == hashed_token:
+            return fake_key
+        if key == f"{litellm_proxy_admin_name}:spend":
+            return 100.0
         return None
 
     with patch.object(
-        cache, "async_get_cache", new=AsyncMock(side_effect=mock_get_cache_side_effect)
-    ) as mock_get_cache:
+        cache, "async_get_cache", new=AsyncMock(side_effect=fake_get_cache)
+    ):
         with patch.object(
             cache, "async_set_cache_pipeline", new=AsyncMock()
-        ) as mock_set_cache:
+        ) as mock_pipeline:
             await litellm.proxy.proxy_server.update_cache(
-                token=None,
-                user_id=None,
-                end_user_id=None,
-                team_id=None,
-                response_cost=5.0,
+                token=hashed_token,
+                user_id="user-123",
+                end_user_id="eu-456",
+                team_id="team-789",
+                response_cost=1.0,
                 parent_otel_span=None,
-                tags=["tag1", "tag2"],
+                tags=["billing"],
             )
-
             await asyncio.sleep(0.1)
 
-            assert mock_get_cache.call_count == 2
-            mock_set_cache.assert_awaited_once()
+    mock_pipeline.assert_awaited_once()
+    cache_list = mock_pipeline.call_args.kwargs["cache_list"]
 
-            call_args = mock_set_cache.call_args
-            cache_list = call_args.kwargs["cache_list"]
+    written_keys = {k for k, _ in cache_list}
 
-            assert len(cache_list) == 2
+    # Key object must never be written back
+    assert (
+        hashed_token not in written_keys
+    ), "Key object was written back — stale resurrection risk"
 
-            tag_updates = {
-                cache_key: cache_value for cache_key, cache_value in cache_list
-            }
-            assert "tag:tag1" in tag_updates
-            assert "tag:tag2" in tag_updates
-            assert tag_updates["tag:tag1"]["spend"] == 15.0
-            assert tag_updates["tag:tag2"]["spend"] == 25.0
+    # Only numeric counters (global proxy spend) may be in the pipeline
+    for k, v in cache_list:
+        assert isinstance(v, (int, float)), (
+            f"Non-numeric value written to cache for key {k!r}: {type(v).__name__}. "
+            "Only numeric counters (e.g. global proxy spend) should be in the pipeline."
+        )
 
 
 @pytest.mark.asyncio
@@ -4913,9 +4937,7 @@ async def test_increment_spend_counters_team_and_member():
             response_cost=0.30,
         )
 
-        team_counter = counter_cache.in_memory_cache.get_cache(
-            key="spend:team:team-1"
-        )
+        team_counter = counter_cache.in_memory_cache.get_cache(key="spend:team:team-1")
         assert team_counter == 2.30
 
         member_counter = counter_cache.in_memory_cache.get_cache(
