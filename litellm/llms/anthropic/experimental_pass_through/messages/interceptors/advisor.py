@@ -31,6 +31,10 @@ ADVISOR_TOOL_DESCRIPTION: str = _c.ADVISOR_TOOL_DESCRIPTION
 from .base import MessagesInterceptor
 
 
+class AdvisorMaxIterationsError(Exception):
+    """Raised when the advisor loop exceeds max_uses."""
+
+
 class AdvisorOrchestrationHandler(MessagesInterceptor):
     """Orchestrates the advisor tool loop for non-native providers."""
 
@@ -74,7 +78,8 @@ class AdvisorOrchestrationHandler(MessagesInterceptor):
             raise ValueError(
                 "advisor tool definition must include a 'model' field specifying the advisor model"
             )
-        max_uses: int = advisor_tool.get("max_uses") or ADVISOR_MAX_USES
+        _raw_max_uses = advisor_tool.get("max_uses")
+        max_uses: int = ADVISOR_MAX_USES if _raw_max_uses is None else int(_raw_max_uses)
         # Optional routing overrides for the advisor sub-call (e.g. proxy routing).
         # If not set in the tool definition, litellm resolves from env vars.
         advisor_api_key: Optional[str] = advisor_tool.get("api_key")
@@ -131,12 +136,10 @@ class AdvisorOrchestrationHandler(MessagesInterceptor):
 
             iteration += 1
             if iteration > max_uses:
-                # Per Anthropic spec: inject max_uses_exceeded error result so the
-                # executor sees the cap and continues without further advice.
-                current_messages = _inject_max_uses_error(
-                    current_messages, executor_response, advisor_use_block
+                raise AdvisorMaxIterationsError(
+                    f"Advisor orchestration loop exceeded max_uses={max_uses}. "
+                    "Increase max_uses in the advisor tool definition or cap the request."
                 )
-                continue
 
             # --- Build advisor context ---
             advisor_messages = _build_advisor_context(
