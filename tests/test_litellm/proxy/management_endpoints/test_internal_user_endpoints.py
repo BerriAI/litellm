@@ -2672,3 +2672,81 @@ async def test_new_user_password_raises_if_user_id_missing(mocker):
 
     assert exc_info.value.status_code == 500
     assert "user_id" in exc_info.value.detail
+
+
+@pytest.mark.asyncio
+async def test_new_user_password_update_failure_rolls_back_user(mocker):
+    """
+    If litellm_usertable.update() raises after the user row is created,
+    the user row must be deleted so the caller can safely retry without
+    being stuck with a passwordless user that cannot be recreated.
+    """
+    from litellm.proxy._types import NewUserRequest, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.internal_user_endpoints import new_user
+
+    mock_prisma_client = mocker.MagicMock()
+
+    async def mock_count(*args, **kwargs):
+        return 5
+
+    mock_prisma_client.db.litellm_usertable.count = mock_count
+
+    async def mock_no_duplicate(*args, **kwargs):
+        return None
+
+    mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints._check_duplicate_user_email",
+        mock_no_duplicate,
+    )
+    mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints._check_duplicate_user_id",
+        mock_no_duplicate,
+    )
+
+    mock_license_check = mocker.MagicMock()
+    mock_license_check.is_over_limit.return_value = False
+
+    created_user_id = "test-user-rollback-456"
+
+    mock_generate_key = mocker.AsyncMock(
+        return_value={
+            "user_id": created_user_id,
+            "token": "sk-test-token",
+            "expires": None,
+            "max_budget": None,
+        }
+    )
+
+    # Simulate a transient DB error on the password update
+    db_error = Exception("DB connection lost")
+    mock_update = mocker.AsyncMock(side_effect=db_error)
+    mock_delete = mocker.AsyncMock()
+    mock_prisma_client.db.litellm_usertable.update = mock_update
+    mock_prisma_client.db.litellm_usertable.delete = mock_delete
+
+    mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints.UserManagementEventHooks.async_user_created_hook",
+        mocker.AsyncMock(),
+    )
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    mocker.patch("litellm.proxy.proxy_server._license_check", mock_license_check)
+    mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints.generate_key_helper_fn",
+        mock_generate_key,
+    )
+
+    user_request = NewUserRequest(
+        user_id=created_user_id,
+        user_email="rollback@example.com",
+        password="secure_pass_123",
+    )
+    mock_user_key = UserAPIKeyAuth(user_id="admin", user_role="proxy_admin")
+
+    with pytest.raises(Exception) as exc_info:
+        await new_user(data=user_request, user_api_key_dict=mock_user_key)
+
+    # The original DB error must propagate
+    assert exc_info.value is db_error
+
+    # The user row must have been deleted (rollback)
+    mock_delete.assert_called_once_with(where={"user_id": created_user_id})
