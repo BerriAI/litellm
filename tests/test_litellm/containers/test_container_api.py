@@ -25,6 +25,7 @@ from litellm.containers.main import (
 from litellm.main import base_llm_http_handler
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.llms.openai.containers.transformation import OpenAIContainerConfig
+from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.router import Router
 from litellm.types.containers.main import (
     ContainerListResponse,
@@ -219,6 +220,76 @@ class TestContainerAPI:
             assert response.object == "container"
             assert response.expires_after.minutes == 20
             assert response.expires_after.anchor == "last_active_at"
+
+    def test_retrieve_container_reencodes_short_managed_id_for_routing(self):
+        """Short cntr_ IDs must still re-encode output so follow-ups keep router affinity."""
+        short_managed_id = ResponsesAPIRequestUtils._build_container_id(
+            custom_llm_provider="azure",
+            model_id="router-gpt",
+            container_id="x",
+        )
+        assert short_managed_id.startswith("cntr_")
+        assert len(short_managed_id) < 100
+
+        mock_response = ContainerObject(
+            id="x",
+            object="container",
+            created_at=1747857508,
+            status="running",
+            expires_after={"anchor": "last_active_at", "minutes": 20},
+            last_active_at=1747857508,
+            name="Tiny",
+        )
+
+        with patch.object(
+            base_llm_http_handler,
+            "container_retrieve_handler",
+            return_value=mock_response,
+        ) as mock_method:
+            response = retrieve_container(
+                container_id=short_managed_id,
+                custom_llm_provider="openai",
+            )
+
+        mock_method.assert_called_once()
+        assert mock_method.call_args.kwargs["container_id"] == "x"
+        assert response.id.startswith("cntr_")
+        decoded = ResponsesAPIRequestUtils._decode_container_id(response.id)
+        assert decoded.get("response_id") == "x"
+        assert decoded.get("model_id") == "router-gpt"
+        assert decoded.get("custom_llm_provider") == "azure"
+
+    def test_delete_container_reencodes_short_managed_id_for_routing(self):
+        """Same as retrieve: short managed IDs must round-trip encoding on delete result."""
+        short_managed_id = ResponsesAPIRequestUtils._build_container_id(
+            custom_llm_provider="azure",
+            model_id="router-gpt",
+            container_id="z",
+        )
+        assert len(short_managed_id) < 100
+
+        mock_response = DeleteContainerResult(
+            id="z",
+            object="container.deleted",
+            deleted=True,
+        )
+
+        with patch.object(
+            base_llm_http_handler,
+            "container_delete_handler",
+            return_value=mock_response,
+        ) as mock_method:
+            response = delete_container(
+                container_id=short_managed_id,
+                custom_llm_provider="openai",
+            )
+
+        mock_method.assert_called_once()
+        assert mock_method.call_args.kwargs["container_id"] == "z"
+        assert response.id.startswith("cntr_")
+        decoded = ResponsesAPIRequestUtils._decode_container_id(response.id)
+        assert decoded.get("response_id") == "z"
+        assert decoded.get("model_id") == "router-gpt"
 
     @pytest.mark.asyncio
     async def test_aretrieve_container_basic(self):

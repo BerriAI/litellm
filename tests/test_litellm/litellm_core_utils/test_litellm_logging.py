@@ -429,7 +429,7 @@ class TestUpdateFromKwargs:
         assert logging_obj.litellm_params["litellm_metadata"] == lm_meta
 
     def test_caller_litellm_params_win_over_kwargs(self, logging_obj):
-        """Explicit litellm_params from the caller should override auto-extracted values."""
+        """Explicit litellm_params metadata merges into kwargs metadata without overwriting."""
         kwargs = {"metadata": {"from_kwargs": True}}
 
         logging_obj.update_from_kwargs(
@@ -437,7 +437,24 @@ class TestUpdateFromKwargs:
             litellm_params={"metadata": {"from_caller": True}, "litellm_call_id": "x"},
         )
 
-        assert logging_obj.litellm_params["metadata"] == {"from_caller": True}
+        # kwargs metadata is preserved, caller metadata is merged in
+        assert logging_obj.litellm_params["metadata"] == {"from_kwargs": True, "from_caller": True}
+
+    def test_kwargs_metadata_wins_over_caller_metadata_in_conflict(self, logging_obj):
+        """kwargs metadata takes precedence; caller litellm_params metadata is merged without overwriting."""
+        kwargs = {"metadata": {"from_kwargs": True, "shared_key": "kwargs_value"}}
+
+        logging_obj.update_from_kwargs(
+            kwargs=kwargs,
+            litellm_params={"metadata": {"from_caller": True, "shared_key": "caller_value"}, "litellm_call_id": "x"},
+        )
+
+        # kwargs metadata is preserved (shared_key keeps the kwargs value), caller-only keys are added
+        assert logging_obj.litellm_params["metadata"] == {
+            "from_kwargs": True,
+            "from_caller": True,
+            "shared_key": "kwargs_value",  # kwargs wins on conflict
+        }
 
     def test_custom_pricing_detected_via_litellm_metadata(self, logging_obj):
         """Custom pricing in litellm_metadata.model_info should set custom_pricing flag."""
@@ -2151,6 +2168,59 @@ def test_function_setup_metadata_takes_precedence_over_litellm_metadata():
     litellm_metadata = litellm_params.get("litellm_metadata")
     assert litellm_metadata is not None
     assert litellm_metadata.get("user_api_key_hash") == "sk-hashed-xyz"
+
+
+def test_update_from_kwargs_litellm_params_metadata_does_not_overwrite_proxy_fields():
+    """
+    Test the exact bug: when update_from_kwargs is called with litellm_params
+    containing a 'metadata' key (e.g. Anthropic's native metadata with user_id),
+    it must NOT overwrite proxy key-auth fields already merged from litellm_metadata.
+
+    This is the anthropic_messages code path where async_anthropic_messages_handler
+    passes anthropic_messages_optional_request_params (which includes metadata)
+    as litellm_params to update_from_kwargs.
+    """
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    logging_obj = Logging(
+        model="claude-3-5-sonnet",
+        messages=[{"role": "user", "content": "test"}],
+        stream=False,
+        call_type="anthropic_messages",
+        start_time=time.time(),
+        litellm_call_id="test-overwrite-bug",
+        function_id="test-function-id",
+    )
+
+    kwargs = {
+        "litellm_metadata": {
+            "user_api_key_hash": "sk-hashed-proxy",
+            "user_api_key_alias": "claude-api",
+            "user_api_key_team_id": "team-zurich",
+        },
+    }
+
+    # Simulate what async_anthropic_messages_handler does:
+    # passes Anthropic's native metadata in litellm_params
+    logging_obj.update_from_kwargs(
+        kwargs=kwargs,
+        litellm_params={
+            "preset_cache_key": None,
+            "stream_response": {},
+            "metadata": {"user_id": "anthropic-device-id"},  # Anthropic native metadata
+        },
+    )
+
+    litellm_params = logging_obj.model_call_details.get("litellm_params", {})
+    metadata = litellm_params.get("metadata")
+
+    assert metadata is not None
+    # Proxy key-auth fields must survive the litellm_params.update()
+    assert metadata.get("user_api_key_hash") == "sk-hashed-proxy"
+    assert metadata.get("user_api_key_alias") == "claude-api"
+    assert metadata.get("user_api_key_team_id") == "team-zurich"
+    # Anthropic native metadata must also be present
+    assert metadata.get("user_id") == "anthropic-device-id"
 
 
 def test_function_setup_empty_metadata_falls_back_to_litellm_metadata():

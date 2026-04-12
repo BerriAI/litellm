@@ -112,6 +112,37 @@ from litellm.types.proxy.management_endpoints.team_endpoints import (
 router = APIRouter()
 
 
+async def _verify_team_access(
+    team_obj: LiteLLM_TeamTable,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> None:
+    """
+    Verify the caller is authorized to manage the given team.
+
+    Access is granted if:
+    - Caller is a proxy admin, OR
+    - Caller is an org admin for the team's organization, OR
+    - Caller is a team admin of this team
+
+    Raises HTTPException(403) otherwise.
+    """
+    if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN:
+        return
+
+    if _is_user_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team_obj):
+        return
+
+    if await _is_user_org_admin_for_team(
+        user_api_key_dict=user_api_key_dict, team_obj=team_obj
+    ):
+        return
+
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="You do not have access to this team",
+    )
+
+
 class TeamMemberBudgetHandler:
     """Helper class to handle team member budget, RPM, and TPM limit operations"""
 
@@ -1409,6 +1440,12 @@ async def update_team(  # noqa: PLR0915
                 detail={"error": f"Team not found, passed team_id={data.team_id}"},
             )
 
+        # Verify caller has access to manage this team
+        await _verify_team_access(
+            team_obj=LiteLLM_TeamTable(**existing_team_row.model_dump()),
+            user_api_key_dict=user_api_key_dict,
+        )
+
         if data.soft_budget is not None:
             max_budget_to_check = (
                 data.max_budget
@@ -2702,6 +2739,13 @@ async def delete_team(
                 detail={"error": f"Team not found, passed team_id={team_id}"},
             )
         team_row_pydantic = LiteLLM_TeamTable(**team_row_base.model_dump())
+
+        # Verify caller has access to manage this team
+        await _verify_team_access(
+            team_obj=team_row_pydantic,
+            user_api_key_dict=user_api_key_dict,
+        )
+
         team_rows.append(team_row_pydantic)
 
     await _persist_deleted_team_records(
@@ -2939,9 +2983,7 @@ async def _resolve_team_access_group_resources(_team_info: Any) -> None:
     info response by resolving inherited resources from its access groups."""
     if not _team_info.access_group_ids:
         return
-    ag_lookup = await _batch_resolve_access_group_resources(
-        _team_info.access_group_ids
-    )
+    ag_lookup = await _batch_resolve_access_group_resources(_team_info.access_group_ids)
     models, mcp_ids, agent_ids = set(), set(), set()
     for ag_id in _team_info.access_group_ids:
         if ag_id in ag_lookup:
@@ -3133,15 +3175,24 @@ async def block_team(
     if prisma_client is None:
         raise Exception("No DB Connected.")
 
-    record = await prisma_client.db.litellm_teamtable.update(
-        where={"team_id": data.team_id}, data={"blocked": True}  # type: ignore
+    existing_team = await prisma_client.db.litellm_teamtable.find_unique(
+        where={"team_id": data.team_id}
     )
-
-    if record is None:
+    if existing_team is None:
         raise HTTPException(
             status_code=404,
             detail={"error": f"Team not found, passed team_id={data.team_id}"},
         )
+
+    # Verify caller has access to manage this team
+    await _verify_team_access(
+        team_obj=LiteLLM_TeamTable(**existing_team.model_dump()),
+        user_api_key_dict=user_api_key_dict,
+    )
+
+    record = await prisma_client.db.litellm_teamtable.update(
+        where={"team_id": data.team_id}, data={"blocked": True}  # type: ignore
+    )
 
     return record
 
@@ -3156,7 +3207,7 @@ async def unblock_team(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
-    Blocks all calls from keys with this team id.
+    Unblocks a previously blocked team, re-enabling calls from keys with this team id.
 
     Parameters:
     - team_id: str - Required. The unique identifier of the team to unblock.
@@ -3176,15 +3227,24 @@ async def unblock_team(
     if prisma_client is None:
         raise Exception("No DB Connected.")
 
-    record = await prisma_client.db.litellm_teamtable.update(
-        where={"team_id": data.team_id}, data={"blocked": False}  # type: ignore
+    existing_team = await prisma_client.db.litellm_teamtable.find_unique(
+        where={"team_id": data.team_id}
     )
-
-    if record is None:
+    if existing_team is None:
         raise HTTPException(
             status_code=404,
             detail={"error": f"Team not found, passed team_id={data.team_id}"},
         )
+
+    # Verify caller has access to manage this team
+    await _verify_team_access(
+        team_obj=LiteLLM_TeamTable(**existing_team.model_dump()),
+        user_api_key_dict=user_api_key_dict,
+    )
+
+    record = await prisma_client.db.litellm_teamtable.update(
+        where={"team_id": data.team_id}, data={"blocked": False}  # type: ignore
+    )
 
     return record
 
@@ -3449,9 +3509,7 @@ async def _enforce_list_team_v2_access(
         if organization_id and organization_id not in org_admin_org_ids:
             raise HTTPException(
                 status_code=403,
-                detail={
-                    "error": "You can only view teams within your organizations."
-                },
+                detail={"error": "You can only view teams within your organizations."},
             )
         verbose_proxy_logger.debug(
             "list_team_v2: org admin access for user=%s, org_ids=%s, user_id_filter=%s",
@@ -3642,8 +3700,7 @@ async def list_team_v2(
     # Resolve resources inherited from access groups (single batch query)
     if not use_deleted_table:
         team_items_with_ag = [
-            t for t in team_list
-            if isinstance(t, TeamListItem) and t.access_group_ids
+            t for t in team_list if isinstance(t, TeamListItem) and t.access_group_ids
         ]
         if team_items_with_ag:
             all_ag_ids = [
@@ -3654,7 +3711,7 @@ async def list_team_v2(
             ag_lookup = await _batch_resolve_access_group_resources(all_ag_ids)
             for team_item in team_items_with_ag:
                 models, mcp_ids, agent_ids = set(), set(), set()
-                for ag_id in (team_item.access_group_ids or []):
+                for ag_id in team_item.access_group_ids or []:
                     if ag_id in ag_lookup:
                         models.update(ag_lookup[ag_id]["models"])
                         mcp_ids.update(ag_lookup[ag_id]["mcp_server_ids"])
@@ -4315,17 +4372,13 @@ async def bulk_update_team_member_permissions(
     if not data.apply_to_all_teams and not data.team_ids:
         raise HTTPException(
             status_code=400,
-            detail={
-                "error": "Must provide team_ids or set apply_to_all_teams=true"
-            },
+            detail={"error": "Must provide team_ids or set apply_to_all_teams=true"},
         )
 
     if data.apply_to_all_teams and data.team_ids:
         raise HTTPException(
             status_code=400,
-            detail={
-                "error": "Cannot set both apply_to_all_teams=true and team_ids"
-            },
+            detail={"error": "Cannot set both apply_to_all_teams=true and team_ids"},
         )
 
     permissions_to_add = set(data.permissions)
@@ -4346,14 +4399,18 @@ async def bulk_update_team_member_permissions(
     }
 
 
-async def _compute_and_batch_updates(prisma_client, teams, permissions_to_add: set) -> int:
+async def _compute_and_batch_updates(
+    prisma_client, teams, permissions_to_add: set
+) -> int:
     """Compute merged permissions and batch-write updates. Returns count of teams updated."""
     updates = []
     for team in teams:
         existing = set(team.team_member_permissions or [])
         if permissions_to_add <= existing:
             continue
-        merged = sorted(existing | permissions_to_add)  # normalise to alphabetical order
+        merged = sorted(
+            existing | permissions_to_add
+        )  # normalise to alphabetical order
         updates.append((team.team_id, merged))
 
     if updates:
