@@ -5,34 +5,6 @@ import { navigateToPage } from "../../helpers/navigation";
 import { Page } from "../../fixtures/pages";
 
 /**
- * Helper to delete a model by searching for it via the API and deleting matching entries.
- * Accepts a partial model name to match against.
- */
-async function cleanupModels(request: any, searchTerm: string) {
-  try {
-    const response = await request.get("/v2/model/info?include_team_models=true&page=1&size=100", {
-      headers: { Authorization: "Bearer sk-1234" },
-    });
-    const data = await response.json();
-    const models = data?.data || [];
-    for (const model of models) {
-      const name = model.model_name || "";
-      if (name.includes(searchTerm)) {
-        await request.post("/model/delete", {
-          headers: {
-            Authorization: "Bearer sk-1234",
-            "Content-Type": "application/json",
-          },
-          data: { id: model.model_info?.id },
-        });
-      }
-    }
-  } catch {
-    // Best-effort cleanup; don't fail the test
-  }
-}
-
-/**
  * Helper to select a provider from the Add Model form dropdown.
  */
 async function selectProvider(page: any, providerName: string) {
@@ -137,9 +109,7 @@ test.describe("Add Model", () => {
     await expect(page.getByText(/Connection to .* failed/)).toBeVisible({ timeout: 30_000 });
   });
 
-  test("Add specific model and verify it appears in All Models", async ({ page, request }) => {
-    // Clean up any leftover models from previous runs
-    await cleanupModels(request, "claude-haiku-4-5");
+  test("Add specific model and verify it appears in All Models", async ({ page }) => {
     await navigateToPage(page, Page.Models);
     await page.getByRole("tab", { name: "Add Model" }).click();
 
@@ -178,9 +148,7 @@ test.describe("Add Model", () => {
     await expect(tableBody.getByText("claude-haiku-4-5").first()).toBeVisible({ timeout: 15_000 });
   });
 
-  test("Add wildcard route and verify it appears in All Models", async ({ page, request }) => {
-    // Clean up any leftover models from previous runs
-    await cleanupModels(request, "cohere/");
+  test("Add wildcard route and verify it appears in All Models", async ({ page }) => {
     await navigateToPage(page, Page.Models);
     await page.getByRole("tab", { name: "Add Model" }).click();
 
