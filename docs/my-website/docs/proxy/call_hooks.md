@@ -19,6 +19,7 @@ import Image from '@theme/IdealImage';
 | `async_post_call_success_hook` | Modify outgoing response (non-streaming) | After successful LLM API call, for non-streaming responses |
 | `async_post_call_failure_hook` | Transform error responses sent to clients | After failed LLM API call |
 | `async_post_call_streaming_hook` | Modify outgoing response (streaming) | After successful LLM API call, for streaming responses |
+| `async_post_call_response_headers_hook` | Inject custom HTTP response headers | After LLM API call (both success and failure) |
 
 See a complete example with our [parallel request rate limiter](https://github.com/BerriAI/litellm/blob/main/litellm/proxy/hooks/parallel_request_limiter.py)
 
@@ -114,6 +115,18 @@ class MyCustomHandler(CustomLogger): # https://docs.litellm.ai/docs/observabilit
         """
         async for item in response:
             yield item
+
+    async def async_post_call_response_headers_hook(
+        self,
+        data: dict,
+        user_api_key_dict: UserAPIKeyAuth,
+        response: Any,
+        request_headers: Optional[Dict[str, str]] = None,
+    ) -> Optional[Dict[str, str]]:
+        """
+        Inject custom headers into HTTP response (runs for both success and failure).
+        """
+        return {"x-custom-header": "custom-value"}
 
 proxy_handler_instance = MyCustomHandler()
 ```
@@ -389,3 +402,31 @@ proxy_handler_instance = MyErrorTransformer()
 ```
 
 **Result:** Clients receive `"Your prompt is too long..."` instead of `"ContextWindowExceededError: Prompt exceeds context window"`.
+
+## Advanced - Inject Custom HTTP Response Headers
+
+Use `async_post_call_response_headers_hook` to inject custom HTTP headers into responses. This hook runs for **both successful and failed** LLM API calls.
+
+```python
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.proxy.proxy_server import UserAPIKeyAuth
+from typing import Any, Dict, Optional
+
+class CustomHeaderLogger(CustomLogger):
+    def __init__(self):
+        super().__init__()
+
+    async def async_post_call_response_headers_hook(
+        self,
+        data: dict,
+        user_api_key_dict: UserAPIKeyAuth,
+        response: Any,
+        request_headers: Optional[Dict[str, str]] = None,
+    ) -> Optional[Dict[str, str]]:
+        """
+        Inject custom headers into all responses (success and failure).
+        """
+        return {"x-custom-header": "custom-value"}
+
+proxy_handler_instance = CustomHeaderLogger()
+```

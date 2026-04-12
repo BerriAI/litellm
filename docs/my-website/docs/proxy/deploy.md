@@ -4,6 +4,10 @@ import Image from '@theme/IdealImage';
 
 # Docker, Helm, Terraform
 
+:::info No Limits on LiteLLM OSS
+There are **no limits** on the number of users, keys, or teams you can create on LiteLLM OSS.
+:::
+
 You can find the Dockerfile to build litellm proxy [here](https://github.com/BerriAI/litellm/blob/main/Dockerfile)
 
 > Note: Production requires at least 4 CPU cores and 8 GB RAM.
@@ -196,6 +200,7 @@ Example `requirements.txt`
 
 ```shell
 litellm[proxy]==1.57.3 # Specify the litellm version you want to use
+litellm-enterprise
 prometheus_client
 langfuse
 prisma

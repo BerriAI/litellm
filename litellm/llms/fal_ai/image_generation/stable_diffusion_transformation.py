@@ -18,17 +18,18 @@ else:
 class FalAIStableDiffusionConfig(FalAIBaseConfig):
     """
     Configuration for Fal AI Stable Diffusion models.
-    
+
     Supports Stable Diffusion v3.5 variants and other Stable Diffusion models on Fal AI.
-    
+
     Example models:
     - fal-ai/stable-diffusion-v35-medium
     - fal-ai/stable-diffusion-v35-large
-    
+
     Documentation: https://fal.ai/models/fal-ai/stable-diffusion-v35-medium
     """
+
     IMAGE_GENERATION_ENDPOINT: str = ""  # Will be set from model name
-    
+
     def get_complete_url(
         self,
         api_base: Optional[str],
@@ -40,19 +41,17 @@ class FalAIStableDiffusionConfig(FalAIBaseConfig):
     ) -> str:
         """
         Get the complete url for the request.
-        
+
         For Stable Diffusion models, extract the endpoint from the model name.
         """
         from litellm.secret_managers.main import get_secret_str
-        
+
         complete_url: str = (
-            api_base 
-            or get_secret_str("FAL_AI_API_BASE") 
-            or self.DEFAULT_BASE_URL
+            api_base or get_secret_str("FAL_AI_API_BASE") or self.DEFAULT_BASE_URL
         )
-        
+
         complete_url = complete_url.rstrip("/")
-        
+
         # Extract endpoint from model name
         # e.g., "fal-ai/stable-diffusion-v35-medium" or "stable-diffusion-v35-medium"
         endpoint = model
@@ -62,10 +61,10 @@ class FalAIStableDiffusionConfig(FalAIBaseConfig):
         elif not model.startswith("fal-ai/"):
             # If model is just "stable-diffusion-v35-medium", prepend fal-ai
             endpoint = f"fal-ai/{model}"
-        
+
         complete_url = f"{complete_url}/{endpoint}"
         return complete_url
-    
+
     def get_supported_openai_params(
         self, model: str
     ) -> List[OpenAIImageGenerationOptionalParams]:
@@ -77,7 +76,7 @@ class FalAIStableDiffusionConfig(FalAIBaseConfig):
             "response_format",
             "size",
         ]
-    
+
     def map_openai_params(
         self,
         non_default_params: dict,
@@ -87,28 +86,28 @@ class FalAIStableDiffusionConfig(FalAIBaseConfig):
     ) -> dict:
         """
         Map OpenAI parameters to Stable Diffusion parameters.
-        
+
         Mappings:
         - n -> num_images (1-4, default 1)
         - response_format -> output_format (jpeg or png)
         - size -> image_size (can be preset or custom width/height)
         """
         supported_params = self.get_supported_openai_params(model)
-        
+
         # Map OpenAI params to Stable Diffusion params
         param_mapping = {
             "n": "num_images",
             "response_format": "output_format",
             "size": "image_size",
         }
-        
+
         for k in non_default_params.keys():
             if k not in optional_params.keys():
                 if k in supported_params:
                     # Use mapped parameter name if exists
                     mapped_key = param_mapping.get(k, k)
                     mapped_value = non_default_params[k]
-                    
+
                     # Transform specific parameters
                     if k == "response_format":
                         # Map OpenAI response formats to image formats
@@ -117,7 +116,7 @@ class FalAIStableDiffusionConfig(FalAIBaseConfig):
                     elif k == "size":
                         # Map OpenAI size format to Stable Diffusion image_size
                         mapped_value = self._map_image_size(mapped_value)
-                    
+
                     optional_params[mapped_key] = mapped_value
                 elif drop_params:
                     pass
@@ -131,10 +130,10 @@ class FalAIStableDiffusionConfig(FalAIBaseConfig):
     def _map_image_size(self, size: str) -> Any:
         """
         Map OpenAI size format to Stable Diffusion image_size format.
-        
+
         OpenAI format: "1024x1024", "1792x1024", etc.
         Stable Diffusion format: Can be preset strings or {"width": int, "height": int}
-        
+
         Available presets:
         - square_hd
         - square
@@ -152,10 +151,10 @@ class FalAIStableDiffusionConfig(FalAIBaseConfig):
             "1024x768": "landscape_4_3",
             "1024x576": "landscape_16_9",
         }
-        
+
         if size in size_mapping:
             return size_mapping[size]
-        
+
         # Parse custom size format "WIDTHxHEIGHT"
         if "x" in size:
             try:
@@ -166,7 +165,7 @@ class FalAIStableDiffusionConfig(FalAIBaseConfig):
                 }
             except (ValueError, AttributeError):
                 pass
-        
+
         # Default to landscape_4_3
         return "landscape_4_3"
 
@@ -180,10 +179,10 @@ class FalAIStableDiffusionConfig(FalAIBaseConfig):
     ) -> dict:
         """
         Transform the image generation request to Stable Diffusion request body.
-        
+
         Required parameters:
         - prompt: The prompt to generate an image from
-        
+
         Optional parameters:
         - num_images: Number of images (1-4, default: 1)
         - image_size: Size preset or {"width": int, "height": int} (default: landscape_4_3)
@@ -199,7 +198,7 @@ class FalAIStableDiffusionConfig(FalAIBaseConfig):
             "prompt": prompt,
             **optional_params,
         }
-        
+
         return stable_diffusion_request_body
 
     def transform_image_generation_response(
@@ -217,7 +216,7 @@ class FalAIStableDiffusionConfig(FalAIBaseConfig):
     ) -> ImageResponse:
         """
         Transform the Stable Diffusion response to litellm ImageResponse format.
-        
+
         Expected response format:
         {
             "images": [
@@ -242,10 +241,10 @@ class FalAIStableDiffusionConfig(FalAIBaseConfig):
                 status_code=raw_response.status_code,
                 headers=raw_response.headers,
             )
-        
+
         if not model_response.data:
             model_response.data = []
-        
+
         # Handle Stable Diffusion response format
         images = response_data.get("images", [])
         if isinstance(images, list):
@@ -265,7 +264,7 @@ class FalAIStableDiffusionConfig(FalAIBaseConfig):
                             b64_json=None,
                         )
                     )
-        
+
         # Add additional metadata from Stable Diffusion response
         if hasattr(model_response, "_hidden_params"):
             if "seed" in response_data:
@@ -276,6 +275,5 @@ class FalAIStableDiffusionConfig(FalAIBaseConfig):
                 model_response._hidden_params["has_nsfw_concepts"] = response_data[
                     "has_nsfw_concepts"
                 ]
-        
-        return model_response
 
+        return model_response

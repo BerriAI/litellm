@@ -10,7 +10,7 @@ from litellm._logging import verbose_logger
 
 from .database import FocusLiteLLMDatabase
 from .destinations import FocusDestinationFactory, FocusTimeWindow
-from .serializers import FocusParquetSerializer, FocusSerializer
+from .serializers import FocusCsvSerializer, FocusParquetSerializer, FocusSerializer
 from .transformer import FocusTransformer
 
 
@@ -38,9 +38,13 @@ class FocusExportEngine:
         self._database = FocusLiteLLMDatabase()
 
     def _init_serializer(self) -> FocusSerializer:
-        if self.export_format != "parquet":
-            raise NotImplementedError("Only parquet export supported currently")
-        return FocusParquetSerializer()
+        if self.export_format == "csv":
+            return FocusCsvSerializer()
+        if self.export_format == "parquet":
+            return FocusParquetSerializer()
+        raise NotImplementedError(
+            f"Export format '{self.export_format}' not supported. Use 'parquet' or 'csv'."
+        )
 
     async def dry_run_export_usage_data(self, limit: Optional[int]) -> Dict[str, Any]:
         data = await self._database.get_usage_data(limit=limit)
@@ -51,10 +55,10 @@ class FocusExportEngine:
 
         summary = {
             "total_records": len(normalized),
-            "total_spend": self._sum_column(normalized, "spend"),
-            "total_tokens": self._sum_column(normalized, "total_tokens"),
-            "unique_teams": self._count_unique(normalized, "team_id"),
-            "unique_models": self._count_unique(normalized, "model"),
+            "total_spend": self._sum_column(data, "spend"),
+            "total_tokens": self._sum_column(data, "total_tokens"),
+            "unique_teams": self._count_unique(data, "team_id"),
+            "unique_models": self._count_unique(data, "model"),
         }
 
         return {
@@ -62,6 +66,33 @@ class FocusExportEngine:
             "normalized_data": normalized_sample,
             "summary": summary,
         }
+
+    async def export_all(
+        self,
+        *,
+        limit: Optional[int],
+    ) -> None:
+        """Export all available data without time-window filtering."""
+        data = await self._database.get_usage_data(limit=limit)
+        if data.is_empty():
+            verbose_logger.debug("Focus export: no usage data available")
+            return
+
+        normalized = self._transformer.transform(data)
+        if normalized.is_empty():
+            verbose_logger.debug("Focus export: normalized data empty")
+            return
+
+        # Build a window spanning the full data range for the filename
+        from datetime import datetime, timezone
+
+        now = datetime.now(timezone.utc)
+        window = FocusTimeWindow(
+            start_time=now.replace(hour=0, minute=0, second=0, microsecond=0),
+            end_time=now,
+            frequency="all",
+        )
+        await self._serialize_and_upload(normalized, window)
 
     async def export_window(
         self,
@@ -97,13 +128,17 @@ class FocusExportEngine:
         await self._destination.deliver(
             content=payload,
             time_window=window,
-            filename=self._build_filename(),
+            filename=self._build_filename(window),
         )
 
-    def _build_filename(self) -> str:
+    def _build_filename(self, window: FocusTimeWindow) -> str:
         if not self._serializer.extension:
             raise ValueError("Serializer must declare a file extension")
-        return f"usage.{self._serializer.extension}"
+        # Include time window in filename so Vantage (which deduplicates
+        # by filename) doesn't overwrite previous uploads.
+        start_str = window.start_time.strftime("%Y%m%dT%H%M%SZ")
+        end_str = window.end_time.strftime("%Y%m%dT%H%M%SZ")
+        return f"usage_{start_str}_{end_str}.{self._serializer.extension}"
 
     @staticmethod
     def _sum_column(frame: pl.DataFrame, column: str) -> float:

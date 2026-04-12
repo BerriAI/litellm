@@ -23,7 +23,7 @@ else:
 class CometAPIImageGenerationConfig(BaseImageGenerationConfig):
     DEFAULT_BASE_URL: str = "https://api.cometapi.com"
     IMAGE_GENERATION_ENDPOINT: str = "v1/images/generations"
-    
+
     def get_supported_openai_params(
         self, model: str
     ) -> List[OpenAIImageGenerationOptionalParams]:
@@ -37,7 +37,7 @@ class CometAPIImageGenerationConfig(BaseImageGenerationConfig):
             "size",
             "style",
         ]
-    
+
     def map_openai_params(
         self,
         non_default_params: dict,
@@ -46,7 +46,7 @@ class CometAPIImageGenerationConfig(BaseImageGenerationConfig):
         drop_params: bool,
     ) -> dict:
         supported_params = self.get_supported_openai_params(model)
-        
+
         for k in non_default_params.keys():
             if k not in optional_params.keys():
                 if k in supported_params:
@@ -74,7 +74,7 @@ class CometAPIImageGenerationConfig(BaseImageGenerationConfig):
         Get the complete url for the request
         """
         complete_url: str = (
-            api_base 
+            api_base
             or get_secret_str("COMETAPI_BASE_URL")
             or get_secret_str("COMETAPI_API_BASE")
             or self.DEFAULT_BASE_URL
@@ -95,15 +95,15 @@ class CometAPIImageGenerationConfig(BaseImageGenerationConfig):
         api_base: Optional[str] = None,
     ) -> dict:
         final_api_key: Optional[str] = (
-            api_key or 
-            get_secret_str("COMETAPI_KEY") or
-            get_secret_str("COMETAPI_API_KEY")
+            api_key
+            or get_secret_str("COMETAPI_KEY")
+            or get_secret_str("COMETAPI_API_KEY")
         )
         if not final_api_key:
             raise ValueError("COMETAPI_KEY or COMETAPI_API_KEY is not set")
-        
+
         headers["Authorization"] = f"Bearer {final_api_key}"
-        headers["Content-Type"] = "application/json"        
+        headers["Content-Type"] = "application/json"
         return headers
 
     def transform_image_generation_request(
@@ -153,10 +153,10 @@ class CometAPIImageGenerationConfig(BaseImageGenerationConfig):
                 status_code=raw_response.status_code,
                 headers=raw_response.headers,
             )
-            
+
         if not model_response.data:
             model_response.data = []
-        
+
         # CometAPI returns OpenAI-compatible format
         # Expected format: {"created": timestamp, "data": [{"url": "...", "b64_json": "..."}]}
         if "data" in response_data:
@@ -166,5 +166,5 @@ class CometAPIImageGenerationConfig(BaseImageGenerationConfig):
                     url=image_data.get("url"),
                 )
                 model_response.data.append(image_obj)
-        
+
         return model_response

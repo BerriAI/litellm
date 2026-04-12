@@ -1,4 +1,5 @@
 import userEvent from "@testing-library/user-event";
+import React, { useState } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { renderWithProviders, screen, waitFor } from "../../tests/test-utils";
 import Navbar from "./navbar";
@@ -6,16 +7,97 @@ import Navbar from "./navbar";
 // Mock the hooks and utilities
 vi.mock("@/components/networking", () => ({
   getProxyBaseUrl: vi.fn(() => "http://localhost:4000"),
+  serverRootPath: "",
 }));
+
+vi.mock("@/app/(dashboard)/hooks/useDisableBouncingIcon", () => ({
+  useDisableBouncingIcon: () => false,
+}));
+
+vi.mock("./Navbar/BlogDropdown/BlogDropdown", () => ({
+  BlogDropdown: () => <div data-testid="blog-dropdown">Blog</div>,
+}));
+
+const mockUserDropdownData = vi.hoisted(() => ({
+  current: () => ({
+    userId: "test-user",
+    userEmail: "test@example.com",
+    userRole: "Admin",
+    premiumUser: false,
+  }),
+}));
+
+vi.mock("./Navbar/UserDropdown/UserDropdown", async (importOriginal) => {
+  const React = await import("react");
+  const { useState } = React;
+  const localStorageUtils = await import("@/utils/localStorageUtils");
+  return {
+    default: function MockUserDropdown({ onLogout }: { onLogout: () => void }) {
+      const { userId, userEmail, userRole, premiumUser } = mockUserDropdownData.current();
+      const [open, setOpen] = useState(false);
+      return (
+        <div>
+          <button type="button" onClick={() => setOpen(!open)}>
+            User
+          </button>
+          {open && (
+            <div data-testid="user-dropdown-content">
+              <span>{userId}</span>
+              <span>{userRole}</span>
+              <span>{userEmail}</span>
+              {premiumUser && <span>Premium</span>}
+              <button type="button" onClick={() => onLogout()}>
+                Logout
+              </button>
+              <label>
+                <input
+                  type="checkbox"
+                  aria-label="Toggle hide new feature indicators"
+                  onChange={(e) => {
+                    if (e.target.checked) {
+                      localStorageUtils.setLocalStorageItem("disableShowNewBadge", "true");
+                      localStorageUtils.emitLocalStorageChange("disableShowNewBadge");
+                    }
+                  }}
+                />
+                Toggle hide new feature indicators
+              </label>
+            </div>
+          )}
+        </div>
+      );
+    },
+  };
+});
 
 vi.mock("@/utils/proxyUtils", () => ({
   fetchProxySettings: vi.fn(),
 }));
 
+// Mock CommunityEngagementButtons component
+vi.mock("./Navbar/CommunityEngagementButtons/CommunityEngagementButtons", () => ({
+  CommunityEngagementButtons: () => (
+    <div data-testid="community-engagement-buttons">
+      <a href="https://www.litellm.ai/support" target="_blank" rel="noopener noreferrer">
+        Join Slack
+      </a>
+      <a href="https://github.com/BerriAI/litellm" target="_blank" rel="noopener noreferrer">
+        Star us on GitHub
+      </a>
+    </div>
+  ),
+}));
+
 // Create mock functions that can be controlled in tests
 let mockUseThemeImpl = () => ({ logoUrl: null as string | null });
 let mockUseHealthReadinessImpl = () => ({ data: null as any });
-let mockGetLocalStorageItemImpl = () => null as string | null;
+let mockGetLocalStorageItemImpl = (key: string) => null as string | null;
+let mockUseAuthorizedImpl = () => ({
+  userId: "test-user",
+  userEmail: "test@example.com",
+  userRole: "Admin",
+  premiumUser: false,
+});
 
 vi.mock("@/contexts/ThemeContext", () => ({
   useTheme: () => mockUseThemeImpl(),
@@ -25,8 +107,13 @@ vi.mock("@/app/(dashboard)/hooks/healthReadiness/useHealthReadiness", () => ({
   useHealthReadiness: () => mockUseHealthReadinessImpl(),
 }));
 
+vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
+  default: () => mockUseAuthorizedImpl(),
+}));
+
 vi.mock("@/utils/localStorageUtils", () => ({
-  getLocalStorageItem: () => mockGetLocalStorageItemImpl(),
+  LOCAL_STORAGE_EVENT: "local-storage-change",
+  getLocalStorageItem: (key: string) => mockGetLocalStorageItemImpl(key),
   setLocalStorageItem: vi.fn(),
   removeLocalStorageItem: vi.fn(),
   emitLocalStorageChange: vi.fn(),
@@ -52,6 +139,8 @@ describe("Navbar", () => {
     setProxySettings: vi.fn(),
     accessToken: "test-token",
     isPublicPage: false,
+    isDarkMode: false,
+    toggleDarkMode: vi.fn(),
   };
 
   it("should render without crashing", () => {
@@ -59,26 +148,6 @@ describe("Navbar", () => {
 
     expect(screen.getByText("Docs")).toBeInTheDocument();
     expect(screen.getByText("User")).toBeInTheDocument();
-  });
-
-  it("should render Join Slack button with correct link", () => {
-    renderWithProviders(<Navbar {...defaultProps} />);
-
-    const joinSlackLink = screen.getByRole("link", { name: /join slack/i });
-    expect(joinSlackLink).toBeInTheDocument();
-    expect(joinSlackLink).toHaveAttribute("href", "https://www.litellm.ai/support");
-    expect(joinSlackLink).toHaveAttribute("target", "_blank");
-    expect(joinSlackLink).toHaveAttribute("rel", "noopener noreferrer");
-  });
-
-  it("should render Star us on GitHub button with correct link", () => {
-    renderWithProviders(<Navbar {...defaultProps} />);
-
-    const starOnGithubLink = screen.getByRole("link", { name: /star us on github/i });
-    expect(starOnGithubLink).toBeInTheDocument();
-    expect(starOnGithubLink).toHaveAttribute("href", "https://github.com/BerriAI/litellm");
-    expect(starOnGithubLink).toHaveAttribute("target", "_blank");
-    expect(starOnGithubLink).toHaveAttribute("rel", "noopener noreferrer");
   });
 
   it("should display user information in dropdown", async () => {
@@ -115,14 +184,23 @@ describe("Navbar", () => {
 
   it("should show premium user badge when premiumUser is true", async () => {
     const user = userEvent.setup();
-    const premiumProps = { ...defaultProps, premiumUser: true };
-    renderWithProviders(<Navbar {...premiumProps} />);
+    const originalCurrent = mockUserDropdownData.current;
+    mockUserDropdownData.current = () => ({
+      userId: "test-user",
+      userEmail: "test@example.com",
+      userRole: "Admin",
+      premiumUser: true,
+    });
+    renderWithProviders(<Navbar {...defaultProps} />);
 
     await user.click(screen.getByText("User"));
 
     await waitFor(() => {
       expect(screen.getByText("Premium")).toBeInTheDocument();
     });
+
+    // Reset mock
+    mockUserDropdownData.current = originalCurrent;
   });
 
   it("should show version badge when health data contains version", () => {
@@ -159,7 +237,10 @@ describe("Navbar", () => {
     const user = userEvent.setup();
 
     // Initially disabled
-    mockGetLocalStorageItemImpl = () => "false";
+    mockGetLocalStorageItemImpl = (key: string) => {
+      if (key === "disableShowNewBadge") return "false";
+      return null;
+    };
 
     renderWithProviders(<Navbar {...defaultProps} />);
 
@@ -178,6 +259,9 @@ describe("Navbar", () => {
     const localStorageUtils = vi.mocked(await import("@/utils/localStorageUtils"));
     expect(localStorageUtils.setLocalStorageItem).toHaveBeenCalledWith("disableShowNewBadge", "true");
     expect(localStorageUtils.emitLocalStorageChange).toHaveBeenCalledWith("disableShowNewBadge");
+
+    // Reset mock
+    mockGetLocalStorageItemImpl = (key: string) => null;
   });
 
   it("should handle logout functionality", async () => {
@@ -197,5 +281,12 @@ describe("Navbar", () => {
     const cookieUtils = vi.mocked(await import("@/utils/cookieUtils"));
     expect(cookieUtils.clearTokenCookies).toHaveBeenCalled();
     expect(window.location.href).toBe("");
+  });
+
+  it("should not render dark mode toggle slider", () => {
+    renderWithProviders(<Navbar {...defaultProps} />);
+
+    // DO NOT RENDER THIS UNTIL ALL COMPONENTS ARE CONFIRMED TO SUPPORT DARK MODE STYLES. IT IS AN ISSUE IF THIS TEST FAILS.
+    expect(screen.queryByTestId("dark-mode-toggle")).not.toBeInTheDocument();
   });
 });

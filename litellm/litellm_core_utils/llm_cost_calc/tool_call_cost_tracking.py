@@ -233,9 +233,10 @@ class StandardBuiltInToolCostTracking:
             return 0.0
 
         model_info_dict = dict(model_info) if model_info is not None else None
-        input_tokens, output_tokens = (
-            StandardBuiltInToolCostTracking._extract_token_counts(computer_use_usage)
-        )
+        (
+            input_tokens,
+            output_tokens,
+        ) = StandardBuiltInToolCostTracking._extract_token_counts(computer_use_usage)
 
         return StandardBuiltInToolCostTracking.get_cost_for_computer_use(
             input_tokens=input_tokens,
@@ -314,8 +315,10 @@ class StandardBuiltInToolCostTracking:
 
         if isinstance(response_object, ModelResponse):
             # chat completions only include url_citation annotations when a web search call is made
-            has_url_citations = StandardBuiltInToolCostTracking.response_includes_annotation_type(
-                response_object=response_object, annotation_type="url_citation"
+            has_url_citations = (
+                StandardBuiltInToolCostTracking.response_includes_annotation_type(
+                    response_object=response_object, annotation_type="url_citation"
+                )
             )
             if has_url_citations:
                 return True
@@ -325,7 +328,9 @@ class StandardBuiltInToolCostTracking:
                 if (
                     hasattr(usage, "prompt_tokens_details")
                     and usage.prompt_tokens_details is not None
-                    and isinstance(usage.prompt_tokens_details, PromptTokensDetailsWrapper)
+                    and isinstance(
+                        usage.prompt_tokens_details, PromptTokensDetailsWrapper
+                    )
                     and hasattr(usage.prompt_tokens_details, "web_search_requests")
                     and usage.prompt_tokens_details.web_search_requests is not None
                 ):
@@ -468,7 +473,9 @@ class StandardBuiltInToolCostTracking:
         """
         if model_info is None:
             return 0.0
-        search_context_raw: Any = model_info.get("search_context_cost_per_query", {}) or {}
+        search_context_raw: Any = (
+            model_info.get("search_context_cost_per_query", {}) or {}
+        )
         search_context_pricing: SearchContextCostPerQuery = (
             SearchContextCostPerQuery(**search_context_raw)
             if search_context_raw
@@ -603,21 +610,26 @@ class StandardBuiltInToolCostTracking:
         Get code interpreter cost per session from model cost map.
         """
         import litellm
-        
+
         try:
             container_model = f"{provider}/container"
             model_info = litellm.get_model_info(
-                model=container_model,
-                custom_llm_provider=provider
+                model=container_model, custom_llm_provider=provider
             )
-            model_key = model_info.get("key") if isinstance(model_info, dict) else getattr(model_info, "key", None)
-            
+            model_key = (
+                model_info.get("key")
+                if isinstance(model_info, dict)
+                else getattr(model_info, "key", None)
+            )
+
             if model_key and model_key in litellm.model_cost:
-                return litellm.model_cost[model_key].get("code_interpreter_cost_per_session")
-            
+                return litellm.model_cost[model_key].get(
+                    "code_interpreter_cost_per_session"
+                )
+
         except Exception:
             pass
-        
+
         return None
 
     @staticmethod
@@ -646,7 +658,6 @@ class StandardBuiltInToolCostTracking:
             )
             if cost_per_session is not None:
                 return sessions * cost_per_session
-            
 
         return 0.0
 

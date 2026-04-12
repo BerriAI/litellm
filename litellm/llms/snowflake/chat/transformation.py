@@ -208,27 +208,43 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
 
     def _transform_tool_choice(
         self, tool_choice: Union[str, Dict[str, Any]]
-    ) -> Union[str, Dict[str, Any]]:
+    ) -> Dict[str, Any]:
         """
         Transform OpenAI tool_choice format to Snowflake format.
+
+        Snowflake requires tool_choice to be an object, not a string.
+        Ref: https://docs.snowflake.com/en/developer-guide/snowflake-rest-api/reference/cortex-inference#post--api-v2-cortex-inference-complete-req-body-schema
 
         Args:
             tool_choice: Tool choice in OpenAI format (str or dict)
 
         Returns:
-            Tool choice in Snowflake format
+            Tool choice in Snowflake format (always an object, never a string)
 
-        OpenAI format:
+        OpenAI format (string):
+        "auto", "required", "none"
+
+        OpenAI format (dict):
         {"type": "function", "function": {"name": "get_weather"}}
 
         Snowflake format:
+        {"type": "auto"} / {"type": "any"} / {"type": "none"}
         {"type": "tool", "name": ["get_weather"]}
 
-        Note: String values ("auto", "required", "none") pass through unchanged.
+        Snowflake's API (like Anthropic) requires tool_choice as an object
+        with a "type" field, not as a bare string.
         """
         if isinstance(tool_choice, str):
-            # "auto", "required", "none" pass through as-is
-            return tool_choice
+            # Snowflake requires object format, not string.
+            # Map OpenAI string values to Snowflake object format.
+            # "required" maps to "any" (Snowflake/Anthropic convention).
+            _type_map = {
+                "auto": "auto",
+                "required": "any",
+                "none": "none",
+            }
+            mapped_type = _type_map.get(tool_choice, tool_choice)
+            return {"type": mapped_type}
 
         if isinstance(tool_choice, dict):
             if tool_choice.get("type") == "function":

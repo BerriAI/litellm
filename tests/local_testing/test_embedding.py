@@ -932,12 +932,12 @@ async def test_gemini_embeddings(sync_mode, input):
         litellm.set_verbose = True
         if sync_mode:
             response = litellm.embedding(
-                model="gemini/text-embedding-004",
+                model="gemini/gemini-embedding-001",
                 input=input,
             )
         else:
             response = await litellm.aembedding(
-                model="gemini/text-embedding-004",
+                model="gemini/gemini-embedding-001",
                 input=input,
             )
         print(f"response: {response}")

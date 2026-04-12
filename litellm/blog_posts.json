@@ -1,0 +1,10 @@
+{
+  "posts": [
+    {
+      "title": "Incident Report: SERVER_ROOT_PATH regression broke UI routing",
+      "description": "How a single line removal caused UI 404s for all deployments using SERVER_ROOT_PATH, and the tests we added to prevent it from happening again.",
+      "date": "2026-02-21",
+      "url": "https://docs.litellm.ai/blog/server-root-path-incident"
+    }
+  ]
+}

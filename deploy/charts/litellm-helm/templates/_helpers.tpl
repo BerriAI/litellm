@@ -62,6 +62,20 @@ Create the name of the service account to use
 {{- end }}
 
 {{/*
+Create the service account name used by migration jobs.
+When Helm hooks are enabled, pre-install/pre-upgrade hooks run before normal resources.
+If this chart is creating the ServiceAccount, it is not yet available for the hook job,
+so fall back to "default" (or an explicit override) to avoid a cyclic dependency.
+*/}}
+{{- define "litellm.migrationServiceAccountName" -}}
+{{- if and .Values.migrationJob.hooks.helm.enabled .Values.serviceAccount.create }}
+{{- default "default" .Values.migrationJob.serviceAccountName }}
+{{- else }}
+{{- include "litellm.serviceAccountName" . }}
+{{- end }}
+{{- end }}
+
+{{/*
 Get redis service name
 */}}
 {{- define "litellm.redis.serviceName" -}}

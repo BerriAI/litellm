@@ -93,7 +93,9 @@ class TwelveLabsMarengoEmbeddingConfig:
         # Get input_type or default to "text"
         input_type = cast(
             TWELVELABS_EMBEDDING_INPUT_TYPES,
-            inference_params.get("inputType") or inference_params.get("input_type") or "text"
+            inference_params.get("inputType")
+            or inference_params.get("input_type")
+            or "text",
         )
 
         # Validate that async-invoke is used for video/audio
@@ -130,6 +132,7 @@ class TwelveLabsMarengoEmbeddingConfig:
                 else:
                     # Direct base64 string
                     from litellm.utils import get_base64_str
+
                     b64_str = get_base64_str(input)
 
                 transformed_request["mediaSource"] = {"base64String": b64_str}

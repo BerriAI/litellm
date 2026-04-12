@@ -219,6 +219,22 @@ def test_get_standard_logging_metadata_invalid_user_api_key():
     assert result["user_api_key_hash"] is None
 
 
+def test_get_standard_logging_metadata_non_string_user_api_key():
+    """Non-string user_api_key should not be set as user_api_key_hash."""
+    metadata = {"user_api_key": 12345}
+    result = StandardLoggingPayloadSetup.get_standard_logging_metadata(metadata)
+    all_fields_present(result)
+    assert result["user_api_key_hash"] is None
+
+
+def test_get_standard_logging_metadata_none_user_api_key():
+    """None user_api_key should not be set as user_api_key_hash."""
+    metadata = {"user_api_key": None}
+    result = StandardLoggingPayloadSetup.get_standard_logging_metadata(metadata)
+    all_fields_present(result)
+    assert result["user_api_key_hash"] is None
+
+
 def test_get_standard_logging_metadata_invalid_keys():
     metadata = {
         "user_api_key_alias": "test_alias",
@@ -705,6 +721,190 @@ def test_cost_breakdown_missing_in_standard_logging_payload():
     print("✅ Cost breakdown missing test passed!")
 
 
+@pytest.mark.parametrize(
+    "use_combined_usage_object",
+    [False, True],
+    ids=["normal_usage_dict", "combined_usage_object"],
+)
+def test_usage_dict_roundtrip_in_payload(use_combined_usage_object):
+    """
+    Regression test: verify that usage data flows correctly through
+    get_standard_logging_object_payload without unnecessary Pydantic round-trips.
+
+    Checks:
+    - usage_object in StandardLoggingMetadata is a plain dict with correct token values
+    - prompt_tokens, completion_tokens, total_tokens on the payload match the usage dict
+    - Works for both normal usage dict path and combined_usage_object (realtime API) path
+    """
+    from litellm.litellm_core_utils.litellm_logging import (
+        get_standard_logging_object_payload,
+        Logging,
+    )
+    from datetime import datetime
+
+    logging_obj = Logging(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "Hi"}],
+        stream=False,
+        call_type="completion",
+        start_time=datetime.now(),
+        litellm_call_id="test-usage-roundtrip",
+        function_id="test-fn",
+    )
+
+    mock_response = {
+        "id": "chatcmpl-usage-test",
+        "object": "chat.completion",
+        "model": "gpt-4o",
+        "usage": {
+            "prompt_tokens": 42,
+            "completion_tokens": 58,
+            "total_tokens": 100,
+        },
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "Hello!"},
+                "finish_reason": "stop",
+            }
+        ],
+    }
+
+    kwargs = {
+        "model": "gpt-4o",
+        "messages": [{"role": "user", "content": "Hi"}],
+        "response_cost": 0.01,
+        "custom_llm_provider": "openai",
+    }
+
+    if use_combined_usage_object:
+        kwargs["combined_usage_object"] = Usage(
+            prompt_tokens=42, completion_tokens=58, total_tokens=100
+        )
+
+    start_time = datetime.now()
+    end_time = datetime.now()
+
+    payload = get_standard_logging_object_payload(
+        kwargs=kwargs,
+        init_response_obj=mock_response,
+        start_time=start_time,
+        end_time=end_time,
+        logging_obj=logging_obj,
+        status="success",
+    )
+
+    assert payload is not None
+
+    # Top-level token fields must match
+    assert payload["prompt_tokens"] == 42
+    assert payload["completion_tokens"] == 58
+    assert payload["total_tokens"] == 100
+
+    # usage_object in metadata must be a plain dict (not a Pydantic model)
+    usage_obj = payload["metadata"]["usage_object"]
+    assert isinstance(usage_obj, dict)
+    assert usage_obj["prompt_tokens"] == 42
+    assert usage_obj["completion_tokens"] == 58
+    assert usage_obj["total_tokens"] == 100
+
+
+def test_standard_logging_payload_uses_actual_model_for_azure_router():
+    from litellm.litellm_core_utils.litellm_logging import (
+        Logging,
+        get_standard_logging_object_payload,
+    )
+
+    logging_obj = Logging(
+        model="azure_ai/model-router",
+        messages=[{"role": "user", "content": "Hello"}],
+        stream=False,
+        call_type="completion",
+        start_time=datetime.now(),
+        litellm_call_id="test-azure-router-opt-in",
+        function_id="test-fn",
+    )
+
+    kwargs = {
+        "model": "azure_ai/model-router",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "response_cost": 0.00001,
+        "custom_llm_provider": "azure_ai",
+    }
+    mock_response = {
+        "id": "chatcmpl-azure-router-opt-in",
+        "object": "chat.completion",
+        "model": "azure_ai/gpt-5-nano-2025-08-07",
+        "usage": {"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30},
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "hello"},
+                "finish_reason": "stop",
+            }
+        ],
+    }
+
+    payload = get_standard_logging_object_payload(
+        kwargs=kwargs,
+        init_response_obj=mock_response,
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+        logging_obj=logging_obj,
+        status="success",
+    )
+    assert payload is not None
+    assert payload["model"] == "azure_ai/gpt-5-nano-2025-08-07"
+
+
+def test_standard_logging_payload_uses_actual_model_for_azure_router_with_underscore():
+    from litellm.litellm_core_utils.litellm_logging import (
+        Logging,
+        get_standard_logging_object_payload,
+    )
+
+    logging_obj = Logging(
+        model="azure_ai/model_router",
+        messages=[{"role": "user", "content": "Hello"}],
+        stream=False,
+        call_type="completion",
+        start_time=datetime.now(),
+        litellm_call_id="test-azure-router-underscore",
+        function_id="test-fn",
+    )
+
+    kwargs = {
+        "model": "azure_ai/model_router",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "response_cost": 0.00001,
+        "custom_llm_provider": "azure_ai",
+    }
+    mock_response = {
+        "id": "chatcmpl-azure-router-underscore",
+        "object": "chat.completion",
+        "model": "azure_ai/gpt-5-nano-2025-08-07",
+        "usage": {"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30},
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "hello"},
+                "finish_reason": "stop",
+            }
+        ],
+    }
+
+    payload = get_standard_logging_object_payload(
+        kwargs=kwargs,
+        init_response_obj=mock_response,
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+        logging_obj=logging_obj,
+        status="success",
+    )
+    assert payload is not None
+    assert payload["model"] == "azure_ai/gpt-5-nano-2025-08-07"
+
+
 def test_merge_litellm_metadata_basic():
     """
     Test that merge_litellm_metadata correctly merges metadata and litellm_metadata.
@@ -888,3 +1088,136 @@ def test_merge_litellm_metadata_bedrock_passthrough_scenario():
 
     # Verify total number of fields (9 user fields + 4 model fields = 13)
     assert len(result) == 13
+
+
+# ---------------------------------------------------------------------------
+# Tests for base64 truncation in StandardLoggingPayload.response field
+# ---------------------------------------------------------------------------
+
+
+def test_standard_logging_payload_response_base64_truncated():
+    """
+    StandardLoggingPayload.response must have long base64 data-URIs truncated,
+    mirroring the truncation already applied to the .messages field.
+    Regression test for the Vertex image generation memory leak where a
+    ~173MB data_uri string was forwarded to every logging callback unchanged.
+    """
+    from datetime import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import (
+        Logging,
+        get_standard_logging_object_payload,
+    )
+    from litellm.types.utils import StandardLoggingPayloadStatus
+
+    b64_payload = "A" * 200  # well above MAX_BASE64_LENGTH_FOR_LOGGING (64)
+    data_uri = f"data:image/png;base64,{b64_payload}"
+
+    # Simulate a Vertex image generation response dict
+    init_response_obj = {
+        "id": "test-resp-id",
+        "choices": [
+            {
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": None,
+                    "images": [
+                        {"image_url": {"url": data_uri, "detail": "auto"}, "type": "image_url"}
+                    ],
+                },
+                "finish_reason": "stop",
+            }
+        ],
+        "model": "gemini-2.0-flash",
+        "usage": {"prompt_tokens": 10, "completion_tokens": 0, "total_tokens": 10},
+    }
+
+    logging_obj = Logging(
+        model="gemini-2.0-flash",
+        messages=[{"role": "user", "content": "generate an image"}],
+        stream=False,
+        call_type="acompletion",
+        start_time=datetime.now(),
+        litellm_call_id="test-call-truncate-response",
+        function_id="test-func-truncate-response",
+    )
+    logging_obj.model_call_details["litellm_params"] = {
+        "custom_llm_provider": "vertex_ai",
+        "api_base": "https://generativelanguage.googleapis.com",
+    }
+
+    payload = get_standard_logging_object_payload(
+        kwargs=logging_obj.model_call_details,
+        init_response_obj=init_response_obj,
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+        logging_obj=logging_obj,
+        status="success",
+    )
+
+    assert payload is not None
+    # The full base64 payload must NOT appear in the serialized response
+    import json
+
+    response_str = json.dumps(payload.get("response") if isinstance(payload, dict) else payload.response)
+    assert b64_payload not in response_str, (
+        "Full base64 payload found in StandardLoggingPayload.response — "
+        "image data is leaking into logging callbacks"
+    )
+    assert "base64_data truncated" in response_str
+
+
+def test_standard_logging_payload_response_short_base64_preserved():
+    """Short base64 data-URIs (under threshold) must NOT be truncated."""
+    from datetime import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import (
+        Logging,
+        get_standard_logging_object_payload,
+    )
+
+    short_b64 = "AAAA"  # well below threshold
+    data_uri = f"data:image/png;base64,{short_b64}"
+
+    init_response_obj = {
+        "id": "test-resp-short",
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": data_uri},
+                "finish_reason": "stop",
+            }
+        ],
+        "model": "gpt-4o",
+        "usage": {"prompt_tokens": 5, "completion_tokens": 5, "total_tokens": 10},
+    }
+
+    logging_obj = Logging(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "hello"}],
+        stream=False,
+        call_type="acompletion",
+        start_time=datetime.now(),
+        litellm_call_id="test-call-short-b64",
+        function_id="test-func-short-b64",
+    )
+    logging_obj.model_call_details["litellm_params"] = {
+        "custom_llm_provider": "openai",
+        "api_base": "https://api.openai.com",
+    }
+
+    payload = get_standard_logging_object_payload(
+        kwargs=logging_obj.model_call_details,
+        init_response_obj=init_response_obj,
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+        logging_obj=logging_obj,
+        status="success",
+    )
+
+    assert payload is not None
+    import json
+
+    response_str = json.dumps(payload.get("response") if isinstance(payload, dict) else payload.response)
+    assert short_b64 in response_str, "Short base64 must not be truncated"

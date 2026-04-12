@@ -24,6 +24,7 @@ print("Python Path:", sys.path)
 print("Current Working Directory:", os.getcwd())
 
 
+import functools
 from typing import Optional
 from unittest.mock import MagicMock, patch
 
@@ -32,6 +33,19 @@ from litellm._uuid import uuid
 import json
 from litellm.secret_managers.aws_secret_manager_v2 import AWSSecretsManagerV2
 from litellm.types.secret_managers.main import KeyManagementSettings
+
+
+def skip_on_throttling(func):
+    """Skip async test on AWS ThrottlingException instead of failing."""
+    @functools.wraps(func)
+    async def wrapper(*args, **kwargs):
+        try:
+            return await func(*args, **kwargs)
+        except Exception as e:
+            if "ThrottlingException" in str(e):
+                pytest.skip(f"AWS throttling: {e}")
+            raise
+    return wrapper
 
 
 def check_aws_credentials():
@@ -43,6 +57,7 @@ def check_aws_credentials():
 
 
 @pytest.mark.asyncio
+@skip_on_throttling
 async def test_write_and_read_simple_secret():
     """Test writing and reading a simple string secret"""
     check_aws_credentials()
@@ -84,6 +99,7 @@ async def test_write_and_read_simple_secret():
 
 
 @pytest.mark.asyncio
+@skip_on_throttling
 async def test_write_and_read_json_secret():
     """Test writing and reading a JSON structured secret"""
     check_aws_credentials()
@@ -128,6 +144,7 @@ async def test_write_and_read_json_secret():
 
 
 @pytest.mark.asyncio
+@skip_on_throttling
 async def test_read_nonexistent_secret():
     """Test reading a secret that doesn't exist"""
     check_aws_credentials()
@@ -141,6 +158,7 @@ async def test_read_nonexistent_secret():
 
 
 @pytest.mark.asyncio
+@skip_on_throttling
 async def test_primary_secret_functionality():
     """Test storing and retrieving secrets from a primary secret"""
     check_aws_credentials()
@@ -196,6 +214,7 @@ async def test_primary_secret_functionality():
         assert delete_response is not None
 
 @pytest.mark.asyncio
+@skip_on_throttling
 async def test_write_secret_with_description_and_tags():
     """Test writing a secret with description and tags"""
     check_aws_credentials()
@@ -402,6 +421,7 @@ def test_load_aws_secret_manager_with_settings():
 
 
 @pytest.mark.asyncio
+@skip_on_throttling
 async def test_end_to_end_iam_role_secret_write():
     """
     Test writing a secret using IAM role assumption (integration test)

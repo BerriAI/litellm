@@ -21,6 +21,7 @@ class SimpleProviderConfig:
         self.param_mappings = data.get("param_mappings", {})
         self.constraints = data.get("constraints", {})
         self.special_handling = data.get("special_handling", {})
+        self.supported_endpoints = data.get("supported_endpoints", [])
 
 
 class JSONProviderRegistry:
@@ -36,7 +37,7 @@ class JSONProviderRegistry:
             return
 
         json_path = Path(__file__).parent / "providers.json"
-        
+
         if not json_path.exists():
             # No JSON file yet, that's okay
             cls._loaded = True
@@ -51,7 +52,9 @@ class JSONProviderRegistry:
 
             cls._loaded = True
         except Exception as e:
-            verbose_logger.warning(f"Warning: Failed to load JSON provider configs: {e}")
+            verbose_logger.warning(
+                f"Warning: Failed to load JSON provider configs: {e}"
+            )
             cls._loaded = True
 
     @classmethod
@@ -63,6 +66,14 @@ class JSONProviderRegistry:
     def exists(cls, slug: str) -> bool:
         """Check if a provider is defined via JSON"""
         return slug in cls._providers
+
+    @classmethod
+    def supports_responses_api(cls, slug: str) -> bool:
+        """Check if a JSON provider supports the Responses API"""
+        provider = cls._providers.get(slug)
+        if provider is None:
+            return False
+        return "/v1/responses" in provider.supported_endpoints
 
     @classmethod
     def list_providers(cls) -> list:

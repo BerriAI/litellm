@@ -87,5 +87,3 @@ class FalAIFluxProV11Config(FalAIFluxProV11UltraConfig):
                 pass
 
         return "landscape_4_3"
-
-

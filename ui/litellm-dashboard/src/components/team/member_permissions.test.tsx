@@ -97,6 +97,20 @@ describe("MemberPermissions", () => {
     }
   });
 
+  it("should render team daily activity permission with correct method and description", async () => {
+    vi.mocked(networking.getTeamPermissionsCall).mockResolvedValue({
+      all_available_permissions: ["/key/generate", "/team/daily/activity"],
+      team_member_permissions: [],
+    });
+
+    renderWithProviders(<MemberPermissions teamId="team-123" accessToken="token-123" canEditTeam={true} />);
+
+    await waitFor(() => {
+      expect(screen.getByText("/team/daily/activity")).toBeInTheDocument();
+      expect(screen.getByText("Member can view all team usage data (not just their own)")).toBeInTheDocument();
+    });
+  });
+
   it("should not show save button when canEditTeam is false", async () => {
     vi.mocked(networking.getTeamPermissionsCall).mockResolvedValue({
       all_available_permissions: ["/key/generate", "/key/list"],

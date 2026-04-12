@@ -1,4 +1,9 @@
 # conftest.py
+#
+# xdist-compatible test isolation for guardrails tests.
+# Pattern matches tests/test_litellm/conftest.py:
+#   - Function-scoped fixture saves/restores litellm globals (no reload)
+#   - Module-scoped fixture reloads only in single-process mode
 
 import importlib
 import os
@@ -10,58 +15,85 @@ sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 import litellm
-import asyncio
 
-@pytest.fixture(scope="session")
-def event_loop():
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        loop = asyncio.new_event_loop()
-    yield loop
-    loop.close()
 
 @pytest.fixture(scope="function", autouse=True)
-def setup_and_teardown():
+def isolate_litellm_state():
     """
-    This fixture reloads litellm before every function. To speed up testing by removing callbacks being chained.
+    Per-function isolation fixture.
+
+    Saves and restores litellm callback/global state so tests don't leak
+    side effects. Works safely under pytest-xdist parallel execution.
     """
-    curr_dir = os.getcwd()  # Get the current working directory
-    sys.path.insert(
-        0, os.path.abspath("../..")
-    )  # Adds the project directory to the system path
+    # Save original callback state
+    original_state = {}
+    for attr in (
+        "callbacks",
+        "success_callback",
+        "failure_callback",
+        "_async_success_callback",
+        "_async_failure_callback",
+    ):
+        if hasattr(litellm, attr):
+            val = getattr(litellm, attr)
+            original_state[attr] = val.copy() if val else []
 
-    import litellm
-    from litellm import Router
-    import asyncio
+    # Save other globals that tests commonly mutate
+    for attr in ("set_verbose", "cache", "num_retries"):
+        if hasattr(litellm, attr):
+            original_state[attr] = getattr(litellm, attr)
 
-    from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
-    # flush all logs
-    asyncio.run(GLOBAL_LOGGING_WORKER.clear_queue())
+    # Flush cache before test
+    if hasattr(litellm, "in_memory_llm_clients_cache"):
+        litellm.in_memory_llm_clients_cache.flush_cache()
 
+    # Clear callbacks before test
+    for attr in (
+        "success_callback",
+        "failure_callback",
+        "_async_success_callback",
+        "_async_failure_callback",
+    ):
+        if hasattr(litellm, attr):
+            setattr(litellm, attr, [])
 
-    importlib.reload(litellm)
-
-    try:
-        if hasattr(litellm, "proxy") and hasattr(litellm.proxy, "proxy_server"):
-            import litellm.proxy.proxy_server
-
-            importlib.reload(litellm.proxy.proxy_server)
-    except Exception as e:
-        print(f"Error reloading litellm.proxy.proxy_server: {e}")
-
-    import asyncio
-
-    loop = asyncio.get_event_loop_policy().new_event_loop()
-    asyncio.set_event_loop(loop)
-    print(litellm)
-    # from litellm import Router, completion, aembedding, acompletion, embedding
     yield
 
-    # Teardown code (executes after the yield point)
-    loop.close()  # Close the loop created earlier
-    asyncio.set_event_loop(None)  # Remove the reference to the loop
+    # Restore all saved state
+    if hasattr(litellm, "in_memory_llm_clients_cache"):
+        litellm.in_memory_llm_clients_cache.flush_cache()
 
+    for attr, original_value in original_state.items():
+        if hasattr(litellm, attr):
+            setattr(litellm, attr, original_value)
+
+
+@pytest.fixture(scope="module", autouse=True)
+def setup_and_teardown():
+    """
+    Module-scoped setup. Reloads litellm only in single-process mode
+    (skipped under xdist to avoid cross-worker interference).
+    """
+    sys.path.insert(0, os.path.abspath("../.."))
+
+    import litellm
+
+    worker_id = os.environ.get("PYTEST_XDIST_WORKER", None)
+    if worker_id is None:
+        importlib.reload(litellm)
+
+        try:
+            if hasattr(litellm, "proxy") and hasattr(litellm.proxy, "proxy_server"):
+                import litellm.proxy.proxy_server
+
+                importlib.reload(litellm.proxy.proxy_server)
+        except Exception as e:
+            print(f"Error reloading litellm.proxy.proxy_server: {e}")
+
+        if hasattr(litellm, "in_memory_llm_clients_cache"):
+            litellm.in_memory_llm_clients_cache.flush_cache()
+
+    yield
 
 
 def pytest_collection_modifyitems(config, items):

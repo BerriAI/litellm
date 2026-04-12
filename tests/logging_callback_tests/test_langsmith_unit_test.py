@@ -475,7 +475,11 @@ async def test_langsmith_queue_logging():
                 mock_response="This is a mock response",
             )
 
-        await asyncio.sleep(3)
+        # Poll for async callbacks to complete (up to 10s)
+        for _ in range(20):
+            if len(test_langsmith_logger.log_queue) >= 5:
+                break
+            await asyncio.sleep(0.5)
 
         # Check that logs are in the queue
         assert len(test_langsmith_logger.log_queue) == 5
@@ -490,8 +494,11 @@ async def test_langsmith_queue_logging():
                 mock_response="This is a mock response",
             )
 
-        # Wait a short time for any asynchronous operations to complete
-        await asyncio.sleep(1)
+        # Poll for flush to complete (up to 10s)
+        for _ in range(20):
+            if len(test_langsmith_logger.log_queue) < 5:
+                break
+            await asyncio.sleep(0.5)
 
         print(
             "Length of langsmith log queue: {}".format(

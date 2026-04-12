@@ -68,6 +68,8 @@ def mock_request():
             self.request_body = request_body or {}
             # Add url attribute that the actual code expects
             self.url = "http://localhost:8000/test"
+            # Add state attribute that FastAPI requests have
+            self.state = type("State", (), {})()
 
         async def body(self) -> bytes:
             return bytes(json.dumps(self.request_body), "utf-8")

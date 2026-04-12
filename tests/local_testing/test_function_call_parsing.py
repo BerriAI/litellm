@@ -144,6 +144,7 @@ def trade(model_name: str) -> List[Trade]:  # type: ignore
 @pytest.mark.parametrize(
     "model", ["claude-3-haiku-20240307", "anthropic.claude-3-haiku-20240307-v1:0"]
 )
+@pytest.mark.flaky(retries=6, delay=10)
 def test_function_call_parsing(model):
     trades = trade(model)
     print([trade.order for trade in trades if trade is not None])

@@ -94,8 +94,15 @@ def test_bedrock_timeout():
 
 
 def test_hanging_request_azure():
+    """
+    Test that a slow Azure request properly raises APITimeoutError via the Router.
+
+    Uses a mock to simulate a slow HTTP response so the timeout fires reliably,
+    rather than racing against real network latency.
+    """
     litellm.set_verbose = True
     import asyncio
+    from unittest.mock import AsyncMock, patch
 
     try:
         router = litellm.Router(
@@ -103,7 +110,7 @@ def test_hanging_request_azure():
                 {
                     "model_name": "azure-gpt",
                     "litellm_params": {
-                        "model": "azure/gpt-4o-new-test",
+                        "model": "azure/gpt-4.1-mini",
                         "api_base": os.environ["AZURE_API_BASE"],
                         "api_key": os.environ["AZURE_API_KEY"],
                     },
@@ -118,17 +125,27 @@ def test_hanging_request_azure():
 
         encoded = litellm.utils.encode(model="gpt-3.5-turbo", text="blue")[0]
 
+        original_send = httpx.AsyncClient.send
+
+        async def _slow_send(self, request, *args, **kwargs):
+            await asyncio.sleep(5)
+            return await original_send(self, request, *args, **kwargs)
+
         async def _test():
-            response = await router.acompletion(
-                model="azure-gpt",
-                messages=[
-                    {"role": "user", "content": f"what color is red {uuid.uuid4()}"}
-                ],
-                logit_bias={encoded: 100},
-                timeout=0.01,
-            )
-            print(response)
-            return response
+            with patch.object(httpx.AsyncClient, "send", new=_slow_send):
+                response = await router.acompletion(
+                    model="azure-gpt",
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": f"what color is red {uuid.uuid4()}",
+                        }
+                    ],
+                    logit_bias={encoded: 100},
+                    timeout=0.01,
+                )
+                print(response)
+                return response
 
         response = asyncio.run(_test())
 
@@ -260,7 +277,7 @@ async def test_anthropic_timeout(streaming, sync_mode):
     try:
         if sync_mode:
             response = litellm.completion(
-                model="claude-3-5-sonnet-20240620",
+                model="claude-sonnet-4-5-20250929",
                 timeout=0.01,
                 messages=[{"role": "user", "content": "hello, write a 20 pg essay"}],
                 stream=streaming,
@@ -270,7 +287,7 @@ async def test_anthropic_timeout(streaming, sync_mode):
                     pass
         else:
             response = await litellm.acompletion(
-                model="claude-3-5-sonnet-20240620",
+                model="claude-sonnet-4-5-20250929",
                 timeout=0.01,
                 messages=[{"role": "user", "content": "hello, write a 20 pg essay"}],
                 stream=streaming,

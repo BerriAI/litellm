@@ -54,7 +54,7 @@ class BaseAnthropicMessagesTest(ABC):
         print("making request to anthropic passthrough with thinking")
         client = self.get_client()
         response = client.messages.create(
-            model="claude-3-7-sonnet-20250219",
+            model="claude-4-sonnet-20250514",
             max_tokens=20000,
             thinking={"type": "enabled", "budget_tokens": 16000},
             messages=[
@@ -75,7 +75,7 @@ class BaseAnthropicMessagesTest(ABC):
         collected_response = []
         client = self.get_client()
         with client.messages.stream(
-            model="claude-3-7-sonnet-20250219",
+            model="claude-4-sonnet-20250514",
             max_tokens=20000,
             thinking={"type": "enabled", "budget_tokens": 16000},
             messages=[

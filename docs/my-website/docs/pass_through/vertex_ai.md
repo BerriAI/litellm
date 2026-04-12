@@ -45,7 +45,7 @@ model_list:
     litellm_params:
       model: vertex_ai/gemini-1.0-pro
       vertex_project: adroit-crow-413218
-      vertex_region: us-central1
+      vertex_location: us-central1
       vertex_credentials: /path/to/credentials.json
       use_in_pass_through: true # 👈 KEY CHANGE
 ```
@@ -57,9 +57,9 @@ model_list:
 <TabItem value="yaml" label="Set in config.yaml">
 
 ```yaml
-default_vertex_config: 
+default_vertex_config:
   vertex_project: adroit-crow-413218
-  vertex_region: us-central1
+  vertex_location: us-central1
   vertex_credentials: /path/to/credentials.json
 ```
 </TabItem>

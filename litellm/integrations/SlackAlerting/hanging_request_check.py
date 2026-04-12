@@ -102,10 +102,10 @@ class AlertingHangingRequestCheck:
         )
 
         for request_id in hanging_requests:
-            hanging_request_data: Optional[HangingRequestData] = (
-                await self.hanging_request_cache.async_get_cache(
-                    key=request_id,
-                )
+            hanging_request_data: Optional[
+                HangingRequestData
+            ] = await self.hanging_request_cache.async_get_cache(
+                key=request_id,
             )
 
             if hanging_request_data is None:
@@ -172,4 +172,6 @@ Team Alias: `{hanging_request_data.team_alias}`"""
             level="Medium",
             alert_type=AlertType.llm_requests_hanging,
             alerting_metadata=hanging_request_data.alerting_metadata or {},
+            request_model=hanging_request_data.model,
+            api_base=hanging_request_data.api_base,
         )

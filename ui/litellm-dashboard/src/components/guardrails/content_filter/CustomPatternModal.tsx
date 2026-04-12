@@ -1,6 +1,5 @@
 import React from "react";
-import { Typography, Select, Modal, Space } from "antd";
-import { Button, TextInput } from "@tremor/react";
+import { Typography, Select, Modal, Space, Button, Input } from "antd";
 
 const { Text } = Typography;
 const { Option } = Select;
@@ -39,20 +38,20 @@ const CustomPatternModal: React.FC<CustomPatternModalProps> = ({
       <Space direction="vertical" style={{ width: "100%" }} size="large">
         <div>
           <Text strong>Pattern name</Text>
-          <TextInput
+          <Input
             placeholder="e.g., internal_id, employee_code"
             value={patternName}
-            onValueChange={onNameChange}
+            onChange={(e) => onNameChange(e.target.value)}
             style={{ marginTop: 8 }}
           />
         </div>
 
         <div>
           <Text strong>Regex pattern</Text>
-          <TextInput
+          <Input
             placeholder="e.g., ID-[0-9]{6}"
             value={patternRegex}
-            onValueChange={onRegexChange}
+            onChange={(e) => onRegexChange(e.target.value)}
             style={{ marginTop: 8 }}
           />
           <Text type="secondary" style={{ fontSize: 12 }}>
@@ -77,10 +76,10 @@ const CustomPatternModal: React.FC<CustomPatternModalProps> = ({
       </Space>
 
       <div style={{ display: "flex", justifyContent: "flex-end", gap: "8px", marginTop: "24px" }}>
-        <Button variant="secondary" onClick={onCancel}>
+        <Button onClick={onCancel}>
           Cancel
         </Button>
-        <Button onClick={onAdd}>
+        <Button type="primary" onClick={onAdd}>
           Add
         </Button>
       </div>

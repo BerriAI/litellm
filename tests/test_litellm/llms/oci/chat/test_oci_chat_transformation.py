@@ -287,6 +287,114 @@ class TestOCIChatConfig:
         # Verify the message content
         assert transformed_request["chatRequest"]["message"] == "What is quantum computing?"
 
+    def test_transform_request_response_format_json_object(self):
+        """
+        Tests that response_format type 'json_object' is uppercased to 'JSON_OBJECT' for generic OCI models.
+        """
+        config = OCIChatConfig()
+        optional_params = {
+            "oci_compartment_id": TEST_COMPARTMENT_ID,
+            "response_format": {"type": "json_object"},
+        }
+        transformed_request = config.transform_request(
+            model=TEST_MODEL_NAME,
+            messages=TEST_MESSAGES,  # type: ignore
+            optional_params=optional_params,
+            litellm_params={},
+            headers={},
+        )
+        rf = transformed_request["chatRequest"]["responseFormat"]
+        assert rf["type"] == "JSON_OBJECT"
+
+    def test_transform_request_response_format_text(self):
+        """
+        Tests that response_format type 'text' is uppercased to 'TEXT' for generic OCI models.
+        """
+        config = OCIChatConfig()
+        optional_params = {
+            "oci_compartment_id": TEST_COMPARTMENT_ID,
+            "response_format": {"type": "text"},
+        }
+        transformed_request = config.transform_request(
+            model=TEST_MODEL_NAME,
+            messages=TEST_MESSAGES,  # type: ignore
+            optional_params=optional_params,
+            litellm_params={},
+            headers={},
+        )
+        rf = transformed_request["chatRequest"]["responseFormat"]
+        assert rf["type"] == "TEXT"
+
+    def test_transform_request_response_format_json_shorthand(self):
+        """
+        Tests that response_format type 'json' is mapped to 'JSON_OBJECT' for generic OCI models.
+        """
+        config = OCIChatConfig()
+        optional_params = {
+            "oci_compartment_id": TEST_COMPARTMENT_ID,
+            "response_format": {"type": "json"},
+        }
+        transformed_request = config.transform_request(
+            model=TEST_MODEL_NAME,
+            messages=TEST_MESSAGES,  # type: ignore
+            optional_params=optional_params,
+            litellm_params={},
+            headers={},
+        )
+        rf = transformed_request["chatRequest"]["responseFormat"]
+        assert rf["type"] == "JSON_OBJECT"
+
+    def test_transform_response_without_token_details(self):
+        """
+        Tests that responses missing completionTokensDetails and promptTokensDetails
+        are handled correctly (fields are optional).
+        """
+        config = OCIChatConfig()
+        created_time = datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
+        mock_oci_response = {
+            "modelId": TEST_MODEL_NAME,
+            "modelVersion": "1.0",
+            "chatResponse": {
+                "apiFormat": "GENERIC",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {
+                            "role": "ASSISTANT",
+                            "content": [{"type": "TEXT", "text": "Hello!"}],
+                        },
+                        "finishReason": "STOP",
+                    }
+                ],
+                "timeCreated": created_time,
+                "usage": {
+                    "promptTokens": 5,
+                    "completionTokens": 10,
+                    "totalTokens": 15,
+                },
+            },
+        }
+        response = httpx.Response(
+            status_code=200, json=mock_oci_response, headers={"Content-Type": "application/json"}
+        )
+        result = config.transform_response(
+            model=TEST_MODEL_NAME,
+            raw_response=response,
+            model_response=ModelResponse(),
+            logging_obj={},  # type: ignore
+            request_data={},
+            messages=[],
+            optional_params={},
+            litellm_params={},
+            encoding={},
+        )
+
+        assert isinstance(result, ModelResponse)
+        assert result.choices[0].message.content == "Hello!"
+        assert result.usage.prompt_tokens == 5  # type: ignore
+        assert result.usage.completion_tokens == 10  # type: ignore
+        assert result.usage.total_tokens == 15  # type: ignore
+
     def test_transform_response_simple_text(self):
         """
         Tests if a simple text response is transformed correctly.

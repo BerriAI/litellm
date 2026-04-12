@@ -215,6 +215,66 @@ The following parameters can be updated on a continuation of a trace by passing 
 
 Any other key value pairs passed into the metadata not listed in the above spec for a `litellm` completion will be added as a metadata key value pair for the generation.
 
+#### Multiple Langfuse Projects (Per-Request Credentials)
+
+You can send traces to different Langfuse projects per request by passing credentials directly to `completion()` or `acompletion()`. This works alongside (or instead of) the global env vars and is useful when different teams or business processes use different Langfuse projects.
+
+Pass **`langfuse_public_key`**, **`langfuse_secret_key`** (or **`langfuse_secret`**), and optionally **`langfuse_host`** as keyword arguments:
+
+```python
+import litellm
+from litellm import completion
+
+# Optional: set a default via env for requests that don't pass credentials
+# os.environ["LANGFUSE_PUBLIC_KEY"] = "pk-default..."
+# os.environ["LANGFUSE_SECRET_KEY"] = "sk-default..."
+
+litellm.success_callback = ["langfuse"]
+litellm.failure_callback = ["langfuse"]
+
+# Request 1 → Langfuse Project A
+response_a = completion(
+    model="gpt-3.5-turbo",
+    messages=[{"role": "user", "content": "Hello from team A"}],
+    langfuse_public_key="pk-lf-project-a...",
+    langfuse_secret_key="sk-lf-project-a...",
+    langfuse_host="https://us.cloud.langfuse.com",  # optional
+)
+
+# Request 2 → Langfuse Project B (different project)
+response_b = completion(
+    model="gpt-3.5-turbo",
+    messages=[{"role": "user", "content": "Hello from team B"}],
+    langfuse_public_key="pk-lf-project-b...",
+    langfuse_secret_key="sk-lf-project-b...",
+    langfuse_host="https://eu.cloud.langfuse.com",  # optional, can differ per project
+)
+```
+
+Async usage with per-request credentials:
+
+```python
+import litellm
+from litellm import acompletion
+
+litellm.success_callback = ["langfuse"]
+litellm.failure_callback = ["langfuse"]
+
+response = await acompletion(
+    model="gpt-3.5-turbo",
+    messages=[{"role": "user", "content": "Hi"}],
+    langfuse_public_key="pk-lf-...",
+    langfuse_secret_key="sk-lf-...",
+    langfuse_host="https://us.cloud.langfuse.com",  # optional
+)
+```
+
+- **`langfuse_public_key`** – Langfuse project public key (required for per-request override).
+- **`langfuse_secret_key`** or **`langfuse_secret`** – Langfuse secret key (either name is accepted).
+- **`langfuse_host`** – Langfuse host URL (e.g. `https://us.cloud.langfuse.com`); optional, defaults to env or Langfuse cloud.
+
+When these are passed, that request uses this project (and host) for the Langfuse callback; when omitted, the callback uses the global Langfuse client (from env vars if set). LiteLLM caches a Langfuse client per credential set to avoid creating a new client on every request.
+
 #### Disable Logging - Specific Calls
 
 To disable logging for specific calls use the `no-log` flag. 

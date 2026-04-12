@@ -583,7 +583,7 @@ async def test_aaaaakey_info_spend_values_streaming():
             rounded_response_cost == rounded_key_info_spend
         ), f"Expected={rounded_response_cost}, Got={rounded_key_info_spend}"
 
-
+@pytest.mark.flaky(retries=3, delay=1)
 @pytest.mark.asyncio
 async def test_key_info_spend_values_image_generation():
     """

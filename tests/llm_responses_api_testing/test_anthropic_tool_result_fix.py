@@ -114,7 +114,7 @@ def test_fix_ensures_tool_calls_for_tool_results():
     optional_params = {"tools": [shell_tool]}
     
     anthropic_data = anthropic_config.transform_request(
-        model="claude-3-7-sonnet-latest",
+        model="claude-sonnet-4-5",
         messages=fixed_messages,
         optional_params=optional_params,
         litellm_params={},

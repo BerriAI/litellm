@@ -9,7 +9,7 @@ from typing import Any, AsyncIterator, Dict
 class BaseA2AProviderConfig(ABC):
     """
     Base configuration class for A2A protocol providers.
-    
+
     Each provider should implement this interface to define how to handle
     A2A requests for their specific agent type.
     """
@@ -60,4 +60,3 @@ class BaseA2AProviderConfig(ABC):
         # The yield is here to make this a generator function
         if False:  # pragma: no cover
             yield {}
-

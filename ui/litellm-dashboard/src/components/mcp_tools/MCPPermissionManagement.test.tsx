@@ -44,7 +44,10 @@ const renderWithForm = (props = {}) => {
   it("should default allow_all_keys switch to unchecked for new servers", async () => {
     renderWithForm();
     await expandPanel();
-    const toggle = screen.getByRole("switch");
+    // Find the switch associated with "Allow All LiteLLM Keys" text
+    // The first switch in the component is for allow_all_keys
+    const switches = screen.getAllByRole("switch");
+    const toggle = switches[0];
     expect(toggle).toHaveAttribute("aria-checked", "false");
   });
 
@@ -62,7 +65,10 @@ const renderWithForm = (props = {}) => {
     });
 
     const user = await expandPanel();
-    const toggle = screen.getByRole("switch");
+    // Find the switch associated with "Allow All LiteLLM Keys" text
+    // The first switch in the component is for allow_all_keys
+    const switches = screen.getAllByRole("switch");
+    const toggle = switches[0];
     expect(toggle).toHaveAttribute("aria-checked", "true");
 
     await user.click(toggle);

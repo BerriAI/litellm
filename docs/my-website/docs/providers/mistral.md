@@ -311,6 +311,79 @@ print(response)
 - **Model Compatibility**: Reasoning parameters only work with magistral models
 - **Backward Compatibility**: Non-magistral models will ignore reasoning parameters and work normally
 
+## Audio Transcription
+
+Use Mistral's Voxtral models for audio transcription via `litellm.transcription()`.
+
+### SDK Usage
+
+```python
+from litellm import transcription
+import os
+
+os.environ["MISTRAL_API_KEY"] = ""
+
+audio_file = open("path/to/audio.wav", "rb")
+
+response = transcription(
+    model="mistral/voxtral-mini-latest",
+    file=audio_file,
+)
+
+print(response.text)
+```
+
+### With Optional Parameters
+
+```python
+response = transcription(
+    model="mistral/voxtral-mini-latest",
+    file=audio_file,
+    language="en",
+    temperature=0.0,
+    response_format="json",
+)
+```
+
+### Mistral-Specific Parameters
+
+Mistral supports additional parameters beyond the OpenAI-compatible ones:
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `diarize` | `bool` | Enable speaker diarization |
+
+```python
+response = transcription(
+    model="mistral/voxtral-mini-latest",
+    file=audio_file,
+    diarize=True,
+)
+```
+
+### Usage with LiteLLM Proxy
+
+```yaml
+model_list:
+  - model_name: voxtral
+    litellm_params:
+      model: mistral/voxtral-mini-latest
+      api_key: os.environ/MISTRAL_API_KEY
+    model_info:
+      mode: audio_transcription
+```
+
+```bash
+litellm --config /path/to/config.yaml
+```
+
+```bash
+curl --location 'http://0.0.0.0:4000/v1/audio/transcriptions' \
+--header 'Authorization: Bearer sk-1234' \
+--form 'file=@"audio.wav"' \
+--form 'model="voxtral"'
+```
+
 ## Sample Usage - Embedding
 ```python
 from litellm import embedding

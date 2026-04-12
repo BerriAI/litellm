@@ -1,6 +1,7 @@
-from typing import List, Literal, Optional, Union
+from typing import Any, Dict, List, Literal, Optional, Union
 
-from typing_extensions import TypedDict
+from pydantic import BaseModel
+from typing_extensions import TypedDict  # noqa: F401 – re-exported
 
 from .llms.openai import (
     OpenAIRealtimeEvents,
@@ -49,3 +50,68 @@ class RealtimeQueryParams(TypedDict, total=False):
     model: str
     intent: Optional[str]
     # Add more fields as needed
+
+
+# ---------------------------------------------------------------------------
+# WebRTC / client_secrets types  (POST /v1/realtime/client_secrets)
+# ---------------------------------------------------------------------------
+
+
+class RealtimeExpiresAfter(BaseModel):
+    """Expiration config for a client secret."""
+
+    anchor: Optional[str] = "created_at"
+    seconds: Optional[int] = None
+
+
+class RealtimeSessionConfig(BaseModel):
+    """
+    Session configuration nested inside the client_secrets request body.
+
+    Mirrors OpenAI's RealtimeSessionCreateRequest (type=realtime) and
+    RealtimeTranscriptionSessionCreateRequest (type=transcription).
+    Extra/unknown fields are passed through unchanged.
+    """
+
+    model_config = {"extra": "allow"}
+
+    type: Optional[str] = None
+    model: Optional[str] = None
+    instructions: Optional[str] = None
+    audio: Optional[Dict[str, Any]] = None
+    include: Optional[List[str]] = None
+    max_output_tokens: Optional[Union[int, str]] = None
+    output_modalities: Optional[List[str]] = None
+    tool_choice: Optional[Any] = None
+    tools: Optional[List[Dict[str, Any]]] = None
+    tracing: Optional[Any] = None
+    truncation: Optional[Any] = None
+    prompt: Optional[Dict[str, Any]] = None
+
+
+class RealtimeClientSecretRequest(BaseModel):
+    """
+    Request body for POST /v1/realtime/client_secrets.
+
+    LiteLLM also accepts a top-level `model` field for routing when
+    session.model is absent (LiteLLM extension, not forwarded to OpenAI).
+    """
+
+    expires_after: Optional[RealtimeExpiresAfter] = None
+    session: Optional[RealtimeSessionConfig] = None
+    # LiteLLM-only routing hint — stripped before forwarding upstream
+    model: Optional[str] = None
+
+
+class RealtimeClientSecretResponse(BaseModel):
+    """
+    Response from POST /v1/realtime/client_secrets.
+
+    Both the top-level `value` and `session.client_secret.value`
+    will contain the encrypted token instead of the raw ephemeral key.
+    The `session` field is kept as a raw dict so unknown fields pass through.
+    """
+
+    expires_at: Optional[int] = None
+    value: str
+    session: Optional[Dict[str, Any]] = None

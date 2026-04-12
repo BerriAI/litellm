@@ -18,16 +18,16 @@ from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation
     LiteLLMLoggingObj,
 )
 from litellm.types.llms.openai import AllMessageValues
-from litellm.types.utils import ModelResponse
+from litellm.types.utils import ModelResponse, Usage
 
 
 class AmazonQwen2Config(AmazonQwen3Config):
     """
     Config for sending `qwen2` requests to `/bedrock/invoke/`
-    
+
     Inherits from AmazonQwen3Config since Qwen2 and Qwen3 architectures are mostly similar.
     The main difference is in the response format: Qwen2 uses "text" field while Qwen3 uses "generation" field.
-    
+
     Reference: https://docs.aws.amazon.com/bedrock/latest/userguide/invoke-imported-model.html
     """
 
@@ -47,45 +47,47 @@ class AmazonQwen2Config(AmazonQwen3Config):
     ) -> ModelResponse:
         """
         Transform Qwen2 Bedrock response to OpenAI format
-        
+
         Qwen2 uses "text" field, but we also support "generation" field for compatibility.
         """
         try:
-            if hasattr(raw_response, 'json'):
+            if hasattr(raw_response, "json"):
                 response_data = raw_response.json()
             else:
                 response_data = raw_response
-            
+
             # Extract the generated text - Qwen2 uses "text" field, but also support "generation" for compatibility
-            generated_text = response_data.get("generation", "") or response_data.get("text", "")
-            
+            generated_text = response_data.get("generation", "") or response_data.get(
+                "text", ""
+            )
+
             # Clean up the response (remove assistant start token if present)
             if generated_text.startswith("<|im_start|>assistant\n"):
-                generated_text = generated_text[len("<|im_start|>assistant\n"):]
+                generated_text = generated_text[len("<|im_start|>assistant\n") :]
             if generated_text.endswith("<|im_end|>"):
-                generated_text = generated_text[:-len("<|im_end|>")]
-            
+                generated_text = generated_text[: -len("<|im_end|>")]
+
             # Set the content in the existing model_response structure
-            if hasattr(model_response, 'choices') and len(model_response.choices) > 0:
+            if hasattr(model_response, "choices") and len(model_response.choices) > 0:
                 choice = model_response.choices[0]
-                if hasattr(choice, 'message'):
-                    choice.message.content = generated_text
-                    choice.finish_reason = "stop"
-                else:
-                    # Handle streaming choices
-                    choice.delta.content = generated_text
-                    choice.finish_reason = "stop"
-            
+                choice.message.content = generated_text
+                choice.finish_reason = "stop"
+
             # Set usage information if available in response
             if "usage" in response_data:
                 usage_data = response_data["usage"]
-                if hasattr(model_response, 'usage'):
-                    model_response.usage.prompt_tokens = usage_data.get("prompt_tokens", 0)
-                    model_response.usage.completion_tokens = usage_data.get("completion_tokens", 0)
-                    model_response.usage.total_tokens = usage_data.get("total_tokens", 0)
-            
+                setattr(
+                    model_response,
+                    "usage",
+                    Usage(
+                        prompt_tokens=usage_data.get("prompt_tokens", 0),
+                        completion_tokens=usage_data.get("completion_tokens", 0),
+                        total_tokens=usage_data.get("total_tokens", 0),
+                    ),
+                )
+
             return model_response
-            
+
         except Exception as e:
             if logging_obj:
                 logging_obj.post_call(
@@ -95,4 +97,3 @@ class AmazonQwen2Config(AmazonQwen3Config):
                     additional_args={"error": str(e)},
                 )
             raise e
-

@@ -1,0 +1,100 @@
+# Singapore PDPA Advisory Guidelines — Sensitive Personal Data
+# Blocks requests to infer, profile, or process sensitive data categories
+# (race, religion, health, political opinions, trade union membership)
+# for Singapore residents without clear legitimate purpose.
+# Reference: https://www.pdpc.gov.sg/overview-of-pdpa/the-legislation/personal-data-protection-act
+category_name: "sg_pdpa_sensitive_data"
+description: "PDPA Advisory Guidelines — Blocks profiling or inference of sensitive personal data categories (race, religion, health, politics) for Singapore residents"
+default_action: "BLOCK"
+
+identifier_words:
+  # Race & ethnicity
+  - "race"
+  - "ethnicity"
+  - "ethnic group"
+  - "CMIO"
+
+  # Religion
+  - "religion"
+  - "religious belief"
+  - "faith"
+
+  # Health & medical
+  - "health condition"
+  - "medical record"
+  - "mental health"
+  - "medical history"
+  - "health status"
+
+  # Political & union
+  - "political opinion"
+  - "political affiliation"
+  - "trade union"
+  - "union membership"
+
+  # Sexual orientation
+  - "sexual orientation"
+  - "gender identity"
+
+  # Criminal
+  - "criminal record"
+  - "criminal history"
+
+  # Financial
+  - "financial status"
+  - "income level"
+  - "credit history"
+
+additional_block_words:
+  # Inference & prediction
+  - "infer"
+  - "predict"
+  - "classify"
+  - "profile"
+  - "categorize"
+
+  # Scoring & ranking
+  - "score"
+  - "rank"
+  - "rate"
+
+  # Targeting & segmentation
+  - "segment by"
+  - "target based on"
+  - "discriminate"
+  - "filter by"
+  - "sort by"
+  - "group by"
+
+always_block_keywords:
+  - keyword: "infer religion from name"
+    severity: "high"
+  - keyword: "predict race from photo"
+    severity: "high"
+  - keyword: "segment by ethnicity Singapore"
+    severity: "high"
+  - keyword: "profile by religious group"
+    severity: "high"
+  - keyword: "classify by mental health"
+    severity: "high"
+  - keyword: "infer race from surname"
+    severity: "high"
+  - keyword: "predict ethnicity from name"
+    severity: "high"
+  - keyword: "discriminate by race Singapore"
+    severity: "high"
+
+exceptions:
+  - "medical treatment"
+  - "healthcare provider"
+  - "research ethics"
+  - "anonymised"
+  - "anonymized"
+  - "aggregate statistics"
+  - "census"
+  - "equal opportunity"
+  - "anti-discrimination"
+  - "explain"
+  - "what is"
+  - "academic"
+  - "study on"

@@ -833,3 +833,125 @@ async def test_bedrock_embedding_custom_headers_with_iam_role_and_custom_api_bas
             
         except Exception as e:
             pytest.fail(f"Failed to forward headers with IAM role + custom api_base (async): {str(e)}")
+
+
+def test_titan_multimodal_embedding_image_cost_tracking():
+    """Test that Titan multimodal embedding with image input populates image_count in Usage."""
+    from litellm.llms.bedrock.embed.amazon_titan_multimodal_transformation import (
+        AmazonTitanMultimodalEmbeddingG1Config,
+    )
+
+    config = AmazonTitanMultimodalEmbeddingG1Config()
+
+    # Simulate response from AWS Bedrock
+    response_list = [
+        {
+            "embedding": [0.1, 0.2, 0.3],
+            "inputTextTokenCount": 0,
+        }
+    ]
+
+    # Simulate batch_data with an image request (inputImage key set by _transform_request)
+    batch_data = [
+        {"inputImage": "/9j/4AAQSkZJRg=="}
+    ]
+
+    result = config._transform_response(
+        response_list=response_list,
+        model="amazon.titan-embed-image-v1",
+        batch_data=batch_data,
+    )
+
+    assert result.usage is not None
+    assert result.usage.prompt_tokens_details is not None
+    assert result.usage.prompt_tokens_details.image_count == 1
+
+
+def test_titan_multimodal_embedding_text_no_image_count():
+    """Test that Titan multimodal embedding with text-only input does not set image_count."""
+    from litellm.llms.bedrock.embed.amazon_titan_multimodal_transformation import (
+        AmazonTitanMultimodalEmbeddingG1Config,
+    )
+
+    config = AmazonTitanMultimodalEmbeddingG1Config()
+
+    response_list = [
+        {
+            "embedding": [0.1, 0.2, 0.3],
+            "inputTextTokenCount": 5,
+        }
+    ]
+
+    # Text-only request — no inputImage key
+    batch_data = [
+        {"inputText": "hello world"}
+    ]
+
+    result = config._transform_response(
+        response_list=response_list,
+        model="amazon.titan-embed-image-v1",
+        batch_data=batch_data,
+    )
+
+    assert result.usage is not None
+    # prompt_tokens_details should be None for text-only (no image_count to report)
+    assert result.usage.prompt_tokens_details is None
+
+
+def test_titan_multimodal_embedding_backward_compat_no_batch_data():
+    """Test that Titan transformer works without batch_data (backward compatibility)."""
+    from litellm.llms.bedrock.embed.amazon_titan_multimodal_transformation import (
+        AmazonTitanMultimodalEmbeddingG1Config,
+    )
+
+    config = AmazonTitanMultimodalEmbeddingG1Config()
+
+    response_list = [
+        {
+            "embedding": [0.1, 0.2, 0.3],
+            "inputTextTokenCount": 5,
+        }
+    ]
+
+    # Call without batch_data — should not break
+    result = config._transform_response(
+        response_list=response_list,
+        model="amazon.titan-embed-image-v1",
+    )
+
+    assert result.usage is not None
+    assert result.usage.prompt_tokens == 5
+    assert result.usage.prompt_tokens_details is None
+
+
+def test_titan_image_embedding_cost_uses_per_image_rate():
+    """
+    End-to-end test: Titan image embedding with mocked AWS response
+    should populate image_count for correct per-image cost calculation.
+    """
+    client = HTTPHandler()
+
+    with patch.object(client, "post") as mock_post:
+        mock_response = Mock()
+        mock_response.status_code = 200
+        embed_response = {
+            "embedding": [0.1] * 1024,
+            "inputTextTokenCount": 0,
+        }
+        mock_response.text = json.dumps(embed_response)
+        mock_response.json = lambda: json.loads(mock_response.text)
+        mock_post.return_value = mock_response
+
+        response = litellm.embedding(
+            model="bedrock/amazon.titan-embed-image-v1",
+            input=["data:image/png;base64,iVBORw0KGgoAAAANSUhEUg=="],
+            client=client,
+            aws_access_key_id="fake",
+            aws_secret_access_key="fake",
+            aws_region_name="us-east-1",
+        )
+
+        assert isinstance(response, litellm.EmbeddingResponse)
+        assert response.usage is not None
+        assert response.usage.prompt_tokens_details is not None
+        assert response.usage.prompt_tokens_details.image_count == 1

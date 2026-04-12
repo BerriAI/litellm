@@ -82,7 +82,7 @@ async def create_skill(
     # Read form data and convert UploadFile objects to file data tuples
     form_data = await get_form_data(request)
     data = await convert_upload_files_to_file_data(form_data)
-    
+
     # Extract model for routing (header > query > body)
     model = (
         data.get("model")
@@ -91,10 +91,10 @@ async def create_skill(
     )
     if model:
         data["model"] = model
-    
+
     if "custom_llm_provider" not in data:
         data["custom_llm_provider"] = custom_llm_provider
-    
+
     # Process request using ProxyBaseLLMRequestProcessing
     processor = ProxyBaseLLMRequestProcessing(data=data)
     try:
@@ -181,7 +181,7 @@ async def list_skills(
     # Read request body
     body = await request.body()
     data = orjson.loads(body) if body else {}
-    
+
     # Use query params if not in body
     if "limit" not in data and limit is not None:
         data["limit"] = limit
@@ -189,7 +189,7 @@ async def list_skills(
         data["after_id"] = after_id
     if "before_id" not in data and before_id is not None:
         data["before_id"] = before_id
-    
+
     # Extract model for routing (header > query > body)
     model = (
         data.get("model")
@@ -198,11 +198,11 @@ async def list_skills(
     )
     if model:
         data["model"] = model
-    
+
     # Set custom_llm_provider: body > query param > default
     if "custom_llm_provider" not in data:
         data["custom_llm_provider"] = custom_llm_provider
-    
+
     # Process request using ProxyBaseLLMRequestProcessing
     processor = ProxyBaseLLMRequestProcessing(data=data)
     try:
@@ -287,10 +287,10 @@ async def get_skill(
     # Read request body
     body = await request.body()
     data = orjson.loads(body) if body else {}
-    
+
     # Set skill_id from path parameter
     data["skill_id"] = skill_id
-    
+
     # Extract model for routing (header > query > body)
     model = (
         data.get("model")
@@ -299,11 +299,11 @@ async def get_skill(
     )
     if model:
         data["model"] = model
-    
+
     # Set custom_llm_provider: body > query param > default
     if "custom_llm_provider" not in data:
         data["custom_llm_provider"] = custom_llm_provider
-    
+
     # Process request using ProxyBaseLLMRequestProcessing
     processor = ProxyBaseLLMRequestProcessing(data=data)
     try:
@@ -390,10 +390,10 @@ async def delete_skill(
     # Read request body
     body = await request.body()
     data = orjson.loads(body) if body else {}
-    
+
     # Set skill_id from path parameter
     data["skill_id"] = skill_id
-    
+
     # Extract model for routing (header > query > body)
     model = (
         data.get("model")
@@ -402,11 +402,11 @@ async def delete_skill(
     )
     if model:
         data["model"] = model
-    
+
     # Set custom_llm_provider: body > query param > default
     if "custom_llm_provider" not in data:
         data["custom_llm_provider"] = custom_llm_provider
-    
+
     # Process request using ProxyBaseLLMRequestProcessing
     processor = ProxyBaseLLMRequestProcessing(data=data)
     try:
@@ -435,4 +435,3 @@ async def delete_skill(
             proxy_logging_obj=proxy_logging_obj,
             version=version,
         )
-

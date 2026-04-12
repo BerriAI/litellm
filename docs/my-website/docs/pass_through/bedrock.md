@@ -556,3 +556,147 @@ for event in response.get("completion"):
 
 print(completion)
 ```
+
+## Using LangChain AWS SDK with LiteLLM
+
+You can use the [LangChain AWS SDK](https://python.langchain.com/docs/integrations/chat/bedrock/) with LiteLLM Proxy to get cost tracking, load balancing, and other LiteLLM features.
+
+### Quick Start
+
+**1. Install LangChain AWS**:
+
+```bash showLineNumbers
+pip install langchain-aws
+```
+
+**2. Setup LiteLLM Proxy**:
+
+Create a `config.yaml`:
+
+```yaml showLineNumbers
+model_list:
+  - model_name: claude-sonnet
+    litellm_params:
+      model: bedrock/us.anthropic.claude-3-7-sonnet-20250219-v1:0
+      aws_region_name: us-east-1
+      custom_llm_provider: bedrock
+```
+
+Start the proxy:
+
+```bash showLineNumbers
+export AWS_ACCESS_KEY_ID="your-access-key"
+export AWS_SECRET_ACCESS_KEY="your-secret-key"
+
+litellm --config config.yaml
+
+# RUNNING on http://0.0.0.0:4000
+```
+
+**3. Use LangChain with LiteLLM**:
+
+```python showLineNumbers
+from langchain_aws import ChatBedrockConverse
+from langchain_core.messages import HumanMessage
+
+# Your LiteLLM API key
+API_KEY = "Bearer sk-1234"
+
+# Initialize ChatBedrockConverse pointing to LiteLLM proxy
+llm = ChatBedrockConverse(
+    model_id="us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+    endpoint_url="http://localhost:4000/bedrock",
+    region_name="us-east-1",
+    aws_access_key_id=API_KEY,
+    aws_secret_access_key="bedrock"  # Any non-empty value works
+)
+
+# Invoke the model
+messages = [HumanMessage(content="Hello, how are you?")]
+response = llm.invoke(messages)
+
+print(response.content)
+```
+
+### Advanced Example: PDF Document Processing with Citations
+
+LangChain AWS SDK supports Bedrock's document processing features. Here's how to use it with LiteLLM:
+
+```python showLineNumbers
+import os
+import json
+from langchain_aws import ChatBedrockConverse
+from langchain_core.messages import HumanMessage
+
+# Your LiteLLM API key
+API_KEY = "Bearer sk-1234"
+
+def get_llm() -> ChatBedrockConverse:
+    """Initialize LLM pointing to LiteLLM proxy"""
+    llm = ChatBedrockConverse(
+        model_id="us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+        base_model_id="anthropic.claude-3-7-sonnet-20250219-v1:0",
+        endpoint_url="http://localhost:4000/bedrock",
+        region_name="us-east-1",
+        aws_access_key_id=API_KEY,
+        aws_secret_access_key="bedrock"
+    )
+    return llm
+
+if __name__ == "__main__":
+    # Initialize the LLM
+    llm = get_llm()
+    
+    # Read PDF file as bytes (Converse API requires raw bytes)
+    with open("your-document.pdf", "rb") as file:
+        file_bytes = file.read()
+    
+    # Prepare messages with document attachment
+    messages = [
+        HumanMessage(content=[
+            {"text": "What is the policy number in this document?"},
+            {
+                "document": {
+                    "format": "pdf",
+                    "name": "PolicyDocument",
+                    "source": {"bytes": file_bytes},
+                    "citations": {"enabled": True}
+                }
+            }
+        ])
+    ]
+    
+    # Invoke the LLM
+    response = llm.invoke(messages)
+    
+    # Print response with citations
+    print(json.dumps(response.content, indent=4))
+```
+
+### Supported LangChain Features
+
+All LangChain AWS features work with LiteLLM:
+
+| Feature | Supported | Notes |
+|---------|-----------|-------|
+| Text Generation | ✅ | Full support |
+| Streaming | ✅ | Use `stream()` method |
+| Document Processing | ✅ | PDF, images, etc. |
+| Citations | ✅ | Enable in document config |
+| Tool Use | ✅ | Function calling support |
+| Multi-modal | ✅ | Text + images + documents |
+
+### Troubleshooting
+
+**Issue**: `UnknownOperationException` error
+
+**Solution**: Make sure you're using the correct endpoint URL format:
+- ✅ Correct: `http://localhost:4000/bedrock`
+- ❌ Wrong: `http://localhost:4000/bedrock/v2`
+
+**Issue**: Authentication errors
+
+**Solution**: Ensure your API key is in the correct format:
+```python
+aws_access_key_id="Bearer sk-1234"  # Include "Bearer " prefix
+```

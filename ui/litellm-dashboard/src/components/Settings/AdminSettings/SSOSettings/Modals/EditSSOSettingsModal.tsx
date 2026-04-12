@@ -68,11 +68,22 @@ const EditSSOSettingsModal: React.FC<EditSSOSettingsModalProps> = ({ isVisible, 
         };
       }
 
+      // Extract team mappings if they exist
+      let teamMappingFields = {};
+      if (ssoData.values.team_mappings) {
+        const teamMappings = ssoData.values.team_mappings;
+        teamMappingFields = {
+          use_team_mappings: true,
+          team_ids_jwt_field: teamMappings.team_ids_jwt_field,
+        };
+      }
+
       // Set form values with existing data (excluding UI access control fields)
       const formValues = {
         sso_provider: selectedProvider,
         ...ssoData.values,
         ...roleMappingFields,
+        ...teamMappingFields,
       };
 
       console.log("Setting form values:", formValues); // Debug log

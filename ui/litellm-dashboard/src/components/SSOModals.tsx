@@ -323,7 +323,7 @@ const SSOModals: React.FC<SSOModalsProps> = ({
     <>
       <Modal
         title={ssoConfigured ? "Edit SSO Settings" : "Add SSO"}
-        visible={isAddSSOModalVisible}
+        open={isAddSSOModalVisible}
         width={800}
         footer={null}
         onOk={handleAddSSOOk}
@@ -517,7 +517,7 @@ const SSOModals: React.FC<SSOModalsProps> = ({
       {/* Clear Confirmation Modal */}
       <Modal
         title="Confirm Clear SSO Settings"
-        visible={isClearConfirmModalVisible}
+        open={isClearConfirmModalVisible}
         onOk={handleClearSSO}
         onCancel={() => setIsClearConfirmModalVisible(false)}
         okText="Yes, Clear"
@@ -536,7 +536,7 @@ const SSOModals: React.FC<SSOModalsProps> = ({
 
       <Modal
         title="SSO Setup Instructions"
-        visible={isInstructionsModalVisible}
+        open={isInstructionsModalVisible}
         width={800}
         footer={null}
         onOk={handleInstructionsOk}

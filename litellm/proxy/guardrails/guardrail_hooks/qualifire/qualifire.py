@@ -12,10 +12,11 @@ from typing import Any, Dict, List, Literal, Optional, Type
 from fastapi import HTTPException
 
 from litellm._logging import verbose_proxy_logger
-from litellm.integrations.custom_guardrail import CustomGuardrail
-from litellm.litellm_core_utils.litellm_logging import (
-    Logging as LiteLLMLoggingObj,
+from litellm.integrations.custom_guardrail import (
+    CustomGuardrail,
+    log_guardrail_information,
 )
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
@@ -343,9 +344,7 @@ class QualifireGuardrail(CustomGuardrail):
                 )
                 url = f"{self.qualifire_api_base}/api/evaluation/evaluate"
 
-            verbose_proxy_logger.debug(
-                f"Qualifire Guardrail: Making request to {url}"
-            )
+            verbose_proxy_logger.debug(f"Qualifire Guardrail: Making request to {url}")
 
             # Make the API request
             response = await self.async_handler.post(
@@ -393,6 +392,7 @@ class QualifireGuardrail(CustomGuardrail):
             verbose_proxy_logger.exception(f"Qualifire Guardrail error: {e}")
             raise
 
+    @log_guardrail_information
     async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,

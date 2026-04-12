@@ -1,5 +1,6 @@
 import React from "react";
 import { render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { vi, test, expect } from "vitest";
 import OrganizationInfoView from "./organization_view";
 
@@ -105,6 +106,7 @@ test("should display empty state when organization has no members", async () => 
   const { organizationInfoCall } = await import("../networking");
   (organizationInfoCall as unknown as ReturnType<typeof vi.fn>).mockResolvedValueOnce(mockOrg);
 
+  const user = userEvent.setup();
   render(
     <OrganizationInfoView
       organizationId="org_123"
@@ -116,6 +118,12 @@ test("should display empty state when organization has no members", async () => 
       editOrg={false}
     />,
   );
+
+  await waitFor(() => {
+    expect(screen.getByText("Acme Corp")).toBeInTheDocument();
+  });
+
+  await user.click(screen.getByRole("tab", { name: "Members" }));
 
   await waitFor(() => {
     expect(screen.getByText("No members found")).toBeInTheDocument();

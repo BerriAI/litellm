@@ -11,7 +11,7 @@ import Image from '@theme/IdealImage';
 
 This is a free LiteLLM Enterprise feature.
 
-Available via the `litellm[proxy]` package or any `litellm` docker image.
+Available via the `litellm` docker image. If you are using the pip package, you must install [`litellm-enterprise`](https://pypi.org/project/litellm-enterprise/).
 
 :::
 

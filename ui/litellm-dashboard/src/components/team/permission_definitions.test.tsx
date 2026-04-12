@@ -11,6 +11,10 @@ describe("permission_definitions", () => {
       expect(getMethodForEndpoint("/key/list")).toBe("GET");
     });
 
+    it("should return GET for activity endpoints", () => {
+      expect(getMethodForEndpoint("/team/daily/activity")).toBe("GET");
+    });
+
     it("should return POST for other endpoints", () => {
       expect(getMethodForEndpoint("/key/generate")).toBe("POST");
       expect(getMethodForEndpoint("/key/update")).toBe("POST");
@@ -48,12 +52,27 @@ describe("permission_definitions", () => {
       expect(result.description).toBe(PERMISSION_DESCRIPTIONS["/key/service-account/generate"]);
     });
 
+    it("should return correct info for team daily activity permission", () => {
+      const result = getPermissionInfo("/team/daily/activity");
+      expect(result.method).toBe("GET");
+      expect(result.endpoint).toBe("/team/daily/activity");
+      expect(result.description).toBe(PERMISSION_DESCRIPTIONS["/team/daily/activity"]);
+      expect(result.route).toBe("/team/daily/activity");
+    });
+
     it("should return fallback description for unknown permission", () => {
       const result = getPermissionInfo("/unknown/endpoint");
       expect(result.method).toBe("POST");
       expect(result.endpoint).toBe("/unknown/endpoint");
       expect(result.description).toBe("Access /unknown/endpoint");
       expect(result.route).toBe("/unknown/endpoint");
+    });
+  });
+
+  describe("PERMISSION_DESCRIPTIONS", () => {
+    it("should include team daily activity permission", () => {
+      expect(PERMISSION_DESCRIPTIONS["/team/daily/activity"]).toBeDefined();
+      expect(PERMISSION_DESCRIPTIONS["/team/daily/activity"]).toContain("team usage");
     });
   });
 });

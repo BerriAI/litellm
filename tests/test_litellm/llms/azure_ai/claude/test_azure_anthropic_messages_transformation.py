@@ -239,6 +239,50 @@ class TestAzureAnthropicMessagesConfig:
         assert "tools" in params
         assert "tool_choice" in params
 
+    def test_transform_anthropic_messages_request_removes_scope_from_cache_control(
+        self,
+    ):
+        """Test that scope is removed from cache_control (Azure AI Foundry doesn't support it)"""
+        config = AzureAnthropicMessagesConfig()
+        model = "claude-sonnet-4-5"
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "Hello",
+                        "cache_control": {"type": "ephemeral", "scope": "global"},
+                    }
+                ],
+            }
+        ]
+        anthropic_messages_optional_request_params = {
+            "max_tokens": 1024,
+            "system": [
+                {
+                    "type": "text",
+                    "text": "You are an AI assistant.",
+                    "cache_control": {"type": "ephemeral", "scope": "global"},
+                }
+            ],
+        }
+        litellm_params = GenericLiteLLMParams()
+        headers = {}
+
+        result = config.transform_anthropic_messages_request(
+            model=model,
+            messages=messages,
+            anthropic_messages_optional_request_params=anthropic_messages_optional_request_params,
+            litellm_params=litellm_params,
+            headers=headers,
+        )
+
+        assert "scope" not in result["system"][0]["cache_control"]
+        assert result["system"][0]["cache_control"]["type"] == "ephemeral"
+        assert "scope" not in result["messages"][0]["content"][0]["cache_control"]
+        assert result["messages"][0]["content"][0]["cache_control"]["type"] == "ephemeral"
+
 
 class TestProviderConfigManagerAzureAnthropicMessages:
     """Test ProviderConfigManager returns correct config for Azure AI Anthropic Messages API"""

@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any, Optional
 
 from litellm._logging import verbose_proxy_logger
 from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
+from litellm.types.utils import GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
     from litellm.integrations.custom_guardrail import CustomGuardrail
@@ -88,8 +89,12 @@ class OpenAIAudioTranscriptionHandler(BaseTranslation):
             if user_metadata:
                 request_data["litellm_metadata"] = user_metadata
 
+            inputs = GenericGuardrailAPIInputs(texts=[original_text])
+            # Include model information from the response if available
+            if hasattr(response, "model") and response.model:
+                inputs["model"] = response.model
             guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
-                inputs={"texts": [original_text]},
+                inputs=inputs,
                 request_data=request_data,
                 input_type="response",
                 logging_obj=litellm_logging_obj,

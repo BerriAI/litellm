@@ -79,6 +79,7 @@ All models listed [here](https://github.com/BerriAI/litellm/blob/57f37f743886a02
 | textembedding-gecko@003 | `embedding(model="vertex_ai/textembedding-gecko@003", input)` | 
 | text-embedding-preview-0409 | `embedding(model="vertex_ai/text-embedding-preview-0409", input)` |
 | text-multilingual-embedding-preview-0409 | `embedding(model="vertex_ai/text-multilingual-embedding-preview-0409", input)` | 
+| gemini-embedding-2-preview | `embedding(model="vertex_ai/gemini-embedding-2-preview", input)` | [Multimodal docs](#gemini-embedding-2-preview-multimodal) |
 | Fine-tuned OR Custom Embedding models | `embedding(model="vertex_ai/<your-model-id>", input)` | 
 
 ### Supported OpenAI (Unified) Params
@@ -257,6 +258,71 @@ model_list:
 
 ## **Multi-Modal Embeddings**
 
+### Gemini Embedding 2 Preview (Multimodal)
+
+`gemini-embedding-2-preview` supports **unified multimodal embeddings**—text, images, audio, video, and PDF in a single request. See [blog post](/blog/gemini_embedding_2_multimodal) for details.
+
+**Input formats:**
+- **Data URIs:** `data:image/png;base64,<encoded_data>`
+- **GCS URLs:** `gs://bucket/path/to/file.png` (MIME type inferred from extension)
+
+**Supported MIME types:** `image/png`, `image/jpeg`, `audio/mpeg`, `audio/wav`, `video/mp4`, `video/quicktime`, `application/pdf`
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+import litellm
+from litellm import embedding
+
+litellm.vertex_project = "your-project-id"
+litellm.vertex_location = "us-central1"
+
+# Text + Image (GCS URL)
+response = embedding(
+    model="vertex_ai/gemini-embedding-2-preview",
+    input=[
+        "Describe this image",
+        "gs://my-bucket/images/photo.png"
+    ],
+)
+
+# Text + Image (base64)
+response = embedding(
+    model="vertex_ai/gemini-embedding-2-preview",
+    input=[
+        "The food was delicious",
+        "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAgAAAAIAQMAAAD+wSzIAAAABlBMVEX///+/v7+jQ3Y5AAAADklEQVQI12P4AIX8EAgALgAD/aNpbtEAAAAASUVORK5CYII"
+    ],
+)
+```
+
+</TabItem>
+<TabItem value="proxy" label="LiteLLM PROXY">
+
+```yaml
+model_list:
+  - model_name: vertex-gemini-embedding-2-preview
+    litellm_params:
+      model: vertex_ai/gemini-embedding-2-preview
+      vertex_project: "your-project-id"
+      vertex_location: "us-central1"
+```
+
+```bash
+curl -X POST http://localhost:4000/embeddings \
+  -H "Authorization: Bearer sk-1234" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "vertex-gemini-embedding-2-preview",
+    "input": ["Describe this", "gs://bucket/image.png"]
+  }'
+```
+
+</TabItem>
+</Tabs>
+
+### multimodalembedding@001 (Legacy)
 
 Known Limitations:
 - Only supports 1 image / video / image per request

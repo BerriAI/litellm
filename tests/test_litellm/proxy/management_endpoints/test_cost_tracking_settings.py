@@ -270,3 +270,123 @@ class TestCostTrackingSettings:
             assert "error" in response_data["detail"]
             assert "STORE_MODEL_IN_DB" in response_data["detail"]["error"]
 
+
+
+class TestResolveModelForCostLookup:
+    """Tests for _resolve_model_for_cost_lookup base_model resolution."""
+
+    def test_resolves_base_model_for_azure_deployment(self):
+        """
+        When a model group has base_model set in model_info,
+        _resolve_model_for_cost_lookup should return the base_model
+        instead of the raw litellm_params.model (Azure deployment name).
+        """
+        from litellm.proxy.management_endpoints.cost_tracking_settings import (
+            _resolve_model_for_cost_lookup,
+        )
+
+        mock_router = MagicMock()
+        mock_router.get_model_list.return_value = [
+            {
+                "model_name": "gpt-5.3-codex",
+                "litellm_params": {
+                    "model": "azure/openai/gpt-5.3-codex",
+                    "api_base": "https://fake.openai.azure.com/",
+                    "api_key": "fake-key",
+                },
+                "model_info": {
+                    "id": "test-id",
+                    "base_model": "azure/gpt-4o",
+                },
+            }
+        ]
+
+        with patch(
+            "litellm.proxy.proxy_server.llm_router",
+            mock_router,
+        ):
+            resolved_model, provider = _resolve_model_for_cost_lookup("gpt-5.3-codex")
+
+        assert resolved_model == "azure/gpt-4o"
+        mock_router.get_model_list.assert_called_once_with(model_name="gpt-5.3-codex")
+
+    def test_falls_back_to_litellm_params_model_when_no_base_model(self):
+        """
+        When no base_model is set, should fall back to litellm_params.model.
+        """
+        from litellm.proxy.management_endpoints.cost_tracking_settings import (
+            _resolve_model_for_cost_lookup,
+        )
+
+        mock_router = MagicMock()
+        mock_router.get_model_list.return_value = [
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {
+                    "model": "openai/gpt-4",
+                },
+                "model_info": {
+                    "id": "test-id",
+                },
+            }
+        ]
+
+        with patch(
+            "litellm.proxy.proxy_server.llm_router",
+            mock_router,
+        ):
+            resolved_model, provider = _resolve_model_for_cost_lookup("gpt-4")
+
+        assert resolved_model == "openai/gpt-4"
+
+    def test_resolves_base_model_from_litellm_params(self):
+        """
+        When base_model is in litellm_params (not model_info),
+        it should still be resolved.
+        """
+        from litellm.proxy.management_endpoints.cost_tracking_settings import (
+            _resolve_model_for_cost_lookup,
+        )
+
+        mock_router = MagicMock()
+        mock_router.get_model_list.return_value = [
+            {
+                "model_name": "my-azure-model",
+                "litellm_params": {
+                    "model": "azure/my-custom-deployment",
+                    "base_model": "azure/gpt-4o-mini",
+                },
+                "model_info": {
+                    "id": "test-id",
+                },
+            }
+        ]
+
+        with patch(
+            "litellm.proxy.proxy_server.llm_router",
+            mock_router,
+        ):
+            resolved_model, provider = _resolve_model_for_cost_lookup(
+                "my-azure-model"
+            )
+
+        assert resolved_model == "azure/gpt-4o-mini"
+
+    def test_returns_original_model_when_no_router(self):
+        """
+        When no router is available, should return the original model name.
+        """
+        from litellm.proxy.management_endpoints.cost_tracking_settings import (
+            _resolve_model_for_cost_lookup,
+        )
+
+        with patch(
+            "litellm.proxy.proxy_server.llm_router",
+            None,
+        ):
+            resolved_model, provider = _resolve_model_for_cost_lookup(
+                "azure/openai/gpt-5.3-codex"
+            )
+
+        assert resolved_model == "azure/openai/gpt-5.3-codex"
+        assert provider is None

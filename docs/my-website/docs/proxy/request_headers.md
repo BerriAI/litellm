@@ -20,6 +20,10 @@ By default, LiteLLM does not forward client headers to LLM provider APIs. Howeve
 
 `x-litellm-spend-logs-metadata`: Optional[str]: JSON string containing custom metadata to include in spend logs. Example: `{"user_id": "12345", "project_id": "proj_abc", "request_type": "chat_completion"}`. [Learn More](../proxy/enterprise#tracking-spend-with-custom-metadata)
 
+`x-litellm-customer-id`: Optional[str]: Standard header for passing a customer/end-user ID. Always checked without any configuration. [Learn More](./customers)
+
+`x-litellm-end-user-id`: Optional[str]: Standard header for passing a customer/end-user ID. Always checked without any configuration. [Learn More](./customers)
+
 ## Anthropic Headers
 
 `anthropic-version` Optional[str]: The version of the Anthropic API to use.  

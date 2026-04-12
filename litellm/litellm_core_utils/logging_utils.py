@@ -1,10 +1,13 @@
 import asyncio
 import functools
+import inspect
+import re
 import time
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, List, Optional, Union
 
 from litellm._logging import verbose_logger
+from litellm.constants import MAX_BASE64_LENGTH_FOR_LOGGING
 from litellm.types.utils import (
     ModelResponse,
     ModelResponseStream,
@@ -32,6 +35,251 @@ import litellm
 """
 Helper utils used for logging callbacks
 """
+
+_BYTES_PER_KIB = 1024
+_BYTES_PER_MIB = 1024 * 1024
+
+# Regex matching data-URI base64 content: "data:<mime>;base64,<payload>"
+# Captures: group(1)=mime_type, group(2)=base64_payload
+_DATA_URI_RE = re.compile(r"data:([^;]+);base64,([A-Za-z0-9+/=]+)")
+
+# Regex matching raw JSON base64 fields used by Vertex AI / Google AI Studio:
+#   "data":"<base64payload>"  (inside inlineData, imageBytes, etc.)
+# The captured groups are: group(1)=opening_quote+key+colon+quote,
+# group(2)=base64_payload, group(3)=closing_quote.
+# We only replace payloads longer than MAX_BASE64_LENGTH_FOR_LOGGING.
+_JSON_BASE64_FIELD_RE = re.compile(
+    r'("(?:data|imageBytes|bytesBase64Encoded)"\s*:\s*")([A-Za-z0-9+/=]{64,})(")'
+)
+
+# Regex matching a string that IS entirely a base64 payload.
+# Used when _truncate_base64_in_value passes a bare dict value (e.g. the "data"
+# field after JSON parsing, which is just the raw base64 characters with no
+# surrounding JSON quote structure).  Must be anchored so we don't accidentally
+# truncate short alphanumeric strings.
+_BARE_BASE64_RE = re.compile(r"^[A-Za-z0-9+/]{64,}={0,2}$")
+
+# Maximum nesting depth for _truncate_base64_in_value to guard against
+# pathological payloads. OpenAI message format is typically 3-4 levels deep.
+_MAX_TRUNCATION_DEPTH = 20
+
+
+def _format_base64_size(num_chars: int) -> str:
+    """Return a human-readable byte-size estimate from a base64 character count."""
+    num_bytes = num_chars * 3 / 4
+    if num_bytes >= _BYTES_PER_MIB:
+        return f"{num_bytes / _BYTES_PER_MIB:.2f}MB"
+    if num_bytes >= _BYTES_PER_KIB:
+        return f"{num_bytes / _BYTES_PER_KIB:.1f}KB"
+    return f"{int(num_bytes)}B"
+
+
+def _base64_data_uri_replacer(match: re.Match) -> str:
+    """Replace a single base64 data-URI match with a size placeholder if too long."""
+    mime_type = match.group(1)
+    payload = match.group(2)
+    if len(payload) <= MAX_BASE64_LENGTH_FOR_LOGGING:
+        return match.group(0)
+    size_str = _format_base64_size(len(payload))
+    return f"data:{mime_type};base64,[base64_data truncated: {size_str}]"
+
+
+def _json_base64_field_replacer(match: re.Match) -> str:
+    """Replace a raw JSON base64 field value with a size placeholder if too long.
+
+    Handles Vertex AI / Google AI Studio responses where the base64 payload
+    appears as a bare JSON string value rather than a data-URI:
+        {"inlineData": {"mimeType": "image/png", "data": "<BASE64>"}}
+    """
+    prefix = match.group(1)  # e.g. '"data":"'
+    payload = match.group(2)
+    suffix = match.group(3)  # closing '"'
+    if len(payload) <= MAX_BASE64_LENGTH_FOR_LOGGING:
+        return match.group(0)
+    size_str = _format_base64_size(len(payload))
+    return f"{prefix}[base64_data truncated: {size_str}]{suffix}"
+
+
+def _truncate_base64_in_string(value: str) -> str:
+    """Replace long base64 payloads in a string with a size placeholder.
+
+    Handles three formats:
+    1. data-URI format:  data:<mime>;base64,<payload>
+    2. Raw JSON field:   "data":"<payload>"  (Vertex AI / Google AI Studio)
+    3. Bare base64 string: the entire value is a base64 payload (e.g. a parsed
+       dict value after JSON decoding, where the surrounding JSON quotes are
+       gone and only the raw characters remain).
+    """
+    if MAX_BASE64_LENGTH_FOR_LOGGING <= 0:
+        return value
+    # Fast-path: if the entire string is a bare base64 payload, truncate it
+    # directly without running the heavier sub() patterns.
+    if len(value) > MAX_BASE64_LENGTH_FOR_LOGGING and _BARE_BASE64_RE.match(value):
+        size_str = _format_base64_size(len(value))
+        return f"[base64_data truncated: {size_str}]"
+    value = _DATA_URI_RE.sub(_base64_data_uri_replacer, value)
+    value = _JSON_BASE64_FIELD_RE.sub(_json_base64_field_replacer, value)
+    return value
+
+
+def _truncate_base64_in_value(value: Any) -> Any:
+    """Iteratively truncate base64 data URIs in a JSON-like value (str/list/dict).
+
+    Uses an explicit stack instead of recursion to satisfy the project's
+    recursive-function detector and avoid stack-overflow on deep payloads.
+    """
+    # Stack entries: (source_value, depth, parent_container, key_or_index)
+    # We mutate *copies* of dicts/lists in-place via parent references.
+    if isinstance(value, str):
+        return _truncate_base64_in_string(value)
+    if not isinstance(value, (dict, list)):
+        return value
+
+    # Shallow-copy the root so we don't mutate the caller's data.
+    root = {k: v for k, v in value.items()} if isinstance(value, dict) else list(value)
+    stack: list = [(root, 0)]
+
+    while stack:
+        container, depth = stack.pop()
+        if depth > _MAX_TRUNCATION_DEPTH:
+            continue
+        if isinstance(container, dict):
+            for k, v in container.items():
+                if isinstance(v, str):
+                    container[k] = _truncate_base64_in_string(v)
+                elif isinstance(v, dict):
+                    copy: Union[dict, list] = {ck: cv for ck, cv in v.items()}
+                    container[k] = copy
+                    stack.append((copy, depth + 1))
+                elif isinstance(v, list):
+                    copy = list(v)
+                    container[k] = copy
+                    stack.append((copy, depth + 1))
+        elif isinstance(container, list):
+            for i, v in enumerate(container):
+                if isinstance(v, str):
+                    container[i] = _truncate_base64_in_string(v)
+                elif isinstance(v, dict):
+                    copy = {ck: cv for ck, cv in v.items()}
+                    container[i] = copy
+                    stack.append((copy, depth + 1))
+                elif isinstance(v, list):
+                    copy = list(v)
+                    container[i] = copy
+                    stack.append((copy, depth + 1))
+
+    return root
+
+
+def release_base64_from_request_data_inplace(data: dict) -> None:
+    """Truncate base64 payloads in a request data dict **in-place** to free memory.
+
+    Unlike ``truncate_base64_in_messages`` (which returns a shallow copy for
+    logging), this function mutates the dict so that **every** reference to it —
+    local variables, closure captures, ``self.data``, etc. — immediately sees
+    smaller data, allowing the GC to collect the original large strings.
+
+    To avoid false positives on regular text, bare base64 detection is only
+    applied to dict values under keys known to carry raw base64 payloads
+    (``data``, ``b64_json``, ``image_data``).  For all other strings, only
+    data-URI patterns (``data:<mime>;base64,<payload>``) are truncated.
+
+    Call this after the HTTP request body has been sent to the provider and the
+    response has been transformed, i.e. when the original base64 payloads are
+    no longer needed.  (Fix 13)
+    """
+    # Dict keys whose string values may be raw base64 (no data-URI wrapper).
+    # e.g. Anthropic source.data, Vertex inline_data.data, OpenAI b64_json.
+    _bare_base64_keys = frozenset({"data", "b64_json", "image_data"})
+
+    if MAX_BASE64_LENGTH_FOR_LOGGING <= 0:
+        return
+    try:
+        stack: list = [(data, 0)]
+        while stack:
+            obj, depth = stack.pop()
+            if depth > _MAX_TRUNCATION_DEPTH:
+                continue
+            if isinstance(obj, dict):
+                for k, v in obj.items():
+                    if isinstance(v, str):
+                        if k in _bare_base64_keys:
+                            # Full truncation: data URI + JSON field + bare base64
+                            obj[k] = _truncate_base64_in_string(v)
+                        else:
+                            # Only truncate data-URI patterns, not bare strings
+                            obj[k] = _DATA_URI_RE.sub(
+                                _base64_data_uri_replacer, v
+                            )
+                    elif isinstance(v, (dict, list)):
+                        stack.append((v, depth + 1))
+            elif isinstance(obj, list):
+                for i, v in enumerate(obj):
+                    if isinstance(v, str):
+                        # In lists, only truncate data-URI patterns
+                        obj[i] = _DATA_URI_RE.sub(_base64_data_uri_replacer, v)
+                    elif isinstance(v, (dict, list)):
+                        stack.append((v, depth + 1))
+    except Exception:
+        pass
+
+
+def strip_large_base64_from_result(result: Any) -> Any:
+    """Truncate large base64 image data URIs inside a ModelResponse in-place.
+
+    Called in async_success_handler after standard_logging_object is built
+    (which already holds a truncated copy) and before slow DB/observability
+    callbacks run.  Replaces every ``image_url.url`` data-URI that exceeds
+    MAX_BASE64_LENGTH_FOR_LOGGING with a size placeholder, freeing the
+    ~7.9 MB string from the Logging object's lifetime.
+
+    Operates on ``result.choices[].message["images"][].image_url["url"]`` —
+    the location where Vertex AI / Gemini image-generation responses store
+    inline image data after ``_extract_image_response_from_parts`` constructs
+    the data URI (``"data:<mime>;base64,<payload>"``).
+
+    Mutation is safe here because the HTTP response has already been sent to
+    the caller before async_success_handler is scheduled.
+    """
+    if MAX_BASE64_LENGTH_FOR_LOGGING <= 0:
+        return result
+    choices = getattr(result, "choices", None)
+    if not choices:
+        return result
+    for choice in choices:
+        message = getattr(choice, "message", None)
+        if message is None:
+            continue
+        images = getattr(message, "images", None)
+        if not images:
+            continue
+        for img in images:
+            if not isinstance(img, dict):
+                continue
+            image_url = img.get("image_url")
+            if not isinstance(image_url, dict):
+                continue
+            url = image_url.get("url")
+            if isinstance(url, str):
+                image_url["url"] = _truncate_base64_in_string(url)
+    return result
+
+
+def truncate_base64_in_messages(
+    messages: Optional[Union[str, list, dict]],
+) -> Optional[Union[str, list, dict]]:
+    """
+    Return a copy of *messages* with long base64 data-URI payloads replaced
+    by human-readable size placeholders.
+    """
+    if messages is None or MAX_BASE64_LENGTH_FOR_LOGGING <= 0:
+        return messages
+    try:
+        return _truncate_base64_in_value(messages)
+    except Exception as e:
+        verbose_logger.debug("Failed to truncate base64 in messages: %s", e)
+        return messages
+
 
 # Global service logger instance to avoid recreating it
 _service_logger = None
@@ -270,7 +518,7 @@ def track_llm_api_timing():
                     verbose_logger.debug(f"Error in service logging: {str(e)}")
 
         # Check if the function is async or sync
-        if asyncio.iscoroutinefunction(func):
+        if inspect.iscoroutinefunction(func):
             return async_wrapper
         return sync_wrapper
 

@@ -9,6 +9,7 @@ vi.mock("../utils/roles", () => {
     internalUserRoles: ["internal"],
     rolesWithWriteAccess: ["admin", "internal"],
     isAdminRole: (role: string) => role === "admin",
+    isUserTeamAdminForAnyTeam: () => false,
   };
 });
 
@@ -41,6 +42,10 @@ vi.mock("@/app/(dashboard)/hooks/organizations/useOrganizations", () => ({
   useOrganizations: mockUseOrganizations,
 }));
 
+vi.mock("@/app/(dashboard)/hooks/teams/useTeams", () => ({
+  useTeams: () => ({ data: [], isLoading: false, error: null }),
+}));
+
 vi.mock("@/app/(dashboard)/hooks/uiConfig/useUIConfig", () => {
   return {
     useUIConfig: () => ({
@@ -64,17 +69,22 @@ describe("Sidebar (leftnav)", () => {
       "Virtual Keys",
       "Playground",
       "Models + Endpoints",
+      "Agents",
+      "MCP Servers",
+      "Guardrails",
+      "Policies",
+      "Tools",
       "Usage",
+      "Logs",
+      "Guardrails Monitor",
       "Teams",
-      "Organizations",
       "Internal Users",
+      "Organizations",
+      "Access Groups",
       "Budgets",
       "API Reference",
       "AI Hub",
-      "Logs",
-      "Guardrails",
-      "MCP Servers",
-      "Tools",
+      "Learning Resources",
       "Experimental",
       "Settings",
     ];

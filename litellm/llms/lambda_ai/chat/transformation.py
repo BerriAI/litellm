@@ -13,7 +13,7 @@ class LambdaAIChatConfig(OpenAILikeChatConfig):
     """
     Lambda AI is OpenAI-compatible with standard endpoints
     """
-    
+
     @property
     def custom_llm_provider(self) -> Optional[str]:
         return "lambda_ai"

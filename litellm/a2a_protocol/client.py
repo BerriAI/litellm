@@ -103,5 +103,7 @@ class A2AClient:
         from litellm.a2a_protocol.main import asend_message_streaming
 
         a2a_client = await self._get_client()
-        async for chunk in asend_message_streaming(a2a_client=a2a_client, request=request):
+        async for chunk in asend_message_streaming(
+            a2a_client=a2a_client, request=request
+        ):
             yield chunk

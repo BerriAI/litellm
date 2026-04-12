@@ -1,4 +1,5 @@
 import React, { useState } from "react";
+import { Collapse } from "antd";
 import { getProviderLogoAndName } from "../provider_info_helpers";
 
 interface VectorStoreContent {
@@ -30,7 +31,6 @@ interface VectorStoreViewerProps {
 }
 
 export function VectorStoreViewer({ data }: VectorStoreViewerProps) {
-  const [sectionExpanded, setSectionExpanded] = useState(true);
   const [expandedResults, setExpandedResults] = useState<Record<string, boolean>>({});
 
   if (!data || data.length === 0) {
@@ -56,27 +56,16 @@ export function VectorStoreViewer({ data }: VectorStoreViewerProps) {
   };
 
   return (
-    <div className="bg-white rounded-lg shadow mb-6">
-      <div
-        className="flex justify-between items-center p-4 border-b cursor-pointer hover:bg-gray-50"
-        onClick={() => setSectionExpanded(!sectionExpanded)}
-      >
-        <div className="flex items-center">
-          <svg
-            className={`w-5 h-5 mr-2 text-gray-600 transition-transform ${sectionExpanded ? "transform rotate-90" : ""}`}
-            fill="none"
-            stroke="currentColor"
-            viewBox="0 0 24 24"
-          >
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-          </svg>
-          <h3 className="text-lg font-medium">Vector Store Requests</h3>
-        </div>
-        <span className="text-sm text-gray-500">{sectionExpanded ? "Click to collapse" : "Click to expand"}</span>
-      </div>
-
-      {sectionExpanded && (
-        <div className="p-4">
+    <div className="bg-white rounded-lg shadow w-full max-w-full overflow-hidden mb-6">
+      <Collapse
+        defaultActiveKey={["1"]}
+        expandIconPosition="start"
+        items={[
+          {
+            key: "1",
+            label: <h3 className="text-lg font-medium text-gray-900">Vector Store Requests</h3>,
+            children: (
+              <div className="p-4">
           {data.map((request, index) => (
             <div key={index} className="mb-6 last:mb-0">
               <div className="bg-white rounded-lg border p-4 mb-4">
@@ -168,7 +157,10 @@ export function VectorStoreViewer({ data }: VectorStoreViewerProps) {
             </div>
           ))}
         </div>
-      )}
+            ),
+          },
+        ]}
+      />
     </div>
   );
 }

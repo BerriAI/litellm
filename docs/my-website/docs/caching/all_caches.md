@@ -297,6 +297,7 @@ litellm.cache = Cache(
     similarity_threshold=0.7, # similarity threshold for cache hits, 0 == no similarity, 1 = exact matches, 0.5 == 50% similarity
     qdrant_quantization_config ="binary", # can be one of 'binary', 'product' or 'scalar' quantizations that is supported by qdrant
     qdrant_semantic_cache_embedding_model="text-embedding-ada-002", # this model is passed to litellm.embedding(), any litellm.embedding() model is supported here
+    qdrant_semantic_cache_vector_size=1536, # vector size for the embedding model, must match the dimensionality of the embedding model used
 )
 
 response1 = completion(
@@ -635,6 +636,7 @@ def __init__(
     qdrant_quantization_config: Optional[str] = None,
     qdrant_semantic_cache_embedding_model="text-embedding-ada-002",
 
+    qdrant_semantic_cache_vector_size: Optional[int] = None,
     **kwargs
 ):
 ```

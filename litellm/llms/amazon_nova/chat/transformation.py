@@ -56,7 +56,7 @@ class AmazonNovaChatConfig(OpenAILikeChatConfig):
             or get_secret_str("AMAZON_NOVA_API_BASE")
             or "https://api.nova.amazon.com/v1"
         )  # type: ignore
-        
+
         # Get API key from multiple sources
         key = (
             api_key
@@ -65,7 +65,7 @@ class AmazonNovaChatConfig(OpenAILikeChatConfig):
             or litellm.api_key
         )
         return api_base, key
-    
+
     def get_supported_openai_params(self, model: str) -> List:
         return [
             "top_p",
@@ -78,7 +78,7 @@ class AmazonNovaChatConfig(OpenAILikeChatConfig):
             "stream_options",
             "tools",
             "tool_choice",
-            "reasoning_effort"
+            "reasoning_effort",
         ]
 
     def transform_response(

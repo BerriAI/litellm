@@ -151,7 +151,30 @@ def test_all_dictionaries_consistent():
     pattern_names_from_patterns = set(PREBUILT_PATTERNS.keys())
     pattern_names_from_display = set(PATTERN_DISPLAY_NAMES.keys())
     pattern_names_from_descriptions = set(PATTERN_DESCRIPTIONS.keys())
-    
+
     assert pattern_names_from_patterns == pattern_names_from_display
     assert pattern_names_from_patterns == pattern_names_from_descriptions
+
+
+def test_eu_patterns_loaded():
+    """Verify all EU PII patterns are loaded"""
+    required_patterns = [
+        "fr_nir",
+        "eu_iban_enhanced",
+        "fr_phone",
+        "eu_vat",
+        "eu_passport_generic",
+        "fr_postal_code"
+    ]
+    for pattern_name in required_patterns:
+        assert pattern_name in PREBUILT_PATTERNS, f"Pattern {pattern_name} not found"
+
+
+def test_eu_patterns_have_category():
+    """Verify EU patterns are in correct category"""
+    eu_patterns = ["fr_nir", "eu_iban_enhanced", "fr_phone", "eu_vat", "eu_passport_generic", "fr_postal_code"]
+    eu_category_patterns = PATTERN_CATEGORIES.get("EU PII Patterns", [])
+
+    for pattern_name in eu_patterns:
+        assert pattern_name in eu_category_patterns, f"Pattern {pattern_name} not in EU PII Patterns category"
 

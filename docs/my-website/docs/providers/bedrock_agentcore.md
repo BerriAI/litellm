@@ -13,7 +13,7 @@ Call Bedrock AgentCore in the OpenAI Request/Response format.
 
 :::info
 
-This documentation is for **AgentCore Agents** (agent runtimes). If you want to use AgentCore MCP servers, add them as you would any other MCP server. See the [MCP documentation](https://docs.litellm.ai/docs/mcp) for details.
+This documentation is for **AgentCore Agents** (agent runtimes). If you want to use AgentCore MCP servers with LiteLLM, see the [MCP AWS SigV4 Auth](https://docs.litellm.ai/docs/mcp_aws_sigv4) guide for setup instructions.
 
 :::
 

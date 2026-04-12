@@ -7,7 +7,7 @@ from typing import Literal, Optional, Tuple
 
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
-from litellm.types.utils import CallTypes, Usage
+from litellm.types.utils import CallTypes, ModelInfo, Usage
 from litellm.utils import get_model_info
 
 
@@ -129,7 +129,10 @@ def cost_per_second(
 
 
 def video_generation_cost(
-    model: str, duration_seconds: float, custom_llm_provider: Optional[str] = None
+    model: str,
+    duration_seconds: float,
+    custom_llm_provider: Optional[str] = None,
+    model_info: Optional[ModelInfo] = None,
 ) -> float:
     """
     Calculates the cost for video generation based on duration in seconds.
@@ -138,14 +141,18 @@ def video_generation_cost(
         - model: str, the model name without provider prefix
         - duration_seconds: float, the duration of the generated video in seconds
         - custom_llm_provider: str, the custom llm provider
+        - model_info: Optional[dict], deployment-level model info containing
+            custom video pricing. When provided, skips the global
+            get_model_info() lookup so that deployment-specific pricing is used.
 
     Returns:
         float - total_cost_in_usd
     """
     ## GET MODEL INFO
-    model_info = get_model_info(
-        model=model, custom_llm_provider=custom_llm_provider or "openai"
-    )
+    if model_info is None:
+        model_info = get_model_info(
+            model=model, custom_llm_provider=custom_llm_provider or "openai"
+        )
 
     # Check for video-specific cost per second
     video_cost_per_second = model_info.get("output_cost_per_video_per_second")

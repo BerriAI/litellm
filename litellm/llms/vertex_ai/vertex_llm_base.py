@@ -20,7 +20,12 @@ from .common_utils import (
     _get_vertex_url,
     all_gemini_url_modes,
     get_vertex_base_model_name,
-    is_global_only_vertex_model,
+    get_vertex_base_url,
+)
+
+GOOGLE_IMPORT_ERROR_MESSAGE = (
+    "Google Cloud SDK not found. Install it with: pip install 'litellm[google]' "
+    "or pip install google-cloud-aiplatform"
 )
 
 if TYPE_CHECKING:
@@ -43,8 +48,32 @@ class VertexBase:
         self.async_handler: Optional[AsyncHTTPHandler] = None
 
     def get_vertex_region(self, vertex_region: Optional[str], model: str) -> str:
-        if is_global_only_vertex_model(model):
-            return "global"
+        import litellm
+
+        # Try to get supported_regions directly from model_cost
+        # Check both with and without vertex_ai/ prefix
+        model_key = (
+            f"vertex_ai/{model}" if not model.startswith("vertex_ai/") else model
+        )
+        model_info = litellm.model_cost.get(model_key, {})
+        supported_regions = model_info.get("supported_regions")
+
+        if supported_regions and len(supported_regions) > 0:
+            # If user didn't specify region, use the first supported region
+            if vertex_region is None:
+                return supported_regions[0]
+            # If user specified a region not supported by this model, override it
+            if vertex_region not in supported_regions:
+                verbose_logger.warning(
+                    "Vertex AI model '%s' does not support region '%s' "
+                    "(supported: %s). Routing to '%s'.",
+                    model,
+                    vertex_region,
+                    supported_regions,
+                    supported_regions[0],
+                )
+                return supported_regions[0]
+            return vertex_region
         return vertex_region or "us-central1"
 
     def load_auth(
@@ -90,10 +119,23 @@ class VertexBase:
                     else ""
                 )
                 if isinstance(environment_id, str) and "aws" in environment_id:
-                    creds = self._credentials_from_identity_pool_with_aws(
-                        json_obj,
-                        scopes=["https://www.googleapis.com/auth/cloud-platform"],
+                    # Check if explicit AWS params are in the JSON (bypasses metadata)
+                    from litellm.llms.vertex_ai.vertex_ai_aws_wif import (
+                        VertexAIAwsWifAuth,
                     )
+
+                    aws_params = VertexAIAwsWifAuth.extract_aws_params(json_obj)
+                    if aws_params:
+                        creds = VertexAIAwsWifAuth.credentials_from_explicit_aws(
+                            json_obj,
+                            aws_params=aws_params,
+                            scopes=["https://www.googleapis.com/auth/cloud-platform"],
+                        )
+                    else:
+                        creds = self._credentials_from_identity_pool_with_aws(
+                            json_obj,
+                            scopes=["https://www.googleapis.com/auth/cloud-platform"],
+                        )
                 else:
                     creds = self._credentials_from_identity_pool(
                         json_obj,
@@ -138,7 +180,10 @@ class VertexBase:
 
     # Google Auth Helpers -- extracted for mocking purposes in tests
     def _credentials_from_identity_pool(self, json_obj, scopes):
-        from google.auth import identity_pool
+        try:
+            from google.auth import identity_pool
+        except ImportError:
+            raise ImportError(GOOGLE_IMPORT_ERROR_MESSAGE)
 
         creds = identity_pool.Credentials.from_info(json_obj)
         if scopes and hasattr(creds, "requires_scopes") and creds.requires_scopes:
@@ -146,7 +191,10 @@ class VertexBase:
         return creds
 
     def _credentials_from_identity_pool_with_aws(self, json_obj, scopes):
-        from google.auth import aws
+        try:
+            from google.auth import aws
+        except ImportError:
+            raise ImportError(GOOGLE_IMPORT_ERROR_MESSAGE)
 
         creds = aws.Credentials.from_info(json_obj)
         if scopes and hasattr(creds, "requires_scopes") and creds.requires_scopes:
@@ -154,22 +202,30 @@ class VertexBase:
         return creds
 
     def _credentials_from_authorized_user(self, json_obj, scopes):
-        import google.oauth2.credentials
+        try:
+            import google.oauth2.credentials
+        except ImportError:
+            raise ImportError(GOOGLE_IMPORT_ERROR_MESSAGE)
 
         return google.oauth2.credentials.Credentials.from_authorized_user_info(
             json_obj, scopes=scopes
         )
 
     def _credentials_from_service_account(self, json_obj, scopes):
-        import google.oauth2.service_account
+        try:
+            import google.oauth2.service_account
+        except ImportError:
+            raise ImportError(GOOGLE_IMPORT_ERROR_MESSAGE)
 
         return google.oauth2.service_account.Credentials.from_service_account_info(
             json_obj, scopes=scopes
         )
 
     def _credentials_from_default_auth(self, scopes):
-
-        import google.auth as google_auth
+        try:
+            import google.auth as google_auth
+        except ImportError:
+            raise ImportError(GOOGLE_IMPORT_ERROR_MESSAGE)
 
         return google_auth.default(scopes=scopes)
 
@@ -181,12 +237,9 @@ class VertexBase:
     ) -> str:
         if api_base:
             return api_base
-        elif vertex_location == "global":
-            return "https://aiplatform.googleapis.com"
-        elif vertex_location:
-            return f"https://{vertex_location}-aiplatform.googleapis.com"
-        else:
-            return f"https://{self.get_default_vertex_location()}-aiplatform.googleapis.com"
+        return get_vertex_base_url(
+            vertex_location or self.get_default_vertex_location()
+        )
 
     @staticmethod
     def create_vertex_url(
@@ -199,7 +252,8 @@ class VertexBase:
     ) -> str:
         """Return the base url for the vertex partner models"""
 
-        api_base = api_base or f"https://{vertex_location}-aiplatform.googleapis.com"
+        if api_base is None:
+            api_base = get_vertex_base_url(vertex_location)
         if partner == VertexPartnerProvider.llama:
             return f"{api_base}/v1/projects/{vertex_project}/locations/{vertex_location}/endpoints/openapi/chat/completions"
         elif partner == VertexPartnerProvider.mistralai:
@@ -228,11 +282,13 @@ class VertexBase:
         stream: Optional[bool],
         model: str,
     ) -> str:
+        # Use get_vertex_region to handle global-only models
+        resolved_location = self.get_vertex_region(vertex_location, model)
         api_base = self.get_api_base(
-            api_base=custom_api_base, vertex_location=vertex_location
+            api_base=custom_api_base, vertex_location=resolved_location
         )
         default_api_base = VertexBase.create_vertex_url(
-            vertex_location=vertex_location or "us-central1",
+            vertex_location=resolved_location,
             vertex_project=vertex_project or project_id,
             partner=partner,
             stream=stream,
@@ -255,15 +311,18 @@ class VertexBase:
             url=default_api_base,
             model=model,
             vertex_project=vertex_project or project_id,
-            vertex_location=vertex_location or "us-central1",
+            vertex_location=resolved_location,
             vertex_api_version="v1",  # Partner models typically use v1
         )
         return api_base
 
     def refresh_auth(self, credentials: Any) -> None:
-        from google.auth.transport.requests import (
-            Request,  # type: ignore[import-untyped]
-        )
+        try:
+            from google.auth.transport.requests import (
+                Request,  # type: ignore[import-untyped]
+            )
+        except ImportError:
+            raise ImportError(GOOGLE_IMPORT_ERROR_MESSAGE)
 
         credentials.refresh(Request())
 

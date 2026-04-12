@@ -11,7 +11,7 @@ from litellm.a2a_protocol.providers.pydantic_ai_agents.handler import PydanticAI
 class PydanticAIProviderConfig(BaseA2AProviderConfig):
     """
     Provider configuration for Pydantic AI agents.
-    
+
     Pydantic AI agents follow A2A protocol but don't support streaming natively.
     This config provides fake streaming by converting non-streaming responses into streaming chunks.
     """
@@ -48,4 +48,3 @@ class PydanticAIProviderConfig(BaseA2AProviderConfig):
             delay_ms=kwargs.get("delay_ms", 10),
         ):
             yield chunk
-

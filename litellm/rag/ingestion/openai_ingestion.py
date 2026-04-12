@@ -84,7 +84,9 @@ class OpenAIRAGIngestion(BaseRAGIngestion):
 
         # Create vector store if not provided
         if not vector_store_id:
-            expires_after = {"anchor": "last_active_at", "days": ttl_days} if ttl_days else None
+            expires_after = (
+                {"anchor": "last_active_at", "days": ttl_days} if ttl_days else None
+            )
             create_response = await vector_store_acreate(
                 name=self.ingest_name or "litellm-rag-ingest",
                 custom_llm_provider="openai",
@@ -99,7 +101,11 @@ class OpenAIRAGIngestion(BaseRAGIngestion):
         if file_content and filename and vector_store_id:
             # Upload file to OpenAI
             file_response = await litellm.acreate_file(
-                file=(filename, file_content, content_type or "application/octet-stream"),
+                file=(
+                    filename,
+                    file_content,
+                    content_type or "application/octet-stream",
+                ),
                 purpose="assistants",
                 custom_llm_provider="openai",
                 api_key=api_key,
@@ -112,10 +118,11 @@ class OpenAIRAGIngestion(BaseRAGIngestion):
                 vector_store_id=vector_store_id,
                 file_id=result_file_id,
                 custom_llm_provider="openai",
-                chunking_strategy=cast(Optional[Dict[str, Any]], self.chunking_strategy),
+                chunking_strategy=cast(
+                    Optional[Dict[str, Any]], self.chunking_strategy
+                ),
                 api_key=api_key,
                 api_base=api_base,
             )
 
         return vector_store_id, result_file_id
-

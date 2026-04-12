@@ -63,7 +63,6 @@ for _ in range(2):
                     }
                 ],
             },
-            # marked for caching with the cache_control parameter, so that this checkpoint can read from the previous cache.
             {
                 "role": "user",
                 "content": [
@@ -77,7 +76,6 @@ for _ in range(2):
                 "role": "assistant",
                 "content": "Certainly! the key terms and conditions are the following: the contract is 1 year long for $10/mo",
             },
-            # The final turn is marked with cache-control, for continuing in followups.
             {
                 "role": "user",
                 "content": [
@@ -112,16 +110,16 @@ model_list:
         api_key: os.environ/OPENAI_API_KEY
 ```
 
-2. Start proxy 
+2. Start proxy
 
 ```bash
 litellm --config /path/to/config.yaml
 ```
 
-3. Test it! 
+3. Test it!
 
 ```python
-from openai import OpenAI 
+from openai import OpenAI
 import os
 
 client = OpenAI(
@@ -144,7 +142,6 @@ for _ in range(2):
                     }
                 ],
             },
-            # marked for caching with the cache_control parameter, so that this checkpoint can read from the previous cache.
             {
                 "role": "user",
                 "content": [
@@ -158,7 +155,6 @@ for _ in range(2):
                 "role": "assistant",
                 "content": "Certainly! the key terms and conditions are the following: the contract is 1 year long for $10/mo",
             },
-            # The final turn is marked with cache-control, for continuing in followups.
             {
                 "role": "user",
                 "content": [
@@ -178,6 +174,78 @@ print("response.usage=", response.usage)
 
 assert "prompt_tokens_details" in response.usage
 assert response.usage.prompt_tokens_details.cached_tokens > 0
+```
+
+</TabItem>
+</Tabs>
+
+### OpenAI `prompt_cache_key` and `prompt_cache_retention`
+
+OpenAI prompt caching is [**automatic**](https://platform.openai.com/docs/guides/prompt-caching) — no `cache_control` message annotations are needed. Any request with 1024+ prompt tokens is eligible for caching.
+
+OpenAI also supports two optional parameters for more control over caching behavior:
+
+- **`prompt_cache_key`** (string) — A routing hint that improves cache hit rates for requests sharing long common prefixes. Requests with the same cache key are routed to the same backend, increasing the likelihood of a cache hit.
+- **`prompt_cache_retention`** (`"in_memory"` or `"24h"`) — Controls cache TTL. Default is `"in_memory"` (5–10 min). Set to `"24h"` for extended caching that offloads KV tensors to GPU-local storage.
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import completion
+import os
+
+os.environ["OPENAI_API_KEY"] = ""
+
+response = completion(
+    model="gpt-4o",
+    messages=[
+        {
+            "role": "system",
+            "content": "You are an AI assistant tasked with analyzing legal documents. "
+            + "Here is the full text of a complex legal agreement " * 400,
+        },
+        {
+            "role": "user",
+            "content": "What are the key terms and conditions?",
+        },
+    ],
+    prompt_cache_key="legal-doc-analysis",
+    prompt_cache_retention="24h",
+)
+print(response.usage)
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+```python
+from openai import OpenAI
+
+client = OpenAI(
+    api_key="LITELLM_PROXY_KEY",
+    base_url="LITELLM_PROXY_BASE",
+)
+
+response = client.chat.completions.create(
+    model="gpt-4o",
+    messages=[
+        {
+            "role": "system",
+            "content": "You are an AI assistant tasked with analyzing legal documents. "
+            + "Here is the full text of a complex legal agreement " * 400,
+        },
+        {
+            "role": "user",
+            "content": "What are the key terms and conditions?",
+        },
+    ],
+    extra_body={
+        "prompt_cache_key": "legal-doc-analysis",
+        "prompt_cache_retention": "24h",
+    },
+)
+print(response.usage)
 ```
 
 </TabItem>

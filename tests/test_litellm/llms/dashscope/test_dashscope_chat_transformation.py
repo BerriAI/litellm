@@ -12,6 +12,7 @@ sys.path.insert(
     0, os.path.abspath("../../../../..")
 )  # Adds the parent directory to the system path
 
+from litellm.types.llms.openai import AllMessageValues
 import pytest
 
 import litellm
@@ -111,3 +112,35 @@ class TestDashScopeConfig:
         # Check for specific content in the response
         assert "```python" in response.choices[0].message.content
         assert "Hey from LiteLLM" in response.choices[0].message.content
+
+    def test_dashscope_no_longer_transforms_content_list(self):
+        """
+        Test that DashScopeChatConfig does not transform content lists to strings.
+        This ensures that the transformation logic specific to content lists is not applied,
+        as DashScope should handle content in list format natively.
+        """
+        config = DashScopeChatConfig()
+
+        # Create a message with content in list format
+        messages: list[AllMessageValues] = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Hello"},
+                    {"type": "text", "text": "World"},
+                ],
+            }
+        ]
+
+        # Call the _transform_messages method directly
+        transformed_messages = config._transform_messages(
+            messages=messages, model="qwen-turbo", is_async=False
+        )
+
+        # Verify that the content is still in list format and has not been transformed to a string
+        assert isinstance(transformed_messages[0]["content"], list)
+        assert len(transformed_messages[0]["content"]) == 2
+        assert transformed_messages[0]["content"][0]["type"] == "text"
+        assert transformed_messages[0]["content"][0]["text"] == "Hello"
+        assert transformed_messages[0]["content"][1]["type"] == "text"
+        assert transformed_messages[0]["content"][1]["text"] == "World"

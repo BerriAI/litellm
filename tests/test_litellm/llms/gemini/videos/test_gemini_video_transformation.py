@@ -600,7 +600,8 @@ class TestGeminiVideoCostTracking:
         cost_veo2 = video_generation_cost(
             model="gemini/veo-2.0-generate-001",
             duration_seconds=5.0,
-            custom_llm_provider="gemini"
+            custom_llm_provider="gemini",
+            model_info={"output_cost_per_second": 0.35},
         )
         expected_veo2 = 0.35 * 5.0  # $1.75
         assert abs(cost_veo2 - expected_veo2) < 0.001, f"Expected ${expected_veo2}, got ${cost_veo2}"
@@ -609,7 +610,8 @@ class TestGeminiVideoCostTracking:
         cost_veo3 = video_generation_cost(
             model="gemini/veo-3.0-generate-preview",
             duration_seconds=8.0,
-            custom_llm_provider="gemini"
+            custom_llm_provider="gemini",
+            model_info={"output_cost_per_second": 0.75},
         )
         expected_veo3 = 0.75 * 8.0  # $6.00
         assert abs(cost_veo3 - expected_veo3) < 0.001, f"Expected ${expected_veo3}, got ${cost_veo3}"
@@ -618,7 +620,8 @@ class TestGeminiVideoCostTracking:
         cost_veo31 = video_generation_cost(
             model="gemini/veo-3.1-generate-preview",
             duration_seconds=10.0,
-            custom_llm_provider="gemini"
+            custom_llm_provider="gemini",
+            model_info={"output_cost_per_second": 0.40},
         )
         expected_veo31 = 0.40 * 10.0  # $4.00
         assert abs(cost_veo31 - expected_veo31) < 0.001, f"Expected ${expected_veo31}, got ${cost_veo31}"
@@ -627,7 +630,8 @@ class TestGeminiVideoCostTracking:
         cost_veo31_fast = video_generation_cost(
             model="gemini/veo-3.1-fast-generate-preview",
             duration_seconds=6.0,
-            custom_llm_provider="gemini"
+            custom_llm_provider="gemini",
+            model_info={"output_cost_per_second": 0.15},
         )
         expected_veo31_fast = 0.15 * 6.0  # $0.90
         assert abs(cost_veo31_fast - expected_veo31_fast) < 0.001, f"Expected ${expected_veo31_fast}, got ${cost_veo31_fast}"
@@ -667,7 +671,8 @@ class TestGeminiVideoCostTracking:
         cost = video_generation_cost(
             model="gemini/veo-3.0-generate-preview",
             duration_seconds=duration,
-            custom_llm_provider="gemini"
+            custom_llm_provider="gemini",
+            model_info={"output_cost_per_second": 0.75},
         )
         
         # Verify cost calculation (VEO 3.0 is $0.75/second)

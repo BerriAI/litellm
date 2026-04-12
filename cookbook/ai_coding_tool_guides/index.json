@@ -95,4 +95,40 @@
         "LiteLLM",
         "Quickstart"
     ]
+},
+{
+    "title": "AI Coding Tool Usage Tracking",
+    "description": "This is a guide to tracking usage for AI coding tools monitor the use of Claude Code , Google Antigravity, OpenAI Codex, Roo Code etc. through LiteLLM.",
+    "url": "https://docs.litellm.ai/docs/tutorials/cost_tracking_coding",
+    "date": "2026-01-17",
+    "version": "1.0.0",
+    "tags": [
+        "Claude Code",
+        "Gemini CLI",
+        "OpenAI Codex",
+        "LiteLLM"
+    ]
+},
+{
+    "title": "Use Web Search with Claude Code (across Bedrock/OpenAI/Gemini/etc.)",
+    "description": "This is a guide for using Web Search with Claude Code via LiteLLM.",
+    "url": "https://docs.litellm.ai/docs/tutorials/claude_code_websearch",
+    "date": "2026-01-17",
+    "version": "1.0.0",
+    "tags": [
+        "Claude Code",
+        "LiteLLM",
+        "Web Search"
+    ]
+},
+{
+    "title": "Track Claude Code Usage per user via Custom Headers",
+    "description": "This is a guide for tracking claude code user usage by passing a customer ID header.",
+    "url": "https://docs.litellm.ai/docs/tutorials/claude_code_customer_tracking",
+    "date": "2026-01-17",
+    "version": "1.0.0",
+    "tags": [
+        "Claude Code",
+        "LiteLLM"
+    ]
 }]

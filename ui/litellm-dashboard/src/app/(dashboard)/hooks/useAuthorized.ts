@@ -2,39 +2,12 @@
 
 import { getProxyBaseUrl } from "@/components/networking";
 import { clearTokenCookies, getCookie } from "@/utils/cookieUtils";
-import { jwtDecode } from "jwt-decode";
+import { checkTokenValidity, decodeToken } from "@/utils/jwtUtils";
+import { buildLoginUrlWithReturn, storeReturnUrl } from "@/utils/returnUrlUtils";
 import { useRouter } from "next/navigation";
-import { useEffect, useMemo } from "react";
+import { useCallback, useEffect, useMemo } from "react";
+import { formatUserRole } from "@/utils/roles";
 import { useUIConfig } from "./uiConfig/useUIConfig";
-
-function formatUserRole(userRole: string) {
-  if (!userRole) {
-    return "Undefined Role";
-  }
-  switch (userRole.toLowerCase()) {
-    case "app_owner":
-      return "App Owner";
-    case "demo_app_owner":
-      return "App Owner";
-    case "app_admin":
-      return "Admin";
-    case "proxy_admin":
-      return "Admin";
-    case "proxy_admin_viewer":
-      return "Admin Viewer";
-    case "org_admin":
-      return "Org Admin";
-    case "internal_user":
-      return "Internal User";
-    case "internal_user_viewer":
-    case "internal_viewer": // TODO:remove if deprecated
-      return "Internal Viewer";
-    case "app_user":
-      return "App User";
-    default:
-      return "Unknown Role";
-  }
-}
 
 const useAuthorized = () => {
   const router = useRouter();
@@ -42,35 +15,39 @@ const useAuthorized = () => {
 
   const token = typeof document !== "undefined" ? getCookie("token") : null;
 
-  // Redirect after mount if missing/invalid token
-  useEffect(() => {
-    if (isUIConfigLoading) {
-      return;
-    }
-    if (!token || uiConfig?.admin_ui_disabled) {
-      router.replace(`${getProxyBaseUrl()}/ui/login`);
-    }
-  }, [token, router, isUIConfigLoading, uiConfig]);
+  const decoded = useMemo(() => decodeToken(token), [token]);
+  const isTokenValid = useMemo(() => checkTokenValidity(token), [token]);
+  const isLoading = isUIConfigLoading;
+  const isAuthorized = isTokenValid && !uiConfig?.admin_ui_disabled;
 
-  // Decode safely
-  const decoded = useMemo(() => {
-    if (!token) return null;
-    try {
-      return jwtDecode(token) as Record<string, any>;
-    } catch {
-      // Bad token in cookie — clear and bounce
-      clearTokenCookies();
-      router.replace(`${getProxyBaseUrl()}/ui/login`);
-      return null;
+  // Helper function to redirect to login while preserving the current URL
+  const redirectToLogin = useCallback(() => {
+    storeReturnUrl();
+    const baseLoginUrl = `${getProxyBaseUrl()}/ui/login`;
+    const loginUrlWithReturn = buildLoginUrlWithReturn(baseLoginUrl);
+    router.replace(loginUrlWithReturn);
+  }, [router]);
+
+  // Single useEffect for all redirect logic
+  useEffect(() => {
+    if (isLoading) return;
+
+    if (!isAuthorized) {
+      if (token) {
+        clearTokenCookies();
+      }
+      redirectToLogin();
     }
-  }, [token, router]);
+  }, [isLoading, isAuthorized, token, redirectToLogin]);
 
   return {
-    token: token,
+    isLoading,
+    isAuthorized,
+    token: isAuthorized ? token : null,
     accessToken: decoded?.key ?? null,
     userId: decoded?.user_id ?? null,
     userEmail: decoded?.user_email ?? null,
-    userRole: formatUserRole(decoded?.user_role ?? null),
+    userRole: formatUserRole(decoded?.user_role),
     premiumUser: decoded?.premium_user ?? null,
     disabledPersonalKeyCreation: decoded?.disabled_non_admin_personal_key_creation ?? null,
     showSSOBanner: decoded?.login_method === "username_password",

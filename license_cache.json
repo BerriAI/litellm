@@ -1,0 +1,9 @@
+{
+  "tornado:6.5.3": "Apache-2.0",
+  "redisvl:0.4.1": "MIT",
+  "google-cloud-iam:2.19.1": "Apache 2.0",
+  "google-genai:1.37.0": "Apache-2.0",
+  "azure-keyvault:4.2.0": "MIT License",
+  "soundfile:0.12.1": "BSD 3-Clause License",
+  "openapi-core:0.21.0": "BSD-3-Clause"
+}

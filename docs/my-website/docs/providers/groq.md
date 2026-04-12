@@ -159,6 +159,7 @@ We support ALL Groq models, just set `groq/` as a prefix when sending completion
 | moonshotai/kimi-k2-instruct-0905 | `completion(model="groq/moonshotai/kimi-k2-instruct-0905", messages)` |
 | openai/gpt-oss-120b | `completion(model="groq/openai/gpt-oss-120b", messages)` |
 | openai/gpt-oss-20b | `completion(model="groq/openai/gpt-oss-20b", messages)` |
+| openai/gpt-oss-safeguard-20b | `completion(model="groq/openai/gpt-oss-safeguard-20b", messages)` |
 
 ## Groq - Tool / Function Calling Example
 

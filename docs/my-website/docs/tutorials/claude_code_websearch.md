@@ -1,12 +1,16 @@
+import Image from '@theme/IdealImage';
+
 # Claude Code - WebSearch Across All Providers
 
 Enable Claude Code's web search tool to work with any provider (Bedrock, Azure, Vertex, etc.). LiteLLM automatically intercepts web search requests and executes them server-side.
+
+<Image img={require('../../img/claude_code_websearch.png')} />
 
 ## Proxy Configuration
 
 Add WebSearch interception to your `litellm_config.yaml`:
 
-```yaml
+```yaml showLineNumbers title="litellm_config.yaml"
 model_list:
   - model_name: bedrock-sonnet
     litellm_params:
@@ -37,7 +41,7 @@ search_tools:
 
 Create `config.yaml`:
 
-```yaml
+```yaml showLineNumbers title="config.yaml"
 model_list:
   - model_name: bedrock-sonnet
     litellm_params:
@@ -58,14 +62,14 @@ search_tools:
 
 ### 2. Start Proxy
 
-```bash
+```bash showLineNumbers title="Start LiteLLM Proxy"
 export PERPLEXITY_API_KEY=your-key
 litellm --config config.yaml
 ```
 
 ### 3. Use with Claude Code
 
-```bash
+```bash showLineNumbers title="Configure Claude Code"
 export ANTHROPIC_BASE_URL=http://localhost:4000
 export ANTHROPIC_API_KEY=sk-1234
 claude
@@ -116,12 +120,19 @@ sequenceDiagram
 
 Configure which search provider to use. LiteLLM supports multiple search providers:
 
-| Provider | Configuration |
-|----------|---------------|
-| **Perplexity** | `search_provider: perplexity` |
-| **Tavily** | `search_provider: tavily` |
+| Provider | `search_provider` Value | Environment Variable |
+|----------|------------------------|----------------------|
+| **Perplexity AI** | `perplexity` | `PERPLEXITYAI_API_KEY` |
+| **Tavily** | `tavily` | `TAVILY_API_KEY` |
+| **Exa AI** | `exa_ai` | `EXA_API_KEY` |
+| **Parallel AI** | `parallel_ai` | `PARALLEL_AI_API_KEY` |
+| **Google PSE** | `google_pse` | `GOOGLE_PSE_API_KEY`, `GOOGLE_PSE_ENGINE_ID` |
+| **DataForSEO** | `dataforseo` | `DATAFORSEO_LOGIN`, `DATAFORSEO_PASSWORD` |
+| **Firecrawl** | `firecrawl` | `FIRECRAWL_API_KEY` |
+| **SearXNG** | `searxng` | `SEARXNG_API_BASE` (required) |
+| **Linkup** | `linkup` | `LINKUP_API_KEY` |
 
-See [all supported search providers](../search/index.md) for the complete list.
+See [all supported search providers](../search/index.md) for detailed setup instructions and provider-specific parameters.
 
 ## Configuration Options
 
@@ -145,7 +156,7 @@ Use these values in `enabled_providers`:
 
 ### Complete Configuration Example
 
-```yaml
+```yaml showLineNumbers title="Complete config.yaml"
 model_list:
   - model_name: bedrock-sonnet
     litellm_params:

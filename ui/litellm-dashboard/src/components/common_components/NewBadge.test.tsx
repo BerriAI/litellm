@@ -49,4 +49,39 @@ describe("NewBadge", () => {
 
     expect(container.firstChild).toBeNull();
   });
+
+  it("should render badge with dot when dot prop is true", () => {
+    mockUseDisableShowNewBadge.mockReturnValue(false);
+
+    render(<NewBadge dot={true}>Test Content</NewBadge>);
+
+    expect(screen.queryByText("New")).not.toBeInTheDocument();
+    expect(screen.getByText("Test Content")).toBeInTheDocument();
+  });
+
+  it("should render badge with 'New' text when dot prop is false", () => {
+    mockUseDisableShowNewBadge.mockReturnValue(false);
+
+    render(<NewBadge dot={false}>Test Content</NewBadge>);
+
+    expect(screen.getByText("New")).toBeInTheDocument();
+    expect(screen.getByText("Test Content")).toBeInTheDocument();
+  });
+
+  it("should render badge with 'New' text when dot prop is not provided (defaults to false)", () => {
+    mockUseDisableShowNewBadge.mockReturnValue(false);
+
+    render(<NewBadge>Test Content</NewBadge>);
+
+    expect(screen.getByText("New")).toBeInTheDocument();
+    expect(screen.getByText("Test Content")).toBeInTheDocument();
+  });
+
+  it("should render badge with dot when dot is true and no children", () => {
+    mockUseDisableShowNewBadge.mockReturnValue(false);
+
+    render(<NewBadge dot={true} />);
+
+    expect(screen.queryByText("New")).not.toBeInTheDocument();
+  });
 });

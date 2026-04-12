@@ -19,7 +19,7 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
 
     _panw_callback = PanwPrismaAirsHandler(
         **{
-            **litellm_params.model_dump(),
+            **litellm_params.model_dump(exclude_unset=True),
             "guardrail_name": guardrail_name,
             "event_hook": litellm_params.mode,
             "default_on": litellm_params.default_on or False,

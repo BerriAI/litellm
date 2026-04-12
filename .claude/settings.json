@@ -1,0 +1,36 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git show:*)",
+      "Bash(git worktree add:*)",
+      "Read(//Users/krrishdholakia/Documents/litellm/**)",
+      "Read(//Users/krrishdholakia/Documents/litellm-claude-code-guardrails/litellm/types/**)",
+      "Read(//Users/krrishdholakia/Documents/litellm-claude-code-guardrails/**)",
+      "Read(//Users/krrishdholakia/Documents/litellm-claude-code-guardrails/litellm/**)",
+      "Bash(python:*)",
+      "Bash(python -c \"\nimport sys; sys.path.insert\\(0, ''.''\\)\nfrom litellm.proxy.guardrails.guardrail_hooks.claude_code.guardrail import ClaudeCodeGuardrail, HOSTED_TOOL_PREFIXES\nprint\\(''HOSTED_TOOL_PREFIXES:'', HOSTED_TOOL_PREFIXES\\)\nprint\\(''ClaudeCodeGuardrail imported OK''\\)\n\")",
+      "Read(//Users/krrishdholakia/Documents/litellm-mcp-jwt-groups/litellm/proxy/**)",
+      "Read(//Users/krrishdholakia/Documents/litellm-mcp-jwt-groups/**)",
+      "Bash(poetry run pytest:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(poetry run python:*)",
+      "Bash(poetry run pip:*)",
+      "Bash(git reset:*)",
+      "Bash(git cherry-pick:*)",
+      "Bash(git checkout:*)",
+      "Read(//Users/krrishdholakia/Documents/litellm/litellm/proxy/guardrails/guardrail_hooks/**)",
+      "Read(//Users/krrishdholakia/Documents/**)",
+      "Bash(git -C /Users/krrishdholakia/Documents/litellm-mcp-user-permissions worktree list)",
+      "Bash(ls:*)"
+    ],
+    "additionalDirectories": [
+      "/Users/krrishdholakia/Documents/litellm-mcp-group-plan/plan",
+      "/Users/krrishdholakia/Documents/litellm-claude-code-guardrails/litellm/proxy/guardrails/guardrail_hooks/claude_code",
+      "/Users/krrishdholakia/Documents/litellm-claude-code-guardrails/litellm/types",
+      "/Users/krrishdholakia/Documents/litellm-claude-code-guardrails",
+      "/Users/krrishdholakia/Documents/litellm-mcp-jwt-groups/litellm/proxy",
+      "/Users/krrishdholakia/Documents/litellm-mcp-jwt-groups/tests/test_litellm/proxy/auth"
+    ]
+  }
+}

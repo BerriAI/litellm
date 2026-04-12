@@ -1,6 +1,8 @@
 import json
 from typing import Any, Union
 
+from pydantic import BaseModel
+
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 
 
@@ -39,6 +41,11 @@ def safe_dumps(data: Any, max_depth: int = DEFAULT_MAX_RECURSE_DEPTH) -> str:
             return result
         elif isinstance(obj, set):
             result = sorted([_serialize(item, seen, depth + 1) for item in obj])
+            seen.remove(id(obj))
+            return result
+        elif isinstance(obj, BaseModel):
+            dumped = obj.model_dump()
+            result = _serialize(dumped, seen, depth + 1)
             seen.remove(id(obj))
             return result
         else:

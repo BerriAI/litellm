@@ -105,6 +105,14 @@ const createRoleMappingsSSOData = (overrides: Record<string, any> = {}) =>
     ...overrides,
   });
 
+const createTeamMappingsSSOData = (overrides: Record<string, any> = {}) =>
+  createGenericSSOData({
+    team_mappings: {
+      team_ids_jwt_field: overrides.team_ids_jwt_field || "teams",
+    },
+    ...overrides,
+  });
+
 // Mock utilities
 const createMockHooks = (): {
   useSSOSettings: SSOSettingsHookReturn;
@@ -575,6 +583,104 @@ describe("EditSSOSettingsModal", () => {
           internal_user_teams: "",
           internal_viewer_teams: "",
         });
+      });
+    });
+  });
+
+  describe("Team Mappings", () => {
+    it("processes team mappings when team_mappings exists", async () => {
+      const ssoData = createTeamMappingsSSOData();
+
+      setupMocks({
+        useSSOSettings: { data: ssoData, isLoading: false, error: null },
+      });
+
+      renderComponent();
+
+      await waitFor(() => {
+        expect(mockForm.setFieldsValue).toHaveBeenCalledWith({
+          sso_provider: SSO_PROVIDERS.GENERIC,
+          ...ssoData.values,
+          use_team_mappings: true,
+          team_ids_jwt_field: "teams",
+        });
+      });
+    });
+
+    it("handles team mappings with custom JWT field name", async () => {
+      const ssoData = createTeamMappingsSSOData({
+        team_ids_jwt_field: "custom_teams_field",
+      });
+
+      setupMocks({
+        useSSOSettings: { data: ssoData, isLoading: false, error: null },
+      });
+
+      renderComponent();
+
+      await waitFor(() => {
+        expect(mockForm.setFieldsValue).toHaveBeenCalledWith({
+          sso_provider: SSO_PROVIDERS.GENERIC,
+          ...ssoData.values,
+          use_team_mappings: true,
+          team_ids_jwt_field: "custom_teams_field",
+        });
+      });
+    });
+
+    it("handles team mappings and role mappings together", async () => {
+      const ssoData = createGenericSSOData({
+        role_mappings: {
+          group_claim: "groups",
+          default_role: "internal_user",
+          roles: {
+            proxy_admin: ["admin-group"],
+            proxy_admin_viewer: [],
+            internal_user: [],
+            internal_user_viewer: [],
+          },
+        },
+        team_mappings: {
+          team_ids_jwt_field: "teams",
+        },
+      });
+
+      setupMocks({
+        useSSOSettings: { data: ssoData, isLoading: false, error: null },
+      });
+
+      renderComponent();
+
+      await waitFor(() => {
+        expect(mockForm.setFieldsValue).toHaveBeenCalledWith({
+          sso_provider: SSO_PROVIDERS.GENERIC,
+          ...ssoData.values,
+          use_role_mappings: true,
+          group_claim: "groups",
+          default_role: "internal_user",
+          proxy_admin_teams: "admin-group",
+          admin_viewer_teams: "",
+          internal_user_teams: "",
+          internal_viewer_teams: "",
+          use_team_mappings: true,
+          team_ids_jwt_field: "teams",
+        });
+      });
+    });
+
+    it("does not set team mapping fields when team_mappings is not present", async () => {
+      const ssoData = createGenericSSOData();
+
+      setupMocks({
+        useSSOSettings: { data: ssoData, isLoading: false, error: null },
+      });
+
+      renderComponent();
+
+      await waitFor(() => {
+        const callArgs = mockForm.setFieldsValue.mock.calls[0][0];
+        expect(callArgs.use_team_mappings).toBeUndefined();
+        expect(callArgs.team_ids_jwt_field).toBeUndefined();
       });
     });
 

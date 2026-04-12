@@ -2,7 +2,14 @@ import warnings
 
 import pytest
 
-from litellm.types.utils import Choices, Message, ModelResponse
+from litellm.types.utils import (
+    Choices,
+    Delta,
+    Message,
+    ModelResponse,
+    ModelResponseStream,
+    StreamingChoices,
+)
 
 
 def test_modelresponse_normalizes_openai_base_models() -> None:
@@ -58,4 +65,64 @@ def test_modelresponse_serialization_avoids_pydantic_warnings() -> None:
         "PydanticSerializationUnexpectedValue" in str(w.message)
         or "Pydantic serializer warnings" in str(w.message)
         for w in captured
+    )
+
+
+def test_modelresponse_model_dump_json_no_pydantic_warnings() -> None:
+    """model_dump_json() and model_dump() should not trigger any Pydantic
+    serialization warnings now that choices is List[Choices] (no Union)."""
+    response = ModelResponse(
+        model="test-model",
+        choices=[
+            Choices(
+                finish_reason="stop",
+                index=0,
+                message=Message(content="hello", role="assistant"),
+            )
+        ],
+    )
+
+    with warnings.catch_warnings(record=True) as captured:
+        warnings.simplefilter("always")
+        _ = response.model_dump_json()
+        _ = response.model_dump()
+        _ = response.model_dump(exclude_none=True)
+
+    pydantic_warnings = [
+        w
+        for w in captured
+        if "PydanticSerializationUnexpectedValue" in str(w.message)
+        or "Pydantic serializer warnings" in str(w.message)
+    ]
+    assert pydantic_warnings == [], (
+        f"Unexpected Pydantic serialization warnings: {pydantic_warnings}"
+    )
+
+
+def test_streaming_modelresponsestream_no_pydantic_warnings() -> None:
+    """Streaming responses use ModelResponseStream with List[StreamingChoices]
+    and should serialize without warnings."""
+    response = ModelResponseStream(
+        choices=[
+            StreamingChoices(
+                finish_reason="stop",
+                index=0,
+                delta=Delta(content="hello", role="assistant"),
+            )
+        ],
+    )
+
+    with warnings.catch_warnings(record=True) as captured:
+        warnings.simplefilter("always")
+        _ = response.model_dump_json()
+        _ = response.model_dump()
+
+    pydantic_warnings = [
+        w
+        for w in captured
+        if "PydanticSerializationUnexpectedValue" in str(w.message)
+        or "Pydantic serializer warnings" in str(w.message)
+    ]
+    assert pydantic_warnings == [], (
+        f"Unexpected Pydantic serialization warnings: {pydantic_warnings}"
     )

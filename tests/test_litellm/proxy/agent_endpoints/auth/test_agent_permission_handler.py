@@ -4,7 +4,7 @@ Unit tests for AgentRequestHandler - Agent permission management for keys and te
 
 import os
 import sys
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -111,3 +111,57 @@ class TestAgentRequestHandler:
 
                 result = await AgentRequestHandler.get_allowed_agents(user_api_key_auth=mock_user_auth)
                 assert result == []
+
+    async def test_get_allowed_agents_for_key_via_access_group_ids(self):
+        """
+        Test that _get_allowed_agents_for_key includes agents from key's access_group_ids
+        (unified access groups) when key has no native object_permission.
+        """
+        mock_user_auth = UserAPIKeyAuth(
+            api_key="test-key",
+            user_id="test-user",
+            access_group_ids=["ag-with-agents"],
+        )
+
+        with patch.object(
+            AgentRequestHandler, "_get_key_object_permission", return_value=None
+        ):
+            with patch(
+                "litellm.proxy.auth.auth_checks._get_agent_ids_from_access_groups",
+                new_callable=AsyncMock,
+                return_value=["agent-from-ag-1", "agent-from-ag-2"],
+            ):
+                result = await AgentRequestHandler._get_allowed_agents_for_key(
+                    user_api_key_auth=mock_user_auth
+                )
+                assert sorted(result) == ["agent-from-ag-1", "agent-from-ag-2"]
+
+    async def test_get_allowed_agents_for_key_combines_native_and_access_groups(self):
+        """
+        Test that _get_allowed_agents_for_key combines agents from native object_permission
+        and key's access_group_ids (unified access groups).
+        """
+        from litellm.proxy._types import LiteLLM_ObjectPermissionTable
+
+        mock_permission = LiteLLM_ObjectPermissionTable(
+            object_permission_id="obj-1",
+            agents=["native-agent-1"],
+            agent_access_groups=[],
+        )
+        mock_user_auth = UserAPIKeyAuth(
+            api_key="test-key",
+            user_id="test-user",
+            access_group_ids=["ag-1"],
+        )
+        # Attach object_permission so _get_key_object_permission returns it
+        mock_user_auth.object_permission = mock_permission
+
+        with patch(
+            "litellm.proxy.auth.auth_checks._get_agent_ids_from_access_groups",
+            new_callable=AsyncMock,
+            return_value=["agent-from-ag"],
+        ):
+            result = await AgentRequestHandler._get_allowed_agents_for_key(
+                user_api_key_auth=mock_user_auth
+            )
+            assert sorted(result) == ["agent-from-ag", "native-agent-1"]

@@ -51,12 +51,14 @@ LiteLLM is a unified interface for 100+ LLMs that:
 
 ### MAKING CODE CHANGES FOR THE UI (IGNORE FOR BACKEND)
 
-1. **Use Common Components as much as possible**:
+1. **Tremor is DEPRECATED, do not use Tremor components in new features/changes**
+   - The only exception is the Tremor Table component and its required Tremor Table sub components.
+
+2. **Use Common Components as much as possible**:
    - These are usually defined in the `common_components` directory
    - Use these components as much as possible and avoid building new components unless needed
-   - Tremor components are deprecated; prefer using Ant Design (AntD) as much as possible
 
-2. **Testing**:
+3. **Testing**:
    - The codebase uses **Vitest** and **React Testing Library**
    - **Query Priority Order**: Use query methods in this order: `getByRole`, `getByLabelText`, `getByPlaceholderText`, `getByText`, `getByTestId`
    - **Always use `screen`** instead of destructuring from `render()` (e.g., use `screen.getByText()` not `getByText`)
@@ -106,6 +108,8 @@ Key files:
 - `litellm/proxy/proxy_server.py` - Main server implementation
 - `litellm/proxy/auth/` - Authentication logic
 - `litellm/proxy/management_endpoints/` - Admin API endpoints
+
+**Database (proxy)**: Use Prisma model methods (`prisma_client.db.<model>.upsert`, `.find_many`, `.find_unique`, etc.), not raw SQL (`execute_raw`/`query_raw`). See COMMON PITFALLS for details.
 
 ## MCP (MODEL CONTEXT PROTOCOL) SUPPORT
 
@@ -172,6 +176,43 @@ When opening issues or pull requests, follow these templates:
 3. **Rate Limits**: Respect provider rate limits in tests
 4. **Memory Usage**: Be mindful of memory usage in streaming scenarios
 5. **Dependencies**: Keep dependencies minimal and well-justified
+6. **UI/Backend Contract Mismatch**: When adding a new entity type to the UI, always check whether the backend endpoint accepts a single value or an array. Match the UI control accordingly (single-select vs. multi-select) to avoid silently dropping user selections
+7. **Missing Tests for New Entity Types**: When adding a new entity type (e.g., in `EntityUsage`, `UsageViewSelect`), always add corresponding tests in the existing test files and update any icon/component mocks
+8. **Raw SQL in proxy DB code**: Do not use `execute_raw` or `query_raw` for proxy database access. Use Prisma model methods (e.g. `prisma_client.db.litellm_tooltable.upsert()`, `.find_many()`, `.find_unique()`) so behavior stays consistent with the schema, the client stays mockable in tests, and you avoid the pitfalls of hand-written SQL (parameter ordering, type casting, schema drift)
+
+8. **Do not hardcode model-specific flags**: Put model-specific capability flags in `model_prices_and_context_window.json` and read them via `get_model_info` (or existing helpers like `supports_reasoning`). This prevents users from needing to upgrade LiteLLM each time a new model supports a feature.
+
+   **Example of BAD** (hardcoded model checks):
+
+   ```python
+   @staticmethod
+   def _is_effort_supported_model(model: str) -> bool:
+       """Check if the model supports the output_config.effort parameter..."""
+       model_lower = model.lower()
+       if AnthropicConfig._is_claude_4_6_model(model):
+           return True
+       return any(
+           v in model_lower for v in ("opus-4-5", "opus_4_5", "opus-4.5", "opus_4.5")
+       )
+   ```
+
+   **Example of GOOD** (config-driven or helper that reads from config):
+
+   ```python
+   if (
+       "claude-3-7-sonnet" in model
+       or AnthropicConfig._is_claude_4_6_model(model)
+       or supports_reasoning(
+           model=model,
+           custom_llm_provider=self.custom_llm_provider,
+       )
+   ):
+       ...
+   ```
+
+   Using helpers like `supports_reasoning` (which read from `model_prices_and_context_window.json` / `get_model_info`) allows future model updates to "just work" without code changes.
+
+9. **Never close HTTP/SDK clients on cache eviction**: Do not add `close()`, `aclose()`, or `create_task(close_fn())` inside `LLMClientCache._remove_key()` or any cache eviction path. Evicted clients may still be held by in-flight requests; closing them causes `RuntimeError: Cannot send a request, as the client has been closed.` in production after the cache TTL (1 hour) expires. Connection cleanup is handled at shutdown by `close_litellm_async_clients()`. See PR #22247 for the full incident history.
 
 ## HELPFUL RESOURCES
 
@@ -185,4 +226,49 @@ When opening issues or pull requests, follow these templates:
 - Check similar provider implementations
 - Ensure comprehensive test coverage
 - Update documentation appropriately
-- Consider backward compatibility impact 
+- Consider backward compatibility impact
+
+## Cursor Cloud specific instructions
+
+### Environment
+
+- Poetry is installed in `~/.local/bin`; the update script ensures it is on `PATH`.
+- Python 3.12, Node 22 are pre-installed.
+- The virtual environment lives under `~/.cache/pypoetry/virtualenvs/`.
+
+### Running the proxy server
+
+Start the proxy with a config file:
+
+```bash
+poetry run litellm --config dev_config.yaml --port 4000
+```
+
+The proxy takes ~15-20 seconds to fully start (it runs Prisma migrations on boot). Wait for `/health` to return before sending requests. Without a PostgreSQL `DATABASE_URL`, the proxy connects to a default Neon dev database embedded in the `litellm-proxy-extras` package.
+
+### Running tests
+
+See `CLAUDE.md` and the `Makefile` for standard commands. Key notes:
+
+- `psycopg-binary` must be installed (`poetry run pip install psycopg-binary`) because the pytest-postgresql plugin requires it and the lock file only includes `psycopg` (no binary).
+- `openapi-core` must be installed (`poetry run pip install openapi-core`) for the OpenAPI compliance tests in `tests/test_litellm/interactions/`.
+- The `--timeout` pytest flag is NOT available; don't pass it.
+- Unit tests: `poetry run pytest tests/test_litellm/ -x -vv -n 4`
+- Black `--check` may report pre-existing formatting issues; this does not block test runs.
+- If `poetry install` fails with "pyproject.toml changed significantly since poetry.lock was last generated", run `poetry lock` first to regenerate the lock file.
+
+### Lint
+
+```bash
+cd litellm && poetry run ruff check .
+```
+
+Ruff is the primary fast linter. For the full lint suite (including mypy, black, circular imports), run `make lint` per `CLAUDE.md`.
+
+### UI Dashboard development
+
+- The UI is at `ui/litellm-dashboard/`. Run `npm run dev` from that directory for the Next.js dev server on port 3000.
+- The proxy at port 4000 serves a **pre-built** static UI from `litellm/proxy/_experimental/out/`. After making UI code changes, you must run `npm run build` in the dashboard directory and copy the output: `cp -r ui/litellm-dashboard/out/* litellm/proxy/_experimental/out/` for the proxy to serve the updated UI.
+- SVGs used as provider logos (loaded via `<img>` tags) must NOT use `fill="currentColor"` — replace with an explicit color like `#000000` or use the `-color` variant from lobehub icons, since CSS color inheritance does not work inside `<img>` elements.
+- Provider logos live in `ui/litellm-dashboard/public/assets/logos/` (source) and `litellm/proxy/_experimental/out/assets/logos/` (pre-built). Both locations must have the file for it to work in dev and proxy-served modes.
+- UI Vitest tests: `cd ui/litellm-dashboard && npx vitest run`

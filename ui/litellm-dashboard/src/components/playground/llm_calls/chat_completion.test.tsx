@@ -95,7 +95,8 @@ describe("chat_completion", () => {
       undefined, // traceId
       undefined, // vector_store_ids
       undefined, // guardrails
-      undefined, // selectedMCPTools
+      undefined, // policies
+      undefined, // selectedMCPServers
       undefined, // onImageGenerated
       undefined, // onSearchResults
       0.7, // temperature
@@ -157,6 +158,7 @@ describe("chat_completion", () => {
       undefined, // traceId
       undefined, // vector_store_ids
       undefined, // guardrails
+      undefined, // policies
       selectedMCPServers,
       undefined, // onImageGenerated
       undefined, // onSearchResults
@@ -187,5 +189,71 @@ describe("chat_completion", () => {
     expect(secondTool.server_url).toBe("litellm_proxy/mcp/Beta");
     expect(secondTool.require_approval).toBe("never");
     expect(secondTool.allowed_tools).toEqual(["toolC"]);
+  });
+
+  it("should include mock_testing_fallbacks in request body when mockTestFallbacks is true", async () => {
+    await makeOpenAIChatCompletionRequest(
+      mockChatHistory,
+      mockUpdateUI,
+      "gpt-4",
+      "test-token",
+      undefined, // tags
+      undefined, // signal
+      undefined, // onReasoningContent
+      undefined, // onTimingData
+      undefined, // onUsageData
+      undefined, // traceId
+      undefined, // vector_store_ids
+      undefined, // guardrails
+      undefined, // policies
+      undefined, // selectedMCPServers
+      undefined, // onImageGenerated
+      undefined, // onSearchResults
+      undefined, // temperature
+      undefined, // max_tokens
+      undefined, // onTotalLatency
+      undefined, // customBaseUrl
+      undefined, // mcpServers
+      undefined, // mcpServerToolRestrictions
+      undefined, // onMCPEvent
+      true, // mockTestFallbacks
+    );
+
+    expect(mockCreate).toHaveBeenCalledTimes(1);
+    const callArgs = mockCreate.mock.calls[0][0];
+    expect(callArgs.mock_testing_fallbacks).toBe(true);
+  });
+
+  it("should not include mock_testing_fallbacks in request body when mockTestFallbacks is false or undefined", async () => {
+    await makeOpenAIChatCompletionRequest(
+      mockChatHistory,
+      mockUpdateUI,
+      "gpt-4",
+      "test-token",
+      undefined, // tags
+      undefined, // signal
+      undefined, // onReasoningContent
+      undefined, // onTimingData
+      undefined, // onUsageData
+      undefined, // traceId
+      undefined, // vector_store_ids
+      undefined, // guardrails
+      undefined, // policies
+      undefined, // selectedMCPServers
+      undefined, // onImageGenerated
+      undefined, // onSearchResults
+      undefined, // temperature
+      undefined, // max_tokens
+      undefined, // onTotalLatency
+      undefined, // customBaseUrl
+      undefined, // mcpServers
+      undefined, // mcpServerToolRestrictions
+      undefined, // onMCPEvent
+      false, // mockTestFallbacks
+    );
+
+    expect(mockCreate).toHaveBeenCalledTimes(1);
+    const callArgs = mockCreate.mock.calls[0][0];
+    expect(callArgs).not.toHaveProperty("mock_testing_fallbacks");
   });
 });

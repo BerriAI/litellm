@@ -69,6 +69,67 @@ router_settings:
   redis_port: 1992
 ```
 
+## Enforce Model Rate Limits
+
+Strictly enforce RPM/TPM limits set on deployments. When limits are exceeded, requests are blocked **before** reaching the LLM provider with a `429 Too Many Requests` error.
+
+:::info
+By default, `rpm` and `tpm` values are only used for **routing decisions** (picking deployments with capacity). With `enforce_model_rate_limits`, they become **hard limits**.
+:::
+
+### Quick Start
+
+```yaml
+model_list:
+  - model_name: gpt-4
+    litellm_params:
+      model: openai/gpt-4
+      api_key: os.environ/OPENAI_API_KEY
+    rpm: 60     # 60 requests per minute
+    tpm: 90000  # 90k tokens per minute
+
+router_settings:
+  optional_pre_call_checks:
+    - enforce_model_rate_limits  # 👈 Enables strict enforcement
+```
+
+### How It Works
+
+| Limit Type | Enforcement | Accuracy |
+|------------|-------------|----------|
+| **RPM** | Hard limit - blocked at exact threshold | 100% accurate |
+| **TPM** | Best-effort - may slightly exceed | Blocked when already over limit |
+
+**Why TPM is best-effort:** Token count is unknown until the LLM responds. TPM is checked before each request (blocks if already over), and tracked after (adds actual tokens used).
+
+### Error Response
+
+```json
+{
+  "error": {
+    "message": "Model rate limit exceeded. RPM limit=60, current usage=60",
+    "type": "rate_limit_error",
+    "code": 429
+  }
+}
+```
+
+Response includes `retry-after: 60` header.
+
+### Multi-Instance Deployment
+
+For multiple LiteLLM proxy instances, add Redis to share rate limit state:
+
+```yaml
+router_settings:
+  optional_pre_call_checks:
+    - enforce_model_rate_limits
+  redis_host: redis.example.com
+  redis_port: 6379
+  redis_password: your-password
+```
+
+
 :::info
 Detailed information about [routing strategies can be found here](../routing)
 :::
@@ -275,6 +336,21 @@ The `order` parameter requires `enable_pre_call_checks: true` in `router_setting
 
 If `order=1` deployment is unavailable (e.g., rate-limited), the router falls back to `order=2` deployments.
 
+### Team-scoped models and legacy `model_aliases` {#team-scoped-models-and-legacy-model_aliases}
+
+Team-scoped deployments are identified by `model_info.team_id` and `model_info.team_public_model_name`. Requests should use the **public** model name; the router resolves all sibling deployments (same public name, different `api_base` / `order`, etc.) for routing, failover, and deployment `order`.
+
+For router internals: when a `team_id` is in scope, optimized lookups key off `(team_id, team_public_model_name)`. If code passes an internal deployment id (e.g. `model_name_<team_id>_<uuid>`) instead of the public name, routing still works via the usual deployment-name paths, but the team-specific fast path applies only to the public name.
+
+**Legacy teams:** Older proxy versions could persist `model_aliases` on the team row mapping a public name to a single internal deployment id (`model_name_<team_id>_<uuid>`). On each request, pre-call logic may still rewrite `model` to that internal name **before** routing, which collapses to one deployment and can make newer sibling deployments unreachable.
+
+**Migration options:**
+
+1. **Recommended for upgrades:** Set environment variable `LITELLM_ENABLE_TEAM_STALE_ALIAS_BYPASS=true` so that when sibling team deployments exist for the public name, the stale alias rewrite is skipped and team-scoped routing (including `order` and failover) applies. See the [Environment variables](./config_settings) table in the proxy settings doc.
+2. **Data cleanup:** Remove obsolete `model_aliases` entries for team public names from the team record in the database so only `team_public_model_name` + team model list drive access.
+
+If a stale alias is detected and the bypass is **not** enabled, the proxy may emit a **one-time** warning in logs explaining that sibling deployments may be unreachable until the flag is set or aliases are cleaned up.
+
 ### When You'll See Load Balancing in Action
 
 **Immediate Effects:**
@@ -286,3 +362,36 @@ If `order=1` deployment is unavailable (e.g., rate-limited), the router falls ba
 - **Higher throughput**: More requests handled simultaneously across deployments
 - **Improved reliability**: If one deployment fails, traffic automatically routes to healthy ones
 - **Better resource utilization**: Load spread evenly across all available deployments
+
+## Special Considerations for Responses API
+
+When load balancing OpenAI's Responses API across deployments with **different API keys** (e.g., different Azure regions or organizations), encrypted content items (like `rs_...` reasoning items) can only be decrypted by the originating API key.
+
+**Solution:** Use the `encrypted_content_affinity` pre-call check to automatically route follow-up requests containing encrypted items to the correct deployment:
+
+```yaml
+model_list:
+  - model_name: gpt-5.1-codex
+    litellm_params:
+      model: azure/gpt-5.1-codex
+      api_base: https://eastus.openai.azure.com/
+      api_key: os.environ/AZURE_API_KEY_EASTUS
+    model_info:
+      id: "deployment-eastus"
+  
+  - model_name: gpt-5.1-codex
+    litellm_params:
+      model: azure/gpt-5.1-codex
+      api_base: https://westeurope.openai.azure.com/
+      api_key: os.environ/AZURE_API_KEY_WESTEUROPE
+    model_info:
+      id: "deployment-westeurope"
+
+router_settings:
+  optional_pre_call_checks:
+    - encrypted_content_affinity  # 👈 Prevents invalid_encrypted_content errors
+```
+
+This ensures requests containing encrypted content are routed to the deployment that created them, while other requests continue to load balance normally.
+
+**[Learn more about Encrypted Content Affinity →](../response_api.md#encrypted-content-affinity-multi-region-load-balancing)**

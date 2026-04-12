@@ -1,0 +1,614 @@
+[
+  {
+    "id": "asesinato",
+    "match": "asesinato",
+    "tags": [
+      "profanity",
+      "spanish"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "asno",
+    "match": "asno",
+    "tags": [
+      "profanity",
+      "spanish"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "bastardo",
+    "match": "bastardo",
+    "tags": [
+      "profanity",
+      "spanish"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "bollera",
+    "match": "bollera",
+    "tags": [
+      "profanity",
+      "spanish"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "cabron",
+    "match": "cabron",
+    "tags": [
+      "profanity",
+      "spanish"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "cabron",
+    "match": "cabrón",
+    "tags": [
+      "profanity",
+      "spanish"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "caca",
+    "match": "caca",
+    "tags": [
+      "profanity",
+      "spanish"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "chupada",
+    "match": "chupada",
+    "tags": [
+      "profanity",
+      "spanish"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "chupapollas",
+    "match": "chupapollas",
+    "tags": [
+      "profanity",
+      "spanish"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "chupeton",
+    "match": "chupetón",
+    "tags": [
+      "profanity",
+      "spanish"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "concha",
+    "match": "concha",
+    "tags": [
+      "profanity",
+      "spanish"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "concha-de-tu-madre",
+    "match": "concha de tu madre",
+    "tags": [
+      "profanity",
+      "spanish"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "coño",
+    "match": "coño",
+    "tags": [
+      "profanity",
+      "spanish"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "coprofagia",
+    "match": "coprofagía",
+    "tags": [
+      "profanity",
+      "spanish"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "culo",
+    "match": "culo",
+    "tags": [
+      "profanity",
+      "spanish"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "drogas",
+    "match": "drogas",
+    "tags": [
+      "profanity",
+      "spanish"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "esperma",
+    "match": "esperma",
+    "tags": [
+      "profanity",
+      "spanish"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "fiesta-de-salchichas",
+    "match": "fiesta de salchichas",
+    "tags": [
+      "profanity",
+      "spanish"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "follador",
+    "match": "follador",
+    "tags": [
+      "profanity",
+      "spanish"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "follar",
+    "match": "follar",
+    "tags": [
+      "profanity",
+      "spanish"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "gilipichis",
+    "match": "gilipichis",
+    "tags": [
+      "profanity",
+      "spanish"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "gilipollas",
+    "match": "gilipollas",
+    "tags": [
+      "profanity",
+      "spanish"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "hacer-una-paja",
+    "match": "hacer una paja",
+    "tags": [
+      "profanity",
+      "spanish"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "haciendo-el-amor",
+    "match": "haciendo el amor",
+    "tags": [
+      "profanity",
+      "spanish"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "heroina",
+    "match": "heroína",
+    "tags": [
+      "profanity",
+      "spanish"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "hija-de-puta",
+    "match": "hija de puta",
+    "tags": [
+      "profanity",
+      "spanish"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "hijaputa",
+    "match": "hijaputa",
+    "tags": [
+      "profanity",
+      "spanish"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "hijo-de-puta",
+    "match": "hijo de puta",
+    "tags": [
+      "profanity",
+      "spanish"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "hijoputa",
+    "match": "hijoputa",
+    "tags": [
+      "profanity",
+      "spanish"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "idiota",
+    "match": "idiota",
+    "tags": [
+      "profanity",
+      "spanish"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "imbecil",
+    "match": "imbécil",
+    "tags": [
+      "profanity",
+      "spanish"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "infierno",
+    "match": "infierno",
+    "tags": [
+      "profanity",
+      "spanish"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "jilipollas",
+    "match": "jilipollas",
+    "tags": [
+      "profanity",
+      "spanish"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "kapullo",
+    "match": "kapullo",
+    "tags": [
+      "profanity",
+      "spanish"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "lameculos",
+    "match": "lameculos",
+    "tags": [
+      "profanity",
+      "spanish"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "maciza",
+    "match": "maciza",
+    "tags": [
+      "profanity",
+      "spanish"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "macizorra",
+    "match": "macizorra",
+    "tags": [
+      "profanity",
+      "spanish"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "maldito",
+    "match": "maldito",
+    "tags": [
+      "profanity",
+      "spanish"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "mamada",
+    "match": "mamada",
+    "tags": [
+      "profanity",
+      "spanish"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "marica",
+    "match": "marica",
+    "tags": [
+      "profanity",
+      "spanish"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "maricon",
+    "match": "maricón",
+    "tags": [
+      "profanity",
+      "spanish"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "mariconazo",
+    "match": "mariconazo",
+    "tags": [
+      "profanity",
+      "spanish"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "martillo",
+    "match": "martillo",
+    "tags": [
+      "profanity",
+      "spanish"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "mierda",
+    "match": "mierda",
+    "tags": [
+      "profanity",
+      "spanish"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "nazi",
+    "match": "nazi",
+    "tags": [
+      "profanity",
+      "spanish"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "orina",
+    "match": "orina",
+    "tags": [
+      "profanity",
+      "spanish"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "pedo",
+    "match": "pedo",
+    "tags": [
+      "profanity",
+      "spanish"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "pervertido",
+    "match": "pervertido",
+    "tags": [
+      "profanity",
+      "spanish"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "pezon",
+    "match": "pezón",
+    "tags": [
+      "profanity",
+      "spanish"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "pinche",
+    "match": "pinche",
+    "tags": [
+      "profanity",
+      "spanish"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "pis",
+    "match": "pis",
+    "tags": [
+      "profanity",
+      "spanish"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "prostituta",
+    "match": "prostituta",
+    "tags": [
+      "profanity",
+      "spanish"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "puta",
+    "match": "puta",
+    "tags": [
+      "profanity",
+      "spanish"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "racista",
+    "match": "racista",
+    "tags": [
+      "profanity",
+      "spanish"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "ramera",
+    "match": "ramera",
+    "tags": [
+      "profanity",
+      "spanish"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "sadico",
+    "match": "sádico",
+    "tags": [
+      "profanity",
+      "spanish"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "semen",
+    "match": "semen",
+    "tags": [
+      "profanity",
+      "spanish"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "sexo",
+    "match": "sexo",
+    "tags": [
+      "profanity",
+      "spanish"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "sexo-oral",
+    "match": "sexo oral",
+    "tags": [
+      "profanity",
+      "spanish"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "soplagaitas",
+    "match": "soplagaitas",
+    "tags": [
+      "profanity",
+      "spanish"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "soplapollas",
+    "match": "soplapollas",
+    "tags": [
+      "profanity",
+      "spanish"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "tetas-grandes",
+    "match": "tetas grandes",
+    "tags": [
+      "profanity",
+      "spanish"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "tia-buena",
+    "match": "tía buena",
+    "tags": [
+      "profanity",
+      "spanish"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "travesti",
+    "match": "travesti",
+    "tags": [
+      "profanity",
+      "spanish"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "trio",
+    "match": "trio",
+    "tags": [
+      "profanity",
+      "spanish"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "verga",
+    "match": "verga",
+    "tags": [
+      "profanity",
+      "spanish"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "vete-a-la-mierda",
+    "match": "vete a la mierda",
+    "tags": [
+      "profanity",
+      "spanish"
+    ],
+    "severity": 3
+  },
+  {
+    "id": "vulva",
+    "match": "vulva",
+    "tags": [
+      "profanity",
+      "spanish"
+    ],
+    "severity": 3
+  }
+]

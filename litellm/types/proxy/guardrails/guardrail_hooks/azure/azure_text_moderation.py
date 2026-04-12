@@ -76,7 +76,6 @@ class AzureContentSafetyTextModerationConfigModel(
     AzureContentSafetyConfigModel,
     GuardrailConfigModel[AzureTextModerationOptionalParams],
 ):
-
     optional_params: AzureTextModerationOptionalParams = Field(
         description="Optional parameters for the Azure Content Safety Text Moderation guardrail",
     )

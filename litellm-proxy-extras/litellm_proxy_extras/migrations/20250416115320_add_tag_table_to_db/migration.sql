@@ -1,9 +1,9 @@
 -- AlterTable
-ALTER TABLE "LiteLLM_DailyTeamSpend" ADD COLUMN     "cache_creation_input_tokens" INTEGER NOT NULL DEFAULT 0,
-ADD COLUMN     "cache_read_input_tokens" INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE "LiteLLM_DailyTeamSpend" ADD COLUMN IF NOT EXISTS "cache_creation_input_tokens" INTEGER NOT NULL DEFAULT 0,
+ADD COLUMN IF NOT EXISTS "cache_read_input_tokens" INTEGER NOT NULL DEFAULT 0;
 
 -- CreateTable
-CREATE TABLE "LiteLLM_DailyTagSpend" (
+CREATE TABLE IF NOT EXISTS "LiteLLM_DailyTagSpend" (
     "id" TEXT NOT NULL,
     "tag" TEXT NOT NULL,
     "date" TEXT NOT NULL,
@@ -26,20 +26,20 @@ CREATE TABLE "LiteLLM_DailyTagSpend" (
 );
 
 -- CreateIndex
-CREATE UNIQUE INDEX "LiteLLM_DailyTagSpend_tag_key" ON "LiteLLM_DailyTagSpend"("tag");
+CREATE UNIQUE INDEX IF NOT EXISTS "LiteLLM_DailyTagSpend_tag_key" ON "LiteLLM_DailyTagSpend"("tag");
 
 -- CreateIndex
-CREATE INDEX "LiteLLM_DailyTagSpend_date_idx" ON "LiteLLM_DailyTagSpend"("date");
+CREATE INDEX IF NOT EXISTS "LiteLLM_DailyTagSpend_date_idx" ON "LiteLLM_DailyTagSpend"("date");
 
 -- CreateIndex
-CREATE INDEX "LiteLLM_DailyTagSpend_tag_idx" ON "LiteLLM_DailyTagSpend"("tag");
+CREATE INDEX IF NOT EXISTS "LiteLLM_DailyTagSpend_tag_idx" ON "LiteLLM_DailyTagSpend"("tag");
 
 -- CreateIndex
-CREATE INDEX "LiteLLM_DailyTagSpend_api_key_idx" ON "LiteLLM_DailyTagSpend"("api_key");
+CREATE INDEX IF NOT EXISTS "LiteLLM_DailyTagSpend_api_key_idx" ON "LiteLLM_DailyTagSpend"("api_key");
 
 -- CreateIndex
-CREATE INDEX "LiteLLM_DailyTagSpend_model_idx" ON "LiteLLM_DailyTagSpend"("model");
+CREATE INDEX IF NOT EXISTS "LiteLLM_DailyTagSpend_model_idx" ON "LiteLLM_DailyTagSpend"("model");
 
 -- CreateIndex
-CREATE UNIQUE INDEX "LiteLLM_DailyTagSpend_tag_date_api_key_model_custom_llm_pro_key" ON "LiteLLM_DailyTagSpend"("tag", "date", "api_key", "model", "custom_llm_provider");
+CREATE UNIQUE INDEX IF NOT EXISTS "LiteLLM_DailyTagSpend_tag_date_api_key_model_custom_llm_pro_key" ON "LiteLLM_DailyTagSpend"("tag", "date", "api_key", "model", "custom_llm_provider");
 

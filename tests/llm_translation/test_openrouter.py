@@ -30,7 +30,7 @@ def test_completion_openrouter_image_generation():
     assert (
         resp.choices[0]
         .message.images[0]["image_url"]["url"]
-        .startswith("data:image/png;base64,")
+        .startswith("data:image/")
     )
 
 

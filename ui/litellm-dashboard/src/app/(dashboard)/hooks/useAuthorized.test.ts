@@ -8,11 +8,14 @@ import useAuthorized from "./useAuthorized";
 // Unmock useAuthorized to test the actual implementation
 vi.unmock("@/app/(dashboard)/hooks/useAuthorized");
 
-const { replaceMock, clearTokenCookiesMock, getProxyBaseUrlMock, getUiConfigMock } = vi.hoisted(() => ({
+const { replaceMock, clearTokenCookiesMock, getProxyBaseUrlMock, getUiConfigMock, decodeTokenMock, checkTokenValidityMock, buildLoginUrlWithReturnMock } = vi.hoisted(() => ({
   replaceMock: vi.fn(),
   clearTokenCookiesMock: vi.fn(),
   getProxyBaseUrlMock: vi.fn(() => "http://proxy.example"),
   getUiConfigMock: vi.fn(),
+  decodeTokenMock: vi.fn(),
+  checkTokenValidityMock: vi.fn(),
+  buildLoginUrlWithReturnMock: vi.fn((baseUrl: string) => baseUrl),
 }));
 
 vi.mock("next/navigation", () => ({
@@ -38,6 +41,23 @@ vi.mock("@/utils/cookieUtils", async (importOriginal) => {
   };
 });
 
+vi.mock("@/utils/jwtUtils", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/utils/jwtUtils")>();
+  return {
+    ...actual,
+    decodeToken: decodeTokenMock,
+    checkTokenValidity: checkTokenValidityMock,
+  };
+});
+
+vi.mock("@/utils/returnUrlUtils", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/utils/returnUrlUtils")>();
+  return {
+    ...actual,
+    buildLoginUrlWithReturn: buildLoginUrlWithReturnMock,
+    storeReturnUrl: vi.fn(),
+  };
+});
 const createQueryClient = () =>
   new QueryClient({
     defaultOptions: {
@@ -68,6 +88,9 @@ describe("useAuthorized", () => {
     clearTokenCookiesMock.mockReset();
     getProxyBaseUrlMock.mockClear();
     getUiConfigMock.mockReset();
+    decodeTokenMock.mockReset();
+    checkTokenValidityMock.mockReset();
+    buildLoginUrlWithReturnMock.mockClear();
     clearCookie();
   });
 
@@ -77,9 +100,10 @@ describe("useAuthorized", () => {
       proxy_base_url: null,
       auto_redirect_to_sso: false,
       admin_ui_disabled: false,
+      sso_configured: false,
     });
-
-    const token = createJwt({
+    
+    const decodedPayload = {
       key: "api-key-123",
       user_id: "user-1",
       user_email: "user@example.com",
@@ -87,7 +111,12 @@ describe("useAuthorized", () => {
       premium_user: true,
       disabled_non_admin_personal_key_creation: false,
       login_method: "username_password",
-    });
+    };
+    
+    decodeTokenMock.mockReturnValue(decodedPayload);
+    checkTokenValidityMock.mockReturnValue(true);
+
+    const token = createJwt(decodedPayload);
     document.cookie = `token=${token}; path=/;`;
 
     const { result } = renderHook(() => useAuthorized(), { wrapper });
@@ -104,6 +133,7 @@ describe("useAuthorized", () => {
     expect(result.current.disabledPersonalKeyCreation).toBe(false);
     expect(result.current.showSSOBanner).toBe(true);
     expect(replaceMock).not.toHaveBeenCalled();
+    expect(clearTokenCookiesMock).not.toHaveBeenCalled();
   });
 
   it("should clear cookies and redirect on an invalid token", async () => {
@@ -112,7 +142,11 @@ describe("useAuthorized", () => {
       proxy_base_url: null,
       auto_redirect_to_sso: false,
       admin_ui_disabled: false,
+      sso_configured: false,
     });
+
+    decodeTokenMock.mockReturnValue(null);
+    checkTokenValidityMock.mockReturnValue(false);
 
     document.cookie = "token=invalid-token; path=/;";
 
@@ -133,9 +167,10 @@ describe("useAuthorized", () => {
       proxy_base_url: null,
       auto_redirect_to_sso: false,
       admin_ui_disabled: true,
+      sso_configured: false,
     });
 
-    const token = createJwt({
+    const decodedPayload = {
       key: "api-key-123",
       user_id: "user-1",
       user_email: "user@example.com",
@@ -143,7 +178,12 @@ describe("useAuthorized", () => {
       premium_user: true,
       disabled_non_admin_personal_key_creation: false,
       login_method: "username_password",
-    });
+    };
+
+    decodeTokenMock.mockReturnValue(decodedPayload);
+    checkTokenValidityMock.mockReturnValue(true);
+
+    const token = createJwt(decodedPayload);
     document.cookie = `token=${token}; path=/;`;
 
     const { result } = renderHook(() => useAuthorized(), { wrapper });
@@ -155,5 +195,60 @@ describe("useAuthorized", () => {
     expect(result.current.accessToken).toBe("api-key-123");
     expect(result.current.userId).toBe("user-1");
     expect(result.current.userEmail).toBe("user@example.com");
+  });
+
+  it("should redirect when token is missing", async () => {
+    getUiConfigMock.mockResolvedValue({
+      server_root_path: "/",
+      proxy_base_url: null,
+      auto_redirect_to_sso: false,
+      admin_ui_disabled: false,
+      sso_configured: false,
+    });
+
+    decodeTokenMock.mockReturnValue(null);
+    checkTokenValidityMock.mockReturnValue(false);
+
+    // No token cookie set
+    const { result } = renderHook(() => useAuthorized(), { wrapper });
+
+    await waitFor(() => {
+      expect(replaceMock).toHaveBeenCalledWith("http://proxy.example/ui/login");
+    });
+
+    expect(clearTokenCookiesMock).not.toHaveBeenCalled();
+    expect(result.current.token).toBeNull();
+  });
+
+  it("should clear cookies and redirect when token is expired", async () => {
+    getUiConfigMock.mockResolvedValue({
+      server_root_path: "/",
+      proxy_base_url: null,
+      auto_redirect_to_sso: false,
+      admin_ui_disabled: false,
+      sso_configured: false,
+    });
+
+    const decodedPayload = {
+      key: "api-key-123",
+      user_id: "user-1",
+      user_email: "user@example.com",
+      user_role: "app_admin",
+    };
+
+    decodeTokenMock.mockReturnValue(decodedPayload);
+    checkTokenValidityMock.mockReturnValue(false);
+
+    const token = createJwt(decodedPayload);
+    document.cookie = `token=${token}; path=/;`;
+
+    const { result } = renderHook(() => useAuthorized(), { wrapper });
+
+    await waitFor(() => {
+      expect(clearTokenCookiesMock).toHaveBeenCalled();
+    });
+
+    expect(replaceMock).toHaveBeenCalledWith("http://proxy.example/ui/login");
+    expect(checkTokenValidityMock).toHaveBeenCalledWith(token);
   });
 });

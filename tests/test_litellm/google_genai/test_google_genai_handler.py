@@ -25,7 +25,7 @@ def test_non_stream_response_when_stream_requested_sync():
     the sync handler correctly transforms it to generate_content format.
     """
     from litellm.types.utils import Choices
-    
+
     # Mock a non-stream response (ModelResponse with valid choices)
     mock_response = ModelResponse(
         id="test-123",
@@ -70,7 +70,7 @@ async def test_non_stream_response_when_stream_requested_async():
     the async handler correctly transforms it to generate_content format.
     """
     from litellm.types.utils import Choices
-    
+
     # Mock a non-stream response (ModelResponse with valid choices)
     mock_response = ModelResponse(
         id="test-123",
@@ -183,6 +183,7 @@ def test_stream_transformation_error_sync():
         "translate_completion_output_params_streaming", 
         return_value=None
     ):
+        # Patch litellm.completion directly to prevent real API calls
         with patch("litellm.completion", return_value=mock_stream):
             # Call the handler with stream=True and expect a ValueError
             with pytest.raises(ValueError, match="Failed to transform streaming response"):
@@ -209,7 +210,11 @@ async def test_stream_transformation_error_async():
         "translate_completion_output_params_streaming", 
         return_value=None
     ):
-        with patch("litellm.acompletion", return_value=mock_stream):
+        # Mock litellm.acompletion at the module level where it's imported
+        # We need to patch it in the handler module, not in litellm itself
+        with patch("litellm.google_genai.adapters.handler.litellm") as mock_litellm:
+            # Use AsyncMock for async function
+            mock_litellm.acompletion = AsyncMock(return_value=mock_stream)
             # Call the handler with stream=True and expect a ValueError
             with pytest.raises(ValueError, match="Failed to transform streaming response"):
                 await GenerateContentToCompletionHandler.async_generate_content_handler(
@@ -225,11 +230,13 @@ def test_citation_metadata_transformation():
     Test that citationMetadata.citationSources is properly transformed to citationMetadata.citations
     to avoid Pydantic validation errors.
     """
-    from litellm.llms.gemini.google_genai.transformation import GoogleGenAIConfig
-    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from unittest.mock import MagicMock
+
     import httpx
-    
+
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.llms.gemini.google_genai.transformation import GoogleGenAIConfig
+
     # Create a mock response with citationMetadata.citationSources (the problematic format)
     mock_response_data = {
         "candidates": [
