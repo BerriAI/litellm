@@ -1,6 +1,8 @@
 import os
 import sys
-from typing import Any, Dict, List
+from typing import Any, AsyncIterator, Dict, List
+
+import pytest
 
 sys.path.insert(0, os.path.abspath("../../../../.."))
 
@@ -333,3 +335,57 @@ def test_has_meaningful_delta():
             "delta": {"type": "thinking_delta", "thinking": "Let me think..."},
         }
     ) is True
+
+
+# ---------------------------------------------------------------------------
+# Async iterator tests
+# ---------------------------------------------------------------------------
+
+
+async def _async_iter(chunks: list) -> AsyncIterator:
+    """Wrap a list into an async iterator."""
+    for chunk in chunks:
+        yield chunk
+
+
+@pytest.mark.asyncio
+async def test_async_emit_input_json_delta_for_atomic_tool_call():
+    """
+    Async counterpart of test_emit_input_json_delta_for_atomic_tool_call.
+    Verifies the __anext__ path also emits input_json_delta when a provider
+    delivers name + arguments in a single streaming chunk.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/25561
+    """
+    chunks = [
+        _make_text_chunk("Let me read that file for you."),
+        _make_tool_call_chunk("Read", '{"file_path": "/etc/hosts"}'),
+        _make_finish_chunk("tool_use"),
+    ]
+
+    wrapper = AnthropicStreamWrapper(
+        completion_stream=_async_iter(chunks),
+        model="test-model",
+    )
+
+    events: List[Dict[str, Any]] = []
+    async for event in wrapper:
+        events.append(event)
+
+    event_types = [e.get("type") for e in events]
+
+    input_json_deltas: List[Dict[str, Any]] = [
+        e
+        for e in events
+        if e.get("type") == "content_block_delta"
+        and e.get("delta", {}).get("type") == "input_json_delta"
+    ]
+    assert len(input_json_deltas) >= 1, (
+        f"Expected at least one input_json_delta event, got 0. "
+        f"Event types: {event_types}"
+    )
+
+    combined_json = "".join(
+        d["delta"]["partial_json"] for d in input_json_deltas
+    )
+    assert combined_json == '{"file_path": "/etc/hosts"}'
