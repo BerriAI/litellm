@@ -31,6 +31,18 @@ else:
 router = APIRouter()
 
 
+def _require_proxy_admin_or_viewer(user_api_key_dict: UserAPIKeyAuth) -> None:
+    if user_api_key_dict.user_role in (
+        LitellmUserRoles.PROXY_ADMIN,
+        LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
+    ):
+        return
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail={"error": CommonProxyErrors.not_allowed_access.value},
+    )
+
+
 @router.get(
     "/spend/keys",
     tags=["Budget & Spend Tracking"],
@@ -945,12 +957,12 @@ async def get_global_spend_provider(
 @router.get(
     "/global/spend/report",
     tags=["Budget & Spend Tracking"],
-    dependencies=[Depends(user_api_key_auth)],
     responses={
         200: {"model": List[LiteLLM_SpendLogs]},
     },
 )
 async def get_global_spend_report(
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     start_date: Optional[str] = fastapi.Query(
         default=None,
         description="Time from which to start viewing spend",
@@ -1009,6 +1021,8 @@ async def get_global_spend_report(
         ]
     }
     """
+    _require_proxy_admin_or_viewer(user_api_key_dict)
+
     if start_date is None or end_date is None:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

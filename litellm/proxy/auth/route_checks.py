@@ -665,6 +665,11 @@ class RouteChecks:
             # Allow access to global spend tracking routes (read-only spend endpoints)
             # proxy_admin_viewer role description: "view all keys, view all spend"
             return
+        elif RouteChecks.check_route_access(
+            route=route, allowed_routes=LiteLLMRoutes.global_spend_report_routes.value
+        ):
+            # Global spend report: proxy_admin + proxy_admin_viewer only (not org admin)
+            return
         else:
             # For other routes, block access
             raise HTTPException(

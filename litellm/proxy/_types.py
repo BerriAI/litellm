@@ -586,10 +586,13 @@ class LiteLLMRoutes(enum.Enum):
         "/global/spend/end_users",
         "/global/spend/models",
         "/global/predict/spend/logs",
-        "/global/spend/report",
         "/global/spend/provider",
         "/global/spend/tags",
         "/global/spend/all_tag_names",
+    ]
+
+    global_spend_report_routes = [
+        "/global/spend/report",
     ]
 
     public_routes = set(
@@ -4191,6 +4194,7 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
         "management_routes",
         "spend_tracking_routes",
         "global_spend_tracking_routes",
+        "global_spend_report_routes",
         "info_routes",
     ]
     team_id_jwt_field: Optional[str] = None

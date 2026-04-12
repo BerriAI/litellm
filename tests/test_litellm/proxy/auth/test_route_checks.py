@@ -1004,6 +1004,58 @@ def test_proxy_admin_viewer_can_access_global_spend_tags():
         )
 
 
+def test_proxy_admin_viewer_can_access_global_spend_report():
+    """proxy_admin_viewer should pass route checks for /global/spend/report."""
+
+    user_obj = LiteLLM_UserTable(
+        user_id="viewer_user",
+        user_email="viewer@example.com",
+        user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
+    )
+    valid_token = UserAPIKeyAuth(
+        user_id="viewer_user",
+        user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
+    )
+    request = MagicMock(spec=Request)
+    request.query_params = {"start_date": "2025-05-12", "end_date": "2025-10-09"}
+
+    RouteChecks.non_proxy_admin_allowed_routes_check(
+        user_obj=user_obj,
+        _user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
+        route="/global/spend/report",
+        request=request,
+        valid_token=valid_token,
+        request_data={},
+    )
+
+
+def test_internal_user_cannot_access_global_spend_report_route():
+    """Internal users must not use /global/spend/report (proxy admin roles only)."""
+
+    user_obj = LiteLLM_UserTable(
+        user_id="internal_user",
+        user_email="user@example.com",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+    )
+    valid_token = UserAPIKeyAuth(
+        user_id="internal_user",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+    )
+    request = MagicMock(spec=Request)
+    request.query_params = {}
+
+    with pytest.raises(Exception) as exc_info:
+        RouteChecks.non_proxy_admin_allowed_routes_check(
+            user_obj=user_obj,
+            _user_role=LitellmUserRoles.INTERNAL_USER.value,
+            route="/global/spend/report",
+            request=request,
+            valid_token=valid_token,
+            request_data={},
+        )
+    assert "Only proxy admin can be used to generate" in str(exc_info.value)
+
+
 @pytest.mark.parametrize("route", ["/audit", "/audit/some-log-id"])
 def test_proxy_admin_viewer_can_access_audit_logs(route):
     """
