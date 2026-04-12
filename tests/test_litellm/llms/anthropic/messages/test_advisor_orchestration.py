@@ -415,3 +415,104 @@ async def test_advisor_tool_translated_for_executor():
     # Must have a description and input_schema
     assert "description" in advisor_tool
     assert "input_schema" in advisor_tool
+
+
+# ---------------------------------------------------------------------------
+# 9. max_uses=0 means zero advisor calls allowed — first call raises immediately
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_max_uses_zero_raises_on_first_advisor_call():
+    """max_uses=0 must cause AdvisorMaxIterationsError on the first advisor call."""
+    from litellm.llms.anthropic.experimental_pass_through.messages.interceptors.advisor import (
+        AdvisorMaxIterationsError,
+        AdvisorOrchestrationHandler,
+    )
+
+    advisor_tool_with_zero = {**ADVISOR_TOOL, "max_uses": 0}
+    advisor_tool_use_resp = _make_advisor_tool_use_response()
+
+    async def mock_call(model, messages, tools, stream, max_tokens, **kwargs):
+        return advisor_tool_use_resp  # executor always tries to call advisor
+
+    with patch(
+        "litellm.llms.anthropic.experimental_pass_through.messages.interceptors.advisor._call_messages_handler",
+        side_effect=mock_call,
+    ):
+        h = AdvisorOrchestrationHandler()
+        with pytest.raises(AdvisorMaxIterationsError):
+            await h.handle(
+                model="openai/gpt-4o-mini",
+                messages=MESSAGES,
+                tools=[advisor_tool_with_zero],
+                stream=False,
+                max_tokens=512,
+                custom_llm_provider="openai",
+            )
+
+
+# ---------------------------------------------------------------------------
+# 10. Missing model in advisor tool definition raises ValueError from handle()
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_missing_advisor_model_raises_value_error():
+    """handle() must raise ValueError when the advisor tool has no model field."""
+    from litellm.llms.anthropic.experimental_pass_through.messages.interceptors.advisor import (
+        AdvisorOrchestrationHandler,
+    )
+
+    advisor_tool_no_model = {"type": "advisor_20260301", "name": "advisor"}
+
+    h = AdvisorOrchestrationHandler()
+    with pytest.raises(ValueError, match="model"):
+        await h.handle(
+            model="openai/gpt-4o-mini",
+            messages=MESSAGES,
+            tools=[advisor_tool_no_model],
+            stream=False,
+            max_tokens=512,
+            custom_llm_provider="openai",
+        )
+
+
+# ---------------------------------------------------------------------------
+# 11. max_uses not set → falls back to ADVISOR_MAX_USES default
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_max_uses_none_falls_back_to_default():
+    """When max_uses is absent, the handler uses ADVISOR_MAX_USES from constants."""
+    import litellm.constants as _c
+    from litellm.llms.anthropic.experimental_pass_through.messages.interceptors.advisor import (
+        AdvisorMaxIterationsError,
+        AdvisorOrchestrationHandler,
+    )
+
+    advisor_tool_use_resp = _make_advisor_tool_use_response()
+    advisor_advice_resp = _make_text_response("Here is advice.")
+
+    async def mock_call(model, messages, tools, stream, max_tokens, **kwargs):
+        if tools is None:
+            return advisor_advice_resp
+        return advisor_tool_use_resp
+
+    with patch(
+        "litellm.llms.anthropic.experimental_pass_through.messages.interceptors.advisor._call_messages_handler",
+        side_effect=mock_call,
+    ):
+        h = AdvisorOrchestrationHandler()
+        with pytest.raises(AdvisorMaxIterationsError) as exc_info:
+            await h.handle(
+                model="openai/gpt-4o-mini",
+                messages=MESSAGES,
+                tools=[ADVISOR_TOOL],  # no max_uses — should use default
+                stream=False,
+                max_tokens=512,
+                custom_llm_provider="openai",
+            )
+
+    assert str(_c.ADVISOR_MAX_USES) in str(exc_info.value)
