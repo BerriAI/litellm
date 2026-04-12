@@ -1,0 +1,21 @@
+name: Check Docs Site Health
+
+on:
+  schedule:
+    # Run every 6 hours
+    - cron: '0 */6 * * *'
+  workflow_dispatch:
+
+jobs:
+  check-docs-health:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check docs site is reachable
+        run: |
+          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" --max-time 30 https://docs.litellm.ai)
+          echo "HTTP status: $HTTP_STATUS"
+          if [ "$HTTP_STATUS" -ne 200 ]; then
+            echo "::error::Docs site returned HTTP $HTTP_STATUS - site may be down!"
+            exit 1
+          fi
+          echo "Docs site is healthy (HTTP 200)"
