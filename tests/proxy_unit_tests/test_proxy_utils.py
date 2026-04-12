@@ -2044,6 +2044,49 @@ def test_update_model_if_team_alias_exists(data, user_api_key_dict, expected_mod
     assert test_data.get("model") == expected_model
 
 
+def test_team_alias_stale_bypass_disabled_by_default():
+    from litellm.proxy.litellm_pre_call_utils import _update_model_if_team_alias_exists
+
+    class _MockRouter:
+        team_model_to_deployment_indices = {("team-1", "gpt-4o"): [0]}
+
+    test_data = {"model": "gpt-4o"}
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test_key",
+        team_id="team-1",
+        team_model_aliases={"gpt-4o": "model_name_team-1_legacy-uuid"},
+    )
+
+    with patch("litellm.proxy.proxy_server.llm_router", _MockRouter()):
+        _update_model_if_team_alias_exists(
+            data=test_data, user_api_key_dict=user_api_key_dict
+        )
+
+    assert test_data.get("model") == "model_name_team-1_legacy-uuid"
+
+
+def test_team_alias_stale_bypass_enabled_by_flag(monkeypatch):
+    from litellm.proxy.litellm_pre_call_utils import _update_model_if_team_alias_exists
+
+    class _MockRouter:
+        team_model_to_deployment_indices = {("team-1", "gpt-4o"): [0]}
+
+    test_data = {"model": "gpt-4o"}
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test_key",
+        team_id="team-1",
+        team_model_aliases={"gpt-4o": "model_name_team-1_legacy-uuid"},
+    )
+    monkeypatch.setenv("LITELLM_ENABLE_TEAM_STALE_ALIAS_BYPASS", "true")
+
+    with patch("litellm.proxy.proxy_server.llm_router", _MockRouter()):
+        _update_model_if_team_alias_exists(
+            data=test_data, user_api_key_dict=user_api_key_dict
+        )
+
+    assert test_data.get("model") == "gpt-4o"
+
+
 @pytest.fixture
 def mock_prisma_client():
     client = MagicMock()

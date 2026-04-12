@@ -9,6 +9,9 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 jobs:
   proxy_e2e_azure_batches_tests:
     runs-on: ubuntu-latest
@@ -30,18 +33,20 @@ jobs:
           --health-retries 5
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          persist-credentials: false
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.12"
 
       - name: Install Poetry
-        uses: snok/install-poetry@v1
+        run: pip install 'poetry==2.3.2'
 
       - name: Cache Poetry dependencies
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.0.0
         with:
           path: |
             ~/.cache/pypoetry
@@ -56,14 +61,17 @@ jobs:
         run: |
           poetry config virtualenvs.in-project true
           poetry install --with dev,proxy-dev --extras "proxy"
-          poetry run pip install psycopg2-binary uvicorn fastapi httpx tenacity
+          poetry run pip install psycopg2-binary==2.9.11 uvicorn==0.42.0 fastapi==0.135.2 httpx==0.28.1 tenacity==9.1.4
 
       - name: Setup litellm-enterprise
         run: |
           poetry run pip install --force-reinstall --no-deps -e enterprise/
 
       - name: Generate Prisma client
+        env:
+          PRISMA_BINARY_CACHE_DIR: ${{ runner.temp }}/prisma-cache
         run: |
+          poetry run pip install nodejs-wheel-binaries==24.13.1
           poetry run prisma generate --schema litellm/proxy/schema.prisma
 
       - name: Run Prisma migrations
@@ -87,4 +95,3 @@ jobs:
             --tb=short \
             --maxfail=3 \
             --durations=10
-

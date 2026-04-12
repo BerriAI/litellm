@@ -13,13 +13,13 @@ model/{model_id}/update - PATCH endpoint for model update.
 import asyncio
 import datetime
 import json
-from litellm._uuid import uuid
 from typing import Dict, List, Literal, Optional, Tuple, Union, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, ConfigDict, Field
 
 from litellm._logging import verbose_proxy_logger
+from litellm._uuid import uuid
 from litellm.constants import LITELLM_PROXY_ADMIN_NAME
 from litellm.proxy._types import (
     CommonProxyErrors,
@@ -32,7 +32,7 @@ from litellm.proxy._types import (
     ProxyErrorTypes,
     ProxyException,
     TeamModelAddRequest,
-    UpdateTeamRequest,
+    TeamModelDeleteRequest,
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -40,7 +40,7 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helpe
 from litellm.proxy.management_endpoints.common_utils import _is_user_team_admin
 from litellm.proxy.management_endpoints.team_endpoints import (
     team_model_add,
-    update_team,
+    team_model_delete,
 )
 from litellm.proxy.management_helpers.audit_logs import create_object_audit_log
 from litellm.proxy.utils import PrismaClient
@@ -324,7 +324,7 @@ async def _add_team_model_to_db(
 
     - generate a unique 'model_name' for the model (e.g. 'model_name_{team_id}_{uuid})
     - store the model in the db with the unique 'model_name'
-    - store a team model alias mapping {"model_name": "model_name_{team_id}_{uuid}"}
+    - add the public model name to the team's allowed models list
     """
     _team_id = model_params.model_info.team_id
     if _team_id is None:
@@ -344,25 +344,15 @@ async def _add_team_model_to_db(
         prisma_client=prisma_client,
     )
 
-    ## CREATE MODEL ALIAS IN DB ##
-    await update_team(
-        data=UpdateTeamRequest(
-            team_id=_team_id,
-            model_aliases={original_model_name: unique_model_name},
-        ),
-        user_api_key_dict=user_api_key_dict,
-        http_request=Request(scope={"type": "http"}),
-    )
-
-    # add model to team object
-    await team_model_add(
-        data=TeamModelAddRequest(
-            team_id=_team_id,
-            models=[original_model_name],
-        ),
-        http_request=Request(scope={"type": "http"}),
-        user_api_key_dict=user_api_key_dict,
-    )
+    if original_model_name:
+        await team_model_add(
+            data=TeamModelAddRequest(
+                team_id=_team_id,
+                models=[original_model_name],
+            ),
+            http_request=Request(scope={"type": "http"}),
+            user_api_key_dict=user_api_key_dict,
+        )
 
     return model_response
 
@@ -428,6 +418,7 @@ async def _update_team_model_in_db(
             db_model=db_model,
             patch_data=patch_data,
             user_api_key_dict=user_api_key_dict,
+            prisma_client=prisma_client,
         )
 
     return update_db_model(db_model=db_model, updated_patch=patch_data)
@@ -453,18 +444,9 @@ async def _setup_new_team_model_assignment(
     patch_data: updateDeployment,
     user_api_key_dict: UserAPIKeyAuth,
 ) -> None:
-    """Set up a new team model with unique name, alias, and team membership."""
+    """Set up a new team model with unique name and team membership."""
     unique_model_name = f"model_name_{team_id}_{uuid.uuid4()}"
     patch_data.model_name = unique_model_name
-
-    await update_team(
-        data=UpdateTeamRequest(
-            team_id=team_id,
-            model_aliases={public_model_name: unique_model_name},
-        ),
-        user_api_key_dict=user_api_key_dict,
-        http_request=Request(scope={"type": "http"}),
-    )
 
     await team_model_add(
         data=TeamModelAddRequest(
@@ -482,24 +464,95 @@ async def _update_existing_team_model_assignment(
     db_model: Deployment,
     patch_data: updateDeployment,
     user_api_key_dict: UserAPIKeyAuth,
+    prisma_client: Optional[PrismaClient],
 ) -> None:
-    """Update an existing team model if the public name changed."""
+    """Update an existing team model if the public name changed.
+
+    Note on DB scan: Prisma's JSON filtering does not support compound AND conditions
+    across multiple JSON paths, so we fetch all deployments for the team and filter
+    team_public_model_name in Python. For teams with many deployments this scan grows
+    linearly; if team deployment counts become large this should be revisited.
+    """
+
+    def _get_team_public_model_name(
+        model_info: Optional[Union[dict, str]]
+    ) -> Optional[str]:
+        if isinstance(model_info, dict):
+            value = model_info.get("team_public_model_name")
+            return value if isinstance(value, str) else None
+        if isinstance(model_info, str):
+            try:
+                parsed = json.loads(model_info)
+            except (TypeError, ValueError):
+                return None
+            if isinstance(parsed, dict):
+                value = parsed.get("team_public_model_name")
+                return value if isinstance(value, str) else None
+        return None
+
     old_public_name = (
         db_model.model_info.team_public_model_name if db_model.model_info else None
     )
 
-    # Update alias only if public name changed
     if old_public_name and public_model_name != old_public_name:
-        await update_team(
-            data=UpdateTeamRequest(
+        # Clear user-supplied public name from patch before any early return so the
+        # caller does not overwrite the internal UUID-based model_name in the DB.
+        patch_data.model_name = None
+        if prisma_client is None:
+            verbose_proxy_logger.warning(
+                "prisma_client not initialized; skipping public name update entirely to avoid orphaned entries"
+            )
+            return
+
+        response = await prisma_client.db.litellm_proxymodeltable.find_many(
+            where={
+                "model_info": {
+                    "path": ["team_id"],
+                    "equals": team_id,
+                }
+            }
+        )
+        if not response:
+            other_deployments_with_old_name = []
+        else:
+            other_deployments_with_old_name = [
+                d
+                for d in response
+                if d.model_name != db_model.model_name
+                and _get_team_public_model_name(d.model_info) == old_public_name
+            ]
+
+        # Add new name first, then delete old name to prevent access loss on partial failure
+        await team_model_add(
+            data=TeamModelAddRequest(
                 team_id=team_id,
-                model_aliases={public_model_name: db_model.model_name},
+                models=[public_model_name],
             ),
-            user_api_key_dict=user_api_key_dict,
             http_request=Request(scope={"type": "http"}),
+            user_api_key_dict=user_api_key_dict,
         )
 
-    # Keep existing unique model_name
+        if not other_deployments_with_old_name:
+            await team_model_delete(
+                data=TeamModelDeleteRequest(
+                    team_id=team_id,
+                    models=[old_public_name],
+                ),
+                http_request=Request(scope={"type": "http"}),
+                user_api_key_dict=user_api_key_dict,
+            )
+    elif not old_public_name and public_model_name:
+        # First-time assignment of public name on an existing team deployment:
+        # ensure the team's models list is updated so team routing can resolve it.
+        await team_model_add(
+            data=TeamModelAddRequest(
+                team_id=team_id,
+                models=[public_model_name],
+            ),
+            http_request=Request(scope={"type": "http"}),
+            user_api_key_dict=user_api_key_dict,
+        )
+
     patch_data.model_name = None
 
 
