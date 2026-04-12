@@ -259,11 +259,11 @@ class CustomGuardrail(CustomLogger):
         """
         Returns True if the global guardrail should be disabled
         """
-        if "disable_global_guardrail" in data:
-            return data["disable_global_guardrail"]
+        if "disable_global_guardrails" in data:
+            return data["disable_global_guardrails"]
         metadata = data.get("litellm_metadata") or data.get("metadata", {})
-        if "disable_global_guardrail" in metadata:
-            return metadata["disable_global_guardrail"]
+        if "disable_global_guardrails" in metadata:
+            return metadata["disable_global_guardrails"]
         return False
 
     def _is_valid_response_type(self, result: Any) -> bool:
