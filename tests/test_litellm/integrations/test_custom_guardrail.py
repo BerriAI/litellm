@@ -197,7 +197,7 @@ class TestCustomGuardrailShouldRunGuardrail:
         data_with_disable_root = {
             "model": "gpt-3.5-turbo",
             "messages": [{"role": "user", "content": "test"}],
-            "disable_global_guardrail": True,
+            "disable_global_guardrails": True,
         }
         result = custom_guardrail.should_run_guardrail(
             data=data_with_disable_root, event_type=GuardrailEventHooks.pre_call
@@ -210,7 +210,7 @@ class TestCustomGuardrailShouldRunGuardrail:
         data_with_disable_litellm = {
             "model": "gpt-3.5-turbo",
             "messages": [{"role": "user", "content": "test"}],
-            "litellm_metadata": {"disable_global_guardrail": True},
+            "litellm_metadata": {"disable_global_guardrails": True},
         }
         result = custom_guardrail.should_run_guardrail(
             data=data_with_disable_litellm, event_type=GuardrailEventHooks.pre_call
@@ -223,7 +223,7 @@ class TestCustomGuardrailShouldRunGuardrail:
         data_with_disable_metadata = {
             "model": "gpt-3.5-turbo",
             "messages": [{"role": "user", "content": "test"}],
-            "metadata": {"disable_global_guardrail": True},
+            "metadata": {"disable_global_guardrails": True},
         }
         result = custom_guardrail.should_run_guardrail(
             data=data_with_disable_metadata, event_type=GuardrailEventHooks.pre_call
@@ -236,7 +236,7 @@ class TestCustomGuardrailShouldRunGuardrail:
         data_with_disable_false = {
             "model": "gpt-3.5-turbo",
             "messages": [{"role": "user", "content": "test"}],
-            "disable_global_guardrail": False,
+            "disable_global_guardrails": False,
         }
         result = custom_guardrail.should_run_guardrail(
             data=data_with_disable_false, event_type=GuardrailEventHooks.pre_call
