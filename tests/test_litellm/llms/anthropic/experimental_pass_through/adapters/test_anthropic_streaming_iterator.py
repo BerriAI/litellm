@@ -137,9 +137,7 @@ def test_emit_input_json_delta_for_atomic_tool_call():
     )
 
     # The concatenated partial_json must produce the correct arguments
-    combined_json = "".join(
-        d["delta"]["partial_json"] for d in input_json_deltas
-    )
+    combined_json = "".join(d["delta"]["partial_json"] for d in input_json_deltas)
     assert combined_json == '{"file_path": "/etc/hosts"}'
 
 
@@ -171,7 +169,8 @@ def test_correct_event_sequence_for_atomic_tool_call():
 
     # tool_use content block
     tool_block_starts: List[Dict[str, Any]] = [
-        e for e in events
+        e
+        for e in events
         if e.get("type") == "content_block_start"
         and e.get("content_block", {}).get("type") == "tool_use"
     ]
@@ -181,7 +180,8 @@ def test_correct_event_sequence_for_atomic_tool_call():
     # input_json_delta must appear between the tool_use start and stop
     tool_start_idx = events.index(tool_block_starts[0])
     input_deltas_after_tool_start: List[Dict[str, Any]] = [
-        e for e in events[tool_start_idx:]
+        e
+        for e in events[tool_start_idx:]
         if e.get("type") == "content_block_delta"
         and e.get("delta", {}).get("type") == "input_json_delta"
     ]
@@ -273,9 +273,7 @@ def test_split_tool_call_across_chunks():
     ]
     assert len(input_json_deltas) >= 1
 
-    combined_json = "".join(
-        d["delta"]["partial_json"] for d in input_json_deltas
-    )
+    combined_json = "".join(d["delta"]["partial_json"] for d in input_json_deltas)
     assert combined_json == '{"file_path": "/etc/hosts"}'
 
 
@@ -287,54 +285,72 @@ def test_has_meaningful_delta():
     )
 
     # input_json_delta with content -> meaningful
-    assert wrapper._has_meaningful_delta(
-        {
-            "type": "content_block_delta",
-            "index": 0,
-            "delta": {"type": "input_json_delta", "partial_json": '{"a": 1}'},
-        }
-    ) is True
+    assert (
+        wrapper._has_meaningful_delta(
+            {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "input_json_delta", "partial_json": '{"a": 1}'},
+            }
+        )
+        is True
+    )
 
     # input_json_delta with empty string -> not meaningful
-    assert wrapper._has_meaningful_delta(
-        {
-            "type": "content_block_delta",
-            "index": 0,
-            "delta": {"type": "input_json_delta", "partial_json": ""},
-        }
-    ) is False
+    assert (
+        wrapper._has_meaningful_delta(
+            {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "input_json_delta", "partial_json": ""},
+            }
+        )
+        is False
+    )
 
     # text_delta with content -> meaningful
-    assert wrapper._has_meaningful_delta(
-        {
-            "type": "content_block_delta",
-            "index": 0,
-            "delta": {"type": "text_delta", "text": "hello"},
-        }
-    ) is True
+    assert (
+        wrapper._has_meaningful_delta(
+            {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "text_delta", "text": "hello"},
+            }
+        )
+        is True
+    )
 
     # text_delta with empty string -> not meaningful
-    assert wrapper._has_meaningful_delta(
-        {
-            "type": "content_block_delta",
-            "index": 0,
-            "delta": {"type": "text_delta", "text": ""},
-        }
-    ) is False
+    assert (
+        wrapper._has_meaningful_delta(
+            {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "text_delta", "text": ""},
+            }
+        )
+        is False
+    )
 
     # message_delta (not a content_block_delta) -> not meaningful
-    assert wrapper._has_meaningful_delta(
-        {"type": "message_delta", "delta": {"stop_reason": "end_turn"}}
-    ) is False
+    assert (
+        wrapper._has_meaningful_delta(
+            {"type": "message_delta", "delta": {"stop_reason": "end_turn"}}
+        )
+        is False
+    )
 
     # thinking_delta with content -> meaningful
-    assert wrapper._has_meaningful_delta(
-        {
-            "type": "content_block_delta",
-            "index": 0,
-            "delta": {"type": "thinking_delta", "thinking": "Let me think..."},
-        }
-    ) is True
+    assert (
+        wrapper._has_meaningful_delta(
+            {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "thinking_delta", "thinking": "Let me think..."},
+            }
+        )
+        is True
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -385,7 +401,5 @@ async def test_async_emit_input_json_delta_for_atomic_tool_call():
         f"Event types: {event_types}"
     )
 
-    combined_json = "".join(
-        d["delta"]["partial_json"] for d in input_json_deltas
-    )
+    combined_json = "".join(d["delta"]["partial_json"] for d in input_json_deltas)
     assert combined_json == '{"file_path": "/etc/hosts"}'
