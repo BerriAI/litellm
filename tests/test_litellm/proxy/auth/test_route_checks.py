@@ -1030,7 +1030,7 @@ def test_proxy_admin_viewer_can_access_global_spend_report():
 
 
 def test_internal_user_cannot_access_global_spend_report_route():
-    """Internal users must not use /global/spend/report (proxy admin roles only)."""
+    """Without key allowlisting, internal users cannot use /global/spend/report."""
 
     user_obj = LiteLLM_UserTable(
         user_id="internal_user",
@@ -1054,6 +1054,32 @@ def test_internal_user_cannot_access_global_spend_report_route():
             request_data={},
         )
     assert "Only proxy admin can be used to generate" in str(exc_info.value)
+
+
+def test_internal_user_can_access_global_spend_report_when_key_allowlists_route():
+    """Virtual key with allowed_routes including /global/spend/report passes route check."""
+
+    user_obj = LiteLLM_UserTable(
+        user_id="internal_user",
+        user_email="user@example.com",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+    )
+    valid_token = UserAPIKeyAuth(
+        user_id="internal_user",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+        allowed_routes=["/global/spend/report"],
+    )
+    request = MagicMock(spec=Request)
+    request.query_params = {}
+
+    RouteChecks.non_proxy_admin_allowed_routes_check(
+        user_obj=user_obj,
+        _user_role=LitellmUserRoles.INTERNAL_USER.value,
+        route="/global/spend/report",
+        request=request,
+        valid_token=valid_token,
+        request_data={},
+    )
 
 
 @pytest.mark.parametrize("route", ["/audit", "/audit/some-log-id"])
