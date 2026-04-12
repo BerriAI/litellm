@@ -2618,9 +2618,7 @@ async def test_new_user_password_raises_if_user_id_missing(mocker):
     If generate_key_helper_fn returns a response without user_id,
     new_user must raise HTTP 500 rather than silently drop the password.
     """
-    from fastapi import HTTPException
-
-    from litellm.proxy._types import NewUserRequest, UserAPIKeyAuth
+    from litellm.proxy._types import NewUserRequest, ProxyException, UserAPIKeyAuth
     from litellm.proxy.management_endpoints.internal_user_endpoints import new_user
 
     mock_prisma_client = mocker.MagicMock()
@@ -2667,11 +2665,11 @@ async def test_new_user_password_raises_if_user_id_missing(mocker):
     )
     mock_user_key = UserAPIKeyAuth(user_id="admin", user_role="proxy_admin")
 
-    with pytest.raises(HTTPException) as exc_info:
+    with pytest.raises(ProxyException) as exc_info:
         await new_user(data=user_request, user_api_key_dict=mock_user_key)
 
-    assert exc_info.value.status_code == 500
-    assert "user_id" in exc_info.value.detail
+    assert exc_info.value.code == 500
+    assert "user_id" in exc_info.value.message
 
 
 @pytest.mark.asyncio
@@ -2742,11 +2740,13 @@ async def test_new_user_password_update_failure_rolls_back_user(mocker):
     )
     mock_user_key = UserAPIKeyAuth(user_id="admin", user_role="proxy_admin")
 
-    with pytest.raises(Exception) as exc_info:
+    from litellm.proxy._types import ProxyException
+
+    with pytest.raises(ProxyException) as exc_info:
         await new_user(data=user_request, user_api_key_dict=mock_user_key)
 
-    # The original DB error must propagate
-    assert exc_info.value is db_error
+    # The original DB error message must be surfaced
+    assert "DB connection lost" in exc_info.value.message
 
     # The user row must have been deleted (rollback)
     mock_delete.assert_called_once_with(where={"user_id": created_user_id})
