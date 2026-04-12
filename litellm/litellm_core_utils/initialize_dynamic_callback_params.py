@@ -1,6 +1,9 @@
 from typing import Dict, Optional
-from litellm.secret_managers.main import get_secret_str
 from litellm.types.utils import StandardCallbackDynamicParams
+
+
+def _is_env_reference(value: object) -> bool:
+    return isinstance(value, str) and "os.environ/" in value
 
 # Hardcoded list of supported callback params to avoid runtime inspection issues with TypedDict
 _supported_callback_params = [
@@ -46,12 +49,10 @@ def initialize_standard_callback_dynamic_params(
         for param in _supported_callback_params:
             if param in kwargs:
                 _param_value = kwargs.get(param)
-                if (
-                    _param_value is not None
-                    and isinstance(_param_value, str)
-                    and "os.environ/" in _param_value
-                ):
-                    _param_value = get_secret_str(secret_name=_param_value)
+                if _is_env_reference(_param_value):
+                    # Skip request-supplied environment references; these must
+                    # come from server-side configuration only.
+                    continue
                 standard_callback_dynamic_params[param] = _param_value  # type: ignore
 
         # 2. Fallback: check "metadata" or "litellm_params" -> "metadata"
@@ -64,12 +65,8 @@ def initialize_standard_callback_dynamic_params(
             for param in _supported_callback_params:
                 if param not in standard_callback_dynamic_params and param in metadata:
                     _param_value = metadata.get(param)
-                    if (
-                        _param_value is not None
-                        and isinstance(_param_value, str)
-                        and "os.environ/" in _param_value
-                    ):
-                        _param_value = get_secret_str(secret_name=_param_value)
+                    if _is_env_reference(_param_value):
+                        continue
                     standard_callback_dynamic_params[param] = _param_value  # type: ignore
 
     return standard_callback_dynamic_params
