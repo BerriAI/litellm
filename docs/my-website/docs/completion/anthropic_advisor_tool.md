@@ -12,51 +12,6 @@ The advisor tool is in beta. Include `anthropic-beta: advisor-tool-2026-03-01` i
 
 :::
 
-## How it works
-
-LiteLLM handles the advisor tool differently depending on the provider.
-
-**Anthropic API (native):** the advisor tool definition is forwarded as-is to Anthropic. Anthropic runs the advisor sub-inference server-side, inside the same `/v1/messages` call. No extra round-trips.
-
-**All other providers (OpenAI, Bedrock, Vertex, Groq, Mistral, …):** LiteLLM implements the orchestration loop itself via `AdvisorOrchestrationHandler`. The advisor tool is translated into a regular function tool the provider understands. When the executor calls it, LiteLLM intercepts, makes a separate sub-call to the advisor model (always `claude-opus-4-6`), injects the advice, and re-calls the executor — all transparently inside your original request.
-
-```mermaid
-flowchart TD
-    A["Client request — /messages or /chat/completions\ntools includes advisor_20260301"] --> B{"provider?"}
-
-    B -->|anthropic| C["Forward to Anthropic API\nadvisor runs server-side natively\nno extra round-trips"]
-
-    B -->|"openai / bedrock / vertex\ngroq / mistral / any other"| D["AdvisorOrchestrationHandler\nintercepts request"]
-
-    D --> E["Translate advisor_20260301\ninto a regular function tool"]
-
-    E --> F["EXECUTOR CALL\ne.g. openai/gpt-4.1-mini\nreceives synthetic advisor fn tool"]
-
-    F --> G{"executor\nstop_reason?"}
-
-    G -->|"tool_use name=advisor"| H{"iteration >\nmax_uses?"}
-
-    H -->|no| I["ADVISOR SUB-CALL\nclaude-opus-4-6\nno tools — full transcript forwarded"]
-
-    I --> J["Inject advisor advice\nas tool_result into message history"]
-
-    J --> F
-
-    H -->|yes| K["Raise AdvisorMaxIterationsError\n(caller can catch and handle)"]
-
-    G -->|"end_turn / other\nno advisor call"| L["Return clean final response\nno advisor blocks exposed to caller"]
-
-    C --> L
-```
-
-**Key properties of the non-native path:**
-
-- Executor always called non-streaming; streaming is emulated via `FakeAnthropicMessagesStreamIterator` on the final response.
-- The advisor sub-call uses no tools and receives the full conversation transcript.
-- `advisor_tool_result` blocks are stripped from message history before each executor call — providers like OpenAI never see Anthropic-specific block types.
-- `max_uses` is a hard cap: once exceeded, `AdvisorMaxIterationsError` is raised. Callers can catch this or set a high enough limit.
-- `max_uses=0` disables the advisor entirely — the first call raises immediately.
-
 ## Supported Providers
 
 | Provider | Chat Completions API | Messages API | Notes |
@@ -66,6 +21,41 @@ flowchart TD
 | **Amazon Bedrock** | ✅ | ✅ | LiteLLM orchestration loop |
 | **Google Vertex AI** | ✅ | ✅ | LiteLLM orchestration loop |
 | **Groq / Mistral / others** | ✅ | ✅ | LiteLLM orchestration loop |
+
+## How it works (LiteLLM native orchestration)
+
+For non-Anthropic providers, LiteLLM implements the advisor loop itself. The API you call is identical — LiteLLM handles everything transparently.
+
+When a request arrives with an `advisor_20260301` tool and a non-Anthropic provider, `AdvisorOrchestrationHandler` intercepts it. It translates the advisor tool into a regular function tool the provider understands, then runs an orchestration loop:
+
+```mermaid
+flowchart TD
+    A["Your request\ntools: advisor_20260301\nmodel: e.g. openai/gpt-4.1-mini"] --> B["AdvisorOrchestrationHandler\ntranslates advisor → regular fn tool"]
+
+    B --> C["EXECUTOR CALL\nopenai / bedrock / vertex / etc."]
+
+    C --> D{"executor calls\nadvisor tool?"}
+
+    D -->|"yes — tool_use\nname=advisor"| E{"max_uses\nexceeded?"}
+
+    E -->|no| F["ADVISOR SUB-CALL\nclaude-opus-4-6\nfull transcript forwarded\nno tools"]
+
+    F --> G["Inject advice as\ntool_result into history"]
+
+    G --> C
+
+    E -->|yes| H["AdvisorMaxIterationsError"]
+
+    D -->|"no — end_turn\nor other stop reason"| I["Clean final response\nno advisor blocks in output"]
+```
+
+**What LiteLLM does for you:**
+
+- Strips `advisor_20260301` from the outgoing request — the provider only sees a standard function tool named `advisor`
+- When the executor calls it, intercepts before the result reaches you, runs the advisor sub-call, and injects the advice
+- Strips any `advisor_tool_result` / `server_tool_use` blocks from message history on re-send so non-Anthropic providers never see Anthropic-specific types
+- Wraps the final response in an SSE stream if you requested `stream=True`
+- Enforces `max_uses` as a hard cap — `AdvisorMaxIterationsError` is raised if exceeded; `max_uses=0` disables the advisor entirely
 
 ## Model Compatibility
 
