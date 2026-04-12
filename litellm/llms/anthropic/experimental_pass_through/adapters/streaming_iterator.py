@@ -144,9 +144,12 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                     )
                     # Also emit the trigger chunk's delta so that providers like
                     # Ollama that send the complete tool call in a single chunk
-                    # do not lose their arguments.
+                    # do not lose their tool arguments.  Skip empty deltas
+                    # (e.g. OpenAI sends arguments="" in the first tool chunk).
                     if processed_chunk.get("type") == "content_block_delta":
-                        self.chunk_queue.append(processed_chunk)
+                        delta = processed_chunk.get("delta", {})
+                        if delta.get("partial_json"):
+                            self.chunk_queue.append(processed_chunk)
                     self.sent_content_block_finish = False
                     return self.chunk_queue.popleft()
 
@@ -328,9 +331,13 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
 
                         # Also emit the trigger chunk's delta so that providers
                         # like Ollama that send the complete tool call in a
-                        # single chunk do not lose their arguments.
+                        # single chunk do not lose their tool arguments.  Skip
+                        # empty deltas (e.g. OpenAI sends arguments="" in the
+                        # first tool chunk).
                         if processed_chunk.get("type") == "content_block_delta":
-                            self.chunk_queue.append(processed_chunk)
+                            delta = processed_chunk.get("delta", {})
+                            if delta.get("partial_json"):
+                                self.chunk_queue.append(processed_chunk)
 
                         # Reset state for new block
                         self.sent_content_block_finish = False
