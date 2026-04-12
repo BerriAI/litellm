@@ -1,5 +1,5 @@
 import json
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, cast
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 from fastapi import APIRouter, Form, HTTPException, Request
@@ -470,7 +470,148 @@ async def exchange_token_with_server(
     if "scope" in token_response and token_response["scope"]:
         result["scope"] = token_response["scope"]
 
+    # Persist OAuth credentials and discovery URLs to the database.
+    # When the upstream server does not rotate refresh tokens (common pattern),
+    # the token response omits refresh_token — fall back to the incoming
+    # refresh_token parameter so the previously stored token is preserved.
+    persisted_refresh_token = token_response.get("refresh_token") or refresh_token
+    await _persist_oauth_credentials(
+        mcp_server=mcp_server,
+        client_id=token_data["client_id"],
+        client_secret=token_data.get("client_secret"),
+        access_token=access_token,
+        refresh_token=persisted_refresh_token,
+        expires_in=token_response.get("expires_in"),
+    )
+
     return JSONResponse(result)
+
+
+async def _persist_oauth_credentials(
+    mcp_server: MCPServer,
+    client_id: Optional[str],
+    client_secret: Optional[str],
+    access_token: str,
+    refresh_token: Optional[str],
+    expires_in: Optional[int],
+) -> None:
+    """
+    Persist OAuth credentials and discovery URLs to the MCP server record
+    in the database after a successful token exchange.
+
+    Merges new credential fields on top of any existing credentials in the DB,
+    following the same pattern as ``update_mcp_server`` to avoid wiping fields
+    that may have been set independently (e.g. by an admin).
+    """
+    try:
+        from datetime import datetime, timedelta, timezone
+
+        from litellm.proxy.proxy_server import prisma_client
+
+        if prisma_client is None:
+            verbose_logger.warning(
+                "Cannot persist OAuth credentials: no database connected"
+            )
+            return
+
+        import json
+
+        from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+
+        from litellm.proxy._experimental.mcp_server.db import encrypt_credentials
+        from litellm.proxy.common_utils.encrypt_decrypt_utils import _get_salt_key
+
+        # Build new credential fields from the token exchange
+        new_credentials: dict = {}
+        if client_id:
+            new_credentials["client_id"] = client_id
+        if client_secret:
+            new_credentials["client_secret"] = client_secret
+        new_credentials["auth_value"] = access_token
+        if refresh_token:
+            new_credentials["refresh_token"] = refresh_token
+        if expires_in is not None:
+            new_credentials["expires_at"] = (
+                datetime.now(timezone.utc) + timedelta(seconds=expires_in)
+            ).isoformat()
+        new_credentials["type"] = "oauth2"
+
+        # Resolve the persistent DB record for this server.
+        # During an OAuth PKCE session flow the MCPServer object carries an
+        # ephemeral session UUID as server_id (not the real DB row id).  Try
+        # the exact server_id first; if not found, fall back to server_name /
+        # alias so the credentials land on the correct persistent row.
+        existing_record = await prisma_client.db.litellm_mcpservertable.find_unique(
+            where={"server_id": mcp_server.server_id}
+        )
+        if existing_record is None and mcp_server.name:
+            existing_record = await prisma_client.db.litellm_mcpservertable.find_first(
+                where={
+                    "OR": [
+                        {"server_name": mcp_server.name},
+                        {"alias": mcp_server.name},
+                    ]
+                }
+            )
+
+        if existing_record is None:
+            verbose_logger.warning(
+                "Cannot persist OAuth credentials: no DB record found for MCP server %s (%s)",
+                mcp_server.name,
+                mcp_server.server_id,
+            )
+            return
+
+        # Merge new credentials on top of existing to preserve unrelated fields
+        if existing_record.credentials:
+            existing_creds = (
+                json.loads(existing_record.credentials)
+                if isinstance(existing_record.credentials, str)
+                else dict(existing_record.credentials)
+            )
+            merged = {**existing_creds, **new_credentials}
+        else:
+            merged = new_credentials
+
+        from litellm.types.mcp import MCPCredentials
+
+        encrypted_credentials = encrypt_credentials(
+            credentials=cast(MCPCredentials, merged),
+            encryption_key=_get_salt_key(),
+        )
+
+        # Build the update data — persist credentials and discovery URLs
+        update_data: dict = {
+            "auth_type": "oauth2",
+            "credentials": safe_dumps(encrypted_credentials),
+            "updated_by": "oauth_token_exchange",
+        }
+
+        # Persist discovery URLs if they were found during the flow
+        if mcp_server.token_url:
+            update_data["token_url"] = mcp_server.token_url
+        if mcp_server.authorization_url:
+            update_data["authorization_url"] = mcp_server.authorization_url
+        if mcp_server.registration_url:
+            update_data["registration_url"] = mcp_server.registration_url
+
+        await prisma_client.db.litellm_mcpservertable.update(
+            where={"server_id": existing_record.server_id},
+            data=update_data,
+        )
+
+        verbose_logger.info(
+            "Persisted OAuth credentials for MCP server %s (db_id=%s, session_id=%s)",
+            mcp_server.name,
+            existing_record.server_id,
+            mcp_server.server_id,
+        )
+    except Exception as e:
+        verbose_logger.error(
+            "Failed to persist OAuth credentials for MCP server %s: %s",
+            mcp_server.server_id,
+            e,
+        )
 
 
 async def register_client_with_server(

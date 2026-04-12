@@ -10,7 +10,7 @@ from fastapi import HTTPException
 @pytest.fixture(autouse=True)
 def mock_mcp_client_ip():
     """Mock IPAddressUtils.get_mcp_client_ip to return None for all tests.
-    
+
     This bypasses IP-based access control in tests, since the MCP server's
     available_on_public_internet defaults to False and mock requests don't
     have proper client IP context.
@@ -145,9 +145,9 @@ async def test_authorize_endpoint_preserves_existing_query_params():
     location = response.headers["location"]
 
     # Must NOT have double '?' — existing params must be merged correctly
-    assert location.count("?") == 1, (
-        f"Expected exactly one '?' in URL but got {location.count('?')}: {location}"
-    )
+    assert (
+        location.count("?") == 1
+    ), f"Expected exactly one '?' in URL but got {location.count('?')}: {location}"
     assert "tenant=system" in location
     assert "client_id=test_client_id" in location
     assert "response_type=code" in location
@@ -1521,7 +1521,10 @@ async def test_oauth_callback_redirects_with_state():
 
         # Should redirect to the client callback URL with code and original state
         assert response.status_code == 302
-        assert "http://localhost:3000/ui/mcp/oauth/callback" in response.headers["location"]
+        assert (
+            "http://localhost:3000/ui/mcp/oauth/callback"
+            in response.headers["location"]
+        )
         assert "code=test_authorization_code_12345" in response.headers["location"]
         assert "state=test-uuid-state-123" in response.headers["location"]
 
@@ -1609,7 +1612,10 @@ async def test_oauth_authorize_includes_scopes_from_server_config():
         # Should redirect with scopes from server config
         assert response.status_code in (307, 302)
         redirect_url = response.headers["location"]
-        assert "scope=api+read_user+ai_workflows" in redirect_url or "scope=api%20read_user%20ai_workflows" in redirect_url
+        assert (
+            "scope=api+read_user+ai_workflows" in redirect_url
+            or "scope=api%20read_user%20ai_workflows" in redirect_url
+        )
 
 
 @pytest.mark.asyncio
@@ -1664,7 +1670,10 @@ async def test_oauth_authorize_prefers_request_scope_over_server_config():
         # Should use the explicit scope, not server config
         assert response.status_code in (307, 302)
         redirect_url = response.headers["location"]
-        assert "scope=custom_scope1+custom_scope2" in redirect_url or "scope=custom_scope1%20custom_scope2" in redirect_url
+        assert (
+            "scope=custom_scope1+custom_scope2" in redirect_url
+            or "scope=custom_scope1%20custom_scope2" in redirect_url
+        )
         assert "default_scope" not in redirect_url
 
 
@@ -1804,3 +1813,299 @@ async def test_token_endpoint_authorization_code_missing_code():
         )
     assert exc_info.value.status_code == 400
     assert "code is required" in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_token_exchange_persists_credentials_to_db():
+    """Test that token exchange persists OAuth credentials and discovery URLs to the database."""
+    try:
+        import json
+
+        from fastapi import Request
+
+        from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+            exchange_token_with_server,
+        )
+        from litellm.proxy._types import MCPTransport
+        from litellm.types.mcp import MCPAuth
+        from litellm.types.mcp_server.mcp_server_manager import MCPServer
+    except ImportError:
+        pytest.skip("MCP discoverable endpoints not available")
+
+    oauth2_server = MCPServer(
+        server_id="test-persist-server",
+        name="test_persist",
+        server_name="test_persist",
+        alias="test_persist",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        token_url="https://auth.example.com/token",
+        authorization_url="https://auth.example.com/authorize",
+        registration_url="https://auth.example.com/register",
+    )
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "https://litellm-proxy.example.com/"
+    mock_request.headers = {}
+
+    mock_response = MagicMock()
+    mock_response.json.return_value = {
+        "access_token": "test_access_token_123",
+        "token_type": "Bearer",
+        "expires_in": 3600,
+        "refresh_token": "test_refresh_token_456",
+        "scope": "tools",
+    }
+    mock_response.raise_for_status = MagicMock()
+
+    mock_server_record = MagicMock()
+    mock_server_record.server_id = "test-persist-server"
+    mock_server_record.credentials = (
+        None  # No existing credentials — first token exchange
+    )
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_mcpservertable.update = AsyncMock(return_value=None)
+    mock_prisma.db.litellm_mcpservertable.find_unique = AsyncMock(
+        return_value=mock_server_record
+    )
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.discoverable_endpoints.get_async_httpx_client"
+    ) as mock_get_client, patch(
+        "litellm.proxy.proxy_server.prisma_client",
+        mock_prisma,
+    ), patch(
+        "litellm.proxy.common_utils.encrypt_decrypt_utils._get_salt_key",
+        return_value="test-salt-key",
+    ):
+        mock_async_client = MagicMock()
+        mock_async_client.post = AsyncMock(return_value=mock_response)
+        mock_get_client.return_value = mock_async_client
+
+        response = await exchange_token_with_server(
+            request=mock_request,
+            mcp_server=oauth2_server,
+            grant_type="authorization_code",
+            code="test_auth_code",
+            redirect_uri="https://litellm-proxy.example.com/callback",
+            client_id="test-client-id",
+            client_secret=None,
+            code_verifier="test_verifier",
+        )
+
+    response_data = json.loads(response.body)
+    assert response_data["access_token"] == "test_access_token_123"
+    assert response_data["refresh_token"] == "test_refresh_token_456"
+
+    mock_prisma.db.litellm_mcpservertable.update.assert_called_once()
+    update_call = mock_prisma.db.litellm_mcpservertable.update.call_args
+
+    assert update_call[1]["where"]["server_id"] == "test-persist-server"
+
+    update_data = update_call[1]["data"]
+    assert update_data["auth_type"] == "oauth2"
+    assert update_data["token_url"] == "https://auth.example.com/token"
+    assert update_data["authorization_url"] == "https://auth.example.com/authorize"
+    assert update_data["registration_url"] == "https://auth.example.com/register"
+    assert update_data["updated_by"] == "oauth_token_exchange"
+
+    credentials_json = json.loads(update_data["credentials"])
+    assert "auth_value" in credentials_json
+    assert "client_id" in credentials_json
+    assert "refresh_token" in credentials_json
+    assert "type" in credentials_json
+
+    # Verify expires_at is ISO-8601 string (not Unix epoch int)
+    assert "expires_at" in credentials_json
+    from datetime import datetime
+
+    datetime.fromisoformat(credentials_json["expires_at"])  # should not raise
+
+    # Verify sensitive fields are encrypted (not plaintext)
+    assert credentials_json["auth_value"] != "test_access_token_123"
+    assert credentials_json["client_id"] != "test-client-id"
+    assert credentials_json["refresh_token"] != "test_refresh_token_456"
+
+
+@pytest.mark.asyncio
+async def test_token_exchange_persists_without_optional_fields():
+    """Test that token exchange persists correctly when refresh_token and expires_in are absent."""
+    try:
+        import json
+
+        from fastapi import Request
+
+        from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+            exchange_token_with_server,
+        )
+        from litellm.proxy._types import MCPTransport
+        from litellm.types.mcp import MCPAuth
+        from litellm.types.mcp_server.mcp_server_manager import MCPServer
+    except ImportError:
+        pytest.skip("MCP discoverable endpoints not available")
+
+    oauth2_server = MCPServer(
+        server_id="test-persist-minimal",
+        name="test_minimal",
+        server_name="test_minimal",
+        alias="test_minimal",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        token_url="https://auth.example.com/token",
+    )
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "https://proxy.example.com/"
+    mock_request.headers = {}
+
+    mock_response = MagicMock()
+    mock_response.json.return_value = {
+        "access_token": "minimal_token",
+        "token_type": "Bearer",
+    }
+    mock_response.raise_for_status = MagicMock()
+
+    mock_server_record = MagicMock()
+    mock_server_record.server_id = "test-persist-minimal"
+    mock_server_record.credentials = None
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_mcpservertable.update = AsyncMock(return_value=None)
+    mock_prisma.db.litellm_mcpservertable.find_unique = AsyncMock(
+        return_value=mock_server_record
+    )
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.discoverable_endpoints.get_async_httpx_client"
+    ) as mock_get_client, patch(
+        "litellm.proxy.proxy_server.prisma_client",
+        mock_prisma,
+    ), patch(
+        "litellm.proxy.common_utils.encrypt_decrypt_utils._get_salt_key",
+        return_value="test-salt-key",
+    ):
+        mock_async_client = MagicMock()
+        mock_async_client.post = AsyncMock(return_value=mock_response)
+        mock_get_client.return_value = mock_async_client
+
+        response = await exchange_token_with_server(
+            request=mock_request,
+            mcp_server=oauth2_server,
+            grant_type="authorization_code",
+            code="test_code",
+            redirect_uri="https://proxy.example.com/callback",
+            client_id="test-client",
+            client_secret=None,
+            code_verifier=None,
+        )
+
+    response_data = json.loads(response.body)
+    assert response_data["access_token"] == "minimal_token"
+    assert "refresh_token" not in response_data
+
+    mock_prisma.db.litellm_mcpservertable.update.assert_called_once()
+    update_data = mock_prisma.db.litellm_mcpservertable.update.call_args[1]["data"]
+    assert update_data["auth_type"] == "oauth2"
+    assert update_data["token_url"] == "https://auth.example.com/token"
+    assert "authorization_url" not in update_data
+    assert "registration_url" not in update_data
+
+
+@pytest.mark.asyncio
+async def test_token_refresh_preserves_existing_refresh_token():
+    """
+    When a non-rotating OAuth server returns a new access_token without a
+    refresh_token, the previously stored refresh_token must be preserved.
+    """
+    try:
+        import json
+
+        from fastapi import Request
+
+        from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+            exchange_token_with_server,
+        )
+        from litellm.proxy._types import MCPTransport
+        from litellm.types.mcp import MCPAuth
+        from litellm.types.mcp_server.mcp_server_manager import MCPServer
+    except ImportError:
+        pytest.skip("MCP discoverable endpoints not available")
+
+    oauth2_server = MCPServer(
+        server_id="test-refresh-preserve",
+        name="test_refresh",
+        server_name="test_refresh",
+        alias="test_refresh",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        token_url="https://auth.example.com/token",
+    )
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "https://proxy.example.com/"
+    mock_request.headers = {}
+
+    # Upstream returns new access_token but NO refresh_token (non-rotating)
+    mock_response = MagicMock()
+    mock_response.json.return_value = {
+        "access_token": "new_access_token",
+        "token_type": "Bearer",
+        "expires_in": 3600,
+    }
+    mock_response.raise_for_status = MagicMock()
+
+    # Existing DB record has the original refresh_token
+    mock_existing = MagicMock()
+    mock_existing.credentials = json.dumps(
+        {
+            "auth_value": "old_encrypted_access",
+            "refresh_token": "original_refresh_token_encrypted",
+            "client_id": "existing_client_id",
+            "type": "oauth2",
+        }
+    )
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_mcpservertable.update = AsyncMock(return_value=None)
+    mock_prisma.db.litellm_mcpservertable.find_unique = AsyncMock(
+        return_value=mock_existing
+    )
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.discoverable_endpoints.get_async_httpx_client"
+    ) as mock_get_client, patch(
+        "litellm.proxy.proxy_server.prisma_client",
+        mock_prisma,
+    ), patch(
+        "litellm.proxy.common_utils.encrypt_decrypt_utils._get_salt_key",
+        return_value="test-salt-key",
+    ):
+        mock_async_client = MagicMock()
+        mock_async_client.post = AsyncMock(return_value=mock_response)
+        mock_get_client.return_value = mock_async_client
+
+        # Simulate refresh_token grant — caller passes the stored refresh token
+        response = await exchange_token_with_server(
+            request=mock_request,
+            mcp_server=oauth2_server,
+            grant_type="refresh_token",
+            code=None,
+            redirect_uri=None,
+            client_id="test-client",
+            client_secret=None,
+            code_verifier=None,
+            refresh_token="original_refresh_token",
+        )
+
+    response_data = json.loads(response.body)
+    assert response_data["access_token"] == "new_access_token"
+
+    mock_prisma.db.litellm_mcpservertable.update.assert_called_once()
+    update_data = mock_prisma.db.litellm_mcpservertable.update.call_args[1]["data"]
+    credentials_json = json.loads(update_data["credentials"])
+
+    # The refresh_token should be preserved (merged from existing + fallback)
+    assert "refresh_token" in credentials_json
+    # auth_value should be the new access token (encrypted, so not plaintext)
+    assert credentials_json["auth_value"] != "new_access_token"

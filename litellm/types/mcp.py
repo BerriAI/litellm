@@ -117,6 +117,15 @@ class MCPCredentials(TypedDict, total=False):
     aws_session_name: Optional[str]
     """Session name for STS AssumeRole (used in CloudTrail). Not a secret — stored unencrypted."""
 
+    refresh_token: Optional[str]
+    """OAuth 2.0 refresh token. Encrypted at rest."""
+
+    expires_at: Optional[str]
+    """ISO-8601 timestamp when the access token expires."""
+
+    type: Optional[str]
+    """Credential type identifier (e.g. 'oauth2')."""
+
 
 class MCPServerCostInfo(TypedDict, total=False):
     default_cost_per_query: Optional[float]
