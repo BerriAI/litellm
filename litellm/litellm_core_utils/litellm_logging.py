@@ -2852,14 +2852,6 @@ class Logging(LiteLLMLoggingBaseClass):
             if "async_complete_streaming_response" in self.model_call_details:
                 self.model_call_details["async_complete_streaming_response"] = True
 
-            # Clear the body copy inside proxy_server_request (spend tracking
-            # has already extracted what it needs by this point).
-            _litellm_params = self.model_call_details.get("litellm_params")
-            if isinstance(_litellm_params, dict):
-                _psr = _litellm_params.get("proxy_server_request")
-                if isinstance(_psr, dict):
-                    _psr.pop("body", None)
-
             # Clear streaming chunks
             self.streaming_chunks.clear()
             self.sync_streaming_chunks.clear()

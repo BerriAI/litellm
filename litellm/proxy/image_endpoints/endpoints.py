@@ -8,6 +8,9 @@ from fastapi.responses import ORJSONResponse
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.litellm_core_utils.logging_utils import (
+    release_base64_from_request_data_inplace,
+)
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_str_from_messages,
 )
@@ -144,6 +147,10 @@ async def image_generation(
             user_model=user_model,
         )
         response = await llm_call
+
+        # Fix 13: Release base64 payloads from request data after API call to
+        # free large image strings for GC while keeping the dict usable.
+        release_base64_from_request_data_inplace(data)
 
         ### ALERTING ###
         asyncio.create_task(
