@@ -66,9 +66,18 @@ class AdvisorOrchestrationHandler(MessagesInterceptor):
 
         # Extract advisor tool config.
         advisor_tool = next(
-            t for t in (tools or []) if t.get("type") == ANTHROPIC_ADVISOR_TOOL_TYPE
+            (t for t in (tools or []) if t.get("type") == ANTHROPIC_ADVISOR_TOOL_TYPE),
+            None,
         )
-        advisor_model: str = advisor_tool["model"]
+        if advisor_tool is None:
+            raise ValueError(
+                f"handle() called but no {ANTHROPIC_ADVISOR_TOOL_TYPE} tool found in tools list"
+            )
+        advisor_model: str = advisor_tool.get("model") or ""
+        if not advisor_model:
+            raise ValueError(
+                "advisor tool definition must include a 'model' field specifying the advisor model"
+            )
         max_uses: int = advisor_tool.get("max_uses") or ADVISOR_MAX_USES
         # Optional routing overrides for the advisor sub-call (e.g. proxy routing).
         # If not set in the tool definition, litellm resolves from env vars.
