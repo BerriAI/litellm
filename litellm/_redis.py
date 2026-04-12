@@ -307,6 +307,10 @@ def _init_redis_sentinel(redis_kwargs) -> redis.Redis:
     sentinel_nodes = redis_kwargs.get("sentinel_nodes")
     sentinel_password = redis_kwargs.get("sentinel_password")
     service_name = redis_kwargs.get("service_name")
+    master_kwargs = {}
+
+    if redis_kwargs.get("password") is not None:
+        master_kwargs["password"] = redis_kwargs.get("password")
 
     if not sentinel_nodes or not service_name:
         raise ValueError(
@@ -319,18 +323,24 @@ def _init_redis_sentinel(redis_kwargs) -> redis.Redis:
     sentinel = redis.Sentinel(
         sentinel_nodes,
         socket_timeout=REDIS_SOCKET_TIMEOUT,
-        password=sentinel_password,
+        sentinel_kwargs={"password": sentinel_password}
+        if sentinel_password is not None
+        else None,
     )
 
     # Return the master instance for the given service
 
-    return sentinel.master_for(service_name)
+    return sentinel.master_for(service_name, **master_kwargs)
 
 
 def _init_async_redis_sentinel(redis_kwargs) -> async_redis.Redis:
     sentinel_nodes = redis_kwargs.get("sentinel_nodes")
     sentinel_password = redis_kwargs.get("sentinel_password")
     service_name = redis_kwargs.get("service_name")
+    master_kwargs = {}
+
+    if redis_kwargs.get("password") is not None:
+        master_kwargs["password"] = redis_kwargs.get("password")
 
     if not sentinel_nodes or not service_name:
         raise ValueError(
@@ -343,12 +353,14 @@ def _init_async_redis_sentinel(redis_kwargs) -> async_redis.Redis:
     sentinel = async_redis.Sentinel(
         sentinel_nodes,
         socket_timeout=REDIS_SOCKET_TIMEOUT,
-        password=sentinel_password,
+        sentinel_kwargs={"password": sentinel_password}
+        if sentinel_password is not None
+        else None,
     )
 
     # Return the master instance for the given service
 
-    return sentinel.master_for(service_name)
+    return sentinel.master_for(service_name, **master_kwargs)
 
 
 def get_redis_client(**env_overrides):
