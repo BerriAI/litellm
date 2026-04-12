@@ -90,6 +90,8 @@ litellm --config benchmark_config.yaml --port 4000 --num_workers 8
 python scripts/benchmark_mock.py --requests 2000 --max-concurrent 200 --runs 3
 ```
 
+Get the benchmarking script [here](https://github.com/BerriAI/litellm/blob/main/scripts/benchmark_mock.py)
+
 This measures pure proxy overhead on the hot path without any network latency to a real or fake provider.
 
 ## Setting Up a Fake OpenAI Endpoint
