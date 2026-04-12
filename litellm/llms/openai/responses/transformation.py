@@ -360,8 +360,6 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         to the native WebSocket path (e.g. when using a private deployment or
         reverse proxy that reliably honours the native wss:// protocol).
         """
-        import litellm
-
         return bool(getattr(litellm, "openai_responses_native_websocket", False))
 
     #########################################################
