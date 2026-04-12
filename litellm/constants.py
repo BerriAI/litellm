@@ -133,6 +133,11 @@ MCP_OAUTH2_TOKEN_CACHE_DEFAULT_TTL = int(
 # npm/npx needs a writable cache dir; in containers the default (~/.npm)
 # may not exist or be read-only. /tmp is always writable.
 MCP_NPM_CACHE_DIR = os.getenv("MCP_NPM_CACHE_DIR", "/tmp/.npm_mcp_cache")
+
+# Default uv cache directory for uvx-based STDIO MCP servers.
+# uvx needs a writable cache dir; in containers the default (~/.cache/uv)
+# may not exist or be read-only, causing uvx to fail when downloading packages.
+MCP_UV_CACHE_DIR = os.getenv("MCP_UV_CACHE_DIR", "/tmp/.uv_mcp_cache")
 MCP_OAUTH2_TOKEN_CACHE_MIN_TTL = int(os.getenv("MCP_OAUTH2_TOKEN_CACHE_MIN_TTL", "10"))
 
 # MCP timeout defaults (seconds). Override via env vars for slow/custom MCP servers.
