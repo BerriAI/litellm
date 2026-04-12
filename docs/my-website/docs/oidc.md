@@ -57,10 +57,11 @@ oidc/config_name_here/
 
 #### Unofficial Providers (not recommended)
 
-For the unofficial `file` provider, you can use the following format:
+For the unofficial `file` provider, you can use the following format
+(note the double slash — the path after `oidc/file/` must be absolute):
 
 ```
-oidc/file/var/run/secrets/my-token
+oidc/file//var/run/secrets/my-token
 ```
 
 For safety, the resolved path must live inside an allowed credential

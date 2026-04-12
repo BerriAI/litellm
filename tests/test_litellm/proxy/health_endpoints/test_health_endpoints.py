@@ -452,7 +452,7 @@ async def test_test_model_connection_loads_config_from_router():
     
     # Mock _reject_os_environ_references
     def mock_reject_os_environ(params):
-        return params
+        return None
 
     with patch(
         "litellm.proxy.proxy_server.prisma_client",

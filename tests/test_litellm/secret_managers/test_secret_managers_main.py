@@ -222,6 +222,12 @@ def test_oidc_file_rejects_path_outside_allowlist(tmp_path, monkeypatch):
         get_secret(f"oidc/file/{outside_file}")
 
 
+def test_oidc_file_rejects_relative_path(tmp_path, monkeypatch):
+    monkeypatch.setenv("LITELLM_OIDC_ALLOWED_CREDENTIAL_DIRS", str(tmp_path))
+    with pytest.raises(ValueError, match="must be absolute"):
+        get_secret("oidc/file/relative/path/token")
+
+
 def test_oidc_env_success(mock_env):
     mock_env["CUSTOM_TOKEN"] = "env_token"
 

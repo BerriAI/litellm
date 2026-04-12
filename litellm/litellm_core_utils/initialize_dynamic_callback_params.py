@@ -1,4 +1,6 @@
 from typing import Dict, Optional
+
+from litellm._logging import verbose_logger
 from litellm.types.utils import StandardCallbackDynamicParams
 
 
@@ -50,8 +52,12 @@ def initialize_standard_callback_dynamic_params(
             if param in kwargs:
                 _param_value = kwargs.get(param)
                 if _is_env_reference(_param_value):
-                    # Skip request-supplied environment references; these must
-                    # come from server-side configuration only.
+                    verbose_logger.warning(
+                        "Dropping callback param '%s': os.environ/ references "
+                        "in request-supplied parameters are not resolved. "
+                        "Configure this value server-side instead.",
+                        param,
+                    )
                     continue
                 standard_callback_dynamic_params[param] = _param_value  # type: ignore
 
@@ -66,6 +72,13 @@ def initialize_standard_callback_dynamic_params(
                 if param not in standard_callback_dynamic_params and param in metadata:
                     _param_value = metadata.get(param)
                     if _is_env_reference(_param_value):
+                        verbose_logger.warning(
+                            "Dropping callback param '%s' from metadata: "
+                            "os.environ/ references in request-supplied "
+                            "parameters are not resolved. Configure this "
+                            "value server-side instead.",
+                            param,
+                        )
                         continue
                     standard_callback_dynamic_params[param] = _param_value  # type: ignore
 
