@@ -670,11 +670,20 @@ def convert_to_model_response_object(  # noqa: PLR0915
                     "/" in model_response_object.model
                     and response_object["model"] is not None
                 ):
-                    openai_compatible_provider = model_response_object.model.split("/")[
-                        0
-                    ]
+                    # Extract the full provider prefix (everything before the base model name).
+                    # For gateway-style providers like "vercel_ai_gateway/anthropic/claude-opus-4.5",
+                    # we need to preserve the full prefix "vercel_ai_gateway/anthropic",
+                    # not just "vercel_ai_gateway".
+                    response_model = response_object["model"]
+                    preset_model = model_response_object.model
+                    if preset_model.endswith("/" + response_model):
+                        # The response model is the suffix of the preset model,
+                        # so the prefix is everything before it.
+                        openai_compatible_provider = preset_model[: -(len(response_model) + 1)]
+                    else:
+                        openai_compatible_provider = preset_model.rsplit("/", 1)[0]
                     model_response_object.model = (
-                        openai_compatible_provider + "/" + response_object["model"]
+                        openai_compatible_provider + "/" + response_model
                     )
 
             if start_time is not None and end_time is not None:
