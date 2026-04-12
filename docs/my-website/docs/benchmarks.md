@@ -5,6 +5,55 @@ import Image from '@theme/IdealImage';
 
 Benchmarks for LiteLLM Gateway (Proxy Server) tested against a fake OpenAI endpoint.
 
+
+LiteLLM Gateway has **8ms P95 latency** at 1k RPS (See benchmarks [here](#4-instances))
+
+## Machine Spec used for testing
+
+Each machine deploying LiteLLM had the following specs:
+
+- 4 CPU
+- 8GB RAM
+
+## Configuration
+
+- Database: PostgreSQL
+- Redis: Not used
+
+
+### 2 Instance LiteLLM Proxy
+
+In these tests the baseline latency characteristics are measured against a fake-openai-endpoint.
+
+#### Performance Metrics
+
+| **Type** | **Name** | **Median (ms)** | **95%ile (ms)** | **99%ile (ms)** | **Average (ms)** | **Current RPS** |
+| --- | --- | --- | --- | --- | --- | --- |
+| POST | /chat/completions | 200 | 630 | 1200 | 262.46 | 1035.7 |
+| Custom | LiteLLM Overhead Duration (ms) | 12 | 29 | 43 | 14.74 | 1035.7 |
+|  | Aggregated | 100 | 430 | 930 | 138.6 | 2071.4 |
+
+<!-- <Image img={require('../img/1_instance_proxy.png')} /> -->
+
+<!-- ## **Horizontal Scaling - 10K RPS**
+
+<Image img={require('../img/instances_vs_rps.png')} /> -->
+
+
+### 4 Instances
+
+| **Type** | **Name** | **Median (ms)** | **95%ile (ms)** | **99%ile (ms)** | **Average (ms)** | **Current RPS** |
+| --- | --- | --- | --- | --- | --- | --- |
+| POST | /chat/completions | 100 | 150 | 240 | 111.73 | 1170 |
+| Custom | LiteLLM Overhead Duration (ms) | 2 | 8 | 13 | 3.32 | 1170 |
+|  | Aggregated | 77 | 130 | 180 | 57.53 | 2340 |
+
+#### Key Findings
+- Doubling from 2 to 4 LiteLLM instances halves median latency: 200 ms → 100 ms.
+- High-percentile latencies drop significantly: P95 630 ms → 150 ms, P99 1,200 ms → 240 ms.
+- Setting workers equal to CPU count gives optimal performance.
+
+
 ## Setting Up Benchmarking with Network Mock
 
 The fastest way to benchmark proxy overhead is using `network_mock` mode. This intercepts outbound requests at the httpx transport layer and returns canned responses, no need for setting up a mock provider. 
@@ -61,38 +110,6 @@ model_list:
       api_key: "test"
 ```
 
-### 2 Instance LiteLLM Proxy
-
-In these tests the baseline latency characteristics are measured against a fake-openai-endpoint.
-
-#### Performance Metrics
-
-| **Type** | **Name** | **Median (ms)** | **95%ile (ms)** | **99%ile (ms)** | **Average (ms)** | **Current RPS** |
-| --- | --- | --- | --- | --- | --- | --- |
-| POST | /chat/completions | 200 | 630 | 1200 | 262.46 | 1035.7 |
-| Custom | LiteLLM Overhead Duration (ms) | 12 | 29 | 43 | 14.74 | 1035.7 |
-|  | Aggregated | 100 | 430 | 930 | 138.6 | 2071.4 |
-
-<!-- <Image img={require('../img/1_instance_proxy.png')} /> -->
-
-<!-- ## **Horizontal Scaling - 10K RPS**
-
-<Image img={require('../img/instances_vs_rps.png')} /> -->
-
-
-### 4 Instances
-
-| **Type** | **Name** | **Median (ms)** | **95%ile (ms)** | **99%ile (ms)** | **Average (ms)** | **Current RPS** |
-| --- | --- | --- | --- | --- | --- | --- |
-| POST | /chat/completions | 100 | 150 | 240 | 111.73 | 1170 |
-| Custom | LiteLLM Overhead Duration (ms) | 2 | 8 | 13 | 3.32 | 1170 |
-|  | Aggregated | 77 | 130 | 180 | 57.53 | 2340 |
-
-#### Key Findings
-- Doubling from 2 to 4 LiteLLM instances halves median latency: 200 ms → 100 ms.
-- High-percentile latencies drop significantly: P95 630 ms → 150 ms, P99 1,200 ms → 240 ms.
-- Setting workers equal to CPU count gives optimal performance.
-
 ## `/realtime` API Benchmarks
 
 End-to-end latency benchmarks for the `/realtime` endpoint tested against a fake realtime endpoint.
@@ -115,17 +132,6 @@ End-to-end latency benchmarks for the `/realtime` endpoint tested against a fake
 | **System** | 4 vCPUs, 8 GB RAM, 4 workers, 4 instances |
 | **Database** | PostgreSQL (Redis unused) |
 
-## Machine Spec used for testing
-
-Each machine deploying LiteLLM had the following specs:
-
-- 4 CPU
-- 8GB RAM
-
-## Configuration
-
-- Database: PostgreSQL
-- Redis: Not used
 
 ## Infrastructure Recommendations
 
