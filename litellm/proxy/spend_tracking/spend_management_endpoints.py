@@ -2379,26 +2379,26 @@ async def view_spend_logs(  # noqa: PLR0915
             return response
 
         else:
-            filter_query: Dict[str, Any] = {}
+            scoped_filter: Dict[str, Any] = {}
             if api_key is not None and isinstance(api_key, str):
                 if api_key.startswith("sk-"):
                     hashed_token = prisma_client.hash_token(token=api_key)
                 else:
                     hashed_token = api_key
-                filter_query["api_key"] = hashed_token
+                scoped_filter["api_key"] = hashed_token
             if request_id is not None and isinstance(request_id, str):
-                filter_query["request_id"] = request_id
+                scoped_filter["request_id"] = request_id
             if user_id is not None and isinstance(user_id, str):
-                filter_query["user"] = user_id
+                scoped_filter["user"] = user_id
 
-            if not filter_query:
+            if not scoped_filter:
                 spend_logs = await prisma_client.get_data(
                     table_name="spend", query_type="find_all"
                 )
                 return spend_logs
 
             data = await prisma_client.db.litellm_spendlogs.find_many(
-                where=filter_query,  # type: ignore
+                where=scoped_filter,  # type: ignore
                 order={"startTime": "desc"},
             )
             return data
