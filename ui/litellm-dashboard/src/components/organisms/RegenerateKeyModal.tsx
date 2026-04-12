@@ -26,9 +26,6 @@ export function RegenerateKeyModal({ selectedToken, visible, onClose, onKeyUpdat
   const [isRegenerating, setIsRegenerating] = useState(false);
   const [copied, setCopied] = useState(false);
 
-  // Keep track of the current valid access token locally
-  const [currentAccessToken, setCurrentAccessToken] = useState<string | null>(null);
-
   useEffect(() => {
     if (visible && selectedToken && accessToken) {
       form.setFieldsValue({
@@ -39,22 +36,8 @@ export function RegenerateKeyModal({ selectedToken, visible, onClose, onKeyUpdat
         duration: selectedToken.duration || "",
         grace_period: "",
       });
-
-      // Initialize the current access token
-      setCurrentAccessToken(accessToken);
     }
   }, [visible, selectedToken, form, accessToken]);
-
-  useEffect(() => {
-    if (!visible) {
-      // Reset states when modal is closed
-      setRegeneratedKey(null);
-      setIsRegenerating(false);
-      setCurrentAccessToken(null);
-      setCopied(false);
-      form.resetFields();
-    }
-  }, [visible, form]);
 
   const calculateNewExpiryTime = (duration: string | undefined): string | null => {
     if (!duration) return null;
@@ -98,15 +81,14 @@ export function RegenerateKeyModal({ selectedToken, visible, onClose, onKeyUpdat
   }, [regenerateFormData?.duration]);
 
   const handleRegenerateKey = async () => {
-    if (!selectedToken || !currentAccessToken) return;
+    if (!selectedToken || !accessToken) return;
 
     setIsRegenerating(true);
     try {
       const formValues = await form.validateFields();
 
-      // Use the current access token for the API call
       const response = await regenerateKeyCall(
-        currentAccessToken,
+        accessToken,
         selectedToken.token || selectedToken.token_id,
         formValues,
       );
@@ -145,7 +127,6 @@ export function RegenerateKeyModal({ selectedToken, visible, onClose, onKeyUpdat
   const handleClose = () => {
     setRegeneratedKey(null);
     setIsRegenerating(false);
-    setCurrentAccessToken(null);
     setCopied(false);
     form.resetFields();
     onClose();
