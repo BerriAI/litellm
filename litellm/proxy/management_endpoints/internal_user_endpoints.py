@@ -421,12 +421,6 @@ async def new_user(
             raise HTTPException(
                 status_code=400, detail=CommonProxyErrors.db_not_connected_error.value
             )
-
-        if prisma_client is None:
-            raise HTTPException(
-                status_code=500,
-                detail=CommonProxyErrors.db_not_connected_error.value,
-            )
         # Check for duplicate user_id or email
         await _check_duplicate_user_id(data.user_id, prisma_client)
         await _check_duplicate_user_email(data.user_email, prisma_client)
@@ -477,10 +471,17 @@ async def new_user(
                     status_code=500,
                     detail="User was created but user_id was not returned — password could not be stored.",
                 )
-            await prisma_client.db.litellm_usertable.update(
-                where={"user_id": created_user_id},
-                data={"password": hashed_password},
-            )
+            try:
+                await prisma_client.db.litellm_usertable.update(
+                    where={"user_id": created_user_id},
+                    data={"password": hashed_password},
+                )
+            except Exception as pwd_err:
+                # Roll back the user row so the caller can safely retry.
+                await prisma_client.db.litellm_usertable.delete(
+                    where={"user_id": created_user_id}
+                )
+                raise pwd_err
         # Admin UI Logic
         # Add User to Team and Organization
         # if team_id passed add this user to the team
