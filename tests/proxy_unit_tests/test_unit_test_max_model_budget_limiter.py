@@ -220,6 +220,155 @@ async def test_get_end_user_spend_for_model(budget_limiter):
 
 
 @pytest.mark.asyncio
+async def test_async_log_success_event_uses_model_group_for_cache_key(budget_limiter):
+    """
+    When model_group is present in StandardLoggingPayload (proxy/router
+    deployments), spend must be tracked under the model_group name — not the
+    deployment-level model name — so the cache key matches the one used by
+    is_key_within_model_budget (which receives request_data["model"], the
+    model group alias).
+
+    Without this, providers that decorate model names (e.g. Vertex AI
+    "vertex_ai/claude-opus-4-6@default") track spend under a different cache
+    key than enforcement reads, silently disabling budget limits.
+    """
+    from litellm.proxy.hooks.model_max_budget_limiter import (
+        VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX,
+    )
+
+    virtual_key = "test-key-hash"
+    model_group = "claude-opus-4-6"
+    deployment_model = "vertex_ai/claude-opus-4-6@default"
+    budget_duration = "1d"
+    user_api_key_model_max_budget = {
+        model_group: {"budget_limit": 50.0, "time_period": budget_duration},
+    }
+    kwargs = {
+        "standard_logging_object": {
+            "response_cost": 0.10,
+            "model": deployment_model,
+            "model_group": model_group,
+            "metadata": {"user_api_key_hash": virtual_key},
+        },
+        "litellm_params": {
+            "metadata": {
+                "user_api_key_model_max_budget": user_api_key_model_max_budget,
+            },
+        },
+    }
+    with patch.object(
+        budget_limiter,
+        "_increment_spend_for_key",
+        new_callable=AsyncMock,
+    ) as mock_increment:
+        await budget_limiter.async_log_success_event(
+            kwargs, response_obj=None, start_time=None, end_time=None
+        )
+        mock_increment.assert_awaited_once()
+        call_kwargs = mock_increment.call_args.kwargs
+        spend_key = call_kwargs["spend_key"]
+        # The cache key must use the model_group name, NOT the deployment name
+        assert spend_key == (
+            f"{VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX}:{virtual_key}:{model_group}:{budget_duration}"
+        )
+        assert call_kwargs["response_cost"] == 0.10
+
+
+@pytest.mark.asyncio
+async def test_async_log_success_event_falls_back_to_model_when_no_model_group(
+    budget_limiter,
+):
+    """
+    When model_group is None (non-proxy / non-router usage), spend tracking
+    must fall back to using the model field so existing behaviour is preserved.
+    """
+    from litellm.proxy.hooks.model_max_budget_limiter import (
+        VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX,
+    )
+
+    virtual_key = "test-key-hash"
+    model = "gpt-4"
+    budget_duration = "1d"
+    user_api_key_model_max_budget = {
+        model: {"budget_limit": 100.0, "time_period": budget_duration},
+    }
+    kwargs = {
+        "standard_logging_object": {
+            "response_cost": 0.05,
+            "model": model,
+            "model_group": None,
+            "metadata": {"user_api_key_hash": virtual_key},
+        },
+        "litellm_params": {
+            "metadata": {
+                "user_api_key_model_max_budget": user_api_key_model_max_budget,
+            },
+        },
+    }
+    with patch.object(
+        budget_limiter,
+        "_increment_spend_for_key",
+        new_callable=AsyncMock,
+    ) as mock_increment:
+        await budget_limiter.async_log_success_event(
+            kwargs, response_obj=None, start_time=None, end_time=None
+        )
+        mock_increment.assert_awaited_once()
+        call_kwargs = mock_increment.call_args.kwargs
+        spend_key = call_kwargs["spend_key"]
+        assert spend_key == (
+            f"{VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX}:{virtual_key}:{model}:{budget_duration}"
+        )
+
+
+@pytest.mark.asyncio
+async def test_async_log_success_event_end_user_uses_model_group(budget_limiter):
+    """
+    End-user model budget tracking must also use model_group when available,
+    matching the enforcement path in is_end_user_within_model_budget.
+    """
+    from litellm.proxy.hooks.model_max_budget_limiter import (
+        END_USER_SPEND_CACHE_KEY_PREFIX,
+    )
+
+    end_user_id = "test-user"
+    model_group = "claude-sonnet-4-6"
+    deployment_model = "vertex_ai/claude-sonnet-4-6@default"
+    budget_duration = "1d"
+    user_api_key_end_user_model_max_budget = {
+        model_group: {"budget_limit": 25.0, "time_period": budget_duration},
+    }
+    kwargs = {
+        "standard_logging_object": {
+            "response_cost": 0.03,
+            "model": deployment_model,
+            "model_group": model_group,
+            "end_user": end_user_id,
+            "metadata": {"user_api_key_end_user_id": end_user_id},
+        },
+        "litellm_params": {
+            "metadata": {
+                "user_api_key_end_user_model_max_budget": user_api_key_end_user_model_max_budget,
+            },
+        },
+    }
+    with patch.object(
+        budget_limiter,
+        "_increment_spend_for_key",
+        new_callable=AsyncMock,
+    ) as mock_increment:
+        await budget_limiter.async_log_success_event(
+            kwargs, response_obj=None, start_time=None, end_time=None
+        )
+        mock_increment.assert_awaited_once()
+        call_kwargs = mock_increment.call_args.kwargs
+        spend_key = call_kwargs["spend_key"]
+        assert spend_key == (
+            f"{END_USER_SPEND_CACHE_KEY_PREFIX}:{end_user_id}:{model_group}:{budget_duration}"
+        )
+
+
+@pytest.mark.asyncio
 async def test_async_log_success_event_uses_end_user_model_budget_duration(
     budget_limiter,
 ):
