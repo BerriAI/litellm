@@ -54,7 +54,7 @@ from litellm.constants import (
     LITELLM_SETTINGS_SAFE_DB_OVERRIDES,
     LITELLM_UI_ALLOW_HEADERS,
     LITELLM_UI_SESSION_DURATION,
-    DAILY_TAG_SPEND_BATCH_MULTIPLIER
+    DAILY_TAG_SPEND_BATCH_MULTIPLIER,
 )
 from litellm.litellm_core_utils.litellm_logging import (
     _init_custom_logger_compatible_class,
@@ -637,9 +637,9 @@ except ImportError:
 server_root_path = get_server_root_path()
 _license_check = LicenseCheck()
 premium_user: bool = _license_check.is_premium()
-premium_user_data: Optional["EnterpriseLicenseData"] = (
-    _license_check.airgapped_license_data
-)
+premium_user_data: Optional[
+    "EnterpriseLicenseData"
+] = _license_check.airgapped_license_data
 global_max_parallel_request_retries_env: Optional[str] = os.getenv(
     "LITELLM_GLOBAL_MAX_PARALLEL_REQUEST_RETRIES"
 )
@@ -1534,9 +1534,9 @@ master_key: Optional[str] = None
 config_agents: Optional[List[AgentConfig]] = None
 otel_logging = False
 prisma_client: Optional[PrismaClient] = None
-shared_aiohttp_session: Optional["ClientSession"] = (
-    None  # Global shared session for connection reuse
-)
+shared_aiohttp_session: Optional[
+    "ClientSession"
+] = None  # Global shared session for connection reuse
 user_api_key_cache = DualCache(
     default_in_memory_ttl=UserAPIKeyCacheTTLEnum.in_memory_cache_ttl.value
 )
@@ -1547,13 +1547,13 @@ model_max_budget_limiter = _PROXY_VirtualKeyModelMaxBudgetLimiter(
     dual_cache=user_api_key_cache
 )
 litellm.logging_callback_manager.add_litellm_callback(model_max_budget_limiter)
-redis_usage_cache: Optional[RedisCache] = (
-    None  # redis cache used for tracking spend, tpm/rpm limits
-)
+redis_usage_cache: Optional[
+    RedisCache
+] = None  # redis cache used for tracking spend, tpm/rpm limits
 polling_via_cache_enabled: Union[Literal["all"], List[str], bool] = False
-native_background_mode: List[str] = (
-    []
-)  # Models that should use native provider background mode instead of polling
+native_background_mode: List[
+    str
+] = []  # Models that should use native provider background mode instead of polling
 polling_cache_ttl: int = 3600  # Default 1 hour TTL for polling cache
 user_custom_auth = None
 user_custom_key_generate = None
@@ -1910,59 +1910,16 @@ async def update_cache(  # noqa: PLR0915
             )
             # set cooldown on alert
 
-        if (
-            existing_spend_obj is not None
-            and getattr(existing_spend_obj, "team_spend", None) is not None
-        ):
-            existing_team_spend = existing_spend_obj.team_spend or 0
-            # Calculate the new cost by adding the existing cost and response_cost
-            existing_spend_obj.team_spend = existing_team_spend + response_cost
-
-        if (
-            existing_spend_obj is not None
-            and getattr(existing_spend_obj, "team_member_spend", None) is not None
-        ):
-            existing_team_member_spend = existing_spend_obj.team_member_spend or 0
-            # Calculate the new cost by adding the existing cost and response_cost
-            existing_spend_obj.team_member_spend = (
-                existing_team_member_spend + response_cost
-            )
-
-        # Update the cost column for the given token
-        existing_spend_obj.spend = new_spend
-        values_to_update_in_cache.append((hashed_token, existing_spend_obj))
+        # Do NOT write the key object back to cache — spend is tracked via
+        # spend_counter_cache (atomic increments) to avoid stale-resurrection
+        # when another pod has invalidated and reloaded the key object.
 
     ### UPDATE USER SPEND ###
     async def _update_user_cache():
-        ## UPDATE CACHE FOR USER ID + GLOBAL PROXY
-        user_ids = [user_id]
+        ## UPDATE CACHE FOR GLOBAL PROXY SPEND COUNTER ##
+        # User entity objects are no longer written back — spend is tracked via
+        # spend_counter_cache (atomic increments) to avoid stale-resurrection.
         try:
-            for _id in user_ids:
-                # Fetch the existing cost for the given user
-                if _id is None:
-                    continue
-                existing_spend_obj = await user_api_key_cache.async_get_cache(key=_id)
-                if existing_spend_obj is None:
-                    # do nothing if there is no cache value
-                    return
-                verbose_proxy_logger.debug(
-                    f"_update_user_db: existing spend: {existing_spend_obj}; response_cost: {response_cost}"
-                )
-
-                if isinstance(existing_spend_obj, dict):
-                    existing_spend = existing_spend_obj["spend"]
-                else:
-                    existing_spend = existing_spend_obj.spend
-                # Calculate the new cost by adding the existing cost and response_cost
-                new_spend = existing_spend + response_cost
-
-                # Update the cost column for the given user
-                if isinstance(existing_spend_obj, dict):
-                    existing_spend_obj["spend"] = new_spend
-                    values_to_update_in_cache.append((_id, existing_spend_obj))
-                else:
-                    existing_spend_obj.spend = new_spend
-                    values_to_update_in_cache.append((_id, existing_spend_obj.json()))
             ## UPDATE GLOBAL PROXY ##
             global_proxy_spend = await user_api_key_cache.async_get_cache(
                 key="{}:spend".format(litellm_proxy_admin_name)
@@ -1977,173 +1934,31 @@ async def update_cache(  # noqa: PLR0915
                 )
         except Exception as e:
             verbose_proxy_logger.warning(
-                "Spend tracking - failed to update user spend in cache. "
-                "Budget enforcement may use stale spend values. "
-                "user_id=%s, response_cost=%s - %s\n%s",
-                user_id,
+                "Spend tracking - failed to update global proxy spend counter. "
+                "response_cost=%s - %s\n%s",
                 response_cost,
                 str(e),
                 traceback.format_exc(),
             )
 
-    ### UPDATE END-USER SPEND ###
-    async def _update_end_user_cache():
-        if end_user_id is None or response_cost is None:
-            return
-
-        _id = "end_user_id:{}".format(end_user_id)
-        try:
-            # Fetch the existing cost for the given user
-            existing_spend_obj = await user_api_key_cache.async_get_cache(key=_id)
-            if existing_spend_obj is None:
-                # if user does not exist in LiteLLM_UserTable, create a new user
-                # do nothing if end-user not in api key cache
-                return
-            verbose_proxy_logger.debug(
-                f"_update_end_user_db: existing spend: {existing_spend_obj}; response_cost: {response_cost}"
-            )
-            if existing_spend_obj is None:
-                existing_spend = 0
-            else:
-                if isinstance(existing_spend_obj, dict):
-                    existing_spend = existing_spend_obj["spend"]
-                else:
-                    existing_spend = existing_spend_obj.spend
-            # Calculate the new cost by adding the existing cost and response_cost
-            new_spend = existing_spend + response_cost
-
-            # Update the cost column for the given user
-            if isinstance(existing_spend_obj, dict):
-                existing_spend_obj["spend"] = new_spend
-                values_to_update_in_cache.append((_id, existing_spend_obj))
-            else:
-                existing_spend_obj.spend = new_spend
-                values_to_update_in_cache.append((_id, existing_spend_obj.json()))
-        except Exception as e:
-            verbose_proxy_logger.warning(
-                "Spend tracking - failed to update end user spend in cache. "
-                "Budget enforcement may use stale spend values. "
-                "end_user_id=%s, response_cost=%s - %s\n%s",
-                end_user_id,
-                response_cost,
-                str(e),
-                traceback.format_exc(),
-            )
-
-    ### UPDATE TEAM SPEND ###
-    async def _update_team_cache():
-        if team_id is None or response_cost is None:
-            return
-
-        _id = "team_id:{}".format(team_id)
-        try:
-            # Fetch the existing cost for the given user
-            existing_spend_obj: Optional[LiteLLM_TeamTable] = (
-                await user_api_key_cache.async_get_cache(key=_id)
-            )
-            if existing_spend_obj is None:
-                # do nothing if team not in api key cache
-                return
-            verbose_proxy_logger.debug(
-                f"_update_team_db: existing spend: {existing_spend_obj}; response_cost: {response_cost}"
-            )
-            if existing_spend_obj is None:
-                existing_spend: Optional[float] = 0.0
-            else:
-                if isinstance(existing_spend_obj, dict):
-                    existing_spend = existing_spend_obj["spend"]
-                else:
-                    existing_spend = existing_spend_obj.spend
-
-            if existing_spend is None:
-                existing_spend = 0.0
-            # Calculate the new cost by adding the existing cost and response_cost
-            new_spend = existing_spend + response_cost
-
-            # Update the cost column for the given user
-            if isinstance(existing_spend_obj, dict):
-                existing_spend_obj["spend"] = new_spend
-                values_to_update_in_cache.append((_id, existing_spend_obj))
-            else:
-                existing_spend_obj.spend = new_spend
-                values_to_update_in_cache.append((_id, existing_spend_obj))
-        except Exception as e:
-            verbose_proxy_logger.warning(
-                "Spend tracking - failed to update team spend in cache. "
-                "Budget enforcement may use stale spend values. "
-                "team_id=%s, response_cost=%s - %s\n%s",
-                team_id,
-                response_cost,
-                str(e),
-                traceback.format_exc(),
-            )
-
-    ### UPDATE TAG SPEND ###
-    async def _update_tag_cache():
-        """
-        Update the tag cache with the new spend.
-        """
-        if tags is None or response_cost is None:
-            return
-
-        try:
-            for tag_name in tags:
-                if not tag_name or not isinstance(tag_name, str):
-                    continue
-
-                cache_key = f"tag:{tag_name}"
-                # Fetch the existing tag object from cache
-                existing_tag_obj = await user_api_key_cache.async_get_cache(
-                    key=cache_key
-                )
-                if existing_tag_obj is None:
-                    # do nothing if tag not in api key cache
-                    continue
-
-                verbose_proxy_logger.debug(
-                    f"_update_tag_cache: existing spend for tag={tag_name}: {existing_tag_obj}; response_cost: {response_cost}"
-                )
-
-                if isinstance(existing_tag_obj, dict):
-                    existing_spend = existing_tag_obj.get("spend", 0) or 0
-                else:
-                    existing_spend = getattr(existing_tag_obj, "spend", 0) or 0
-
-                # Calculate the new cost by adding the existing cost and response_cost
-                new_spend = existing_spend + response_cost
-
-                # Update the spend column for the given tag
-                if isinstance(existing_tag_obj, dict):
-                    existing_tag_obj["spend"] = new_spend
-                    values_to_update_in_cache.append((cache_key, existing_tag_obj))
-                else:
-                    existing_tag_obj.spend = new_spend
-                    values_to_update_in_cache.append((cache_key, existing_tag_obj))
-        except Exception as e:
-            verbose_proxy_logger.warning(
-                "Spend tracking - failed to update tag spend in cache. "
-                "Budget enforcement may use stale spend values. "
-                "tags=%s, response_cost=%s - %s\n%s",
-                tags,
-                response_cost,
-                str(e),
-                traceback.format_exc(),
-            )
+    # End-user, team, and tag entity objects are intentionally NOT written back
+    # to cache. Removing the writeback prevents stale-resurrection: a
+    # fire-and-forget write after a long LLM call can overwrite a freshly
+    # invalidated cache entry, causing /key/update changes to be ignored
+    # indefinitely under load.
+    #
+    # - end-user: no spend_counter_cache counter yet; .spend is DB-loaded at
+    #   auth time and read directly by _check_end_user_budget().
+    # - team: spend tracked via spend_counter_cache; budget checks use
+    #   get_current_spend().
+    # - tag: no spend_counter_cache counter yet; tag spend is written to DB
+    #   asynchronously and not used for budget enforcement.
 
     if token is not None and response_cost is not None:
         await _update_key_cache(token=token, response_cost=response_cost)
 
     if user_id is not None:
         await _update_user_cache()
-
-    if end_user_id is not None:
-        await _update_end_user_cache()
-
-    if team_id is not None:
-        await _update_team_cache()
-
-    if tags is not None:
-        await _update_tag_cache()
 
     asyncio.create_task(
         user_api_key_cache.async_set_cache_pipeline(
@@ -2161,9 +1976,11 @@ def run_ollama_serve():
         with open(os.devnull, "w") as devnull:
             subprocess.Popen(command, stdout=devnull, stderr=devnull)
     except Exception as e:
-        verbose_proxy_logger.debug(f"""
+        verbose_proxy_logger.debug(
+            f"""
             LiteLLM Warning: proxy started with `ollama` model\n`ollama serve` failed with Exception{e}. \nEnsure you run `ollama serve`
-        """)
+        """
+        )
 
 
 def _get_process_rss_mb() -> Optional[float]:
@@ -2316,9 +2133,13 @@ def _write_health_state_to_router_cache(
 
             exception_status = getattr(original_exception, "status_code", 500)
 
-            if llm_router.health_check_ignore_transient_errors and exception_status in (
-                429,
-                408,
+            if (
+                llm_router.health_check_ignore_transient_errors
+                and exception_status
+                in (
+                    429,
+                    408,
+                )
             ):
                 continue
 
@@ -5290,10 +5111,10 @@ class ProxyConfig:
         )
 
         try:
-            guardrails_in_db: List[Guardrail] = (
-                await GuardrailRegistry.get_all_guardrails_from_db(
-                    prisma_client=prisma_client
-                )
+            guardrails_in_db: List[
+                Guardrail
+            ] = await GuardrailRegistry.get_all_guardrails_from_db(
+                prisma_client=prisma_client
             )
             verbose_proxy_logger.debug(
                 "guardrails from the DB %s", str(guardrails_in_db)
@@ -5675,9 +5496,9 @@ async def initialize(  # noqa: PLR0915
         user_api_base = api_base
         dynamic_config[user_model]["api_base"] = api_base
     if api_version:
-        os.environ["AZURE_API_VERSION"] = (
-            api_version  # set this for azure - litellm can read this from the env
-        )
+        os.environ[
+            "AZURE_API_VERSION"
+        ] = api_version  # set this for azure - litellm can read this from the env
     if max_tokens:  # model-specific param
         dynamic_config[user_model]["max_tokens"] = max_tokens
     if temperature:  # model-specific param
@@ -6019,9 +5840,9 @@ class ProxyStartupEvent:
         """
         from litellm.secret_managers.main import str_to_bool
 
-        _use_redis_transaction_buffer: Optional[Union[bool, str]] = (
-            general_settings.get("use_redis_transaction_buffer", False)
-        )
+        _use_redis_transaction_buffer: Optional[
+            Union[bool, str]
+        ] = general_settings.get("use_redis_transaction_buffer", False)
         if isinstance(_use_redis_transaction_buffer, str):
             _use_redis_transaction_buffer = str_to_bool(_use_redis_transaction_buffer)
 
@@ -6287,7 +6108,9 @@ class ProxyStartupEvent:
 
         ### UPDATE DAILY TAG SPEND (separate scheduler job with longer interval) ###
         ## Reduces QPS as there are more tags for a single request
-        tag_spend_update_interval = int(batch_writing_interval * DAILY_TAG_SPEND_BATCH_MULTIPLIER)
+        tag_spend_update_interval = int(
+            batch_writing_interval * DAILY_TAG_SPEND_BATCH_MULTIPLIER
+        )
         from litellm.proxy.utils import update_daily_tag_spend
 
         scheduler.add_job(
@@ -7132,9 +6955,9 @@ async def chat_completion(  # noqa: PLR0915
             hasattr(user_api_key_dict, "organization_alias")
             and user_api_key_dict.organization_alias is not None
         ):
-            data["metadata"]["user_api_key_org_alias"] = (
-                user_api_key_dict.organization_alias
-            )
+            data["metadata"][
+                "user_api_key_org_alias"
+            ] = user_api_key_dict.organization_alias
         if (
             hasattr(user_api_key_dict, "agent_id")
             and user_api_key_dict.agent_id is not None
@@ -7313,9 +7136,9 @@ async def completion(  # noqa: PLR0915
                 hasattr(user_api_key_dict, "organization_alias")
                 and user_api_key_dict.organization_alias is not None
             ):
-                data["metadata"]["user_api_key_org_alias"] = (
-                    user_api_key_dict.organization_alias
-                )
+                data["metadata"][
+                    "user_api_key_org_alias"
+                ] = user_api_key_dict.organization_alias
             if (
                 hasattr(user_api_key_dict, "agent_id")
                 and user_api_key_dict.agent_id is not None
@@ -7562,9 +7385,9 @@ async def embeddings(  # noqa: PLR0915
                 hasattr(user_api_key_dict, "organization_alias")
                 and user_api_key_dict.organization_alias is not None
             ):
-                data["metadata"]["user_api_key_org_alias"] = (
-                    user_api_key_dict.organization_alias
-                )
+                data["metadata"][
+                    "user_api_key_org_alias"
+                ] = user_api_key_dict.organization_alias
             if (
                 hasattr(user_api_key_dict, "agent_id")
                 and user_api_key_dict.agent_id is not None
@@ -12745,9 +12568,9 @@ async def get_config_list(
                             hasattr(sub_field_info, "description")
                             and sub_field_info.description is not None
                         ):
-                            nested_fields[idx].field_description = (
-                                sub_field_info.description
-                            )
+                            nested_fields[
+                                idx
+                            ].field_description = sub_field_info.description
                         idx += 1
 
                     _stored_in_db = None
