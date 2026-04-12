@@ -1059,16 +1059,7 @@ const sidebars = {
         "proxy/health_check_routing"
       ],
     },
-    {
-      type: "category",
-      label: "Load Testing",
-      items: [
-        "benchmarks",
-        "load_test_advanced",
-        "load_test_sdk",
-        "load_test_rpm",
-      ]
-    },
+    "benchmarks",
     {
       type: "category",
       label: "Contributing",
@@ -1097,6 +1088,9 @@ const sidebars = {
         "data_retention",
         "proxy/security_encryption_faq",
         "migration_policy",
+        "load_test_advanced",
+        "load_test_sdk",
+        "load_test_rpm",
         {
           type: "category",
           label: "❤️ 🚅 Projects built on LiteLLM",
