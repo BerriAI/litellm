@@ -104,14 +104,14 @@ export default function BlogListPage(props) {
 
   return (
     <Layout
-      title="Engineering Blog"
+      title="Blog"
       description="How we build the world's most widely used open-source AI Gateway. Routing, reliability, observability, and what we learn along the way."
     >
       <div className={styles.page}>
         {/* Hero */}
         <header className={styles.hero}>
           <p className={styles.eyebrow}>AI Gateway</p>
-          <h1 className={styles.heroTitle}>Engineering</h1>
+          <h1 className={styles.heroTitle}>Blog</h1>
           <p className={styles.heroSub}>
             How we build the world's most widely used open-source AI Gateway.
             Routing, reliability, observability, and what we learn along the way.
