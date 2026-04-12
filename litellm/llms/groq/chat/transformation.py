@@ -1,6 +1,7 @@
 """
 Translate from OpenAI's `/v1/chat/completions` to Groq's `/v1/chat/completions`
 """
+
 from typing import (
     Any,
     Coroutine,
@@ -115,8 +116,7 @@ class GroqChatConfig(OpenAILikeChatConfig):
     @overload
     def _transform_messages(
         self, messages: List[AllMessageValues], model: str, is_async: Literal[True]
-    ) -> Coroutine[Any, Any, List[AllMessageValues]]:
-        ...
+    ) -> Coroutine[Any, Any, List[AllMessageValues]]: ...
 
     @overload
     def _transform_messages(
@@ -124,8 +124,7 @@ class GroqChatConfig(OpenAILikeChatConfig):
         messages: List[AllMessageValues],
         model: str,
         is_async: Literal[False] = False,
-    ) -> List[AllMessageValues]:
-        ...
+    ) -> List[AllMessageValues]: ...
 
     def _transform_messages(
         self, messages: List[AllMessageValues], model: str, is_async: bool = False
@@ -133,6 +132,8 @@ class GroqChatConfig(OpenAILikeChatConfig):
         for idx, message in enumerate(messages):
             """
             1. Don't pass 'null' function_call assistant message to groq - https://github.com/BerriAI/litellm/issues/5839
+            2. Strip LiteLLM-internal provider_specific_fields from assistant history
+               before sending to Groq, which rejects unknown assistant properties.
             """
             if isinstance(message, BaseModel):
                 _message = message.model_dump()
@@ -142,6 +143,8 @@ class GroqChatConfig(OpenAILikeChatConfig):
             if assistant_message:
                 new_message = ChatCompletionAssistantMessage(role="assistant")
                 for k, v in _message.items():
+                    if k == "provider_specific_fields":
+                        continue
                     if v is not None:
                         new_message[k] = v  # type: ignore
                 messages[idx] = new_message
@@ -293,10 +296,10 @@ class GroqChatConfig(OpenAILikeChatConfig):
             json_mode=json_mode,
         )
 
-        mapped_service_tier: Literal[
-            "auto", "default", "flex"
-        ] = self._map_groq_service_tier(
-            original_service_tier=getattr(model_response, "service_tier")
+        mapped_service_tier: Literal["auto", "default", "flex"] = (
+            self._map_groq_service_tier(
+                original_service_tier=getattr(model_response, "service_tier")
+            )
         )
         setattr(model_response, "service_tier", mapped_service_tier)
         return model_response
