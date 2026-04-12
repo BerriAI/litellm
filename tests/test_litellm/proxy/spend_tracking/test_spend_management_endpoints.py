@@ -318,6 +318,135 @@ async def test_assert_user_can_view_request_id_rejects_both_users_none():
     assert exc_info.value.status_code == 403
 
 
+@pytest.mark.asyncio
+async def test_global_spend_report_rbac_admin_passes_through_api_key():
+    auth = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        user_id="admin",
+        api_key="hashed-admin",
+    )
+    out_key, out_uid = await spend_management_endpoints._apply_global_spend_report_rbac(
+        user_api_key_dict=auth,
+        api_key=None,
+        internal_user_id=None,
+        team_id=None,
+        customer_id=None,
+        prisma_client=MagicMock(),
+    )
+    assert out_key is None
+    assert out_uid is None
+
+
+@pytest.mark.asyncio
+async def test_global_spend_report_rbac_internal_defaults_to_user_scope():
+    auth = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="u1",
+        api_key="abc123hash",
+    )
+    out_key, out_uid = await spend_management_endpoints._apply_global_spend_report_rbac(
+        user_api_key_dict=auth,
+        api_key=None,
+        internal_user_id=None,
+        team_id=None,
+        customer_id=None,
+        prisma_client=MagicMock(),
+    )
+    assert out_key is None
+    assert out_uid == "u1"
+
+
+@pytest.mark.asyncio
+async def test_global_spend_report_rbac_internal_allows_self_internal_user_id():
+    auth = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="u1",
+        api_key="abc123hash",
+    )
+    out_key, out_uid = await spend_management_endpoints._apply_global_spend_report_rbac(
+        user_api_key_dict=auth,
+        api_key=None,
+        internal_user_id="u1",
+        team_id=None,
+        customer_id=None,
+        prisma_client=MagicMock(),
+    )
+    assert out_key is None
+    assert out_uid == "u1"
+
+
+@pytest.mark.asyncio
+async def test_global_spend_report_rbac_internal_no_user_id_defaults_to_callers_key():
+    auth = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id=None,
+        api_key="onlyhash",
+    )
+    out_key, out_uid = await spend_management_endpoints._apply_global_spend_report_rbac(
+        user_api_key_dict=auth,
+        api_key=None,
+        internal_user_id=None,
+        team_id=None,
+        customer_id=None,
+        prisma_client=MagicMock(),
+    )
+    assert out_key == "onlyhash"
+    assert out_uid is None
+
+
+@pytest.mark.asyncio
+async def test_global_spend_report_rbac_internal_rejects_other_user_id():
+    auth = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="u1",
+        api_key="abc123hash",
+    )
+    with pytest.raises(HTTPException) as exc_info:
+        await spend_management_endpoints._apply_global_spend_report_rbac(
+            user_api_key_dict=auth,
+            api_key=None,
+            internal_user_id="u2",
+            team_id=None,
+            customer_id=None,
+            prisma_client=MagicMock(),
+        )
+    assert exc_info.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_global_spend_report_rbac_internal_rejects_foreign_api_key():
+    class KeyRow:
+        user_id = "other"
+
+    class MockDB:
+        class VT:
+            async def find_first(self, where):
+                return KeyRow()
+
+        def __init__(self):
+            self.litellm_verificationtoken = self.VT()
+
+    class MockPrisma:
+        def __init__(self):
+            self.db = MockDB()
+
+    auth = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="u1",
+        api_key="myhash",
+    )
+    with pytest.raises(HTTPException) as exc_info:
+        await spend_management_endpoints._apply_global_spend_report_rbac(
+            user_api_key_dict=auth,
+            api_key="otherhash_literal",
+            internal_user_id=None,
+            team_id=None,
+            customer_id=None,
+            prisma_client=MockPrisma(),
+        )
+    assert exc_info.value.status_code == 403
+
+
 def test_ui_view_request_response_forbids_non_admin_without_db(client, monkeypatch):
     """
     Without prisma, non-admins cannot be authorized to read request/response

@@ -3,7 +3,7 @@ import collections
 import json
 import os
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Tuple
 
 import fastapi
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -945,7 +945,6 @@ async def get_global_spend_provider(
 @router.get(
     "/global/spend/report",
     tags=["Budget & Spend Tracking"],
-    dependencies=[Depends(user_api_key_auth)],
     responses={
         200: {"model": List[LiteLLM_SpendLogs]},
     },
@@ -979,6 +978,7 @@ async def get_global_spend_report(
         default=None,
         description="View spend for a specific customer_id. Example customer_id='1234. Can be used in conjunction with team_id as well.",
     ),
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
     Get Daily Spend per Team, based on specific startTime and endTime. Per team, view usage by each key, model
@@ -1033,6 +1033,16 @@ async def get_global_spend_report(
             raise ValueError(
                 "/spend/report endpoint " + CommonProxyErrors.not_premium_user.value
             )
+
+        api_key, internal_user_id = await _apply_global_spend_report_rbac(
+            user_api_key_dict=user_api_key_dict,
+            api_key=api_key,
+            internal_user_id=internal_user_id,
+            team_id=team_id,
+            customer_id=customer_id,
+            prisma_client=prisma_client,
+        )
+
         if api_key is not None:
             verbose_proxy_logger.debug(
                 "Getting /spend for api_key: [set=%s]", api_key is not None
@@ -3540,6 +3550,95 @@ async def _can_team_member_view_log(
         team_obj=team_obj,
         permission=KeyManagementRoutes.SPEND_LOGS.value,
     )
+
+
+async def _apply_global_spend_report_rbac(
+    user_api_key_dict: UserAPIKeyAuth,
+    api_key: Optional[str],
+    internal_user_id: Optional[str],
+    team_id: Optional[str],
+    customer_id: Optional[str],
+    prisma_client: Any,
+) -> Tuple[Optional[str], Optional[str]]:
+    """
+    For non-proxy-admin callers, enforce that global spend report cannot return
+    deployment-wide data unless explicitly filtered.
+
+    Returns ``(effective_api_key, effective_internal_user_id)``. When the caller
+    does not specify filters, defaults to all spend for their ``user_id`` (all
+    keys owned by that user) if ``user_id`` is set; otherwise to the caller's
+    virtual key hash only.
+    """
+    from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
+
+    if _user_has_admin_view(user_api_key_dict):
+        return api_key, internal_user_id
+
+    if team_id is not None and customer_id is not None:
+        if not await _can_team_member_view_log(
+            prisma_client=prisma_client,
+            user_api_key_dict=user_api_key_dict,
+            team_id=team_id,
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={
+                    "error": "Not authorized to view spend for this team and customer."
+                },
+            )
+
+    if internal_user_id is not None:
+        if user_api_key_dict.user_id != internal_user_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={
+                    "error": "Not authorized to view another user's spend (internal_user_id mismatch)."
+                },
+            )
+
+    if api_key is not None:
+        requested_hash = (
+            hash_token(token=api_key) if api_key.startswith("sk-") else api_key
+        )
+        if user_api_key_dict.api_key != requested_hash:
+            if user_api_key_dict.user_id is None:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail={
+                        "error": "Not authorized to view spend for this API key."
+                    },
+                )
+            key_row = await prisma_client.db.litellm_verificationtoken.find_first(
+                where={"token": requested_hash}
+            )
+            if (
+                key_row is None
+                or getattr(key_row, "user_id", None) != user_api_key_dict.user_id
+            ):
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail={
+                        "error": "Not authorized to view spend for this API key."
+                    },
+                )
+
+    if (
+        api_key is None
+        and internal_user_id is None
+        and not (team_id is not None and customer_id is not None)
+    ):
+        if user_api_key_dict.user_id is not None:
+            return None, user_api_key_dict.user_id
+        if not user_api_key_dict.api_key:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={
+                    "error": "Cannot resolve caller API key or user id for spend report scoping."
+                },
+            )
+        return user_api_key_dict.api_key, None
+
+    return api_key, internal_user_id
 
 
 def _can_user_view_spend_log(user_api_key_dict: UserAPIKeyAuth) -> bool:
