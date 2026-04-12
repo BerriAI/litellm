@@ -365,6 +365,7 @@ const AllModelsTab = ({
                       <input
                         type="text"
                         placeholder="Search model names..."
+                        data-testid="model-search-input"
                         className="w-full px-3 py-2 pl-8 border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                         value={modelNameSearch}
                         onChange={(e) => setModelNameSearch(e.target.value)}
@@ -472,7 +473,7 @@ const AllModelsTab = ({
                   {isLoading ? (
                     <Skeleton.Input active style={{ width: 184, height: 20 }} />
                   ) : (
-                    <span className="text-sm text-gray-700">
+                    <span data-testid="models-results-count" className="text-sm text-gray-700">
                       {paginationMeta.total_count > 0
                         ? `Showing ${((currentPage - 1) * pageSize) + 1} - ${Math.min(currentPage * pageSize, paginationMeta.total_count)} of ${paginationMeta.total_count} results`
                         : "Showing 0 results"}

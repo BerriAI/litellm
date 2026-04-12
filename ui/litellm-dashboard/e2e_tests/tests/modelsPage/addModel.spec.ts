@@ -1,24 +1,29 @@
 import { test, expect } from "@playwright/test";
 import { ADMIN_STORAGE_PATH, E2E_TEAM_CRUD_ID } from "../../constants";
 import { Role, users } from "../../fixtures/users";
+import { navigateToPage } from "../../helpers/navigation";
+import { Page } from "../../fixtures/pages";
 
 test.describe("Add Model", () => {
   test.use({ storageState: ADMIN_STORAGE_PATH });
 
   test("Able to see all models for a specific provider in the model dropdown", async ({ page }) => {
-    await page.goto("/ui");
-
-    await page.getByText("Models + Endpoints").click();
+    await navigateToPage(page, Page.Models);
     await page.getByRole("tab", { name: "Add Model" }).click();
 
-    const providerInputDropdown = page.getByRole("combobox", { name: /Provider/i });
-    await providerInputDropdown.fill("Anthropic");
+    const providerDropdown = page.getByRole("combobox", { name: /Provider/i });
+    await providerDropdown.fill("Anthropic");
     await page.waitForTimeout(1000);
-    await providerInputDropdown.press("Enter");
+    await providerDropdown.press("Enter");
     await page.waitForTimeout(2000);
 
-    const providerModelsDropdown = page.locator(".ant-select-selection-overflow").first();
-    await providerModelsDropdown.click();
+    // The model field should be a multi-select dropdown (not a text input)
+    const modelSelect = page.getByTestId("model-name-select");
+    await expect(modelSelect).toBeVisible({ timeout: 10_000 });
+
+    // Click to open the dropdown and verify provider-specific models are listed
+    const modelDropdown = page.locator(".ant-select-selection-overflow").first();
+    await modelDropdown.click();
     await expect(page.getByTitle("claude-haiku-4-5", { exact: true })).toBeVisible();
   });
 
@@ -71,5 +76,128 @@ test.describe("Add Model", () => {
     // Verify the new values render back in view mode
     await expect(page.getByText("999", { exact: true })).toBeVisible({ timeout: 10_000 });
     await expect(page.getByText("888", { exact: true })).toBeVisible({ timeout: 10_000 });
+  });
+
+  test("Test connection with bad credentials shows failure", async ({ page }) => {
+    await navigateToPage(page, Page.Models);
+    await page.getByRole("tab", { name: "Add Model" }).click();
+
+    // Select provider: Anthropic
+    const providerDropdown = page.getByRole("combobox", { name: /Provider/i });
+    await providerDropdown.fill("Anthropic");
+    await page.waitForTimeout(1000);
+    await providerDropdown.press("Enter");
+    await page.waitForTimeout(2000);
+
+    // Select model: claude-haiku-4-5
+    const modelDropdown = page.locator(".ant-select-selection-overflow").first();
+    await modelDropdown.click();
+    await page.getByTitle("claude-haiku-4-5", { exact: true }).click();
+    await page.keyboard.press("Escape");
+
+    // Enter bad API key
+    const apiKeyInput = page.locator('input[type="password"]').first();
+    await apiKeyInput.fill("sk-bad-key-12345");
+
+    // Click Test Connect
+    await page.getByTestId("test-connect-btn").click();
+
+    // Wait for modal to appear and connection test to complete
+    await expect(page.getByText("Connection Test Results")).toBeVisible({ timeout: 10_000 });
+
+    // Verify failure message appears (the test makes a real API call, so it will fail with bad creds)
+    await expect(page.getByTestId("connection-failure-msg")).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByTestId("connection-failure-msg")).toContainText("failed");
+  });
+
+  test("Add specific model and verify it appears in All Models", async ({ page }) => {
+    await navigateToPage(page, Page.Models);
+    await page.getByRole("tab", { name: "Add Model" }).click();
+
+    // Select provider: Anthropic
+    const providerDropdown = page.getByRole("combobox", { name: /Provider/i });
+    await providerDropdown.fill("Anthropic");
+    await page.waitForTimeout(1000);
+    await providerDropdown.press("Enter");
+    await page.waitForTimeout(2000);
+
+    // Select model: claude-haiku-4-5
+    const modelDropdown = page.locator(".ant-select-selection-overflow").first();
+    await modelDropdown.click();
+    await page.getByTitle("claude-haiku-4-5", { exact: true }).click();
+    await page.keyboard.press("Escape");
+
+    // Enter any API key
+    const apiKeyInput = page.locator('input[type="password"]').first();
+    await apiKeyInput.fill("sk-any-key-for-add-test");
+
+    // Click Add Model
+    await page.getByTestId("add-model-btn").click();
+
+    // Wait for success notification
+    await expect(page.getByText("created successfully")).toBeVisible({ timeout: 15_000 });
+
+    // Navigate to All Models tab
+    await page.getByRole("tab", { name: "All Models" }).click();
+    await page.waitForLoadState("networkidle");
+    await page.waitForTimeout(2000);
+
+    // Search for the model we just added
+    await page.getByTestId("model-search-input").fill("claude-haiku-4-5");
+    await page.waitForTimeout(1000);
+
+    // Verify the model appears in the results count (not "Showing 0 results")
+    const resultsCount = page.getByTestId("models-results-count");
+    await expect(resultsCount).not.toHaveText("Showing 0 results", { timeout: 15_000 });
+
+    // Verify the model name appears in the table body
+    const tableBody = page.locator("table tbody");
+    await expect(tableBody.getByText("claude-haiku-4-5").first()).toBeVisible({ timeout: 15_000 });
+  });
+
+  test("Add wildcard route and verify it appears in All Models", async ({ page }) => {
+    await navigateToPage(page, Page.Models);
+    await page.getByRole("tab", { name: "Add Model" }).click();
+
+    // Select provider: Cohere
+    const providerDropdown = page.getByRole("combobox", { name: /Provider/i });
+    await providerDropdown.fill("Cohere");
+    await page.waitForTimeout(1000);
+    await providerDropdown.press("Enter");
+    await page.waitForTimeout(2000);
+
+    // Select All Cohere Models (Wildcard)
+    const modelDropdown = page.locator(".ant-select-selection-overflow").first();
+    await modelDropdown.click();
+    const wildcardOption = page.getByTitle(/All .* Models \(Wildcard\)/);
+    await wildcardOption.click();
+    await page.keyboard.press("Escape");
+
+    // Enter any API key
+    const apiKeyInput = page.locator('input[type="password"]').first();
+    await apiKeyInput.fill("sk-any-key-for-wildcard-test");
+
+    // Click Add Model
+    await page.getByTestId("add-model-btn").click();
+
+    // Wait for success notification
+    await expect(page.getByText("created successfully")).toBeVisible({ timeout: 15_000 });
+
+    // Navigate to All Models tab
+    await page.getByRole("tab", { name: "All Models" }).click();
+    await page.waitForLoadState("networkidle");
+    await page.waitForTimeout(2000);
+
+    // Search for the wildcard model
+    await page.getByTestId("model-search-input").fill("cohere");
+    await page.waitForTimeout(1000);
+
+    // Verify the model appears in the results count (not "Showing 0 results")
+    const resultsCount = page.getByTestId("models-results-count");
+    await expect(resultsCount).not.toHaveText("Showing 0 results", { timeout: 15_000 });
+
+    // Verify the wildcard model appears in the table body (wildcard models show as "cohere/*")
+    const tableBody = page.locator("table tbody");
+    await expect(tableBody.getByText("cohere/").first()).toBeVisible({ timeout: 15_000 });
   });
 });
