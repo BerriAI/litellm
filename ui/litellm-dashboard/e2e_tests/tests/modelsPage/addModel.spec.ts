@@ -4,6 +4,34 @@ import { Role, users } from "../../fixtures/users";
 import { navigateToPage } from "../../helpers/navigation";
 import { Page } from "../../fixtures/pages";
 
+/**
+ * Helper to delete a model by searching for it via the API and deleting matching entries.
+ * Accepts a partial model name to match against.
+ */
+async function cleanupModels(request: any, searchTerm: string) {
+  try {
+    const response = await request.get("/v2/model/info?include_team_models=true&page=1&size=100", {
+      headers: { Authorization: "Bearer sk-1234" },
+    });
+    const data = await response.json();
+    const models = data?.data || [];
+    for (const model of models) {
+      const name = model.model_name || "";
+      if (name.includes(searchTerm)) {
+        await request.post("/model/delete", {
+          headers: {
+            Authorization: "Bearer sk-1234",
+            "Content-Type": "application/json",
+          },
+          data: { id: model.model_info?.id },
+        });
+      }
+    }
+  } catch {
+    // Best-effort cleanup; don't fail the test
+  }
+}
+
 test.describe("Add Model", () => {
   test.use({ storageState: ADMIN_STORAGE_PATH });
 
@@ -110,7 +138,9 @@ test.describe("Add Model", () => {
     await expect(page.getByTestId("connection-failure-msg")).toContainText("failed");
   });
 
-  test("Add specific model and verify it appears in All Models", async ({ page }) => {
+  test("Add specific model and verify it appears in All Models", async ({ page, request }) => {
+    // Clean up any leftover models from previous runs
+    await cleanupModels(request, "claude-haiku-4-5");
     await navigateToPage(page, Page.Models);
     await page.getByRole("tab", { name: "Add Model" }).click();
 
@@ -155,7 +185,9 @@ test.describe("Add Model", () => {
     await expect(tableBody.getByText("claude-haiku-4-5").first()).toBeVisible({ timeout: 15_000 });
   });
 
-  test("Add wildcard route and verify it appears in All Models", async ({ page }) => {
+  test("Add wildcard route and verify it appears in All Models", async ({ page, request }) => {
+    // Clean up any leftover models from previous runs
+    await cleanupModels(request, "cohere/");
     await navigateToPage(page, Page.Models);
     await page.getByRole("tab", { name: "Add Model" }).click();
 
