@@ -89,10 +89,6 @@ def _get_redis_cluster_kwargs(client=None):
         "gcp_service_account",
         "gcp_ssl_ca_certs",
         "max_connections",
-        "socket_timeout",
-        "socket_connect_timeout",
-        "socket_keepalive",
-        "socket_keepalive_options",
     }
 
     return available_args
@@ -309,7 +305,7 @@ def init_redis_cluster(redis_kwargs) -> redis.RedisCluster:
 
 def _get_redis_sentinel_connection_kwargs(redis_kwargs: dict) -> dict:
     connection_kwargs = {}
-    args = _get_redis_cluster_kwargs()
+    args = _get_redis_kwargs()
     for arg in redis_kwargs:
         if arg in args:
             connection_kwargs[arg] = redis_kwargs[arg]
@@ -322,9 +318,8 @@ def _init_redis_sentinel(redis_kwargs) -> redis.Redis:
     sentinel_password = redis_kwargs.get("sentinel_password")
     service_name = redis_kwargs.get("service_name")
     connection_kwargs = _get_redis_sentinel_connection_kwargs(redis_kwargs)
-    sentinel_kwargs = dict(connection_kwargs)
     connection_kwargs.setdefault("socket_timeout", REDIS_SOCKET_TIMEOUT)
-    sentinel_kwargs.setdefault("socket_timeout", connection_kwargs["socket_timeout"])
+    sentinel_kwargs = dict(connection_kwargs)
     sentinel_kwargs["password"] = sentinel_password
 
     if not sentinel_nodes or not service_name:
@@ -350,9 +345,8 @@ def _init_async_redis_sentinel(redis_kwargs) -> async_redis.Redis:
     sentinel_password = redis_kwargs.get("sentinel_password")
     service_name = redis_kwargs.get("service_name")
     connection_kwargs = _get_redis_sentinel_connection_kwargs(redis_kwargs)
-    sentinel_kwargs = dict(connection_kwargs)
     connection_kwargs.setdefault("socket_timeout", REDIS_SOCKET_TIMEOUT)
-    sentinel_kwargs.setdefault("socket_timeout", connection_kwargs["socket_timeout"])
+    sentinel_kwargs = dict(connection_kwargs)
     sentinel_kwargs["password"] = sentinel_password
 
     if not sentinel_nodes or not service_name:
