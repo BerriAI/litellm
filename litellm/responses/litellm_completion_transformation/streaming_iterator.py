@@ -57,6 +57,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         responses_api_request: ResponsesAPIOptionalRequestParams,
         custom_llm_provider: Optional[str] = None,
         litellm_metadata: Optional[dict] = None,
+        compaction_output_item: Optional[Dict[str, Any]] = None,
     ):
         self.model: str = model
         self.litellm_custom_stream_wrapper: litellm.CustomStreamWrapper = (
@@ -103,6 +104,14 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         self._reasoning_summary_text: str = ""
         # -- GENERIC RESPONSE-EVENTS PENDING QUEUE as required by fix --
         self._pending_response_events: List[BaseLiteLLMOpenAIResponseObject] = []
+        # If a compaction happened before the stream started, queue the event first
+        if compaction_output_item:
+            from litellm.types.llms.base import BaseLiteLLMOpenAIResponseObject as _Base
+
+            event_data = {"type": "response.compaction", **compaction_output_item}
+            self._pending_response_events.append(
+                _Base.model_construct(**event_data)
+            )
         self._reasoning_active = False
         self._reasoning_done_emitted = False
         self._reasoning_item_id: Optional[str] = None
