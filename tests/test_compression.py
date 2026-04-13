@@ -265,3 +265,28 @@ def test_embedding_scorer():
     )
     assert result["compression_ratio"] > 0
     assert len(result["cache"]) > 0
+
+
+@pytest.mark.parametrize(
+    "final_user_message, expected_content",
+    [
+        ("How to cook?", "Unrelated cooking recipes "),
+        ("Fix auth", "Authentication code "),
+    ],
+)
+def test_simple_compression(final_user_message, expected_content):
+    messages = [
+        {"role": "user", "content": "Authentication code " * 2000},
+        {"role": "user", "content": "Unrelated cooking recipes " * 2000},
+        {"role": "user", "content": final_user_message},
+    ]
+    result = litellm.compress(messages, model="gpt-4o", compression_trigger=1000)
+    print(result["messages"])
+    if expected_content == "Unrelated cooking recipes ":
+        assert "Unrelated cooking recipes " in result["messages"][1]["content"]
+        assert "Authentication code " not in result["messages"][0]["content"]
+    elif expected_content == "Authentication code ":
+        assert "Authentication code " in result["messages"][0]["content"]
+        assert "Unrelated cooking recipes " not in result["messages"][1]["content"]
+    else:
+        raise ValueError(f"Unexpected expected_content: {expected_content}")
