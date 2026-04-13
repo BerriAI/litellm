@@ -20,7 +20,7 @@ import NotificationManager from "../molecules/notifications_manager";
 import { getPolicyInfoWithGuardrails, keyDeleteCall, keyUpdateCall } from "../networking";
 import { useResetKeySpend } from "@/app/(dashboard)/hooks/keys/useResetKeySpend";
 import ObjectPermissionsView from "../object_permissions_view";
-import { RegenerateKeyModal } from "../organisms/regenerate_key_modal";
+import { RegenerateKeyModal } from "../organisms/RegenerateKeyModal";
 import { parseErrorMessage } from "../shared/errorUtils";
 import { KeyEditView } from "./key_edit_view";
 
