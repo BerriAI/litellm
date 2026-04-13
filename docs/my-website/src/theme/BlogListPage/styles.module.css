@@ -252,3 +252,32 @@
 [data-theme='dark'] .hiringBtn:hover {
   background: #fff;
 }
+
+[data-theme='dark'] .marqueeItem {
+  color: #9ca3af;
+}
+
+[data-theme='dark'] .marqueeSep {
+  color: #374151;
+}
+
+[data-theme='dark'] .marqueeLabel {
+  color: #6b7280;
+}
+
+[data-theme='dark'] .pageLink {
+  color: #d1d5db;
+}
+
+[data-theme='dark'] .pageLink:hover {
+  color: #38bdf8;
+}
+
+[data-theme='dark'] .meta {
+  color: #9ca3af;
+}
+
+[data-theme='dark'] .metaDash,
+[data-theme='dark'] .authorSep {
+  color: #4b5563;
+}
