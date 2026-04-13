@@ -432,6 +432,138 @@ class TestHiddenlayerGuardrail:
                 },
             )
 
+    @pytest.mark.asyncio
+    async def test_apply_guardrail_request_with_image(self):
+        """Test apply_guardrail sends multimodal content (image) to HiddenLayer v1."""
+        os.environ["HIDDENLAYER_API_BASE"] = "https://my.hiddenlayer"
+
+        guardrail = HiddenlayerGuardrail(
+            guardrail_name="hiddenlayer", event_hook="pre_call", default_on=True
+        )
+
+        multimodal_content = [
+            {"type": "text", "text": "how much is on this receipt?"},
+            {
+                "type": "image_url",
+                "image_url": {"url": "data:image/png;base64,iVBORw0KGgo="},
+            },
+        ]
+        inputs = GenericGuardrailAPIInputs(
+            texts=["how much is on this receipt?"],
+            images=["data:image/png;base64,iVBORw0KGgo="],
+            structured_messages=[{"role": "user", "content": multimodal_content}],
+            model="gpt-4o-mini",
+        )
+
+        request_data = {
+            "proxy_server_request": {
+                "headers": {},
+                "messages": [{"role": "user", "content": multimodal_content}],
+                "model": "gpt-4o-mini",
+            }
+        }
+
+        logging_obj = LiteLLMLoggingObj(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": multimodal_content}],
+            stream=False,
+            call_type="completion",
+            litellm_call_id="test-call-id",
+            function_id="test-function-id",
+            start_time=None,
+        )
+
+        mock_response = MagicMock()
+        mock_response.json.return_value = {}
+        mock_response.raise_for_status = MagicMock()
+
+        with patch.object(
+            guardrail._http_client, "post", return_value=mock_response
+        ) as mock_post:
+            result = await guardrail.apply_guardrail(
+                inputs=inputs,
+                request_data=request_data,
+                input_type="request",
+                logging_obj=logging_obj,
+            )
+
+        # v1 API requires string content — multimodal list is stringified
+        mock_post.assert_called_once()
+        call_kwargs = mock_post.call_args.kwargs
+        sent_content = call_kwargs["json"]["input"]["messages"][0]["content"]
+        assert isinstance(sent_content, str)
+        assert sent_content == str(multimodal_content)
+
+        # Result should be returned without error
+        assert result is not None
+
+    @pytest.mark.asyncio
+    async def test_apply_guardrail_redact_with_image_content(self):
+        """Test that REDACT action with multimodal content extracts text properly into inputs['texts']."""
+        os.environ["HIDDENLAYER_API_BASE"] = "https://my.hiddenlayer"
+
+        guardrail = HiddenlayerGuardrail(
+            guardrail_name="hiddenlayer", event_hook="pre_call", default_on=True
+        )
+
+        multimodal_content = [
+            {"type": "text", "text": "how much is on this receipt?"},
+            {
+                "type": "image_url",
+                "image_url": {"url": "data:image/png;base64,iVBORw0KGgo="},
+            },
+        ]
+        inputs = GenericGuardrailAPIInputs(
+            texts=["how much is on this receipt?"],
+            images=["data:image/png;base64,iVBORw0KGgo="],
+            structured_messages=[{"role": "user", "content": multimodal_content}],
+            model="gpt-4o-mini",
+        )
+
+        request_data = {"proxy_server_request": {"headers": {}}}
+
+        logging_obj = LiteLLMLoggingObj(
+            model="gpt-4o-mini",
+            messages=[],
+            stream=False,
+            call_type="completion",
+            litellm_call_id="test-call-id",
+            function_id="test-function-id",
+            start_time=None,
+        )
+
+        redacted_content = [
+            {"type": "text", "text": "[REDACTED]"},
+            {
+                "type": "image_url",
+                "image_url": {"url": "data:image/png;base64,iVBORw0KGgo="},
+            },
+        ]
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "evaluation": {"action": "Redact"},
+            "modified_data": {
+                "input": {
+                    "messages": [{"role": "user", "content": redacted_content}]
+                }
+            },
+        }
+        mock_response.raise_for_status = MagicMock()
+
+        with patch.object(guardrail._http_client, "post", return_value=mock_response):
+            result = await guardrail.apply_guardrail(
+                inputs=inputs,
+                request_data=request_data,
+                input_type="request",
+                logging_obj=logging_obj,
+            )
+
+        # texts must be List[str], not List[List]
+        assert result.get("texts") == ["[REDACTED]"]
+        assert result.get("structured_messages") == [
+            {"role": "user", "content": redacted_content}
+        ]
+
     def test_get_config_model(self):
         """Test get_config_model method."""
         config_model = HiddenlayerGuardrail.get_config_model()
@@ -831,6 +963,141 @@ class TestHiddenlayerGuardrailV2:
             assert (
                 "detection/v2/response-evaluations" in mock_post.call_args.args[0]
             )
+
+    @pytest.mark.asyncio
+    async def test_apply_guardrail_request_with_image(self):
+        """Test apply_guardrail sends multimodal content (image) to HiddenLayer v2."""
+        os.environ["HIDDENLAYER_API_BASE"] = "https://my.hiddenlayer"
+
+        guardrail = HiddenlayerGuardrailV2(
+            guardrail_name="hiddenlayer", event_hook="pre_call", default_on=True
+        )
+
+        multimodal_content = [
+            {"type": "text", "text": "how much is on this receipt?"},
+            {
+                "type": "image_url",
+                "image_url": {"url": "data:image/png;base64,iVBORw0KGgo="},
+            },
+        ]
+        inputs = GenericGuardrailAPIInputs(
+            texts=["how much is on this receipt?"],
+            images=["data:image/png;base64,iVBORw0KGgo="],
+            structured_messages=[{"role": "user", "content": multimodal_content}],
+            model="gpt-4o-mini",
+        )
+
+        request_data = {
+            "proxy_server_request": {
+                "headers": {},
+                "messages": [{"role": "user", "content": multimodal_content}],
+                "model": "gpt-4o-mini",
+            }
+        }
+
+        logging_obj = LiteLLMLoggingObj(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": multimodal_content}],
+            stream=False,
+            call_type="completion",
+            litellm_call_id="test-call-id",
+            function_id="test-function-id",
+            start_time=None,
+        )
+
+        mock_response = MagicMock()
+        mock_response.headers = MagicMock()
+        mock_response.headers.get = MagicMock(return_value="")
+        mock_response.json.return_value = {
+            "messages": [{"role": "user", "content": multimodal_content}],
+            "model": "gpt-4o-mini",
+        }
+        mock_response.raise_for_status = MagicMock()
+
+        with patch.object(
+            guardrail._http_client, "post", return_value=mock_response
+        ) as mock_post:
+            result = await guardrail.apply_guardrail(
+                inputs=inputs,
+                request_data=request_data,
+                input_type="request",
+                logging_obj=logging_obj,
+            )
+
+        # Image data should be sent to HiddenLayer in the message content
+        mock_post.assert_called_once()
+        call_kwargs = mock_post.call_args.kwargs
+        sent_messages = call_kwargs["json"]["messages"]
+        assert sent_messages[0]["content"] == multimodal_content
+
+        # texts must be List[str] even when content is multimodal
+        texts = result.get("texts", [])
+        assert all(isinstance(t, str) for t in texts)
+        assert texts == ["how much is on this receipt?"]
+
+    @pytest.mark.asyncio
+    async def test_apply_guardrail_request_with_image_multimodal_response(self):
+        """Test that new_texts extraction handles multimodal content (list) returned by HiddenLayer v2."""
+        os.environ["HIDDENLAYER_API_BASE"] = "https://my.hiddenlayer"
+
+        guardrail = HiddenlayerGuardrailV2(
+            guardrail_name="hiddenlayer", event_hook="pre_call", default_on=True
+        )
+
+        multimodal_content = [
+            {"type": "text", "text": "how much is on this receipt?"},
+            {
+                "type": "image_url",
+                "image_url": {"url": "data:image/png;base64,iVBORw0KGgo="},
+            },
+        ]
+        inputs = GenericGuardrailAPIInputs(
+            texts=["how much is on this receipt?"],
+            images=["data:image/png;base64,iVBORw0KGgo="],
+            structured_messages=[{"role": "user", "content": multimodal_content}],
+            model="gpt-4o-mini",
+        )
+
+        request_data = {
+            "proxy_server_request": {
+                "headers": {},
+            }
+        }
+
+        logging_obj = LiteLLMLoggingObj(
+            model="gpt-4o-mini",
+            messages=[],
+            stream=False,
+            call_type="completion",
+            litellm_call_id="test-call-id",
+            function_id="test-function-id",
+            start_time=None,
+        )
+
+        # HiddenLayer returns the message with multimodal content unchanged
+        mock_response = MagicMock()
+        mock_response.headers = MagicMock()
+        mock_response.headers.get = MagicMock(return_value="")
+        mock_response.json.return_value = {
+            "messages": [{"role": "user", "content": multimodal_content}],
+            "model": "gpt-4o-mini",
+        }
+        mock_response.raise_for_status = MagicMock()
+
+        with patch.object(guardrail._http_client, "post", return_value=mock_response):
+            result = await guardrail.apply_guardrail(
+                inputs=inputs,
+                request_data=request_data,
+                input_type="request",
+                logging_obj=logging_obj,
+            )
+
+        # texts must be List[str], not List[List]
+        texts = result.get("texts", [])
+        assert all(isinstance(t, str) for t in texts), (
+            f"inputs['texts'] must be List[str], got: {texts}"
+        )
+        assert texts == ["how much is on this receipt?"]
 
     def test_get_config_model(self):
         """Test get_config_model method."""

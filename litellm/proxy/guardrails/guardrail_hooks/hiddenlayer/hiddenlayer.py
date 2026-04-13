@@ -161,7 +161,7 @@ class HiddenlayerGuardrail(CustomGuardrail):
                     "messages": [
                         {
                             "role": last_msg.get("role", "user"),
-                            "content": last_msg.get("content", ""),
+                            "content": str(last_msg.get("content", "")),
                         }
                     ]
                 },
@@ -197,11 +197,29 @@ class HiddenlayerGuardrail(CustomGuardrail):
         if result.get("evaluation", {}).get("action") == HiddenlayerAction.REDACT:
             modified_data = result.get("modified_data", {})
             if modified_data.get("input") and input_type == "request":
-                inputs["texts"] = [modified_data["input"]["messages"][-1]["content"]]
+                last_content = modified_data["input"]["messages"][-1]["content"]
+                if isinstance(last_content, list):
+                    texts = [
+                        item["text"]
+                        for item in last_content
+                        if isinstance(item, dict) and item.get("type") == "text"
+                    ]
+                    inputs["texts"] = texts if texts else [""]
+                else:
+                    inputs["texts"] = [last_content]
                 inputs["structured_messages"] = modified_data["input"]["messages"]
 
             if modified_data.get("output") and input_type == "response":
-                inputs["texts"] = [modified_data["output"]["messages"][-1]["content"]]
+                last_content = modified_data["output"]["messages"][-1]["content"]
+                if isinstance(last_content, list):
+                    texts = [
+                        item["text"]
+                        for item in last_content
+                        if isinstance(item, dict) and item.get("type") == "text"
+                    ]
+                    inputs["texts"] = texts if texts else [""]
+                else:
+                    inputs["texts"] = [last_content]
 
         return inputs
 
@@ -414,7 +432,16 @@ class HiddenlayerGuardrailV2(CustomGuardrail):
             inputs["structured_messages"] = output
 
             for message in output.get("messages", []):
-                if content := message.get("content", ""):
+                content = message.get("content", "")
+                if isinstance(content, list):
+                    text_parts = [
+                        item["text"]
+                        for item in content
+                        if isinstance(item, dict) and item.get("type") == "text"
+                    ]
+                    if text_parts:
+                        new_texts.append(" ".join(text_parts))
+                elif content:
                     new_texts.append(content)
 
             inputs["texts"] = new_texts
