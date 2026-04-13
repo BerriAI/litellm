@@ -8,6 +8,7 @@ sys.path.insert(
 from litellm.proxy.common_utils.callback_utils import (
     get_remaining_tokens_and_requests_from_request_data,
     normalize_callback_names,
+    redact_sensitive_logging_metadata,
 )
 
 from unittest.mock import patch
@@ -80,4 +81,95 @@ def test_normalize_callback_names_none_returns_empty_list():
 
 def test_normalize_callback_names_lowercases_strings():
     assert normalize_callback_names(["SQS", "S3", "CUSTOM_CALLBACK"]) == ["sqs", "s3", "custom_callback"]
+
+
+# ---------------------------------------------------------------------------
+# redact_sensitive_logging_metadata tests
+# ---------------------------------------------------------------------------
+
+
+def test_redact_scrubs_real_secret_values():
+    """Real credential values must be replaced with '***'."""
+    metadata = {
+        "logging": [
+            {
+                "callback_name": "langfuse",
+                "callback_type": "success_and_failure",
+                "callback_vars": {
+                    "langfuse_public_key": "pk-lf-abc123",
+                    "langfuse_secret_key": "sk-lf-supersecret",
+                    "langfuse_host": "https://us.cloud.langfuse.com",
+                },
+            }
+        ]
+    }
+    result = redact_sensitive_logging_metadata(metadata)
+    vars_ = result["logging"][0]["callback_vars"]
+    assert vars_["langfuse_public_key"] == "***"
+    assert vars_["langfuse_secret_key"] == "***"
+    assert vars_["langfuse_host"] == "***"
+
+
+def test_redact_keeps_env_var_references():
+    """os.environ/ pointers are not secrets — they must be preserved."""
+    metadata = {
+        "logging": [
+            {
+                "callback_name": "langfuse",
+                "callback_vars": {
+                    "langfuse_public_key": "os.environ/LANGFUSE_PUBLIC_KEY",
+                    "langfuse_secret_key": "os.environ/LANGFUSE_SECRET_KEY",
+                },
+            }
+        ]
+    }
+    result = redact_sensitive_logging_metadata(metadata)
+    vars_ = result["logging"][0]["callback_vars"]
+    assert vars_["langfuse_public_key"] == "os.environ/LANGFUSE_PUBLIC_KEY"
+    assert vars_["langfuse_secret_key"] == "os.environ/LANGFUSE_SECRET_KEY"
+
+
+def test_redact_does_not_mutate_original():
+    """The original metadata dict must not be modified."""
+    metadata = {
+        "logging": [
+            {
+                "callback_name": "langfuse",
+                "callback_vars": {"langfuse_secret_key": "sk-real-secret"},
+            }
+        ]
+    }
+    original_value = metadata["logging"][0]["callback_vars"]["langfuse_secret_key"]
+    redact_sensitive_logging_metadata(metadata)
+    assert metadata["logging"][0]["callback_vars"]["langfuse_secret_key"] == original_value
+
+
+def test_redact_returns_none_for_none_input():
+    assert redact_sensitive_logging_metadata(None) is None
+
+
+def test_redact_returns_unchanged_when_no_logging_key():
+    """Metadata without a 'logging' key passes through untouched."""
+    metadata = {"some_other_key": "value"}
+    result = redact_sensitive_logging_metadata(metadata)
+    assert result == {"some_other_key": "value"}
+
+
+def test_redact_mixed_env_and_real_values():
+    """Only real values are scrubbed; env-var pointers in the same dict survive."""
+    metadata = {
+        "logging": [
+            {
+                "callback_name": "langfuse",
+                "callback_vars": {
+                    "langfuse_public_key": "os.environ/LANGFUSE_PUBLIC_KEY",
+                    "langfuse_secret_key": "sk-real-secret",
+                },
+            }
+        ]
+    }
+    result = redact_sensitive_logging_metadata(metadata)
+    vars_ = result["logging"][0]["callback_vars"]
+    assert vars_["langfuse_public_key"] == "os.environ/LANGFUSE_PUBLIC_KEY"
+    assert vars_["langfuse_secret_key"] == "***"
 
