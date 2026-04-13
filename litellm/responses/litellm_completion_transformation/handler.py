@@ -2,7 +2,7 @@
 Handler for transforming responses api requests to litellm.completion requests
 """
 
-from typing import Any, Coroutine, Dict, Optional, Union
+from typing import Any, Coroutine, Dict, Optional, Union, cast
 
 import litellm
 from litellm.responses.litellm_completion_transformation.streaming_iterator import (
@@ -105,6 +105,27 @@ class LiteLLMCompletionTransformationHandler:
                 litellm_completion_request=litellm_completion_request,
             )
 
+        # --- context_management compaction ---
+        context_management = responses_api_request.get("context_management")
+        compaction_output_item: Optional[dict] = None
+        if context_management:
+            messages = litellm_completion_request.get("messages") or []
+            token_count = LiteLLMCompletionResponsesConfig._cheap_token_counter_for_messages(
+                messages
+            )
+            if LiteLLMCompletionResponsesConfig.should_execute_compaction(
+                token_count, context_management
+            ):
+                model_for_compact = litellm_completion_request.get("model") or ""
+                messages, compaction_output_item = (
+                    await LiteLLMCompletionResponsesConfig._apply_compaction_to_messages(
+                        model=model_for_compact,
+                        messages=messages,
+                    )
+                )
+                litellm_completion_request["messages"] = messages
+        # --- end compaction ---
+
         acompletion_args = {}
         acompletion_args.update(kwargs)
         acompletion_args.update(litellm_completion_request)
@@ -121,11 +142,14 @@ class LiteLLMCompletionTransformationHandler:
                 request_input=request_input,
                 responses_api_request=responses_api_request,
             )
+            # Prepend compaction item to output (must be first per spec)
+            if compaction_output_item and responses_api_response.output is not None:
+                responses_api_response.output.insert(0, cast(Any, compaction_output_item))
 
             return responses_api_response
 
         elif isinstance(litellm_completion_response, litellm.CustomStreamWrapper):
-            return LiteLLMCompletionStreamingIterator(
+            streaming_iterator = LiteLLMCompletionStreamingIterator(
                 model=litellm_completion_request.get("model") or "",
                 litellm_custom_stream_wrapper=litellm_completion_response,
                 request_input=request_input,
@@ -134,7 +158,9 @@ class LiteLLMCompletionTransformationHandler:
                     "custom_llm_provider"
                 ),
                 litellm_metadata=kwargs.get("litellm_metadata", {}),
+                compaction_output_item=compaction_output_item,
             )
+            return streaming_iterator
         raise ValueError(
             f"Unexpected response type: {type(litellm_completion_response)}"
         )
