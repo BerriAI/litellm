@@ -51,7 +51,9 @@ LiteLLM is a unified interface for 100+ LLMs that:
 
 ### MAKING CODE CHANGES FOR THE UI (IGNORE FOR BACKEND)
 
-1. **Tremor is DEPRECATED, do not use Tremor components in new features/changes**
+1. **Always use `antd` for new UI components — Tremor is DEPRECATED**
+   - We are migrating off of `@tremor/react`. Do not introduce new `Badge`, `Text`, `Card`, `Grid`, `Title`, or other imports from `@tremor/react` in any new or modified file.
+   - Use `antd` equivalents: `Tag` for labels, plain `<span>`/`<div>` with Tailwind classes (or `Typography.Text`) for text, `Card` from `antd`, etc. Note that `antd` has no `"yellow"` Tag color — use `"gold"` for amber/yellow.
    - The only exception is the Tremor Table component and its required Tremor Table sub components.
 
 2. **Use Common Components as much as possible**:

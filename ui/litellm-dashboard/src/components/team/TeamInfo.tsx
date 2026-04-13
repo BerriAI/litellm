@@ -2,7 +2,6 @@ import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 import UserSearchModal from "@/components/common_components/user_search_modal";
 import {
-  getGuardrailsList,
   getPoliciesList,
   getPolicyInfoWithGuardrails,
   Member,
@@ -14,13 +13,14 @@ import {
   teamMemberUpdateCall,
   teamUpdateCall,
 } from "@/components/networking";
+import { useGuardrails } from "@/app/(dashboard)/hooks/guardrails/useGuardrails";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { mapEmptyStringToNull } from "@/utils/keyUpdateUtils";
 import { isProxyAdminRole } from "@/utils/roles";
-import { EditOutlined, InfoCircleOutlined, MinusCircleOutlined, PlusOutlined, SaveOutlined } from "@ant-design/icons";
+import { EditOutlined, GlobalOutlined, InfoCircleOutlined, MinusCircleOutlined, PlusOutlined, SaveOutlined } from "@ant-design/icons";
 import { ArrowLeftIcon } from "@heroicons/react/outline";
 import { Badge, Card, Grid, Text, TextInput, Title } from "@tremor/react";
-import { Button, Form, Input, InputNumber, Select, Space, Switch, Tabs, Tooltip } from "antd";
+import { Button, Form, Input, InputNumber, Select, Space, Switch, Tabs, Tag, Tooltip } from "antd";
 import MessageManager from "@/components/molecules/message_manager";
 import { CheckIcon, CopyIcon } from "lucide-react";
 import React, { useEffect, useMemo, useState } from "react";
@@ -31,6 +31,7 @@ import DeleteResourceModal from "../common_components/DeleteResourceModal";
 import DurationSelect from "../common_components/DurationSelect";
 import PassThroughRoutesSelector from "../common_components/PassThroughRoutesSelector";
 import { unfurlWildcardModelsInList } from "../key_team_helpers/fetch_available_models_team_key";
+import GuardrailSettingsView from "../GuardrailSettingsView";
 import LoggingSettingsView from "../logging_settings_view";
 import MCPServerSelector from "../mcp_server_management/MCPServerSelector";
 import MCPToolPermissions from "../mcp_server_management/MCPToolPermissions";
@@ -179,7 +180,8 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   const [mcpAccessGroups, setMcpAccessGroups] = useState<string[]>([]);
   const [mcpAccessGroupsLoaded, setMcpAccessGroupsLoaded] = useState(false);
   const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({});
-  const [guardrailsList, setGuardrailsList] = useState<string[]>([]);
+  const { data: guardrailsData, isLoading: isGuardrailsLoading } = useGuardrails();
+  const globalGuardrailNames = guardrailsData?.globalGuardrailNames ?? new Set<string>();
   const [policiesList, setPoliciesList] = useState<string[]>([]);
   const [policyGuardrails, setPolicyGuardrails] = useState<Record<string, string[]>>({});
   const [loadingPolicies, setLoadingPolicies] = useState(false);
@@ -202,6 +204,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   // Models currently selected in the team edit form, used to scope the per-model
   // rate limit dropdown to models this team actually has access to.
   const selectedModelsInForm = Form.useWatch("models", form) as string[] | undefined;
+  const killSwitchOn = Form.useWatch("disable_global_guardrails", form) as boolean | undefined;
   const availableRateLimitModels = useMemo(() => {
     const selected = selectedModelsInForm ?? teamData?.team_info?.models ?? [];
     if (selected.includes("all-proxy-models") || selected.includes("all-team-models")) {
@@ -273,17 +276,6 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   };
 
   useEffect(() => {
-    const fetchGuardrails = async () => {
-      try {
-        if (!accessToken) return;
-        const response = await getGuardrailsList(accessToken);
-        const guardrailNames = response.guardrails.map((g: { guardrail_name: string }) => g.guardrail_name);
-        setGuardrailsList(guardrailNames);
-      } catch (error) {
-        console.error("Failed to fetch guardrails:", error);
-      }
-    };
-
     const fetchPolicies = async () => {
       try {
         if (!accessToken) return;
@@ -295,7 +287,6 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       }
     };
 
-    fetchGuardrails();
     fetchPolicies();
   }, [accessToken]);
 
@@ -491,6 +482,13 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         }
       }
 
+      const killSwitchOnAtSave = values.disable_global_guardrails === true;
+      const optedOutGlobalGuardrails = killSwitchOnAtSave
+        ? Array.from(globalGuardrailNames)
+        : Array.from(globalGuardrailNames).filter(
+            (n) => !(values.guardrails || []).includes(n),
+          );
+
       const updateData: any = {
         team_id: teamId,
         team_alias: values.team_alias,
@@ -504,9 +502,10 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         budget_duration: values.budget_duration,
         metadata: {
           ...parsedMetadata,
-          ...(values.guardrails?.length > 0 ? { guardrails: values.guardrails } : {}),
+          guardrails: (values.guardrails || []).filter((n: string) => !globalGuardrailNames.has(n)),
+          opted_out_global_guardrails: optedOutGlobalGuardrails,
           ...(values.logging_settings?.length > 0 ? { logging: values.logging_settings } : {}),
-          disable_global_guardrails: values.disable_global_guardrails || false,
+          disable_global_guardrails: killSwitchOnAtSave,
           soft_budget_alerting_emails:
             typeof values.soft_budget_alerting_emails === "string"
               ? values.soft_budget_alerting_emails
@@ -609,6 +608,39 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   }
 
   const { team_info: info } = teamData;
+
+  const initialKillSwitchOn = info.metadata?.disable_global_guardrails === true;
+  const optedOutGlobals = new Set<string>(info.metadata?.opted_out_global_guardrails || []);
+  const nonGlobalOptIns: string[] = (info.metadata?.guardrails || []).filter(
+    (n: string) => !globalGuardrailNames.has(n),
+  );
+  const effectiveGuardrails: string[] = initialKillSwitchOn
+    ? nonGlobalOptIns
+    : [
+        ...Array.from(globalGuardrailNames).filter((n) => !optedOutGlobals.has(n)),
+        ...nonGlobalOptIns,
+      ];
+
+  const preventTagMouseDown = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+  };
+
+  const renderGuardrailTag = ({ label, value, closable, onClose }: any) => {
+    const isGlobal = globalGuardrailNames.has(value);
+    return (
+      <Tag
+        color="blue"
+        closable={closable}
+        onClose={onClose}
+        onMouseDown={preventTagMouseDown}
+        style={{ marginInlineEnd: 4 }}
+      >
+        {isGlobal && <GlobalOutlined style={{ marginInlineEnd: 4 }} aria-label="Global guardrail" />}
+        {label}
+      </Tag>
+    );
+  };
 
   const copyToClipboard = async (text: string, key: string) => {
     const success = await utilCopyToClipboard(text);
@@ -738,23 +770,13 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                 />
 
                 <Card>
-                  <Text className="font-semibold text-gray-900 mb-3">Guardrails</Text>
-                  {info.guardrails && info.guardrails.length > 0 ? (
-                    <div className="flex flex-wrap gap-2">
-                      {info.guardrails.map((guardrail: string, index: number) => (
-                        <Badge key={index} color="blue">
-                          {guardrail}
-                        </Badge>
-                      ))}
-                    </div>
-                  ) : (
-                    <Text className="text-gray-500">No guardrails configured</Text>
-                  )}
-                  {info.metadata?.disable_global_guardrails && (
-                    <div className="mt-3 pt-3 border-t border-gray-200">
-                      <Badge color="yellow">Global Guardrails Disabled</Badge>
-                    </div>
-                  )}
+                  <GuardrailSettingsView
+                    globalGuardrailNames={globalGuardrailNames}
+                    teamGuardrails={info.metadata?.guardrails || []}
+                    optedOutGlobalGuardrails={info.metadata?.opted_out_global_guardrails || []}
+                    killSwitchOn={initialKillSwitchOn}
+                    variant="inline"
+                  />
                 </Card>
 
                 <Card>
@@ -839,10 +861,23 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                   )}
                 </div>
 
-                {isEditing ? (
+                {isEditing && isGuardrailsLoading ? (
+                  <div className="p-4">Loading...</div>
+                ) : isEditing ? (
                   <Form
                     form={form}
                     onFinish={handleTeamUpdate}
+                    onValuesChange={(changedValues) => {
+                      if ("disable_global_guardrails" in changedValues) {
+                        const checked = changedValues.disable_global_guardrails === true;
+                        const current = (form.getFieldValue("guardrails") || []) as string[];
+                        const nonGlobals = current.filter((n) => !globalGuardrailNames.has(n));
+                        form.setFieldValue(
+                          "guardrails",
+                          checked ? nonGlobals : [...Array.from(globalGuardrailNames), ...nonGlobals],
+                        );
+                      }
+                    }}
                     initialValues={{
                       ...info,
                       team_alias: info.team_alias,
@@ -866,7 +901,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                       team_member_rpm_limit: info.team_member_budget_table?.rpm_limit,
                       team_member_budget: info.team_member_budget_table?.max_budget,
                       team_member_budget_duration: info.team_member_budget_table?.budget_duration,
-                      guardrails: info.metadata?.guardrails || [],
+                      guardrails: effectiveGuardrails,
                       policies: info.policies || [],
                       disable_global_guardrails: info.metadata?.disable_global_guardrails || false,
                       soft_budget_alerting_emails:
@@ -1090,7 +1125,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                       label={
                         <span>
                           Guardrails{" "}
-                          <Tooltip title="Setup your first guardrail">
+                          <Tooltip title="Select which guardrails apply to this team. Global guardrails are enabled by default — uncheck to opt out. Other guardrails are opt-in.">
                             <a
                               href="https://docs.litellm.ai/docs/proxy/guardrails/quick_start"
                               target="_blank"
@@ -1103,27 +1138,61 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                         </span>
                       }
                       name="guardrails"
-                      help="Select existing guardrails or enter new ones"
                     >
                       <Select
-                        mode="tags"
-                        placeholder="Select or enter guardrails"
-                        options={guardrailsList.map((name) => ({ value: name, label: name }))}
-                      />
+                        mode="multiple"
+                        placeholder="Select guardrails"
+                        optionLabelProp="label"
+                        tagRender={renderGuardrailTag}
+                      >
+                        <Select.OptGroup
+                          label={
+                            <>
+                              <GlobalOutlined style={{ marginInlineEnd: 4 }} />
+                              Global
+                            </>
+                          }
+                        >
+                          {(guardrailsData?.guardrails ?? [])
+                            .filter((g) => g.litellm_params?.default_on)
+                            .map((g) => (
+                              <Select.Option
+                                key={g.guardrail_name}
+                                value={g.guardrail_name}
+                                label={g.guardrail_name}
+                                disabled={killSwitchOn}
+                              >
+                                {g.guardrail_name}
+                              </Select.Option>
+                            ))}
+                        </Select.OptGroup>
+                        <Select.OptGroup label="Other">
+                          {(guardrailsData?.guardrails ?? [])
+                            .filter((g) => !g.litellm_params?.default_on)
+                            .map((g) => (
+                              <Select.Option
+                                key={g.guardrail_name}
+                                value={g.guardrail_name}
+                                label={g.guardrail_name}
+                              >
+                                {g.guardrail_name}
+                              </Select.Option>
+                            ))}
+                        </Select.OptGroup>
+                      </Select>
                     </Form.Item>
 
                     <Form.Item
                       label={
                         <span>
-                          Disable Global Guardrails
-                          <Tooltip title="When enabled, this team will bypass any guardrails configured to run on every request (global guardrails)">
+                          Disable all global guardrails{" "}
+                          <Tooltip title="Kill switch: bypass every global guardrail for this team, including any added in the future. For per-guardrail opt-out instead, use the Guardrails dropdown above.">
                             <InfoCircleOutlined style={{ marginLeft: "4px" }} />
                           </Tooltip>
                         </span>
                       }
                       name="disable_global_guardrails"
                       valuePropName="checked"
-                      help="Bypass global guardrails for this team"
                     >
                       <Switch checkedChildren="Yes" unCheckedChildren="No" />
                     </Form.Item>
@@ -1145,7 +1214,6 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                         </span>
                       }
                       name="policies"
-                      help="Select existing policies or enter new ones"
                     >
                       <Select
                         mode="tags"
@@ -1382,22 +1450,20 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                       <Badge color={info.blocked ? "red" : "green"}>{info.blocked ? "Blocked" : "Active"}</Badge>
                     </div>
 
-                    <div>
-                      <Text className="font-medium">Disable Global Guardrails</Text>
-                      <div>
-                        {info.metadata?.disable_global_guardrails === true ? (
-                          <Badge color="yellow">Enabled - Global guardrails bypassed</Badge>
-                        ) : (
-                          <Badge color="green">Disabled - Global guardrails active</Badge>
-                        )}
-                      </div>
-                    </div>
-
                     <ObjectPermissionsView
                       objectPermission={info.object_permission}
                       variant="inline"
                       className="pt-4 border-t border-gray-200"
                       accessToken={accessToken}
+                    />
+
+                    <GuardrailSettingsView
+                      globalGuardrailNames={globalGuardrailNames}
+                      teamGuardrails={info.metadata?.guardrails || []}
+                      optedOutGlobalGuardrails={info.metadata?.opted_out_global_guardrails || []}
+                      killSwitchOn={initialKillSwitchOn}
+                      variant="inline"
+                      className="pt-4 border-t border-gray-200"
                     />
 
                     <LoggingSettingsView
