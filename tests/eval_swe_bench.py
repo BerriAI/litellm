@@ -36,7 +36,10 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Optional
 
-import litellm
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+import litellm  # noqa: E402
+from litellm.compression import compress as litellm_compress  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Prompts
@@ -55,22 +58,51 @@ SYSTEM_MSG = (
 # ---------------------------------------------------------------------------
 
 
-def load_problems(n: int = 10, split: str = "test") -> list[dict]:
-    """Load n problems from princeton-nlp/SWE-bench_Lite_bm25_27K."""
-    try:
-        from datasets import load_dataset
-    except ImportError:
-        print("ERROR: run `pip install datasets` first.")
-        sys.exit(1)
+def _load_via_datasets(n: int, split: str) -> list[dict]:
+    """Load via the HuggingFace `datasets` library (preferred if available)."""
+    from datasets import load_dataset
 
-    print("Loading SWE-bench_Lite_bm25_27K ...", flush=True)
     ds = load_dataset("princeton-nlp/SWE-bench_Lite_bm25_27K", split=split)
-
     problems = []
     for i, item in enumerate(ds):
         if n > 0 and i >= n:
             break
         problems.append(dict(item))
+    return problems
+
+
+def _load_via_api(n: int, split: str) -> list[dict]:
+    """Fallback: fetch rows directly from the HuggingFace dataset API (no deps)."""
+    import json
+    import urllib.request
+
+    url = (
+        "https://datasets-server.huggingface.co/rows"
+        "?dataset=princeton-nlp/SWE-bench_Lite_bm25_27K"
+        f"&config=default&split={split}&offset=0&length={n}"
+    )
+    req = urllib.request.Request(url, headers={"User-Agent": "litellm-eval"})
+    with urllib.request.urlopen(req, timeout=60) as resp:
+        data = json.loads(resp.read().decode())
+    return [row["row"] for row in data["rows"]]
+
+
+def load_problems(n: int = 10, split: str = "test") -> list[dict]:
+    """Load n problems from princeton-nlp/SWE-bench_Lite_bm25_27K."""
+    print("Loading SWE-bench_Lite_bm25_27K ...", flush=True)
+
+    # Try the HuggingFace API first — it's pure HTTP with no native deps,
+    # so it never triggers pyarrow/numpy binary incompatibilities that can
+    # poison the process.  Fall back to the `datasets` library only if the
+    # API call fails.
+    try:
+        problems = _load_via_api(n, split)
+    except Exception:
+        try:
+            problems = _load_via_datasets(n, split)
+        except Exception as e:
+            print(f"ERROR: Could not load dataset ({type(e).__name__}: {e})")
+            sys.exit(1)
 
     print(f"Loaded {len(problems)} problems.\n")
     return problems
@@ -218,7 +250,7 @@ def eval_instance(
     compression_ratio = 0.0
 
     if use_compression:
-        result = litellm.compress(
+        result = litellm_compress(
             messages=messages,
             model=model,
             compression_trigger=compression_trigger,
