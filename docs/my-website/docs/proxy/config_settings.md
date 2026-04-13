@@ -731,6 +731,7 @@ router_settings:
 | GOOGLE_KMS_RESOURCE_NAME | Name of the resource in Google KMS
 | GUARDRAILS_AI_API_BASE | Base URL for Guardrails AI API
 | HEALTH_CHECK_TIMEOUT_SECONDS | Timeout in seconds for health checks. Default is 60
+| HEALTH_CHECK_TTL_DAYS | Retention period in days for LiteLLM_HealthCheckTable rows. Rows older than this value are automatically deleted. Default is 7
 | HEROKU_API_BASE | Base URL for Heroku API
 | HEROKU_API_KEY | API key for Heroku services
 | HF_API_BASE | Base URL for Hugging Face API
