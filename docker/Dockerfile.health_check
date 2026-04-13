@@ -1,4 +1,4 @@
-FROM python:3.11-slim
+FROM python:3.13-slim@sha256:739e7213785e88c0f702dcdc12c0973afcbd606dbf021a589cab77d6b00b579d
 
 WORKDIR /app
 
@@ -11,6 +11,14 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Make script executable
 RUN chmod +x /app/health_check_client.py
+
+# Run as non-root user
+RUN groupadd --gid 1000 appuser && useradd --uid 1000 --gid 1000 --no-create-home appuser
+USER appuser
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
+  CMD ["python", "/app/health_check_client.py", "--help"]
 
 # Set entrypoint
 ENTRYPOINT ["python", "/app/health_check_client.py"]

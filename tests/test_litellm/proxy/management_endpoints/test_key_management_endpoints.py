@@ -33,6 +33,7 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (
     _check_org_key_limits,
     _check_team_key_limits,
     _common_key_generation_helper,
+    _enforce_upperbound_key_params,
     _get_and_validate_existing_key,
     _list_key_helper,
     _persist_deleted_verification_tokens,
@@ -6588,7 +6589,7 @@ async def test_build_key_filter_member_team_service_accounts():
     # Should have 2 conditions: user's own keys + member team service accounts
     assert len(or_conditions) == 2
 
-    # First: user's own keys
+    # First: user's own keys (exact match — non-admin callers use exact matching)
     user_cond = or_conditions[0]
     assert user_cond["user_id"] == user_id
 
@@ -6986,6 +6987,98 @@ async def test_build_key_filter_team_id_scoped():
     assert {"team_id": "team-A"} in outer_and, (
         f"Expected {{'team_id': 'team-A'}} as a direct AND condition, got: {outer_and}"
     )
+
+
+@pytest.mark.asyncio
+async def test_build_key_filter_admin_substring_matching():
+    """
+    Admin callers get substring (contains + insensitive) matching for user_id
+    and key_alias when use_substring_matching=True.
+    """
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _build_key_filter_conditions,
+    )
+
+    user_id = "alice"
+    key_alias = "prod"
+
+    where = _build_key_filter_conditions(
+        user_id=user_id,
+        team_id=None,
+        organization_id=None,
+        key_alias=key_alias,
+        key_hash=None,
+        exclude_team_id=None,
+        admin_team_ids=None,
+        member_team_ids=None,
+        include_created_by_keys=False,
+        use_substring_matching=True,
+    )
+
+    # Single OR condition is flattened into the top-level where dict
+    assert where["user_id"] == {"contains": user_id, "mode": "insensitive"}
+    assert where["key_alias"] == {"contains": key_alias, "mode": "insensitive"}
+
+
+@pytest.mark.asyncio
+async def test_build_key_filter_non_admin_exact_matching():
+    """
+    Non-admin callers get exact matching for user_id and key_alias when
+    use_substring_matching=False (the default).  This prevents a user whose
+    ID is a substring of another user's ID from seeing that user's keys.
+    """
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _build_key_filter_conditions,
+    )
+
+    user_id = "alice@example.com"
+    key_alias = "my-key"
+
+    where = _build_key_filter_conditions(
+        user_id=user_id,
+        team_id=None,
+        organization_id=None,
+        key_alias=key_alias,
+        key_hash=None,
+        exclude_team_id=None,
+        admin_team_ids=None,
+        member_team_ids=None,
+        include_created_by_keys=False,
+        use_substring_matching=False,
+    )
+
+    # Single OR condition is flattened into the top-level where dict
+    # Exact match — no contains/insensitive wrapping
+    assert where["user_id"] == user_id
+    assert where["key_alias"] == key_alias
+
+
+@pytest.mark.asyncio
+async def test_build_key_filter_default_is_exact_matching():
+    """
+    The default for use_substring_matching is False, ensuring backward
+    compatibility — callers that don't pass the flag get exact matching.
+    """
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _build_key_filter_conditions,
+    )
+
+    user_id = "user-123"
+
+    where = _build_key_filter_conditions(
+        user_id=user_id,
+        team_id=None,
+        organization_id=None,
+        key_alias=None,
+        key_hash=None,
+        exclude_team_id=None,
+        admin_team_ids=None,
+        member_team_ids=None,
+        include_created_by_keys=False,
+    )
+
+    # Single OR condition is flattened into the top-level where dict
+    assert where["user_id"] == user_id
 
 
 @pytest.mark.asyncio
@@ -8343,3 +8436,313 @@ class TestKeyAliasSkipValidationOnUnchanged:
 
         # None alias should always pass
         _validate_key_alias_format(None)
+
+
+# --- Tests: _enforce_upperbound_key_params ---
+
+
+def test_enforce_upperbound_rejects_over_limit_on_generate():
+    """Test that key generation is rejected when values exceed upperbound."""
+    import litellm
+    from litellm.types.proxy.management_endpoints.ui_sso import (
+        LiteLLM_UpperboundKeyGenerateParams,
+    )
+
+    original = litellm.upperbound_key_generate_params
+    try:
+        litellm.upperbound_key_generate_params = LiteLLM_UpperboundKeyGenerateParams(
+            tpm_limit=1000, rpm_limit=100, max_budget=10.0
+        )
+        data = GenerateKeyRequest(tpm_limit=5000)
+        with pytest.raises(HTTPException) as exc_info:
+            _enforce_upperbound_key_params(data, fill_defaults=True)
+        assert exc_info.value.status_code == 400
+        assert "tpm_limit" in str(exc_info.value.detail)
+    finally:
+        litellm.upperbound_key_generate_params = original
+
+
+def test_enforce_upperbound_fills_defaults_on_generate():
+    """Test that None values are filled with upperbound defaults during generation."""
+    import litellm
+    from litellm.types.proxy.management_endpoints.ui_sso import (
+        LiteLLM_UpperboundKeyGenerateParams,
+    )
+
+    original = litellm.upperbound_key_generate_params
+    try:
+        litellm.upperbound_key_generate_params = LiteLLM_UpperboundKeyGenerateParams(
+            tpm_limit=1000, rpm_limit=100
+        )
+        data = GenerateKeyRequest()  # tpm_limit=None, rpm_limit=None
+        _enforce_upperbound_key_params(data, fill_defaults=True)
+        assert data.tpm_limit == 1000
+        assert data.rpm_limit == 100
+    finally:
+        litellm.upperbound_key_generate_params = original
+
+
+def test_enforce_upperbound_skips_none_on_update():
+    """Test that None values are NOT filled during update (fill_defaults=False)."""
+    import litellm
+    from litellm.types.proxy.management_endpoints.ui_sso import (
+        LiteLLM_UpperboundKeyGenerateParams,
+    )
+
+    original = litellm.upperbound_key_generate_params
+    try:
+        litellm.upperbound_key_generate_params = LiteLLM_UpperboundKeyGenerateParams(
+            tpm_limit=1000, rpm_limit=100
+        )
+        data = UpdateKeyRequest(key="sk-test")  # tpm_limit=None, rpm_limit=None
+        _enforce_upperbound_key_params(data, fill_defaults=False)
+        assert data.tpm_limit is None  # should NOT be filled
+        assert data.rpm_limit is None  # should NOT be filled
+    finally:
+        litellm.upperbound_key_generate_params = original
+
+
+def test_enforce_upperbound_rejects_over_limit_on_update():
+    """Test that key update is rejected when values exceed upperbound."""
+    import litellm
+    from litellm.types.proxy.management_endpoints.ui_sso import (
+        LiteLLM_UpperboundKeyGenerateParams,
+    )
+
+    original = litellm.upperbound_key_generate_params
+    try:
+        litellm.upperbound_key_generate_params = LiteLLM_UpperboundKeyGenerateParams(
+            tpm_limit=1000, rpm_limit=100, max_budget=10.0
+        )
+        data = UpdateKeyRequest(key="sk-test", tpm_limit=5000)
+        with pytest.raises(HTTPException) as exc_info:
+            _enforce_upperbound_key_params(data, fill_defaults=False)
+        assert exc_info.value.status_code == 400
+        assert "tpm_limit" in str(exc_info.value.detail)
+    finally:
+        litellm.upperbound_key_generate_params = original
+
+
+def test_enforce_upperbound_allows_within_limit_on_update():
+    """Test that key update passes when values are within upperbound."""
+    import litellm
+    from litellm.types.proxy.management_endpoints.ui_sso import (
+        LiteLLM_UpperboundKeyGenerateParams,
+    )
+
+    original = litellm.upperbound_key_generate_params
+    try:
+        litellm.upperbound_key_generate_params = LiteLLM_UpperboundKeyGenerateParams(
+            tpm_limit=1000, rpm_limit=100, max_budget=10.0
+        )
+        data = UpdateKeyRequest(key="sk-test", tpm_limit=500, rpm_limit=50, max_budget=5.0)
+        _enforce_upperbound_key_params(data, fill_defaults=False)
+        # Should not raise
+        assert data.tpm_limit == 500
+        assert data.rpm_limit == 50
+        assert data.max_budget == 5.0
+    finally:
+        litellm.upperbound_key_generate_params = original
+
+
+def test_enforce_upperbound_duration_over_limit():
+    """Test that duration exceeding upperbound is rejected."""
+    import litellm
+    from litellm.types.proxy.management_endpoints.ui_sso import (
+        LiteLLM_UpperboundKeyGenerateParams,
+    )
+
+    original = litellm.upperbound_key_generate_params
+    try:
+        litellm.upperbound_key_generate_params = LiteLLM_UpperboundKeyGenerateParams(
+            duration="7d"
+        )
+        data = UpdateKeyRequest(key="sk-test", duration="30d")
+        with pytest.raises(HTTPException) as exc_info:
+            _enforce_upperbound_key_params(data, fill_defaults=False)
+        assert exc_info.value.status_code == 400
+        assert "duration" in str(exc_info.value.detail)
+    finally:
+        litellm.upperbound_key_generate_params = original
+
+
+def test_enforce_upperbound_no_config_is_noop():
+    """Test that no enforcement happens when upperbound params are not configured."""
+    import litellm
+
+    original = litellm.upperbound_key_generate_params
+    try:
+        litellm.upperbound_key_generate_params = None
+        data = UpdateKeyRequest(key="sk-test", tpm_limit=999999)
+        _enforce_upperbound_key_params(data, fill_defaults=False)
+        # Should not raise — no enforcement configured
+        assert data.tpm_limit == 999999
+    finally:
+        litellm.upperbound_key_generate_params = original
+
+
+class TestAllowedRoutesCallerPermission:
+    """
+    Non-admins must not be able to set `allowed_routes` on a key. The field
+    bypasses the role-based route gate in
+    RouteChecks.non_proxy_admin_allowed_routes_check, so allowing a non-admin
+    to populate it grants them arbitrary endpoint access.
+    """
+
+    @pytest.mark.asyncio
+    async def test_non_admin_generate_key_with_allowed_routes_rejected(self):
+        data = GenerateKeyRequest(
+            key_alias="escalate",
+            allowed_routes=["/*"],
+        )
+        user_api_key_dict = UserAPIKeyAuth(
+            user_id="internal-user-123",
+            user_role=LitellmUserRoles.INTERNAL_USER,
+        )
+        mock_prisma_client = AsyncMock()
+
+        with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client), patch(
+            "litellm.proxy.proxy_server.user_api_key_cache", MagicMock()
+        ), patch("litellm.proxy.proxy_server.user_custom_key_generate", None), patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints._common_key_generation_helper",
+            new_callable=AsyncMock,
+            return_value=MagicMock(),
+        ):
+            with pytest.raises(ProxyException) as exc_info:
+                await generate_key_fn(
+                    data=data,
+                    user_api_key_dict=user_api_key_dict,
+                    litellm_changed_by=None,
+                )
+        assert str(exc_info.value.code) == "403"
+        assert "allowed_routes" in str(exc_info.value.message)
+
+    @pytest.mark.asyncio
+    async def test_admin_generate_key_with_allowed_routes_allowed(self):
+        data = GenerateKeyRequest(
+            key_alias="admin-key",
+            allowed_routes=["/chat/completions"],
+            user_id="admin-user",
+        )
+        user_api_key_dict = UserAPIKeyAuth(
+            user_id="admin-user",
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+        )
+        mock_prisma_client = AsyncMock()
+        stub_response = MagicMock()
+
+        with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client), patch(
+            "litellm.proxy.proxy_server.user_api_key_cache", MagicMock()
+        ), patch("litellm.proxy.proxy_server.user_custom_key_generate", None), patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints._common_key_generation_helper",
+            new_callable=AsyncMock,
+            return_value=stub_response,
+        ):
+            result = await generate_key_fn(
+                data=data,
+                user_api_key_dict=user_api_key_dict,
+                litellm_changed_by=None,
+            )
+        assert result is stub_response
+
+    @pytest.mark.asyncio
+    async def test_non_admin_generate_key_default_empty_allowed_routes_ok(self):
+        """
+        Regression guard: GenerateKeyRequest.allowed_routes defaults to [], so
+        the helper must treat empty-list as "not set" or every non-admin key
+        creation breaks.
+        """
+        data = GenerateKeyRequest(key_alias="plain-key")
+        user_api_key_dict = UserAPIKeyAuth(
+            user_id="internal-user-123",
+            user_role=LitellmUserRoles.INTERNAL_USER,
+        )
+        mock_prisma_client = AsyncMock()
+        stub_response = MagicMock()
+
+        with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client), patch(
+            "litellm.proxy.proxy_server.user_api_key_cache", MagicMock()
+        ), patch("litellm.proxy.proxy_server.user_custom_key_generate", None), patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints._common_key_generation_helper",
+            new_callable=AsyncMock,
+            return_value=stub_response,
+        ):
+            result = await generate_key_fn(
+                data=data,
+                user_api_key_dict=user_api_key_dict,
+                litellm_changed_by=None,
+            )
+        assert result is stub_response
+
+    @pytest.mark.asyncio
+    async def test_non_admin_update_key_with_allowed_routes_rejected(self):
+        from litellm.proxy.management_endpoints.key_management_endpoints import (
+            update_key_fn,
+        )
+
+        data = UpdateKeyRequest(key="sk-test", allowed_routes=["/*"])
+        user_api_key_dict = UserAPIKeyAuth(
+            user_id="internal-user-123",
+            user_role=LitellmUserRoles.INTERNAL_USER,
+        )
+        mock_prisma_client = AsyncMock()
+
+        with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client), patch(
+            "litellm.proxy.proxy_server.user_api_key_cache", MagicMock()
+        ), patch("litellm.proxy.proxy_server.user_custom_key_update", None), patch(
+            "litellm.proxy.proxy_server.llm_router", None
+        ), patch("litellm.proxy.proxy_server.premium_user", True), patch(
+            "litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()
+        ), patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints._get_and_validate_existing_key",
+            new_callable=AsyncMock,
+            return_value=MagicMock(),
+        ):
+            with pytest.raises(ProxyException) as exc_info:
+                await update_key_fn(
+                    request=MagicMock(),
+                    data=data,
+                    user_api_key_dict=user_api_key_dict,
+                    litellm_changed_by=None,
+                )
+        assert str(exc_info.value.code) == "403"
+        assert "allowed_routes" in str(exc_info.value.message)
+
+
+def test_jinja_prompt_manager_is_sandboxed():
+    """
+    PromptManager renders user-supplied templates via /prompts/test, so its
+    jinja env must reject access to unsafe Python attributes like
+    ``__class__`` and ``__mro__``.
+    """
+    from jinja2.exceptions import SecurityError
+
+    from litellm.integrations.dotprompt.prompt_manager import PromptManager
+
+    pm = PromptManager()
+    template = pm.jinja_env.from_string("{{ ''.__class__.__mro__ }}")
+    with pytest.raises(SecurityError):
+        template.render()
+
+
+def test_validate_public_image_url_rejects_local_paths():
+    from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import (
+        _validate_public_image_url,
+    )
+
+    for bad in ("/etc/passwd", "file:///etc/passwd", "../../etc/passwd"):
+        with pytest.raises(HTTPException) as exc_info:
+            _validate_public_image_url(bad, "logo_url")
+        assert exc_info.value.status_code == 400
+
+
+def test_validate_public_image_url_accepts_http_and_noop_empty():
+    from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import (
+        _validate_public_image_url,
+    )
+
+    _validate_public_image_url("https://example.com/logo.png", "logo_url")
+    _validate_public_image_url("http://cdn.internal/logo.svg", "logo_url")
+    _validate_public_image_url(None, "logo_url")
+    _validate_public_image_url("", "logo_url")
+    _validate_public_image_url("   ", "logo_url")

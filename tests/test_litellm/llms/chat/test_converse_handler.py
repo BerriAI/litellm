@@ -48,8 +48,8 @@ class TestBedrockRegionInModelPath:
                 "us-east-1",
             ),
             (
-                "us-west-2/anthropic.claude-3-5-sonnet-20241022-v2:0",
-                "anthropic.claude-3-5-sonnet-20241022-v2%3A0",
+                "us-west-2/anthropic.claude-haiku-4-5-20251001-v1:0",
+                "anthropic.claude-haiku-4-5-20251001-v1%3A0",
                 "us-west-2",
             ),
             # No region in path — modelId unchanged, no region injected
@@ -60,8 +60,8 @@ class TestBedrockRegionInModelPath:
             ),
             # Cross-region inference prefix (us., eu., ap.) — not a region path segment
             (
-                "us.anthropic.claude-3-5-sonnet-20241022-v2:0",
-                "us.anthropic.claude-3-5-sonnet-20241022-v2%3A0",
+                "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+                "us.anthropic.claude-haiku-4-5-20251001-v1%3A0",
                 None,
             ),
         ],

@@ -67,6 +67,32 @@ def test_cost_calculator_with_response_cost_in_additional_headers():
     assert result == 1000
 
 
+def test_baseten_model_api_pricing_entries():
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    expected_pricing = {
+        "baseten/nvidia/Nemotron-120B-A12B": (3e-07, 7.5e-07),
+        "baseten/MiniMaxAI/MiniMax-M2.5": (3e-07, 1.2e-06),
+        "baseten/zai-org/GLM-5": (9.5e-07, 3.15e-06),
+        "baseten/zai-org/GLM-4.7": (6e-07, 2.2e-06),
+        "baseten/zai-org/GLM-4.6": (6e-07, 2.2e-06),
+        "baseten/moonshotai/Kimi-K2.5": (6e-07, 3e-06),
+        "baseten/moonshotai/Kimi-K2-Thinking": (6e-07, 2.5e-06),
+        "baseten/moonshotai/Kimi-K2-Instruct-0905": (6e-07, 2.5e-06),
+        "baseten/openai/gpt-oss-120b": (1e-07, 5e-07),
+        "baseten/deepseek-ai/DeepSeek-V3.1": (5e-07, 1.5e-06),
+        "baseten/deepseek-ai/DeepSeek-V3-0324": (7.7e-07, 7.7e-07),
+    }
+
+    for model_name, (input_cost, output_cost) in expected_pricing.items():
+        model_info = litellm.model_cost.get(model_name)
+        assert model_info is not None, f"Missing model pricing entry: {model_name}"
+        assert model_info["litellm_provider"] == "baseten"
+        assert model_info["input_cost_per_token"] == input_cost
+        assert model_info["output_cost_per_token"] == output_cost
+
+
 def test_cost_calculator_with_usage(monkeypatch):
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
@@ -123,6 +149,7 @@ def test_cost_calculator_with_usage(monkeypatch):
 
     # Invalidate caches after modifying litellm.model_cost
     from litellm.utils import _invalidate_model_cost_lowercase_map
+
     _invalidate_model_cost_lowercase_map()
 
     result = response_cost_calculator(
@@ -528,9 +555,7 @@ def test_azure_audio_output_cost_calculation():
     model_info = litellm.get_model_info("azure/gpt-audio-2025-08-28")
 
     # Calculate expected cost
-    expected_input_cost = (
-        model_info["input_cost_per_token"] * 17  # text tokens
-    )
+    expected_input_cost = model_info["input_cost_per_token"] * 17  # text tokens
     expected_output_cost = (
         model_info["output_cost_per_token"] * 110  # text tokens
         + model_info["output_cost_per_audio_token"] * 482  # audio tokens
@@ -542,14 +567,14 @@ def test_azure_audio_output_cost_calculation():
     wrong_total_cost = expected_input_cost + wrong_output_cost
 
     # Verify audio tokens are NOT charged at text rate (the bug)
-    assert abs(cost - wrong_total_cost) > 0.001, (
-        "Bug: Audio tokens are being charged at text token rate"
-    )
+    assert (
+        abs(cost - wrong_total_cost) > 0.001
+    ), "Bug: Audio tokens are being charged at text token rate"
 
     # Verify cost matches
-    assert abs(cost - expected_total_cost) < 0.0000001, (
-        f"Expected cost {expected_total_cost}, got {cost}"
-    )
+    assert (
+        abs(cost - expected_total_cost) < 0.0000001
+    ), f"Expected cost {expected_total_cost}, got {cost}"
 
 
 def test_default_image_cost_calculator(monkeypatch):
@@ -1056,12 +1081,12 @@ def test_azure_ai_cache_cost_calculation():
     print(f"Output cost: {output_cost}, Expected: {expected_output_cost}")
     print(f"Total cost: {total_cost}")
 
-    assert abs(input_cost - expected_input_cost) < 1e-10, (
-        f"Input cost mismatch: got {input_cost}, expected {expected_input_cost}"
-    )
-    assert abs(output_cost - expected_output_cost) < 1e-10, (
-        f"Output cost mismatch: got {output_cost}, expected {expected_output_cost}"
-    )
+    assert (
+        abs(input_cost - expected_input_cost) < 1e-10
+    ), f"Input cost mismatch: got {input_cost}, expected {expected_input_cost}"
+    assert (
+        abs(output_cost - expected_output_cost) < 1e-10
+    ), f"Output cost mismatch: got {output_cost}, expected {expected_output_cost}"
 
 
 def test_cost_discount_vertex_ai():
@@ -1929,7 +1954,9 @@ def test_gemini_implicit_caching_cost_calculation():
         f"Cached tokens may not be using reduced pricing."
     )
 
-    print("✅ Issue #16341 fix verified: Gemini implicit caching cost calculated correctly")
+    print(
+        "✅ Issue #16341 fix verified: Gemini implicit caching cost calculated correctly"
+    )
 
 
 def test_additional_costs_only_for_azure_ai():

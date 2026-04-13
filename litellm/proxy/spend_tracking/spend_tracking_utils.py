@@ -90,6 +90,7 @@ def _get_spend_logs_metadata(
             user_api_key_alias=None,
             user_api_key_team_id=None,
             user_api_key_project_id=None,
+            user_api_key_project_alias=None,
             user_api_key_org_id=None,
             user_api_key_user_id=None,
             user_api_key_team_alias=None,
@@ -558,7 +559,8 @@ async def get_spend_by_team_and_customer(
         ON 
             sl.team_id = tt.team_id
         WHERE
-            sl."startTime" >= $1::timestamptz AND sl."startTime" < ($2::timestamptz + INTERVAL '1 day')
+            sl."startTime" >= ($1::timestamptz AT TIME ZONE 'UTC')
+            AND sl."startTime" <  (($2::timestamptz + INTERVAL '1 day') AT TIME ZONE 'UTC')
             AND sl.team_id = $3
             AND sl.end_user = $4
         GROUP BY

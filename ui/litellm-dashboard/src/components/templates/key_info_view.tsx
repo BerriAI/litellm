@@ -20,7 +20,7 @@ import NotificationManager from "../molecules/notifications_manager";
 import { getPolicyInfoWithGuardrails, keyDeleteCall, keyUpdateCall } from "../networking";
 import { useResetKeySpend } from "@/app/(dashboard)/hooks/keys/useResetKeySpend";
 import ObjectPermissionsView from "../object_permissions_view";
-import { RegenerateKeyModal } from "../organisms/regenerate_key_modal";
+import { RegenerateKeyModal } from "../organisms/RegenerateKeyModal";
 import { parseErrorMessage } from "../shared/errorUtils";
 import { KeyEditView } from "./key_edit_view";
 
@@ -160,11 +160,12 @@ export default function KeyInfoView({
       }
 
       if (formValues.mcp_servers_and_groups !== undefined) {
-        const { servers, accessGroups } = formValues.mcp_servers_and_groups || { servers: [], accessGroups: [] };
+        const { servers, accessGroups, toolsets } = formValues.mcp_servers_and_groups || { servers: [], accessGroups: [], toolsets: [] };
         formValues.object_permission = {
           ...currentKeyData.object_permission,
           mcp_servers: servers || [],
           mcp_access_groups: accessGroups || [],
+          mcp_toolsets: toolsets || [],
         };
         // Remove mcp_servers_and_groups from the top level as it should be in object_permission
         delete formValues.mcp_servers_and_groups;
