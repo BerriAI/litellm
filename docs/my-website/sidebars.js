@@ -1144,6 +1144,7 @@ const sidebars = {
       label: "Troubleshooting",
       items: [
         "troubleshoot/ui_issues",
+        "troubleshoot/cost_discrepancy",
         "mcp_troubleshoot",
         {
           type: "category",
