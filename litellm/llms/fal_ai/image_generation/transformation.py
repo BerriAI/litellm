@@ -50,6 +50,10 @@ class FalAIBaseConfig(BaseImageGenerationConfig):
         complete_url = complete_url.rstrip("/")
         if self.IMAGE_GENERATION_ENDPOINT:
             complete_url = f"{complete_url}/{self.IMAGE_GENERATION_ENDPOINT}"
+        else:
+            # Generic models need the model name in the URL path
+            # model arrives without provider prefix (e.g. "nano-banana-2/edit")
+            complete_url = f"{complete_url}/fal-ai/{model}"
         return complete_url
 
     def validate_environment(
@@ -128,12 +132,31 @@ class FalAIImageGenerationConfig(FalAIBaseConfig):
         self, model: str
     ) -> List[OpenAIImageGenerationOptionalParams]:
         """
-        Get supported OpenAI parameters for fal.ai image generation
+        Get supported OpenAI parameters for fal.ai image generation.
+
+        FAL models accept many model-specific params (loras, guidance_scale, etc.)
+        that vary by model. We list known params explicitly and pass through all
+        others in map_openai_params to avoid silently dropping them.
         """
         return [
             "n",
             "response_format",
             "size",
+            # FAL-specific params used across models
+            "image_url",
+            "image_urls",
+            "loras",
+            "num_inference_steps",
+            "guidance_scale",
+            "output_format",
+            "image_size",
+            "aspect_ratio",
+            "enable_safety_checker",
+            "seed",
+            "strength",
+            "num_images",
+            "expand_prompt",
+            "safety_tolerance",
         ]
 
     def map_openai_params(
@@ -143,18 +166,11 @@ class FalAIImageGenerationConfig(FalAIBaseConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
-        supported_params = self.get_supported_openai_params(model)
-        for k in non_default_params.keys():
-            if k not in optional_params.keys():
-                if k in supported_params:
-                    optional_params[k] = non_default_params[k]
-                elif drop_params:
-                    pass
-                else:
-                    raise ValueError(
-                        f"Parameter {k} is not supported for model {model}. Supported parameters are {supported_params}. Set drop_params=True to drop unsupported parameters."
-                    )
-
+        """Pass through all params for FAL. FAL models accept diverse model-specific
+        params that cannot be enumerated ahead of time."""
+        for k, v in non_default_params.items():
+            if k not in optional_params:
+                optional_params[k] = v
         return optional_params
 
     def transform_image_generation_request(

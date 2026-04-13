@@ -1,0 +1,112 @@
+# LiteLLM Proxy ConfigMap for dev namespace
+# Apply: kubectl apply -f k8s/dev-config.yaml -n dev
+# Restart: kubectl rollout restart deployment litellm -n dev
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: litellm-config
+  namespace: dev
+data:
+  config.yaml: |
+    model_list:
+      # --- FAL AI: Image Generation ---
+      - model_name: fal_ai/flux-2/klein/9b
+        litellm_params:
+          model: fal_ai/flux-2/klein/9b
+          api_key: os.environ/FAL_AI_API_KEY
+      - model_name: fal_ai/flux-2/klein/9b/base/edit/lora
+        litellm_params:
+          model: fal_ai/flux-2/klein/9b/base/edit/lora
+          api_key: os.environ/FAL_AI_API_KEY
+      - model_name: fal_ai/nano-banana-2
+        litellm_params:
+          model: fal_ai/nano-banana-2
+          api_key: os.environ/FAL_AI_API_KEY
+      - model_name: fal_ai/nano-banana-2/edit
+        litellm_params:
+          model: fal_ai/nano-banana-2/edit
+          api_key: os.environ/FAL_AI_API_KEY
+      - model_name: fal_ai/nano-banana-pro
+        litellm_params:
+          model: fal_ai/nano-banana-pro
+          api_key: os.environ/FAL_AI_API_KEY
+      - model_name: fal_ai/nano-banana-pro/edit
+        litellm_params:
+          model: fal_ai/nano-banana-pro/edit
+          api_key: os.environ/FAL_AI_API_KEY
+      - model_name: fal_ai/gemini-3-pro-image-preview
+        litellm_params:
+          model: fal_ai/gemini-3-pro-image-preview
+          api_key: os.environ/FAL_AI_API_KEY
+      - model_name: fal_ai/gemini-3-pro-image-preview/edit
+        litellm_params:
+          model: fal_ai/gemini-3-pro-image-preview/edit
+          api_key: os.environ/FAL_AI_API_KEY
+      - model_name: fal_ai/gemini-3.1-flash-image-preview
+        litellm_params:
+          model: fal_ai/gemini-3.1-flash-image-preview
+          api_key: os.environ/FAL_AI_API_KEY
+      - model_name: fal_ai/gemini-3.1-flash-image-preview/edit
+        litellm_params:
+          model: fal_ai/gemini-3.1-flash-image-preview/edit
+          api_key: os.environ/FAL_AI_API_KEY
+      - model_name: fal_ai/gemini-25-flash-image
+        litellm_params:
+          model: fal_ai/gemini-25-flash-image
+          api_key: os.environ/FAL_AI_API_KEY
+      - model_name: fal_ai/gemini-25-flash-image/edit
+        litellm_params:
+          model: fal_ai/gemini-25-flash-image/edit
+          api_key: os.environ/FAL_AI_API_KEY
+      - model_name: fal_ai/bytedance/seedream/v5/lite/text-to-image
+        litellm_params:
+          model: fal_ai/bytedance/seedream/v5/lite/text-to-image
+          api_key: os.environ/FAL_AI_API_KEY
+      - model_name: fal_ai/bytedance/seedream/v5/lite/edit
+        litellm_params:
+          model: fal_ai/bytedance/seedream/v5/lite/edit
+          api_key: os.environ/FAL_AI_API_KEY
+      - model_name: fal_ai/bytedance/seedream/v4.5/text-to-image
+        litellm_params:
+          model: fal_ai/bytedance/seedream/v4.5/text-to-image
+          api_key: os.environ/FAL_AI_API_KEY
+      - model_name: fal_ai/bytedance/seedream/v4.5/edit
+        litellm_params:
+          model: fal_ai/bytedance/seedream/v4.5/edit
+          api_key: os.environ/FAL_AI_API_KEY
+      - model_name: fal_ai/bytedance/seedream/v4/text-to-image
+        litellm_params:
+          model: fal_ai/bytedance/seedream/v4/text-to-image
+          api_key: os.environ/FAL_AI_API_KEY
+      - model_name: fal_ai/bytedance/seedream/v4/edit
+        litellm_params:
+          model: fal_ai/bytedance/seedream/v4/edit
+          api_key: os.environ/FAL_AI_API_KEY
+      - model_name: fal_ai/flux-pro/kontext
+        litellm_params:
+          model: fal_ai/flux-pro/kontext
+          api_key: os.environ/FAL_AI_API_KEY
+      - model_name: fal_ai/flux-pro
+        litellm_params:
+          model: fal_ai/flux-pro
+          api_key: os.environ/FAL_AI_API_KEY
+      - model_name: fal_ai/flux-2/klein/9b/edit
+        litellm_params:
+          model: fal_ai/flux-2/klein/9b/edit
+          api_key: os.environ/FAL_AI_API_KEY
+      - model_name: fal_ai/kling-image/omni
+        litellm_params:
+          model: fal_ai/kling-image/omni
+          api_key: os.environ/FAL_AI_API_KEY
+      - model_name: fal_ai/iclight-v2
+        litellm_params:
+          model: fal_ai/iclight-v2
+          api_key: os.environ/FAL_AI_API_KEY
+
+    general_settings:
+      master_key: os.environ/LITELLM_MASTER_KEY
+      database_url: os.environ/DATABASE_URL
+
+    litellm_settings:
+      drop_params: true
+      telemetry: false
