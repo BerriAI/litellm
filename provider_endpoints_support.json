@@ -471,7 +471,9 @@
         "audio_speech": false,
         "moderations": false,
         "batches": false,
-        "rerank": false
+        "rerank": false,
+        "a2a": false,
+        "interactions": false
       }
     },
     "chutes": {
@@ -2557,8 +2559,8 @@
       "url": "https://docs.litellm.ai/docs/providers/rapid_mlx",
       "endpoints": {
         "chat_completions": true,
-        "messages": true,
-        "responses": true,
+        "messages": false,
+        "responses": false,
         "embeddings": false,
         "image_generations": false,
         "audio_transcriptions": false,
