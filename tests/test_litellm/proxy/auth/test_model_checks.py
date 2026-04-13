@@ -312,3 +312,43 @@ def test_get_complete_model_list_keeps_provider_qualified_models():
     )
 
     assert result == ["bedrock/very_new_model"]
+
+
+def test_get_complete_model_list_keeps_json_registry_provider_models():
+    """
+    JSON-registry-only providers should also survive filtering even when the
+    exact model name is not present in LiteLLM's static model list.
+    """
+    from litellm.proxy.auth.model_checks import get_complete_model_list
+
+    result = get_complete_model_list(
+        key_models=["publicai/some-new-model"],
+        team_models=[],
+        proxy_model_list=[],
+        user_model=None,
+        infer_model_from_keys=False,
+        model_access_groups={},
+    )
+
+    assert result == ["publicai/some-new-model"]
+
+
+def test_get_complete_model_list_keeps_openai_finetune_model_ids():
+    """
+    OpenAI fine-tuned model IDs are dynamic valid models and should remain in
+    the final list even though they are not in LiteLLM's static model list.
+    """
+    from litellm.proxy.auth.model_checks import get_complete_model_list
+
+    finetuned_model = "ft:gpt-4o:my-org:custom-suffix:model-id"
+
+    result = get_complete_model_list(
+        key_models=[finetuned_model],
+        team_models=[],
+        proxy_model_list=[],
+        user_model=None,
+        infer_model_from_keys=False,
+        model_access_groups={},
+    )
+
+    assert result == [finetuned_model]

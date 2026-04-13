@@ -4,12 +4,11 @@ from typing import Dict, List, Optional, Set
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.proxy._types import SpecialModelNames, UserAPIKeyAuth
 from litellm.router import Router
 from litellm.router_utils.fallback_event_handlers import get_fallback_model_group
 from litellm.types.router import LiteLLM_Params
-from litellm.types.utils import LlmProvidersSet
 from litellm.utils import get_valid_models
 
 
@@ -66,24 +65,22 @@ def _get_models_from_access_groups(
     return all_models
 
 
-def _is_known_provider_qualified_model(model: str) -> bool:
+def _is_resolvable_dynamic_model(model: str) -> bool:
     """
-    Return True for provider-qualified model identifiers such as:
-    - openai/gpt-4o-mini
-    - bedrock/us.amazon.nova-micro-v1:0
-    - openrouter/auto
+    Return True for model identifiers that LiteLLM can still resolve even when
+    they are not present in the static model list.
 
-    This intentionally allows provider-prefixed models even when the exact
-    model name is not yet in LiteLLM's static model list, since those routes
-    may still be valid for pass-through / BYOK flows.
+    This covers:
+    - provider-qualified routes such as `bedrock/us.amazon.nova-micro-v1:0`
+      or JSON-registry providers such as `publicai/some-new-model`
+    - dynamic model identifiers such as OpenAI fine-tunes
+      (`ft:gpt-4o:my-org:custom:id`)
     """
-    if "/" not in model:
+    try:
+        get_llm_provider(model=model)
+        return True
+    except Exception:
         return False
-
-    provider_prefix = model.split("/", 1)[0]
-    return provider_prefix in LlmProvidersSet or JSONProviderRegistry.exists(
-        provider_prefix
-    )
 
 
 def _should_include_model_in_complete_list(
@@ -99,11 +96,12 @@ def _should_include_model_in_complete_list(
     - configured proxy model groups
     - configured access group names
     - known base model IDs (e.g. gpt-4o-mini)
-    - known provider-qualified routes (e.g. openai/gpt-4o-mini, bedrock/*)
+    - provider-qualified or other dynamically resolvable model IDs
+      (e.g. openai/gpt-4o-mini, publicai/foo, ft:gpt-4o:org:suffix:id)
 
     Drop:
     - arbitrary strings that don't resolve to a proxy model, access group, or
-      a recognized LiteLLM/provider model route.
+      a recognized LiteLLM model route.
     """
     if model in (
         SpecialModelNames.all_proxy_models.value,
@@ -120,7 +118,7 @@ def _should_include_model_in_complete_list(
     if model == "*":
         return True
 
-    if _is_known_provider_qualified_model(model):
+    if _is_resolvable_dynamic_model(model):
         return True
 
     return False
