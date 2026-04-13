@@ -17,7 +17,7 @@ import { useGuardrails } from "@/app/(dashboard)/hooks/guardrails/useGuardrails"
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { mapEmptyStringToNull } from "@/utils/keyUpdateUtils";
 import { isProxyAdminRole } from "@/utils/roles";
-import { EditOutlined, InfoCircleOutlined, MinusCircleOutlined, PlusOutlined, SaveOutlined } from "@ant-design/icons";
+import { EditOutlined, GlobalOutlined, InfoCircleOutlined, MinusCircleOutlined, PlusOutlined, SaveOutlined } from "@ant-design/icons";
 import { ArrowLeftIcon } from "@heroicons/react/outline";
 import { Badge, Card, Grid, Text, TextInput, Title } from "@tremor/react";
 import { Button, Form, Input, InputNumber, Select, Space, Switch, Tabs, Tag, Tooltip } from "antd";
@@ -625,17 +625,21 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
     e.stopPropagation();
   };
 
-  const renderGuardrailTag = ({ label, value, closable, onClose }: any) => (
-    <Tag
-      color={globalGuardrailNames.has(value) ? "green" : "blue"}
-      closable={closable}
-      onClose={onClose}
-      onMouseDown={preventTagMouseDown}
-      style={{ marginInlineEnd: 4 }}
-    >
-      {label}
-    </Tag>
-  );
+  const renderGuardrailTag = ({ label, value, closable, onClose }: any) => {
+    const isGlobal = globalGuardrailNames.has(value);
+    return (
+      <Tag
+        color={isGlobal ? "green" : "blue"}
+        closable={closable}
+        onClose={onClose}
+        onMouseDown={preventTagMouseDown}
+        style={{ marginInlineEnd: 4 }}
+      >
+        {isGlobal && <GlobalOutlined style={{ marginInlineEnd: 4 }} aria-label="Global guardrail" />}
+        {label}
+      </Tag>
+    );
+  };
 
   const copyToClipboard = async (text: string, key: string) => {
     const success = await utilCopyToClipboard(text);
@@ -770,8 +774,13 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     <div className="flex flex-wrap gap-2">
                       {effectiveGuardrails.map((name) => (
                         <Badge key={name} color="blue">
+                          {globalGuardrailNames.has(name) && (
+                            <GlobalOutlined
+                              style={{ marginInlineEnd: 4 }}
+                              aria-label="Global guardrail"
+                            />
+                          )}
                           {name}
-                          {globalGuardrailNames.has(name) ? " · Global" : ""}
                         </Badge>
                       ))}
                     </div>
@@ -1151,7 +1160,14 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                         optionLabelProp="label"
                         tagRender={renderGuardrailTag}
                       >
-                        <Select.OptGroup label="Global">
+                        <Select.OptGroup
+                          label={
+                            <>
+                              <GlobalOutlined style={{ marginInlineEnd: 4 }} />
+                              Global
+                            </>
+                          }
+                        >
                           {(guardrailsData?.guardrails ?? [])
                             .filter((g) => g.litellm_params?.default_on)
                             .map((g) => (
