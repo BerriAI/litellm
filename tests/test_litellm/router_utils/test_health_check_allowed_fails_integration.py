@@ -48,7 +48,8 @@ class TestHealthCheckEndpointExceptionPropagation:
     @pytest.mark.asyncio
     async def test_unhealthy_endpoint_dict_exception_in_map(self):
         """When ahealth_check returns {"error": ..., "exception": e}, the exception
-        must appear in exceptions_by_model_id keyed by model_id — not in the endpoint dict."""
+        must appear in exceptions_by_model_id keyed by model_id — not in the endpoint dict.
+        """
         from unittest.mock import AsyncMock, patch
 
         from litellm.proxy.health_check import _perform_health_check
@@ -66,7 +67,9 @@ class TestHealthCheckEndpointExceptionPropagation:
 
         with patch(
             "litellm.proxy.health_check.litellm.ahealth_check",
-            new=AsyncMock(return_value={"error": "auth failed", "exception": auth_error}),
+            new=AsyncMock(
+                return_value={"error": "auth failed", "exception": auth_error}
+            ),
         ):
             healthy, unhealthy, exc_map = await _perform_health_check(model_list)
 
@@ -787,3 +790,131 @@ class TestSharedCacheTransientErrorFilter:
 
         unhealthy_ids = router.health_state_cache.get_unhealthy_deployment_ids()
         assert "deploy-1" in unhealthy_ids
+
+
+def _make_ordered_model(
+    model_id: str, model_name: str, order: int, api_key: str = "fake-key"
+) -> dict:
+    return {
+        "model_name": model_name,
+        "litellm_params": {
+            "model": model_name,
+            "api_key": api_key,
+            "order": order,
+        },
+        "model_info": {"id": model_id},
+    }
+
+
+class TestTransientErrorSkipsOrderFallback:
+    """
+    When health_check_ignore_transient_errors=True and the error is transient
+    (429, 408, 529), order-based fallback should be skipped — the error is
+    returned directly to the caller instead of falling back to the next order.
+    """
+
+    @pytest.mark.asyncio
+    async def test_529_no_order_fallback_when_flag_enabled(self):
+        """529 from order-1 should NOT fallback to order-2 when flag is True."""
+        router = Router(
+            model_list=[
+                _make_ordered_model("deploy-1", "openai/gpt-4", order=1),
+                _make_ordered_model("deploy-2", "openai/gpt-4", order=2),
+            ],
+            health_check_ignore_transient_errors=True,
+            num_retries=0,
+        )
+
+        overloaded_exc = litellm.InternalServerError(
+            message="Overloaded",
+            model="openai/gpt-4",
+            llm_provider="openai",
+        )
+        overloaded_exc.status_code = 529
+
+        async def mock_make_call(*args, **kwargs):
+            raise overloaded_exc
+
+        with patch.object(router, "make_call", side_effect=mock_make_call):
+            with pytest.raises(litellm.InternalServerError) as exc_info:
+                await router.acompletion(
+                    model="openai/gpt-4",
+                    messages=[{"role": "user", "content": "hi"}],
+                )
+            assert exc_info.value.status_code == 529
+
+    @pytest.mark.asyncio
+    async def test_529_falls_back_when_flag_disabled(self):
+        """529 from order-1 SHOULD fallback to order-2 when flag is False (default)."""
+        router = Router(
+            model_list=[
+                _make_ordered_model("deploy-1", "openai/gpt-4", order=1),
+                _make_ordered_model("deploy-2", "openai/gpt-4", order=2),
+            ],
+            health_check_ignore_transient_errors=False,
+            num_retries=0,
+        )
+
+        overloaded_exc = litellm.InternalServerError(
+            message="Overloaded",
+            model="openai/gpt-4",
+            llm_provider="openai",
+        )
+        overloaded_exc.status_code = 529
+
+        success_response = litellm.ModelResponse(
+            id="chatcmpl-123",
+            choices=[
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "hello"},
+                    "finish_reason": "stop",
+                }
+            ],
+            model="openai/gpt-4",
+        )
+
+        call_count = 0
+
+        async def mock_make_call(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                raise overloaded_exc
+            return success_response
+
+        with patch.object(router, "make_call", side_effect=mock_make_call):
+            response = await router.acompletion(
+                model="openai/gpt-4",
+                messages=[{"role": "user", "content": "hi"}],
+            )
+            assert response.id == "chatcmpl-123"
+
+    @pytest.mark.asyncio
+    async def test_429_no_order_fallback_when_flag_enabled(self):
+        """429 from order-1 should NOT fallback to order-2 when flag is True."""
+        router = Router(
+            model_list=[
+                _make_ordered_model("deploy-1", "openai/gpt-4", order=1),
+                _make_ordered_model("deploy-2", "openai/gpt-4", order=2),
+            ],
+            health_check_ignore_transient_errors=True,
+            num_retries=0,
+        )
+
+        rate_limit_exc = litellm.RateLimitError(
+            message="Rate limited",
+            model="openai/gpt-4",
+            llm_provider="openai",
+        )
+
+        async def mock_make_call(*args, **kwargs):
+            raise rate_limit_exc
+
+        with patch.object(router, "make_call", side_effect=mock_make_call):
+            with pytest.raises(Exception) as exc_info:
+                await router.acompletion(
+                    model="openai/gpt-4",
+                    messages=[{"role": "user", "content": "hi"}],
+                )
+            assert getattr(exc_info.value, "status_code", None) == 429

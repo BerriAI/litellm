@@ -3864,7 +3864,7 @@ class Router:
             self._add_deployment_model_to_endpoint_for_llm_passthrough_route(
                 kwargs=kwargs, model=model, model_name=model_name
             )
-            
+
             # Get custom_llm_provider from deployment params
             try:
                 custom_llm_provider = data.get("custom_llm_provider")
@@ -3872,10 +3872,12 @@ class Router:
                     model=data["model"],
                     custom_llm_provider=custom_llm_provider,
                 )
-                custom_llm_provider = custom_llm_provider or inferred_custom_llm_provider
+                custom_llm_provider = (
+                    custom_llm_provider or inferred_custom_llm_provider
+                )
             except Exception:
                 custom_llm_provider = None
-            
+
             # Build response kwargs
             response_kwargs = {
                 **data,
@@ -3885,7 +3887,7 @@ class Router:
             # Only set custom_llm_provider if it's not None
             if custom_llm_provider is not None:
                 response_kwargs["custom_llm_provider"] = custom_llm_provider
-            
+
             response = original_generic_function(**response_kwargs)
 
             rpm_semaphore = self._get_client(
@@ -3981,7 +3983,9 @@ class Router:
                     model=data["model"],
                     custom_llm_provider=custom_llm_provider,
                 )
-                custom_llm_provider = custom_llm_provider or inferred_custom_llm_provider
+                custom_llm_provider = (
+                    custom_llm_provider or inferred_custom_llm_provider
+                )
             except Exception:
                 custom_llm_provider = None
 
@@ -4246,7 +4250,9 @@ class Router:
                     custom_llm_provider=custom_llm_provider,
                 )
                 # Preserve explicitly stored provider, fallback to inferred
-                custom_llm_provider = custom_llm_provider or inferred_custom_llm_provider
+                custom_llm_provider = (
+                    custom_llm_provider or inferred_custom_llm_provider
+                )
 
                 ## REPLACE MODEL IN FILE WITH SELECTED DEPLOYMENT ##
                 purpose = cast(Optional[OpenAIFilesPurpose], kwargs.get("purpose"))
@@ -5355,9 +5361,18 @@ class Router:
             e,
             (litellm.ContextWindowExceededError, litellm.ContentPolicyViolationError),
         )
-        _request_team_id: Optional[str] = (
-            kwargs.get("metadata", {}) or {}
-        ).get("user_api_key_team_id")
+
+        # When health_check_ignore_transient_errors is enabled, transient errors
+        # (429, 408, 529) should not trigger order-based fallback — return the
+        # error to the caller instead.
+        if not _skip_order_fallback and self.health_check_ignore_transient_errors:
+            _exc_status = getattr(e, "status_code", None)
+            if _exc_status in (429, 408, 529):
+                _skip_order_fallback = True
+
+        _request_team_id: Optional[str] = (kwargs.get("metadata", {}) or {}).get(
+            "user_api_key_team_id"
+        )
         all_deployments = self._get_all_deployments(
             model_name=original_model_group, team_id=_request_team_id
         )
