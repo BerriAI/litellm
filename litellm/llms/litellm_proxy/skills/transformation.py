@@ -103,7 +103,8 @@ class LiteLLMSkillsTransformationHandler:
 
         import asyncio
 
-        return asyncio.get_event_loop().run_until_complete(
+        loop = asyncio.get_event_loop()
+        return loop.run_until_complete(
             self._async_create_skill(
                 display_title=display_title,
                 description=description,
@@ -186,7 +187,8 @@ class LiteLLMSkillsTransformationHandler:
 
         import asyncio
 
-        return asyncio.get_event_loop().run_until_complete(
+        loop = asyncio.get_event_loop()
+        return loop.run_until_complete(
             self._async_list_skills(limit=limit, offset=offset)
         )
 
@@ -246,9 +248,8 @@ class LiteLLMSkillsTransformationHandler:
 
         import asyncio
 
-        return asyncio.get_event_loop().run_until_complete(
-            self._async_get_skill(skill_id=skill_id)
-        )
+        loop = asyncio.get_event_loop()
+        return loop.run_until_complete(self._async_get_skill(skill_id=skill_id))
 
     async def _async_get_skill(self, skill_id: str) -> Skill:
         """Async implementation of get_skill."""
@@ -293,9 +294,8 @@ class LiteLLMSkillsTransformationHandler:
 
         import asyncio
 
-        return asyncio.get_event_loop().run_until_complete(
-            self._async_delete_skill(skill_id=skill_id)
-        )
+        loop = asyncio.get_event_loop()
+        return loop.run_until_complete(self._async_delete_skill(skill_id=skill_id))
 
     async def _async_delete_skill(self, skill_id: str) -> DeleteSkillResponse:
         """Async implementation of delete_skill."""

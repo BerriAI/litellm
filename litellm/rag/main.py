@@ -157,7 +157,7 @@ async def aingest(
     """
     local_vars = locals()
     try:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         kwargs["aingest"] = True
 
         func = partial(
@@ -284,7 +284,7 @@ async def aquery(
     """
     local_vars = locals()
     try:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         kwargs["aquery"] = True
 
         func = partial(

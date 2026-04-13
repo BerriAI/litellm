@@ -475,7 +475,7 @@ async def acompletion(  # noqa: PLR0915
     if mock_timeout is True:
         await _handle_mock_timeout_async(mock_timeout, timeout, model)
 
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     custom_llm_provider = kwargs.get("custom_llm_provider", None)
 
     ## PROMPT MANAGEMENT HOOKS ##
@@ -4557,7 +4557,7 @@ async def aembedding(*args, **kwargs) -> EmbeddingResponse:
     Returns:
     - `response` (Any): The response returned by the `embedding` function.
     """
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     model = args[0] if len(args) > 0 else kwargs["model"]
     ### PASS ARGS TO Embedding ###
     kwargs["aembedding"] = True
@@ -5806,7 +5806,7 @@ async def atext_completion(
     """
     Implemented to handle async streaming for the text completion endpoint
     """
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     model = args[0] if len(args) > 0 else kwargs["model"]
     ### PASS ARGS TO COMPLETION ###
     kwargs["acompletion"] = True
@@ -6349,7 +6349,7 @@ async def atranscription(*args, **kwargs) -> TranscriptionResponse:
 
     Allows router to load balance between them
     """
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     model = args[0] if len(args) > 0 else kwargs["model"]
     ### PASS ARGS TO Image Generation ###
     kwargs["atranscription"] = True
@@ -6376,8 +6376,7 @@ async def atranscription(*args, **kwargs) -> TranscriptionResponse:
         elif asyncio.iscoroutine(init_response):
             response = await init_response  # type: ignore
         else:
-            # Call the synchronous function using run_in_executor
-            response = await loop.run_in_executor(None, func_with_context)
+            response = init_response  # type: ignore
         if not isinstance(response, TranscriptionResponse):
             raise ValueError(
                 f"Invalid response from transcription provider, expected TranscriptionResponse, but got {type(response)}"
@@ -6635,7 +6634,7 @@ async def aspeech(*args, **kwargs) -> HttpxBinaryResponseContent:
     """
     Calls openai tts endpoints.
     """
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     model = args[0] if len(args) > 0 else kwargs["model"]
     ### PASS ARGS TO Image Generation ###
     kwargs["aspeech"] = True
@@ -6657,8 +6656,7 @@ async def aspeech(*args, **kwargs) -> HttpxBinaryResponseContent:
         if asyncio.iscoroutine(init_response):
             response = await init_response
         else:
-            # Call the synchronous function using run_in_executor
-            response = await loop.run_in_executor(None, func_with_context)
+            response = init_response
         return response  # type: ignore
     except Exception as e:
         custom_llm_provider = custom_llm_provider or "openai"

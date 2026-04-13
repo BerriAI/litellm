@@ -59,7 +59,7 @@ async def allm_passthrough_route(
     Async: Reranks a list of documents based on their relevance to the query
     """
     try:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         kwargs["allm_passthrough_route"] = True
 
         model, custom_llm_provider, api_key, api_base = get_llm_provider(

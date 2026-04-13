@@ -19,7 +19,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.proxy._types import *
-from litellm.proxy.auth.auth_checks import can_user_call_model, get_user_object
+from litellm.proxy.auth.auth_checks import can_user_call_model
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.management_endpoints.budget_management_endpoints import (
     new_budget,
@@ -44,53 +44,6 @@ from litellm.types.proxy.management_endpoints.common_daily_activity import (
 from litellm.utils import _update_dictionary
 
 router = APIRouter()
-
-
-async def _verify_org_access(
-    organization_id: str,
-    user_api_key_dict: UserAPIKeyAuth,
-    prisma_client: PrismaClient,
-) -> None:
-    """
-    Verify the caller is either a proxy admin or an org admin of the given organization.
-
-    Raises HTTPException(403) if the caller does not have access.
-    """
-    if _user_has_admin_view(user_api_key_dict):
-        return
-
-    if not user_api_key_dict.user_id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="You do not have access to this organization",
-        )
-
-    from litellm.proxy.proxy_server import proxy_logging_obj, user_api_key_cache
-
-    caller_user = await get_user_object(
-        user_id=user_api_key_dict.user_id,
-        prisma_client=prisma_client,
-        user_api_key_cache=user_api_key_cache,
-        user_id_upsert=False,
-        proxy_logging_obj=proxy_logging_obj,
-    )
-    if caller_user is None:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="You do not have access to this organization",
-        )
-
-    for m in caller_user.organization_memberships or []:
-        if (
-            m.organization_id == organization_id
-            and m.user_role == LitellmUserRoles.ORG_ADMIN.value
-        ):
-            return
-
-    raise HTTPException(
-        status_code=status.HTTP_403_FORBIDDEN,
-        detail="You do not have access to this organization",
-    )
 
 
 def handle_nested_budget_structure_in_organization_update_request(
@@ -764,10 +717,7 @@ async def list_organization(
     dependencies=[Depends(user_api_key_auth)],
     response_model=LiteLLM_OrganizationTableWithMembers,
 )
-async def info_organization(
-    organization_id: str,
-    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-):
+async def info_organization(organization_id: str):
     """
     Get the org specific information
     """
@@ -776,27 +726,20 @@ async def info_organization(
     if prisma_client is None:
         raise HTTPException(status_code=500, detail={"error": "No db connected"})
 
-    # Verify caller has access to this organization
-    await _verify_org_access(
-        organization_id=organization_id,
-        user_api_key_dict=user_api_key_dict,
-        prisma_client=prisma_client,
-    )
-
-    response: Optional[
-        LiteLLM_OrganizationTableWithMembers
-    ] = await prisma_client.db.litellm_organizationtable.find_unique(
-        where={"organization_id": organization_id},
-        include={
-            "litellm_budget_table": True,
-            "members": {
-                "include": {
-                    "user": True,
-                }
+    response: Optional[LiteLLM_OrganizationTableWithMembers] = (
+        await prisma_client.db.litellm_organizationtable.find_unique(
+            where={"organization_id": organization_id},
+            include={
+                "litellm_budget_table": True,
+                "members": {
+                    "include": {
+                        "user": True,
+                    }
+                },
+                "teams": True,
+                "object_permission": True,
             },
-            "teams": True,
-            "object_permission": True,
-        },
+        )
     )
 
     if response is None:
@@ -814,10 +757,7 @@ async def info_organization(
     tags=["organization management"],
     dependencies=[Depends(user_api_key_auth)],
 )
-async def deprecated_info_organization(
-    data: OrganizationRequest,
-    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-):
+async def deprecated_info_organization(data: OrganizationRequest):
     """
     DEPRECATED: Use GET /organization/info instead
     """
@@ -833,15 +773,6 @@ async def deprecated_info_organization(
                 "error": f"Specify list of organization id's to query. Passed in={data.organizations}"
             },
         )
-
-    # Verify caller has access to each requested organization
-    for org_id in data.organizations:
-        await _verify_org_access(
-            organization_id=org_id,
-            user_api_key_dict=user_api_key_dict,
-            prisma_client=prisma_client,
-        )
-
     response = await prisma_client.db.litellm_organizationtable.find_many(
         where={"organization_id": {"in": data.organizations}},
         include={"litellm_budget_table": True},
@@ -1104,16 +1035,16 @@ async def organization_member_update(
                 },
                 data={"budget_id": budget_id},
             )
-        final_organization_membership: Optional[
-            BaseModel
-        ] = await prisma_client.db.litellm_organizationmembership.find_unique(
-            where={
-                "user_id_organization_id": {
-                    "user_id": data.user_id,
-                    "organization_id": data.organization_id,
-                }
-            },
-            include={"litellm_budget_table": True},
+        final_organization_membership: Optional[BaseModel] = (
+            await prisma_client.db.litellm_organizationmembership.find_unique(
+                where={
+                    "user_id_organization_id": {
+                        "user_id": data.user_id,
+                        "organization_id": data.organization_id,
+                    }
+                },
+                include={"litellm_budget_table": True},
+            )
         )
 
         if final_organization_membership is None:

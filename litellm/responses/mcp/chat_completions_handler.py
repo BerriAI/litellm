@@ -556,7 +556,7 @@ async def acompletion_with_mcp(  # noqa: PLR0915
                     import asyncio
 
                     try:
-                        self._sync_loop = asyncio.get_event_loop()
+                        self._sync_loop = asyncio.get_running_loop()
                     except RuntimeError:
                         self._sync_loop = asyncio.new_event_loop()
                         asyncio.set_event_loop(self._sync_loop)

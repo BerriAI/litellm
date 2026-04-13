@@ -8,12 +8,13 @@
 #  Thank you users! We ❤️ you! - Krrish & Ishaan
 
 import ast
+import asyncio
 import hashlib
 import json
 import time
 import traceback
 from enum import Enum
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple, Union
 
 from pydantic import BaseModel
 
@@ -22,7 +23,13 @@ from litellm._logging import verbose_logger
 from litellm.constants import CACHED_STREAMING_CHUNK_DELAY
 from litellm.litellm_core_utils.model_param_helper import ModelParamHelper
 from litellm.types.caching import *
-from litellm.types.utils import EmbeddingResponse, all_litellm_params
+from litellm.types.utils import (
+    Delta,
+    EmbeddingResponse,
+    ModelResponseStream,
+    StreamingChoices,
+    all_litellm_params,
+)
 
 from .azure_blob_cache import AzureBlobCache
 from .base_cache import BaseCache
@@ -453,6 +460,23 @@ class Cache:
                 ]
             }
             time.sleep(CACHED_STREAMING_CHUNK_DELAY)
+
+    async def async_generate_streaming_content(
+        self, content: str
+    ) -> AsyncGenerator[ModelResponseStream, None]:
+        chunk_size = 5  # Adjust the chunk size as needed
+        for i in range(0, len(content), chunk_size):
+            yield ModelResponseStream(
+                choices=[
+                    StreamingChoices(
+                        delta=Delta(
+                            role="assistant",
+                            content=content[i : i + chunk_size],
+                        )
+                    )
+                ]
+            )
+            await asyncio.sleep(CACHED_STREAMING_CHUNK_DELAY)
 
     def _get_cache_logic(
         self,

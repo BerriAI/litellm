@@ -180,9 +180,9 @@ async def _save_vector_store_to_db_from_rag_ingest(
                 vector_store_name=vector_store_name,
                 vector_store_description=vector_store_description,
                 vector_store_metadata=initial_metadata,
-                litellm_params=provider_specific_params
-                if provider_specific_params
-                else None,
+                litellm_params=(
+                    provider_specific_params if provider_specific_params else None
+                ),
                 team_id=user_api_key_dict.team_id,
                 user_id=user_api_key_dict.user_id,
             )

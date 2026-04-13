@@ -34,7 +34,7 @@ class PatternUtils:
 
     @staticmethod
     def sorted_patterns(
-        patterns: Dict[str, List[Dict]]
+        patterns: Dict[str, List[Dict]],
     ) -> List[Tuple[str, List[Dict]]]:
         """
         Cached property for patterns sorted by specificity.
@@ -105,11 +105,13 @@ class PatternMatchRouter:
         new_deployments = []
         for deployment in deployments:
             new_deployment = copy.deepcopy(deployment)
-            new_deployment["litellm_params"][
-                "model"
-            ] = PatternMatchRouter.set_deployment_model_name(
-                matched_pattern=matched_pattern,
-                litellm_deployment_litellm_model=deployment["litellm_params"]["model"],
+            new_deployment["litellm_params"]["model"] = (
+                PatternMatchRouter.set_deployment_model_name(
+                    matched_pattern=matched_pattern,
+                    litellm_deployment_litellm_model=deployment["litellm_params"][
+                        "model"
+                    ],
+                )
             )
             new_deployments.append(new_deployment)
 

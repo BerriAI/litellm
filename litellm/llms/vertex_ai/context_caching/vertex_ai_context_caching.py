@@ -93,9 +93,9 @@ class ContextCachingEndpoints(VertexBase):
             model=model,
             vertex_project=vertex_project,
             vertex_location=vertex_location,
-            vertex_api_version="v1beta1"
-            if custom_llm_provider == "vertex_ai_beta"
-            else "v1",
+            vertex_api_version=(
+                "v1beta1" if custom_llm_provider == "vertex_ai_beta" else "v1"
+            ),
         )
 
     def check_cache(

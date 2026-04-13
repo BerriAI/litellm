@@ -39,7 +39,7 @@ async def aget_assistants(
     client: Optional[AsyncOpenAI] = None,
     **kwargs,
 ) -> AsyncCursorPage[Assistant]:
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     ### PASS ARGS TO GET ASSISTANTS ###
     kwargs["aget_assistants"] = True
     try:
@@ -210,7 +210,7 @@ async def acreate_assistants(
     client: Optional[AsyncOpenAI] = None,
     **kwargs,
 ) -> Assistant:
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     ### PASS ARGS TO GET ASSISTANTS ###
     kwargs["async_create_assistants"] = True
     model = kwargs.pop("model", None)
@@ -411,7 +411,7 @@ async def adelete_assistant(
     client: Optional[AsyncOpenAI] = None,
     **kwargs,
 ) -> AssistantDeleted:
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     ### PASS ARGS TO GET ASSISTANTS ###
     kwargs["async_delete_assistants"] = True
     try:
@@ -591,7 +591,7 @@ def delete_assistant(
 async def acreate_thread(
     custom_llm_provider: Literal["openai", "azure"], **kwargs
 ) -> Thread:
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     ### PASS ARGS TO GET ASSISTANTS ###
     kwargs["acreate_thread"] = True
     try:
@@ -773,7 +773,7 @@ async def aget_thread(
     client: Optional[AsyncOpenAI] = None,
     **kwargs,
 ) -> Thread:
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     ### PASS ARGS TO GET ASSISTANTS ###
     kwargs["aget_thread"] = True
     try:
@@ -935,7 +935,7 @@ async def a_add_message(
     client=None,
     **kwargs,
 ) -> OpenAIMessage:
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     ### PASS ARGS TO GET ASSISTANTS ###
     kwargs["a_add_message"] = True
     try:
@@ -1116,7 +1116,7 @@ async def aget_messages(
     client: Optional[AsyncOpenAI] = None,
     **kwargs,
 ) -> AsyncCursorPage[OpenAIMessage]:
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     ### PASS ARGS TO GET ASSISTANTS ###
     kwargs["aget_messages"] = True
     try:
@@ -1293,7 +1293,7 @@ async def arun_thread(
     client: Optional[Any] = None,
     **kwargs,
 ) -> Run:
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     ### PASS ARGS TO GET ASSISTANTS ###
     kwargs["arun_thread"] = True
     try:

@@ -228,7 +228,7 @@ async def agenerate_content(
     """
     local_vars = locals()
     try:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         kwargs["agenerate_content"] = True
 
         # Handle generationConfig parameter from kwargs for backward compatibility

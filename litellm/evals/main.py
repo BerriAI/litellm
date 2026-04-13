@@ -71,7 +71,7 @@ async def acreate_eval(
     """
     local_vars = locals()
     try:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         kwargs["acreate_eval"] = True
 
         func = partial(
@@ -152,10 +152,10 @@ def create_eval(
             custom_llm_provider = "openai"
 
         # Get provider config
-        evals_api_provider_config: Optional[
-            BaseEvalsAPIConfig
-        ] = ProviderConfigManager.get_provider_evals_api_config(  # type: ignore
-            provider=litellm.LlmProviders(custom_llm_provider),
+        evals_api_provider_config: Optional[BaseEvalsAPIConfig] = (
+            ProviderConfigManager.get_provider_evals_api_config(  # type: ignore
+                provider=litellm.LlmProviders(custom_llm_provider),
+            )
         )
 
         if evals_api_provider_config is None:
@@ -262,7 +262,7 @@ async def alist_evals(
     """
     local_vars = locals()
     try:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         kwargs["alist_evals"] = True
 
         func = partial(
@@ -343,10 +343,10 @@ def list_evals(
             custom_llm_provider = "openai"
 
         # Get provider config
-        evals_api_provider_config: Optional[
-            BaseEvalsAPIConfig
-        ] = ProviderConfigManager.get_provider_evals_api_config(  # type: ignore
-            provider=litellm.LlmProviders(custom_llm_provider),
+        evals_api_provider_config: Optional[BaseEvalsAPIConfig] = (
+            ProviderConfigManager.get_provider_evals_api_config(  # type: ignore
+                provider=litellm.LlmProviders(custom_llm_provider),
+            )
         )
 
         if evals_api_provider_config is None:
@@ -444,7 +444,7 @@ async def aget_eval(
     """
     local_vars = locals()
     try:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         kwargs["aget_eval"] = True
 
         func = partial(
@@ -513,10 +513,10 @@ def get_eval(
             custom_llm_provider = "openai"
 
         # Get provider config
-        evals_api_provider_config: Optional[
-            BaseEvalsAPIConfig
-        ] = ProviderConfigManager.get_provider_evals_api_config(  # type: ignore
-            provider=litellm.LlmProviders(custom_llm_provider),
+        evals_api_provider_config: Optional[BaseEvalsAPIConfig] = (
+            ProviderConfigManager.get_provider_evals_api_config(  # type: ignore
+                provider=litellm.LlmProviders(custom_llm_provider),
+            )
         )
 
         if evals_api_provider_config is None:
@@ -604,7 +604,7 @@ async def aupdate_eval(
     """
     local_vars = locals()
     try:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         kwargs["aupdate_eval"] = True
 
         func = partial(
@@ -682,10 +682,10 @@ def update_eval(
             custom_llm_provider = "openai"
 
         # Get provider config
-        evals_api_provider_config: Optional[
-            BaseEvalsAPIConfig
-        ] = ProviderConfigManager.get_provider_evals_api_config(  # type: ignore
-            provider=litellm.LlmProviders(custom_llm_provider),
+        evals_api_provider_config: Optional[BaseEvalsAPIConfig] = (
+            ProviderConfigManager.get_provider_evals_api_config(  # type: ignore
+                provider=litellm.LlmProviders(custom_llm_provider),
+            )
         )
 
         if evals_api_provider_config is None:
@@ -824,7 +824,7 @@ async def adelete_eval(
     """
     local_vars = locals()
     try:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         kwargs["adelete_eval"] = True
 
         func = partial(
@@ -893,10 +893,10 @@ def delete_eval(
             custom_llm_provider = "openai"
 
         # Get provider config
-        evals_api_provider_config: Optional[
-            BaseEvalsAPIConfig
-        ] = ProviderConfigManager.get_provider_evals_api_config(  # type: ignore
-            provider=litellm.LlmProviders(custom_llm_provider),
+        evals_api_provider_config: Optional[BaseEvalsAPIConfig] = (
+            ProviderConfigManager.get_provider_evals_api_config(  # type: ignore
+                provider=litellm.LlmProviders(custom_llm_provider),
+            )
         )
 
         if evals_api_provider_config is None:
@@ -978,7 +978,7 @@ async def acancel_eval(
     """
     local_vars = locals()
     try:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         kwargs["acancel_eval"] = True
 
         func = partial(
@@ -1047,10 +1047,10 @@ def cancel_eval(
             custom_llm_provider = "openai"
 
         # Get provider config
-        evals_api_provider_config: Optional[
-            BaseEvalsAPIConfig
-        ] = ProviderConfigManager.get_provider_evals_api_config(  # type: ignore
-            provider=litellm.LlmProviders(custom_llm_provider),
+        evals_api_provider_config: Optional[BaseEvalsAPIConfig] = (
+            ProviderConfigManager.get_provider_evals_api_config(  # type: ignore
+                provider=litellm.LlmProviders(custom_llm_provider),
+            )
         )
 
         if evals_api_provider_config is None:
@@ -1149,7 +1149,7 @@ async def acreate_run(
     """
     local_vars = locals()
     try:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         kwargs["acreate_run"] = True
 
         func = partial(
@@ -1230,10 +1230,10 @@ def create_run(
             custom_llm_provider = "openai"
 
         # Get provider config
-        evals_api_provider_config: Optional[
-            BaseEvalsAPIConfig
-        ] = ProviderConfigManager.get_provider_evals_api_config(  # type: ignore
-            provider=litellm.LlmProviders(custom_llm_provider),
+        evals_api_provider_config: Optional[BaseEvalsAPIConfig] = (
+            ProviderConfigManager.get_provider_evals_api_config(  # type: ignore
+                provider=litellm.LlmProviders(custom_llm_provider),
+            )
         )
 
         if evals_api_provider_config is None:
@@ -1337,7 +1337,7 @@ async def alist_runs(
     """
     local_vars = locals()
     try:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         kwargs["alist_runs"] = True
 
         func = partial(
@@ -1418,10 +1418,10 @@ def list_runs(
             custom_llm_provider = "openai"
 
         # Get provider config
-        evals_api_provider_config: Optional[
-            BaseEvalsAPIConfig
-        ] = ProviderConfigManager.get_provider_evals_api_config(  # type: ignore
-            provider=litellm.LlmProviders(custom_llm_provider),
+        evals_api_provider_config: Optional[BaseEvalsAPIConfig] = (
+            ProviderConfigManager.get_provider_evals_api_config(  # type: ignore
+                provider=litellm.LlmProviders(custom_llm_provider),
+            )
         )
 
         if evals_api_provider_config is None:
@@ -1520,7 +1520,7 @@ async def aget_run(
     """
     local_vars = locals()
     try:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         kwargs["aget_run"] = True
 
         func = partial(
@@ -1592,10 +1592,10 @@ def get_run(
             custom_llm_provider = "openai"
 
         # Get provider config
-        evals_api_provider_config: Optional[
-            BaseEvalsAPIConfig
-        ] = ProviderConfigManager.get_provider_evals_api_config(  # type: ignore
-            provider=litellm.LlmProviders(custom_llm_provider),
+        evals_api_provider_config: Optional[BaseEvalsAPIConfig] = (
+            ProviderConfigManager.get_provider_evals_api_config(  # type: ignore
+                provider=litellm.LlmProviders(custom_llm_provider),
+            )
         )
 
         if evals_api_provider_config is None:
@@ -1680,7 +1680,7 @@ async def acancel_run(
     """
     local_vars = locals()
     try:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         kwargs["acancel_run"] = True
 
         func = partial(
@@ -1752,10 +1752,10 @@ def cancel_run(
             custom_llm_provider = "openai"
 
         # Get provider config
-        evals_api_provider_config: Optional[
-            BaseEvalsAPIConfig
-        ] = ProviderConfigManager.get_provider_evals_api_config(  # type: ignore
-            provider=litellm.LlmProviders(custom_llm_provider),
+        evals_api_provider_config: Optional[BaseEvalsAPIConfig] = (
+            ProviderConfigManager.get_provider_evals_api_config(  # type: ignore
+                provider=litellm.LlmProviders(custom_llm_provider),
+            )
         )
 
         if evals_api_provider_config is None:
@@ -1849,7 +1849,7 @@ async def adelete_run(
     """
     local_vars = locals()
     try:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         kwargs["adelete_run"] = True
 
         func = partial(
@@ -1921,10 +1921,10 @@ def delete_run(
             custom_llm_provider = "openai"
 
         # Get provider config
-        evals_api_provider_config: Optional[
-            BaseEvalsAPIConfig
-        ] = ProviderConfigManager.get_provider_evals_api_config(  # type: ignore
-            provider=litellm.LlmProviders(custom_llm_provider),
+        evals_api_provider_config: Optional[BaseEvalsAPIConfig] = (
+            ProviderConfigManager.get_provider_evals_api_config(  # type: ignore
+                provider=litellm.LlmProviders(custom_llm_provider),
+            )
         )
 
         if evals_api_provider_config is None:

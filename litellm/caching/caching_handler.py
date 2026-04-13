@@ -78,7 +78,9 @@ class CachingHandlerResponse(BaseModel):
 
     cached_result: Optional[Any] = None
     final_embedding_cached_response: Optional[EmbeddingResponse] = None
-    embedding_all_elements_cache_hit: bool = False  # this is set to True when all elements in the list have a cache hit in the embedding cache, if true return the final_embedding_cached_response no need to make an API call
+    embedding_all_elements_cache_hit: bool = (
+        False  # this is set to True when all elements in the list have a cache hit in the embedding cache, if true return the final_embedding_cached_response no need to make an API call
+    )
 
 
 in_memory_cache_obj = InMemoryCache()
@@ -776,9 +778,32 @@ class LLMCachingHandler:
             call_type == CallTypes.acompletion.value
             or call_type == CallTypes.atext_completion.value
         ):
-            _stream_cached_result = convert_to_streaming_response_async(
-                response_object=cached_result,
-            )
+            # Prefer async_generate_streaming_content when the cached result
+            # contains simple text content — it uses asyncio.sleep() instead of
+            # time.sleep(), keeping the event loop non-blocking while replaying
+            # the response chunk-by-chunk (CACHED_STREAMING_CHUNK_DELAY per chunk).
+            # Fall back to convert_to_streaming_response_async for complex
+            # responses (tool calls, missing content, or no active cache object).
+            _text_content: Optional[str] = None
+            if (
+                litellm.cache is not None
+                and isinstance(cached_result, dict)
+                and cached_result.get("choices")
+            ):
+                _first_choice = cached_result["choices"][0]
+                if isinstance(_first_choice, dict):
+                    _msg = _first_choice.get("message", {})
+                    if isinstance(_msg, dict) and not _msg.get("tool_calls"):
+                        _text_content = _msg.get("content") or None
+
+            if _text_content is not None:
+                _stream_cached_result = litellm.cache.async_generate_streaming_content(
+                    _text_content
+                )
+            else:
+                _stream_cached_result = convert_to_streaming_response_async(
+                    response_object=cached_result,
+                )
         else:
             _stream_cached_result = convert_to_streaming_response(
                 response_object=cached_result,
@@ -1014,9 +1039,9 @@ class LLMCachingHandler:
         }
 
         if litellm.cache is not None:
-            litellm_params[
-                "preset_cache_key"
-            ] = litellm.cache._get_preset_cache_key_from_kwargs(**kwargs)
+            litellm_params["preset_cache_key"] = (
+                litellm.cache._get_preset_cache_key_from_kwargs(**kwargs)
+            )
         else:
             litellm_params["preset_cache_key"] = None
 

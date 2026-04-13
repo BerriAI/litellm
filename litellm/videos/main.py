@@ -67,7 +67,7 @@ async def avideo_generation(
     """
     local_vars = locals()
     try:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         kwargs["async_call"] = True
 
         # get custom llm provider so we can use this for mapping exceptions
@@ -174,7 +174,10 @@ def video_generation(  # noqa: PLR0915
     extra_query: Optional[Dict[str, Any]] = None,
     extra_body: Optional[Dict[str, Any]] = None,
     **kwargs,
-) -> Union[VideoObject, Coroutine[Any, Any, VideoObject],]:
+) -> Union[
+    VideoObject,
+    Coroutine[Any, Any, VideoObject],
+]:
     """
     Maps the https://api.openai.com/v1/videos endpoint.
 
@@ -203,11 +206,11 @@ def video_generation(  # noqa: PLR0915
         )
 
         # get provider config
-        video_generation_provider_config: Optional[
-            BaseVideoConfig
-        ] = ProviderConfigManager.get_provider_video_config(
-            model=model,
-            provider=litellm.LlmProviders(custom_llm_provider),
+        video_generation_provider_config: Optional[BaseVideoConfig] = (
+            ProviderConfigManager.get_provider_video_config(
+                model=model,
+                provider=litellm.LlmProviders(custom_llm_provider),
+            )
         )
 
         if video_generation_provider_config is None:
@@ -286,7 +289,10 @@ def video_content(
     extra_query: Optional[Dict[str, Any]] = None,
     extra_body: Optional[Dict[str, Any]] = None,
     **kwargs,
-) -> Union[bytes, Coroutine[Any, Any, bytes],]:
+) -> Union[
+    bytes,
+    Coroutine[Any, Any, bytes],
+]:
     """
     Download video content from OpenAI's video API.
 
@@ -331,11 +337,11 @@ def video_content(
         litellm_params = GenericLiteLLMParams(**kwargs)
 
         # get provider config
-        video_provider_config: Optional[
-            BaseVideoConfig
-        ] = ProviderConfigManager.get_provider_video_config(
-            model=None,
-            provider=litellm.LlmProviders(custom_llm_provider),
+        video_provider_config: Optional[BaseVideoConfig] = (
+            ProviderConfigManager.get_provider_video_config(
+                model=None,
+                provider=litellm.LlmProviders(custom_llm_provider),
+            )
         )
 
         if video_provider_config is None:
@@ -418,7 +424,7 @@ async def avideo_content(
     """
     local_vars = locals()
     try:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         kwargs["async_call"] = True
 
         # Try to decode provider from video_id if not explicitly provided
@@ -490,7 +496,7 @@ async def avideo_remix(
     """
     local_vars = locals()
     try:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         kwargs["async_call"] = True
 
         func = partial(
@@ -574,7 +580,10 @@ def video_remix(  # noqa: PLR0915
     extra_query: Optional[Dict[str, Any]] = None,
     extra_body: Optional[Dict[str, Any]] = None,
     **kwargs,
-) -> Union[VideoObject, Coroutine[Any, Any, VideoObject],]:
+) -> Union[
+    VideoObject,
+    Coroutine[Any, Any, VideoObject],
+]:
     """
     Maps the https://api.openai.com/v1/videos/{video_id}/remix endpoint.
 
@@ -604,11 +613,11 @@ def video_remix(  # noqa: PLR0915
         litellm_params = GenericLiteLLMParams(**kwargs)
 
         # get provider config
-        video_remix_provider_config: Optional[
-            BaseVideoConfig
-        ] = ProviderConfigManager.get_provider_video_config(
-            model=None,
-            provider=litellm.LlmProviders(custom_llm_provider),
+        video_remix_provider_config: Optional[BaseVideoConfig] = (
+            ProviderConfigManager.get_provider_video_config(
+                model=None,
+                provider=litellm.LlmProviders(custom_llm_provider),
+            )
         )
 
         if video_remix_provider_config is None:
@@ -698,7 +707,7 @@ async def avideo_list(
     """
     local_vars = locals()
     try:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         kwargs["async_call"] = True
 
         # get custom llm provider so we can use this for mapping exceptions
@@ -793,7 +802,10 @@ def video_list(  # noqa: PLR0915
     extra_query: Optional[Dict[str, Any]] = None,
     extra_body: Optional[Dict[str, Any]] = None,
     **kwargs,
-) -> Union[List[VideoObject], Coroutine[Any, Any, List[VideoObject]],]:
+) -> Union[
+    List[VideoObject],
+    Coroutine[Any, Any, List[VideoObject]],
+]:
     """
     Maps the https://api.openai.com/v1/videos endpoint.
 
@@ -820,11 +832,11 @@ def video_list(  # noqa: PLR0915
         litellm_params = GenericLiteLLMParams(**kwargs)
 
         # get provider config
-        video_list_provider_config: Optional[
-            BaseVideoConfig
-        ] = ProviderConfigManager.get_provider_video_config(
-            model=None,
-            provider=litellm.LlmProviders(custom_llm_provider),
+        video_list_provider_config: Optional[BaseVideoConfig] = (
+            ProviderConfigManager.get_provider_video_config(
+                model=None,
+                provider=litellm.LlmProviders(custom_llm_provider),
+            )
         )
 
         if video_list_provider_config is None:
@@ -911,7 +923,7 @@ async def avideo_status(
     """
     local_vars = locals()
     try:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         kwargs["async_call"] = True
 
         func = partial(
@@ -991,7 +1003,10 @@ def video_status(  # noqa: PLR0915
     extra_query: Optional[Dict[str, Any]] = None,
     extra_body: Optional[Dict[str, Any]] = None,
     **kwargs,
-) -> Union[VideoObject, Coroutine[Any, Any, VideoObject],]:
+) -> Union[
+    VideoObject,
+    Coroutine[Any, Any, VideoObject],
+]:
     """
     Retrieve video status from OpenAI's video API.
 
@@ -1043,11 +1058,11 @@ def video_status(  # noqa: PLR0915
         litellm_params = GenericLiteLLMParams(**kwargs)
 
         # get provider config
-        video_status_provider_config: Optional[
-            BaseVideoConfig
-        ] = ProviderConfigManager.get_provider_video_config(
-            model=None,
-            provider=litellm.LlmProviders(custom_llm_provider),
+        video_status_provider_config: Optional[BaseVideoConfig] = (
+            ProviderConfigManager.get_provider_video_config(
+                model=None,
+                provider=litellm.LlmProviders(custom_llm_provider),
+            )
         )
 
         if video_status_provider_config is None:
@@ -1116,7 +1131,7 @@ async def avideo_create_character(
     """
     local_vars = locals()
     try:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         kwargs["async_call"] = True
 
         if custom_llm_provider is None:
@@ -1186,11 +1201,11 @@ def video_create_character(
 
         litellm_params = GenericLiteLLMParams(**kwargs)
 
-        provider_config: Optional[
-            BaseVideoConfig
-        ] = ProviderConfigManager.get_provider_video_config(
-            model=None,
-            provider=litellm.LlmProviders(custom_llm_provider),
+        provider_config: Optional[BaseVideoConfig] = (
+            ProviderConfigManager.get_provider_video_config(
+                model=None,
+                provider=litellm.LlmProviders(custom_llm_provider),
+            )
         )
 
         if provider_config is None:
@@ -1250,7 +1265,7 @@ async def avideo_get_character(
     """
     local_vars = locals()
     try:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         kwargs["async_call"] = True
 
         func = partial(
@@ -1315,11 +1330,11 @@ def video_get_character(
 
         litellm_params = GenericLiteLLMParams(**kwargs)
 
-        provider_config: Optional[
-            BaseVideoConfig
-        ] = ProviderConfigManager.get_provider_video_config(
-            model=None,
-            provider=litellm.LlmProviders(custom_llm_provider),
+        provider_config: Optional[BaseVideoConfig] = (
+            ProviderConfigManager.get_provider_video_config(
+                model=None,
+                provider=litellm.LlmProviders(custom_llm_provider),
+            )
         )
 
         if provider_config is None:
@@ -1379,7 +1394,7 @@ async def avideo_edit(
     """
     local_vars = locals()
     try:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         kwargs["async_call"] = True
 
         func = partial(
@@ -1447,11 +1462,11 @@ def video_edit(
 
         litellm_params = GenericLiteLLMParams(**kwargs)
 
-        provider_config: Optional[
-            BaseVideoConfig
-        ] = ProviderConfigManager.get_provider_video_config(
-            model=None,
-            provider=litellm.LlmProviders(custom_llm_provider),
+        provider_config: Optional[BaseVideoConfig] = (
+            ProviderConfigManager.get_provider_video_config(
+                model=None,
+                provider=litellm.LlmProviders(custom_llm_provider),
+            )
         )
 
         if provider_config is None:
@@ -1512,7 +1527,7 @@ async def avideo_extension(
     """
     local_vars = locals()
     try:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         kwargs["async_call"] = True
 
         func = partial(
@@ -1582,11 +1597,11 @@ def video_extension(
 
         litellm_params = GenericLiteLLMParams(**kwargs)
 
-        provider_config: Optional[
-            BaseVideoConfig
-        ] = ProviderConfigManager.get_provider_video_config(
-            model=None,
-            provider=litellm.LlmProviders(custom_llm_provider),
+        provider_config: Optional[BaseVideoConfig] = (
+            ProviderConfigManager.get_provider_video_config(
+                model=None,
+                provider=litellm.LlmProviders(custom_llm_provider),
+            )
         )
 
         if provider_config is None:

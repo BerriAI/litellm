@@ -187,9 +187,11 @@ async def anthropic_messages(
     """
     Async: Make llm api request in Anthropic /messages API spec
     """
-    original_stream = stream or kwargs.get(
-        "_websearch_interception_converted_stream", False
-    )
+    # Save original stream flag before pre-request hooks can convert it.
+    # The websearch interception hook converts stream=True → stream=False
+    # for the agentic loop, but the short-circuit path needs to know
+    # whether the caller originally requested streaming.
+    original_stream = stream
 
     # Execute pre-request hooks to allow CustomLoggers to modify request
     request_kwargs = await _execute_pre_request_hooks(
@@ -236,7 +238,7 @@ async def anthropic_messages(
     if short_circuit_response is not None:
         return short_circuit_response
 
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     kwargs["is_async"] = True
 
     func = partial(

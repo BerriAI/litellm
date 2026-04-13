@@ -1,7 +1,7 @@
 """
 Translate from OpenAI's `/v1/embeddings` to Sagemaker's `/invoke`
 
-In the Huggingface TGI format. 
+In the Huggingface TGI format.
 """
 
 from typing import TYPE_CHECKING, Any, List, Optional, Union
