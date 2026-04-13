@@ -166,10 +166,18 @@ class FalAIImageGenerationConfig(FalAIBaseConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
-        """Pass through all params for FAL. FAL models accept diverse model-specific
-        params that cannot be enumerated ahead of time."""
+        """Pass through all params for FAL, flattening extra_body if present.
+
+        LiteLLM's image_generation() path doesn't extract extra_body from kwargs
+        (unlike image_edit), so it arrives here as a nested dict. Flatten it so
+        FAL-specific params like image_urls reach the FAL API at the top level.
+        """
         for k, v in non_default_params.items():
-            if k not in optional_params:
+            if k == "extra_body" and isinstance(v, dict):
+                for ek, ev in v.items():
+                    if ek not in optional_params:
+                        optional_params[ek] = ev
+            elif k not in optional_params:
                 optional_params[k] = v
         return optional_params
 
@@ -182,8 +190,21 @@ class FalAIImageGenerationConfig(FalAIBaseConfig):
         headers: dict,
     ) -> dict:
         """
-        Transform the image generation request to the fal.ai image generation request body
+        Transform the image generation request to the fal.ai image generation request body.
+
+        Flattens extra_body if present -- LiteLLM's image_generation() path does not
+        extract extra_body from kwargs (unlike image_edit), so it can arrive here as
+        a nested dict. We flatten it so FAL-specific params (image_urls, loras, etc.)
+        appear at the top level of the request body.
         """
+        if "extra_body" in optional_params and isinstance(
+            optional_params["extra_body"], dict
+        ):
+            extra = optional_params.pop("extra_body")
+            for k, v in extra.items():
+                if k not in optional_params:
+                    optional_params[k] = v
+
         fal_ai_image_generation_request_body = {
             "prompt": prompt,
             **optional_params,
