@@ -8,25 +8,25 @@ Per OpenAPI spec (https://ai.google.dev/static/api/interactions.openapi.json):
 
 Usage:
     import litellm
-    
+
     # Create an interaction with a model
     response = litellm.interactions.create(
         model="gemini-2.5-flash",
         input="Hello, how are you?"
     )
-    
+
     # Create an interaction with an agent
     response = litellm.interactions.create(
         agent="deep-research-pro-preview-12-2025",
         input="Research the current state of cancer research"
     )
-    
+
     # Async version
     response = await litellm.interactions.acreate(...)
-    
+
     # Get an interaction
     response = litellm.interactions.get(interaction_id="...")
-    
+
     # Delete an interaction
     result = litellm.interactions.delete(interaction_id="...")
 """
@@ -123,7 +123,7 @@ async def acreate(
     """
     local_vars = locals()
     try:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         kwargs["acreate_interaction"] = True
 
         if custom_llm_provider is None and model:
@@ -348,7 +348,7 @@ async def aget(
     """Async: Get an interaction by its ID."""
     local_vars = locals()
     try:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         kwargs["aget_interaction"] = True
 
         func = partial(
@@ -452,7 +452,7 @@ async def adelete(
     """Async: Delete an interaction by its ID."""
     local_vars = locals()
     try:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         kwargs["adelete_interaction"] = True
 
         func = partial(
@@ -556,7 +556,7 @@ async def acancel(
     """Async: Cancel an interaction by its ID."""
     local_vars = locals()
     try:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         kwargs["acancel_interaction"] = True
 
         func = partial(

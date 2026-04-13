@@ -108,7 +108,7 @@ async def acreate(
     """
     local_vars = locals()
     try:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         kwargs["acreate"] = True
 
         # get custom llm provider so we can use this for mapping exceptions
@@ -295,7 +295,7 @@ async def asearch(
     local_vars = locals()
 
     try:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         kwargs["asearch"] = True
 
         # get custom llm provider so we can use this for mapping exceptions
@@ -499,7 +499,7 @@ async def aretrieve(
     """
     local_vars = locals()
     try:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         kwargs["aretrieve"] = True
 
         if custom_llm_provider is None:
@@ -638,7 +638,7 @@ async def alist(
     """
     local_vars = locals()
     try:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         kwargs["alist"] = True
 
         if custom_llm_provider is None:
@@ -794,7 +794,7 @@ async def aupdate(
     """
     local_vars = locals()
     try:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         kwargs["aupdate"] = True
 
         if custom_llm_provider is None:
@@ -952,7 +952,7 @@ async def adelete(
     """
     local_vars = locals()
     try:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         kwargs["adelete"] = True
 
         if custom_llm_provider is None:

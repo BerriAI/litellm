@@ -251,7 +251,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
 
     @staticmethod
     def translate_thinking_to_reasoning(
-        thinking: Dict[str, Any]
+        thinking: Dict[str, Any],
     ) -> Optional[Dict[str, Any]]:
         """
         Convert Anthropic thinking param to Responses API reasoning param.
@@ -337,10 +337,10 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         # tool_choice
         tool_choice = anthropic_request.get("tool_choice")
         if tool_choice:
-            responses_kwargs[
-                "tool_choice"
-            ] = self.translate_tool_choice_to_responses_api(
-                cast(AnthropicMessagesToolChoice, tool_choice)
+            responses_kwargs["tool_choice"] = (
+                self.translate_tool_choice_to_responses_api(
+                    cast(AnthropicMessagesToolChoice, tool_choice)
+                )
             )
 
         # thinking -> reasoning

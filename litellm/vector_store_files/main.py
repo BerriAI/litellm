@@ -70,7 +70,7 @@ async def acreate(
 ) -> VectorStoreFileObject:
     local_vars = locals()
     try:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         kwargs["acreate"] = True
 
         func = partial(
@@ -202,7 +202,7 @@ async def alist(
 ) -> VectorStoreFileListResponse:
     local_vars = locals()
     try:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         kwargs["alist"] = True
 
         func = partial(
@@ -328,7 +328,7 @@ async def aretrieve(
 ) -> VectorStoreFileObject:
     local_vars = locals()
     try:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         kwargs["aretrieve"] = True
 
         func = partial(
@@ -439,7 +439,7 @@ async def aretrieve_content(
 ) -> VectorStoreFileContentResponse:
     local_vars = locals()
     try:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         kwargs["aretrieve_content"] = True
 
         func = partial(
@@ -553,7 +553,7 @@ async def aupdate(
 ) -> VectorStoreFileObject:
     local_vars = locals()
     try:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         kwargs["aupdate"] = True
 
         func = partial(
@@ -676,7 +676,7 @@ async def adelete(
 ) -> VectorStoreFileDeleteResponse:
     local_vars = locals()
     try:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         kwargs["adelete"] = True
 
         func = partial(

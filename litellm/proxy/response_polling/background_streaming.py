@@ -7,6 +7,7 @@ with partial results for polling.
 Follows OpenAI Response Streaming format:
 https://platform.openai.com/docs/api-reference/responses-streaming
 """
+
 import asyncio
 import json
 from typing import Any, Optional, cast
@@ -114,13 +115,13 @@ async def background_streaming_task(  # noqa: PLR0915
         incomplete_details_data = None
 
         state_dirty = False  # Track if state needs to be synced
-        last_update_time = asyncio.get_event_loop().time()
+        last_update_time = asyncio.get_running_loop().time()
         UPDATE_INTERVAL = 0.150  # 150ms batching interval
 
         # Track the terminal event from the stream (may not be "completed")
-        terminal_status: Optional[
-            ResponsesAPIStatus
-        ] = None  # Will be set by response.completed/failed/incomplete/cancelled
+        terminal_status: Optional[ResponsesAPIStatus] = (
+            None  # Will be set by response.completed/failed/incomplete/cancelled
+        )
         terminal_error = None
         _event_to_status = {
             "response.completed": "completed",
@@ -133,7 +134,7 @@ async def background_streaming_task(  # noqa: PLR0915
             """Flush accumulated state to Redis if interval elapsed or forced"""
             nonlocal state_dirty, last_update_time
 
-            current_time = asyncio.get_event_loop().time()
+            current_time = asyncio.get_running_loop().time()
             if state_dirty and (
                 force or (current_time - last_update_time) >= UPDATE_INTERVAL
             ):
@@ -211,9 +212,9 @@ async def background_streaming_task(  # noqa: PLR0915
                                         if isinstance(
                                             content_list[content_index], dict
                                         ):
-                                            content_list[content_index][
-                                                "text"
-                                            ] = accumulated_text[key]
+                                            content_list[content_index]["text"] = (
+                                                accumulated_text[key]
+                                            )
                                 state_dirty = True
 
                         elif event_type == "response.content_part.done":

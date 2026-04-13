@@ -106,7 +106,7 @@ class S3Cache(BaseCache):
         """
         try:
             verbose_logger.debug(f"Set ASYNC S3 Cache: Key={key}. Value={value}")
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             func = partial(self.set_cache, key, value, **kwargs)
             await loop.run_in_executor(None, func)
         except Exception as e:
@@ -170,7 +170,7 @@ class S3Cache(BaseCache):
         """
         try:
             verbose_logger.debug(f"Get ASYNC S3 Cache: key: {key}")
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             func = partial(self.get_cache, key, **kwargs)
             result = await loop.run_in_executor(None, func)
             return result

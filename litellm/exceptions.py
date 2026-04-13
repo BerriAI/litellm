@@ -281,7 +281,7 @@ class Timeout(openai.APITimeoutError):  # type: ignore
         return _message
 
 
-class PermissionDeniedError(openai.PermissionDeniedError):  # type:ignore
+class PermissionDeniedError(openai.PermissionDeniedError):  # type: ignore
     def __init__(
         self,
         message,

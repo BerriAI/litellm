@@ -1,6 +1,7 @@
 """
 Azure Anthropic handler - reuses AnthropicChatCompletion logic with Azure authentication
 """
+
 import copy
 import json
 from typing import TYPE_CHECKING, Callable, Union

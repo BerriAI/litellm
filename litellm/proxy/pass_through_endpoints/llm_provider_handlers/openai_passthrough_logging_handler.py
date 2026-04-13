@@ -367,9 +367,9 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
             kwargs["custom_llm_provider"] = custom_llm_provider
 
             # Extract user information for tracking
-            passthrough_logging_payload: Optional[
-                PassthroughStandardLoggingPayload
-            ] = kwargs.get("passthrough_logging_payload")
+            passthrough_logging_payload: Optional[PassthroughStandardLoggingPayload] = (
+                kwargs.get("passthrough_logging_payload")
+            )
             if passthrough_logging_payload:
                 user = handler_instance._get_user_from_metadata(
                     passthrough_logging_payload=passthrough_logging_payload,
@@ -398,9 +398,7 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
             endpoint_type = (
                 "chat_completions"
                 if is_chat_completions
-                else "image_generation"
-                if is_image_generation
-                else "image_editing"
+                else "image_generation" if is_image_generation else "image_editing"
             )
             verbose_proxy_logger.debug(
                 f"OpenAI passthrough cost tracking - Endpoint: {endpoint_type}, Model: {model}, Cost: ${response_cost:.6f}"
@@ -558,10 +556,10 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
             }
 
             # Extract user information for tracking
-            passthrough_logging_payload: Optional[
-                PassthroughStandardLoggingPayload
-            ] = litellm_logging_obj.model_call_details.get(
-                "passthrough_logging_payload"
+            passthrough_logging_payload: Optional[PassthroughStandardLoggingPayload] = (
+                litellm_logging_obj.model_call_details.get(
+                    "passthrough_logging_payload"
+                )
             )
             if passthrough_logging_payload:
                 user = handler_instance._get_user_from_metadata(
@@ -584,9 +582,9 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
 
             # Update logging object with cost information
             litellm_logging_obj.model_call_details["model"] = model
-            litellm_logging_obj.model_call_details[
-                "custom_llm_provider"
-            ] = custom_llm_provider
+            litellm_logging_obj.model_call_details["custom_llm_provider"] = (
+                custom_llm_provider
+            )
             litellm_logging_obj.model_call_details["response_cost"] = response_cost
 
             verbose_proxy_logger.debug(

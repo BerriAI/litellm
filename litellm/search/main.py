@@ -1,6 +1,7 @@
 """
 Main Search function for LiteLLM.
 """
+
 import asyncio
 import contextvars
 from functools import partial
@@ -115,7 +116,7 @@ async def asearch(
     """
     local_vars = locals()
     try:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         kwargs["asearch"] = True
 
         func = partial(
@@ -242,10 +243,10 @@ def search(
             raise ValueError("All items in query list must be strings")
 
         # Get provider config
-        search_provider_config: Optional[
-            BaseSearchConfig
-        ] = ProviderConfigManager.get_provider_search_config(
-            provider=SearchProviders(search_provider),
+        search_provider_config: Optional[BaseSearchConfig] = (
+            ProviderConfigManager.get_provider_search_config(
+                provider=SearchProviders(search_provider),
+            )
         )
 
         if search_provider_config is None:

@@ -241,7 +241,7 @@ def prompt_team_selection(teams: List[Dict[str, Any]]) -> Optional[Dict[str, Any
 
 
 def prompt_team_selection_fallback(
-    teams: List[Dict[str, Any]]
+    teams: List[Dict[str, Any]],
 ) -> Optional[Dict[str, Any]]:
     """Fallback team selection for non-interactive environments"""
     if not teams:

@@ -75,7 +75,7 @@ async def acreate_skill(
     """
     local_vars = locals()
     try:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         kwargs["acreate_skill"] = True
 
         func = partial(
@@ -173,10 +173,10 @@ def create_skill(
             )
 
         # Get provider config for external providers (Anthropic, etc.)
-        skills_api_provider_config: Optional[
-            BaseSkillsAPIConfig
-        ] = ProviderConfigManager.get_provider_skills_api_config(
-            provider=litellm.LlmProviders(custom_llm_provider),
+        skills_api_provider_config: Optional[BaseSkillsAPIConfig] = (
+            ProviderConfigManager.get_provider_skills_api_config(
+                provider=litellm.LlmProviders(custom_llm_provider),
+            )
         )
 
         if skills_api_provider_config is None:
@@ -269,7 +269,7 @@ async def alist_skills(
     """
     local_vars = locals()
     try:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         kwargs["alist_skills"] = True
 
         func = partial(
@@ -354,10 +354,10 @@ def list_skills(
             )
 
         # Get provider config for external providers (Anthropic, etc.)
-        skills_api_provider_config: Optional[
-            BaseSkillsAPIConfig
-        ] = ProviderConfigManager.get_provider_skills_api_config(
-            provider=litellm.LlmProviders(custom_llm_provider),
+        skills_api_provider_config: Optional[BaseSkillsAPIConfig] = (
+            ProviderConfigManager.get_provider_skills_api_config(
+                provider=litellm.LlmProviders(custom_llm_provider),
+            )
         )
 
         if skills_api_provider_config is None:
@@ -451,7 +451,7 @@ async def aget_skill(
     """
     local_vars = locals()
     try:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         kwargs["aget_skill"] = True
 
         func = partial(
@@ -529,10 +529,10 @@ def get_skill(
             )
 
         # Get provider config for external providers (Anthropic, etc.)
-        skills_api_provider_config: Optional[
-            BaseSkillsAPIConfig
-        ] = ProviderConfigManager.get_provider_skills_api_config(
-            provider=litellm.LlmProviders(custom_llm_provider),
+        skills_api_provider_config: Optional[BaseSkillsAPIConfig] = (
+            ProviderConfigManager.get_provider_skills_api_config(
+                provider=litellm.LlmProviders(custom_llm_provider),
+            )
         )
 
         if skills_api_provider_config is None:
@@ -618,7 +618,7 @@ async def adelete_skill(
     """
     local_vars = locals()
     try:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         kwargs["adelete_skill"] = True
 
         func = partial(
@@ -696,10 +696,10 @@ def delete_skill(
             )
 
         # Get provider config for external providers (Anthropic, etc.)
-        skills_api_provider_config: Optional[
-            BaseSkillsAPIConfig
-        ] = ProviderConfigManager.get_provider_skills_api_config(
-            provider=litellm.LlmProviders(custom_llm_provider),
+        skills_api_provider_config: Optional[BaseSkillsAPIConfig] = (
+            ProviderConfigManager.get_provider_skills_api_config(
+                provider=litellm.LlmProviders(custom_llm_provider),
+            )
         )
 
         if skills_api_provider_config is None:

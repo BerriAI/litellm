@@ -86,11 +86,6 @@ class PrometheusLogger(CustomLogger):
             # Always initialize label_filters, even for non-premium users
             self.label_filters = self._parse_prometheus_config()
 
-            _custom_buckets = litellm.prometheus_latency_buckets
-            self.latency_buckets = (
-                tuple(_custom_buckets) if _custom_buckets is not None else LATENCY_BUCKETS
-            )
-
             # Create metric factory functions
             self._counter_factory = self._create_metric_factory(Counter)
             self._gauge_factory = self._create_metric_factory(Gauge)
@@ -119,14 +114,14 @@ class PrometheusLogger(CustomLogger):
                 labelnames=self.get_labels_for_metric(
                     "litellm_request_total_latency_metric"
                 ),
-                buckets=self.latency_buckets,
+                buckets=LATENCY_BUCKETS,
             )
 
             self.litellm_llm_api_latency_metric = self._histogram_factory(
                 "litellm_llm_api_latency_metric",
                 "Total latency (seconds) for a models LLM API call",
                 labelnames=self.get_labels_for_metric("litellm_llm_api_latency_metric"),
-                buckets=self.latency_buckets,
+                buckets=LATENCY_BUCKETS,
             )
 
             self.litellm_llm_api_time_to_first_token_metric = self._histogram_factory(
@@ -142,7 +137,7 @@ class PrometheusLogger(CustomLogger):
                 labelnames=self.get_labels_for_metric(
                     "litellm_llm_api_time_to_first_token_metric"
                 ),
-                buckets=self.latency_buckets,
+                buckets=LATENCY_BUCKETS,
             )
 
             # Counter for spend
@@ -319,7 +314,7 @@ class PrometheusLogger(CustomLogger):
                 labelnames=self.get_labels_for_metric(
                     "litellm_overhead_latency_metric"
                 ),
-                buckets=self.latency_buckets,
+                buckets=LATENCY_BUCKETS,
             )
 
             # Request queue time metric
@@ -329,7 +324,7 @@ class PrometheusLogger(CustomLogger):
                 labelnames=self.get_labels_for_metric(
                     "litellm_request_queue_time_seconds"
                 ),
-                buckets=self.latency_buckets,
+                buckets=LATENCY_BUCKETS,
             )
 
             # Guardrail metrics
@@ -337,7 +332,7 @@ class PrometheusLogger(CustomLogger):
                 "litellm_guardrail_latency_seconds",
                 "Latency (seconds) for guardrail execution",
                 labelnames=["guardrail_name", "status", "error_type", "hook_type"],
-                buckets=self.latency_buckets,
+                buckets=LATENCY_BUCKETS,
             )
 
             self.litellm_guardrail_errors_total = self._counter_factory(
@@ -1097,9 +1092,11 @@ class PrometheusLogger(CustomLogger):
             ),
             client_ip=standard_logging_payload["metadata"].get("requester_ip_address"),
             user_agent=standard_logging_payload["metadata"].get("user_agent"),
-            stream=str(standard_logging_payload.get("stream"))
-            if litellm.prometheus_emit_stream_label
-            else None,
+            stream=(
+                str(standard_logging_payload.get("stream"))
+                if litellm.prometheus_emit_stream_label
+                else None
+            ),
         )
 
         if (
@@ -1767,9 +1764,11 @@ class PrometheusLogger(CustomLogger):
                 client_ip=_metadata.get("requester_ip_address"),
                 user_agent=_metadata.get("user_agent"),
                 model_id=model_id,
-                stream=str(request_data.get("stream"))
-                if litellm.prometheus_emit_stream_label
-                else None,
+                stream=(
+                    str(request_data.get("stream"))
+                    if litellm.prometheus_emit_stream_label
+                    else None
+                ),
             )
             _labels = prometheus_label_factory(
                 supported_enum_labels=self.get_labels_for_metric(
@@ -2093,9 +2092,9 @@ class PrometheusLogger(CustomLogger):
     ):
         try:
             verbose_logger.debug("setting remaining tokens requests metric")
-            standard_logging_payload: Optional[
-                StandardLoggingPayload
-            ] = request_kwargs.get("standard_logging_object")
+            standard_logging_payload: Optional[StandardLoggingPayload] = (
+                request_kwargs.get("standard_logging_object")
+            )
 
             if standard_logging_payload is None:
                 return
@@ -2728,9 +2727,7 @@ class PrometheusLogger(CustomLogger):
             )
             return
 
-        async def fetch_keys(
-            page_size: int, page: int
-        ) -> Tuple[
+        async def fetch_keys(page_size: int, page: int) -> Tuple[
             List[Union[str, UserAPIKeyAuth, LiteLLM_DeletedVerificationToken]],
             Optional[int],
         ]:
@@ -2921,9 +2918,11 @@ class PrometheusLogger(CustomLogger):
                 org_alias=org.organization_alias or "",
                 spend=org.spend or 0.0,
                 max_budget=budget_table.max_budget if budget_table else None,
-                budget_reset_at=getattr(budget_table, "budget_reset_at", None)
-                if budget_table
-                else None,
+                budget_reset_at=(
+                    getattr(budget_table, "budget_reset_at", None)
+                    if budget_table
+                    else None
+                ),
             )
 
     async def _set_team_budget_metrics_after_api_request(
@@ -3405,10 +3404,10 @@ class PrometheusLogger(CustomLogger):
         from litellm.constants import PROMETHEUS_BUDGET_METRICS_REFRESH_INTERVAL_MINUTES
         from litellm.integrations.custom_logger import CustomLogger
 
-        prometheus_loggers: List[
-            CustomLogger
-        ] = litellm.logging_callback_manager.get_custom_loggers_for_type(
-            callback_type=PrometheusLogger
+        prometheus_loggers: List[CustomLogger] = (
+            litellm.logging_callback_manager.get_custom_loggers_for_type(
+                callback_type=PrometheusLogger
+            )
         )
         # we need to get the initialized prometheus logger instance(s) and call logger.initialize_remaining_budget_metrics() on them
         verbose_logger.debug("found %s prometheus loggers", len(prometheus_loggers))

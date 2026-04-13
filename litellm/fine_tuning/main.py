@@ -94,7 +94,7 @@ async def acreate_fine_tuning_job(
         "inside acreate_fine_tuning_job model=%s and kwargs=%s", model, kwargs
     )
     try:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         kwargs["acreate_fine_tuning_job"] = True
 
         # Use a partial function to pass your keyword arguments
@@ -361,7 +361,7 @@ async def acancel_fine_tuning_job(
     Async: Immediately cancel a fine-tune job.
     """
     try:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         kwargs["acancel_fine_tuning_job"] = True
 
         # Use a partial function to pass your keyword arguments
@@ -520,7 +520,7 @@ async def alist_fine_tuning_jobs(
     Async: List your organization's fine-tuning jobs
     """
     try:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         kwargs["alist_fine_tuning_jobs"] = True
 
         # Use a partial function to pass your keyword arguments
@@ -684,7 +684,7 @@ async def aretrieve_fine_tuning_job(
     Async: Get info about a fine-tuning job.
     """
     try:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         kwargs["aretrieve_fine_tuning_job"] = True
 
         # Use a partial function to pass your keyword arguments

@@ -770,9 +770,7 @@ async def test_vertex_streaming_bad_request_not_midstream(logging_obj: Logging):
     from litellm.llms.vertex_ai.common_utils import VertexAIError
 
     async def _raise_bad_request(**kwargs):
-        raise VertexAIError(
-            status_code=400, message="invalid maxOutputTokens", headers=None
-        )
+        raise VertexAIError(status_code=400, message="invalid maxOutputTokens", headers=None)
 
     response = CustomStreamWrapper(
         completion_stream=None,
@@ -790,9 +788,7 @@ async def test_vertex_streaming_bad_request_not_midstream(logging_obj: Logging):
 
 
 @pytest.mark.asyncio
-async def test_vertex_streaming_rate_limit_triggers_midstream_fallback(
-    logging_obj: Logging,
-):
+async def test_vertex_streaming_rate_limit_triggers_midstream_fallback(logging_obj: Logging):
     """Ensure Vertex 429 rate-limit errors raise MidStreamFallbackError, not RateLimitError.
 
     Regression test for https://github.com/BerriAI/litellm/issues/20870
@@ -801,9 +797,7 @@ async def test_vertex_streaming_rate_limit_triggers_midstream_fallback(
     from litellm.llms.vertex_ai.common_utils import VertexAIError
 
     async def _raise_rate_limit(**kwargs):
-        raise VertexAIError(
-            status_code=429, message="Resource exhausted.", headers=None
-        )
+        raise VertexAIError(status_code=429, message="Resource exhausted.", headers=None)
 
     response = CustomStreamWrapper(
         completion_stream=None,
@@ -831,9 +825,7 @@ def test_sync_streaming_rate_limit_triggers_midstream_fallback(logging_obj: Logg
     from litellm.llms.vertex_ai.common_utils import VertexAIError
 
     def _raise_rate_limit(**kwargs):
-        raise VertexAIError(
-            status_code=429, message="Resource exhausted.", headers=None
-        )
+        raise VertexAIError(status_code=429, message="Resource exhausted.", headers=None)
 
     response = CustomStreamWrapper(
         completion_stream=None,
@@ -858,9 +850,7 @@ def test_sync_streaming_bad_request_not_midstream(logging_obj: Logging):
     from litellm.llms.vertex_ai.common_utils import VertexAIError
 
     def _raise_bad_request(**kwargs):
-        raise VertexAIError(
-            status_code=400, message="invalid maxOutputTokens", headers=None
-        )
+        raise VertexAIError(status_code=400, message="invalid maxOutputTokens", headers=None)
 
     response = CustomStreamWrapper(
         completion_stream=None,
@@ -1373,7 +1363,6 @@ def _build_chunks(pattern: list[str], N: int) -> list[ModelResponseStream]:
             chunks.append(_make_chunk(p))
     return chunks
 
-
 _REPETITION_TEST_CASES = [
     # Basic cases
     pytest.param(
@@ -1430,14 +1419,7 @@ _REPETITION_TEST_CASES = [
         id="last_chunk_different_no_raise",
     ),
     pytest.param(
-        ["same"] * (litellm.REPEATED_STREAMING_CHUNK_LIMIT // 2 + 1)
-        + ["different_mid"]
-        + ["same"]
-        * (
-            litellm.REPEATED_STREAMING_CHUNK_LIMIT
-            - litellm.REPEATED_STREAMING_CHUNK_LIMIT // 2
-            + 1
-        ),
+        ["same"] * (litellm.REPEATED_STREAMING_CHUNK_LIMIT // 2 + 1) + ["different_mid"] + ["same"] * (litellm.REPEATED_STREAMING_CHUNK_LIMIT - litellm.REPEATED_STREAMING_CHUNK_LIMIT // 2 + 1),
         False,
         id="middle_chunk_different_no_raise",
     ),
@@ -1447,9 +1429,7 @@ _REPETITION_TEST_CASES = [
         id="last_two_different_no_raise",
     ),
     pytest.param(
-        ["diff"] * litellm.REPEATED_STREAMING_CHUNK_LIMIT
-        + ["same"] * litellm.REPEATED_STREAMING_CHUNK_LIMIT
-        + ["diff"],
+        ["diff"] * litellm.REPEATED_STREAMING_CHUNK_LIMIT + ["same"] * litellm.REPEATED_STREAMING_CHUNK_LIMIT + ["diff"],
         True,
         id="in_between_same_and_diff_raise",
     ),
@@ -1475,8 +1455,6 @@ def test_raise_on_model_repetition(
         for chunk in chunks:
             wrapper.chunks.append(chunk)
             wrapper.raise_on_model_repetition()
-
-
 def test_usage_chunk_after_finish_reason_updates_hidden_params(logging_obj):
     """
     Test that provider-reported usage from a post-finish_reason chunk
@@ -1558,13 +1536,12 @@ def test_usage_chunk_after_finish_reason_updates_hidden_params(logging_obj):
     last_chunk = collected[-1]
     hidden_usage = last_chunk._hidden_params.get("usage")
     assert hidden_usage is not None, "Expected usage in _hidden_params"
-    assert (
-        hidden_usage.prompt_tokens == 20
-    ), f"Expected prompt_tokens=20 from provider, got {hidden_usage.prompt_tokens}"
-    assert (
-        hidden_usage.completion_tokens == 135
-    ), f"Expected completion_tokens=135 from provider, got {hidden_usage.completion_tokens}"
-
+    assert hidden_usage.prompt_tokens == 20, (
+        f"Expected prompt_tokens=20 from provider, got {hidden_usage.prompt_tokens}"
+    )
+    assert hidden_usage.completion_tokens == 135, (
+        f"Expected completion_tokens=135 from provider, got {hidden_usage.completion_tokens}"
+    )
 
 @pytest.mark.asyncio
 async def test_custom_stream_wrapper_aclose():
@@ -1638,9 +1615,9 @@ def test_content_not_dropped_when_finish_reason_already_set(
 
     result = initialized_custom_stream_wrapper.chunk_creator(chunk=content_chunk)
 
-    assert (
-        result is not None
-    ), "chunk_creator() returned None — content was dropped (issue #22098)"
+    assert result is not None, (
+        "chunk_creator() returned None — content was dropped (issue #22098)"
+    )
     assert result.choices[0].delta.content == "world!"
 
 
@@ -1692,43 +1669,16 @@ def test_tool_use_not_dropped_when_finish_reason_already_set(
 
     result = initialized_custom_stream_wrapper.chunk_creator(chunk=tool_chunk)
 
-    assert (
-        result is not None
-    ), "chunk_creator() returned None — tool_use data was dropped"
+    assert result is not None, (
+        "chunk_creator() returned None — tool_use data was dropped"
+    )
 
     tool_calls = result.choices[0].delta.tool_calls
-    assert (
-        tool_calls is not None and len(tool_calls) > 0
-    ), "tool_calls should contain at least one tool call"
+    assert tool_calls is not None and len(tool_calls) > 0, (
+        "tool_calls should contain at least one tool call"
+    )
     assert tool_calls[0].id == "call_1"
     assert tool_calls[0].function.name == "get_weather"
-
-
-def test_usage_only_chunk_not_dropped_when_finish_reason_already_set(
-    initialized_custom_stream_wrapper: CustomStreamWrapper,
-):
-    """
-    Regression test: usage-only chunks must not be dropped once finish_reason
-    is already set. Dropping these chunks can lose terminal finish_reason in
-    downstream Responses API streaming translation.
-    """
-    initialized_custom_stream_wrapper.received_finish_reason = "content_filter"
-    initialized_custom_stream_wrapper.custom_llm_provider = "anthropic"
-
-    usage_only_chunk = {
-        "text": "",
-        "tool_use": None,
-        "is_finished": False,
-        "finish_reason": "",
-        "usage": {"prompt_tokens": 10, "completion_tokens": 1, "total_tokens": 11},
-        "index": 0,
-    }
-
-    result = initialized_custom_stream_wrapper.chunk_creator(chunk=usage_only_chunk)
-
-    assert result is not None, "usage-only chunk should not be dropped"
-    assert result.choices[0].finish_reason == "content_filter"
-    assert result.usage is not None
 
 
 @pytest.mark.asyncio

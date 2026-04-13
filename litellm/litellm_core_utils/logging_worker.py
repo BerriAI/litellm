@@ -383,11 +383,14 @@ class LoggingWorker:
         if self._queue is None:
             return
 
-        start_time = asyncio.get_event_loop().time()
+        start_time = asyncio.get_running_loop().time()
 
         for _ in range(MAX_ITERATIONS_TO_CLEAR_QUEUE):
             # Check if we've exceeded the maximum time
-            if asyncio.get_event_loop().time() - start_time >= MAX_TIME_TO_CLEAR_QUEUE:
+            if (
+                asyncio.get_running_loop().time() - start_time
+                >= MAX_TIME_TO_CLEAR_QUEUE
+            ):
                 verbose_logger.warning(
                     f"clear_queue exceeded max_time of {MAX_TIME_TO_CLEAR_QUEUE}s, stopping early"
                 )

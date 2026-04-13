@@ -124,7 +124,7 @@ async def acreate_batch(
     LiteLLM Equivalent of POST: https://api.openai.com/v1/batches
     """
     try:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         kwargs["acreate_batch"] = True
 
         # Use a partial function to pass your keyword arguments
@@ -384,7 +384,7 @@ async def aretrieve_batch(
     LiteLLM Equivalent of GET https://api.openai.com/v1/batches/{batch_id}
     """
     try:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         kwargs["aretrieve_batch"] = True
 
         # Use a partial function to pass your keyword arguments
@@ -707,7 +707,7 @@ async def alist_batches(
     """
 
     try:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         kwargs["alist_batches"] = True
 
         # Use a partial function to pass your keyword arguments
@@ -897,7 +897,7 @@ async def acancel_batch(
     LiteLLM Equivalent of POST https://api.openai.com/v1/batches/{batch_id}/cancel
     """
     try:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         kwargs["acancel_batch"] = True
         # Preserve model parameter - only pop from kwargs if it exists there
         # (to avoid passing it twice), otherwise keep the function parameter value

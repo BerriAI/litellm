@@ -98,7 +98,7 @@ async def aimage_generation(*args, **kwargs) -> ImageResponse:
     Returns:
     - `response` (Any): The response returned by the `image_generation` function.
     """
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     model = args[0] if len(args) > 0 else kwargs["model"]
     ### PASS ARGS TO Image Generation ###
     kwargs["aimg_generation"] = True
@@ -210,7 +210,10 @@ def image_generation(  # noqa: PLR0915
     api_version: Optional[str] = None,
     custom_llm_provider=None,
     **kwargs,
-) -> Union[ImageResponse, Coroutine[Any, Any, ImageResponse],]:
+) -> Union[
+    ImageResponse,
+    Coroutine[Any, Any, ImageResponse],
+]:
     """
     Maps the https://api.openai.com/v1/images/generations endpoint.
 
@@ -594,7 +597,7 @@ async def aimage_variation(*args, **kwargs) -> ImageResponse:
     Returns:
     - `response` (Any): The response returned by the `image_variation` function.
     """
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     model = kwargs.get("model", None)
     custom_llm_provider = kwargs.get("custom_llm_provider", None)
     ### PASS ARGS TO Image Generation ###
@@ -864,11 +867,11 @@ def image_edit(  # noqa: PLR0915
                 )
 
         # get provider config
-        image_edit_provider_config: Optional[
-            BaseImageEditConfig
-        ] = ProviderConfigManager.get_provider_image_edit_config(
-            model=model,
-            provider=litellm.LlmProviders(custom_llm_provider),
+        image_edit_provider_config: Optional[BaseImageEditConfig] = (
+            ProviderConfigManager.get_provider_image_edit_config(
+                model=model,
+                provider=litellm.LlmProviders(custom_llm_provider),
+            )
         )
 
         if image_edit_provider_config is None:
@@ -876,20 +879,20 @@ def image_edit(  # noqa: PLR0915
 
         local_vars.update(kwargs)
         # Get ImageEditOptionalRequestParams with only valid parameters
-        image_edit_optional_params: ImageEditOptionalRequestParams = (
-            _get_ImageEditRequestUtils().get_requested_image_edit_optional_param(
-                local_vars
-            )
+        image_edit_optional_params: (
+            ImageEditOptionalRequestParams
+        ) = _get_ImageEditRequestUtils().get_requested_image_edit_optional_param(
+            local_vars
         )
         # Get optional parameters for the responses API
-        image_edit_request_params: Dict = (
-            _get_ImageEditRequestUtils().get_optional_params_image_edit(
-                model=model,
-                image_edit_provider_config=image_edit_provider_config,
-                image_edit_optional_params=image_edit_optional_params,
-                drop_params=kwargs.get("drop_params"),
-                additional_drop_params=kwargs.get("additional_drop_params"),
-            )
+        image_edit_request_params: (
+            Dict
+        ) = _get_ImageEditRequestUtils().get_optional_params_image_edit(
+            model=model,
+            image_edit_provider_config=image_edit_provider_config,
+            image_edit_optional_params=image_edit_optional_params,
+            drop_params=kwargs.get("drop_params"),
+            additional_drop_params=kwargs.get("additional_drop_params"),
         )
 
         # Pre Call logging
@@ -1019,7 +1022,7 @@ async def aimage_edit(
     """
     local_vars = locals()
     try:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         kwargs["async_call"] = True
 
         # get custom llm provider so we can use this for mapping exceptions

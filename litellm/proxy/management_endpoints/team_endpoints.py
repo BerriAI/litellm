@@ -112,37 +112,6 @@ from litellm.types.proxy.management_endpoints.team_endpoints import (
 router = APIRouter()
 
 
-async def _verify_team_access(
-    team_obj: LiteLLM_TeamTable,
-    user_api_key_dict: UserAPIKeyAuth,
-) -> None:
-    """
-    Verify the caller is authorized to manage the given team.
-
-    Access is granted if:
-    - Caller is a proxy admin, OR
-    - Caller is an org admin for the team's organization, OR
-    - Caller is a team admin of this team
-
-    Raises HTTPException(403) otherwise.
-    """
-    if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN:
-        return
-
-    if _is_user_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team_obj):
-        return
-
-    if await _is_user_org_admin_for_team(
-        user_api_key_dict=user_api_key_dict, team_obj=team_obj
-    ):
-        return
-
-    raise HTTPException(
-        status_code=status.HTTP_403_FORBIDDEN,
-        detail="You do not have access to this team",
-    )
-
-
 class TeamMemberBudgetHandler:
     """Helper class to handle team member budget, RPM, and TPM limit operations"""
 
@@ -1440,12 +1409,6 @@ async def update_team(  # noqa: PLR0915
                 detail={"error": f"Team not found, passed team_id={data.team_id}"},
             )
 
-        # Verify caller has access to manage this team
-        await _verify_team_access(
-            team_obj=LiteLLM_TeamTable(**existing_team_row.model_dump()),
-            user_api_key_dict=user_api_key_dict,
-        )
-
         if data.soft_budget is not None:
             max_budget_to_check = (
                 data.max_budget
@@ -1584,12 +1547,12 @@ async def update_team(  # noqa: PLR0915
             updated_kv["router_settings"] = safe_dumps(updated_kv["router_settings"])
 
         updated_kv = prisma_client.jsonify_team_object(db_data=updated_kv)
-        team_row: Optional[
-            LiteLLM_TeamTable
-        ] = await prisma_client.db.litellm_teamtable.update(
-            where={"team_id": data.team_id},
-            data=updated_kv,
-            include={"litellm_model_table": True},  # type: ignore
+        team_row: Optional[LiteLLM_TeamTable] = (
+            await prisma_client.db.litellm_teamtable.update(
+                where={"team_id": data.team_id},
+                data=updated_kv,
+                include={"litellm_model_table": True},  # type: ignore
+            )
         )
 
         if team_row is None or team_row.team_id is None:
@@ -2336,13 +2299,13 @@ async def team_member_delete(
         )
 
         # Fetch keys before deletion to persist them
-        keys_to_delete: List[
-            LiteLLM_VerificationToken
-        ] = await prisma_client.db.litellm_verificationtoken.find_many(
-            where={
-                "user_id": {"in": list(user_ids_to_delete)},
-                "team_id": data.team_id,
-            }
+        keys_to_delete: List[LiteLLM_VerificationToken] = (
+            await prisma_client.db.litellm_verificationtoken.find_many(
+                where={
+                    "user_id": {"in": list(user_ids_to_delete)},
+                    "team_id": data.team_id,
+                }
+            )
         )
 
         if keys_to_delete:
@@ -2726,10 +2689,10 @@ async def delete_team(
     team_rows: List[LiteLLM_TeamTable] = []
     for team_id in data.team_ids:
         try:
-            team_row_base: Optional[
-                BaseModel
-            ] = await prisma_client.db.litellm_teamtable.find_unique(
-                where={"team_id": team_id}
+            team_row_base: Optional[BaseModel] = (
+                await prisma_client.db.litellm_teamtable.find_unique(
+                    where={"team_id": team_id}
+                )
             )
             if team_row_base is None:
                 raise Exception
@@ -2739,13 +2702,6 @@ async def delete_team(
                 detail={"error": f"Team not found, passed team_id={team_id}"},
             )
         team_row_pydantic = LiteLLM_TeamTable(**team_row_base.model_dump())
-
-        # Verify caller has access to manage this team
-        await _verify_team_access(
-            team_obj=team_row_pydantic,
-            user_api_key_dict=user_api_key_dict,
-        )
-
         team_rows.append(team_row_pydantic)
 
     await _persist_deleted_team_records(
@@ -2795,10 +2751,10 @@ async def delete_team(
         _persist_deleted_verification_tokens,
     )
 
-    keys_to_delete: List[
-        LiteLLM_VerificationToken
-    ] = await prisma_client.db.litellm_verificationtoken.find_many(
-        where={"team_id": {"in": data.team_ids}}
+    keys_to_delete: List[LiteLLM_VerificationToken] = (
+        await prisma_client.db.litellm_verificationtoken.find_many(
+            where={"team_id": {"in": data.team_ids}}
+        )
     )
 
     if keys_to_delete:
@@ -3035,11 +2991,11 @@ async def team_info(
             )
 
         try:
-            team_info: Optional[
-                BaseModel
-            ] = await prisma_client.db.litellm_teamtable.find_unique(
-                where={"team_id": team_id},
-                include={"object_permission": True},
+            team_info: Optional[BaseModel] = (
+                await prisma_client.db.litellm_teamtable.find_unique(
+                    where={"team_id": team_id},
+                    include={"object_permission": True},
+                )
             )
             if team_info is None:
                 raise Exception
@@ -3175,24 +3131,15 @@ async def block_team(
     if prisma_client is None:
         raise Exception("No DB Connected.")
 
-    existing_team = await prisma_client.db.litellm_teamtable.find_unique(
-        where={"team_id": data.team_id}
+    record = await prisma_client.db.litellm_teamtable.update(
+        where={"team_id": data.team_id}, data={"blocked": True}  # type: ignore
     )
-    if existing_team is None:
+
+    if record is None:
         raise HTTPException(
             status_code=404,
             detail={"error": f"Team not found, passed team_id={data.team_id}"},
         )
-
-    # Verify caller has access to manage this team
-    await _verify_team_access(
-        team_obj=LiteLLM_TeamTable(**existing_team.model_dump()),
-        user_api_key_dict=user_api_key_dict,
-    )
-
-    record = await prisma_client.db.litellm_teamtable.update(
-        where={"team_id": data.team_id}, data={"blocked": True}  # type: ignore
-    )
 
     return record
 
@@ -3207,7 +3154,7 @@ async def unblock_team(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
-    Unblocks a previously blocked team, re-enabling calls from keys with this team id.
+    Blocks all calls from keys with this team id.
 
     Parameters:
     - team_id: str - Required. The unique identifier of the team to unblock.
@@ -3227,24 +3174,15 @@ async def unblock_team(
     if prisma_client is None:
         raise Exception("No DB Connected.")
 
-    existing_team = await prisma_client.db.litellm_teamtable.find_unique(
-        where={"team_id": data.team_id}
+    record = await prisma_client.db.litellm_teamtable.update(
+        where={"team_id": data.team_id}, data={"blocked": False}  # type: ignore
     )
-    if existing_team is None:
+
+    if record is None:
         raise HTTPException(
             status_code=404,
             detail={"error": f"Team not found, passed team_id={data.team_id}"},
         )
-
-    # Verify caller has access to manage this team
-    await _verify_team_access(
-        team_obj=LiteLLM_TeamTable(**existing_team.model_dump()),
-        user_api_key_dict=user_api_key_dict,
-    )
-
-    record = await prisma_client.db.litellm_teamtable.update(
-        where={"team_id": data.team_id}, data={"blocked": False}  # type: ignore
-    )
 
     return record
 
@@ -3894,9 +3832,7 @@ async def list_team(
         except Exception as e:
             team_exception = """Invalid team object for team_id: {}. team_object={}.
             Error: {}
-            """.format(
-                team.team_id, team.model_dump(), str(e)
-            )
+            """.format(team.team_id, team.model_dump(), str(e))
             verbose_proxy_logger.exception(team_exception)
             continue
     # Sort the responses by team_alias

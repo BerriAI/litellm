@@ -13,6 +13,7 @@ import pytest
 import yaml
 from fastapi.testclient import TestClient
 
+
 def build_cache_config(enable_cache: bool = True) -> Optional[Dict]:
     """
     Build Redis cache configuration from environment variables.
