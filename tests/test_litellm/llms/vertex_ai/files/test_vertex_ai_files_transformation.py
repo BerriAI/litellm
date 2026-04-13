@@ -1,5 +1,6 @@
 """
 Tests for VertexAIFilesConfig transformation methods (Issues 5-7).
+Includes tests for Vertex AI batch output transformation to OpenAI format.
 """
 
 import json
@@ -9,7 +10,10 @@ import httpx
 import pytest
 from unittest.mock import MagicMock
 
-from litellm.llms.vertex_ai.files.transformation import VertexAIFilesConfig
+from litellm.llms.vertex_ai.files.transformation import (
+    VertexAIFilesConfig,
+    VertexAIJsonlFilesTransformation,
+)
 from litellm.types.llms.openai import OpenAIFileObject, HttpxBinaryResponseContent
 from openai.types.file_deleted import FileDeleted
 
@@ -228,3 +232,297 @@ class TestTransformDeleteFile:
             "gs://prod-bucket/litellm-vertex-files/publishers/google/"
             "models/gemini-2.0-flash-001/abc-123"
         )
+
+
+class TestVertexBatchOutputTransformation:
+    """Test transformation of Vertex AI batch outputs to OpenAI format"""
+
+    def test_transform_successful_vertex_batch_output(self, config):
+        """Test transformation of a successful Vertex AI batch output"""
+        # Sample Vertex AI batch output (based on actual format)
+        vertex_output = {
+            "status": "",
+            "processed_time": "2024-11-01T18:13:16.826+00:00",
+            "request": {
+                "contents": [{"role": "user", "parts": [{"text": "Hello world!"}]}],
+                "labels": {"litellm_custom_id": "request-1"}
+            },
+            "response": {
+                "candidates": [{
+                    "content": {
+                        "parts": [{"text": "Hello! How can I help you today?"}],
+                        "role": "model"
+                    },
+                    "finishReason": "STOP"
+                }],
+                "modelVersion": "gemini-2.0-flash-001@default",
+                "usageMetadata": {
+                    "promptTokenCount": 10,
+                    "candidatesTokenCount": 20,
+                    "totalTokenCount": 30
+                }
+            }
+        }
+
+        content = json.dumps(vertex_output).encode("utf-8")
+        transformed_content = config._try_transform_vertex_batch_output_to_openai(content)
+        result = json.loads(transformed_content.decode("utf-8"))
+
+        # Verify OpenAI format
+        assert "id" in result
+        assert "custom_id" in result
+        assert "response" in result
+        assert "error" in result
+        
+        # Verify custom_id was extracted from labels
+        assert result["custom_id"] == "request-1"
+        
+        # Verify response structure
+        assert result["response"]["status_code"] == 200
+        assert "body" in result["response"]
+        
+        # Verify body has OpenAI format
+        body = result["response"]["body"]
+        assert "choices" in body
+        assert "usage" in body
+        assert "model" in body
+        
+        # Verify choices
+        assert len(body["choices"]) > 0
+        choice = body["choices"][0]
+        assert "message" in choice
+        assert "content" in choice["message"]
+        assert "Hello! How can I help you today?" in choice["message"]["content"]
+
+    def test_transform_error_vertex_batch_output(self, config):
+        """Test transformation of an error Vertex AI batch output"""
+        vertex_output = {
+            "status": "Error: Invalid request",
+            "processed_time": "2024-11-01T18:13:16.826+00:00",
+            "request": {
+                "contents": [{"role": "user", "parts": [{"text": "Hello world!"}]}],
+                "labels": {"litellm_custom_id": "request-error"}
+            },
+            "response": {}
+        }
+
+        content = json.dumps(vertex_output).encode("utf-8")
+        transformed_content = config._try_transform_vertex_batch_output_to_openai(content)
+        result = json.loads(transformed_content.decode("utf-8"))
+
+        # Verify error format
+        assert result["response"]["status_code"] == 400
+        assert result["error"] is not None
+        assert "Invalid request" in result["error"]["message"]
+        assert result["custom_id"] == "request-error"
+
+    def test_transform_multiple_vertex_batch_outputs(self, config):
+        """Test transformation of multiple Vertex AI batch outputs (JSONL)"""
+        vertex_outputs = [
+            {
+                "status": "",
+                "processed_time": "2024-11-01T18:13:16.826+00:00",
+                "request": {
+                    "contents": [{"role": "user", "parts": [{"text": "First request"}]}],
+                    "labels": {"litellm_custom_id": "request-1"}
+                },
+                "response": {
+                    "candidates": [{
+                        "content": {"parts": [{"text": "First response"}], "role": "model"},
+                        "finishReason": "STOP"
+                    }],
+                    "modelVersion": "gemini-2.0-flash-001@default",
+                    "usageMetadata": {
+                        "promptTokenCount": 5,
+                        "candidatesTokenCount": 10,
+                        "totalTokenCount": 15
+                    }
+                }
+            },
+            {
+                "status": "",
+                "processed_time": "2024-11-01T18:13:17.826+00:00",
+                "request": {
+                    "contents": [{"role": "user", "parts": [{"text": "Second request"}]}],
+                    "labels": {"litellm_custom_id": "request-2"}
+                },
+                "response": {
+                    "candidates": [{
+                        "content": {"parts": [{"text": "Second response"}], "role": "model"},
+                        "finishReason": "STOP"
+                    }],
+                    "modelVersion": "gemini-2.0-flash-001@default",
+                    "usageMetadata": {
+                        "promptTokenCount": 6,
+                        "candidatesTokenCount": 11,
+                        "totalTokenCount": 17
+                    }
+                }
+            }
+        ]
+
+        content = "\n".join(json.dumps(output) for output in vertex_outputs).encode("utf-8")
+        transformed_content = config._try_transform_vertex_batch_output_to_openai(content)
+        lines = transformed_content.decode("utf-8").strip().split("\n")
+        
+        assert len(lines) == 2
+
+        for i, line in enumerate(lines):
+            result = json.loads(line)
+            assert "id" in result
+            assert "response" in result
+            assert result["response"]["status_code"] == 200
+            assert result["custom_id"] == f"request-{i+1}"
+            body = result["response"]["body"]
+            assert "choices" in body
+            assert len(body["choices"]) > 0
+
+    def test_non_batch_output_passthrough(self, config):
+        """Test that non-batch output is returned as-is"""
+        regular_content = b"This is just a regular file content"
+        transformed_content = config._try_transform_vertex_batch_output_to_openai(regular_content)
+        assert transformed_content == regular_content
+
+    def test_invalid_json_passthrough(self, config):
+        """Test that invalid JSON is returned as-is"""
+        invalid_content = b'{"invalid": json content}'
+        transformed_content = config._try_transform_vertex_batch_output_to_openai(invalid_content)
+        assert transformed_content == invalid_content
+
+
+class TestVertexBatchCustomIdLabels:
+    """Test custom_id handling in batch transformations"""
+
+    def test_custom_id_added_to_labels_in_vertex_request(self):
+        """Test that custom_id from OpenAI format is added as a label in Vertex AI format"""
+        transformation = VertexAIJsonlFilesTransformation()
+
+        openai_jsonl_content = [
+            {
+                "custom_id": "request-1",
+                "method": "POST",
+                "url": "/v1/chat/completions",
+                "body": {
+                    "model": "gemini-1.5-flash-001",
+                    "messages": [{"role": "user", "content": "What is 2+2?"}],
+                    "max_tokens": 10
+                }
+            }
+        ]
+
+        vertex_jsonl_content = transformation._transform_openai_jsonl_content_to_vertex_ai_jsonl_content(
+            openai_jsonl_content
+        )
+
+        assert len(vertex_jsonl_content) == 1
+        vertex_request = vertex_jsonl_content[0]
+
+        # Verify labels were added
+        assert "labels" in vertex_request["request"]
+        assert "litellm_custom_id" in vertex_request["request"]["labels"]
+        assert vertex_request["request"]["labels"]["litellm_custom_id"] == "request-1"
+
+    def test_multiple_requests_each_get_their_own_label(self):
+        """Test that multiple requests each get their own custom_id label"""
+        transformation = VertexAIJsonlFilesTransformation()
+
+        openai_jsonl_content = [
+            {
+                "custom_id": f"request-{i+1}",
+                "method": "POST",
+                "url": "/v1/chat/completions",
+                "body": {
+                    "model": "gemini-1.5-flash-001",
+                    "messages": [{"role": "user", "content": f"Question {i+1}"}],
+                }
+            }
+            for i in range(3)
+        ]
+
+        vertex_jsonl_content = transformation._transform_openai_jsonl_content_to_vertex_ai_jsonl_content(
+            openai_jsonl_content
+        )
+
+        assert len(vertex_jsonl_content) == 3
+
+        for i, vertex_request in enumerate(vertex_jsonl_content):
+            expected_custom_id = f"request-{i+1}"
+            assert vertex_request["request"]["labels"]["litellm_custom_id"] == expected_custom_id
+
+    def test_request_without_custom_id_has_no_label(self):
+        """Test that requests without custom_id don't get a label"""
+        transformation = VertexAIJsonlFilesTransformation()
+
+        openai_jsonl_content = [
+            {
+                "method": "POST",
+                "url": "/v1/chat/completions",
+                "body": {
+                    "model": "gemini-1.5-flash-001",
+                    "messages": [{"role": "user", "content": "Question"}],
+                }
+            }
+        ]
+
+        vertex_jsonl_content = transformation._transform_openai_jsonl_content_to_vertex_ai_jsonl_content(
+            openai_jsonl_content
+        )
+
+        # Should not have labels if no custom_id was provided
+        assert "labels" not in vertex_jsonl_content[0]["request"]
+
+    def test_end_to_end_custom_id_round_trip(self):
+        """
+        Test the full round trip: OpenAI format -> Vertex AI format -> Vertex AI output -> OpenAI output
+        Verify that custom_id is preserved through the entire flow.
+        """
+        transformation = VertexAIJsonlFilesTransformation()
+        config = VertexAIFilesConfig()
+
+        # Step 1: Transform OpenAI input to Vertex AI format
+        openai_input = [
+            {
+                "custom_id": "my-custom-request-id",
+                "method": "POST",
+                "url": "/v1/chat/completions",
+                "body": {
+                    "model": "gemini-1.5-flash-001",
+                    "messages": [{"role": "user", "content": "Hello"}],
+                }
+            }
+        ]
+
+        vertex_input = transformation._transform_openai_jsonl_content_to_vertex_ai_jsonl_content(
+            openai_input
+        )
+
+        # Verify label was added
+        assert vertex_input[0]["request"]["labels"]["litellm_custom_id"] == "my-custom-request-id"
+
+        # Step 2: Simulate Vertex AI batch output (with the label echoed back)
+        vertex_output = {
+            "status": "",
+            "processed_time": "2024-11-01T18:13:16.826+00:00",
+            "request": vertex_input[0]["request"],
+            "response": {
+                "candidates": [{
+                    "content": {"parts": [{"text": "Hi there!"}], "role": "model"},
+                    "finishReason": "STOP"
+                }],
+                "modelVersion": "gemini-2.0-flash-001@default",
+                "usageMetadata": {
+                    "promptTokenCount": 5,
+                    "candidatesTokenCount": 10,
+                    "totalTokenCount": 15
+                }
+            }
+        }
+
+        # Step 3: Transform Vertex AI output back to OpenAI format
+        content = json.dumps(vertex_output).encode("utf-8")
+        transformed_content = config._try_transform_vertex_batch_output_to_openai(content)
+        openai_output = json.loads(transformed_content.decode("utf-8"))
+
+        # Step 4: Verify custom_id was preserved
+        assert openai_output["custom_id"] == "my-custom-request-id"
+        assert openai_output["response"]["status_code"] == 200

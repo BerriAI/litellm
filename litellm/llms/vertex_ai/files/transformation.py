@@ -3,6 +3,7 @@ import os
 import time
 from typing import Any, Dict, List, Optional, Tuple, Union
 
+import httpx
 from httpx import Headers, Response
 from openai.types.file_deleted import FileDeleted
 
@@ -247,6 +248,14 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
                 litellm_params={},
                 cached_content=None,
             )
+            
+            # Add custom_id as a label for correlation in batch outputs
+            custom_id = _openai_jsonl_content.get("custom_id")
+            if custom_id:
+                if "labels" not in vertex_request_body:
+                    vertex_request_body["labels"] = {}
+                vertex_request_body["labels"]["litellm_custom_id"] = str(custom_id)
+            
             vertex_jsonl_content.append({"request": vertex_request_body})
         return vertex_jsonl_content
 
@@ -453,7 +462,235 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
         logging_obj: LiteLLMLoggingObj,
         litellm_params: dict,
     ) -> HttpxBinaryResponseContent:
+        """
+        Transform file content response, converting Vertex AI batch output to OpenAI format if applicable.
+        
+        This method automatically detects and transforms Vertex AI batch prediction outputs
+        (predictions.jsonl files) into OpenAI-compatible batch response format.
+        
+        If the file is not a batch output or transformation fails, the original content
+        is returned as-is to maintain backward compatibility.
+        """
+        try:
+            # Try to transform batch output if it's a JSONL file
+            content = raw_response.content
+            if content:
+                transformed_content = self._try_transform_vertex_batch_output_to_openai(
+                    content
+                )
+                if transformed_content != content:
+                    # Create a new response with transformed content and updated Content-Length
+                    import httpx
+                    
+                    # Update headers with correct Content-Length
+                    new_headers = dict(raw_response.headers)
+                    new_headers["content-length"] = str(len(transformed_content))
+                    
+                    mock_response = httpx.Response(
+                        status_code=raw_response.status_code,
+                        content=transformed_content,
+                        headers=new_headers,
+                        request=raw_response.request,
+                    )
+                    return HttpxBinaryResponseContent(response=mock_response)
+        except Exception:
+            # If transformation fails, return as-is
+            pass
+        
         return HttpxBinaryResponseContent(response=raw_response)
+    
+    def _try_transform_vertex_batch_output_to_openai(
+        self, content: bytes
+    ) -> bytes:
+        """
+        Try to transform Vertex AI batch output to OpenAI format.
+        If conversion fails at any point, return the original content as-is.
+        
+        Vertex AI batch output format (predictions.jsonl):
+        {
+          "request": {"contents": [...], "labels": {"litellm_custom_id": "request-1"}},
+          "status": "",
+          "response": {"candidates": [...], "modelVersion": "gemini-2.5-flash", ...},
+          "processed_time": "2026-04-13T10:18:18.102004+00:00"
+        }
+        
+        OpenAI batch output format:
+        {
+          "id": "batch_req_...",
+          "custom_id": "request-1",
+          "response": {
+            "status_code": 200,
+            "request_id": "chatcmpl-...",
+            "body": {<OpenAI chat completion response>}
+          },
+          "error": null
+        }
+        """
+        try:
+            # Decode content
+            content_str = content.decode("utf-8")
+            
+            # Check if it's JSONL (multiple lines)
+            lines = content_str.strip().split("\n")
+            if not lines:
+                return content
+            
+            # Try to parse the first line to see if it's Vertex AI batch output
+            first_line = json.loads(lines[0])
+            
+            # Check if it has Vertex AI batch output structure
+            if not ("response" in first_line and "request" in first_line):
+                # Not a Vertex AI batch output, return as-is
+                return content
+            
+            # Transform all lines
+            transformed_lines = []
+            for line in lines:
+                if not line.strip():
+                    continue
+                    
+                try:
+                    vertex_output = json.loads(line)
+                    openai_output = self._transform_single_vertex_batch_output_to_openai(
+                        vertex_output
+                    )
+                    transformed_lines.append(json.dumps(openai_output))
+                except Exception:
+                    # If any line fails, return original content
+                    return content
+            
+            # Return transformed content
+            return "\n".join(transformed_lines).encode("utf-8")
+            
+        except Exception:
+            # If anything fails, return original content
+            return content
+    
+    def _transform_single_vertex_batch_output_to_openai(
+        self, vertex_output: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """
+        Transform a single Vertex AI batch output line to OpenAI format.
+        Uses the existing VertexGeminiConfig transformation for the response.
+        """
+        from litellm.types.utils import ModelResponse
+        import httpx
+        import time
+        
+        # Extract custom_id from request labels
+        custom_id = "unknown"
+        request_data = vertex_output.get("request", {})
+        labels = request_data.get("labels", {})
+        if "litellm_custom_id" in labels:
+            custom_id = labels["litellm_custom_id"]
+        
+        # Check if there's an error
+        status = vertex_output.get("status", "")
+        has_error = bool(status)
+        
+        if has_error:
+            # Return error response in OpenAI format
+            return {
+                "id": f"batch_req_{uuid.uuid4()}",
+                "custom_id": custom_id,
+                "response": {
+                    "status_code": 400,
+                    "request_id": "",
+                    "body": {
+                        "error": {
+                            "message": status,
+                            "type": "vertex_ai_error",
+                            "code": "vertex_ai_error"
+                        }
+                    }
+                },
+                "error": {
+                    "message": status,
+                    "type": "vertex_ai_error",
+                    "code": "vertex_ai_error"
+                }
+            }
+        
+        # Transform successful response using existing transformation
+        vertex_response = vertex_output.get("response", {})
+        
+        # Extract model from response
+        model = vertex_response.get("modelVersion", "gemini-1.5-flash-001")
+        if "@" in model:
+            model = model.split("@")[0]
+        
+        # Create logging object for transformation
+        from litellm.litellm_core_utils.litellm_logging import Logging
+        
+        logging_obj = Logging(
+            model=model,
+            messages=[],
+            stream=False,
+            call_type="batch_transform",
+            start_time=time.time(),
+            litellm_call_id="",
+            function_id="",
+        )
+        logging_obj.optional_params = {}
+        
+        # Create mock httpx response for transformation
+        mock_httpx_response = httpx.Response(
+            status_code=200,
+            content=json.dumps(vertex_response).encode("utf-8"),
+            headers={"content-type": "application/json"},
+            request=httpx.Request(method="POST", url="https://example.com"),
+        )
+        
+        try:
+            # Use existing VertexGeminiConfig transformation
+            vertex_gemini_config = VertexGeminiConfig()
+            model_response = ModelResponse()
+            
+            transformed_response = vertex_gemini_config._transform_google_generate_content_to_openai_model_response(
+                completion_response=vertex_response,
+                model_response=model_response,
+                model=model,
+                logging_obj=logging_obj,
+                raw_response=mock_httpx_response,
+            )
+            
+            # Convert ModelResponse to dict
+            response_dict = transformed_response.model_dump()
+            
+            # Return in OpenAI batch format
+            return {
+                "id": f"batch_req_{uuid.uuid4()}",
+                "custom_id": custom_id,
+                "response": {
+                    "status_code": 200,
+                    "request_id": response_dict.get("id", ""),
+                    "body": response_dict
+                },
+                "error": None
+            }
+            
+        except Exception as e:
+            # If transformation fails, return error
+            return {
+                "id": f"batch_req_{uuid.uuid4()}",
+                "custom_id": custom_id,
+                "response": {
+                    "status_code": 500,
+                    "request_id": "",
+                    "body": {
+                        "error": {
+                            "message": f"Failed to transform response: {str(e)}",
+                            "type": "transformation_error",
+                            "code": "transformation_error"
+                        }
+                    }
+                },
+                "error": {
+                    "message": f"Failed to transform response: {str(e)}",
+                    "type": "transformation_error",
+                    "code": "transformation_error"
+                }
+            }
 
 
 class VertexAIJsonlFilesTransformation(VertexGeminiConfig):
@@ -513,6 +750,14 @@ class VertexAIJsonlFilesTransformation(VertexGeminiConfig):
                 litellm_params={},
                 cached_content=None,
             )
+            
+            # Add custom_id as a label for correlation in batch outputs
+            custom_id = _openai_jsonl_content.get("custom_id")
+            if custom_id:
+                if "labels" not in vertex_request_body:
+                    vertex_request_body["labels"] = {}
+                vertex_request_body["labels"]["litellm_custom_id"] = str(custom_id)
+            
             vertex_jsonl_content.append({"request": vertex_request_body})
         return vertex_jsonl_content
 
