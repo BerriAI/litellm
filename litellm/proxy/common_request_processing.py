@@ -206,6 +206,13 @@ async def create_response(
 
     except StopAsyncIteration:
         # Generator was empty. Default status
+        # Close the original generator to ensure cleanup (e.g., rate limit decrement)
+        # Note: Even though the generator is exhausted, we explicitly close it for clarity
+        try:
+            await generator.aclose()
+        except Exception:
+            pass
+
         async def empty_gen() -> AsyncGenerator[str, None]:
             if False:
                 yield  # type: ignore
@@ -222,11 +229,18 @@ async def create_response(
             f"Error consuming first chunk from generator: {e}"
         )
 
+        # Close the original generator to ensure cleanup (e.g., rate limit decrement)
+        try:
+            await generator.aclose()
+        except Exception:
+            pass
+
         # Preserve status code from HTTPException (e.g., guardrail blocks)
         error_status = getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR)
         error_detail = getattr(e, "detail", "Error processing stream start")
         if not isinstance(error_detail, str):
             error_detail = str(error_detail)
+
 
         async def error_gen_message() -> AsyncGenerator[str, None]:
             yield f"data: {json.dumps({'error': {'message': error_detail, 'code': error_status}})}\n\n"
@@ -240,12 +254,20 @@ async def create_response(
         )
 
     async def combined_generator() -> AsyncGenerator[str, None]:
-        if first_chunk_value is not None:
-            with tracer.trace(DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE):
-                yield first_chunk_value
-        async for chunk in generator:
-            with tracer.trace(DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE):
-                yield chunk
+        try:
+            if first_chunk_value is not None:
+                with tracer.trace(DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE):
+                    yield first_chunk_value
+            async for chunk in generator:
+                with tracer.trace(DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE):
+                    yield chunk
+        finally:
+            # Ensure the original generator is closed when this generator is closed
+            # This is important for cleanup (e.g., rate limit decrement in _wrapped_generator)
+            try:
+                await generator.aclose()
+            except Exception:
+                pass
 
     return StreamingResponse(
         combined_generator(),
@@ -900,6 +922,7 @@ class ProxyBaseLLMRequestProcessing:
         )
 
         is_streaming = False  # Initialize for finally block access
+        decrement_handled = False  # Track if decrement was handled
         try:
             # 2. EXECUTE LLM CALL
             responses = await asyncio.gather(*tasks)
@@ -925,7 +948,7 @@ class ProxyBaseLLMRequestProcessing:
                             api_key, parent_span, user_api_key_dict
                         )
 
-                return await self._process_streaming_response(
+                result = await self._process_streaming_response(
                     responses=responses,
                     user_api_key_dict=user_api_key_dict,
                     proxy_logging_obj=proxy_logging_obj,
@@ -936,13 +959,31 @@ class ProxyBaseLLMRequestProcessing:
                     select_data_generator=select_data_generator,
                     stream_wrapper=_wrapped_generator,
                 )
+                # Check if the stream wrapper was actually applied:
+                # - StreamingResponse: wrapper was applied, generator's finally will decrement
+                # - JSONResponse: generator was consumed in create_response, its finally already ran
+                # - dict/other: wrapper was never applied (e.g., websearch_interception)
+                if isinstance(result, (StreamingResponse, JSONResponse)):
+                    # Wrapper was applied, generator's finally will handle (or already handled) decrement
+                    decrement_handled = True
+                # else: wrapper was never applied, outer finally will handle decrement
+                return result
             else:
                 # 3b. NON-STREAMING: Return responses
                 return responses
 
         finally:
-            # 4. NON-STREAMING DECREMENT (streaming decrements in generator wrapper)
-            if not is_streaming:
+            # 4. DECREMENT if wrapper was not applied
+            # This handles:
+            # - Non-streaming requests (no generator wrapper)
+            # - Streaming requests where wrapper was never applied (websearch_interception returns dict)
+            #
+            # Note: For StreamingResponse, we rely on generator's finally to decrement.
+            # If stream is never consumed, the generator's finally may not run until:
+            # - Client disconnects (FastAPI calls aclose on the generator)
+            # - Response object is garbage collected
+            # - TTL expires (safety net, default 5 minutes via LITELLM_MAX_PARALLEL_REQUESTS_TTL)
+            if not decrement_handled:
                 await rate_limiter._decrement_max_parallel_requests(
                     user_api_key_dict.api_key,
                     user_api_key_dict.parent_otel_span,

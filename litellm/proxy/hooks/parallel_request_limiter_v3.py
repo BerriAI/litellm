@@ -1466,7 +1466,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     raise HTTPException(
                         status_code=429,
                         detail=(
-                            f"Rate limit exceeded for api_key. "
+                            f"Rate limit exceeded for api_key: {api_key}. "
                             f"Limit type: max_parallel_requests. "
                             f"Current limit: {max_parallel_requests}, Current: {current_count}."
                         ),
