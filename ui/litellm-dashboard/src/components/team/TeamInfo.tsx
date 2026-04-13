@@ -31,6 +31,7 @@ import DeleteResourceModal from "../common_components/DeleteResourceModal";
 import DurationSelect from "../common_components/DurationSelect";
 import PassThroughRoutesSelector from "../common_components/PassThroughRoutesSelector";
 import { unfurlWildcardModelsInList } from "../key_team_helpers/fetch_available_models_team_key";
+import GuardrailSettingsView from "../GuardrailSettingsView";
 import LoggingSettingsView from "../logging_settings_view";
 import MCPServerSelector from "../mcp_server_management/MCPServerSelector";
 import MCPToolPermissions from "../mcp_server_management/MCPToolPermissions";
@@ -613,9 +614,6 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   const nonGlobalOptIns: string[] = (info.metadata?.guardrails || []).filter(
     (n: string) => !globalGuardrailNames.has(n),
   );
-  const globalsRunning: string[] = Array.from(globalGuardrailNames).filter(
-    (n) => !optedOutGlobals.has(n),
-  );
   const effectiveGuardrails: string[] = initialKillSwitchOn
     ? nonGlobalOptIns
     : [
@@ -632,7 +630,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
     const isGlobal = globalGuardrailNames.has(value);
     return (
       <Tag
-        color={isGlobal ? "green" : "blue"}
+        color="blue"
         closable={closable}
         onClose={onClose}
         onMouseDown={preventTagMouseDown}
@@ -772,45 +770,13 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                 />
 
                 <Card>
-                  <Text className="font-semibold text-gray-900 mb-3">Guardrails</Text>
-                  {!initialKillSwitchOn &&
-                  globalsRunning.length === 0 &&
-                  nonGlobalOptIns.length === 0 ? (
-                    <Text className="text-gray-500">No guardrails configured</Text>
-                  ) : (
-                    <div className="flex flex-col gap-3">
-                      <div>
-                        <Text className="text-sm font-medium text-gray-700 mb-2">Global</Text>
-                        {initialKillSwitchOn ? (
-                          <Badge color="yellow">Bypassed for this team</Badge>
-                        ) : globalsRunning.length > 0 ? (
-                          <div className="flex flex-wrap gap-2">
-                            {globalsRunning.map((name) => (
-                              <Badge key={name} color="blue">
-                                {name}
-                              </Badge>
-                            ))}
-                          </div>
-                        ) : (
-                          <Text className="text-gray-500 text-sm">None running</Text>
-                        )}
-                      </div>
-                      <div>
-                        <Text className="text-sm font-medium text-gray-700 mb-2">Team-specific</Text>
-                        {nonGlobalOptIns.length > 0 ? (
-                          <div className="flex flex-wrap gap-2">
-                            {nonGlobalOptIns.map((name) => (
-                              <Badge key={name} color="blue">
-                                {name}
-                              </Badge>
-                            ))}
-                          </div>
-                        ) : (
-                          <Text className="text-gray-500 text-sm">None configured</Text>
-                        )}
-                      </div>
-                    </div>
-                  )}
+                  <GuardrailSettingsView
+                    globalGuardrailNames={globalGuardrailNames}
+                    teamGuardrails={info.metadata?.guardrails || []}
+                    optedOutGlobalGuardrails={info.metadata?.opted_out_global_guardrails || []}
+                    killSwitchOn={initialKillSwitchOn}
+                    variant="inline"
+                  />
                 </Card>
 
                 <Card>
@@ -1484,53 +1450,20 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                       <Badge color={info.blocked ? "red" : "green"}>{info.blocked ? "Blocked" : "Active"}</Badge>
                     </div>
 
-                    <div>
-                      <Text className="font-medium">Guardrails</Text>
-                      {!initialKillSwitchOn &&
-                      globalsRunning.length === 0 &&
-                      nonGlobalOptIns.length === 0 ? (
-                        <Text className="text-gray-500">No guardrails configured</Text>
-                      ) : (
-                        <div className="flex flex-col gap-3 mt-1">
-                          <div>
-                            <Text className="text-sm text-gray-700 mb-1">Global</Text>
-                            {initialKillSwitchOn ? (
-                              <Badge color="yellow">Bypassed for this team</Badge>
-                            ) : globalsRunning.length > 0 ? (
-                              <div className="flex flex-wrap gap-2">
-                                {globalsRunning.map((name) => (
-                                  <Badge key={name} color="blue">
-                                    {name}
-                                  </Badge>
-                                ))}
-                              </div>
-                            ) : (
-                              <Text className="text-gray-500 text-sm">None running</Text>
-                            )}
-                          </div>
-                          <div>
-                            <Text className="text-sm text-gray-700 mb-1">Team-specific</Text>
-                            {nonGlobalOptIns.length > 0 ? (
-                              <div className="flex flex-wrap gap-2">
-                                {nonGlobalOptIns.map((name) => (
-                                  <Badge key={name} color="blue">
-                                    {name}
-                                  </Badge>
-                                ))}
-                              </div>
-                            ) : (
-                              <Text className="text-gray-500 text-sm">None configured</Text>
-                            )}
-                          </div>
-                        </div>
-                      )}
-                    </div>
-
                     <ObjectPermissionsView
                       objectPermission={info.object_permission}
                       variant="inline"
                       className="pt-4 border-t border-gray-200"
                       accessToken={accessToken}
+                    />
+
+                    <GuardrailSettingsView
+                      globalGuardrailNames={globalGuardrailNames}
+                      teamGuardrails={info.metadata?.guardrails || []}
+                      optedOutGlobalGuardrails={info.metadata?.opted_out_global_guardrails || []}
+                      killSwitchOn={initialKillSwitchOn}
+                      variant="inline"
+                      className="pt-4 border-t border-gray-200"
                     />
 
                     <LoggingSettingsView
