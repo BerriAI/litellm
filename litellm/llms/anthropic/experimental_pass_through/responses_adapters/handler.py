@@ -72,6 +72,19 @@ def _build_responses_kwargs(
     anthropic_request = AnthropicMessagesRequest(**request_data)  # type: ignore[typeddict-item]
     responses_kwargs = _ADAPTER.translate_request(anthropic_request)
 
+    # Normalize reasoning effort based on model capabilities
+    # (e.g. "max" → "xhigh"/"high", "minimal" → "low" if unsupported)
+    reasoning = responses_kwargs.get("reasoning")
+    if isinstance(reasoning, dict) and "effort" in reasoning:
+        from litellm.llms.anthropic.experimental_pass_through.utils import (
+            normalize_reasoning_effort_value,
+        )
+
+        effort = reasoning["effort"]
+        normalized = normalize_reasoning_effort_value(effort, model=model)
+        if normalized != effort:
+            responses_kwargs["reasoning"] = {**reasoning, "effort": normalized}
+
     if stream:
         responses_kwargs["stream"] = True
 
