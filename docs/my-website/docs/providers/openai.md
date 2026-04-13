@@ -432,9 +432,10 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 | fine tuned `gpt-3.5-turbo-1106` | `response = completion(model="ft:gpt-3.5-turbo-1106", messages=messages)` |
 | fine tuned `gpt-3.5-turbo-0613` | `response = completion(model="ft:gpt-3.5-turbo-0613", messages=messages)` |
 
-## Getting Reasoning Content in `/chat/completions`
+## [BETA] Route all .completions requests to Responses API (better quality)
+ When enabled, LiteLLM sends OpenAI traffic from `litellm.completion()` and the proxy `/chat/completions` endpoint through the [Responses API](https://platform.openai.com/docs/api-reference/responses) instead of Chat Completions. That path generally matches OpenAI’s latest model behavior and quality (for example, reasoning output on GPT‑5 class models).
 
-GPT-5 models return reasoning content when called via the Responses API. You can call these models via the `/chat/completions` endpoint in two ways:
+You can opt in globally or per request:
 
 **Option A — per-request prefix:** Use the `openai/responses/` model prefix.
 
