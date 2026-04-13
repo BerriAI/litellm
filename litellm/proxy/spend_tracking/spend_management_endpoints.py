@@ -12,6 +12,7 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import *
 from litellm.proxy._types import ProviderBudgetResponse, ProviderBudgetResponseObject
+from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 
 # NOTE: Avoid module-level import from common_utils: proxy_server imports this
@@ -29,6 +30,34 @@ else:
     PrismaClient = Any
 
 router = APIRouter()
+
+
+_GLOBAL_SPEND_REPORT_ROUTE = "/global/spend/report"
+
+
+def _require_global_spend_report_access(user_api_key_dict: UserAPIKeyAuth) -> None:
+    """
+    Allow proxy admin roles, or any role when the virtual key allowlists this route
+    (same matching rules as RouteChecks.is_virtual_key_allowed_to_call_route).
+    """
+    if user_api_key_dict.user_role in (
+        LitellmUserRoles.PROXY_ADMIN,
+        LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
+    ):
+        return
+    if user_api_key_dict.allowed_routes:
+        try:
+            RouteChecks.is_virtual_key_allowed_to_call_route(
+                route=_GLOBAL_SPEND_REPORT_ROUTE,
+                valid_token=user_api_key_dict,
+            )
+            return
+        except HTTPException:
+            pass
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail={"error": CommonProxyErrors.not_allowed_access.value},
+    )
 
 
 @router.get(
@@ -945,12 +974,12 @@ async def get_global_spend_provider(
 @router.get(
     "/global/spend/report",
     tags=["Budget & Spend Tracking"],
-    dependencies=[Depends(user_api_key_auth)],
     responses={
         200: {"model": List[LiteLLM_SpendLogs]},
     },
 )
 async def get_global_spend_report(
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     start_date: Optional[str] = fastapi.Query(
         default=None,
         description="Time from which to start viewing spend",
@@ -1009,6 +1038,8 @@ async def get_global_spend_report(
         ]
     }
     """
+    _require_global_spend_report_access(user_api_key_dict)
+
     if start_date is None or end_date is None:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

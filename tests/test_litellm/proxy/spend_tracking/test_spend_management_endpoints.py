@@ -2761,3 +2761,34 @@ async def test_ui_view_spend_logs_team_member_no_permission_blocked(
         assert response.status_code == 403
     finally:
         app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+def test_require_global_spend_report_access_internal_with_allowed_routes():
+    spend_management_endpoints._require_global_spend_report_access(
+        UserAPIKeyAuth(
+            user_role=LitellmUserRoles.INTERNAL_USER,
+            user_id="u1",
+            allowed_routes=["/global/spend/report"],
+        )
+    )
+
+
+def test_require_global_spend_report_access_internal_with_route_bundle_name():
+    spend_management_endpoints._require_global_spend_report_access(
+        UserAPIKeyAuth(
+            user_role=LitellmUserRoles.INTERNAL_USER,
+            user_id="u1",
+            allowed_routes=["global_spend_report_routes"],
+        )
+    )
+
+
+def test_require_global_spend_report_access_internal_without_allowed_routes_fails():
+    with pytest.raises(HTTPException) as exc_info:
+        spend_management_endpoints._require_global_spend_report_access(
+            UserAPIKeyAuth(
+                user_role=LitellmUserRoles.INTERNAL_USER,
+                user_id="u1",
+            )
+        )
+    assert exc_info.value.status_code == 403
