@@ -22,13 +22,15 @@ export const PERMISSION_DESCRIPTIONS: Record<string, string> = {
   "/key/unblock": "Member can unblock a virtual key belonging to this team",
   "/team/daily/activity":
     "Member can view all team usage data (not just their own)",
+  "/spend/logs":
+    "Member can view spend logs for the entire team (not just their own)",
 };
 
 /**
  * Determines the HTTP method for a given permission endpoint
  */
 export const getMethodForEndpoint = (endpoint: string): string => {
-  if (endpoint.includes("/info") || endpoint.includes("/list") || endpoint.includes("/activity")) {
+  if (endpoint.includes("/info") || endpoint.includes("/list") || endpoint.includes("/activity") || endpoint === "/spend/logs") {
     return "GET";
   }
   return "POST";
