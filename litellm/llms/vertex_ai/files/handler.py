@@ -17,9 +17,10 @@ from litellm.types.llms.openai import (
     HttpxBinaryResponseContent,
     OpenAIFileObject,
 )
+from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.types.llms.vertex_ai import VERTEX_CREDENTIALS_TYPES
 
-from .transformation import VertexAIJsonlFilesTransformation
+from .transformation import VertexAIFilesConfig, VertexAIJsonlFilesTransformation
 
 vertex_ai_files_transformation = VertexAIJsonlFilesTransformation()
 
@@ -197,9 +198,6 @@ class VertexAIFilesHandler(GCSBucketBase):
         )
 
         # Apply transformation to convert Vertex AI batch outputs to OpenAI format
-        from .transformation import VertexAIFilesConfig
-        from litellm.litellm_core_utils.litellm_logging import Logging
-        
         config = VertexAIFilesConfig()
         
         # Create a logging object for transformation

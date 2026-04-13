@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import time
 from typing import Any, Dict, List, Optional, Tuple, Union
 
@@ -9,6 +10,7 @@ from openai.types.file_deleted import FileDeleted
 
 from litellm._uuid import uuid
 from litellm.files.utils import FilesAPIUtils
+from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.prompt_templates.common_utils import extract_file_data
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.files.transformation import (
@@ -32,10 +34,29 @@ from litellm.types.llms.openai import (
     PathLike,
 )
 from litellm.types.llms.vertex_ai import GcsBucketResponse
-from litellm.types.utils import ExtractedFileData, LlmProviders
+from litellm.types.utils import ExtractedFileData, LlmProviders, ModelResponse
 
 from ..common_utils import VertexAIError
 from ..vertex_llm_base import VertexBase
+
+
+def _sanitize_gcp_label_value(value: str) -> str:
+    """
+    Sanitize a string to meet GCP label value constraints.
+    
+    GCP label values must:
+    - Be lowercase
+    - Contain only letters, numbers, underscores, and hyphens
+    - Be max 63 characters
+    
+    Args:
+        value: The string to sanitize
+        
+    Returns:
+        A sanitized string that meets GCP label constraints
+    """
+    sanitized = re.sub(r"[^a-z0-9_-]", "_", value.lower())
+    return sanitized[:63]
 
 
 class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
@@ -254,7 +275,7 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
             if custom_id:
                 if "labels" not in vertex_request_body:
                     vertex_request_body["labels"] = {}
-                vertex_request_body["labels"]["litellm_custom_id"] = str(custom_id)
+                vertex_request_body["labels"]["litellm_custom_id"] = _sanitize_gcp_label_value(str(custom_id))
             
             vertex_jsonl_content.append({"request": vertex_request_body})
         return vertex_jsonl_content
@@ -538,8 +559,20 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
             # Try to parse the first line to see if it's Vertex AI batch output
             first_line = json.loads(lines[0])
             
-            # Check if it has Vertex AI batch output structure
-            if not ("response" in first_line and "request" in first_line):
+            # Check if it has Vertex AI batch output structure with discriminating fields
+            # Must have request, response, and processed_time
+            # Plus either candidates (success) or status (error)
+            has_base_structure = (
+                "response" in first_line
+                and "request" in first_line
+                and "processed_time" in first_line
+            )
+            has_success_or_error = (
+                "candidates" in first_line.get("response", {})
+                or "status" in first_line
+            )
+            
+            if not (has_base_structure and has_success_or_error):
                 # Not a Vertex AI batch output, return as-is
                 return content
             
@@ -573,10 +606,6 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
         Transform a single Vertex AI batch output line to OpenAI format.
         Uses the existing VertexGeminiConfig transformation for the response.
         """
-        from litellm.types.utils import ModelResponse
-        import httpx
-        import time
-        
         # Extract custom_id from request labels
         custom_id = "unknown"
         request_data = vertex_output.get("request", {})
@@ -756,7 +785,7 @@ class VertexAIJsonlFilesTransformation(VertexGeminiConfig):
             if custom_id:
                 if "labels" not in vertex_request_body:
                     vertex_request_body["labels"] = {}
-                vertex_request_body["labels"]["litellm_custom_id"] = str(custom_id)
+                vertex_request_body["labels"]["litellm_custom_id"] = _sanitize_gcp_label_value(str(custom_id))
             
             vertex_jsonl_content.append({"request": vertex_request_body})
         return vertex_jsonl_content
