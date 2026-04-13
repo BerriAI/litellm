@@ -365,15 +365,36 @@ def test_sync_sentinel_uses_sentinel_password_and_master_password(mock_sentinel_
         sentinel_password="sentinel-secret",
         service_name="mymaster",
         password="redis-secret",
+        username="redis-user",
+        ssl=True,
+        ssl_cert_reqs="required",
+        ssl_check_hostname=True,
+        ssl_ca_certs="/tmp/test-ca.pem",
+        max_connections=17,
     )
 
     mock_sentinel_cls.assert_called_once()
     sentinel_call_kwargs = mock_sentinel_cls.call_args[1]
-    assert sentinel_call_kwargs["sentinel_kwargs"] == {"password": "sentinel-secret"}
-    assert "password" not in sentinel_call_kwargs
-    mock_sentinel.master_for.assert_called_once_with(
-        "mymaster", password="redis-secret"
-    )
+    assert sentinel_call_kwargs["password"] == "redis-secret"
+    assert sentinel_call_kwargs["username"] == "redis-user"
+    assert sentinel_call_kwargs["ssl"] is True
+    assert sentinel_call_kwargs["ssl_cert_reqs"] == "required"
+    assert sentinel_call_kwargs["ssl_check_hostname"] is True
+    assert sentinel_call_kwargs["ssl_ca_certs"] == "/tmp/test-ca.pem"
+    assert sentinel_call_kwargs["max_connections"] == 17
+    assert sentinel_call_kwargs["sentinel_kwargs"] == {
+        "password": "sentinel-secret",
+        "username": "redis-user",
+        "ssl": True,
+        "ssl_cert_reqs": "required",
+        "ssl_check_hostname": True,
+        "ssl_ca_certs": "/tmp/test-ca.pem",
+        "max_connections": 17,
+    }
+    assert "service_name" not in sentinel_call_kwargs["sentinel_kwargs"]
+    assert "sentinel_nodes" not in sentinel_call_kwargs["sentinel_kwargs"]
+    assert "sentinel_password" not in sentinel_call_kwargs["sentinel_kwargs"]
+    mock_sentinel.master_for.assert_called_once_with("mymaster")
 
 
 @patch("litellm._redis.async_redis.Sentinel")
@@ -389,15 +410,36 @@ def test_async_sentinel_uses_sentinel_password_and_master_password(
         sentinel_password="sentinel-secret",
         service_name="mymaster",
         password="redis-secret",
+        username="redis-user",
+        ssl=True,
+        ssl_cert_reqs="required",
+        ssl_check_hostname=True,
+        ssl_ca_certs="/tmp/test-ca.pem",
+        max_connections=17,
     )
 
     mock_sentinel_cls.assert_called_once()
     sentinel_call_kwargs = mock_sentinel_cls.call_args[1]
-    assert sentinel_call_kwargs["sentinel_kwargs"] == {"password": "sentinel-secret"}
-    assert "password" not in sentinel_call_kwargs
-    mock_sentinel.master_for.assert_called_once_with(
-        "mymaster", password="redis-secret"
-    )
+    assert sentinel_call_kwargs["password"] == "redis-secret"
+    assert sentinel_call_kwargs["username"] == "redis-user"
+    assert sentinel_call_kwargs["ssl"] is True
+    assert sentinel_call_kwargs["ssl_cert_reqs"] == "required"
+    assert sentinel_call_kwargs["ssl_check_hostname"] is True
+    assert sentinel_call_kwargs["ssl_ca_certs"] == "/tmp/test-ca.pem"
+    assert sentinel_call_kwargs["max_connections"] == 17
+    assert sentinel_call_kwargs["sentinel_kwargs"] == {
+        "password": "sentinel-secret",
+        "username": "redis-user",
+        "ssl": True,
+        "ssl_cert_reqs": "required",
+        "ssl_check_hostname": True,
+        "ssl_ca_certs": "/tmp/test-ca.pem",
+        "max_connections": 17,
+    }
+    assert "service_name" not in sentinel_call_kwargs["sentinel_kwargs"]
+    assert "sentinel_nodes" not in sentinel_call_kwargs["sentinel_kwargs"]
+    assert "sentinel_password" not in sentinel_call_kwargs["sentinel_kwargs"]
+    mock_sentinel.master_for.assert_called_once_with("mymaster")
 
 
 @patch("litellm._redis.init_redis_cluster")
