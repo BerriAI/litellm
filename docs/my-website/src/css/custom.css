@@ -899,18 +899,28 @@ video {
   font-size: 0.85rem;
 }
 
-[data-theme='dark'] .blog-wrapper article header h1,
-[data-theme='dark'] .blog-wrapper article .markdown h2,
-[data-theme='dark'] .blog-wrapper article .markdown h3 {
+[data-theme='dark'].blog-wrapper article header h1,
+[data-theme='dark'].blog-wrapper article .markdown h2,
+[data-theme='dark'].blog-wrapper article .markdown h3 {
   color: #f9fafb;
 }
 
-[data-theme='dark'] .blog-wrapper article .markdown {
+[data-theme='dark'].blog-wrapper article .markdown {
   color: #d1d5db;
 }
 
-[data-theme='dark'] .blog-wrapper article .markdown code {
+[data-theme='dark'].blog-wrapper article .markdown code {
   background: #1f2937;
   border-color: #374151;
   color: #f9fafb;
+}
+
+[data-theme='dark'].blog-wrapper article .markdown pre {
+  background: #161b22 !important;
+  border-color: #30363d !important;
+  box-shadow: none;
+}
+
+[data-theme='dark'].blog-wrapper article .markdown a {
+  color: #38bdf8;
 }
