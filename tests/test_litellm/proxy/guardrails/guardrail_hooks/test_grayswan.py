@@ -4,9 +4,6 @@ import pytest
 from fastapi import HTTPException
 
 from litellm.integrations.custom_guardrail import ModifyResponseException
-from litellm.llms.openai.chat.guardrail_translation.handler import (
-    OpenAIChatCompletionsHandler,
-)
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.grayswan.grayswan import (
     GraySwanGuardrail,
@@ -480,13 +477,16 @@ def test_prepare_payload_includes_litellm_metadata(
     assert payload["litellm_metadata"]["user_api_key_team_id"] == "team-456"
 
 
-def test_ensure_litellm_metadata_populates_from_user_api_key_auth() -> None:
-    """Verify BaseTranslation._ensure_litellm_metadata extracts from metadata."""
-    handler = OpenAIChatCompletionsHandler()
-    user_auth = UserAPIKeyAuth(user_id="u1", team_id="t1", api_key="sk-test-hashed")
-    data: dict = {"metadata": {"user_api_key_auth": user_auth}}
+def test_ensure_litellm_metadata_populates_from_user_api_key_dict() -> None:
+    """Verify _ensure_litellm_metadata populates from user_api_key_dict."""
+    from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import (
+        _ensure_litellm_metadata,
+    )
 
-    handler._ensure_litellm_metadata(data)
+    user_auth = UserAPIKeyAuth(user_id="u1", team_id="t1", api_key="sk-test-hashed")
+    data: dict = {}
+
+    _ensure_litellm_metadata(data, user_auth)
 
     assert "litellm_metadata" in data
     assert data["litellm_metadata"]["user_api_key_user_id"] == "u1"
@@ -495,13 +495,13 @@ def test_ensure_litellm_metadata_populates_from_user_api_key_auth() -> None:
 
 def test_ensure_litellm_metadata_noop_when_already_present() -> None:
     """Verify _ensure_litellm_metadata does not overwrite existing litellm_metadata."""
-    handler = OpenAIChatCompletionsHandler()
-    user_auth = UserAPIKeyAuth(user_id="should-not-appear")
-    data: dict = {
-        "litellm_metadata": {"existing": "value"},
-        "metadata": {"user_api_key_auth": user_auth},
-    }
+    from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import (
+        _ensure_litellm_metadata,
+    )
 
-    handler._ensure_litellm_metadata(data)
+    user_auth = UserAPIKeyAuth(user_id="should-not-appear")
+    data: dict = {"litellm_metadata": {"existing": "value"}}
+
+    _ensure_litellm_metadata(data, user_auth)
 
     assert data["litellm_metadata"] == {"existing": "value"}
