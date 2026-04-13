@@ -7,7 +7,7 @@
 | Description | SaladCloud AI Gateway is an OpenAI-compatible LLM API service powered by distributed GPU infrastructure. |
 | Provider Route on LiteLLM | `salad_cloud/` |
 | Link to Provider Doc | [SaladCloud AI Gateway ↗](https://docs.salad.com/ai-gateway/explanation/overview) |
-| Base URL | `https://ai.salad.cloud:40404/v1` |
+| Base URL | `https://ai.salad.cloud/v1` |
 
 ## Required Variables
 

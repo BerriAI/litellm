@@ -34,7 +34,7 @@ class TestSaladCloudProviderConfig:
 
         salad_cloud = JSONProviderRegistry.get("salad_cloud")
         assert salad_cloud is not None
-        assert salad_cloud.base_url == "https://ai.salad.cloud:40404/v1"
+        assert salad_cloud.base_url == "https://ai.salad.cloud/v1"
         assert salad_cloud.api_key_env == "SALAD_API_KEY"
 
     def test_salad_cloud_provider_resolution(self):
@@ -50,7 +50,7 @@ class TestSaladCloudProviderConfig:
 
         assert model == "qwen3.5-35b-a3b"
         assert provider == "salad_cloud"
-        assert api_base == "https://ai.salad.cloud:40404/v1"
+        assert api_base == "https://ai.salad.cloud/v1"
 
     def test_salad_cloud_router_config(self):
         """Test that salad_cloud can be used in Router configuration"""

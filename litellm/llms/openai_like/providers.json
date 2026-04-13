@@ -103,7 +103,7 @@
     }
   },
   "salad_cloud": {
-    "base_url": "https://ai.salad.cloud:40404/v1",
+    "base_url": "https://ai.salad.cloud/v1",
     "api_key_env": "SALAD_API_KEY"
   }
 }
