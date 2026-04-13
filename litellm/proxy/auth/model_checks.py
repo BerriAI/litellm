@@ -4,10 +4,12 @@ from typing import Dict, List, Optional, Set
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.proxy._types import SpecialModelNames, UserAPIKeyAuth
 from litellm.router import Router
 from litellm.router_utils.fallback_event_handlers import get_fallback_model_group
 from litellm.types.router import LiteLLM_Params
+from litellm.types.utils import LlmProvidersSet
 from litellm.utils import get_valid_models
 
 
@@ -62,6 +64,82 @@ def _get_models_from_access_groups(
 
     all_models.extend(new_models)
     return all_models
+
+
+def _is_known_provider_qualified_model(model: str) -> bool:
+    """
+    Return True for provider-qualified model identifiers such as:
+    - openai/gpt-4o-mini
+    - bedrock/us.amazon.nova-micro-v1:0
+    - openrouter/auto
+
+    This intentionally allows provider-prefixed models even when the exact
+    model name is not yet in LiteLLM's static model list, since those routes
+    may still be valid for pass-through / BYOK flows.
+    """
+    if "/" not in model:
+        return False
+
+    provider_prefix = model.split("/", 1)[0]
+    return provider_prefix in LlmProvidersSet or JSONProviderRegistry.exists(
+        provider_prefix
+    )
+
+
+def _should_include_model_in_complete_list(
+    model: str,
+    proxy_model_list: List[str],
+    model_access_groups: Dict[str, List[str]],
+) -> bool:
+    """
+    Filter out unresolved strings from the final model list returned by
+    /v1/models and related endpoints.
+
+    Keep:
+    - configured proxy model groups
+    - configured access group names
+    - known base model IDs (e.g. gpt-4o-mini)
+    - known provider-qualified routes (e.g. openai/gpt-4o-mini, bedrock/*)
+
+    Drop:
+    - arbitrary strings that don't resolve to a proxy model, access group, or
+      a recognized LiteLLM/provider model route.
+    """
+    if model in (
+        SpecialModelNames.all_proxy_models.value,
+        SpecialModelNames.all_team_models.value,
+    ):
+        return False
+
+    if model in proxy_model_list or model in model_access_groups:
+        return True
+
+    if model in litellm.model_list_set:
+        return True
+
+    if model == "*":
+        return True
+
+    if _is_known_provider_qualified_model(model):
+        return True
+
+    return False
+
+
+def _filter_complete_model_list(
+    models: List[str],
+    proxy_model_list: List[str],
+    model_access_groups: Dict[str, List[str]],
+) -> List[str]:
+    return [
+        model
+        for model in models
+        if _should_include_model_in_complete_list(
+            model=model,
+            proxy_model_list=proxy_model_list,
+            model_access_groups=model_access_groups,
+        )
+    ]
 
 
 async def get_mcp_server_ids(
@@ -210,6 +288,12 @@ def get_complete_model_list(
         if infer_model_from_keys:
             valid_models = get_valid_models()
             append_unique(valid_models)
+
+    unique_models = _filter_complete_model_list(
+        models=unique_models,
+        proxy_model_list=proxy_model_list,
+        model_access_groups=model_access_groups,
+    )
 
     if only_model_access_groups:
         model_access_groups_to_return: List[str] = []

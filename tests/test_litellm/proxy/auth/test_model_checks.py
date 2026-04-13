@@ -37,7 +37,10 @@ def test_get_team_models_all_proxy_models_includes_access_groups():
     }
 
     result = get_team_models(
-        team_models, proxy_model_list, model_access_groups, include_model_access_groups=True
+        team_models,
+        proxy_model_list,
+        model_access_groups,
+        include_model_access_groups=True,
     )
     assert "group-a" in result
     assert "group-b" in result
@@ -61,7 +64,10 @@ def test_get_team_models_all_proxy_models_without_include_flag():
     }
 
     result = get_team_models(
-        team_models, proxy_model_list, model_access_groups, include_model_access_groups=False
+        team_models,
+        proxy_model_list,
+        model_access_groups,
+        include_model_access_groups=False,
     )
     assert "group-a" not in result
     assert "group-b" not in result
@@ -159,43 +165,66 @@ def test_get_key_models_does_not_mutate_input():
     "key_models,team_models,proxy_model_list,model_list,expected",
     [
         (
-            ["anthropic/claude-3-haiku-20240307", "anthropic/claude-3-5-haiku-20241022"],
+            [
+                "anthropic/claude-3-haiku-20240307",
+                "anthropic/claude-3-5-haiku-20241022",
+            ],
             [],
             [],
             [{"model_name": "anthropic/*", "litellm_params": {"model": "anthropic/*"}}],
-            ["anthropic/claude-3-haiku-20240307", "anthropic/claude-3-5-haiku-20241022"]
+            [
+                "anthropic/claude-3-haiku-20240307",
+                "anthropic/claude-3-5-haiku-20241022",
+            ],
         ),
         (
             [],
-            ["anthropic/claude-3-haiku-20240307", "anthropic/claude-3-5-haiku-20241022"],
+            [
+                "anthropic/claude-3-haiku-20240307",
+                "anthropic/claude-3-5-haiku-20241022",
+            ],
             [],
             [{"model_name": "anthropic/*", "litellm_params": {"model": "anthropic/*"}}],
-            ["anthropic/claude-3-haiku-20240307", "anthropic/claude-3-5-haiku-20241022"]
+            [
+                "anthropic/claude-3-haiku-20240307",
+                "anthropic/claude-3-5-haiku-20241022",
+            ],
         ),
         (
             [],
             [],
-            ["anthropic/claude-3-haiku-20240307", "anthropic/claude-3-5-haiku-20241022"],
+            [
+                "anthropic/claude-3-haiku-20240307",
+                "anthropic/claude-3-5-haiku-20241022",
+            ],
             [{"model_name": "anthropic/*", "litellm_params": {"model": "anthropic/*"}}],
-            ["anthropic/claude-3-haiku-20240307", "anthropic/claude-3-5-haiku-20241022"]
+            [
+                "anthropic/claude-3-haiku-20240307",
+                "anthropic/claude-3-5-haiku-20241022",
+            ],
         ),
     ],
 )
-def test_get_complete_model_list_order(key_models, team_models, proxy_model_list, model_list, expected):
+def test_get_complete_model_list_order(
+    key_models, team_models, proxy_model_list, model_list, expected
+):
     """
     Test that get_complete_model_list preserves order
     """
     from litellm.proxy.auth.model_checks import get_complete_model_list
     from litellm import Router
 
-    assert get_complete_model_list(
-        proxy_model_list=proxy_model_list,
-        key_models=key_models,
-        team_models=team_models,
-        user_model=None,
-        infer_model_from_keys=False,
-        llm_router=Router(model_list=model_list),
-    ) == expected
+    assert (
+        get_complete_model_list(
+            proxy_model_list=proxy_model_list,
+            key_models=key_models,
+            team_models=team_models,
+            user_model=None,
+            infer_model_from_keys=False,
+            llm_router=Router(model_list=model_list),
+        )
+        == expected
+    )
 
 
 def test_get_complete_model_list_byok_wildcard_expansion():
@@ -220,3 +249,66 @@ def test_get_complete_model_list_byok_wildcard_expansion():
     assert len(result) > 0
     assert all(m.startswith("openai/") for m in result)
     assert "openai/*" not in result
+
+
+def test_get_complete_model_list_filters_unknown_non_model_strings():
+    """
+    If a key contains an arbitrary string that is neither:
+    - a configured proxy model
+    - a configured access group
+    - a known LiteLLM model id
+    - nor a recognized provider-qualified route
+
+    it should not leak into the final /v1/models response.
+    """
+    from litellm.proxy.auth.model_checks import get_complete_model_list
+
+    result = get_complete_model_list(
+        key_models=["team-sales-api"],
+        team_models=[],
+        proxy_model_list=["gpt-4o-mini"],
+        user_model=None,
+        infer_model_from_keys=False,
+        model_access_groups={},
+    )
+
+    assert "team-sales-api" not in result
+    assert result == []
+
+
+def test_get_complete_model_list_keeps_known_base_model_ids():
+    """
+    Exact model IDs can be valid even when they are not configured as proxy
+    model groups, so known LiteLLM model ids should remain in the final list.
+    """
+    from litellm.proxy.auth.model_checks import get_complete_model_list
+
+    result = get_complete_model_list(
+        key_models=["gpt-4o-mini"],
+        team_models=[],
+        proxy_model_list=[],
+        user_model=None,
+        infer_model_from_keys=False,
+        model_access_groups={},
+    )
+
+    assert result == ["gpt-4o-mini"]
+
+
+def test_get_complete_model_list_keeps_provider_qualified_models():
+    """
+    Provider-qualified model identifiers should survive filtering even if the
+    exact model name is newer than LiteLLM's baked-in model list.
+    """
+    from litellm.proxy.auth.model_checks import get_complete_model_list
+
+    result = get_complete_model_list(
+        key_models=["bedrock/very_new_model"],
+        team_models=[],
+        proxy_model_list=[],
+        user_model=None,
+        infer_model_from_keys=False,
+        model_access_groups={},
+    )
+
+    assert result == ["bedrock/very_new_model"]
