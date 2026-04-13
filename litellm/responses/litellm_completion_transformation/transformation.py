@@ -375,6 +375,11 @@ class LiteLLMCompletionResponsesConfig:
             messages.append(ChatCompletionUserMessage(role="user", content=input))
         elif isinstance(input, list):
             existing_tool_call_ids: Set[str] = set()
+            # Track whether tool result messages have been added since
+            # the last assistant message.  When True, a new function_call
+            # means we've crossed a turn boundary and must NOT merge into
+            # the previous assistant message.
+            tool_results_since_last_assistant: bool = False
             for _input in input:
                 chat_completion_messages = LiteLLMCompletionResponsesConfig._transform_responses_api_input_item_to_chat_completion_message(
                     input_item=_input
@@ -395,8 +400,13 @@ class LiteLLMCompletionResponsesConfig:
                     # assistant message, producing back-to-back assistant messages that
                     # Anthropic rejects with "tool_use ids were found without
                     # tool_result blocks immediately after".
+                    #
+                    # However, do NOT merge across turn boundaries.  If tool
+                    # results have been appended since the last assistant
+                    # message, this function_call starts a new turn and must
+                    # produce a separate assistant message.
                     #########################################################
-                    if messages:
+                    if messages and not tool_results_since_last_assistant:
                         last_msg = messages[-1]
                         last_role = (
                             last_msg.get("role")
@@ -425,6 +435,12 @@ class LiteLLMCompletionResponsesConfig:
                                         )
                             continue
 
+                    # A new assistant message is being created (either first
+                    # in the conversation or after a turn boundary).  Reset
+                    # the flag so subsequent consecutive function_calls in
+                    # the same turn get merged.
+                    tool_results_since_last_assistant = False
+
                 #########################################################
                 # If Input Item is a Tool Call Output, add it to the tool_call_output_messages list
                 # preserving the ordering of tool call outputs. Some models require the tool
@@ -433,6 +449,10 @@ class LiteLLMCompletionResponsesConfig:
                 if LiteLLMCompletionResponsesConfig._is_input_item_tool_call_output(
                     input_item=_input
                 ):
+                    # Mark that tool results have been seen — the next
+                    # function_call (if any) starts a new turn.
+                    tool_results_since_last_assistant = True
+
                     if not chat_completion_messages:
                         continue
 
@@ -1401,9 +1421,60 @@ class LiteLLMCompletionResponsesConfig:
                     cast(ChatCompletionToolParam, chat_completion_tool)
                 )
             else:
-                chat_completion_tools.append(
-                    cast(Union[ChatCompletionToolParam, OpenAIMcpServerTool], tool)
-                )
+                #########################################################
+                # Handle Codex CLI tool definition format.
+                #
+                # Codex sends tools as:
+                #   {id: "tool_name", inputSchema: {jsonSchema: {...}}}
+                # without a "type" field.  Detect this by checking for
+                # "inputSchema" — the distinguishing Codex marker.
+                # All other unrecognized tool types (code_execution,
+                # tool_search, etc.) are passed through as-is.
+                #########################################################
+                if "inputSchema" in tool or (
+                    "id" in tool and "type" not in tool and "name" not in tool
+                ):
+                    # Tool name: prefer "name", fall back to "id" (Codex format)
+                    tool_name = tool.get("name") or tool.get("id", "")
+
+                    # Skip tools with empty names (e.g. ghost entries from Codex)
+                    if not tool_name:
+                        chat_completion_tools.append(
+                            cast(
+                                Union[ChatCompletionToolParam, OpenAIMcpServerTool],
+                                tool,
+                            )
+                        )
+                        continue
+
+                    # Parameters: prefer "parameters", fall back to
+                    # "inputSchema.jsonSchema" (Codex format)
+                    codex_parameters = tool.get("parameters")
+                    if codex_parameters is None:
+                        input_schema = tool.get("inputSchema")
+                        if isinstance(input_schema, dict):
+                            codex_parameters = input_schema.get("jsonSchema", {})
+                        else:
+                            codex_parameters = {}
+                    codex_parameters = dict(codex_parameters or {})
+                    if not codex_parameters or "type" not in codex_parameters:
+                        codex_parameters["type"] = "object"
+
+                    codex_tool: Dict[str, Any] = {
+                        "type": "function",
+                        "function": {
+                            "name": tool_name,
+                            "description": tool.get("description", ""),
+                            "parameters": codex_parameters,
+                        },
+                    }
+                    chat_completion_tools.append(
+                        cast(ChatCompletionToolParam, codex_tool)
+                    )
+                else:
+                    chat_completion_tools.append(
+                        cast(Union[ChatCompletionToolParam, OpenAIMcpServerTool], tool)
+                    )
         return chat_completion_tools, web_search_options
 
     @staticmethod
@@ -2123,9 +2194,9 @@ class LiteLLMCompletionResponsesConfig:
                 hasattr(completion_details, "reasoning_tokens")
                 and completion_details.reasoning_tokens is not None
             ):
-                output_details_dict[
-                    "reasoning_tokens"
-                ] = completion_details.reasoning_tokens
+                output_details_dict["reasoning_tokens"] = (
+                    completion_details.reasoning_tokens
+                )
             else:
                 output_details_dict["reasoning_tokens"] = 0
 

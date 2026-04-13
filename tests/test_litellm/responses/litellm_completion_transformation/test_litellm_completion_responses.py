@@ -2169,3 +2169,364 @@ class TestEnsureOutputItemContentPartAdded:
 
         events = iterator._pending_response_events
         assert len(events) == 2
+
+
+# ---------------------------------------------------------------------------
+# Tests for multi-turn tool call boundary detection (Fix #1)
+# ---------------------------------------------------------------------------
+
+
+class TestMultiTurnToolCallBoundary:
+    """Verify that function_call items from different turns produce separate
+    assistant messages instead of being incorrectly merged into one."""
+
+    def test_single_turn_tool_calls_are_merged(self):
+        """Within a single turn, consecutive function_calls should merge
+        into one assistant message (existing behaviour, must not regress)."""
+        input_items = [
+            {"role": "user", "content": "Do two things"},
+            {
+                "type": "function_call",
+                "name": "tool_a",
+                "call_id": "call_a",
+                "arguments": "{}",
+            },
+            {
+                "type": "function_call",
+                "name": "tool_b",
+                "call_id": "call_b",
+                "arguments": "{}",
+            },
+            {
+                "type": "function_call_output",
+                "call_id": "call_a",
+                "output": "result_a",
+            },
+            {
+                "type": "function_call_output",
+                "call_id": "call_b",
+                "output": "result_b",
+            },
+        ]
+        messages = LiteLLMCompletionResponsesConfig._transform_response_input_param_to_chat_completion_message(
+            input=input_items
+        )
+        asst_msgs = [m for m in messages if _get_role(m) == "assistant"]
+        assert len(asst_msgs) == 1, "Single turn: should have 1 assistant message"
+        assert len(_get_tool_calls(asst_msgs[0])) == 2
+
+    def test_two_turns_produce_separate_assistant_messages(self):
+        """Two turns of tool calls must produce two separate assistant messages.
+
+        Sequence: user → call → call → output → output → call → call → output → output
+        Expected: user, assistant(2 calls), tool, tool, assistant(2 calls), tool, tool
+        """
+        input_items = [
+            {"role": "user", "content": "Multi-turn task"},
+            # Turn 1
+            {
+                "type": "function_call",
+                "name": "update_plan",
+                "call_id": "t1_a",
+                "arguments": "{}",
+            },
+            {
+                "type": "function_call",
+                "name": "apply_patch",
+                "call_id": "t1_b",
+                "arguments": "{}",
+            },
+            {
+                "type": "function_call_output",
+                "call_id": "t1_a",
+                "output": "Plan updated",
+            },
+            {
+                "type": "function_call_output",
+                "call_id": "t1_b",
+                "output": "Patch applied",
+            },
+            # Turn 2
+            {
+                "type": "function_call",
+                "name": "exec_cmd",
+                "call_id": "t2_a",
+                "arguments": '{"cmd":"ls"}',
+            },
+            {
+                "type": "function_call",
+                "name": "exec_cmd",
+                "call_id": "t2_b",
+                "arguments": '{"cmd":"pwd"}',
+            },
+            {
+                "type": "function_call_output",
+                "call_id": "t2_a",
+                "output": "file1 file2",
+            },
+            {
+                "type": "function_call_output",
+                "call_id": "t2_b",
+                "output": "/workspace",
+            },
+        ]
+        messages = LiteLLMCompletionResponsesConfig._transform_response_input_param_to_chat_completion_message(
+            input=input_items
+        )
+        asst_msgs = [m for m in messages if _get_role(m) == "assistant"]
+        tool_msgs = [m for m in messages if _get_role(m) == "tool"]
+
+        assert len(asst_msgs) == 2, "Should have 2 assistant messages (one per turn)"
+        assert len(_get_tool_calls(asst_msgs[0])) == 2, "Turn 1: 2 tool calls"
+        assert len(_get_tool_calls(asst_msgs[1])) == 2, "Turn 2: 2 tool calls"
+        assert len(tool_msgs) == 4, "Total 4 tool results"
+
+        # Verify ordering: user, assistant, tool, tool, assistant, tool, tool
+        expected_roles = [
+            "user",
+            "assistant",
+            "tool",
+            "tool",
+            "assistant",
+            "tool",
+            "tool",
+        ]
+        actual_roles = [_get_role(m) for m in messages]
+        assert actual_roles == expected_roles
+
+    def test_three_turns_produce_three_assistant_messages(self):
+        """Three turns of tool calls produce 3 separate assistant messages."""
+        input_items = [
+            {"role": "user", "content": "Create a script"},
+            # Turn 1: 2 calls
+            {
+                "type": "function_call",
+                "name": "update_plan",
+                "call_id": "t1_a",
+                "arguments": "{}",
+            },
+            {
+                "type": "function_call",
+                "name": "apply_patch",
+                "call_id": "t1_b",
+                "arguments": "{}",
+            },
+            {
+                "type": "function_call_output",
+                "call_id": "t1_a",
+                "output": "Plan updated",
+            },
+            {
+                "type": "function_call_output",
+                "call_id": "t1_b",
+                "output": "unsupported",
+            },
+            # Turn 2: 3 calls
+            {
+                "type": "function_call",
+                "name": "exec_command",
+                "call_id": "t2_a",
+                "arguments": '{"cmd":"ls"}',
+            },
+            {
+                "type": "function_call",
+                "name": "exec_command",
+                "call_id": "t2_b",
+                "arguments": '{"cmd":"echo hi"}',
+            },
+            {
+                "type": "function_call",
+                "name": "exec_command",
+                "call_id": "t2_c",
+                "arguments": '{"cmd":"pwd"}',
+            },
+            {
+                "type": "function_call_output",
+                "call_id": "t2_a",
+                "output": "file1 file2",
+            },
+            {"type": "function_call_output", "call_id": "t2_b", "output": "hi"},
+            {"type": "function_call_output", "call_id": "t2_c", "output": "/workspace"},
+            # Turn 3: 2 calls
+            {
+                "type": "function_call",
+                "name": "exec_command",
+                "call_id": "t3_a",
+                "arguments": '{"cmd":"cat file1"}',
+            },
+            {
+                "type": "function_call",
+                "name": "exec_command",
+                "call_id": "t3_b",
+                "arguments": '{"cmd":"cat file2"}',
+            },
+            {"type": "function_call_output", "call_id": "t3_a", "output": "content1"},
+            {"type": "function_call_output", "call_id": "t3_b", "output": "content2"},
+        ]
+        messages = LiteLLMCompletionResponsesConfig._transform_response_input_param_to_chat_completion_message(
+            input=input_items
+        )
+        asst_msgs = [m for m in messages if _get_role(m) == "assistant"]
+        tool_msgs = [m for m in messages if _get_role(m) == "tool"]
+
+        assert len(asst_msgs) == 3, "Should have 3 assistant messages"
+        assert len(_get_tool_calls(asst_msgs[0])) == 2, "Turn 1: 2 calls"
+        assert len(_get_tool_calls(asst_msgs[1])) == 3, "Turn 2: 3 calls"
+        assert len(_get_tool_calls(asst_msgs[2])) == 2, "Turn 3: 2 calls"
+        assert len(tool_msgs) == 7, "Total 7 tool results"
+
+
+# ---------------------------------------------------------------------------
+# Tests for Codex tool definition format (Fix #2)
+# ---------------------------------------------------------------------------
+
+
+class TestCodexToolDefinitionFormat:
+    """Verify that Codex CLI tool definitions using 'id' and
+    'inputSchema.jsonSchema' are correctly handled."""
+
+    def test_standard_function_tool_unchanged(self):
+        """Standard Responses API function tools should work as before."""
+        tools = [
+            {
+                "type": "function",
+                "name": "get_weather",
+                "description": "Get the weather",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"location": {"type": "string"}},
+                },
+            }
+        ]
+        result, _ = (
+            LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+                tools=tools
+            )
+        )
+        assert len(result) == 1
+        func = result[0]["function"]
+        assert func["name"] == "get_weather"
+        assert func["parameters"]["properties"]["location"]["type"] == "string"
+
+    def test_codex_tool_with_id_and_input_schema(self):
+        """Codex CLI sends tools with 'id' instead of 'name' and
+        'inputSchema.jsonSchema' instead of 'parameters'."""
+        tools = [
+            {
+                "id": "exec_command",
+                "inputSchema": {
+                    "jsonSchema": {
+                        "type": "object",
+                        "properties": {"cmd": {"type": "string"}},
+                    }
+                },
+            }
+        ]
+        result, _ = (
+            LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+                tools=tools
+            )
+        )
+        assert len(result) == 1
+        func = result[0]["function"]
+        assert func["name"] == "exec_command"
+        assert func["parameters"]["type"] == "object"
+        assert func["parameters"]["properties"]["cmd"]["type"] == "string"
+
+    def test_codex_tool_with_name_takes_precedence_over_id(self):
+        """If both 'name' and 'id' are present, 'name' takes precedence."""
+        tools = [
+            {
+                "id": "old_name",
+                "name": "new_name",
+                "inputSchema": {
+                    "jsonSchema": {
+                        "type": "object",
+                        "properties": {},
+                    }
+                },
+            }
+        ]
+        result, _ = (
+            LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+                tools=tools
+            )
+        )
+        assert len(result) == 1
+        func = result[0]["function"]
+        assert func["name"] == "new_name"
+
+    def test_codex_tool_parameters_takes_precedence_over_input_schema(self):
+        """If both 'parameters' and 'inputSchema' are present,
+        'parameters' takes precedence."""
+        tools = [
+            {
+                "id": "my_tool",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"from_params": {"type": "string"}},
+                },
+                "inputSchema": {
+                    "jsonSchema": {
+                        "type": "object",
+                        "properties": {"from_schema": {"type": "string"}},
+                    }
+                },
+            }
+        ]
+        result, _ = (
+            LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+                tools=tools
+            )
+        )
+        func = result[0]["function"]
+        assert "from_params" in func["parameters"]["properties"]
+        assert "from_schema" not in func["parameters"]["properties"]
+
+    def test_empty_name_tool_passed_through(self):
+        """Tools with empty names (ghost entries) should be passed through
+        as-is to avoid silently dropping provider-specific tool types."""
+        tools = [
+            {"id": "", "inputSchema": {"jsonSchema": {}}},
+            {"id": "valid_tool", "inputSchema": {"jsonSchema": {"type": "object"}}},
+        ]
+        result, _ = (
+            LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+                tools=tools
+            )
+        )
+        # First tool passed through as-is, second converted
+        assert len(result) == 2
+        assert result[1]["function"]["name"] == "valid_tool"
+
+    def test_codex_tool_missing_input_schema(self):
+        """Codex tool with 'id' but no 'inputSchema' gets empty parameters."""
+        tools = [{"id": "simple_tool"}]
+        result, _ = (
+            LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+                tools=tools
+            )
+        )
+        assert len(result) == 1
+        func = result[0]["function"]
+        assert func["name"] == "simple_tool"
+        assert func["parameters"]["type"] == "object"
+
+
+# ---------------------------------------------------------------------------
+# Helpers for multi-turn tests
+# ---------------------------------------------------------------------------
+
+
+def _get_role(msg):
+    """Extract role from a message (dict or object)."""
+    if isinstance(msg, dict):
+        return msg.get("role", "")
+    return getattr(msg, "role", "")
+
+
+def _get_tool_calls(msg):
+    """Extract tool_calls list from a message (dict or object)."""
+    if isinstance(msg, dict):
+        return msg.get("tool_calls") or []
+    return getattr(msg, "tool_calls", None) or []
