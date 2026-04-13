@@ -4,7 +4,6 @@ from typing import Dict, List, Optional, Set
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.proxy._types import SpecialModelNames, UserAPIKeyAuth
 from litellm.router import Router
 from litellm.router_utils.fallback_event_handlers import get_fallback_model_group
@@ -74,8 +73,18 @@ def _is_resolvable_dynamic_model(model: str) -> bool:
     - provider-qualified routes such as `bedrock/us.amazon.nova-micro-v1:0`
       or JSON-registry providers such as `publicai/some-new-model`
     - dynamic model identifiers such as OpenAI fine-tunes
-      (`ft:gpt-4o:my-org:custom:id`)
+      (`ft:gpt-4o:my-org:custom:id`, `ft:davinci-002:org:suffix:id`)
     """
+    # OpenAI fine-tuned model ids are valid dynamic models, including legacy
+    # bases such as `ft:davinci-002:...` and `ft:babbage-002:...`.
+    # Keep them without calling get_llm_provider(), which currently does not
+    # recognize every historical fine-tune base and prints provider-help text
+    # on failure.
+    if model.startswith("ft:"):
+        return True
+
+    from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+
     try:
         get_llm_provider(model=model)
         return True

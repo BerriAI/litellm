@@ -347,3 +347,31 @@ def test_get_complete_model_list_keeps_openai_finetune_model_ids():
     )
 
     assert result == [finetuned_model]
+
+
+@pytest.mark.parametrize(
+    "finetuned_model",
+    [
+        "ft:davinci-002:my-org:custom-suffix:model-id",
+        "ft:babbage-002:my-org:custom-suffix:model-id",
+    ],
+)
+def test_get_complete_model_list_keeps_legacy_openai_finetune_model_ids(
+    finetuned_model: str,
+):
+    """
+    Legacy OpenAI fine-tuned model IDs should also remain visible even though
+    get_llm_provider() does not recognize all historical fine-tune base names.
+    """
+    from litellm.proxy.auth.model_checks import get_complete_model_list
+
+    result = get_complete_model_list(
+        key_models=[finetuned_model],
+        team_models=[],
+        proxy_model_list=[],
+        user_model=None,
+        infer_model_from_keys=False,
+        model_access_groups={},
+    )
+
+    assert result == [finetuned_model]
