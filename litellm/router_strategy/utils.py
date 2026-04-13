@@ -40,7 +40,11 @@ def extract_text_from_input(input: Union[str, List]) -> Optional[str]:
                         parts.append(content)
                 elif isinstance(content, list):
                     for part in content:
-                        if isinstance(part, dict) and part.get("type") == "text":
+                        # Responses API uses "input_text"; Chat Completions uses "text"
+                        if isinstance(part, dict) and part.get("type") in (
+                            "text",
+                            "input_text",
+                        ):
                             t = part.get("text") or ""
                             if t:
                                 parts.append(t)

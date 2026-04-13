@@ -728,8 +728,8 @@ class TestExtractTextFromInput:
         )
         assert result == "Hello world"
 
-    def test_message_type_item_list_content(self):
-        """A {type: message} item whose content is a list of text parts."""
+    def test_message_type_item_list_content_text(self):
+        """A {type: message} item whose content uses Chat Completions 'text' parts."""
         result = extract_text_from_input(
             [
                 {
@@ -739,6 +739,23 @@ class TestExtractTextFromInput:
                         {"type": "text", "text": "Hello"},
                         {"type": "image_url", "image_url": {"url": "data:..."}},
                         {"type": "text", "text": "world"},
+                    ],
+                }
+            ]
+        )
+        assert result == "Hello world"
+
+    def test_message_type_item_list_content_input_text(self):
+        """A {type: message} item whose content uses Responses API 'input_text' parts."""
+        result = extract_text_from_input(
+            [
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [
+                        {"type": "input_text", "text": "Hello"},
+                        {"type": "input_image", "image_url": "data:..."},
+                        {"type": "input_text", "text": "world"},
                     ],
                 }
             ]
