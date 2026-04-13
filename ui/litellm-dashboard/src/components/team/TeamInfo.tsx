@@ -1484,6 +1484,48 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                       <Badge color={info.blocked ? "red" : "green"}>{info.blocked ? "Blocked" : "Active"}</Badge>
                     </div>
 
+                    <div>
+                      <Text className="font-medium">Guardrails</Text>
+                      {!initialKillSwitchOn &&
+                      globalsRunning.length === 0 &&
+                      nonGlobalOptIns.length === 0 ? (
+                        <Text className="text-gray-500">No guardrails configured</Text>
+                      ) : (
+                        <div className="flex flex-col gap-3 mt-1">
+                          <div>
+                            <Text className="text-sm text-gray-700 mb-1">Global</Text>
+                            {initialKillSwitchOn ? (
+                              <Badge color="yellow">Bypassed for this team</Badge>
+                            ) : globalsRunning.length > 0 ? (
+                              <div className="flex flex-wrap gap-2">
+                                {globalsRunning.map((name) => (
+                                  <Badge key={name} color="blue">
+                                    {name}
+                                  </Badge>
+                                ))}
+                              </div>
+                            ) : (
+                              <Text className="text-gray-500 text-sm">None running</Text>
+                            )}
+                          </div>
+                          <div>
+                            <Text className="text-sm text-gray-700 mb-1">Team-specific</Text>
+                            {nonGlobalOptIns.length > 0 ? (
+                              <div className="flex flex-wrap gap-2">
+                                {nonGlobalOptIns.map((name) => (
+                                  <Badge key={name} color="blue">
+                                    {name}
+                                  </Badge>
+                                ))}
+                              </div>
+                            ) : (
+                              <Text className="text-gray-500 text-sm">None configured</Text>
+                            )}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+
                     <ObjectPermissionsView
                       objectPermission={info.object_permission}
                       variant="inline"
