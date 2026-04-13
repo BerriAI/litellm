@@ -613,6 +613,9 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   const nonGlobalOptIns: string[] = (info.metadata?.guardrails || []).filter(
     (n: string) => !globalGuardrailNames.has(n),
   );
+  const globalsRunning: string[] = Array.from(globalGuardrailNames).filter(
+    (n) => !optedOutGlobals.has(n),
+  );
   const effectiveGuardrails: string[] = initialKillSwitchOn
     ? nonGlobalOptIns
     : [
@@ -770,26 +773,42 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
 
                 <Card>
                   <Text className="font-semibold text-gray-900 mb-3">Guardrails</Text>
-                  {effectiveGuardrails.length > 0 ? (
-                    <div className="flex flex-wrap gap-2">
-                      {effectiveGuardrails.map((name) => (
-                        <Badge key={name} color="blue">
-                          {globalGuardrailNames.has(name) && (
-                            <GlobalOutlined
-                              style={{ marginInlineEnd: 4 }}
-                              aria-label="Global guardrail"
-                            />
-                          )}
-                          {name}
-                        </Badge>
-                      ))}
-                    </div>
-                  ) : (
+                  {!initialKillSwitchOn &&
+                  globalsRunning.length === 0 &&
+                  nonGlobalOptIns.length === 0 ? (
                     <Text className="text-gray-500">No guardrails configured</Text>
-                  )}
-                  {info.metadata?.disable_global_guardrails && (
-                    <div className="mt-3 pt-3 border-t border-gray-200">
-                      <Badge color="yellow">Global Guardrails Disabled</Badge>
+                  ) : (
+                    <div className="flex flex-col gap-3">
+                      <div>
+                        <Text className="text-sm font-medium text-gray-700 mb-2">Global</Text>
+                        {initialKillSwitchOn ? (
+                          <Badge color="yellow">Bypassed for this team</Badge>
+                        ) : globalsRunning.length > 0 ? (
+                          <div className="flex flex-wrap gap-2">
+                            {globalsRunning.map((name) => (
+                              <Badge key={name} color="blue">
+                                {name}
+                              </Badge>
+                            ))}
+                          </div>
+                        ) : (
+                          <Text className="text-gray-500 text-sm">None running</Text>
+                        )}
+                      </div>
+                      <div>
+                        <Text className="text-sm font-medium text-gray-700 mb-2">Team-specific</Text>
+                        {nonGlobalOptIns.length > 0 ? (
+                          <div className="flex flex-wrap gap-2">
+                            {nonGlobalOptIns.map((name) => (
+                              <Badge key={name} color="blue">
+                                {name}
+                              </Badge>
+                            ))}
+                          </div>
+                        ) : (
+                          <Text className="text-gray-500 text-sm">None configured</Text>
+                        )}
+                      </div>
                     </div>
                   )}
                 </Card>
@@ -1463,17 +1482,6 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     <div>
                       <Text className="font-medium">Status</Text>
                       <Badge color={info.blocked ? "red" : "green"}>{info.blocked ? "Blocked" : "Active"}</Badge>
-                    </div>
-
-                    <div>
-                      <Text className="font-medium">Disable Global Guardrails</Text>
-                      <div>
-                        {info.metadata?.disable_global_guardrails === true ? (
-                          <Badge color="yellow">Enabled - Global guardrails bypassed</Badge>
-                        ) : (
-                          <Badge color="green">Disabled - Global guardrails active</Badge>
-                        )}
-                      </div>
                     </div>
 
                     <ObjectPermissionsView
