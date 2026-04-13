@@ -143,6 +143,11 @@ class OVHCloudAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
     ) -> TranscriptionResponse:
         """
         Transform OVHCloud audio transcription response to OpenAI-compatible TranscriptionResponse.
+
+        OVHCloud returns the full verbose_json format (including `segments`, `words`,
+        `language`, `duration`, etc.) when `response_format=verbose_json` is requested.
+        We pass the entire response JSON to TranscriptionResponse so all fields are
+        preserved rather than discarding everything except `text`.
         """
         try:
             response_json = raw_response.json()
@@ -153,8 +158,19 @@ class OVHCloudAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
                 headers=raw_response.headers,
             )
 
-        text = response_json.get("text") or response_json.get("transcript") or ""
-        response = TranscriptionResponse(text=text)
+        # Normalise: OVHCloud may return `transcript` instead of `text`
+        if "transcript" in response_json and "text" not in response_json:
+            response_json["text"] = response_json.pop("transcript")
+
+        # Build a TranscriptionResponse that preserves all OpenAI-compatible fields
+        # (text, segments, words, language, duration, …) returned by the provider.
+        if any(
+            key in response_json
+            for key in TranscriptionResponse.model_fields.keys()
+        ):
+            response = TranscriptionResponse(**response_json)
+        else:
+            response = TranscriptionResponse(text=response_json.get("text", ""))
 
         response._hidden_params = response_json
         return response
