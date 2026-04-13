@@ -7948,6 +7948,13 @@ def validate_chat_completion_tool_choice(
     elif isinstance(tool_choice, str):
         return tool_choice
     elif isinstance(tool_choice, dict):
+        # An empty dict {} has no "type" field.  Some clients (e.g. Cursor IDE)
+        # send {} to mean "use default tool mode".  Pass it through so that
+        # provider-specific code (e.g. Bedrock's map_tool_choice_values) can
+        # convert it to the correct wire format.
+        if not tool_choice:
+            return tool_choice
+
         # Handle Cursor IDE format: {"type": "auto"} -> return as-is
         if (
             tool_choice.get("type") in ["auto", "none", "required"]

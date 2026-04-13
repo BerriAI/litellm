@@ -3881,8 +3881,6 @@ def _convert_to_bedrock_tool_call_invoke(
                                 _parts_list.append(
                                     BedrockContentBlock(toolUse=bedrock_tool)
                                 )
-                            # cache_control applies to the whole original
-                            # tool call; attach after the last split block.
                             if tool.get("cache_control", None) is not None:
                                 _parts_list.append(
                                     BedrockContentBlock(
@@ -3899,7 +3897,6 @@ def _convert_to_bedrock_tool_call_invoke(
                 bedrock_content_block = BedrockContentBlock(toolUse=bedrock_tool)
                 _parts_list.append(bedrock_content_block)
 
-                # Check for cache_control and add a separate cachePoint block
                 if tool.get("cache_control", None) is not None:
                     cache_point_block = BedrockContentBlock(
                         cachePoint=CachePointBlock(type="default")
@@ -4441,6 +4438,34 @@ class BedrockConverseMessagesProcessor:
                                     message=cast(ChatCompletionFileObject, element)
                                 )
                                 _parts.append(_part)
+                            elif element["type"] in ("tool_result", "tool_use"):
+                                if element["type"] == "tool_result":
+                                    tool_use_id = element.get("tool_use_id", str(uuid.uuid4()))
+                                    inner_content = element.get("content", "")
+                                    tool_result_blocks: List[BedrockToolResultContentBlock] = []
+                                    if isinstance(inner_content, str):
+                                        tool_result_blocks.append(
+                                            BedrockToolResultContentBlock(text=inner_content)
+                                        )
+                                    elif isinstance(inner_content, list):
+                                        for inner in inner_content:
+                                            if isinstance(inner, dict) and inner.get("type") == "text":
+                                                tool_result_blocks.append(
+                                                    BedrockToolResultContentBlock(text=inner.get("text", ""))
+                                                )
+                                    bedrock_tool_result = BedrockToolResultBlock(
+                                        content=tool_result_blocks,
+                                        toolUseId=tool_use_id,
+                                    )
+                                    _parts.append(BedrockContentBlock(toolResult=bedrock_tool_result))
+                                else:
+                                    verbose_logger.warning(
+                                        "Unexpected tool_use block in user message content — "
+                                        "tool_use belongs in assistant messages. Dropping block."
+                                    )
+                                # Skip cachePoint — Bedrock rejects cachePoint placed
+                                # before toolResult ("nothing available to cache").
+                                continue
                             _cache_point_block = (
                                 litellm.AmazonConverseConfig()._get_cache_point_block(
                                     message_block=cast(
@@ -4603,17 +4628,35 @@ class BedrockConverseMessagesProcessor:
                                     image_url=image_url
                                 )
                                 assistants_parts.append(assistants_part)
-                                # Add cache point block for assistant content elements
-                        _cache_point_block = (
-                            litellm.AmazonConverseConfig()._get_cache_point_block(
-                                message_block=cast(
-                                    OpenAIMessageContentListBlock, element
-                                ),
-                                block_type="content_block",
+                            elif element["type"] == "tool_use":
+                                tool_input = element.get("input", {})
+                                if isinstance(tool_input, str):
+                                    try:
+                                        tool_input = json.loads(tool_input)
+                                    except Exception:
+                                        tool_input = {}
+                                bedrock_tool_use = BedrockToolUseBlock(
+                                    toolUseId=element.get("id", str(uuid.uuid4())),
+                                    name=element.get("name", ""),
+                                    input=tool_input,
+                                )
+                                assistants_parts.append(
+                                    BedrockContentBlock(toolUse=bedrock_tool_use)
+                                )
+                                # Skip cachePoint for tool_use — a cachePoint here
+                                # would land before the user's toolResult, which
+                                # Bedrock rejects with "nothing available to cache".
+                                continue
+                            _cache_point_block = (
+                                litellm.AmazonConverseConfig()._get_cache_point_block(
+                                    message_block=cast(
+                                        OpenAIMessageContentListBlock, element
+                                    ),
+                                    block_type="content_block",
+                                )
                             )
-                        )
-                        if _cache_point_block is not None:
-                            assistants_parts.append(_cache_point_block)
+                            if _cache_point_block is not None:
+                                assistants_parts.append(_cache_point_block)
                     assistant_content.extend(assistants_parts)
                 elif _assistant_content is not None and isinstance(
                     _assistant_content, str
@@ -4623,8 +4666,6 @@ class BedrockConverseMessagesProcessor:
                         assistant_content.append(
                             BedrockContentBlock(text=_assistant_content)
                         )
-                    # If content is empty/whitespace, skip it (don't add a placeholder)
-                    # Add cache point block for assistant string content
                     _cache_point_block = (
                         litellm.AmazonConverseConfig()._get_cache_point_block(
                             assistant_message_block, block_type="content_block"
@@ -4817,6 +4858,34 @@ def _bedrock_converse_messages_pt(  # noqa: PLR0915
                                 )
                             )
                             _parts.append(_part)
+                        elif element["type"] in ("tool_result", "tool_use"):
+                            if element["type"] == "tool_result":
+                                tool_use_id = element.get("tool_use_id", str(uuid.uuid4()))
+                                inner_content = element.get("content", "")
+                                tool_result_blocks: List[BedrockToolResultContentBlock] = []
+                                if isinstance(inner_content, str):
+                                    tool_result_blocks.append(
+                                        BedrockToolResultContentBlock(text=inner_content)
+                                    )
+                                elif isinstance(inner_content, list):
+                                    for inner in inner_content:
+                                        if isinstance(inner, dict) and inner.get("type") == "text":
+                                            tool_result_blocks.append(
+                                                BedrockToolResultContentBlock(text=inner.get("text", ""))
+                                            )
+                                bedrock_tool_result = BedrockToolResultBlock(
+                                    content=tool_result_blocks,
+                                    toolUseId=tool_use_id,
+                                )
+                                _parts.append(BedrockContentBlock(toolResult=bedrock_tool_result))
+                            else:
+                                verbose_logger.warning(
+                                    "Unexpected tool_use block in user message content — "
+                                    "tool_use belongs in assistant messages. Dropping block."
+                                )
+                            # Skip cachePoint — Bedrock rejects cachePoint placed
+                            # before toolResult ("nothing available to cache").
+                            continue
                         _cache_point_block = (
                             litellm.AmazonConverseConfig()._get_cache_point_block(
                                 message_block=cast(
@@ -4972,7 +5041,28 @@ def _bedrock_converse_messages_pt(  # noqa: PLR0915
                                 image_url=image_url
                             )
                             assistants_parts.append(assistants_part)
-                        # Add cache point block for assistant content elements
+                        elif element["type"] == "tool_use":
+                            # Anthropic-format tool invocation embedded in assistant
+                            # content list (e.g. from Cursor IDE). Convert to Bedrock
+                            # toolUse ContentBlock directly.
+                            tool_input = element.get("input", {})
+                            if isinstance(tool_input, str):
+                                try:
+                                    tool_input = json.loads(tool_input)
+                                except Exception:
+                                    tool_input = {}
+                            bedrock_tool_use = BedrockToolUseBlock(
+                                toolUseId=element.get("id", str(uuid.uuid4())),
+                                name=element.get("name", ""),
+                                input=tool_input,
+                            )
+                            assistants_parts.append(
+                                BedrockContentBlock(toolUse=bedrock_tool_use)
+                            )
+                            # Skip cachePoint for tool_use — a cachePoint here
+                            # would land before the user's toolResult, which
+                            # Bedrock rejects with "nothing available to cache".
+                            continue
                         _cache_point_block = (
                             litellm.AmazonConverseConfig()._get_cache_point_block(
                                 message_block=cast(
@@ -4990,7 +5080,6 @@ def _bedrock_converse_messages_pt(  # noqa: PLR0915
                     assistant_content.append(
                         BedrockContentBlock(text=_assistant_content)
                     )
-                # Add cache point block for assistant string content
                 _cache_point_block = (
                     litellm.AmazonConverseConfig()._get_cache_point_block(
                         assistant_message_block, block_type="content_block"
@@ -5039,9 +5128,9 @@ def make_valid_bedrock_tool_name(input_tool_name: str) -> str:
             return char
         return "_"
 
-    # If the string is empty, return a default valid identifier
-    if input_tool_name is None or len(input_tool_name) == 0:
-        return input_tool_name
+    # If the string is empty or None, return as-is — callers must handle this
+    if not input_tool_name:
+        return ""
     bedrock_tool_name = copy.copy(input_tool_name)
     # If it doesn't start with a letter, prepend 'a'
     if not bedrock_tool_name[0].isalpha():
@@ -5154,16 +5243,37 @@ def _bedrock_tools_pt(tools: List) -> List[BedrockToolBlock]:
             tool_block_list.append(tool)  # type: ignore
             continue
 
-        # Handle regular OpenAI-style function tools
-        parameters = tool.get("function", {}).get(
-            "parameters", {"type": "object", "properties": {}}
-        )
-        name = tool.get("function", {}).get("name", "")
+        # Detect Anthropic-format tools (name + input_schema at top level, no "function" wrapper).
+        # Clients like Cursor IDE send tools in this format when talking to an OpenAI-compatible
+        # proxy that sits in front of a non-Anthropic backend such as Bedrock.
+        if "function" not in tool and "name" in tool and "input_schema" in tool:
+            parameters = tool.get("input_schema", {"type": "object", "properties": {}})
+            name = tool.get("name", "")
+            _raw_description = tool.get("description", None)
+        else:
+            # Handle regular OpenAI-style function tools
+            parameters = tool.get("function", {}).get(
+                "parameters", {"type": "object", "properties": {}}
+            )
+            name = tool.get("function", {}).get("name", "")
+            _raw_description = tool.get("function", {}).get("description", None)
 
         # related issue: https://github.com/BerriAI/litellm/issues/5007
         # Bedrock tool names must satisfy regular expression pattern: [a-zA-Z][a-zA-Z0-9_]* ensure this is true
         name = make_valid_bedrock_tool_name(input_tool_name=name)
-        _tool_description = tool.get("function", {}).get("description", None)
+
+        # Bedrock rejects tools whose name is empty or blank — skip them with a warning
+        # This can happen when MCP tools sent by clients (e.g. Cursor) have missing metadata
+        if not name or not name.strip():
+            verbose_logger.warning(
+                "Skipping tool with empty name when converting to Bedrock format. "
+                "Bedrock requires tool names to be non-empty and match [a-zA-Z0-9_-]+. "
+                "Tool: %s",
+                tool,
+            )
+            continue
+
+        _tool_description = _raw_description
         if _tool_description:  # bedrock doesn't accept empty "" or None descriptions
             description = _tool_description
         else:
