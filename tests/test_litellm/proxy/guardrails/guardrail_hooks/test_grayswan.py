@@ -477,8 +477,28 @@ def test_prepare_payload_includes_litellm_metadata(
     assert payload["litellm_metadata"]["user_api_key_team_id"] == "team-456"
 
 
+def test_prepare_payload_includes_guardrail_litellm_metadata(
+    grayswan_guardrail: GraySwanGuardrail,
+) -> None:
+    """Verify _prepare_payload reads from _guardrail_litellm_metadata fallback."""
+    messages = [{"role": "user", "content": "hello"}]
+    request_data = {
+        "_guardrail_litellm_metadata": {
+            "user_api_key_user_id": "user-pre",
+            "user_api_key_team_id": "team-pre",
+        }
+    }
+
+    payload = grayswan_guardrail._prepare_payload(messages, {}, request_data)
+
+    assert payload is not None
+    assert "litellm_metadata" in payload
+    assert payload["litellm_metadata"]["user_api_key_user_id"] == "user-pre"
+    assert payload["litellm_metadata"]["user_api_key_team_id"] == "team-pre"
+
+
 def test_ensure_litellm_metadata_populates_from_user_api_key_dict() -> None:
-    """Verify _ensure_litellm_metadata populates from user_api_key_dict."""
+    """Verify _ensure_litellm_metadata populates _guardrail_litellm_metadata."""
     from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import (
         _ensure_litellm_metadata,
     )
@@ -488,9 +508,11 @@ def test_ensure_litellm_metadata_populates_from_user_api_key_dict() -> None:
 
     _ensure_litellm_metadata(data, user_auth)
 
-    assert "litellm_metadata" in data
-    assert data["litellm_metadata"]["user_api_key_user_id"] == "u1"
-    assert data["litellm_metadata"]["user_api_key_team_id"] == "t1"
+    # Uses _guardrail_ prefix to avoid interfering with metadata routing
+    assert "_guardrail_litellm_metadata" in data
+    assert "litellm_metadata" not in data
+    assert data["_guardrail_litellm_metadata"]["user_api_key_user_id"] == "u1"
+    assert data["_guardrail_litellm_metadata"]["user_api_key_team_id"] == "t1"
 
 
 def test_ensure_litellm_metadata_noop_when_already_present() -> None:
@@ -505,3 +527,4 @@ def test_ensure_litellm_metadata_noop_when_already_present() -> None:
     _ensure_litellm_metadata(data, user_auth)
 
     assert data["litellm_metadata"] == {"existing": "value"}
+    assert "_guardrail_litellm_metadata" not in data

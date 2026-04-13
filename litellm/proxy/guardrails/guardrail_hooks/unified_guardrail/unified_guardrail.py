@@ -53,8 +53,13 @@ endpoint_guardrail_translation_mappings = None
 
 
 def _ensure_litellm_metadata(data: dict, user_api_key_dict: UserAPIKeyAuth) -> None:
-    """Populate data['litellm_metadata'] from user_api_key_dict if absent."""
-    if "litellm_metadata" not in data:
+    """Populate data['litellm_metadata'] from user_api_key_dict if absent.
+
+    Uses '_guardrail_litellm_metadata' as the key when 'litellm_metadata' is not
+    already present, to avoid interfering with get_metadata_variable_name_from_kwargs()
+    which switches metadata routing when 'litellm_metadata' exists.
+    """
+    if "litellm_metadata" not in data and "_guardrail_litellm_metadata" not in data:
         from litellm.llms.base_llm.guardrail_translation.base_translation import (
             BaseTranslation,
         )
@@ -63,7 +68,7 @@ def _ensure_litellm_metadata(data: dict, user_api_key_dict: UserAPIKeyAuth) -> N
             user_api_key_dict
         )
         if user_metadata:
-            data["litellm_metadata"] = user_metadata
+            data["_guardrail_litellm_metadata"] = user_metadata
 
 
 class UnifiedLLMGuardrails(CustomLogger):
