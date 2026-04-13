@@ -1045,6 +1045,53 @@ def _build_custom_pricing_entry(
     return entry
 
 
+def _resolve_completion_timeout(
+    timeout: Optional[Union[float, str, httpx.Timeout]],
+    kwargs: dict,
+    custom_llm_provider: str,
+) -> Union[float, httpx.Timeout]:
+    """
+    Resolve timeout inside completion().
+
+    Sources (first match wins):
+
+    - **Model / deployment config:** the `timeout` argument (e.g. from router merging
+      per-model `litellm_params`, including a deployment-level `timeout`).
+    - **Model config alias:** ``kwargs["request_timeout"]`` when the caller passes the
+      per-model ``request_timeout`` field from model config (same idea as deployment
+      `litellm_params.request_timeout`).
+    - **Global proxy settings:** :attr:`litellm.request_timeout`, set from
+      ``litellm_settings.request_timeout`` when the proxy loads config.
+    - **Default:** ``600`` seconds if nothing above is set.
+
+    Also accepts ``kwargs["timeout"]`` as a fallback when the named ``timeout`` argument
+    is omitted.
+
+    If the resolved value is :class:`httpx.Timeout` and the provider does not support
+    passing it through (:func:`litellm.utils.supports_httpx_timeout`), coerce to a
+    float (read timeout, or ``600.0`` if read is unset). Otherwise numeric strings /
+    floats are coerced with ``float(...)``.
+    """
+    if timeout is None:
+        timeout = kwargs.get("timeout")
+    if timeout is None:
+        timeout = kwargs.get("request_timeout")
+    if timeout is None:
+        timeout = getattr(litellm, "request_timeout", None)
+    if timeout is None:
+        timeout = 600
+    if isinstance(timeout, httpx.Timeout) and not supports_httpx_timeout(
+        custom_llm_provider
+    ):
+        read_timeout = timeout.read
+        timeout = (
+            float(read_timeout) if read_timeout is not None else 600.0
+        )  # default 10 min timeout
+    elif not isinstance(timeout, httpx.Timeout):
+        timeout = float(timeout)  # type: ignore
+    return timeout
+
+
 @tracer.wrap()
 @client
 def completion(  # type: ignore # noqa: PLR0915
@@ -1400,14 +1447,11 @@ def completion(  # type: ignore # noqa: PLR0915
             )  # support region-based pricing for bedrock
 
         ### TIMEOUT LOGIC ###
-        timeout = timeout or kwargs.get("request_timeout", 600) or 600
-        # set timeout for 10 minutes by default
-        if isinstance(timeout, httpx.Timeout) and not supports_httpx_timeout(
-            custom_llm_provider
-        ):
-            timeout = timeout.read or 600  # default 10 min timeout
-        elif not isinstance(timeout, httpx.Timeout):
-            timeout = float(timeout)  # type: ignore
+        timeout = _resolve_completion_timeout(
+            timeout=timeout,
+            kwargs=kwargs,
+            custom_llm_provider=custom_llm_provider,
+        )
 
         ### REGISTER CUSTOM MODEL PRICING -- IF GIVEN ###
         if (
@@ -2667,6 +2711,7 @@ def completion(  # type: ignore # noqa: PLR0915
                         provider_config=provider_config,
                     )
                 else:
+                    print("[debug] openai_chat_completions.completion", timeout)
                     response = openai_chat_completions.completion(
                         model=model,
                         messages=messages,
