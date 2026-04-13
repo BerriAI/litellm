@@ -1965,9 +1965,9 @@ class ProxyLogging:
                     normalized_call_type = CallTypes.aembedding.value
             if normalized_call_type is not None:
                 litellm_logging_obj.call_type = normalized_call_type
-                litellm_logging_obj.model_call_details[
-                    "call_type"
-                ] = normalized_call_type
+                litellm_logging_obj.model_call_details["call_type"] = (
+                    normalized_call_type
+                )
             # Pass-through endpoints are logged via the callback loop's
             # async_post_call_failure_hook — skip pre_call and failure handlers.
             if litellm_logging_obj.call_type == CallTypes.pass_through.value:
@@ -2065,10 +2065,12 @@ class ProxyLogging:
                         raise
                 else:
                     try:
-                        guardrail_response = await callback.async_post_call_success_hook(
-                            user_api_key_dict=user_api_key_dict,
-                            data=data,
-                            response=response,
+                        guardrail_response = (
+                            await callback.async_post_call_success_hook(
+                                user_api_key_dict=user_api_key_dict,
+                                data=data,
+                                response=response,
+                            )
                         )
                     except Exception as e:
                         _enrich_http_exception_with_guardrail_context(e, callback)
@@ -2281,13 +2283,15 @@ class ProxyLogging:
                         "async_post_call_streaming_iterator_hook"
                         in type(callback).__dict__
                     ):
-                        current_response = self._wrap_streaming_iterator_with_enrichment(
-                            _callback,
-                            _callback.async_post_call_streaming_iterator_hook(
-                                user_api_key_dict=user_api_key_dict,
-                                response=current_response,
-                                request_data=request_data,
-                            ),
+                        current_response = (
+                            self._wrap_streaming_iterator_with_enrichment(
+                                _callback,
+                                _callback.async_post_call_streaming_iterator_hook(
+                                    user_api_key_dict=user_api_key_dict,
+                                    response=current_response,
+                                    request_data=request_data,
+                                ),
+                            )
                         )
                     elif "apply_guardrail" in type(callback).__dict__:
                         request_data["guardrail_to_apply"] = callback
@@ -2300,13 +2304,15 @@ class ProxyLogging:
                             ),
                         )
                     else:
-                        current_response = self._wrap_streaming_iterator_with_enrichment(
-                            _callback,
-                            _callback.async_post_call_streaming_iterator_hook(
-                                user_api_key_dict=user_api_key_dict,
-                                response=current_response,
-                                request_data=request_data,
-                            ),
+                        current_response = (
+                            self._wrap_streaming_iterator_with_enrichment(
+                                _callback,
+                                _callback.async_post_call_streaming_iterator_hook(
+                                    user_api_key_dict=user_api_key_dict,
+                                    response=current_response,
+                                    request_data=request_data,
+                                ),
+                            )
                         )
 
         # Actually iterate through the chained async generator and yield chunks
@@ -2512,6 +2518,7 @@ class PrismaClient:
         self._watching_engine: bool = False
         self._engine_confirmed_dead: bool = False
         self._engine_wait_thread: Optional[threading.Thread] = None
+        self._health_check_last_cleanup_ts: float = 0.0
         verbose_proxy_logger.debug("Success - Created Prisma Client")
 
     def get_request_status(
@@ -4487,7 +4494,17 @@ class PrismaClient:
             )
 
             verbose_proxy_logger.debug(f"Saving health check data: {health_check_data}")
-            return await self.db.litellm_healthchecktable.create(data=health_check_data)
+            result = await self.db.litellm_healthchecktable.create(
+                data=health_check_data
+            )
+
+            # Prune old rows at most once per hour to prevent unbounded table growth
+            now = time.time()
+            if now - self._health_check_last_cleanup_ts >= 3600:
+                self._health_check_last_cleanup_ts = now
+                await self.cleanup_old_health_checks()
+
+            return result
 
         except Exception as e:
             verbose_proxy_logger.error(
@@ -4525,25 +4542,29 @@ class PrismaClient:
 
     async def get_all_latest_health_checks(self):
         """
-        Get the latest health check for each model
+        Get the latest health check for each model.
+
+        Only considers rows within the retention window (HEALTH_CHECK_TTL_DAYS) to
+        avoid full-table scans on deployments with large health check histories.
         """
         try:
-            # Get all unique model names first
+            health_check_ttl_days = int(os.getenv("HEALTH_CHECK_TTL_DAYS", "7"))
+            cutoff = datetime.utcnow() - timedelta(days=health_check_ttl_days)
             all_checks = await self.db.litellm_healthchecktable.find_many(
-                order={"checked_at": "desc"}
+                where={"checked_at": {"gte": cutoff}},
+                order={"checked_at": "desc"},
             )
 
-            # Group by model_name and get the latest for each
+            # Group by model and return only the latest entry per model
             latest_checks = {}
             for check in all_checks:
-                # Create a unique key: prefer model_id if available, otherwise use model_name
-                # This ensures we get the latest check for each unique model
+                # Prefer model_id as the dedup key; fall back to model_name
                 if check.model_id:
                     key = (check.model_id, check.model_name)
                 else:
                     key = (None, check.model_name)
 
-                # Only add if we haven't seen this key yet (since checks are ordered by checked_at desc)
+                # First entry wins because rows are ordered by checked_at desc
                 if key not in latest_checks:
                     latest_checks[key] = check
 
@@ -4551,6 +4572,25 @@ class PrismaClient:
         except Exception as e:
             verbose_proxy_logger.error(f"Error getting all latest health checks: {e}")
             return []
+
+    async def cleanup_old_health_checks(self) -> None:
+        """
+        Delete LiteLLM_HealthCheckTable rows older than HEALTH_CHECK_TTL_DAYS (default 7).
+
+        Called from save_health_check_result at most once per hour to prevent
+        unbounded table growth without adding per-insert overhead.
+        """
+        try:
+            health_check_ttl_days = int(os.getenv("HEALTH_CHECK_TTL_DAYS", "7"))
+            cutoff = datetime.utcnow() - timedelta(days=health_check_ttl_days)
+            result = await self.db.litellm_healthchecktable.delete_many(
+                where={"checked_at": {"lt": cutoff}}
+            )
+            verbose_proxy_logger.debug(
+                f"Health check cleanup: deleted {result} rows older than {health_check_ttl_days} days"
+            )
+        except Exception as e:
+            verbose_proxy_logger.error(f"Error cleaning up old health checks: {e}")
 
 
 ### HELPER FUNCTIONS ###
@@ -4947,25 +4987,27 @@ async def update_daily_tag_spend(
 ):
     """
     Separate scheduler job to commit daily tag spend updates.
-    
+
     Runs at a longer interval (2.3x default) than the main update_spend job
     to reduce query contention for DailyTagSpend table.
-    
+
     This is called by a dedicated scheduler job and does NOT process:
     - Regular spend updates (user, key, team, org)
     - End-user spend
     - Agent spend
     - Spend logs
-    
+
     Only processes tag spend transactions from the daily_tag_spend_update_queue.
-    
+
     Args:
         prisma_client: PrismaClient instance
         proxy_logging_obj: ProxyLogging instance for error handling
     """
     n_retry_times = 3
     try:
-        if proxy_logging_obj.db_spend_update_writer.redis_update_buffer._should_commit_spend_updates_to_redis():
+        if (
+            proxy_logging_obj.db_spend_update_writer.redis_update_buffer._should_commit_spend_updates_to_redis()
+        ):
             await proxy_logging_obj.db_spend_update_writer._commit_daily_tag_spend_to_db_with_redis(
                 prisma_client=prisma_client,
                 n_retry_times=n_retry_times,
