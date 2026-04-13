@@ -320,7 +320,7 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         litellm_call_id: Optional[str] = None,
         custom_headers: Optional[dict] = None,
     ) -> dict:
-        excluded_headers = {"transfer-encoding", "content-encoding"}
+        excluded_headers = {"transfer-encoding", "content-encoding", "content-length"}
 
         return_headers = {
             key: value
