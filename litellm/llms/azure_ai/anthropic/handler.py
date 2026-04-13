@@ -64,7 +64,7 @@ class AzureAnthropicChatCompletion(AnthropicChatCompletion):
 
         # Use AzureAnthropicConfig for both azure_anthropic and azure_ai Claude models
         config = AzureAnthropicConfig()
-        
+
         headers = config.validate_environment(
             api_key=api_key,
             headers=headers,
@@ -224,4 +224,3 @@ class AzureAnthropicChatCompletion(AnthropicChatCompletion):
             encoding=encoding,
             json_mode=json_mode,
         )
-

@@ -1906,3 +1906,222 @@ class TestCacheControlPreservation:
         assert "cache_control" not in result[0]
         assert result[1].get("cache_control") == {"type": "ephemeral"}
         assert result[2].get("cache_control") == {"type": "ephemeral"}
+
+    def test_parallel_tool_calls_merged_into_single_assistant_message(self):
+        """
+        Regression test: multi-turn parallel tool calls via the Responses API must
+        produce a single assistant message with all tool_calls, not one assistant
+        message per function_call item.
+
+        When the model responds with two parallel tool calls (e.g. get_weather for
+        SF and NYC), the next Responses API request includes two consecutive
+        function_call items followed by two function_call_output items.
+
+        Without the fix each function_call becomes its own assistant message,
+        producing back-to-back assistant messages that Anthropic/Vertex AI rejects:
+        "tool_use ids were found without tool_result blocks immediately after".
+        """
+        input_items = [
+            {"type": "message", "role": "user", "content": "Weather in SF and NYC?"},
+            # Two parallel tool calls from the previous assistant response
+            {
+                "type": "function_call",
+                "call_id": "toolu_01",
+                "name": "get_weather",
+                "arguments": '{"city": "SF"}',
+            },
+            {
+                "type": "function_call",
+                "call_id": "toolu_02",
+                "name": "get_weather",
+                "arguments": '{"city": "NYC"}',
+            },
+            # Tool results
+            {"type": "function_call_output", "call_id": "toolu_01", "output": "72°F"},
+            {"type": "function_call_output", "call_id": "toolu_02", "output": "55°F"},
+        ]
+
+        messages = LiteLLMCompletionResponsesConfig._transform_response_input_param_to_chat_completion_message(
+            input=input_items
+        )
+
+        roles = [
+            m.get("role") if isinstance(m, dict) else getattr(m, "role", None)
+            for m in messages
+        ]
+
+        # Must not have two consecutive assistant messages
+        for i in range(len(roles) - 1):
+            assert not (
+                roles[i] == "assistant" and roles[i + 1] == "assistant"
+            ), f"Consecutive assistant messages at indices {i} and {i+1}: {roles}"
+
+        # The single assistant message must contain BOTH tool_calls
+        assistant_messages = [
+            m for m in messages
+            if (m.get("role") if isinstance(m, dict) else getattr(m, "role", None))
+            == "assistant"
+        ]
+        assert len(assistant_messages) == 1, (
+            f"Expected 1 assistant message, got {len(assistant_messages)}"
+        )
+
+        assistant_msg = assistant_messages[0]
+        tool_calls = (
+            assistant_msg.get("tool_calls")
+            if isinstance(assistant_msg, dict)
+            else getattr(assistant_msg, "tool_calls", None)
+        )
+        assert tool_calls is not None and len(tool_calls) == 2, (
+            f"Expected 2 tool_calls in the merged assistant message, got: {tool_calls}"
+        )
+
+        call_ids = [
+            (tc.get("id") if isinstance(tc, dict) else getattr(tc, "id", None))
+            for tc in tool_calls
+        ]
+        assert "toolu_01" in call_ids, f"toolu_01 missing from tool_calls: {call_ids}"
+        assert "toolu_02" in call_ids, f"toolu_02 missing from tool_calls: {call_ids}"
+
+        # Both tool messages must be present
+        tool_messages = [
+            m for m in messages
+            if (m.get("role") if isinstance(m, dict) else getattr(m, "role", None))
+            == "tool"
+        ]
+        assert len(tool_messages) == 2, (
+            f"Expected 2 tool messages, got {len(tool_messages)}"
+        )
+
+    def test_single_tool_call_still_works_after_merge_fix(self):
+        """
+        Ensure the parallel-tool-call merging fix does not break the existing
+        single-tool-call path.
+        """
+        input_items = [
+            {"type": "message", "role": "user", "content": "Weather in SF?"},
+            {
+                "type": "function_call",
+                "call_id": "toolu_01",
+                "name": "get_weather",
+                "arguments": '{"city": "SF"}',
+            },
+            {"type": "function_call_output", "call_id": "toolu_01", "output": "72°F"},
+        ]
+
+        messages = LiteLLMCompletionResponsesConfig._transform_response_input_param_to_chat_completion_message(
+            input=input_items
+        )
+
+        roles = [
+            m.get("role") if isinstance(m, dict) else getattr(m, "role", None)
+            for m in messages
+        ]
+
+        assert "user" in roles
+        assert "assistant" in roles
+        assert "tool" in roles
+
+        assistant_messages = [m for m in messages if (m.get("role") if isinstance(m, dict) else getattr(m, "role", None)) == "assistant"]
+        assert len(assistant_messages) == 1
+
+        tool_calls = (
+            assistant_messages[0].get("tool_calls")
+            if isinstance(assistant_messages[0], dict)
+            else getattr(assistant_messages[0], "tool_calls", None)
+        )
+        assert tool_calls is not None and len(tool_calls) == 1
+
+
+class TestEnsureOutputItemContentPartAdded:
+    """Test that _ensure_output_item_for_chunk emits content_part.added after
+    output_item.added for message items."""
+
+    def _make_iterator(self):
+        """Create a minimal LiteLLMCompletionStreamingIterator for testing."""
+        from unittest.mock import MagicMock
+
+        from litellm.responses.litellm_completion_transformation.streaming_iterator import (
+            LiteLLMCompletionStreamingIterator,
+        )
+
+        iterator = LiteLLMCompletionStreamingIterator.__new__(
+            LiteLLMCompletionStreamingIterator
+        )
+        iterator.sent_output_item_added_event = False
+        iterator.sent_content_part_added_event = False
+        iterator._sequence_number = 0
+        iterator._cached_item_id = None
+        iterator._cached_reasoning_item_id = None
+        iterator._reasoning_active = False
+        iterator._pending_response_events = []
+        return iterator
+
+    def _make_text_chunk(self):
+        """Create a mock ModelResponseStream with a text delta."""
+        from unittest.mock import MagicMock
+
+        chunk = MagicMock()
+        delta = MagicMock()
+        delta.reasoning_content = None
+        delta.tool_calls = None
+        chunk.choices = [MagicMock(delta=delta)]
+        return chunk
+
+    def _make_reasoning_chunk(self):
+        """Create a mock ModelResponseStream with a reasoning delta."""
+        from unittest.mock import MagicMock
+
+        chunk = MagicMock()
+        delta = MagicMock()
+        delta.reasoning_content = "thinking..."
+        delta.tool_calls = None
+        chunk.choices = [MagicMock(delta=delta)]
+        return chunk
+
+    def test_message_item_emits_content_part_added(self):
+        """content_part.added must follow output_item.added for message items."""
+        from litellm.types.llms.openai import (
+            ContentPartAddedEvent,
+            OutputItemAddedEvent,
+            ResponsesAPIStreamEvents,
+        )
+
+        iterator = self._make_iterator()
+        chunk = self._make_text_chunk()
+
+        iterator._ensure_output_item_for_chunk(chunk)
+
+        events = iterator._pending_response_events
+        assert len(events) == 2
+        assert isinstance(events[0], OutputItemAddedEvent)
+        assert events[0].type == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED
+        assert isinstance(events[1], ContentPartAddedEvent)
+        assert events[1].type == ResponsesAPIStreamEvents.CONTENT_PART_ADDED
+        assert events[1].part.type == "output_text"
+        assert iterator.sent_content_part_added_event is True
+
+    def test_reasoning_item_does_not_emit_content_part_added(self):
+        """Reasoning items should not get a content_part.added event."""
+        from litellm.types.llms.openai import OutputItemAddedEvent
+
+        iterator = self._make_iterator()
+        chunk = self._make_reasoning_chunk()
+
+        iterator._ensure_output_item_for_chunk(chunk)
+
+        events = iterator._pending_response_events
+        assert len(events) == 1
+        assert isinstance(events[0], OutputItemAddedEvent)
+        assert iterator.sent_content_part_added_event is False
+
+    def test_only_emits_once(self):
+        """Calling _ensure_output_item_for_chunk twice should not duplicate events."""
+        iterator = self._make_iterator()
+        chunk = self._make_text_chunk()
+
+        iterator._ensure_output_item_for_chunk(chunk)
+        iterator._ensure_output_item_for_chunk(chunk)
+
+        events = iterator._pending_response_events
+        assert len(events) == 2

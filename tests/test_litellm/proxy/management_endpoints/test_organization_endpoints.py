@@ -535,3 +535,28 @@ async def test_list_organization_filter_by_org_alias(monkeypatch):
         "members": True,
         "teams": True,
     }
+
+
+@pytest.mark.asyncio
+async def test_organization_info_includes_user_email(monkeypatch):
+    """
+    Test that GET /organization/info returns user_email in members list.
+    """
+    from litellm.proxy._types import LiteLLM_OrganizationMembershipTable
+    from datetime import datetime
+
+    # Simulate a membership row with a nested user object that has user_email
+    raw_membership = {
+        "user_id": "user_abc",
+        "organization_id": "org_xyz",
+        "user_role": "org_admin",
+        "spend": 0.0,
+        "budget_id": None,
+        "created_at": datetime.utcnow(),
+        "updated_at": datetime.utcnow(),
+        "user": {"user_email": "alice@example.com"},
+        "litellm_budget_table": None,
+    }
+
+    membership = LiteLLM_OrganizationMembershipTable(**raw_membership)
+    assert membership.user_email == "alice@example.com"

@@ -17,6 +17,49 @@ const extractTeamIdFromApiKeyBreakdown = (apiKeyBreakdown: Record<string, any> |
   return null;
 };
 
+// Mirrors backend SpendMetrics fields (litellm/types/activity_tracking.py).
+// If the backend adds a field, add it here too.
+const METRIC_KEYS = [
+  "spend", "api_requests", "successful_requests", "failed_requests",
+  "total_tokens", "prompt_tokens", "completion_tokens",
+  "cache_read_input_tokens", "cache_creation_input_tokens",
+] as const;
+
+// When breakdown.entities is empty (aggregated endpoint), reconstruct entities
+// from breakdown.api_keys by grouping on metadata.team_id.
+const aggregateApiKeysIntoEntities = (breakdown: Record<string, any>): Record<string, any> => {
+  const apiKeys = breakdown.api_keys;
+  if (!apiKeys || Object.keys(apiKeys).length === 0) return {};
+
+  const grouped: Record<string, any> = {};
+
+  for (const [keyId, keyData] of Object.entries<any>(apiKeys)) {
+    const teamId = keyData?.metadata?.team_id || "Unassigned";
+    if (!grouped[teamId]) {
+      grouped[teamId] = {
+        metrics: Object.fromEntries(METRIC_KEYS.map((k) => [k, 0])),
+        api_key_breakdown: {},
+      };
+    }
+    const m = grouped[teamId].metrics;
+    const km = keyData?.metrics || {};
+    for (const k of METRIC_KEYS) {
+      m[k] += km[k] || 0;
+    }
+    grouped[teamId].api_key_breakdown[keyId] = keyData;
+  }
+
+  return grouped;
+};
+
+// Returns breakdown.entities if populated, otherwise falls back to
+// reconstructing entities from breakdown.api_keys.
+export const resolveEntities = (breakdown: Record<string, any>): Record<string, any> => {
+  const entities = breakdown.entities;
+  if (entities && Object.keys(entities).length > 0) return entities;
+  return aggregateApiKeysIntoEntities(breakdown);
+};
+
 export const getEntityBreakdown = (
   spendData: EntitySpendData,
   teamAliasMap: Record<string, string> = {},
@@ -24,7 +67,7 @@ export const getEntityBreakdown = (
   const entitySpend: { [key: string]: EntityBreakdown } = {};
 
   spendData.results.forEach((day) => {
-    Object.entries(day.breakdown.entities || {}).forEach(([entity, data]: [string, any]) => {
+    Object.entries(resolveEntities(day.breakdown)).forEach(([entity, data]: [string, any]) => {
       // Extract team_id from api_key_breakdown metadata (not data.metadata which is empty)
       const teamId = extractTeamIdFromApiKeyBreakdown(data.api_key_breakdown) || entity;
       // Extract key_alias from the first API key that has one
@@ -80,7 +123,7 @@ export const generateDailyData = (
   const dailyBreakdown: any[] = [];
 
   spendData.results.forEach((day) => {
-    Object.entries(day.breakdown.entities || {}).forEach(([entity, data]: [string, any]) => {
+    Object.entries(resolveEntities(day.breakdown)).forEach(([entity, data]: [string, any]) => {
       // Extract team_id from api_key_breakdown metadata (not data.metadata which is empty)
       const teamId = extractTeamIdFromApiKeyBreakdown(data.api_key_breakdown);
       const teamAlias = teamId ? teamAliasMap[teamId] || null : null;
@@ -129,7 +172,7 @@ export const generateDailyWithKeysData = (
   } = {};
 
   spendData.results.forEach((day) => {
-    Object.entries(day.breakdown.entities || {}).forEach(([entity, data]: [string, any]) => {
+    Object.entries(resolveEntities(day.breakdown)).forEach(([entity, data]: [string, any]) => {
       const apiKeyBreakdown = data.api_key_breakdown || {};
 
       // Iterate through each API key in the breakdown
@@ -202,7 +245,7 @@ export const generateDailyWithModelsData = (
   spendData.results.forEach((day) => {
     const dailyEntityModels: { [key: string]: { [key: string]: any } } = {};
 
-    Object.entries(day.breakdown.entities || {}).forEach(([entity, entityData]: [string, any]) => {
+    Object.entries(resolveEntities(day.breakdown)).forEach(([entity, entityData]: [string, any]) => {
       if (!dailyEntityModels[entity]) {
         dailyEntityModels[entity] = {};
       }
@@ -230,7 +273,7 @@ export const generateDailyWithModelsData = (
     });
 
     Object.entries(dailyEntityModels).forEach(([entity, models]) => {
-      const entityData = day.breakdown.entities?.[entity];
+      const entityData = resolveEntities(day.breakdown)[entity];
       // Extract team_id from api_key_breakdown metadata (not entityData.metadata which is empty)
       const teamId = extractTeamIdFromApiKeyBreakdown(entityData?.api_key_breakdown);
       const teamAlias = teamId ? teamAliasMap[teamId] || null : null;

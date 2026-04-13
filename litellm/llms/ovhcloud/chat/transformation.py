@@ -7,13 +7,14 @@ More information on our website: https://endpoints.ai.cloud.ovh.net
 from typing import Optional, Union, List
 
 import httpx
-from litellm.utils import ModelResponseStream, get_model_info
+from litellm.utils import ModelResponseStream, _get_model_info_helper
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 from litellm._logging import verbose_logger
 from litellm.llms.ovhcloud.utils import OVHCloudException
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.llms.openai import AllMessageValues
+
 
 class OVHCloudChatConfig(OpenAIGPTConfig):
     @property
@@ -27,13 +28,15 @@ class OVHCloudChatConfig(OpenAIGPTConfig):
         """
         supports_function_calling: Optional[bool] = None
         try:
-            model_info = get_model_info(model, custom_llm_provider="ovhcloud")
+            model_info = _get_model_info_helper(model, custom_llm_provider="ovhcloud")
             supports_function_calling = model_info.get(
-                "supports_function_calling", False
+                "supports_function_calling", None
             )
+            if supports_function_calling is None:
+                supports_function_calling = False
         except Exception as e:
             verbose_logger.debug(f"Error getting supported OpenAI params: {e}")
-            pass
+            supports_function_calling = False
 
         optional_params = super().get_supported_openai_params(model)
         if supports_function_calling is not True:
@@ -45,7 +48,7 @@ class OVHCloudChatConfig(OpenAIGPTConfig):
             optional_params.remove("function_call")
             optional_params.remove("response_format")
         return optional_params
-    
+
     def get_complete_url(
         self,
         api_base: Optional[str],
@@ -55,15 +58,16 @@ class OVHCloudChatConfig(OpenAIGPTConfig):
         litellm_params: dict,
         stream: Optional[bool] = None,
     ) -> str:
-        api_base = "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1" if api_base is None else api_base.rstrip("/")
+        api_base = (
+            "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1"
+            if api_base is None
+            else api_base.rstrip("/")
+        )
         complete_url = f"{api_base}/chat/completions"
         return complete_url
-    
+
     def get_error_class(
-        self, 
-        error_message: str, 
-        status_code: int, 
-        headers: Union[dict, httpx.Headers]
+        self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
     ) -> BaseLLMException:
         return OVHCloudException(
             message=error_message,
@@ -82,7 +86,7 @@ class OVHCloudChatConfig(OpenAIGPTConfig):
             non_default_params, optional_params, model, drop_params
         )
         return mapped_openai_params
-    
+
     def transform_request(
         self,
         model: str,
@@ -97,6 +101,7 @@ class OVHCloudChatConfig(OpenAIGPTConfig):
         )
         response.update(extra_body)
         return response
+
 
 class OVHCloudChatCompletionStreamingHandler(BaseModelResponseIterator):
     """
@@ -122,7 +127,9 @@ class OVHCloudChatCompletionStreamingHandler(BaseModelResponseIterator):
             new_choices = []
             for choice in chunk["choices"]:
                 if "delta" in choice and "reasoning" in choice["delta"]:
-                    choice["delta"]["reasoning_content"] = choice["delta"].get("reasoning")
+                    choice["delta"]["reasoning_content"] = choice["delta"].get(
+                        "reasoning"
+                    )
                 new_choices.append(choice)
 
             return ModelResponseStream(

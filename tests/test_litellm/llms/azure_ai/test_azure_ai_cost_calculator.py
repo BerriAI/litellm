@@ -196,6 +196,44 @@ class TestAzureModelRouterFlatCost:
         )
         print(f"Total prompt cost: ${prompt_cost:.6f}")
 
+    def test_router_flat_cost_when_response_has_actual_model(self):
+        """
+        Test that router flat cost is added when request was via router but response
+        contains the actual model (e.g., gpt-5-nano).
+
+        This is the key fix: Azure returns the actual model in the response, but we
+        must still add the router flat cost because the request was made via model router.
+        """
+        usage = Usage(
+            prompt_tokens=10000,
+            completion_tokens=5000,
+            total_tokens=15000,
+        )
+
+        # Response model is the actual model Azure used (not a router name)
+        response_model = "gpt-5-nano-2025-08-07"
+        # Request model is the router - user called azure_ai/model_router/model-router
+        request_model = "azure_ai/model_router/model-router"
+
+        prompt_cost, completion_cost = cost_per_token(
+            model=response_model,
+            usage=usage,
+            request_model=request_model,
+        )
+
+        # Expected: model cost (from gpt-5-nano) + router flat cost
+        expected_flat_cost = (
+            usage.prompt_tokens * AZURE_MODEL_ROUTER_FLAT_COST_PER_M_INPUT_TOKENS / 1_000_000
+        )
+        assert expected_flat_cost == pytest.approx(0.0014, rel=1e-9)
+
+        # Total cost should be model cost + flat cost
+        total_cost = prompt_cost + completion_cost
+        assert total_cost >= expected_flat_cost
+
+        # Prompt cost should include both model prompt cost and router flat cost
+        assert prompt_cost >= expected_flat_cost
+
 
 class TestAzureModelRouterCostBreakdown:
     """Test that Azure Model Router flat cost is tracked in cost breakdown."""
@@ -344,3 +382,49 @@ class TestAzureModelRouterCostBreakdown:
         
         print(f"Additional costs in breakdown: {additional_costs}")
         print(f"Azure Model Router Flat Cost: ${actual_flat_cost:.6f}")
+
+    def test_additional_costs_when_response_has_actual_model_via_hidden_params(self):
+        """additional_costs populated when response has actual model but request was via model router (hidden_params)."""
+        from datetime import datetime
+
+        from litellm.cost_calculator import completion_cost
+        from litellm.litellm_core_utils.litellm_logging import Logging
+        from litellm.types.utils import Choices, Message, ModelResponse, Usage
+
+        logging_obj = Logging(
+            model="gpt-4.1-nano-2025-04-14",
+            messages=[{"role": "user", "content": "Hello"}],
+            stream=False,
+            call_type="completion",
+            start_time=datetime.now(),
+            litellm_call_id="test-123",
+            function_id="test-function",
+        )
+        response = ModelResponse(
+            id="test-123",
+            choices=[Choices(finish_reason="stop", index=0, message=Message(role="assistant", content="Hello"))],
+            created=1234567890,
+            model="gpt-4.1-nano-2025-04-14",
+            object="chat.completion",
+            usage=Usage(prompt_tokens=5000, completion_tokens=2000, total_tokens=7000),
+        )
+        response._hidden_params = {
+            "custom_llm_provider": "azure_ai",
+            "litellm_model_name": "azure_ai/model-router",
+        }
+        cost = completion_cost(
+            completion_response=response,
+            model="gpt-4.1-nano-2025-04-14",
+            custom_llm_provider="azure_ai",
+            litellm_logging_obj=logging_obj,
+        )
+        expected_flat_cost = (
+            5000 * AZURE_MODEL_ROUTER_FLAT_COST_PER_M_INPUT_TOKENS / 1_000_000
+        )
+        assert cost >= expected_flat_cost
+        assert logging_obj.cost_breakdown is not None
+        assert "additional_costs" in logging_obj.cost_breakdown
+        assert "Azure Model Router Flat Cost" in logging_obj.cost_breakdown["additional_costs"]
+        assert logging_obj.cost_breakdown["additional_costs"]["Azure Model Router Flat Cost"] == pytest.approx(
+            expected_flat_cost, rel=1e-9
+        )

@@ -1122,6 +1122,83 @@ async def test_model_armor_non_model_response():
     assert not guardrail.async_handler.post.called
 
 
+@pytest.mark.asyncio
+async def test_model_armor_guardrail_status_intervened_vs_failed():
+    """
+    regression test for bug where _process_error always set 'guardrail_failed_to_respond'
+    even for intentional blocks (error 400).
+    """
+    mock_user_api_key_dict = UserAPIKeyAuth()
+    mock_cache = MagicMock(spec=DualCache)
+
+    #1: Blocked content should raise exception and show guardrail status: guardrail_intervened"
+    guardrail = ModelArmorGuardrail(
+        template_id="test-template",
+        project_id="test-project",
+        location="us-central1",
+        guardrail_name="model-armor-test",
+    )
+
+    mock_response = AsyncMock()
+    mock_response.status_code = 200
+    mock_response.json = AsyncMock(return_value={
+        "sanitizationResult": {
+            "filterMatchState": "MATCH_FOUND",
+            "filterResults": {
+                "rai": {
+                    "raiFilterResult": {
+                        "matchState": "MATCH_FOUND",
+                    }
+                }
+            }
+        }
+    })
+
+    guardrail._ensure_access_token_async = AsyncMock(return_value=("token", "test-project"))
+    with patch.object(guardrail.async_handler, "post", AsyncMock(return_value=mock_response)):
+        request_data = {
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "bad content"}],
+            "metadata": {"guardrails": ["model-armor-test"]},
+        }
+        with pytest.raises(HTTPException):
+            await guardrail.async_pre_call_hook(
+                user_api_key_dict=mock_user_api_key_dict,
+                cache=mock_cache,
+                data=request_data,
+                call_type="completion",
+            )
+
+        info = request_data["metadata"]["standard_logging_guardrail_information"]
+        assert info[0]["guardrail_status"] == "guardrail_intervened"
+
+    #2: if an API error - guardrail status should be guardrail_failed_to_respond"
+    guardrail2 = ModelArmorGuardrail(
+        template_id="test-template",
+        project_id="test-project",
+        location="us-central1",
+        guardrail_name="model-armor-test2",
+        fail_on_error=True,
+    )
+
+    guardrail2._ensure_access_token_async = AsyncMock(side_effect=ConnectionError("timeout"))
+    request_data2 = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "hello"}],
+        "metadata": {"guardrails": ["model-armor-test2"]},
+    }
+    with pytest.raises(ConnectionError):
+        await guardrail2.async_pre_call_hook(
+            user_api_key_dict=mock_user_api_key_dict,
+            cache=mock_cache,
+            data=request_data2,
+            call_type="completion",
+        )
+
+    info2 = request_data2["metadata"]["standard_logging_guardrail_information"]
+    assert info2[0]["guardrail_status"] == "guardrail_failed_to_respond"
+
+
 def mock_open(read_data=''):
     """Helper to create a mock file object"""
     import io

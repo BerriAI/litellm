@@ -626,6 +626,7 @@ class TestStreamingEventProcessing:
         assert UPDATE_INTERVAL * 1000 == 150  # 150 milliseconds
 
 
+@pytest.mark.xdist_group("heavy_imports")
 class TestBackgroundStreamingModule:
     """Test cases for background_streaming module imports and structure"""
 
@@ -650,12 +651,12 @@ class TestBackgroundStreamingModule:
 
     def test_background_streaming_task_is_async(self):
         """Test that background_streaming_task is an async function"""
-        import asyncio
+        import inspect
         from litellm.proxy.response_polling.background_streaming import (
             background_streaming_task,
         )
-        
-        assert asyncio.iscoroutinefunction(background_streaming_task)
+
+        assert inspect.iscoroutinefunction(background_streaming_task)
 
 
 class TestProviderResolutionForPolling:
@@ -1315,6 +1316,274 @@ class TestStreamingEventParsing:
         assert "content" in output_items["item_123"]
         assert len(output_items["item_123"]["content"]) == 1
         assert output_items["item_123"]["content"][0]["type"] == "text"
+
+
+def _make_sse_stream(events: list) -> Mock:
+    """Create a mock StreamingResponse with body_iterator from a list of event dicts."""
+
+    async def _body_iterator():
+        for event in events:
+            yield f"data: {json.dumps(event)}"
+        yield "data: [DONE]"
+
+    mock_response = Mock()
+    mock_response.body_iterator = _body_iterator()
+    return mock_response
+
+
+def _make_background_streaming_kwargs(
+    polling_id: str,
+    polling_handler: ResponsePollingHandler,
+) -> dict:
+    """Build kwargs for background_streaming_task with all required mocks."""
+    return dict(
+        polling_id=polling_id,
+        data={"model": "gpt-4o", "stream": False, "background": True},
+        polling_handler=polling_handler,
+        request=Mock(),
+        fastapi_response=Mock(),
+        user_api_key_dict=Mock(),
+        general_settings={},
+        llm_router=None,
+        proxy_config=Mock(),
+        proxy_logging_obj=Mock(),
+        select_data_generator=Mock(),
+        user_model=None,
+        user_temperature=None,
+        user_request_timeout=None,
+        user_max_tokens=None,
+        user_api_base=None,
+        version=None,
+    )
+
+
+@pytest.mark.xdist_group("heavy_imports")
+class TestBackgroundStreamingTerminalEvents:
+    """
+    Integration tests that exercise background_streaming_task with mocked
+    streaming responses, verifying the final update_state call for each
+    terminal event type.
+    """
+
+    @pytest.mark.asyncio
+    async def test_response_failed_sets_failed_status_and_error(self):
+        """Test that a response.failed stream event results in failed status with error"""
+        from litellm.proxy.response_polling.background_streaming import (
+            background_streaming_task,
+        )
+
+        error_payload = {
+            "type": "server_error",
+            "message": "The model encountered an error",
+            "code": "model_error",
+        }
+        events = [
+            {"type": "response.in_progress"},
+            {
+                "type": "response.failed",
+                "response": {
+                    "id": "resp_123",
+                    "status": "failed",
+                    "error": error_payload,
+                    "model": "gpt-4o",
+                    "output": [],
+                },
+            },
+        ]
+        mock_response = _make_sse_stream(events)
+        handler = AsyncMock(spec=ResponsePollingHandler)
+        kwargs = _make_background_streaming_kwargs("poll_1", handler)
+
+        with patch(
+            "litellm.proxy.response_polling.background_streaming.ProxyBaseLLMRequestProcessing"
+        ) as MockProcessor:
+            MockProcessor.return_value.base_process_llm_request = AsyncMock(
+                return_value=mock_response
+            )
+            await background_streaming_task(**kwargs)
+
+        # Find the final update_state call (last one)
+        final_call = handler.update_state.call_args_list[-1]
+        assert final_call.kwargs["status"] == "failed"
+        assert final_call.kwargs["error"] == error_payload
+
+    @pytest.mark.asyncio
+    async def test_response_incomplete_sets_incomplete_status_and_details(self):
+        """Test that a response.incomplete stream event results in incomplete status"""
+        from litellm.proxy.response_polling.background_streaming import (
+            background_streaming_task,
+        )
+
+        error_payload = {
+            "type": "incomplete_response",
+            "message": "The model stopped before producing a complete response",
+            "code": "max_output_tokens",
+        }
+        events = [
+            {"type": "response.in_progress"},
+            {
+                "type": "response.incomplete",
+                "response": {
+                    "id": "resp_123",
+                    "status": "incomplete",
+                    "error": error_payload,
+                    "incomplete_details": {"reason": "max_output_tokens"},
+                    "usage": {"input_tokens": 10, "output_tokens": 4096},
+                    "model": "gpt-4o",
+                    "output": [{"id": "item_1", "type": "message"}],
+                },
+            },
+        ]
+        mock_response = _make_sse_stream(events)
+        handler = AsyncMock(spec=ResponsePollingHandler)
+        kwargs = _make_background_streaming_kwargs("poll_2", handler)
+
+        with patch(
+            "litellm.proxy.response_polling.background_streaming.ProxyBaseLLMRequestProcessing"
+        ) as MockProcessor:
+            MockProcessor.return_value.base_process_llm_request = AsyncMock(
+                return_value=mock_response
+            )
+            await background_streaming_task(**kwargs)
+
+        final_call = handler.update_state.call_args_list[-1]
+        assert final_call.kwargs["status"] == "incomplete"
+        assert final_call.kwargs["error"] == error_payload
+        assert final_call.kwargs["incomplete_details"] == {"reason": "max_output_tokens"}
+        assert final_call.kwargs["usage"] == {"input_tokens": 10, "output_tokens": 4096}
+
+    @pytest.mark.asyncio
+    async def test_response_cancelled_sets_cancelled_status(self):
+        """Test that a response.cancelled stream event results in cancelled status"""
+        from litellm.proxy.response_polling.background_streaming import (
+            background_streaming_task,
+        )
+
+        events = [
+            {"type": "response.in_progress"},
+            {
+                "type": "response.cancelled",
+                "response": {
+                    "id": "resp_123",
+                    "status": "cancelled",
+                    "model": "gpt-4o",
+                    "output": [],
+                },
+            },
+        ]
+        mock_response = _make_sse_stream(events)
+        handler = AsyncMock(spec=ResponsePollingHandler)
+        kwargs = _make_background_streaming_kwargs("poll_3", handler)
+
+        with patch(
+            "litellm.proxy.response_polling.background_streaming.ProxyBaseLLMRequestProcessing"
+        ) as MockProcessor:
+            MockProcessor.return_value.base_process_llm_request = AsyncMock(
+                return_value=mock_response
+            )
+            await background_streaming_task(**kwargs)
+
+        final_call = handler.update_state.call_args_list[-1]
+        assert final_call.kwargs["status"] == "cancelled"
+
+    @pytest.mark.asyncio
+    async def test_response_completed_sets_completed_status(self):
+        """Test that a response.completed stream event results in completed status"""
+        from litellm.proxy.response_polling.background_streaming import (
+            background_streaming_task,
+        )
+
+        events = [
+            {"type": "response.in_progress"},
+            {
+                "type": "response.completed",
+                "response": {
+                    "id": "resp_123",
+                    "status": "completed",
+                    "usage": {"input_tokens": 10, "output_tokens": 50},
+                    "model": "gpt-4o",
+                    "output": [{"id": "item_1", "type": "message"}],
+                },
+            },
+        ]
+        mock_response = _make_sse_stream(events)
+        handler = AsyncMock(spec=ResponsePollingHandler)
+        kwargs = _make_background_streaming_kwargs("poll_4", handler)
+
+        with patch(
+            "litellm.proxy.response_polling.background_streaming.ProxyBaseLLMRequestProcessing"
+        ) as MockProcessor:
+            MockProcessor.return_value.base_process_llm_request = AsyncMock(
+                return_value=mock_response
+            )
+            await background_streaming_task(**kwargs)
+
+        final_call = handler.update_state.call_args_list[-1]
+        assert final_call.kwargs["status"] == "completed"
+        assert final_call.kwargs["usage"] == {"input_tokens": 10, "output_tokens": 50}
+
+    @pytest.mark.asyncio
+    async def test_fallback_status_derived_from_event_type_when_status_field_missing(self):
+        """Test that when the response body lacks a status field, the fallback
+        is derived from the event type, not hardcoded to 'completed'."""
+        from litellm.proxy.response_polling.background_streaming import (
+            background_streaming_task,
+        )
+
+        # response.incomplete event with NO status field in the response body
+        events = [
+            {"type": "response.in_progress"},
+            {
+                "type": "response.incomplete",
+                "response": {
+                    "id": "resp_123",
+                    # "status" deliberately omitted
+                    "incomplete_details": {"reason": "max_output_tokens"},
+                    "model": "gpt-4o",
+                    "output": [],
+                },
+            },
+        ]
+        mock_response = _make_sse_stream(events)
+        handler = AsyncMock(spec=ResponsePollingHandler)
+        kwargs = _make_background_streaming_kwargs("poll_5", handler)
+
+        with patch(
+            "litellm.proxy.response_polling.background_streaming.ProxyBaseLLMRequestProcessing"
+        ) as MockProcessor:
+            MockProcessor.return_value.base_process_llm_request = AsyncMock(
+                return_value=mock_response
+            )
+            await background_streaming_task(**kwargs)
+
+        final_call = handler.update_state.call_args_list[-1]
+        assert final_call.kwargs["status"] == "incomplete"
+
+    @pytest.mark.asyncio
+    async def test_no_terminal_event_defaults_to_completed(self):
+        """Test that when no terminal event is received, status defaults to completed"""
+        from litellm.proxy.response_polling.background_streaming import (
+            background_streaming_task,
+        )
+
+        # Stream with only in_progress, no terminal event
+        events = [
+            {"type": "response.in_progress"},
+        ]
+        mock_response = _make_sse_stream(events)
+        handler = AsyncMock(spec=ResponsePollingHandler)
+        kwargs = _make_background_streaming_kwargs("poll_6", handler)
+
+        with patch(
+            "litellm.proxy.response_polling.background_streaming.ProxyBaseLLMRequestProcessing"
+        ) as MockProcessor:
+            MockProcessor.return_value.base_process_llm_request = AsyncMock(
+                return_value=mock_response
+            )
+            await background_streaming_task(**kwargs)
+
+        final_call = handler.update_state.call_args_list[-1]
+        assert final_call.kwargs["status"] == "completed"
 
 
 class TestEdgeCases:

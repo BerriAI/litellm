@@ -14,8 +14,15 @@ from litellm.proxy.common_utils.custom_openapi_spec import CustomOpenAPISpec
 from litellm.proxy.proxy_server import app
 
 
+@pytest.mark.xdist_group("swagger")
 class TestSwaggerChatCompletions:
     """Test suite for validating /chat/completions schema in Swagger documentation."""
+
+    def setup_method(self):
+        app.openapi_schema = None
+
+    def teardown_method(self):
+        app.openapi_schema = None
 
     @pytest.fixture
     def client(self):
@@ -315,7 +322,8 @@ class TestSwaggerChatCompletions:
         This ensures Swagger UI works correctly with reverse proxies and subpath deployments.
         """
         from unittest.mock import patch
-        from litellm.proxy.proxy_server import get_openapi_schema, custom_openapi, app
+
+        from litellm.proxy.proxy_server import app, custom_openapi, get_openapi_schema
 
         # Test cases: (server_root_path, expected_servers_url)
         # Note: empty string is falsy in Python, so servers won't be set

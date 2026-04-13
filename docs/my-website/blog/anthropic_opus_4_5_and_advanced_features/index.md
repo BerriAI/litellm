@@ -3,18 +3,9 @@ slug: anthropic_advanced_features
 title: "Day 0 Support: Claude 4.5 Opus (+Advanced Features)"
 date: 2025-11-25T10:00:00
 authors:
-  - name: Sameer Kankute
-    title: SWE @ LiteLLM (LLM Translation)
-    url: https://www.linkedin.com/in/sameer-kankute/
-    image_url: https://pbs.twimg.com/profile_images/2001352686994907136/ONgNuSk5_400x400.jpg
-  - name: Krrish Dholakia
-    title: "CEO, LiteLLM"
-    url: https://www.linkedin.com/in/krish-d/
-    image_url: https://pbs.twimg.com/profile_images/1298587542745358340/DZv3Oj-h_400x400.jpg
-  - name: Ishaan Jaff
-    title: "CTO, LiteLLM"
-    url: https://www.linkedin.com/in/reffajnaahsi/
-    image_url: https://pbs.twimg.com/profile_images/1613813310264340481/lz54oEiB_400x400.jpg
+  - sameer
+  - krrish
+  - ishaan-alt
 description: "Guide to Claude Opus 4.5 and advanced features in LiteLLM: Tool Search, Programmatic Tool Calling, and Effort Parameter."
 tags: [anthropic, claude, tool search, programmatic tool calling, effort, advanced features]
 hide_table_of_contents: false
@@ -24,6 +15,8 @@ import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
 This guide covers Anthropic's latest model (Claude Opus 4.5) and its advanced features now available in LiteLLM: Tool Search, Programmatic Tool Calling, Tool Input Examples, and the Effort Parameter.
+
+{/* truncate */}
 
 ---
 

@@ -91,6 +91,11 @@ def test_routes_on_litellm_proxy():
         # Bedrock Pass Through Routes
         ("/bedrock/model/cohere.command-r-v1:0/converse", True),
         ("/vertex-ai/model/text-embedding-004/embeddings", True),
+        # LiteLLM native RAG routes
+        ("/rag/ingest", True),
+        ("/v1/rag/ingest", True),
+        ("/rag/query", True),
+        ("/v1/rag/query", True),
     ],
 )
 def test_is_llm_api_route(route: str, expected: bool):

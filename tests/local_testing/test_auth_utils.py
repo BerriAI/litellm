@@ -268,7 +268,7 @@ def test_get_customer_user_header_from_mapping_returns_customer_header():
         {"header_name": "X-OpenWebUI-User-Email", "litellm_user_role": "customer"},
     ]
     result = get_customer_user_header_from_mapping(mappings)
-    assert result == "X-OpenWebUI-User-Email"
+    assert result == ["x-openwebui-user-email"]
 
 
 def test_get_customer_user_header_from_mapping_no_customer_returns_none():

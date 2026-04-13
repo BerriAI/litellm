@@ -5,7 +5,7 @@ Documentation: https://api-dashboard.search.brave.com/app/documentation/web-sear
 
 from __future__ import annotations
 from datetime import datetime, timezone
-from dateutil import parser
+from dateutil import parser  # type: ignore[import-untyped]
 from typing import Dict, List, Literal, Optional, TypedDict, Union
 import httpx
 import re

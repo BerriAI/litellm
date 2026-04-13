@@ -31,13 +31,18 @@ class RecursiveCharacterTextSplitter:
         """Split text into chunks."""
         return self._split_text(text, self.separators)
 
-    def _split_text(self, text: str, separators: List[str], depth: int = 0) -> List[str]:
+    def _split_text(
+        self, text: str, separators: List[str], depth: int = 0
+    ) -> List[str]:
         """Recursively split text using separators."""
         from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 
         if depth > DEFAULT_MAX_RECURSE_DEPTH:
             # Max depth reached, return text as-is split into chunk_size pieces
-            return [text[i:i + self.chunk_size] for i in range(0, len(text), self.chunk_size)]
+            return [
+                text[i : i + self.chunk_size]
+                for i in range(0, len(text), self.chunk_size)
+            ]
 
         final_chunks: List[str] = []
 
@@ -104,7 +109,9 @@ class RecursiveCharacterTextSplitter:
                         chunks.append(chunk_text)
 
                     # Handle overlap
-                    while current_length > self.chunk_overlap and len(current_chunk) > 1:
+                    while (
+                        current_length > self.chunk_overlap and len(current_chunk) > 1
+                    ):
                         removed = current_chunk.pop(0)
                         current_length -= len(removed) + len(separator)
 
@@ -132,4 +139,3 @@ class RecursiveCharacterTextSplitter:
             start = end - self.chunk_overlap if end < len(text) else len(text)
 
         return chunks
-

@@ -48,8 +48,8 @@ async def test_async_dynamic_arize_config():
         messages=[{"role": "user", "content": "hi test from arize dynamic config"}],
         temperature=0.1,
         user="OTEL_USER",
-        arize_api_key=os.getenv("ARIZE_SPACE_2_API_KEY"),
-        arize_space_key=os.getenv("ARIZE_SPACE_2_KEY"),
+        arize_api_key=os.getenv("ARIZE_SPACE_API_KEY"),
+        arize_space_key=os.getenv("ARIZE_SPACE_KEY"),
     )
 
     await asyncio.sleep(2)

@@ -660,7 +660,7 @@ Same as [Anthropic API response](../providers/anthropic#usage---thinking--reason
 
 LiteLLM supports Anthropic's beta features on AWS Bedrock through the `anthropic-beta` header. This enables access to experimental features like:
 
-- **1M Context Window** - Up to 1 million tokens of context (Claude Sonnet 4)
+- **1M Context Window** - Up to 1 million tokens of context (Claude Opus 4.6, Sonnet 4.5, Sonnet 4)
 - **Computer Use Tools** - AI that can interact with computer interfaces
 - **Token-Efficient Tools** - More efficient tool usage patterns  
 - **Extended Output** - Up to 128K output tokens
@@ -670,7 +670,7 @@ LiteLLM supports Anthropic's beta features on AWS Bedrock through the `anthropic
 
 | Beta Feature | Header Value | Compatible Models | Description |
 |--------------|-------------|------------------|-------------|
-| 1M Context Window | `context-1m-2025-08-07` | Claude Sonnet 4 | Enable 1 million token context window |
+| 1M Context Window | `context-1m-2025-08-07` | Claude Opus 4.6, Sonnet 4.5, Sonnet 4 | Enable 1 million token context window |
 | Computer Use (Latest) | `computer-use-2025-01-24` | Claude 3.7 Sonnet | Latest computer use tools |
 | Computer Use (Legacy) | `computer-use-2024-10-22` | Claude 3.5 Sonnet v2 | Computer use tools for Claude 3.5 |
 | Token-Efficient Tools | `token-efficient-tools-2025-02-19` | Claude 3.7 Sonnet | More efficient tool usage |

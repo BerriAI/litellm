@@ -16,6 +16,8 @@ interface OAuthFormFieldsProps {
   isEditing?: boolean;
   oauthFlow?: OAuthFlowStatus;
   initialFlowType?: string;
+  /** Link to provider docs for creating an OAuth app (e.g. GitHub). */
+  docsUrl?: string | null;
 }
 
 const fieldClassName = "rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500";
@@ -34,6 +36,7 @@ const OAuthFormFields: React.FC<OAuthFormFieldsProps> = ({
   isEditing = false,
   oauthFlow,
   initialFlowType,
+  docsUrl,
 }) => {
   const placeholderSuffix = isEditing ? " (leave blank to keep existing)" : "";
 
@@ -98,7 +101,22 @@ const OAuthFormFields: React.FC<OAuthFormFieldsProps> = ({
       ) : (
         <>
           <Form.Item
-            label={<FieldLabel label="Client ID (optional)" tooltip="Provide only if your MCP server cannot handle dynamic client registration." />}
+            label={
+              <span className="flex items-center justify-between w-full">
+                <FieldLabel label="Client ID (optional)" tooltip="Provide only if your MCP server cannot handle dynamic client registration." />
+                {docsUrl && (
+                  <a
+                    href={docsUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-xs text-blue-500 hover:text-blue-700 ml-2 font-normal"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    Create OAuth App →
+                  </a>
+                )}
+              </span>
+            }
             name={["credentials", "client_id"]}
           >
             <TextInput type="password" placeholder={`Enter client ID${placeholderSuffix}`} className={fieldClassName} />

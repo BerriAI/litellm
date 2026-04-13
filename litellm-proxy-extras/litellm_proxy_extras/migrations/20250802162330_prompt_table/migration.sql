@@ -1,5 +1,5 @@
 -- CreateTable
-CREATE TABLE "LiteLLM_PromptTable" (
+CREATE TABLE IF NOT EXISTS "LiteLLM_PromptTable" (
     "id" TEXT NOT NULL,
     "prompt_id" TEXT NOT NULL,
     "litellm_params" JSONB NOT NULL,
@@ -11,5 +11,5 @@ CREATE TABLE "LiteLLM_PromptTable" (
 );
 
 -- CreateIndex
-CREATE UNIQUE INDEX "LiteLLM_PromptTable_prompt_id_key" ON "LiteLLM_PromptTable"("prompt_id");
+CREATE UNIQUE INDEX IF NOT EXISTS "LiteLLM_PromptTable_prompt_id_key" ON "LiteLLM_PromptTable"("prompt_id");
 

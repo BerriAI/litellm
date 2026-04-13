@@ -109,8 +109,16 @@ class ToolPermissionGuardrail(CustomGuardrail):
                         self._compiled_rule_patterns[rule.id] = compiled_patterns
 
         # Normalize to lowercase for case-insensitive handling
-        self.default_action = default_action.lower() if isinstance(default_action, str) else default_action
-        self.on_disallowed_action = on_disallowed_action.lower() if isinstance(on_disallowed_action, str) else on_disallowed_action
+        self.default_action = (
+            default_action.lower()
+            if isinstance(default_action, str)
+            else default_action
+        )
+        self.on_disallowed_action = (
+            on_disallowed_action.lower()
+            if isinstance(on_disallowed_action, str)
+            else on_disallowed_action
+        )
 
         verbose_proxy_logger.debug(
             "Tool Permission Guardrail initialized with %d rules, default_action: %s",
@@ -246,7 +254,11 @@ class ToolPermissionGuardrail(CustomGuardrail):
         return {}
 
     def _collect_argument_paths(
-        self, value: Any, current_path: str, collected: Dict[str, List[Any]], depth: int = 0
+        self,
+        value: Any,
+        current_path: str,
+        collected: Dict[str, List[Any]],
+        depth: int = 0,
     ) -> None:
         from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 

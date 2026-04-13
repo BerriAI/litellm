@@ -2,7 +2,7 @@ from typing import TYPE_CHECKING, Any, Dict, Optional, Union, cast, get_type_hin
 
 import httpx
 from openai.types.responses import ResponseReasoningItem
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 import litellm
 from litellm._logging import verbose_logger
@@ -31,6 +31,9 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
     @property
     def custom_llm_provider(self) -> LlmProviders:
         return LlmProviders.OPENAI
+
+    def supports_native_file_search(self) -> bool:
+        return True
 
     def get_supported_openai_params(self, model: str) -> list:
         """
@@ -181,7 +184,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
                 f"Error constructing ResponsesAPIResponse: {raw_response_json}, using model_construct"
             )
             response = ResponsesAPIResponse.model_construct(**raw_response_json)
-        
+
         # Store processed headers in additional_headers so they get returned to the client
         response._hidden_params["additional_headers"] = processed_headers
         response._hidden_params["headers"] = raw_response_headers
@@ -249,7 +252,17 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
                 parsed_chunk["error"]["code"] = "unknown_error"
         except Exception:
             verbose_logger.debug("Failed to coalesce error.code in parsed_chunk")
-        return event_pydantic_model(**parsed_chunk)
+
+        try:
+            return event_pydantic_model(**parsed_chunk)
+        except ValidationError:
+            verbose_logger.debug(
+                "Pydantic validation failed for %s with chunk %s, "
+                "falling back to model_construct",
+                event_pydantic_model.__name__,
+                parsed_chunk,
+            )
+            return event_pydantic_model.model_construct(**parsed_chunk)
 
     @staticmethod
     def get_event_model_class(event_type: str) -> Any:
@@ -334,6 +347,10 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
                 )
         return False
 
+    def supports_native_websocket(self) -> bool:
+        """OpenAI supports native WebSocket for Responses API"""
+        return True
+
     #########################################################
     ########## DELETE RESPONSE API TRANSFORMATION ##############
     #########################################################
@@ -397,7 +414,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
     ) -> ResponsesAPIResponse:
         """
         Transform the get response API response into a ResponsesAPIResponse
-        """        
+        """
         try:
             raw_response_json = raw_response.json()
         except Exception:
@@ -409,7 +426,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         response = ResponsesAPIResponse(**raw_response_json)
         response._hidden_params["additional_headers"] = processed_headers
         response._hidden_params["headers"] = raw_response_headers
-        
+
         return response
 
     #########################################################
@@ -489,11 +506,11 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
             )
         raw_response_headers = dict(raw_response.headers)
         processed_headers = process_response_headers(raw_response_headers)
-        
+
         response = ResponsesAPIResponse(**raw_response_json)
         response._hidden_params["additional_headers"] = processed_headers
         response._hidden_params["headers"] = raw_response_headers
-        
+
         return response
 
     #########################################################
@@ -514,15 +531,18 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         OpenAI API expects the following request
         - POST /v1/responses/compact
         """
-        url = f"{api_base}/compact"
-        
+        # Preserve query params (e.g., api-version) while appending /compact.
+        parsed_url = httpx.URL(api_base)
+        compact_path = parsed_url.path.rstrip("/") + "/compact"
+        url = str(parsed_url.copy_with(path=compact_path))
+
         input = self._validate_input_param(input)
         data = dict(
             ResponsesAPIRequestParams(
                 model=model, input=input, **response_api_optional_request_params
             )
         )
-        
+
         return url, data
 
     def transform_compact_response_api_response(
@@ -548,7 +568,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
             )
         raw_response_headers = dict(raw_response.headers)
         processed_headers = process_response_headers(raw_response_headers)
-        
+
         try:
             response = ResponsesAPIResponse(**raw_response_json)
         except Exception:
@@ -556,8 +576,8 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
                 f"Error constructing ResponsesAPIResponse: {raw_response_json}, using model_construct"
             )
             response = ResponsesAPIResponse.model_construct(**raw_response_json)
-        
+
         response._hidden_params["additional_headers"] = processed_headers
         response._hidden_params["headers"] = raw_response_headers
-        
+
         return response

@@ -5,9 +5,10 @@
  */
 
 import { Button } from "@tremor/react";
-import { message, Tabs } from "antd";
+import { Tabs } from "antd";
 import { Plus } from "lucide-react";
 import React, { useEffect, useState } from "react";
+import MessageManager from "@/components/molecules/message_manager";
 import { FallbackGroup, FallbackGroupConfig } from "./FallbackGroupConfig";
 
 interface FallbackSelectionFormProps {
@@ -22,7 +23,7 @@ export function FallbackSelectionForm({
   groups,
   onGroupsChange,
   availableModels,
-  maxFallbacks = 5,
+  maxFallbacks = 10,
   maxGroups = 5,
 }: FallbackSelectionFormProps) {
   const [activeKey, setActiveKey] = useState(groups.length > 0 ? groups[0].id : "1");
@@ -60,7 +61,7 @@ export function FallbackSelectionForm({
 
   const handleRemoveGroup = (targetId: string) => {
     if (groups.length === 1) {
-      message.warning("At least one group is required");
+      MessageManager.warning("At least one group is required");
       return;
     }
     const newGroups = groups.filter((g) => g.id !== targetId);

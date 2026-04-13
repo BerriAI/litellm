@@ -217,60 +217,6 @@ def test_completion_bedrock_claude_external_client_auth():
 # test_completion_bedrock_claude_external_client_auth()
 
 
-@pytest.mark.skip(reason="Expired token, need to renew")
-def test_completion_bedrock_claude_sts_client_auth():
-    print("\ncalling bedrock claude external client auth")
-    import os
-
-    aws_access_key_id = os.environ["AWS_TEMP_ACCESS_KEY_ID"]
-    aws_secret_access_key = os.environ["AWS_TEMP_SECRET_ACCESS_KEY"]
-    aws_region_name = os.environ["AWS_REGION_NAME"]
-    aws_role_name = os.environ["AWS_TEMP_ROLE_NAME"]
-
-    try:
-        import boto3
-
-        litellm.set_verbose = True
-
-        response = completion(
-            model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
-            messages=messages,
-            max_tokens=10,
-            temperature=0.1,
-            aws_region_name=aws_region_name,
-            aws_access_key_id=aws_access_key_id,
-            aws_secret_access_key=aws_secret_access_key,
-            aws_role_name=aws_role_name,
-            aws_session_name="my-test-session",
-        )
-
-        response = embedding(
-            model="cohere.embed-multilingual-v3",
-            input=["hello world"],
-            aws_region_name="us-east-1",
-            aws_access_key_id=aws_access_key_id,
-            aws_secret_access_key=aws_secret_access_key,
-            aws_role_name=aws_role_name,
-            aws_session_name="my-test-session",
-        )
-
-        response = completion(
-            model="gpt-3.5-turbo",
-            messages=messages,
-            aws_region_name="us-east-1",
-            aws_access_key_id=aws_access_key_id,
-            aws_secret_access_key=aws_secret_access_key,
-            aws_role_name=aws_role_name,
-            aws_session_name="my-test-session",
-        )
-        # Add any assertions here to check the response
-        print(response)
-    except RateLimitError:
-        pass
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-
 @pytest.fixture()
 def bedrock_session_token_creds():
     print("\ncalling oidc auto to get aws_session_token credentials")
@@ -494,110 +440,6 @@ def test_completion_bedrock_claude_aws_bedrock_client(bedrock_session_token_cred
 
 
 # test_completion_bedrock_claude_sts_client_auth()
-
-
-@pytest.mark.skipif(
-    os.environ.get("CIRCLE_OIDC_TOKEN_V2") is None,
-    reason="Cannot run without being in CircleCI Runner",
-)
-def test_completion_bedrock_claude_sts_oidc_auth():
-    print("\ncalling bedrock claude with oidc auth")
-    import os
-
-    aws_web_identity_token = "oidc/circleci_v2/"
-    aws_region_name = os.environ["AWS_REGION_NAME"]
-    # aws_role_name = os.environ["AWS_TEMP_ROLE_NAME"]
-    # TODO: This is using ai.moda's IAM role, we should use LiteLLM's IAM role eventually
-    aws_role_name = "arn:aws:iam::335785316107:role/litellm-github-unit-tests-circleci"
-
-    try:
-        litellm.set_verbose = True
-
-        response_1 = completion(
-            model="bedrock/anthropic.claude-3-haiku-20240307-v1:0",
-            messages=messages,
-            max_tokens=10,
-            temperature=0.1,
-            aws_region_name=aws_region_name,
-            aws_web_identity_token=aws_web_identity_token,
-            aws_role_name=aws_role_name,
-            aws_session_name="my-test-session",
-        )
-        print(response_1)
-        assert len(response_1.choices) > 0
-        assert len(response_1.choices[0].message.content) > 0
-
-        # This second call is to verify that the cache isn't breaking anything
-        response_2 = completion(
-            model="bedrock/anthropic.claude-3-haiku-20240307-v1:0",
-            messages=messages,
-            max_tokens=5,
-            temperature=0.2,
-            aws_region_name=aws_region_name,
-            aws_web_identity_token=aws_web_identity_token,
-            aws_role_name=aws_role_name,
-            aws_session_name="my-test-session",
-        )
-        print(response_2)
-        assert len(response_2.choices) > 0
-        assert len(response_2.choices[0].message.content) > 0
-
-        # This third call is to verify that the cache isn't used for a different region
-        response_3 = completion(
-            model="bedrock/anthropic.claude-3-haiku-20240307-v1:0",
-            messages=messages,
-            max_tokens=6,
-            temperature=0.3,
-            aws_region_name="us-east-1",
-            aws_web_identity_token=aws_web_identity_token,
-            aws_role_name=aws_role_name,
-            aws_session_name="my-test-session",
-        )
-        print(response_3)
-        assert len(response_3.choices) > 0
-        assert len(response_3.choices[0].message.content) > 0
-
-    except RateLimitError:
-        pass
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-
-@pytest.mark.skipif(
-    os.environ.get("CIRCLE_OIDC_TOKEN_V2") is None,
-    reason="Cannot run without being in CircleCI Runner",
-)
-def test_completion_bedrock_httpx_command_r_sts_oidc_auth():
-    print("\ncalling bedrock httpx command r with oidc auth")
-    import os
-
-    aws_web_identity_token = "oidc/circleci_v2/"
-    aws_region_name = "us-west-2"
-    # aws_role_name = os.environ["AWS_TEMP_ROLE_NAME"]
-    # TODO: This is using ai.moda's IAM role, we should use LiteLLM's IAM role eventually
-    aws_role_name = "arn:aws:iam::335785316107:role/litellm-github-unit-tests-circleci"
-
-    try:
-        litellm.set_verbose = True
-
-        response = completion(
-            model="bedrock/cohere.command-r-v1:0",
-            messages=messages,
-            max_tokens=10,
-            temperature=0.1,
-            aws_region_name=aws_region_name,
-            aws_web_identity_token=aws_web_identity_token,
-            aws_role_name=aws_role_name,
-            aws_session_name="cross-region-test",
-            aws_sts_endpoint="https://sts-fips.us-east-2.amazonaws.com",
-            aws_bedrock_runtime_endpoint="https://bedrock-runtime-fips.us-west-2.amazonaws.com",
-        )
-        # Add any assertions here to check the response
-        print(response)
-    except RateLimitError:
-        pass
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
 
 
 @pytest.mark.parametrize(
@@ -2630,7 +2472,6 @@ def test_bedrock_error_handling_streaming():
         "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf",
         # "https://raw.githubusercontent.com/datasets/gdp/master/data/gdp.csv",
         "https://www.cmu.edu/blackboard/files/evaluate/tests-example.xls",
-        "http://www.krishdholakia.com/",
         # "https://raw.githubusercontent.com/datasets/sample-data/master/README.txt", # invalid url
         "https://raw.githubusercontent.com/mdn/content/main/README.md",
     ],
@@ -3517,7 +3358,8 @@ def test_bedrock_openai_imported_model():
         print(f"URL: {url}")
         assert "bedrock-runtime.us-east-1.amazonaws.com" in url
         assert (
-            "arn:aws:bedrock:us-east-1:117159858402:imported-model/m4gc1mrfuddy" in url
+            "arn:aws:bedrock:us-east-1:117159858402:imported-model%2Fm4gc1mrfuddy"
+            in url
         )
         assert "/invoke" in url
 
@@ -3954,9 +3796,11 @@ def test_bedrock_openai_error_handling():
     assert exc_info.value.status_code == 422
     print("✓ Error handling works correctly")
 
+
 # ============================================================================
 # Nova Grounding (web_search_options) Unit Tests (Mocked)
 # ============================================================================
+
 
 def test_bedrock_nova_grounding_web_search_options_non_streaming():
     """
@@ -4011,7 +3855,9 @@ def test_bedrock_nova_grounding_web_search_options_non_streaming():
                     break
 
             assert system_tool_found, "systemTool with nova_grounding should be present"
-            print(f"✓ web_search_options correctly transformed to systemTool (non-streaming)")
+            print(
+                f"✓ web_search_options correctly transformed to systemTool (non-streaming)"
+            )
 
 
 def test_bedrock_nova_grounding_with_function_tools():
@@ -4091,7 +3937,9 @@ def test_bedrock_nova_grounding_with_function_tools():
                     assert tool["systemTool"]["name"] == "nova_grounding"
                     system_tool_found = True
 
-            assert function_tool_found, "Function tool (get_stock_price) should be present"
+            assert (
+                function_tool_found
+            ), "Function tool (get_stock_price) should be present"
             assert system_tool_found, "systemTool (nova_grounding) should be present"
             print(f"✓ Both function tools and web_search_options correctly combined")
 
@@ -4196,10 +4044,12 @@ def test_bedrock_nova_grounding_request_transformation():
         mock_post.return_value = MagicMock(
             status_code=200,
             json=lambda: {
-                "output": {"message": {"role": "assistant", "content": [{"text": "Test"}]}},
+                "output": {
+                    "message": {"role": "assistant", "content": [{"text": "Test"}]}
+                },
                 "stopReason": "end_turn",
-                "usage": {"inputTokens": 10, "outputTokens": 5}
-            }
+                "usage": {"inputTokens": 10, "outputTokens": 5},
+            },
         )
 
         try:

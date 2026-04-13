@@ -920,9 +920,9 @@ for model in models:
 
 ## Resources
 
-- [Letta Documentation](https://docs.letta.ai/)
-- [LiteLLM Proxy Documentation](../proxy/quick_start.md)
-- [LiteLLM SDK Documentation](../completion/input.md)
-- [Function Calling Guide](../completion/function_call.md)
-- [Observability Setup](../observability/langfuse_integration.md)
-- [Router Configuration](../routing.md)
+- [Letta Documentation](https://docs.letta.com/)
+- [LiteLLM Proxy Documentation](/docs/simple_proxy)
+- [LiteLLM SDK Documentation](/docs/#litellm-python-sdk)
+- [Function Calling Guide](/docs/completion/function_call)
+- [Observability Setup](/docs/integrations/observability_integrations)
+- [Router Configuration](/docs/routing)

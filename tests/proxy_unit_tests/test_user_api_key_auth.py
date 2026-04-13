@@ -1044,8 +1044,25 @@ async def test_jwt_non_admin_team_route_access(monkeypatch):
         litellm.proxy.proxy_server, "general_settings", {"enable_jwt_auth": True}
     )
 
-    # Mock JWTAuthManager.auth_builder
+    # Initialize jwt_handler with a default LiteLLM_JWTAuth so that the
+    # virtual_key_claim_field check in user_api_key_auth doesn't fail with
+    # "JWTHandler has no attribute 'litellm_jwtauth'"
+    from litellm.proxy._types import LiteLLM_JWTAuth
+    from litellm.caching.dual_cache import DualCache
+
+    litellm.proxy.proxy_server.jwt_handler.update_environment(
+        prisma_client=None,
+        user_api_key_cache=DualCache(),
+        litellm_jwtauth=LiteLLM_JWTAuth(),
+    )
+
+    # Mock enterprise license check and JWTAuthManager.auth_builder
+    # License check must be mocked to avoid environment variable pollution
+    # in parallel test execution
     with patch(
+        "litellm.proxy.proxy_server.premium_user",
+        True,
+    ), patch(
         "litellm.proxy.auth.handle_jwt.JWTAuthManager.auth_builder",
         return_value=mock_jwt_response,
     ):

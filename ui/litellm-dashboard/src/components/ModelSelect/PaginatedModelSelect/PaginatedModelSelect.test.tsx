@@ -10,8 +10,8 @@ vi.mock("@/app/(dashboard)/hooks/models/useModels", () => ({
   useInfiniteModelInfo: vi.fn(),
 }));
 
-vi.mock("@tanstack/react-pacer/debouncer", () => {
-  const React = require("react");
+vi.mock("@tanstack/react-pacer/debouncer", async () => {
+  const React = await vi.importActual<typeof import("react")>("react");
   return {
     useDebouncedState: (initial: string) => {
       const [value, setValue] = React.useState(initial);

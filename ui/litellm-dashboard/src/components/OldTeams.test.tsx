@@ -14,11 +14,12 @@ vi.mock("./networking", () => ({
   teamDeleteCall: vi.fn(),
   fetchMCPAccessGroups: vi.fn(),
   v2TeamListCall: vi.fn(),
-  getGuardrailsList: vi.fn(),
+  getGuardrailsList: vi.fn().mockResolvedValue({ guardrails: [] }),
+  getPoliciesList: vi.fn().mockResolvedValue({ policies: [] }),
 }));
 
-vi.mock("./common_components/fetch_teams", () => ({
-  fetchTeams: vi.fn(),
+vi.mock("@/app/(dashboard)/hooks/teams/useTeams", () => ({
+  teamListCall: vi.fn().mockResolvedValue({ teams: [], total: 0, page: 1, page_size: 100, total_pages: 0 }),
 }));
 
 vi.mock("./molecules/notifications_manager", () => ({
@@ -70,12 +71,16 @@ vi.mock("./ModelSelect/ModelSelect", () => {
         data-testid={dataTestId || "model-select"}
         value={Array.isArray(value) ? value.join(", ") : ""}
         onChange={(e) => {
-          // Mock onChange - in real usage this would be handled by Ant Design Select
           if (onChange) {
-            onChange(value || []);
+            const newVal = e.target.value
+              ? e.target.value
+                .split(",")
+                .map((s: string) => s.trim())
+                .filter(Boolean)
+              : [];
+            onChange(newVal);
           }
         }}
-        readOnly
       />
     );
   });
@@ -87,6 +92,27 @@ vi.mock("./ModelSelect/ModelSelect", () => {
 
 vi.mock("@/app/(dashboard)/hooks/organizations/useOrganizations", () => ({
   useOrganizations: () => mockUseOrganizations(),
+}));
+
+vi.mock("@/app/(dashboard)/hooks/accessGroups/useAccessGroups", () => ({
+  useAccessGroups: vi.fn().mockReturnValue({
+    data: [
+      { access_group_id: "ag-1", access_group_name: "Group 1" },
+      { access_group_id: "ag-2", access_group_name: "Group 2" },
+    ],
+    isLoading: false,
+    isError: false,
+  }),
+}));
+
+vi.mock("./common_components/AccessGroupSelector", () => ({
+  default: ({ value = [], onChange }: { value?: string[]; onChange?: (v: string[]) => void }) => (
+    <input
+      data-testid="access-group-selector"
+      value={Array.isArray(value) ? value.join(",") : ""}
+      onChange={(e) => onChange?.(e.target.value ? e.target.value.split(",").map((s) => s.trim()) : [])}
+    />
+  ),
 }));
 
 const createQueryClient = () => {
@@ -349,6 +375,9 @@ describe("OldTeams - handleCreate organization handling", () => {
         organizations={[]}
       />,
     );
+    await waitFor(() => {
+      expect(screen.getByTestId("delete-team-button")).toBeInTheDocument();
+    });
     const deleteTeamButton = screen.getByTestId("delete-team-button");
     act(() => {
       fireEvent.click(deleteTeamButton);
@@ -363,7 +392,7 @@ describe("OldTeams - empty state", () => {
     mockUseOrganizations.mockReturnValue({ data: [] });
   });
 
-  it("should display empty state message when teams array is empty", () => {
+  it("should display empty state message when teams array is empty", async () => {
     renderWithQueryClient(
       <OldTeams
         teams={[]}
@@ -376,11 +405,13 @@ describe("OldTeams - empty state", () => {
       />,
     );
 
-    expect(screen.getByText("No teams found")).toBeInTheDocument();
-    expect(screen.getByText("Adjust your filters or create a new team")).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByText("No teams yet")).toBeInTheDocument();
+    });
+    expect(screen.getByText("Create your first team to organize members and manage access to models.")).toBeInTheDocument();
   });
 
-  it("should display empty state message when teams is null", () => {
+  it("should display empty state message when teams is null", async () => {
     renderWithQueryClient(
       <OldTeams
         teams={null}
@@ -393,11 +424,13 @@ describe("OldTeams - empty state", () => {
       />,
     );
 
-    expect(screen.getByText("No teams found")).toBeInTheDocument();
-    expect(screen.getByText("Adjust your filters or create a new team")).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByText("No teams yet")).toBeInTheDocument();
+    });
+    expect(screen.getByText("Create your first team to organize members and manage access to models.")).toBeInTheDocument();
   });
 
-  it("should not display empty state when teams array has items", () => {
+  it("should not display empty state when teams array has items", async () => {
     renderWithQueryClient(
       <OldTeams
         teams={[
@@ -425,9 +458,11 @@ describe("OldTeams - empty state", () => {
       />,
     );
 
-    expect(screen.queryByText("No teams found")).not.toBeInTheDocument();
-    expect(screen.queryByText("Adjust your filters or create a new team")).not.toBeInTheDocument();
-    expect(screen.getByText("Test Team")).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByText("Test Team")).toBeInTheDocument();
+    });
+    expect(screen.queryByText("No teams yet")).not.toBeInTheDocument();
+    expect(screen.queryByText("Create your first team to organize members and manage access to models.")).not.toBeInTheDocument();
   });
 });
 
@@ -595,12 +630,9 @@ describe("OldTeams - premium props", () => {
       />,
     );
 
-    const truncatedTeamId = "team-123456789".slice(0, 7);
-    const teamButton = await screen.findByRole("button", {
-      name: new RegExp(`${truncatedTeamId}\\.\\.\\.`),
-    });
+    const teamIdElement = await screen.findByText("team-123456789");
     act(() => {
-      fireEvent.click(teamButton);
+      fireEvent.click(teamIdElement);
     });
 
     await waitFor(() => expect(mockTeamInfoView).toHaveBeenCalled());
@@ -740,6 +772,80 @@ describe("OldTeams - Default Team Settings tab visibility", () => {
   });
 });
 
+describe("OldTeams - access_group_ids in team create", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockTeamInfoView.mockClear();
+    vi.mocked(fetchAvailableModelsForTeamOrKey).mockResolvedValue(["gpt-4", "gpt-3.5-turbo"]);
+    vi.mocked(fetchMCPAccessGroups).mockResolvedValue([]);
+    vi.mocked(getGuardrailsList).mockResolvedValue({ guardrails: [] });
+    vi.mocked(teamCreateCall).mockResolvedValue({
+      team_id: "new-team-1",
+      team_alias: "Test Team",
+      models: ["gpt-4"],
+      organization_id: null,
+      keys: [],
+      members_with_roles: [],
+      spend: 0,
+    } as any);
+    mockUseOrganizations.mockReturnValue({ data: [{ organization_id: "org-1", organization_alias: "Org 1", models: [], members: [] }] });
+  });
+
+  it("should pass access_group_ids to teamCreateCall when creating team", async () => {
+    renderWithQueryClient(
+      <OldTeams
+        teams={[]}
+        searchParams={{}}
+        accessToken="test-token"
+        setTeams={vi.fn()}
+        userID="user-123"
+        userRole="Admin"
+        organizations={[{ organization_id: "org-1", organization_alias: "Org 1", models: [], members: [] }]}
+      />,
+    );
+
+    const createButton = screen.getAllByRole("button", { name: /create team/i })[0];
+    act(() => {
+      fireEvent.click(createButton);
+    });
+
+    await waitFor(() => {
+      expect(screen.getByLabelText(/team name/i)).toBeInTheDocument();
+    });
+
+    const teamNameInput = screen.getByLabelText(/team name/i);
+    fireEvent.change(teamNameInput, { target: { value: "Test Team" } });
+
+    const modelsInput = screen.getByTestId("create-team-models-select");
+    fireEvent.change(modelsInput, { target: { value: "gpt-4" } });
+
+    const additionalSettingsAccordion = screen.getByText("Additional Settings");
+    fireEvent.click(additionalSettingsAccordion);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("access-group-selector")).toBeInTheDocument();
+    });
+
+    const accessGroupInput = screen.getByTestId("access-group-selector");
+    fireEvent.change(accessGroupInput, { target: { value: "ag-1,ag-2" } });
+
+    const createTeamSubmitButtons = screen.getAllByRole("button", { name: /create team/i });
+    const createTeamSubmitButton = createTeamSubmitButtons[createTeamSubmitButtons.length - 1];
+    fireEvent.click(createTeamSubmitButton);
+
+    await waitFor(() => {
+      expect(teamCreateCall).toHaveBeenCalledWith(
+        "test-token",
+        expect.objectContaining({
+          team_alias: "Test Team",
+          models: ["gpt-4"],
+          access_group_ids: ["ag-1", "ag-2"],
+        }),
+      );
+    });
+  }, { timeout: 30000 });
+});
+
 describe("OldTeams - models dropdown options", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -766,7 +872,7 @@ describe("OldTeams - models dropdown options", () => {
       expect(fetchAvailableModelsForTeamOrKey).toHaveBeenCalled();
     });
 
-    const createButton = screen.getByRole("button", { name: /create new team/i });
+    const createButton = screen.getAllByRole("button", { name: /create team/i })[0];
     act(() => {
       fireEvent.click(createButton);
     });
@@ -785,7 +891,7 @@ describe("OldTeams - organization alias display", () => {
     mockUseOrganizations.mockReturnValue({ data: [] });
   });
 
-  it("should display organization alias instead of organization id", () => {
+  it("should display organization alias instead of organization id", async () => {
     const mockOrganizations = [
       {
         organization_id: "org-123",
@@ -835,11 +941,13 @@ describe("OldTeams - organization alias display", () => {
       />,
     );
 
-    expect(screen.getByText("Test Organization")).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByText("Test Organization")).toBeInTheDocument();
+    });
     expect(screen.queryByText("org-123")).not.toBeInTheDocument();
   });
 
-  it("should display organization id when alias is not found", () => {
+  it("should display organization id when alias is not found", async () => {
     mockUseOrganizations.mockReturnValue({ data: [] });
 
     renderWithQueryClient(
@@ -869,10 +977,12 @@ describe("OldTeams - organization alias display", () => {
       />,
     );
 
-    expect(screen.getByText("org-unknown")).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByText("org-unknown")).toBeInTheDocument();
+    });
   });
 
-  it("should display N/A when organization_id is null", () => {
+  it("should display N/A when organization_id is null", async () => {
     mockUseOrganizations.mockReturnValue({ data: [] });
 
     renderWithQueryClient(
@@ -902,6 +1012,9 @@ describe("OldTeams - organization alias display", () => {
       />,
     );
 
-    expect(screen.getByText("N/A")).toBeInTheDocument();
+    await waitFor(() => {
+      // When organization_id is null, the table shows "—" in the Organization column
+      expect(screen.getAllByText("—").length).toBeGreaterThan(0);
+    });
   });
 });

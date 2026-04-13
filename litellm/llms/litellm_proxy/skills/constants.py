@@ -10,4 +10,3 @@ DEFAULT_MAX_ITERATIONS: int = 10
 
 DEFAULT_SANDBOX_TIMEOUT: int = 120
 """Default timeout in seconds for sandbox code execution."""
-

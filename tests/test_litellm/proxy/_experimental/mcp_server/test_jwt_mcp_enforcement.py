@@ -184,6 +184,7 @@ async def test_e2e_jwt_team_mcp_permissions_enforced(monkeypatch):
     proxy_server_module.prisma_client = MagicMock()  # Mock prisma client
     proxy_server_module.user_api_key_cache = DualCache()
     proxy_server_module.proxy_logging_obj = MagicMock()
+    proxy_server_module.general_settings = {}
     monkeypatch.setitem(sys.modules, "litellm.proxy.proxy_server", proxy_server_module)
 
     # Team "ABC" has MCP servers assigned via object_permission
@@ -389,6 +390,7 @@ async def test_e2e_jwt_team_mcp_key_intersection(monkeypatch):
     proxy_server_module.prisma_client = MagicMock()
     proxy_server_module.user_api_key_cache = DualCache()
     proxy_server_module.proxy_logging_obj = MagicMock()
+    proxy_server_module.general_settings = {}
     monkeypatch.setitem(sys.modules, "litellm.proxy.proxy_server", proxy_server_module)
 
     # Team MCP servers

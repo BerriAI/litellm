@@ -17,6 +17,7 @@ import {
   Button as TremorButton,
 } from "@tremor/react";
 import { Button, Form, Input, Modal, Select, Tooltip } from "antd";
+import VectorStoreSelector from "./vector_store_management/VectorStoreSelector";
 import { CheckIcon, CopyIcon } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { copyToClipboard as utilCopyToClipboard } from "../utils/dataUtils";
@@ -30,6 +31,7 @@ import {
   CredentialItem,
   credentialCreateCall,
   credentialGetCall,
+  credentialListCall,
   getGuardrailsList,
   modelDeleteCall,
   modelInfoV1Call,
@@ -75,6 +77,7 @@ export default function ModelInfoView({
   const [isAutoRouterModalOpen, setIsAutoRouterModalOpen] = useState(false);
   const [guardrailsList, setGuardrailsList] = useState<string[]>([]);
   const [tagsList, setTagsList] = useState<Record<string, Tag>>({});
+  const [credentialsList, setCredentialsList] = useState<CredentialItem[]>([]);
 
   // Fetch model data using hook
   const { data: rawModelDataResponse, isLoading: isLoadingModel } = useModelsInfo(1, 50, undefined, modelId);
@@ -191,10 +194,21 @@ export default function ModelInfoView({
       }
     };
 
+    const fetchCredentials = async () => {
+      if (!accessToken) return;
+      try {
+        const response = await credentialListCall(accessToken);
+        setCredentialsList(response.credentials || []);
+      } catch (error) {
+        console.error("Failed to fetch credentials:", error);
+      }
+    };
+
     getExistingCredential();
     getModelInfo();
     fetchGuardrails();
     fetchTags();
+    fetchCredentials();
   }, [accessToken, modelId]);
 
   const handleReuseCredential = async (values: any) => {
@@ -220,6 +234,7 @@ export default function ModelInfoView({
       let parsedExtraParams: Record<string, any> = {};
       try {
         parsedExtraParams = values.litellm_extra_params ? JSON.parse(values.litellm_extra_params) : {};
+        delete parsedExtraParams.litellm_credential_name;
       } catch (e) {
         NotificationsManager.fromBackend("Invalid JSON in LiteLLM Params");
         setIsSaving(false);
@@ -242,8 +257,18 @@ export default function ModelInfoView({
         output_cost_per_token: values.output_cost / 1_000_000,
         tags: values.tags,
       };
+      if (values.litellm_credential_name) {
+        updatedLitellmParams.litellm_credential_name = values.litellm_credential_name;
+      } else {
+        delete updatedLitellmParams.litellm_credential_name;
+      }
       if (values.guardrails) {
         updatedLitellmParams.guardrails = values.guardrails;
+      }
+      if (values.vector_store_ids !== undefined) {
+        updatedLitellmParams.vector_store_ids = Array.isArray(values.vector_store_ids)
+          ? values.vector_store_ids
+          : [];
       }
 
       // Handle cache control settings
@@ -606,9 +631,21 @@ export default function ModelInfoView({
                     guardrails: Array.isArray(localModelData.litellm_params?.guardrails)
                       ? localModelData.litellm_params.guardrails
                       : [],
+                    vector_store_ids: Array.isArray(localModelData.litellm_params?.vector_store_ids)
+                      ? localModelData.litellm_params.vector_store_ids
+                      : [],
                     tags: Array.isArray(localModelData.litellm_params?.tags) ? localModelData.litellm_params.tags : [],
                     health_check_model: isWildcardModel ? localModelData.model_info?.health_check_model : null,
-                    litellm_extra_params: JSON.stringify(localModelData.litellm_params || {}, null, 2),
+                    litellm_credential_name: localModelData.litellm_params?.litellm_credential_name || "",
+                    litellm_extra_params: JSON.stringify(
+                      Object.fromEntries(
+                        Object.entries(localModelData.litellm_params || {}).filter(
+                          ([key]) => key !== "litellm_credential_name",
+                        ),
+                      ),
+                      null,
+                      2,
+                    ),
                   }}
                   layout="vertical"
                   onValuesChange={() => setIsDirty(true)}
@@ -884,6 +921,58 @@ export default function ModelInfoView({
                       </div>
 
                       <div>
+                        <Text className="font-medium">
+                          Attached Knowledge Bases (RAG)
+                          <Tooltip title="Vector stores used for RAG. Every request to this model will automatically retrieve context from these knowledge bases.">
+                            <a
+                              href="https://docs.litellm.ai/docs/completion/knowledgebase"
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                            </a>
+                          </Tooltip>
+                        </Text>
+                        {isEditing ? (
+                          <Form.Item name="vector_store_ids" className="mb-0">
+                            <VectorStoreSelector
+                              onChange={() => {}}
+                              accessToken={accessToken || ""}
+                              placeholder="Select knowledge bases (optional)"
+                            />
+                          </Form.Item>
+                        ) : (
+                          <div className="mt-1 p-2 bg-gray-50 rounded">
+                            {localModelData.litellm_params?.vector_store_ids ? (
+                              Array.isArray(localModelData.litellm_params.vector_store_ids) ? (
+                                localModelData.litellm_params.vector_store_ids.length > 0 ? (
+                                  <div className="flex flex-wrap gap-1">
+                                    {localModelData.litellm_params.vector_store_ids.map(
+                                      (vsId: string, index: number) => (
+                                        <span
+                                          key={index}
+                                          className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-800"
+                                        >
+                                          {vsId}
+                                        </span>
+                                      )
+                                    )}
+                                  </div>
+                                ) : (
+                                  "No knowledge bases attached"
+                                )
+                              ) : (
+                                String(localModelData.litellm_params.vector_store_ids)
+                              )
+                            ) : (
+                              "Not Set"
+                            )}
+                          </div>
+                        )}
+                      </div>
+
+                      <div>
                         <Text className="font-medium">Tags</Text>
                         {isEditing ? (
                           <Form.Item name="tags" className="mb-0">
@@ -927,6 +1016,33 @@ export default function ModelInfoView({
                             ) : (
                               "Not Set"
                             )}
+                          </div>
+                        )}
+                      </div>
+                      <div>
+                        <Text className="font-medium">Existing Credentials</Text>
+                        {isEditing ? (
+                          <Form.Item name="litellm_credential_name" className="mb-0">
+                            <Select
+                              showSearch
+                              placeholder="Select or search for existing credentials"
+                              optionFilterProp="children"
+                              filterOption={(input, option) =>
+                                (option?.label ?? "").toLowerCase().includes(input.toLowerCase())
+                              }
+                              options={[
+                                { value: "", label: "None" },
+                                ...credentialsList.map((credential) => ({
+                                  value: credential.credential_name,
+                                  label: credential.credential_name,
+                                })),
+                              ]}
+                              allowClear
+                            />
+                          </Form.Item>
+                        ) : (
+                          <div className="mt-1 p-2 bg-gray-50 rounded">
+                            {localModelData.litellm_params?.litellm_credential_name || "Manual"}
                           </div>
                         )}
                       </div>

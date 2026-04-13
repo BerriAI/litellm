@@ -654,7 +654,7 @@ def test_transform_text_to_speech_request_ssml_with_mstts_namespace(azure_tts_co
     assert "rate='+20%'" in ssml
 
 
-@patch("litellm.llms.custom_httpx.llm_http_handler.HTTPHandler.post")
+@patch("litellm.llms.custom_httpx.http_handler.HTTPHandler.post")
 def test_litellm_speech_with_ssml_passthrough(mock_post):
     """
     Test that litellm.speech passes SSML through to Azure AVA without transformation
@@ -666,13 +666,13 @@ def test_litellm_speech_with_ssml_passthrough(mock_post):
         </prosody>
     </voice>
 </speak>"""
-    
+
     mock_response = Mock(spec=httpx.Response)
     mock_response.content = b"fake_audio_data"
     mock_response.status_code = 200
     mock_response.headers = {"content-type": "audio/mpeg"}
     mock_post.return_value = mock_response
-    
+
     litellm.speech(
         model="azure/speech/tts",
         input=raw_ssml,
@@ -680,15 +680,15 @@ def test_litellm_speech_with_ssml_passthrough(mock_post):
         api_key="test-key",
         api_base="https://eastus.api.cognitive.microsoft.com"
     )
-    
+
     mock_post.assert_called_once()
     call_kwargs = mock_post.call_args.kwargs
-    
+
     # Verify the SSML was sent in the request body
     assert "data" in call_kwargs
     assert call_kwargs["data"] == raw_ssml
     print("REQUEST BODY: ", json.dumps(call_kwargs["data"], indent=4))
-    
+
     # Verify the SSML contains the original content
     assert "en-US-JennyNeural" in call_kwargs["data"]
     assert "fast" in call_kwargs["data"]

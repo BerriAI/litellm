@@ -4,6 +4,8 @@ Helper functions for health check calls.
 
 from typing import TYPE_CHECKING, Callable, Dict, Literal, Optional
 
+from litellm.types.utils import LIST_BATCHES_SUPPORTED_PROVIDERS
+
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging
 
@@ -12,7 +14,6 @@ TEST_PDF_URL = "data:application/pdf;base64,JVBERi0xLjQKJeLjz9MKMyAwIG9iago8PC9U
 
 
 class HealthCheckHelpers:
-
     @staticmethod
     async def ahealth_check_wildcard_models(
         model: str,
@@ -42,7 +43,9 @@ class HealthCheckHelpers:
         model_params["model"] = cheapest_models[0]
         model_params["litellm_logging_obj"] = litellm_logging_obj
         model_params["fallbacks"] = fallback_models
-        model_params["max_tokens"] = 10  # gpt-5-nano throws errors for max_tokens=1
+        model_params["max_tokens"] = model_params.get(
+            "max_tokens", 10
+        )  # gpt-5-nano throws errors for max_tokens=1
         await acompletion(**model_params)
         return {}
 
@@ -83,6 +86,27 @@ class HealthCheckHelpers:
         }
 
     @staticmethod
+    async def _batch_health_check(
+        custom_llm_provider: str,
+        model_params: dict,
+        filtered_model_params: dict,
+    ) -> dict:
+        """
+        Health check for batch mode.
+
+        Calls list_batches for providers that support it (openai, hosted_vllm, azure,
+        vertex_ai). For all other providers (e.g. bedrock) the batch API surface doesn't
+        include list_batches, so we fall back to acompletion to verify connectivity and
+        credential validity instead.
+        """
+        import litellm
+
+        if custom_llm_provider in LIST_BATCHES_SUPPORTED_PROVIDERS:
+            return await litellm.alist_batches(**filtered_model_params)
+        else:
+            return await litellm.acompletion(**model_params)
+
+    @staticmethod
     def get_mode_handlers(
         model: str,
         custom_llm_provider: str,
@@ -107,7 +131,7 @@ class HealthCheckHelpers:
         Callable,
     ]:
         """
-        Returns a dictionary of mode handlers for health check calls. 
+        Returns a dictionary of mode handlers for health check calls.
 
         Mode Handlers are Callables that need to be run for execution of the health check call.
 
@@ -176,8 +200,10 @@ class HealthCheckHelpers:
                 api_key=model_params.get("api_key", None),
                 api_version=model_params.get("api_version", None),
             ),
-            "batch": lambda: litellm.alist_batches(
-                **_filter_model_params(model_params=model_params),
+            "batch": lambda: HealthCheckHelpers._batch_health_check(
+                custom_llm_provider=custom_llm_provider,
+                model_params=model_params,
+                filtered_model_params=_filter_model_params(model_params=model_params),
             ),
             "responses": lambda: litellm.aresponses(
                 **_filter_model_params(model_params=model_params),

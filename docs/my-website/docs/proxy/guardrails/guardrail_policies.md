@@ -309,6 +309,10 @@ Response:
 </TabItem>
 </Tabs>
 
+## Policy Flow Builder
+
+For conditional execution (e.g., run a second guardrail only if the first fails), use the [Policy Flow Builder](./policy_flow_builder) to define pipelines with per-step pass/fail actions.
+
 ## Config Reference
 
 ### `policies`
@@ -323,6 +327,7 @@ policies:
       remove: [...]
     condition:
       model: ...
+    pipeline: ...  # optional; see Policy Flow Builder
 ```
 
 | Field | Type | Description |
@@ -332,6 +337,7 @@ policies:
 | `guardrails.add` | `list[string]` | Guardrails to enable. |
 | `guardrails.remove` | `list[string]` | Guardrails to disable (useful with inheritance). |
 | `condition.model` | `string` or `list[string]` | Optional. Only apply when model matches. Supports regex. |
+| `pipeline` | `object` | Optional. Ordered guardrail execution with per-step actions. See [Policy Flow Builder](./policy_flow_builder). |
 
 ### `policy_attachments`
 

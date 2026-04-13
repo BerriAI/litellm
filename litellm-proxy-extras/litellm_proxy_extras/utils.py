@@ -415,16 +415,26 @@ class ProxyExtrasDBManager:
                                     logger.info(
                                         f"Migration {failed_migration} failed due to idempotent error (e.g., column already exists), resolving as applied"
                                     )
-                                    ProxyExtrasDBManager._roll_back_migration(
-                                        failed_migration
-                                    )
-                                    ProxyExtrasDBManager._resolve_specific_migration(
-                                        failed_migration
-                                    )
-                                    logger.info(
-                                        f"✅ Migration {failed_migration} resolved."
-                                    )
-                                    return True
+                                    try:
+                                        ProxyExtrasDBManager._roll_back_migration(
+                                            failed_migration
+                                        )
+                                    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as rollback_err:
+                                        logger.warning(
+                                            f"Failed to roll back migration {failed_migration}: {rollback_err}. "
+                                            f"It may already be in a rolled-back state."
+                                        )
+                                    try:
+                                        ProxyExtrasDBManager._resolve_specific_migration(
+                                            failed_migration
+                                        )
+                                        logger.info(
+                                            f"✅ Migration {failed_migration} resolved, retrying to apply remaining migrations"
+                                        )
+                                    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as resolve_err:
+                                        logger.warning(
+                                            f"Failed to resolve migration {failed_migration}: {resolve_err}"
+                                        )
                                 else:
                                     logger.info(
                                         f"Found failed migration: {failed_migration}, marking as rolled back"
@@ -514,20 +524,34 @@ class ProxyExtrasDBManager:
                                 )
                                 if migration_match:
                                     migration_name = migration_match.group(1)
-                                    logger.info(
-                                        f"Rolling back migration {migration_name}"
-                                    )
-                                    ProxyExtrasDBManager._roll_back_migration(
-                                        migration_name
-                                    )
-                                    logger.info(
-                                        f"Resolving migration {migration_name} that failed "
-                                        f"due to existing schema objects"
-                                    )
-                                    ProxyExtrasDBManager._resolve_specific_migration(
-                                        migration_name
-                                    )
-                                    logger.info("✅ Migration resolved.")
+                                    try:
+                                        logger.info(
+                                            f"Rolling back migration {migration_name}"
+                                        )
+                                        ProxyExtrasDBManager._roll_back_migration(
+                                            migration_name
+                                        )
+                                    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as rollback_err:
+                                        logger.warning(
+                                            f"Failed to roll back migration {migration_name}: {rollback_err}. "
+                                            f"It may already be in a rolled-back state."
+                                        )
+                                    try:
+                                        logger.info(
+                                            f"Resolving migration {migration_name} that failed "
+                                            f"due to existing schema objects"
+                                        )
+                                        ProxyExtrasDBManager._resolve_specific_migration(
+                                            migration_name
+                                        )
+                                        logger.info(
+                                            f"✅ Migration {migration_name} resolved, "
+                                            f"retrying to apply remaining migrations"
+                                        )
+                                    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as resolve_err:
+                                        logger.warning(
+                                            f"Failed to resolve migration {migration_name}: {resolve_err}"
+                                        )
                             else:
                                 # Unknown P3018 error - log and re-raise for safety
                                 logger.warning(

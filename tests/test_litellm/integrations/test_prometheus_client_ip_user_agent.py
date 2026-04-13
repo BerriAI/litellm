@@ -1,10 +1,12 @@
+from unittest.mock import AsyncMock, MagicMock, patch
+
 import pytest
-from unittest.mock import MagicMock, patch
+
 from litellm.integrations.prometheus import PrometheusLogger
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.integrations.prometheus import (
     UserAPIKeyLabelValues,
 )
-from litellm.proxy._types import UserAPIKeyAuth
 
 
 @pytest.mark.asyncio
@@ -72,9 +74,11 @@ async def test_async_post_call_failure_hook_includes_client_ip_user_agent():
 @pytest.mark.asyncio
 async def test_async_post_call_success_hook_includes_client_ip_user_agent():
     """
-    Test that async_post_call_success_hook includes client_ip and user_agent in UserAPIKeyLabelValues
+    Test that async_log_success_event includes client_ip and user_agent in UserAPIKeyLabelValues.
+    
+    Note: After PR #21159, the metric increment was moved from async_post_call_success_hook 
+    to async_log_success_event to prevent double-counting.
     """
-    # Mocking
     # Mocking
     with patch(
         "litellm.integrations.prometheus.PrometheusLogger.__init__", return_value=None
@@ -84,16 +88,43 @@ async def test_async_post_call_success_hook_includes_client_ip_user_agent():
         logger.get_labels_for_metric = MagicMock(
             return_value=["client_ip", "user_agent"]
         )
+        logger._should_skip_metrics_for_invalid_key = MagicMock(return_value=False)
+        logger._increment_top_level_request_and_spend_metrics = MagicMock()
+        logger._increment_token_metrics = MagicMock()
+        logger._increment_remaining_budget_metrics = AsyncMock()
+        logger._set_virtual_key_rate_limit_metrics = MagicMock()
+        logger._set_latency_metrics = MagicMock()
+        logger.set_llm_deployment_success_metrics = MagicMock()
+        logger._increment_cache_metrics = MagicMock()
 
-    data = {
+    kwargs = {
         "model": "gpt-4",
-        "metadata": {
-            "requester_ip_address": "192.168.1.1",
-            "user_agent": "success-agent",
+        "litellm_params": {
+            "metadata": {}
+        },
+        "start_time": None,
+        "standard_logging_object": {
+            "model_group": "gpt-4",
+            "model_id": "model_1",
+            "api_base": "http://api.base",
+            "custom_llm_provider": "openai",
+            "completion_tokens": 10,
+            "total_tokens": 20,
+            "response_cost": 0.01,
+            "request_tags": [],
+            "metadata": {
+                "user_api_key_user_id": "user_1",
+                "user_api_key_hash": "hash_1",
+                "user_api_key_alias": "alias_1",
+                "user_api_key_team_id": "team_1",
+                "user_api_key_team_alias": "team_alias_1",
+                "user_api_key_user_email": "test@example.com",
+                "user_api_key_request_route": "/chat/completions",
+                "requester_ip_address": "192.168.1.1",
+                "user_agent": "success-agent",
+            },
         },
     }
-    user_api_key_dict = UserAPIKeyAuth(token="test_token")
-    response = MagicMock()
 
     # Mock prometheus_label_factory to inspect arguments
     with patch(
@@ -101,10 +132,11 @@ async def test_async_post_call_success_hook_includes_client_ip_user_agent():
     ) as mock_label_factory:
         mock_label_factory.return_value = {}
 
-        await logger.async_post_call_success_hook(
-            data=data,
-            user_api_key_dict=user_api_key_dict,
-            response=response,
+        await logger.async_log_success_event(
+            kwargs=kwargs,
+            response_obj=None,
+            start_time=None,
+            end_time=None,
         )
 
         # Verification
@@ -114,8 +146,8 @@ async def test_async_post_call_success_hook_includes_client_ip_user_agent():
         calls = mock_label_factory.call_args_list
         found = False
         for call in calls:
-            kwargs = call.kwargs
-            enum_values = kwargs.get("enum_values")
+            kwargs_args = call.kwargs
+            enum_values = kwargs_args.get("enum_values")
             if isinstance(enum_values, UserAPIKeyLabelValues):
                 if (
                     enum_values.client_ip == "192.168.1.1"

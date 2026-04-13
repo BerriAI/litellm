@@ -107,7 +107,7 @@ def _parse_path_segments(path: str) -> list:
 
     # Match field names OR bracket expressions
     # Pattern: field_name (anything except . or [) | [anything_in_brackets]
-    pattern = r'[^\.\[]+|\[[^\]]*\]'
+    pattern = r"[^\.\[]+|\[[^\]]*\]"
     segments = re.findall(pattern, path)
     return segments
 
@@ -158,7 +158,9 @@ def _delete_nested_value_custom(
                     # Only recurse if element is a dict or list (nested structure)
                     element = data[index]
                     if isinstance(element, (dict, list)):
-                        _delete_nested_value_custom(element, segments, segment_index + 1)
+                        _delete_nested_value_custom(
+                            element, segments, segment_index + 1
+                        )
         except (ValueError, IndexError):
             # Invalid index, skip
             pass
@@ -172,15 +174,23 @@ def _delete_nested_value_custom(
         else:
             # Navigate deeper
             if segment in data:
-                next_segment = segments[segment_index + 1] if segment_index + 1 < len(segments) else None
+                next_segment = (
+                    segments[segment_index + 1]
+                    if segment_index + 1 < len(segments)
+                    else None
+                )
 
                 # If next segment is array notation, current field should be list
                 if next_segment and (next_segment.startswith("[")):
                     if isinstance(data[segment], list):
-                        _delete_nested_value_custom(data[segment], segments, segment_index + 1)
+                        _delete_nested_value_custom(
+                            data[segment], segments, segment_index + 1
+                        )
                 # Otherwise navigate into dict
                 elif isinstance(data[segment], dict):
-                    _delete_nested_value_custom(data[segment], segments, segment_index + 1)
+                    _delete_nested_value_custom(
+                        data[segment], segments, segment_index + 1
+                    )
 
 
 def delete_nested_value(

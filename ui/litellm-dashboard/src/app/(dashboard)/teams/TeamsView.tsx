@@ -278,6 +278,12 @@ const TeamsView: React.FC<TeamProps> = ({
               accessToken={accessToken}
               is_team_admin={is_team_admin(teams?.find((team) => team.team_id === selectedTeamId))}
               is_proxy_admin={userRole == "Admin"}
+              is_org_admin={(() => {
+                const team = teams?.find((t) => t.team_id === selectedTeamId);
+                if (!team?.organization_id || !organizations || !userID) return false;
+                const org = organizations.find((o) => o.organization_id === team.organization_id);
+                return org?.members?.some((m: any) => m.user_id === userID && m.user_role === "org_admin") ?? false;
+              })()}
               userModels={userModels}
               editTeam={editTeam}
               premiumUser={premiumUser}

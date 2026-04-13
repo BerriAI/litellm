@@ -1,5 +1,5 @@
 -- CreateTable
-CREATE TABLE "LiteLLM_ManagedVectorStoresTable" (
+CREATE TABLE IF NOT EXISTS "LiteLLM_ManagedVectorStoresTable" (
     "vector_store_id" TEXT NOT NULL,
     "custom_llm_provider" TEXT NOT NULL,
     "vector_store_name" TEXT,

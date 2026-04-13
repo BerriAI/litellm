@@ -13,6 +13,7 @@ Supported Providers:
 - Deepseek (`deepseek/`)
 - Anthropic API (`anthropic/`)
 - Bedrock (Anthropic + Deepseek + GPT-OSS) (`bedrock/`)
+- OpenAI Responses API (`openai/responses/`)
 - Vertex AI (Anthropic) (`vertexai/`)
 - OpenRouter (`openrouter/`)
 - XAI (`xai/`)
@@ -592,6 +593,31 @@ Expected Response
 </TabItem>
 </Tabs>
 
+:::tip gpt-5.4: reasoning_effort + function tools
+
+When `gpt-5.4+` requests to `litellm.completion()` include both `reasoning_effort` and `tools`, LiteLLM **automatically routes** the request through the Responses API bridge. This works for both **OpenAI** (`openai/gpt-5.4`) and **Azure** (`azure/gpt-5.4`) providers — no extra configuration needed.
+
+You can also route explicitly via `openai/responses/gpt-5.4` or `azure/responses/gpt-5.4`. See [Responses API Bridge](/docs/providers/openai#openai-chat-completion-to-responses-api-bridge) for details.
+
+**Azure custom deployment names:** Auto-routing relies on the deployment name matching the `gpt-5.4*` pattern. If you use a custom deployment name (e.g. `"my-reasoning-model"`), enable routing via:
+
+**SDK:**
+```python
+litellm.completion(model="azure/responses/my-reasoning-model", ...)
+```
+
+**Proxy config:**
+```yaml
+model_list:
+  - model_name: my-reasoning-model
+    litellm_params:
+      model: azure/my-reasoning-model
+    model_info:
+      mode: responses
+```
+
+:::
+
 ## OpenAI Responses API - Auto-Summary Control
 
 When using OpenAI Responses API models (like `gpt-5`) via `/chat/completions` with `reasoning_effort`, you can control whether `summary="detailed"` is automatically added to the reasoning parameter.
@@ -642,6 +668,25 @@ model_list:
       model: openai/responses/gpt-5-mini
 ```
 
+**Per-model configuration** (recommended when using Open WebUI or clients that cannot set `extra_body`):
+
+```yaml
+model_list:
+  - model_name: gpt-5.1
+    litellm_params:
+      model: openai/gpt-5.1
+      # String format - uses reasoning_auto_summary for summary when set
+      reasoning_effort: "high"
+    model_info:
+      mode: responses  # if using Responses API bridge
+
+  - model_name: gpt-5.1-with-summary
+    litellm_params:
+      model: openai/gpt-5.1
+      # Dict format - explicit control over effort and summary
+      reasoning_effort: {"effort": "high", "summary": "detailed"}
+```
+
 </TabItem>
 </Tabs>
 
@@ -656,3 +701,69 @@ response = litellm.completion(
     reasoning_effort={"effort": "low", "summary": "detailed"},  # Explicit control
 )
 ```
+
+### Summary Preservation via `/v1/messages` Adapter
+
+When using the Anthropic `/v1/messages` adapter to route non-Claude models (e.g., `openai/gpt-5.1`), the `thinking.summary` value is preserved and forwarded to the downstream provider. For example:
+
+```python
+import litellm
+
+response = await litellm.anthropic.messages.acreate(
+    model="openai/gpt-5.1",
+    messages=[{"role": "user", "content": "Hello"}],
+    max_tokens=8096,
+    thinking={"type": "enabled", "budget_tokens": 5000, "summary": "concise"},
+)
+# The summary="concise" is preserved when routing to OpenAI's Responses API
+```
+
+### Enabling Default Summary Injection for `/v1/messages` Adapter
+
+When the Anthropic `/v1/messages` adapter translates `thinking` parameters to OpenAI `reasoning_effort` for non-Claude models, you can opt-in to automatic `summary="detailed"` injection using the `reasoning_auto_summary` flag. This ensures that reasoning text is returned in the response (matching the Anthropic thinking behavior).
+
+To **enable** this default injection, use the `reasoning_auto_summary` flag:
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+import litellm
+
+# Enable default summary="detailed" injection
+litellm.reasoning_auto_summary = True
+
+response = await litellm.anthropic.messages.acreate(
+    model="openai/gpt-5.1",
+    messages=[{"role": "user", "content": "Hello"}],
+    max_tokens=8096,
+    thinking={"type": "enabled", "budget_tokens": 5000},
+)
+# summary="detailed" will be automatically added to reasoning_effort
+```
+
+</TabItem>
+
+<TabItem value="env" label="Environment Variable">
+
+```bash
+export LITELLM_REASONING_AUTO_SUMMARY=true
+```
+
+</TabItem>
+
+<TabItem value="proxy" label="Proxy Config">
+
+```yaml
+litellm_settings:
+  reasoning_auto_summary: true
+```
+
+</TabItem>
+</Tabs>
+
+:::info
+
+This flag only affects the automatic injection of `summary="detailed"` when no user-provided summary is present. If you explicitly pass `thinking.summary` (e.g., `"concise"` or `"auto"`), your value is always preserved regardless of this flag.
+
+:::
