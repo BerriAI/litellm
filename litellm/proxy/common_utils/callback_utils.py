@@ -1,3 +1,4 @@
+import copy
 from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Literal, Optional
 
 import litellm
@@ -524,3 +525,36 @@ def normalize_callback_names(callbacks: Iterable[Any]) -> List[Any]:
     if callbacks is None:
         return []
     return [c.lower() if isinstance(c, str) else c for c in callbacks]
+
+
+def redact_sensitive_logging_metadata(metadata: Optional[Dict]) -> Optional[Dict]:
+    """
+    Return a copy of `metadata` with credential values inside
+    `metadata["logging"][*]["callback_vars"]` replaced by "***".
+
+    Values that are just environment-variable references
+    (e.g. "os.environ/LANGFUSE_SECRET_KEY") are left as-is because they
+    don't expose the actual secret — they're just pointers.
+    """
+    if not metadata:
+        return metadata
+
+    metadata = copy.deepcopy(metadata)
+
+    logging_configs = metadata.get("logging")
+    if not isinstance(logging_configs, list):
+        return metadata
+
+    for entry in logging_configs:
+        if not isinstance(entry, dict):
+            continue
+        callback_vars = entry.get("callback_vars")
+        if not isinstance(callback_vars, dict):
+            continue
+        for key, value in callback_vars.items():
+            # Keep env-var pointers; scrub anything that looks like a real secret
+            if isinstance(value, str) and value.startswith("os.environ/"):
+                continue
+            callback_vars[key] = "***"
+
+    return metadata
