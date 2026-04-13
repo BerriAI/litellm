@@ -1,9 +1,4 @@
-from unittest.mock import AsyncMock, patch
-
 import pytest
-
-from litellm.proxy._types import LiteLLM_TeamTable, LiteLLM_UserTable, Member
-from litellm.proxy.auth.handle_jwt import JWTAuthManager
 
 
 def test_get_team_models_for_all_models_and_team_only_models():
