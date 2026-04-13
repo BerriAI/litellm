@@ -1,5 +1,5 @@
 import React from "react";
-import { Badge, Text } from "@tremor/react";
+import { Tag } from "antd";
 import { GlobalOutlined } from "@ant-design/icons";
 
 interface GuardrailSettingsViewProps {
@@ -31,40 +31,40 @@ export function GuardrailSettingsView({
     !killSwitchOn && globalsRunning.length === 0 && nonGlobalOptIns.length === 0;
 
   const content = isEmpty ? (
-    <Text className="text-gray-500">No guardrails configured</Text>
+    <span className="block text-gray-500">No guardrails configured</span>
   ) : (
     <div className="flex flex-col gap-4">
       <div>
-        <Text className="text-sm font-medium text-gray-700 mb-2">
+        <span className="block text-sm font-medium text-gray-700 mb-2">
           <GlobalOutlined style={{ marginInlineEnd: 4 }} aria-label="Global guardrail" />
           Global
-        </Text>
+        </span>
         {killSwitchOn ? (
-          <Badge color="yellow">Bypassed for this team</Badge>
+          <Tag color="gold">Bypassed for this team</Tag>
         ) : globalsRunning.length > 0 ? (
           <div className="flex flex-wrap gap-2">
             {globalsRunning.map((name) => (
-              <Badge key={name} color="blue">
+              <Tag key={name} color="blue">
                 {name}
-              </Badge>
+              </Tag>
             ))}
           </div>
         ) : (
-          <Text className="text-gray-500 text-sm">None configured</Text>
+          <span className="block text-sm text-gray-500">None configured</span>
         )}
       </div>
       <div>
-        <Text className="text-sm font-medium text-gray-700 mb-2">Team-specific</Text>
+        <span className="block text-sm font-medium text-gray-700 mb-2">Team-specific</span>
         {nonGlobalOptIns.length > 0 ? (
           <div className="flex flex-wrap gap-2">
             {nonGlobalOptIns.map((name) => (
-              <Badge key={name} color="blue">
+              <Tag key={name} color="blue">
                 {name}
-              </Badge>
+              </Tag>
             ))}
           </div>
         ) : (
-          <Text className="text-gray-500 text-sm">None configured</Text>
+          <span className="block text-sm text-gray-500">None configured</span>
         )}
       </div>
     </div>
