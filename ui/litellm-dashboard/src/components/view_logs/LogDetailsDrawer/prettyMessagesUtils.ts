@@ -64,6 +64,20 @@ export const parseMessages = (request: any, response: any): ParsedMessages => {
     };
   }
 
+  // If no chat response, check for image generation response
+  if (!responseMessage && response?.data && Array.isArray(response.data)) {
+    const imageUrls = response.data
+      .map((img: any) => img.url || (img.b64_json ? `data:image/png;base64,${img.b64_json}` : null))
+      .filter(Boolean);
+    if (imageUrls.length > 0) {
+      responseMessage = {
+        role: 'assistant',
+        content: '',
+        imageUrls: imageUrls,
+      };
+    }
+  }
+
   return { requestMessages, responseMessage };
 };
 

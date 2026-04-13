@@ -97,6 +97,25 @@ export function OutputCard({ message, completionTokens, outputCost }: OutputCard
             content={message.content}
             toolCalls={message.toolCalls}
           />
+          {message.imageUrls && message.imageUrls.length > 0 && (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: message.content ? 8 : 0 }}>
+              {message.imageUrls.map((url, idx) => (
+                <a key={idx} href={url} target="_blank" rel="noopener noreferrer">
+                  <img
+                    src={url}
+                    alt={`Generated image ${idx + 1}`}
+                    style={{
+                      maxWidth: 300,
+                      maxHeight: 300,
+                      borderRadius: 6,
+                      border: '1px solid #f0f0f0',
+                      objectFit: 'contain',
+                    }}
+                  />
+                </a>
+              ))}
+            </div>
+          )}
         </div>
       </div>
     </div>

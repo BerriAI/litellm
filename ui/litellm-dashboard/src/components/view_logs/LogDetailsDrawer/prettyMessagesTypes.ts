@@ -7,6 +7,7 @@ export interface ParsedMessage {
   content: string;
   toolCalls?: ToolCall[];
   toolCallId?: string;
+  imageUrls?: string[];
 }
 
 export interface ToolCall {
