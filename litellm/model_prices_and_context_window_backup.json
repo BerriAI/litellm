@@ -38206,5 +38206,255 @@
         "tool_use_system_prompt_tokens": 346,
         "supports_native_structured_output": true,
         "supports_pdf_input": true
+    },
+    "fal_ai/bytedance/seedream/v4.5/edit": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.03,
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+    "fal_ai/bytedance/seedream/v4.5/text-to-image": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.03,
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+    "fal_ai/bytedance/seedream/v4/edit": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.03,
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+    "fal_ai/bytedance/seedream/v4/text-to-image": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.03,
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+    "fal_ai/bytedance/seedream/v5/lite/edit": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "pricing_basis": "PER_IMAGE_RESOLUTION",
+        "output_cost_per_image": 0.15,
+        "output_cost_per_image_by_resolution": {
+            "2K": 0.15,
+            "4K": 0.3
+        },
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+    "fal_ai/bytedance/seedream/v5/lite/text-to-image": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "pricing_basis": "PER_IMAGE_RESOLUTION",
+        "output_cost_per_image": 0.15,
+        "output_cost_per_image_by_resolution": {
+            "2K": 0.15,
+            "4K": 0.3
+        },
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+    "fal_ai/flux-2/klein/9b": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "pricing_basis": "PER_MEGAPIXEL",
+        "output_cost_per_megapixel": 0.01,
+        "output_cost_per_image": 0.01,
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+    "fal_ai/flux-2/klein/9b/base/edit/lora": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "pricing_basis": "PER_MEGAPIXEL",
+        "output_cost_per_megapixel": 0.01,
+        "output_cost_per_image": 0.01,
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+    "fal_ai/flux-2/klein/9b/edit": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "pricing_basis": "PER_MEGAPIXEL",
+        "output_cost_per_megapixel": 0.01,
+        "output_cost_per_image": 0.01,
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+    "fal_ai/flux-pro": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+    "fal_ai/flux-pro/kontext": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.05,
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+    "fal_ai/gemini-25-flash-image": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "pricing_basis": "PER_IMAGE_RESOLUTION",
+        "output_cost_per_image": 0.15,
+        "output_cost_per_image_by_resolution": {
+            "2K": 0.15,
+            "4K": 0.3
+        },
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+    "fal_ai/gemini-25-flash-image/edit": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "pricing_basis": "PER_IMAGE_RESOLUTION",
+        "output_cost_per_image": 0.15,
+        "output_cost_per_image_by_resolution": {
+            "2K": 0.15,
+            "4K": 0.3
+        },
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+    "fal_ai/gemini-3-pro-image-preview": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "pricing_basis": "PER_IMAGE_RESOLUTION",
+        "output_cost_per_image": 0.15,
+        "output_cost_per_image_by_resolution": {
+            "2K": 0.15,
+            "4K": 0.3
+        },
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+    "fal_ai/gemini-3-pro-image-preview/edit": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "pricing_basis": "PER_IMAGE_RESOLUTION",
+        "output_cost_per_image": 0.15,
+        "output_cost_per_image_by_resolution": {
+            "2K": 0.15,
+            "4K": 0.3
+        },
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+    "fal_ai/gemini-3.1-flash-image-preview": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "pricing_basis": "PER_IMAGE_RESOLUTION",
+        "output_cost_per_image": 0.15,
+        "output_cost_per_image_by_resolution": {
+            "2K": 0.15,
+            "4K": 0.3
+        },
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+    "fal_ai/gemini-3.1-flash-image-preview/edit": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "pricing_basis": "PER_IMAGE_RESOLUTION",
+        "output_cost_per_image": 0.15,
+        "output_cost_per_image_by_resolution": {
+            "2K": 0.15,
+            "4K": 0.3
+        },
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+    "fal_ai/iclight-v2": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.02,
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+    "fal_ai/kling-image/omni": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+    "fal_ai/nano-banana-2": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "pricing_basis": "PER_IMAGE_RESOLUTION",
+        "output_cost_per_image": 0.15,
+        "output_cost_per_image_by_resolution": {
+            "2K": 0.15,
+            "4K": 0.3
+        },
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+    "fal_ai/nano-banana-2/edit": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "pricing_basis": "PER_IMAGE_RESOLUTION",
+        "output_cost_per_image": 0.15,
+        "output_cost_per_image_by_resolution": {
+            "2K": 0.15,
+            "4K": 0.3
+        },
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+    "fal_ai/nano-banana-pro": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "pricing_basis": "PER_IMAGE_RESOLUTION",
+        "output_cost_per_image": 0.15,
+        "output_cost_per_image_by_resolution": {
+            "2K": 0.15,
+            "4K": 0.3
+        },
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+    "fal_ai/nano-banana-pro/edit": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "pricing_basis": "PER_IMAGE_RESOLUTION",
+        "output_cost_per_image": 0.15,
+        "output_cost_per_image_by_resolution": {
+            "2K": 0.15,
+            "4K": 0.3
+        },
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
     }
 }

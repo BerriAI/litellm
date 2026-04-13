@@ -100,6 +100,10 @@ class FalAIBaseConfig(BaseImageGenerationConfig):
         if not model_response.data:
             model_response.data = []
 
+        # Preserve requested size on the response for cost calculation
+        if optional_params.get("size"):
+            model_response.size = optional_params["size"]
+
         # Handle fal.ai response format
         images = response_data.get("images", [])
         if isinstance(images, list):
