@@ -1,6 +1,7 @@
 """
-Tests for the `use_responses_api_bridge` flag that allows openai/ models
-with custom api_base to opt-in to the /responses → /chat/completions bridge.
+Tests for forcing the /responses → /chat/completions bridge for `openai/` models
+(via `use_chat_completions_api`, deprecated `use_responses_api_bridge`, or the
+`openai/chat_completions/<model>` model id).
 
 Includes file_search emulation: the flag must be forwarded on inner aresponses
 calls so routed requests do not hit a custom api_base /v1/responses endpoint.
@@ -19,7 +20,7 @@ from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
 
 
 class TestUseResponsesApiBridgeFlag:
-    """Test that use_responses_api_bridge forces the chat completions bridge."""
+    """Test that bridge opt-in forces the chat completions path."""
 
     @patch(
         "litellm.responses.main.litellm_completion_transformation_handler.response_api_handler"
@@ -28,8 +29,7 @@ class TestUseResponsesApiBridgeFlag:
         "litellm.responses.main.ProviderConfigManager.get_provider_responses_api_config"
     )
     def test_bridge_used_when_flag_is_true(self, mock_get_config, mock_bridge_handler):
-        """When use_responses_api_bridge=True, the bridge handler should be called
-        even though the provider (openai) has native responses API support."""
+        """When use_responses_api_bridge=True (deprecated alias), the bridge runs."""
         # Setup: provider config returns a non-None config (native support exists)
         mock_get_config.return_value = litellm.OpenAIResponsesAPIConfig()
 
@@ -43,6 +43,51 @@ class TestUseResponsesApiBridgeFlag:
         )
 
         mock_bridge_handler.assert_called_once()
+
+    @patch(
+        "litellm.responses.main.litellm_completion_transformation_handler.response_api_handler"
+    )
+    @patch(
+        "litellm.responses.main.ProviderConfigManager.get_provider_responses_api_config"
+    )
+    def test_bridge_used_when_use_chat_completions_api_true(
+        self, mock_get_config, mock_bridge_handler
+    ):
+        """When use_chat_completions_api=True, the bridge handler should be called."""
+        mock_get_config.return_value = litellm.OpenAIResponsesAPIConfig()
+        mock_bridge_handler.return_value = MagicMock()
+
+        litellm.responses(
+            model="openai/my-custom-model",
+            input="Hello",
+            use_chat_completions_api=True,
+            litellm_logging_obj=MagicMock(),
+        )
+
+        mock_bridge_handler.assert_called_once()
+
+    @patch(
+        "litellm.responses.main.litellm_completion_transformation_handler.response_api_handler"
+    )
+    @patch(
+        "litellm.responses.main.ProviderConfigManager.get_provider_responses_api_config"
+    )
+    def test_bridge_used_when_model_uses_chat_completions_prefix(
+        self, mock_get_config, mock_bridge_handler
+    ):
+        """`openai/chat_completions/<name>` normalizes to `openai/<name>` and uses the bridge."""
+        mock_get_config.return_value = litellm.OpenAIResponsesAPIConfig()
+        mock_bridge_handler.return_value = MagicMock()
+
+        litellm.responses(
+            model="openai/chat_completions/my-custom-model",
+            input="Hello",
+            litellm_logging_obj=MagicMock(),
+        )
+
+        mock_bridge_handler.assert_called_once()
+        # Model string is provider-normalized after resolution; prefix only forces the bridge.
+        assert mock_bridge_handler.call_args.kwargs["model"].endswith("my-custom-model")
 
     @patch("litellm.responses.main.base_llm_http_handler.response_api_handler")
     @patch(
@@ -84,9 +129,10 @@ class TestUseResponsesApiBridgeFlag:
         )
 
         call_kwargs = mock_bridge_handler.call_args
-        # The flag should not appear in the kwargs passed to the bridge handler
+        # Bridge flags should not appear in the kwargs passed to the bridge handler
         all_kwargs = call_kwargs.kwargs if call_kwargs.kwargs else {}
         assert "use_responses_api_bridge" not in all_kwargs
+        assert "use_chat_completions_api" not in all_kwargs
 
     @patch(
         "litellm.responses.main.litellm_completion_transformation_handler.response_api_handler"
@@ -145,12 +191,12 @@ class TestUseResponsesApiBridgeFlag:
             litellm_logging_obj=MagicMock(),
         )
 
-        # Verify _call_aresponses was called with use_responses_api_bridge=True
+        # Verify _call_aresponses was called with use_chat_completions_api=True
         mock_call_aresponses.assert_called_once()
         call_kwargs = mock_call_aresponses.call_args.kwargs
         assert (
-            call_kwargs.get("use_responses_api_bridge") is True
-        ), "use_responses_api_bridge flag should be forwarded to inner aresponses call"
+            call_kwargs.get("use_chat_completions_api") is True
+        ), "use_chat_completions_api should be forwarded to inner aresponses call"
 
     @patch(
         "litellm.responses.main.litellm_completion_transformation_handler.response_api_handler"
@@ -223,6 +269,7 @@ class TestUseResponsesApiBridgeFlag:
         for call in mock_bridge_handler.call_args_list:
             all_kwargs = call.kwargs if call.kwargs else {}
             assert "use_responses_api_bridge" not in all_kwargs
+            assert "use_chat_completions_api" not in all_kwargs
         assert result is not None
         assert result.id is not None
 
