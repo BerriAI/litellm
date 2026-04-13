@@ -19,6 +19,7 @@ from litellm.proxy.common_utils.openai_endpoint_utils import (
     get_custom_llm_provider_from_request_headers,
     get_custom_llm_provider_from_request_query,
 )
+from litellm.responses.utils import ResponsesAPIRequestUtils
 
 
 def _load_endpoints_config() -> Dict:
@@ -40,10 +41,13 @@ def _get_container_provider_config(custom_llm_provider: str):
         from litellm.llms.openai.containers.transformation import OpenAIContainerConfig
 
         return OpenAIContainerConfig()
-    else:
-        raise ValueError(
-            f"Container API not supported for provider: {custom_llm_provider}"
-        )
+    elif custom_llm_provider in ("azure", "azure_text"):
+        from litellm.llms.azure.containers.transformation import AzureContainerConfig
+
+        return AzureContainerConfig()
+    raise ValueError(
+        f"Container API not supported for provider: {custom_llm_provider}"
+    )
 
 
 def _create_handler_for_path_params(
@@ -171,11 +175,20 @@ async def _process_binary_request(
         or "openai"
     )
 
-    # Get the provider config
-    container_provider_config = _get_container_provider_config(custom_llm_provider)
-
     # Build litellm_params - credentials are resolved by provider config from env
     litellm_params = GenericLiteLLMParams()
+
+    # Decode container ID and extract provider info
+    decoded = ResponsesAPIRequestUtils._decode_container_id(container_id)
+    original_container_id = decoded.get("response_id", container_id)
+    
+    # If container ID has encoded provider info and user didn't explicitly set provider, use it
+    decoded_provider = decoded.get("custom_llm_provider")
+    if decoded_provider and custom_llm_provider == "openai":
+        custom_llm_provider = decoded_provider
+
+    # Get the provider config
+    container_provider_config = _get_container_provider_config(custom_llm_provider)
 
     # Create logging object
     logging_obj = Logging(
@@ -193,7 +206,7 @@ async def _process_binary_request(
 
     try:
         content = await handler.async_container_file_content_handler(
-            container_id=container_id,
+            container_id=original_container_id,  # Use decoded original ID
             file_id=file_id,
             container_provider_config=container_provider_config,
             litellm_params=litellm_params,
@@ -267,13 +280,22 @@ async def _process_multipart_upload_request(
     if isinstance(file_list, list) and len(file_list) > 0:
         data["file"] = file_list[0]
 
-    data["container_id"] = container_id
-
     custom_llm_provider = (
         get_custom_llm_provider_from_request_headers(request=request)
         or get_custom_llm_provider_from_request_query(request=request)
         or "openai"
     )
+    
+    # Decode container ID and extract provider info
+    decoded = ResponsesAPIRequestUtils._decode_container_id(container_id)
+    original_container_id = decoded.get("response_id", container_id)
+    
+    # If container ID has encoded provider info and user didn't explicitly set provider, use it
+    decoded_provider = decoded.get("custom_llm_provider")
+    if decoded_provider and custom_llm_provider == "openai":
+        custom_llm_provider = decoded_provider
+    
+    data["container_id"] = original_container_id  # Use decoded original ID
     data["custom_llm_provider"] = custom_llm_provider
 
     processor = ProxyBaseLLMRequestProcessing(data=data)
@@ -338,6 +360,22 @@ async def _process_request(
         or get_custom_llm_provider_from_request_query(request=request)
         or "openai"
     )
+    
+    # Decode container_id if present in path_params
+    if "container_id" in path_params:
+        decoded = ResponsesAPIRequestUtils._decode_container_id(
+            path_params["container_id"]
+        )
+        original_container_id = decoded.get("response_id", path_params["container_id"])
+        
+        # If container ID has encoded provider info and user didn't explicitly set provider, use it
+        decoded_provider = decoded.get("custom_llm_provider")
+        if decoded_provider and custom_llm_provider == "openai":
+            custom_llm_provider = decoded_provider
+        
+        # Update path_params with decoded original ID
+        data["container_id"] = original_container_id
+    
     data["custom_llm_provider"] = custom_llm_provider
 
     processor = ProxyBaseLLMRequestProcessing(data=data)

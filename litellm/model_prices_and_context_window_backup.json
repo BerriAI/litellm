@@ -7818,26 +7818,6 @@
         "cache_read_input_token_cost": 3e-08,
         "cache_creation_input_token_cost": 3.75e-07
     },
-    "bedrock/us-gov-east-1/claude-sonnet-4-5-20250929-v1:0": {
-        "input_cost_per_token": 3.6e-06,
-        "litellm_provider": "bedrock",
-        "max_input_tokens": 200000,
-        "max_output_tokens": 8192,
-        "max_tokens": 8192,
-        "mode": "chat",
-        "output_cost_per_token": 1.8e-05,
-        "supports_assistant_prefill": true,
-        "supports_computer_use": true,
-        "supports_function_calling": true,
-        "supports_pdf_input": true,
-        "supports_prompt_caching": true,
-        "supports_reasoning": true,
-        "supports_response_schema": true,
-        "supports_tool_choice": true,
-        "supports_vision": true,
-        "cache_read_input_token_cost": 3.6e-07,
-        "cache_creation_input_token_cost": 4.5e-06
-    },
     "bedrock/us-gov-east-1/anthropic.claude-sonnet-4-5-20250929-v1:0": {
         "cache_creation_input_token_cost": 4.125e-06,
         "cache_read_input_token_cost": 3.3e-07,
@@ -7856,7 +7836,29 @@
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_native_structured_output": true
+    },
+    "bedrock/us-gov-east-1/claude-sonnet-4-5-20250929-v1:0": {
+        "cache_creation_input_token_cost": 4.125e-06,
+        "cache_read_input_token_cost": 3.3e-07,
+        "input_cost_per_token": 3.3e-06,
+        "litellm_provider": "bedrock",
+        "max_input_tokens": 200000,
+        "max_output_tokens": 8192,
+        "max_tokens": 8192,
+        "mode": "chat",
+        "output_cost_per_token": 1.65e-05,
+        "supports_assistant_prefill": true,
+        "supports_computer_use": true,
+        "supports_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true,
+        "supports_native_structured_output": true
     },
     "bedrock/us-gov-east-1/meta.llama3-70b-instruct-v1:0": {
         "input_cost_per_token": 2.65e-06,
@@ -7989,26 +7991,6 @@
         "cache_read_input_token_cost": 3e-08,
         "cache_creation_input_token_cost": 3.75e-07
     },
-    "bedrock/us-gov-west-1/claude-sonnet-4-5-20250929-v1:0": {
-        "input_cost_per_token": 3.6e-06,
-        "litellm_provider": "bedrock",
-        "max_input_tokens": 200000,
-        "max_output_tokens": 8192,
-        "max_tokens": 8192,
-        "mode": "chat",
-        "output_cost_per_token": 1.8e-05,
-        "supports_assistant_prefill": true,
-        "supports_computer_use": true,
-        "supports_function_calling": true,
-        "supports_pdf_input": true,
-        "supports_prompt_caching": true,
-        "supports_reasoning": true,
-        "supports_response_schema": true,
-        "supports_tool_choice": true,
-        "supports_vision": true,
-        "cache_read_input_token_cost": 3.6e-07,
-        "cache_creation_input_token_cost": 4.5e-06
-    },
     "bedrock/us-gov-west-1/anthropic.claude-sonnet-4-5-20250929-v1:0": {
         "cache_creation_input_token_cost": 4.125e-06,
         "cache_read_input_token_cost": 3.3e-07,
@@ -8027,7 +8009,29 @@
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_native_structured_output": true
+    },
+    "bedrock/us-gov-west-1/claude-sonnet-4-5-20250929-v1:0": {
+        "cache_creation_input_token_cost": 4.125e-06,
+        "cache_read_input_token_cost": 3.3e-07,
+        "input_cost_per_token": 3.3e-06,
+        "litellm_provider": "bedrock",
+        "max_input_tokens": 200000,
+        "max_output_tokens": 8192,
+        "max_tokens": 8192,
+        "mode": "chat",
+        "output_cost_per_token": 1.65e-05,
+        "supports_assistant_prefill": true,
+        "supports_computer_use": true,
+        "supports_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true,
+        "supports_native_structured_output": true
     },
     "bedrock/us-gov-west-1/meta.llama3-70b-instruct-v1:0": {
         "input_cost_per_token": 2.65e-06,
@@ -13735,7 +13739,8 @@
         "supports_tool_choice": true,
         "supports_url_context": true,
         "supports_vision": true,
-        "supports_web_search": true
+        "supports_web_search": true,
+        "supports_service_tier": true
     },
     "gemini-2.5-flash-image": {
         "cache_read_input_token_cost": 3e-08,
@@ -13784,7 +13789,8 @@
         "supports_url_context": true,
         "supports_vision": true,
         "supports_web_search": false,
-        "tpm": 8000000
+        "tpm": 8000000,
+        "supports_service_tier": true
     },
     "gemini-3-pro-image-preview": {
         "input_cost_per_image": 0.0011,
@@ -13818,7 +13824,8 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_vision": true,
-        "supports_web_search": true
+        "supports_web_search": true,
+        "supports_service_tier": true
     },
     "gemini-3.1-flash-image-preview": {
         "input_cost_per_image": 0.00056,
@@ -13901,7 +13908,8 @@
         "supports_video_input": true,
         "supports_vision": true,
         "supports_web_search": true,
-        "supports_native_streaming": true
+        "supports_native_streaming": true,
+        "supports_service_tier": true
     },
     "deep-research-pro-preview-12-2025": {
         "input_cost_per_image": 0.0011,
@@ -13980,7 +13988,8 @@
         "supports_tool_choice": true,
         "supports_url_context": true,
         "supports_vision": true,
-        "supports_web_search": true
+        "supports_web_search": true,
+        "supports_service_tier": true
     },
     "gemini-2.5-flash-lite-preview-09-2025": {
         "cache_read_input_token_cost": 1e-08,
@@ -14251,7 +14260,8 @@
         "supports_tool_choice": true,
         "supports_video_input": true,
         "supports_vision": true,
-        "supports_web_search": true
+        "supports_web_search": true,
+        "supports_service_tier": true
     },
     "gemini-3-pro-preview": {
         "deprecation_date": "2026-03-26",
@@ -15033,7 +15043,8 @@
         "supports_url_context": true,
         "supports_vision": true,
         "supports_web_search": true,
-        "tpm": 8000000
+        "tpm": 8000000,
+        "supports_service_tier": true
     },
     "gemini/gemini-2.5-flash-image": {
         "cache_read_input_token_cost": 3e-08,
@@ -15083,7 +15094,8 @@
         "supports_url_context": true,
         "supports_vision": true,
         "supports_web_search": true,
-        "tpm": 8000000
+        "tpm": 8000000,
+        "supports_service_tier": true
     },
     "gemini/gemini-3-pro-image-preview": {
         "input_cost_per_image": 0.0011,
@@ -15119,7 +15131,8 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_vision": true,
-        "supports_web_search": true
+        "supports_web_search": true,
+        "supports_service_tier": true
     },
     "gemini/gemini-3.1-flash-image-preview": {
         "input_cost_per_token": 2.5e-07,
@@ -15238,7 +15251,8 @@
         "supports_url_context": true,
         "supports_vision": true,
         "supports_web_search": true,
-        "tpm": 250000
+        "tpm": 250000,
+        "supports_service_tier": true
     },
     "gemini/gemini-2.5-flash-lite-preview-09-2025": {
         "cache_read_input_token_cost": 1e-08,
@@ -15678,7 +15692,8 @@
         "supports_vision": true,
         "supports_web_search": true,
         "supports_native_streaming": true,
-        "tpm": 250000
+        "tpm": 250000,
+        "supports_service_tier": true
     },
     "gemini/gemini-3-flash-preview": {
         "cache_read_input_token_cost": 5e-08,
@@ -16918,6 +16933,72 @@
         "max_tokens": 16384,
         "mode": "chat",
         "output_cost_per_token": 1.2e-06
+    },
+    "baseten/MiniMaxAI/MiniMax-M2.5": {
+        "input_cost_per_token": 3e-07,
+        "litellm_provider": "baseten",
+        "mode": "chat",
+        "output_cost_per_token": 1.2e-06
+    },
+    "baseten/nvidia/Nemotron-120B-A12B": {
+        "input_cost_per_token": 3e-07,
+        "litellm_provider": "baseten",
+        "mode": "chat",
+        "output_cost_per_token": 7.5e-07
+    },
+    "baseten/zai-org/GLM-5": {
+        "input_cost_per_token": 9.5e-07,
+        "litellm_provider": "baseten",
+        "mode": "chat",
+        "output_cost_per_token": 3.15e-06
+    },
+    "baseten/zai-org/GLM-4.7": {
+        "input_cost_per_token": 6e-07,
+        "litellm_provider": "baseten",
+        "mode": "chat",
+        "output_cost_per_token": 2.2e-06
+    },
+    "baseten/zai-org/GLM-4.6": {
+        "input_cost_per_token": 6e-07,
+        "litellm_provider": "baseten",
+        "mode": "chat",
+        "output_cost_per_token": 2.2e-06
+    },
+    "baseten/moonshotai/Kimi-K2.5": {
+        "input_cost_per_token": 6e-07,
+        "litellm_provider": "baseten",
+        "mode": "chat",
+        "output_cost_per_token": 3e-06
+    },
+    "baseten/moonshotai/Kimi-K2-Thinking": {
+        "input_cost_per_token": 6e-07,
+        "litellm_provider": "baseten",
+        "mode": "chat",
+        "output_cost_per_token": 2.5e-06
+    },
+    "baseten/moonshotai/Kimi-K2-Instruct-0905": {
+        "input_cost_per_token": 6e-07,
+        "litellm_provider": "baseten",
+        "mode": "chat",
+        "output_cost_per_token": 2.5e-06
+    },
+    "baseten/openai/gpt-oss-120b": {
+        "input_cost_per_token": 1e-07,
+        "litellm_provider": "baseten",
+        "mode": "chat",
+        "output_cost_per_token": 5e-07
+    },
+    "baseten/deepseek-ai/DeepSeek-V3.1": {
+        "input_cost_per_token": 5e-07,
+        "litellm_provider": "baseten",
+        "mode": "chat",
+        "output_cost_per_token": 1.5e-06
+    },
+    "baseten/deepseek-ai/DeepSeek-V3-0324": {
+        "input_cost_per_token": 7.7e-07,
+        "litellm_provider": "baseten",
+        "mode": "chat",
+        "output_cost_per_token": 7.7e-07
     },
     "gmi/Qwen/Qwen3-VL-235B-A22B-Instruct-FP8": {
         "input_cost_per_token": 3e-07,

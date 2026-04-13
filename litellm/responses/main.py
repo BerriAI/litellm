@@ -1967,11 +1967,18 @@ async def _aresponses_websocket(
     )
 
     # Extract params that we're passing explicitly to avoid duplicates in **kwargs
-    remaining_kwargs = {
-        k: v
-        for k, v in kwargs.items()
-        if k not in {"user_api_key_dict", "litellm_metadata"}
+    _explicit_keys = {
+        "user_api_key_dict",
+        "litellm_metadata",
+        "custom_llm_provider",
+        "model",
+        "websocket",
+        "litellm_logging_obj",
+        "api_base",
+        "api_key",
+        "timeout",
     }
+    remaining_kwargs = {k: v for k, v in kwargs.items() if k not in _explicit_keys}
 
     await base_llm_http_handler.async_responses_websocket(
         model=model,

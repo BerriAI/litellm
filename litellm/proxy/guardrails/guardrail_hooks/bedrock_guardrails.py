@@ -18,6 +18,7 @@ from typing import (
     TYPE_CHECKING,
     Any,
     AsyncGenerator,
+    Dict,
     List,
     Literal,
     NamedTuple,
@@ -636,6 +637,141 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                 return (status_code, err)
         return (status_code, message)
 
+    def _extract_blocked_assessments(
+        self, response: BedrockGuardrailResponse
+    ) -> List[dict]:
+        """
+        Walk the Bedrock guardrail response and emit a structured list of
+        BLOCKED assessment entries describing exactly which policies fired.
+
+        Mirrors the iteration in `_should_raise_guardrail_blocked_exception()`
+        but produces a list of `{policy, matches}` dicts instead of a bool.
+        Each `match` carries the originating subcategory, type, action, and
+        matched term where available, so the client can render a precise
+        explanation of the violation.
+        """
+        blocked: List[dict] = []
+        assessments = response.get("assessments", []) or []
+
+        for assessment in assessments:
+            # Topic policy
+            topic_policy = assessment.get("topicPolicy")
+            if topic_policy:
+                topic_matches = [
+                    {
+                        "category": "topics",
+                        "name": t.get("name"),
+                        "type": t.get("type"),
+                        "action": t.get("action"),
+                    }
+                    for t in (topic_policy.get("topics") or [])
+                    if t.get("action") == "BLOCKED"
+                ]
+                if topic_matches:
+                    blocked.append({"policy": "topicPolicy", "matches": topic_matches})
+
+            # Content policy
+            content_policy = assessment.get("contentPolicy")
+            if content_policy:
+                content_matches = [
+                    {
+                        "category": "filters",
+                        "type": f.get("type"),
+                        "confidence": f.get("confidence"),
+                        "filterStrength": f.get("filterStrength"),
+                        "action": f.get("action"),
+                    }
+                    for f in (content_policy.get("filters") or [])
+                    if f.get("action") == "BLOCKED"
+                ]
+                if content_matches:
+                    blocked.append(
+                        {"policy": "contentPolicy", "matches": content_matches}
+                    )
+
+            # Word policy
+            word_policy = assessment.get("wordPolicy")
+            if word_policy:
+                word_matches: List[dict] = []
+                for w in word_policy.get("customWords") or []:
+                    if w.get("action") == "BLOCKED":
+                        word_matches.append(
+                            {
+                                "category": "customWords",
+                                "match": w.get("match"),
+                                "action": w.get("action"),
+                            }
+                        )
+                for mw in word_policy.get("managedWordLists") or []:
+                    if mw.get("action") == "BLOCKED":
+                        word_matches.append(
+                            {
+                                "category": "managedWordLists",
+                                "type": mw.get("type"),
+                                "match": mw.get("match"),
+                                "action": mw.get("action"),
+                            }
+                        )
+                if word_matches:
+                    blocked.append({"policy": "wordPolicy", "matches": word_matches})
+
+            # Sensitive information policy (PII)
+            sensitive_info = assessment.get("sensitiveInformationPolicy")
+            if sensitive_info:
+                pii_matches: List[dict] = []
+                for p in sensitive_info.get("piiEntities") or []:
+                    if p.get("action") == "BLOCKED":
+                        pii_matches.append(
+                            {
+                                "category": "piiEntities",
+                                "type": p.get("type"),
+                                "match": p.get("match"),
+                                "action": p.get("action"),
+                            }
+                        )
+                for r in sensitive_info.get("regexes") or []:
+                    if r.get("action") == "BLOCKED":
+                        pii_matches.append(
+                            {
+                                "category": "regexes",
+                                "name": r.get("name"),
+                                "regex": r.get("regex"),
+                                "match": r.get("match"),
+                                "action": r.get("action"),
+                            }
+                        )
+                if pii_matches:
+                    blocked.append(
+                        {
+                            "policy": "sensitiveInformationPolicy",
+                            "matches": pii_matches,
+                        }
+                    )
+
+            # Contextual grounding policy
+            contextual = assessment.get("contextualGroundingPolicy")
+            if contextual:
+                grounding_matches = [
+                    {
+                        "category": "filters",
+                        "type": f.get("type"),
+                        "threshold": f.get("threshold"),
+                        "score": f.get("score"),
+                        "action": f.get("action"),
+                    }
+                    for f in (contextual.get("filters") or [])
+                    if f.get("action") == "BLOCKED"
+                ]
+                if grounding_matches:
+                    blocked.append(
+                        {
+                            "policy": "contextualGroundingPolicy",
+                            "matches": grounding_matches,
+                        }
+                    )
+
+        return blocked
+
     def _get_http_exception_for_blocked_guardrail(
         self, response: BedrockGuardrailResponse
     ) -> Union[HTTPException, GuardrailInterventionNormalStringError]:
@@ -655,14 +791,21 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             return GuardrailInterventionNormalStringError(
                 message=bedrock_guardrail_output_text
             )
-        else:
-            return HTTPException(
-                status_code=400,
-                detail={
-                    "error": "Violated guardrail policy",
-                    "bedrock_guardrail_response": bedrock_guardrail_output_text,
-                },
-            )
+
+        detail: Dict[str, Any] = {
+            "error": "Violated guardrail policy",
+            "bedrock_guardrail_response": bedrock_guardrail_output_text,
+        }
+        if self.guardrailIdentifier:
+            detail["guardrailIdentifier"] = self.guardrailIdentifier
+        if self.guardrailVersion:
+            detail["guardrailVersion"] = self.guardrailVersion
+
+        assessments = self._extract_blocked_assessments(response)
+        if assessments:
+            detail["assessments"] = assessments
+
+        return HTTPException(status_code=400, detail=detail)
 
     def _should_raise_guardrail_blocked_exception(
         self, response: BedrockGuardrailResponse
