@@ -880,6 +880,7 @@ def eval_problem(
         result = litellm.compress(
             messages=messages,
             model=model,
+            input_type="openai_chat_completions",
             compression_trigger=compression_trigger,
             embedding_model=embedding_model,
         )

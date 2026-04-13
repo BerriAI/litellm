@@ -19,6 +19,7 @@ messages = [
 compressed = litellm.compress(
     messages=messages,
     model="gpt-4o",
+    input_type="openai_chat_completions",
     compression_trigger=1000,
     compression_target=500,
 )
@@ -28,6 +29,41 @@ response = litellm.completion(
     messages=compressed["messages"],
     tools=compressed["tools"],
 )
+```
+
+## Enable On LiteLLM Proxy (`/v1/messages`)
+
+If you want prompt compression enabled globally for Anthropic Messages traffic (for example, Claude Code via `/v1/messages`), enable the `compression_interception` callback in your proxy config.
+
+```yaml
+litellm_settings:
+  callbacks: ["compression_interception"]
+  compression_interception_params:
+    enabled_providers: ["bedrock", "anthropic"]
+    compression_trigger: 12000
+    compression_target: 8000
+```
+
+With this enabled, the proxy:
+
+- compresses incoming `/v1/messages` payloads above your trigger
+- injects `litellm_content_retrieve` when stubs are created
+- runs the retrieval tool loop server-side and returns the final response
+
+Example request:
+
+```bash
+curl -sS "http://localhost:4000/v1/messages" \
+  -H "Authorization: Bearer $LITELLM_PROXY_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+    "max_tokens": 512,
+    "messages": [
+      {"role":"user","content":[{"type":"text","text":"Large context ..."}]},
+      {"role":"user","content":[{"type":"text","text":"Question about that context"}]}
+    ]
+  }'
 ```
 
 ## What It Returns
@@ -45,6 +81,7 @@ response = litellm.completion(
 
 - `messages` (`List[dict]`, required): input conversation messages
 - `model` (`str`, required): model name used for token counting
+- `input_type` (`str`, required): one of `openai_chat_completions` or `anthropic_messages`
 - `compression_trigger` (`int`, default `200000`): compress only if input token count exceeds this
 - `compression_target` (`Optional[int]`, default `70% of compression_trigger`): desired post-compression token budget
 - `embedding_model` (`Optional[str]`): if set, combines BM25 + embedding relevance scoring
