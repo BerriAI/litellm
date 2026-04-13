@@ -80,6 +80,23 @@ def bm25_score_messages(
         # Standard BM25 IDF: log((N - df + 0.5) / (df + 0.5) + 1)
         idf[term] = math.log((n - term_df + 0.5) / (term_df + 0.5) + 1.0)
 
+    # Build a prefix-expansion map per document: for each query term, find all
+    # document tokens that start with that term (min 4 chars match).  This lets
+    # "cook" match "cooking" and "auth" match "authentication" without a full
+    # stemmer dependency.
+    def _expand_tf(query_term: str, tf_counts: Counter) -> int:  # type: ignore[type-arg]
+        """Sum TF across all doc tokens that are prefixed by query_term."""
+        exact = tf_counts.get(query_term, 0)
+        if exact:
+            return exact
+        if len(query_term) < 4:
+            return 0
+        return sum(
+            count
+            for token, count in tf_counts.items()
+            if token != query_term and token.startswith(query_term)
+        )
+
     # Score each document
     scores: List[float] = []
     for i, dt in enumerate(doc_tokens):
@@ -94,7 +111,7 @@ def bm25_score_messages(
         for term in query_terms:
             if term not in idf:
                 continue
-            tf = tf_counts.get(term, 0)
+            tf = _expand_tf(term, tf_counts)
             if tf == 0:
                 continue
             numerator = tf * (k1 + 1)
