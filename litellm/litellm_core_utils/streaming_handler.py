@@ -839,10 +839,7 @@ class CustomStreamWrapper:
                 not self.sent_first_chunk
                 and hasattr(model_response.choices[0].delta, "role")
                 and model_response.choices[0].delta.role is not None
-                and not (
-                    model_response.choices[0].logprobs is not None
-                    and not model_response.choices[0].logprobs.content
-                )
+                and self.custom_llm_provider == "azure"
             )
         ):
             return True
