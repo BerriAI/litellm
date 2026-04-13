@@ -212,5 +212,5 @@ If Path A and Path B do not close the case after triage, **you** should reach ou
 
 ## See also
 
-- [Spend tracking](../proxy/cost_tracking)
-- [Sync model pricing from GitHub](../proxy/sync_models_github)
+- [Spend tracking](/docs/proxy/cost_tracking)
+- [Sync model pricing from GitHub](/docs/proxy/sync_models_github)
