@@ -1876,6 +1876,7 @@ class LiteLLM_ObjectPermissionTable(LiteLLMPydanticObjectBase):
 class LiteLLM_TeamTable(TeamBase):
     team_id: str  # type: ignore
     spend: Optional[float] = None
+    total_spend: Optional[float] = None
     max_parallel_requests: Optional[int] = None
     budget_duration: Optional[str] = None
     budget_reset_at: Optional[datetime] = None
@@ -2347,6 +2348,7 @@ class LiteLLM_VerificationToken(LiteLLMPydanticObjectBase):
     key_name: Optional[str] = None
     key_alias: Optional[str] = None
     spend: float = 0.0
+    total_spend: float = 0.0
     max_budget: Optional[float] = None
     expires: Optional[Union[str, datetime]] = None
     models: List = []
@@ -2685,6 +2687,7 @@ class LiteLLM_UserTable(LiteLLMPydanticObjectBase):
     user_id: str
     max_budget: Optional[float] = None
     spend: float = 0.0
+    total_spend: float = 0.0
     model_max_budget: Optional[Dict] = {}
     model_spend: Optional[Dict] = {}
     user_email: Optional[str] = None
@@ -2724,6 +2727,7 @@ class LiteLLM_OrganizationTable(LiteLLMPydanticObjectBase):
     organization_alias: Optional[str] = None
     budget_id: str
     spend: float = 0.0
+    total_spend: float = 0.0
     metadata: Optional[dict] = None
     models: List[str]
     created_by: str
@@ -2896,6 +2900,7 @@ class LiteLLM_EndUserTable(LiteLLMPydanticObjectBase):
     blocked: bool
     alias: Optional[str] = None
     spend: float = 0.0
+    total_spend: float = 0.0
     allowed_model_region: Optional[AllowedModelRegion] = None
     default_model: Optional[str] = None
     litellm_budget_table: Optional[LiteLLM_BudgetTable] = None

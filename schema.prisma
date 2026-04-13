@@ -86,6 +86,7 @@ model LiteLLM_OrganizationTable {
     metadata  Json  @default("{}")
     models     String[]
     spend      Float    @default(0.0)
+    total_spend Float   @default(0.0)
     model_spend      Json @default("{}")
     object_permission_id String?
     created_at    DateTime               @default(now()) @map("created_at")
@@ -125,6 +126,7 @@ model LiteLLM_TeamTable {
     max_budget Float?
     soft_budget Float?
     spend      Float    @default(0.0)
+    total_spend Float   @default(0.0)
     models     String[]
     max_parallel_requests Int?
     tpm_limit     BigInt?
@@ -239,6 +241,7 @@ model LiteLLM_UserTable {
     user_role  String?
 		max_budget Float?
     spend      Float    @default(0.0)
+    total_spend Float   @default(0.0)
     user_email    String?
     models     String[]
     metadata  Json  @default("{}")
@@ -363,6 +366,7 @@ model LiteLLM_VerificationToken {
     key_alias   String?
     soft_budget_cooldown Boolean @default(false) // key-level state on if budget alerts need to be cooled down
     spend      Float    @default(0.0)
+    total_spend Float   @default(0.0)
     expires    DateTime?
     models     String[]
     aliases    Json  @default("{}")
@@ -513,6 +517,7 @@ model LiteLLM_EndUserTable {
   user_id String @id
   alias    String? // admin-facing alias
   spend      Float    @default(0.0)
+  total_spend Float   @default(0.0)
   allowed_model_region String? // require all user requests to use models in this specific region
   default_model String? // use along with 'allowed_model_region'. if no available model in region, default to this model.
   budget_id String?
@@ -611,6 +616,7 @@ model LiteLLM_TeamMembership {
   user_id    String
   team_id    String
   spend      Float    @default(0.0)
+  total_spend Float   @default(0.0)
   budget_id String?
   litellm_budget_table LiteLLM_BudgetTable?   @relation(fields: [budget_id], references: [budget_id])
   @@id([user_id, team_id])
@@ -622,6 +628,7 @@ model LiteLLM_OrganizationMembership {
   organization_id String
   user_role       String?
   spend           Float?    @default(0.0)
+  total_spend     Float?    @default(0.0)
   budget_id       String?
   created_at      DateTime?               @default(now()) @map("created_at")
   updated_at      DateTime?               @default(now()) @updatedAt @map("updated_at")
