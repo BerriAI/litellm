@@ -156,5 +156,10 @@ class OVHCloudAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         text = response_json.get("text") or response_json.get("transcript") or ""
         response = TranscriptionResponse(text=text)
 
+        if "segments" in response_json:
+            response["segments"] = response_json["segments"]
+        if "language" in response_json:
+            response["language"] = response_json["language"]
+
         response._hidden_params = response_json
         return response
