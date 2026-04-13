@@ -248,25 +248,36 @@ def _extract_changed_lines(patch: str) -> set[str]:
 def _line_range_overlap(
     ranges_a: dict[str, list[tuple[int, int]]],
     ranges_b: dict[str, list[tuple[int, int]]],
+    tolerance: int = 10,
 ) -> float:
-    """Compute fraction of gold hunk line ranges that overlap with generated ranges."""
+    """Compute fraction of gold hunk line ranges that overlap with generated ranges.
+
+    Uses a tolerance window: a generated hunk counts as overlapping a gold hunk
+    if their line ranges are within ``tolerance`` lines of each other.  This
+    accounts for LLM-generated patches having slightly different line numbers
+    than the gold patch (due to context window differences, reformatting, etc.)
+    while still targeting the same logical code region.
+    """
     shared_files = set(ranges_a.keys()) & set(ranges_b.keys())
     if not shared_files:
         return 0.0
 
-    total_gold_lines = 0
-    overlapping_lines = 0
+    total_gold_hunks = 0
+    overlapping_hunks = 0
 
     for f in shared_files:
         for g_start, g_end in ranges_a[f]:
-            gold_set = set(range(g_start, g_end))
-            total_gold_lines += len(gold_set)
+            total_gold_hunks += 1
             for c_start, c_end in ranges_b[f]:
-                overlapping_lines += len(gold_set & set(range(c_start, c_end)))
+                # Ranges overlap (with tolerance) if they're within tolerance
+                # lines of each other
+                if (c_start - tolerance) <= g_end and (c_end + tolerance) >= g_start:
+                    overlapping_hunks += 1
+                    break  # count each gold hunk at most once
 
-    if total_gold_lines == 0:
+    if total_gold_hunks == 0:
         return 0.0
-    return min(overlapping_lines / total_gold_lines, 1.0)
+    return min(overlapping_hunks / total_gold_hunks, 1.0)
 
 
 def proxy_eval(generated_text: str, instance: dict) -> dict:
@@ -434,6 +445,7 @@ def eval_instance(
         compress_kwargs: dict = {
             "messages": messages,
             "model": model,
+            "input_type": "openai_chat_completions",
             "compression_trigger": compression_trigger,
             "embedding_model": embedding_model,
         }
