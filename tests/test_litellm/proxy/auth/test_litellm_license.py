@@ -11,6 +11,14 @@ sys.path.insert(
 from litellm.proxy.auth.litellm_license import LicenseCheck
 
 
+def test_read_public_key_loads_successfully():
+    """Ensure public_key.pem is valid PEM with no leading whitespace."""
+    license_check = LicenseCheck()
+    assert license_check.public_key is not None, (
+        "public_key.pem could not be loaded — check for leading whitespace or malformed PEM header"
+    )
+
+
 def test_is_over_limit():
     license_check = LicenseCheck()
     license_check.airgapped_license_data = {"max_users": 100}
