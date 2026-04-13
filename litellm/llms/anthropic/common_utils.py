@@ -2,7 +2,7 @@
 This file contains common utils for anthropic calls.
 """
 
-from typing import Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 
 import httpx
 
@@ -637,6 +637,54 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         )
 
         return AnthropicTokenCounter()
+
+
+def strip_advisor_blocks_from_messages(messages: List[Any]) -> List[Any]:
+    """
+    Remove server_tool_use (name='advisor') and advisor_tool_result blocks from
+    assistant message content when the advisor tool is absent from the request.
+
+    Prevents Anthropic 400 invalid_request_error: if advisor_tool_result blocks
+    exist in history but the advisor tool is not in the tools array, the API rejects
+    the request. This happens when the user has removed the advisor tool for cost
+    control or on a follow-up turn.
+    """
+    for message in messages:
+        if not isinstance(message, dict) or message.get("role") != "assistant":
+            continue
+        content = message.get("content")
+        if not isinstance(content, list):
+            continue
+        advisor_ids: set = set()
+        for block in content:
+            if (
+                isinstance(block, dict)
+                and block.get("type") == "server_tool_use"
+                and block.get("name") == "advisor"
+            ):
+                bid = block.get("id")
+                if bid:
+                    advisor_ids.add(bid)
+        if not advisor_ids:
+            continue
+        message["content"] = [
+            block
+            for block in content
+            if not (
+                isinstance(block, dict)
+                and (
+                    (
+                        block.get("type") == "server_tool_use"
+                        and block.get("name") == "advisor"
+                    )
+                    or (
+                        block.get("type") == "advisor_tool_result"
+                        and block.get("tool_use_id") in advisor_ids
+                    )
+                )
+            )
+        ]
+    return messages
 
 
 def process_anthropic_headers(headers: Union[httpx.Headers, dict]) -> dict:

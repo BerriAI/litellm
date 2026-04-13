@@ -185,9 +185,7 @@ class FirecrawlSearchConfig(BaseSearchConfig):
         if isinstance(data, list):
             # Self-hosted Firecrawl (v1) format: data is a flat list of results
             for result in data:
-                snippet = (
-                    result.get("markdown") or result.get("description", "")
-                )
+                snippet = result.get("markdown") or result.get("description", "")
                 search_result = SearchResult(
                     title=result.get("title", ""),
                     url=result.get("url", ""),

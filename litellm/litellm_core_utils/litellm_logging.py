@@ -613,7 +613,17 @@ class Logging(LiteLLMLoggingBaseClass):
                 base_litellm_params["metadata"] = kwargs["litellm_metadata"].copy()
 
         if litellm_params:
+            # Merge metadata carefully — don't overwrite the merged metadata
+            # from kwargs/litellm_metadata with the caller's litellm_params metadata.
+            # e.g. anthropic_messages passes Anthropic's native metadata ({user_id: ...})
+            # in litellm_params, which would overwrite proxy key-auth fields.
+            lp_metadata = litellm_params.pop("metadata", None)
             base_litellm_params.update(litellm_params)
+            if lp_metadata and isinstance(lp_metadata, dict):
+                base_litellm_params.setdefault("metadata", {})
+                for k, v in lp_metadata.items():
+                    if k not in base_litellm_params["metadata"]:
+                        base_litellm_params["metadata"][k] = v
 
         self.update_environment_variables(
             litellm_params=base_litellm_params,
@@ -4754,6 +4764,7 @@ class StandardLoggingPayloadSetup:
             user_api_key_budget_reset_at=None,
             user_api_key_team_id=None,
             user_api_key_org_id=None,
+            user_api_key_org_alias=None,
             user_api_key_project_id=None,
             user_api_key_project_alias=None,
             user_api_key_user_id=None,
@@ -5586,6 +5597,7 @@ def get_standard_logging_metadata(
         user_api_key_budget_reset_at=None,
         user_api_key_team_id=None,
         user_api_key_org_id=None,
+        user_api_key_org_alias=None,
         user_api_key_project_id=None,
         user_api_key_project_alias=None,
         user_api_key_user_id=None,
