@@ -955,3 +955,199 @@ def test_titan_image_embedding_cost_uses_per_image_rate():
         assert response.usage is not None
         assert response.usage.prompt_tokens_details is not None
         assert response.usage.prompt_tokens_details.image_count == 1
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Combined text + image embedding tests (Titan multimodal)
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+def test_titan_multimodal_transform_request_combined():
+    """Unit test: _transform_request with both input (image) and input_text produces both keys."""
+    from litellm.llms.bedrock.embed.amazon_titan_multimodal_transformation import (
+        AmazonTitanMultimodalEmbeddingG1Config,
+    )
+
+    config = AmazonTitanMultimodalEmbeddingG1Config()
+    result = config._transform_request(
+        input='data:image/png;base64,iVBORw0KGgoAAAANSUhEUg==',
+        inference_params={},
+        input_text='A red handbag',
+    )
+
+    assert 'inputImage' in result
+    assert 'inputText' in result
+    assert result['inputText'] == 'A red handbag'
+
+
+def test_titan_multimodal_transform_request_image_only_no_text():
+    """Unit test: _transform_request with image only (no input_text) produces only inputImage."""
+    from litellm.llms.bedrock.embed.amazon_titan_multimodal_transformation import (
+        AmazonTitanMultimodalEmbeddingG1Config,
+    )
+
+    config = AmazonTitanMultimodalEmbeddingG1Config()
+    result = config._transform_request(
+        input='data:image/png;base64,iVBORw0KGgoAAAANSUhEUg==',
+        inference_params={},
+    )
+
+    assert 'inputImage' in result
+    assert 'inputText' not in result
+
+
+def test_titan_multimodal_combined_text_and_image_request():
+    """Integration test: passing [text, image] list produces one HTTP call with both keys."""
+    client = HTTPHandler()
+    embed_response = {
+        'embedding': [0.1, 0.2, 0.3],
+        'inputTextTokenCount': 5,
+    }
+
+    with patch.object(client, 'post') as mock_post:
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.text = json.dumps(embed_response)
+        mock_response.json = lambda: json.loads(mock_response.text)
+        mock_post.return_value = mock_response
+
+        response = litellm.embedding(
+            model='bedrock/amazon.titan-embed-image-v1',
+            input=[
+                'Red leather handbag',
+                'data:image/png;base64,iVBORw0KGgoAAAANSUhEUg==',
+            ],
+            client=client,
+            aws_access_key_id='fake',
+            aws_secret_access_key='fake',
+            aws_region_name='us-east-1',
+        )
+
+        assert isinstance(response, litellm.EmbeddingResponse)
+        # Only one HTTP call should have been made (text+image merged)
+        assert mock_post.call_count == 1
+
+        request_body = json.loads(mock_post.call_args.kwargs.get('data', '{}'))
+        assert 'inputText' in request_body
+        assert 'inputImage' in request_body
+        assert request_body['inputText'] == 'Red leather handbag'
+
+
+def test_titan_multimodal_text_only_unchanged():
+    """Backward compat: text-only input still produces only inputText."""
+    client = HTTPHandler()
+    embed_response = {
+        'embedding': [0.1, 0.2, 0.3],
+        'inputTextTokenCount': 5,
+    }
+
+    with patch.object(client, 'post') as mock_post:
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.text = json.dumps(embed_response)
+        mock_response.json = lambda: json.loads(mock_response.text)
+        mock_post.return_value = mock_response
+
+        response = litellm.embedding(
+            model='bedrock/amazon.titan-embed-image-v1',
+            input=['just some text'],
+            client=client,
+            aws_access_key_id='fake',
+            aws_secret_access_key='fake',
+            aws_region_name='us-east-1',
+        )
+
+        assert isinstance(response, litellm.EmbeddingResponse)
+        request_body = json.loads(mock_post.call_args.kwargs.get('data', '{}'))
+        assert 'inputText' in request_body
+        assert 'inputImage' not in request_body
+
+
+def test_titan_multimodal_image_only_unchanged():
+    """Backward compat: image-only input still produces only inputImage."""
+    client = HTTPHandler()
+    embed_response = {
+        'embedding': [0.1, 0.2, 0.3],
+        'inputTextTokenCount': 0,
+    }
+
+    with patch.object(client, 'post') as mock_post:
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.text = json.dumps(embed_response)
+        mock_response.json = lambda: json.loads(mock_response.text)
+        mock_post.return_value = mock_response
+
+        response = litellm.embedding(
+            model='bedrock/amazon.titan-embed-image-v1',
+            input=['data:image/png;base64,iVBORw0KGgoAAAANSUhEUg=='],
+            client=client,
+            aws_access_key_id='fake',
+            aws_secret_access_key='fake',
+            aws_region_name='us-east-1',
+        )
+
+        assert isinstance(response, litellm.EmbeddingResponse)
+        request_body = json.loads(mock_post.call_args.kwargs.get('data', '{}'))
+        assert 'inputImage' in request_body
+        assert 'inputText' not in request_body
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Combined text + image embedding tests (Nova multimodal)
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+def test_nova_combined_text_and_image_request():
+    """Unit test: Nova _transform_request with input_text alongside image produces both keys."""
+    from litellm.llms.bedrock.embed.amazon_nova_transformation import (
+        AmazonNovaEmbeddingConfig,
+    )
+
+    config = AmazonNovaEmbeddingConfig()
+    result = config._transform_request(
+        input='data:image/jpeg;base64,/9j/4AAQSkZJRgAB',
+        inference_params={},
+        input_text='shoes photo',
+    )
+
+    params = result.get('singleEmbeddingParams', {})
+    assert 'image' in params
+    assert 'text' in params
+    assert params['text']['value'] == 'shoes photo'
+
+
+def test_nova_combined_text_and_image_http_request():
+    """Integration test: passing [text, image] list to Nova produces one call with both keys."""
+    client = HTTPHandler()
+    nova_response = {
+        'embeddings': [
+            {'embeddingType': 'IMAGE', 'embedding': [0.1, 0.2, 0.3]},
+        ]
+    }
+
+    with patch.object(client, 'post') as mock_post:
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.text = json.dumps(nova_response)
+        mock_response.json = lambda: json.loads(mock_response.text)
+        mock_post.return_value = mock_response
+
+        response = litellm.embedding(
+            model='bedrock/amazon.nova-2-multimodal-embeddings-v1:0',
+            input=['shoes photo', 'data:image/jpeg;base64,/9j/4AAQSkZJRgAB'],
+            client=client,
+            aws_access_key_id='fake',
+            aws_secret_access_key='fake',
+            aws_region_name='us-east-1',
+        )
+
+        assert isinstance(response, litellm.EmbeddingResponse)
+        # Only one HTTP call (text+image merged)
+        assert mock_post.call_count == 1
+
+        request_body = json.loads(mock_post.call_args.kwargs.get('data', '{}'))
+        params = request_body.get('singleEmbeddingParams', {})
+        assert 'image' in params
+        assert 'text' in params
+        assert params['text']['value'] == 'shoes photo'

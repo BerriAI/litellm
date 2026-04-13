@@ -24,6 +24,7 @@ from litellm.types.llms.bedrock import (
     CohereEmbeddingRequest,
 )
 from litellm.types.utils import EmbeddingResponse, LlmProviders
+from litellm.utils import is_base64_encoded
 
 from ..base_aws_llm import BaseAWSLLM
 from ..common_utils import BedrockError
@@ -449,33 +450,57 @@ class BedrockEmbedding(BaseAWSLLM):
             "amazon.titan-embed-text-v2:0",
         ]:
             batch_data = []
-            for i in input:
-                if model == "amazon.titan-embed-image-v1":
-                    transformed_request: (
-                        AmazonEmbeddingRequest
-                    ) = AmazonTitanMultimodalEmbeddingG1Config()._transform_request(
-                        input=i, inference_params=inference_params
-                    )
-                elif model == "amazon.titan-embed-text-v1":
-                    transformed_request = AmazonTitanG1Config()._transform_request(
-                        input=i, inference_params=inference_params
-                    )
-                elif model == "amazon.titan-embed-text-v2:0":
-                    transformed_request = AmazonTitanV2Config()._transform_request(
-                        input=i, inference_params=inference_params
-                    )
-                else:
-                    raise Exception(
-                        "Unmapped model. Received={}. Expected={}".format(
-                            model,
-                            [
-                                "amazon.titan-embed-image-v1",
-                                "amazon.titan-embed-text-v1",
-                                "amazon.titan-embed-text-v2:0",
-                            ],
+            if model == "amazon.titan-embed-image-v1":
+                # Scan for adjacent [text, base64_image] pairs and combine them
+                idx = 0
+                while idx < len(input):
+                    current = input[idx]
+                    next_elem = input[idx + 1] if idx + 1 < len(input) else None
+                    if (
+                        isinstance(current, str)
+                        and not is_base64_encoded(current)
+                        and next_elem is not None
+                        and is_base64_encoded(next_elem)
+                    ):
+                        # Text followed by image → combined request
+                        transformed_request: (
+                            AmazonEmbeddingRequest
+                        ) = AmazonTitanMultimodalEmbeddingG1Config()._transform_request(
+                            input=next_elem,
+                            inference_params=inference_params,
+                            input_text=current,
                         )
-                    )
-                batch_data.append(transformed_request)
+                        batch_data.append(transformed_request)
+                        idx += 2
+                    else:
+                        transformed_request = (
+                            AmazonTitanMultimodalEmbeddingG1Config()._transform_request(
+                                input=current, inference_params=inference_params
+                            )
+                        )
+                        batch_data.append(transformed_request)
+                        idx += 1
+            else:
+                for i in input:
+                    if model == "amazon.titan-embed-text-v1":
+                        transformed_request = AmazonTitanG1Config()._transform_request(
+                            input=i, inference_params=inference_params
+                        )
+                    elif model == "amazon.titan-embed-text-v2:0":
+                        transformed_request = AmazonTitanV2Config()._transform_request(
+                            input=i, inference_params=inference_params
+                        )
+                    else:
+                        raise Exception(
+                            "Unmapped model. Received={}. Expected={}".format(
+                                model,
+                                [
+                                    "amazon.titan-embed-text-v1",
+                                    "amazon.titan-embed-text-v2:0",
+                                ],
+                            )
+                        )
+                    batch_data.append(transformed_request)
         elif provider == "twelvelabs":
             batch_data = []
             for i in input:
@@ -491,15 +516,39 @@ class BedrockEmbedding(BaseAWSLLM):
                 batch_data.append(twelvelabs_request)
         elif provider == "nova":
             batch_data = []
-            for i in input:
-                nova_request = AmazonNovaEmbeddingConfig()._transform_request(
-                    input=i,
-                    inference_params=inference_params,
-                    async_invoke_route=has_async_invoke,
-                    model_id=modelId,
-                    output_s3_uri=inference_params.get("output_s3_uri"),
-                )
-                batch_data.append(nova_request)
+            # Scan for adjacent [text, data:image/...] pairs and combine them
+            idx = 0
+            while idx < len(input):
+                current = input[idx]
+                next_elem = input[idx + 1] if idx + 1 < len(input) else None
+                if (
+                    isinstance(current, str)
+                    and not current.startswith("data:")
+                    and next_elem is not None
+                    and isinstance(next_elem, str)
+                    and next_elem.startswith("data:image/")
+                ):
+                    # Text followed by image → combined request
+                    nova_request = AmazonNovaEmbeddingConfig()._transform_request(
+                        input=next_elem,
+                        inference_params=inference_params,
+                        async_invoke_route=has_async_invoke,
+                        model_id=modelId,
+                        output_s3_uri=inference_params.get("output_s3_uri"),
+                        input_text=current,
+                    )
+                    batch_data.append(nova_request)
+                    idx += 2
+                else:
+                    nova_request = AmazonNovaEmbeddingConfig()._transform_request(
+                        input=current,
+                        inference_params=inference_params,
+                        async_invoke_route=has_async_invoke,
+                        model_id=modelId,
+                        output_s3_uri=inference_params.get("output_s3_uri"),
+                    )
+                    batch_data.append(nova_request)
+                    idx += 1
 
         ### SET RUNTIME ENDPOINT ###
         endpoint_url, proxy_endpoint_url = self.get_runtime_endpoint(

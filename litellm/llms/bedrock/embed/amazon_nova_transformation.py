@@ -94,6 +94,7 @@ class AmazonNovaEmbeddingConfig:
         async_invoke_route: bool = False,
         model_id: Optional[str] = None,
         output_s3_uri: Optional[str] = None,
+        input_text: Optional[str] = None,
     ) -> dict:
         """
         Transform OpenAI-style input to Nova format.
@@ -164,6 +165,12 @@ class AmazonNovaEmbeddingConfig:
                         "format": image_format,
                         "source": {"bytes": base64_data},
                     }
+                    # If paired text was provided, include it alongside the image
+                    if input_text is not None:
+                        embedding_params["text"] = {
+                            "value": input_text,
+                            "truncationMode": "END",
+                        }
                 elif media_type.startswith("video/"):
                     # Handle video data URLs
                     video_format = media_type.split("/")[1].lower()

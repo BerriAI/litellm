@@ -44,7 +44,10 @@ class AmazonTitanMultimodalEmbeddingG1Config:
         return optional_params
 
     def _transform_request(
-        self, input: str, inference_params: dict
+        self,
+        input: str,
+        inference_params: dict,
+        input_text: Optional[str] = None,
     ) -> AmazonTitanMultimodalEmbeddingRequest:
         ## check if b64 encoded str or not ##
         is_encoded = is_base64_encoded(input)
@@ -53,6 +56,9 @@ class AmazonTitanMultimodalEmbeddingG1Config:
             transformed_request = AmazonTitanMultimodalEmbeddingRequest(
                 inputImage=b64_str
             )
+            # If paired text was provided, include it alongside the image
+            if input_text is not None:
+                transformed_request["inputText"] = input_text
         else:
             transformed_request = AmazonTitanMultimodalEmbeddingRequest(inputText=input)
 

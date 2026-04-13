@@ -158,6 +158,96 @@ curl -X POST 'http://0.0.0.0:4000/v1/embeddings' \
 </TabItem>
 </Tabs>
 
+## Combined Text + Image Embeddings (Bedrock)
+
+Bedrock multimodal embedding models (`amazon.titan-embed-image-v1` and `amazon.nova-2-multimodal-embeddings-v1:0`) support sending both text and image together in a single embedding request.
+
+Pass the text string **immediately before** its paired image in the `input` list. LiteLLM will detect the adjacent `[text, base64_image]` pair and merge them into a single Bedrock request containing both `inputText` and `inputImage` (Titan) or both `text` and `image` (Nova).
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+import base64
+from litellm import embedding
+
+with open("product.jpg", "rb") as f:
+    image_b64 = base64.b64encode(f.read()).decode("utf-8")
+
+# Titan multimodal — text + image in one request
+response = embedding(
+    model="bedrock/amazon.titan-embed-image-v1",
+    input=[
+        "Red leather handbag with gold buckle",       # text
+        f"data:image/jpeg;base64,{image_b64}",        # image (immediately after text)
+    ],
+    dimensions=1024,
+    aws_region_name="us-east-1",
+)
+
+# Nova multimodal — same pattern
+response = embedding(
+    model="bedrock/amazon.nova-2-multimodal-embeddings-v1:0",
+    input=[
+        "shoes photo",                                # text
+        f"data:image/jpeg;base64,{image_b64}",        # image (immediately after text)
+    ],
+    aws_region_name="us-east-1",
+)
+```
+
+Single-modality inputs continue to work unchanged:
+
+```python
+# Text only
+response = embedding(model="bedrock/amazon.titan-embed-image-v1", input=["some text"])
+
+# Image only
+response = embedding(
+    model="bedrock/amazon.titan-embed-image-v1",
+    input=[f"data:image/jpeg;base64,{image_b64}"],
+)
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+1. Setup config.yaml
+
+```yaml
+model_list:
+  - model_name: titan-multimodal
+    litellm_params:
+      model: bedrock/amazon.titan-embed-image-v1
+      aws_region_name: us-east-1
+```
+
+2. Start proxy
+
+```bash
+litellm --config /path/to/config.yaml
+
+# RUNNING on http://0.0.0.0:4000
+```
+
+3. Test it — pass text immediately before its paired image:
+
+```bash
+curl -X POST 'http://0.0.0.0:4000/v1/embeddings' \
+  -H 'Authorization: Bearer <your-key>' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "model": "titan-multimodal",
+    "input": [
+      "Red leather handbag with gold buckle",
+      "data:image/jpeg;base64,<base64_image_string>"
+    ]
+  }'
+```
+
+</TabItem>
+</Tabs>
+
 ## Input Params for `litellm.embedding()`
 
 
