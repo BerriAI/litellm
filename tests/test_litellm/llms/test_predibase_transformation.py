@@ -290,6 +290,48 @@ def test_predibase_transform_response_best_of_with_empty_generated_text(monkeypa
     assert result.choices[1].message.content is None
 
 
+def test_predibase_transform_response_best_of_from_request_data(monkeypatch):
+    config = PredibaseConfig()
+    logging_obj = Mock()
+    encoding = Mock()
+    encoding.encode.return_value = [1]
+    monkeypatch.setattr("litellm.token_counter", lambda messages: 1)
+
+    raw_response = httpx.Response(
+        status_code=200,
+        json={
+            "generated_text": "primary-output",
+            "details": {
+                "finish_reason": "stop",
+                "tokens": [],
+                "best_of_sequences": [
+                    {
+                        "generated_text": "secondary-output",
+                        "finish_reason": "length",
+                        "tokens": [],
+                    }
+                ],
+            },
+        },
+    )
+
+    result = config.transform_response(
+        model="predibase-model",
+        raw_response=raw_response,
+        model_response=_build_model_response(),
+        logging_obj=logging_obj,
+        request_data={"inputs": "hello", "parameters": {"best_of": 2}},
+        messages=[{"role": "user", "content": "hello"}],
+        optional_params={},
+        litellm_params={},
+        encoding=encoding,
+        api_key="test-key",
+    )
+
+    assert len(result.choices) == 2
+    assert result.choices[1].message.content == "secondary-output"
+
+
 def test_predibase_transform_response_empty_output_sets_completion_tokens_zero(monkeypatch):
     config = PredibaseConfig()
     logging_obj = Mock()

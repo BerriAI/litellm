@@ -189,7 +189,15 @@ class PredibaseConfig(BaseConfig):
                 sum_logprob,  # [TODO] move this to using the actual logprobs
             )
 
-        if "best_of" in optional_params and optional_params["best_of"] > 1:
+        effective_best_of = optional_params.get("best_of")
+        if effective_best_of is None:
+            effective_best_of = request_data.get("parameters", {}).get("best_of", 0)
+        try:
+            best_of_value = int(effective_best_of)
+        except (TypeError, ValueError):
+            best_of_value = 0
+
+        if best_of_value > 1:
             if (
                 "details" in completion_response
                 and "best_of_sequences" in completion_response["details"]
