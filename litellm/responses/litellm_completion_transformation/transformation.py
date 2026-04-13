@@ -1456,7 +1456,11 @@ class LiteLLMCompletionResponsesConfig:
                             codex_parameters = input_schema.get("jsonSchema", {})
                         else:
                             codex_parameters = {}
-                    codex_parameters = dict(codex_parameters or {})
+                    codex_parameters = (
+                        dict(codex_parameters)
+                        if isinstance(codex_parameters, dict)
+                        else {}
+                    )
                     if not codex_parameters or "type" not in codex_parameters:
                         codex_parameters["type"] = "object"
 
