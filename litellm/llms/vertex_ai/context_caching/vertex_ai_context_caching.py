@@ -402,7 +402,8 @@ class ContextCachingEndpoints(VertexBase):
         )
 
         cached_content_request_body["tools"] = tools
-        cached_content_request_body["tool_choice"] = tool_choice
+        if tool_choice is not None:
+            cached_content_request_body["toolConfig"] = tool_choice
 
         ## LOGGING
         logging_obj.pre_call(
@@ -550,7 +551,8 @@ class ContextCachingEndpoints(VertexBase):
         )
 
         cached_content_request_body["tools"] = tools
-        cached_content_request_body["tool_choice"] = tool_choice
+        if tool_choice is not None:
+            cached_content_request_body["toolConfig"] = tool_choice
 
         ## LOGGING
         logging_obj.pre_call(

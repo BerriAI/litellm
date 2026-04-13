@@ -280,8 +280,7 @@ class TestContextCachingEndpoints:
         call_args = self.mock_client.post.call_args
         assert "tools" in call_args.kwargs["json"]
         assert call_args.kwargs["json"]["tools"] == self.sample_tools
-        assert "tool_choice" in call_args.kwargs["json"]
-        assert call_args.kwargs["json"]["tool_choice"] is None
+        assert "toolConfig" not in call_args.kwargs["json"]
 
     @pytest.mark.parametrize(
         "custom_llm_provider", ["gemini", "vertex_ai", "vertex_ai_beta"]
@@ -560,8 +559,7 @@ class TestContextCachingEndpoints:
         call_args = self.mock_async_client.post.call_args
         assert "tools" in call_args.kwargs["json"]
         assert call_args.kwargs["json"]["tools"] == self.sample_tools
-        assert "tool_choice" in call_args.kwargs["json"]
-        assert call_args.kwargs["json"]["tool_choice"] is None
+        assert "toolConfig" not in call_args.kwargs["json"]
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -983,9 +981,9 @@ class TestContextCachingEndpoints:
             model="gemini-1.5-pro",
         )
 
-        # tool_choice should be in the request body
+        # tool_choice should be mapped to toolConfig in the request body
         call_args = self.mock_client.post.call_args
-        assert call_args.kwargs["json"]["tool_choice"] == tool_choice_value
+        assert call_args.kwargs["json"]["toolConfig"] == tool_choice_value
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -1065,9 +1063,9 @@ class TestContextCachingEndpoints:
             model="gemini-1.5-pro",
         )
 
-        # tool_choice should be in the request body
+        # tool_choice should be mapped to toolConfig in the request body
         call_args = self.mock_async_client.post.call_args
-        assert call_args.kwargs["json"]["tool_choice"] == tool_choice_value
+        assert call_args.kwargs["json"]["toolConfig"] == tool_choice_value
 
 
 class TestCheckCachePagination:
