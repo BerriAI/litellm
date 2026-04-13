@@ -478,6 +478,13 @@ async def create_response(
         )
     except StopAsyncIteration:
         # Generator was empty. Default status
+        # Close the original generator to ensure cleanup (e.g., rate limit decrement)
+        # Note: Even though the generator is exhausted, we explicitly close it for clarity
+        try:
+            await generator.aclose()
+        except Exception:
+            pass
+
         async def empty_gen() -> AsyncGenerator[str, None]:
             if False:
                 yield  # type: ignore
@@ -491,6 +498,12 @@ async def create_response(
     except Exception as e:
         # Unexpected error consuming first chunk.
         verbose_proxy_logger.exception(f"Error consuming first chunk from generator: {e}")
+
+        # Close the original generator to ensure cleanup (e.g., rate limit decrement)
+        try:
+            await generator.aclose()
+        except Exception:
+            pass
 
         # Preserve status code from HTTPException (e.g., guardrail blocks)
         error_status = getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR)
@@ -514,6 +527,7 @@ async def create_response(
         if merged_fields:
             error_obj["provider_specific_fields"] = merged_fields
 
+
         async def error_gen_message() -> AsyncGenerator[str, None]:
             yield f"data: {json.dumps({'error': error_obj})}\n\n"
             yield "data: [DONE]\n\n"
@@ -526,19 +540,27 @@ async def create_response(
         )
 
     async def combined_generator() -> AsyncGenerator[str, None]:
-        if not _DD_STREAMING_TRACE_ENABLED:
-            # Fast path: no per-chunk span object / context-manager overhead.
+        try:
+            if not _DD_STREAMING_TRACE_ENABLED:
+                # Fast path: no per-chunk span object / context-manager overhead.
+                if first_chunk_value is not None:
+                    yield first_chunk_value
+                async for chunk in generator:
+                    yield chunk
+                return
             if first_chunk_value is not None:
-                yield first_chunk_value
+                with tracer.trace(DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE):
+                    yield first_chunk_value
             async for chunk in generator:
-                yield chunk
-            return
-        if first_chunk_value is not None:
-            with tracer.trace(DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE):
-                yield first_chunk_value
-        async for chunk in generator:
-            with tracer.trace(DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE):
-                yield chunk
+                with tracer.trace(DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE):
+                    yield chunk
+        finally:
+            # Ensure the original generator is closed when this generator is closed
+            # This is important for cleanup (e.g., rate limit decrement in _wrapped_generator)
+            try:
+                await generator.aclose()
+            except Exception:
+                pass
 
     return _UpstreamClosingStreamingResponse(
         combined_generator(),
