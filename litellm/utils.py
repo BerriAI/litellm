@@ -243,8 +243,6 @@ from typing import (
     get_args,
 )
 
-from openai import OpenAIError as OriginalError
-
 # These are lazy loaded via __getattr__
 from litellm.llms.base_llm.base_utils import (
     BaseLLMModelInfo,
@@ -1810,6 +1808,11 @@ def client(original_function):  # noqa: PLR0915
             modified_kwargs = await async_pre_call_deployment_hook(kwargs, call_type)
             if modified_kwargs is not None:
                 kwargs = modified_kwargs
+
+            # Sync logging_obj.stream after deployment hooks (they may convert it).
+            _hook_stream = kwargs.get("stream")
+            if _hook_stream is not None and logging_obj.stream != _hook_stream:
+                logging_obj.stream = _hook_stream
 
             kwargs["litellm_logging_obj"] = logging_obj
             ## LOAD CREDENTIALS
@@ -5872,6 +5875,8 @@ def _get_model_info_helper(  # noqa: PLR0915
                 supports_web_search=_model_info.get("supports_web_search", None),
                 supports_url_context=_model_info.get("supports_url_context", None),
                 supports_reasoning=_model_info.get("supports_reasoning", None),
+                supports_none_reasoning_effort=_model_info.get("supports_none_reasoning_effort", None),
+                supports_xhigh_reasoning_effort=_model_info.get("supports_xhigh_reasoning_effort", None),
                 supports_computer_use=_model_info.get("supports_computer_use", None),
                 search_context_cost_per_query=_model_info.get(
                     "search_context_cost_per_query", None
@@ -8955,6 +8960,12 @@ class ProviderConfigManager:
             )
 
             return OpenAIContainerConfig()
+        if provider in (LlmProviders.AZURE, LlmProviders.AZURE_TEXT):
+            from litellm.llms.azure.containers.transformation import (
+                AzureContainerConfig,
+            )
+
+            return AzureContainerConfig()
         return None
 
     @staticmethod

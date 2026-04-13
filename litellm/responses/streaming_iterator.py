@@ -130,15 +130,64 @@ class BaseResponsesAPIStreamingIterator:
                     )
                 )
 
-                # if "response" in parsed_chunk, then encode litellm specific information like custom_llm_provider
-                response_object = getattr(openai_responses_api_chunk, "response", None)
-                if response_object:
-                    response = ResponsesAPIRequestUtils._update_responses_api_response_id_with_model_id(
-                        responses_api_response=response_object,
-                        litellm_metadata=self.litellm_metadata,
-                        custom_llm_provider=self.custom_llm_provider,
+                # Only when the SSE JSON carries a response body (delta events do not).
+                # Using getattr(..., "response") alone is unsafe with Mocks: they synthesize a
+                # truthy child Mock for any attribute, which breaks tests and is wrong on stream.
+                if "response" in parsed_chunk:
+                    response_object = getattr(
+                        openai_responses_api_chunk, "response", None
                     )
-                    setattr(openai_responses_api_chunk, "response", response)
+                    if response_object is not None:
+                        response = ResponsesAPIRequestUtils._update_responses_api_response_id_with_model_id(
+                            responses_api_response=response_object,
+                            litellm_metadata=self.litellm_metadata,
+                            custom_llm_provider=self.custom_llm_provider,
+                        )
+                        setattr(openai_responses_api_chunk, "response", response)
+
+                # Encode container_id on streaming events so proxy/UI follow-ups route correctly
+                _event_type = getattr(openai_responses_api_chunk, "type", None)
+                _stream_model_id = (
+                    self.litellm_metadata.get("model_info", {}).get("id")
+                    if self.litellm_metadata
+                    else None
+                )
+                if _event_type in (
+                    ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
+                    ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
+                ):
+                    _item = getattr(openai_responses_api_chunk, "item", None)
+                    if _item is not None:
+                        ResponsesAPIRequestUtils._encode_container_id_on_output_item(
+                            item=_item,
+                            custom_llm_provider=self.custom_llm_provider,
+                            model_id=_stream_model_id,
+                        )
+                elif _event_type == ResponsesAPIStreamEvents.OUTPUT_TEXT_ANNOTATION_ADDED:
+                    _annotation = getattr(
+                        openai_responses_api_chunk, "annotation", None
+                    )
+                    if _annotation is not None:
+                        ResponsesAPIRequestUtils._encode_container_id_on_output_item(
+                            item=_annotation,
+                            custom_llm_provider=self.custom_llm_provider,
+                            model_id=_stream_model_id,
+                        )
+                elif _event_type == ResponsesAPIStreamEvents.CONTENT_PART_DONE:
+                    _part = getattr(openai_responses_api_chunk, "part", None)
+                    if _part is not None:
+                        if isinstance(_part, dict):
+                            ResponsesAPIRequestUtils._encode_container_ids_in_annotations(
+                                _part.get("annotations"),
+                                self.custom_llm_provider,
+                                _stream_model_id,
+                            )
+                        else:
+                            ResponsesAPIRequestUtils._encode_container_ids_in_annotations(
+                                getattr(_part, "annotations", None),
+                                self.custom_llm_provider,
+                                _stream_model_id,
+                            )
 
                 # Wrap encrypted_content in streaming events (output_item.added, output_item.done)
                 if self.litellm_metadata and self.litellm_metadata.get(
