@@ -55,7 +55,7 @@ items={[
   {
     icon: "📊",
     title: "MLflow",
-    description: "Experiment tracking.",
+    description: "Open source observability and evaluation.",
     to: "/docs/observability/mlflow",
   },
   {
