@@ -499,6 +499,95 @@ async def check_api_key_for_custom_headers_or_pass_through_endpoints(
     return api_key
 
 
+async def _auto_register_jwt_mapping(
+    virtual_key_claim_field: str,
+    claim_value: str,
+    jwt_handler: JWTHandler,
+    prisma_client: PrismaClient,
+    user_api_key_cache: DualCache,
+    parent_otel_span: Optional[Span],
+    proxy_logging_obj: ProxyLogging,
+    cache_key: str,
+) -> Optional[UserAPIKeyAuth]:
+    """
+    Auto-register: create a new virtual key + mapping for an unrecognised JWT claim value.
+    The new key carries no model/budget restrictions; admins can tighten it later.
+
+    Race safety: if two concurrent requests both reach here simultaneously (both saw
+    no mapping in the DB), one will win the unique-constraint race on
+    litellm_jwtkeymapping. The loser catches the conflict, fetches the winner's
+    mapping, and proceeds — no orphaned keys and no error surfaced to the caller.
+    """
+    # Inline import required: key_management_endpoints imports user_api_key_auth
+    # (line 51) so a module-level import here would create a circular dependency.
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        generate_key_helper_fn,
+    )
+
+    key_data = await generate_key_helper_fn(
+        request_type="key",
+        metadata={
+            "auto_registered": True,
+            "jwt_claim_field": virtual_key_claim_field,
+            "jwt_claim_value": claim_value,
+        },
+    )
+    token_hash = key_data["token"]
+
+    try:
+        await prisma_client.db.litellm_jwtkeymapping.create(
+            data={
+                "jwt_claim_name": virtual_key_claim_field,
+                "jwt_claim_value": claim_value,
+                "token": token_hash,
+                "created_by": "auto_register",
+                "updated_by": "auto_register",
+            }
+        )
+    except Exception as e:
+        error_str = str(e).lower()
+        if "unique" in error_str or "p2002" in error_str:
+            # A concurrent request won the race — fetch the winning mapping and
+            # use its token. The key we just generated is orphaned but harmless;
+            # it will be excluded from spend tracking since nothing maps to it.
+            verbose_proxy_logger.debug(
+                "JWT Key Mapping (auto_register): unique conflict on create — "
+                "fetching winner's mapping for %s='%s'.",
+                virtual_key_claim_field,
+                claim_value,
+            )
+            token_hash = await get_jwt_key_mapping_object(
+                jwt_claim_name=virtual_key_claim_field,
+                jwt_claim_value=claim_value,
+                prisma_client=prisma_client,
+            )
+            if token_hash is None:
+                # Should not happen, but guard against a delete racing our fetch.
+                return None
+        else:
+            raise
+
+    await user_api_key_cache.async_set_cache(
+        key=cache_key,
+        value=token_hash,
+        ttl=jwt_handler.litellm_jwtauth.virtual_key_mapping_cache_ttl,
+    )
+
+    verbose_proxy_logger.info(
+        "JWT Key Mapping (auto_register): created new virtual key for %s='%s'.",
+        virtual_key_claim_field,
+        claim_value,
+    )
+
+    return await get_key_object(
+        hashed_token=token_hash,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        parent_otel_span=parent_otel_span,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+
+
 async def _resolve_jwt_to_virtual_key(
     jwt_claims: dict,
     jwt_handler: JWTHandler,
@@ -527,6 +616,26 @@ async def _resolve_jwt_to_virtual_key(
     cached_mapping = await user_api_key_cache.async_get_cache(cache_key)
 
     if cached_mapping == "__NO_MAPPING__":
+        behavior = jwt_handler.litellm_jwtauth.unregistered_jwt_client_behavior
+        if behavior == UnregisteredJWTClientBehavior.REJECT:
+            raise HTTPException(
+                status_code=403,
+                detail=f"JWT Key Mapping: No registered mapping for {virtual_key_claim_field}='{claim_value}'. Access denied.",
+            )
+        if behavior == UnregisteredJWTClientBehavior.AUTO_REGISTER and prisma_client is not None:
+            # Stale sentinel written under a prior fallback_team_mapping config —
+            # evict it and auto-register now that the policy has changed.
+            await user_api_key_cache.async_delete_cache(cache_key)
+            return await _auto_register_jwt_mapping(
+                virtual_key_claim_field=virtual_key_claim_field,
+                claim_value=str(claim_value),
+                jwt_handler=jwt_handler,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                parent_otel_span=parent_otel_span,
+                proxy_logging_obj=proxy_logging_obj,
+                cache_key=cache_key,
+            )
         return None
     elif cached_mapping is not None:
         return await get_key_object(
@@ -537,14 +646,15 @@ async def _resolve_jwt_to_virtual_key(
             proxy_logging_obj=proxy_logging_obj,
         )
 
-    if prisma_client is None:
-        return None
-
-    token_hash = await get_jwt_key_mapping_object(
-        jwt_claim_name=virtual_key_claim_field,
-        jwt_claim_value=str(claim_value),
-        prisma_client=prisma_client,
-    )
+    # Resolve the mapping from DB, or treat prisma_client=None as a definitive
+    # miss (no DB → no mapping can exist → apply no-match policy below).
+    token_hash: Optional[str] = None
+    if prisma_client is not None:
+        token_hash = await get_jwt_key_mapping_object(
+            jwt_claim_name=virtual_key_claim_field,
+            jwt_claim_value=str(claim_value),
+            prisma_client=prisma_client,
+        )
 
     if token_hash is not None:
         await user_api_key_cache.async_set_cache(
@@ -559,13 +669,51 @@ async def _resolve_jwt_to_virtual_key(
             parent_otel_span=parent_otel_span,
             proxy_logging_obj=proxy_logging_obj,
         )
-    else:
+
+    # No mapping found (DB miss or no DB) — apply no-match policy.
+    behavior = jwt_handler.litellm_jwtauth.unregistered_jwt_client_behavior
+
+    if behavior == UnregisteredJWTClientBehavior.REJECT:
+        # Cache the miss before raising so repeated rejections are served from
+        # cache and don't re-query the DB on every request.
         await user_api_key_cache.async_set_cache(
             key=cache_key,
             value="__NO_MAPPING__",
             ttl=jwt_handler.litellm_jwtauth.virtual_key_mapping_cache_ttl,
         )
-        return None
+        raise HTTPException(
+            status_code=403,
+            detail=f"JWT Key Mapping: No registered mapping for {virtual_key_claim_field}='{claim_value}'. Access denied.",
+        )
+
+    if behavior == UnregisteredJWTClientBehavior.AUTO_REGISTER:
+        if prisma_client is None:
+            raise HTTPException(
+                status_code=500,
+                detail=(
+                    "JWT Key Mapping: AUTO_REGISTER requires a database connection. "
+                    "Configure a database or change unregistered_jwt_client_behavior."
+                ),
+            )
+        return await _auto_register_jwt_mapping(
+            virtual_key_claim_field=virtual_key_claim_field,
+            claim_value=str(claim_value),
+            jwt_handler=jwt_handler,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            parent_otel_span=parent_otel_span,
+            proxy_logging_obj=proxy_logging_obj,
+            cache_key=cache_key,
+        )
+
+    # FALLBACK_TEAM_MAPPING (default): cache the miss and return None so the
+    # caller falls through to standard team-based JWT auth.
+    await user_api_key_cache.async_set_cache(
+        key=cache_key,
+        value="__NO_MAPPING__",
+        ttl=jwt_handler.litellm_jwtauth.virtual_key_mapping_cache_ttl,
+    )
+    return None
 
 
 async def _user_api_key_auth_builder(  # noqa: PLR0915

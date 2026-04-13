@@ -58,26 +58,30 @@ Complete [OIDC JWT Auth setup](./token_auth.md) first — you need `JWT_PUBLIC_K
 
 ### Step 1. Configure the JWT claim to map on
 
-Add `jwt_client_id_field` to your `litellm_jwtauth` config. This is the JWT claim LiteLLM uses as the lookup key:
+Add `virtual_key_claim_field` to your `litellm_jwtauth` config. This is the JWT claim LiteLLM uses as the lookup key:
 
 ```yaml
 general_settings:
   master_key: sk-1234
   enable_jwt_auth: True
   litellm_jwtauth:
-    team_id_jwt_field: "team_id"          # existing team mapping (optional)
+    team_id_jwt_field: "team_id"                   # existing team mapping (optional)
     user_id_jwt_field: "sub"
-    jwt_client_id_field: "client_id"      # 👈 claim used for key mapping
-    unregistered_jwt_client_behavior: "fallback_team_mapping"  # see below
+    virtual_key_claim_field: "client_id"           # 👈 claim used for key mapping
+    unregistered_jwt_client_behavior: "reject"     # see below
 ```
+
+:::note Renamed field
+The field was called `jwt_client_id_field` in earlier docs. Both names are accepted — `jwt_client_id_field` silently maps to `virtual_key_claim_field`.
+:::
 
 **`unregistered_jwt_client_behavior`** controls what happens when a JWT has no registered mapping:
 
 | Value | Behavior |
 |-------|----------|
 | `fallback_team_mapping` | Fall through to team-based JWT auth (default — backward compatible) |
-| `reject` | Return 403 if no mapping found |
-| `auto_register` | Auto-create a virtual key + mapping on first encounter |
+| `reject` | Return 403 if no mapping found. Use this when every caller must be pre-registered. |
+| `auto_register` | Auto-create a virtual key + mapping on first encounter. The new key has no model/budget restrictions; tighten it later with `/jwt_client/update`. |
 
 ### Step 2. Register a JWT client → virtual key mapping
 
