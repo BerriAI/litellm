@@ -1,0 +1,35 @@
+name: Build and Push LiteLLM Image
+on:
+  push:
+    branches: [main, fix/*]
+  workflow_dispatch:
+
+env:
+  REGISTRY: ${{ secrets.AZURE_DASH_REGISTRY_URL }}
+  IMAGE_NAME: litellm-proxy
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to Azure Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ secrets.AZURE_DASH_REGISTRY_CLIENT_ID }}
+          password: ${{ secrets.AZURE_DASH_REGISTRY_CLIENT_SECRET }}
+
+      - name: Get short SHA
+        uses: benjlevesque/short-sha@v2.1
+        id: short-sha
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.short-sha.outputs.sha }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
