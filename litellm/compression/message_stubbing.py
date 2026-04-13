@@ -75,3 +75,34 @@ def stub_message(message: dict, key: str) -> dict:
     )
 
     return {**message, "content": stub_content}
+
+
+def truncate_message(message: dict, max_tokens: int) -> dict:
+    """
+    Truncate a message's content to approximately max_tokens by keeping
+    the first 70% and last 30% of words with a separator in between.
+
+    Used when a message is too large to fit entirely in the budget but
+    too relevant to fully stub out.
+    """
+    content = message.get("content", "")
+    if isinstance(content, list):
+        content = " ".join(
+            p.get("text", "") if isinstance(p, dict) else str(p) for p in content
+        )
+
+    # Rough conversion: 1 token ≈ 0.75 words
+    target_words = max(1, int(max_tokens * 0.75))
+    words = content.split()
+
+    if len(words) <= target_words:
+        return {**message, "content": content}
+
+    first_count = (target_words * 2) // 3
+    last_count = target_words - first_count
+    truncated = (
+        " ".join(words[:first_count])
+        + "\n...[truncated for context window]...\n"
+        + " ".join(words[-last_count:])
+    )
+    return {**message, "content": truncated}

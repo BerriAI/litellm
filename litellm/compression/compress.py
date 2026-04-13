@@ -6,7 +6,7 @@ and retrieval tool injection.
 from typing import Dict, List, Optional, Set
 
 from litellm.caching.dual_cache import DualCache
-from litellm.compression.message_stubbing import extract_key, stub_message
+from litellm.compression.message_stubbing import extract_key, stub_message, truncate_message
 from litellm.compression.retrieval_tool import build_retrieval_tool
 from litellm.compression.scoring.bm25 import bm25_score_messages
 from litellm.litellm_core_utils.token_counter import token_counter
@@ -166,15 +166,34 @@ def compress(
             model=model, text=messages[i].get("content", "") or ""
         )
 
-    # Fill token budget from highest-scoring messages
+    # Fill token budget from highest-scoring messages.
+    # For each candidate (ranked by relevance):
+    #   - If it fits entirely → keep it as-is.
+    #   - If it doesn't fit but there's meaningful remaining budget → truncate it
+    #     to fill that budget (so the LLM always has real content to work with).
+    #   - Otherwise → stub it (pointer only, content goes to cache).
+    # We only truncate one message (the highest-scoring one that overflows) so
+    # the budget is consumed and the rest are stubbed cleanly.
+    truncated_overrides: Dict[int, dict] = {}  # idx -> truncated message dict
+
     for idx in ranked_indices:
         if idx in kept_indices:
             continue
         msg_content = messages[idx].get("content", "") or ""
         msg_tokens = token_counter(model=model, text=msg_content)
+        remaining = compression_target - current_tokens
+
         if current_tokens + msg_tokens <= compression_target:
+            # Fits entirely
             kept_indices.add(idx)
             current_tokens += msg_tokens
+        elif remaining >= 100 and idx not in truncated_overrides:
+            # Too large to fit whole, but we have budget — truncate it.
+            # Only do this once (the highest-scoring overflow message).
+            truncated = truncate_message(messages[idx], remaining)
+            truncated_overrides[idx] = truncated
+            kept_indices.add(idx)
+            current_tokens = compression_target  # budget consumed
 
     # Build compressed messages and cache
     compressed_messages: List[dict] = []
@@ -183,7 +202,8 @@ def compress(
 
     for i, msg in enumerate(messages):
         if i in kept_indices:
-            compressed_messages.append(msg)
+            # Use the truncated version if we made one, otherwise the original
+            compressed_messages.append(truncated_overrides.get(i, msg))
         else:
             key = extract_key(msg, fallback_index=i, used_keys=used_keys)
             content = msg.get("content", "")
