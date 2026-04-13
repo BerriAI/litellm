@@ -281,18 +281,6 @@ def initialize_callbacks_on_proxy(  # noqa: PLR0915
                     )
                 )
                 imported_list.append(websearch_interception_obj)
-            elif isinstance(callback, str) and callback == "compression_interception":
-                from litellm.integrations.compression_interception.handler import (
-                    CompressionInterceptionLogger,
-                )
-
-                compression_interception_obj = (
-                    CompressionInterceptionLogger.initialize_from_proxy_config(
-                        litellm_settings=litellm_settings,
-                        callback_specific_params=callback_specific_params,
-                    )
-                )
-                imported_list.append(compression_interception_obj)
             elif isinstance(callback, str) and callback == "datadog_cost_management":
                 from litellm.integrations.datadog.datadog_cost_management import (
                     DatadogCostManagementLogger,
