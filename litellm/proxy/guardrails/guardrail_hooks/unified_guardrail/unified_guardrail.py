@@ -19,6 +19,9 @@ from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.api_route_to_call_types import get_call_types_for_route
 from litellm.llms import load_guardrail_translation_mappings
+from litellm.llms.base_llm.guardrail_translation.base_translation import (
+    BaseTranslation,
+)
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import CallTypes, CallTypesLiteral
@@ -50,6 +53,16 @@ def _get_a2a_request_id(
 
 
 endpoint_guardrail_translation_mappings = None
+
+
+def _ensure_litellm_metadata(data: dict, user_api_key_dict: UserAPIKeyAuth) -> None:
+    """Populate data['litellm_metadata'] from user_api_key_dict if absent."""
+    if "litellm_metadata" not in data:
+        user_metadata = BaseTranslation.transform_user_api_key_dict_to_metadata(
+            user_api_key_dict
+        )
+        if user_metadata:
+            data["litellm_metadata"] = user_metadata
 
 
 class UnifiedLLMGuardrails(CustomLogger):
@@ -120,6 +133,8 @@ class UnifiedLLMGuardrails(CustomLogger):
             CallTypes(call_type)
         ]()
 
+        _ensure_litellm_metadata(data, user_api_key_dict)
+
         data = await endpoint_translation.process_input_messages(
             data=data,
             guardrail_to_apply=guardrail_to_apply,
@@ -176,6 +191,8 @@ class UnifiedLLMGuardrails(CustomLogger):
         endpoint_translation = endpoint_guardrail_translation_mappings[
             CallTypes(call_type)
         ]()
+
+        _ensure_litellm_metadata(data, user_api_key_dict)
 
         return await endpoint_translation.process_input_messages(
             data=data,
