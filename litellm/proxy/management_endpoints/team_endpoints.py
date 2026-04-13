@@ -69,6 +69,7 @@ from litellm.proxy.auth.auth_checks import (
     get_user_object,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.callback_utils import redact_sensitive_logging_metadata
 from litellm.proxy.management_endpoints.common_utils import (
     _is_user_org_admin_for_team,
     _is_user_team_admin,
@@ -3154,6 +3155,7 @@ async def team_info(
                 # if using pydantic v1
                 key = key.dict()
             key.pop("token", None)
+            key["metadata"] = redact_sensitive_logging_metadata(key.get("metadata"))
 
         ## GET ALL MEMBERSHIPS ##
         returned_tm = await get_all_team_memberships(
@@ -3182,6 +3184,10 @@ async def team_info(
 
         # Resolve resources inherited from access groups
         await _resolve_team_access_group_resources(_team_info)
+
+        # Scrub credentials from team-level logging config before returning
+        if _team_info.metadata is not None:
+            _team_info.metadata = redact_sensitive_logging_metadata(_team_info.metadata)
 
         response_object = TeamInfoResponseObject(
             team_id=team_id,
@@ -3535,6 +3541,9 @@ def _convert_teams_to_response_models(
         except Exception:
             team_dict = team.dict()
 
+        team_dict["metadata"] = redact_sensitive_logging_metadata(
+            team_dict.get("metadata")
+        )
         if use_deleted_table:
             team_list.append(LiteLLM_DeletedTeamTable(**team_dict))
         else:
@@ -3959,9 +3968,13 @@ async def list_team(
         )
 
         try:
+            _team_dict = team.model_dump()
+            _team_dict["metadata"] = redact_sensitive_logging_metadata(
+                _team_dict.get("metadata")
+            )
             returned_responses.append(
                 TeamListResponseObject(
-                    **team.model_dump(),
+                    **_team_dict,
                     team_memberships=_team_memberships,
                     keys=keys,
                 )
