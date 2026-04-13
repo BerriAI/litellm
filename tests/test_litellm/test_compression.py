@@ -8,6 +8,7 @@ import pytest
 
 import litellm
 from litellm.compression.scoring.bm25 import bm25_score_messages
+from litellm.compression.scoring.embedding_scorer import embedding_score_messages
 from litellm.compression.content_detection import detect_content_type
 from litellm.compression.message_stubbing import extract_key, stub_message
 from litellm.compression.retrieval_tool import build_retrieval_tool
@@ -244,6 +245,71 @@ def test_compress_default_target():
     result = litellm.compress(messages, model="gpt-4o", compression_trigger=2000)
     # Should have compressed — target = 1000
     assert result["compressed_tokens"] <= result["original_tokens"]
+
+
+def test_compress_forwards_embedding_model_params(monkeypatch):
+    captured = {}
+
+    def fake_embedding_score_messages(
+        query, messages, model, cache=None, embedding_model_params=None
+    ):
+        captured["query"] = query
+        captured["model"] = model
+        captured["embedding_model_params"] = embedding_model_params
+        return [0.0] * len(messages)
+
+    monkeypatch.setattr(
+        "litellm.compression.scoring.embedding_scorer.embedding_score_messages",
+        fake_embedding_score_messages,
+    )
+
+    result = litellm.compress(
+        messages=[
+            {"role": "user", "content": "Authentication code " * 2000},
+            {"role": "user", "content": "Fix auth"},
+        ],
+        model="gpt-4o",
+        compression_trigger=1000,
+        embedding_model="text-embedding-3-small",
+        embedding_model_params={"api_base": "https://example-embeddings.test"},
+    )
+
+    assert result["compressed_tokens"] <= result["original_tokens"]
+    assert captured["model"] == "text-embedding-3-small"
+    assert captured["embedding_model_params"] == {
+        "api_base": "https://example-embeddings.test"
+    }
+
+
+def test_embedding_scorer_forwards_embedding_model_params(monkeypatch):
+    captured = {}
+
+    class _MockResponse:
+        data = [
+            {"embedding": [1.0, 0.0]},
+            {"embedding": [1.0, 0.0]},
+            {"embedding": [0.0, 1.0]},
+        ]
+
+    def fake_embedding(**kwargs):
+        captured.update(kwargs)
+        return _MockResponse()
+
+    monkeypatch.setattr(litellm, "embedding", fake_embedding)
+
+    scores = embedding_score_messages(
+        query="auth",
+        messages=[
+            {"role": "user", "content": "auth code"},
+            {"role": "user", "content": "cooking recipe"},
+        ],
+        model="text-embedding-3-small",
+        embedding_model_params={"api_base": "https://example-embeddings.test"},
+    )
+
+    assert len(scores) == 2
+    assert captured["model"] == "text-embedding-3-small"
+    assert captured["api_base"] == "https://example-embeddings.test"
 
 
 # ---------------------------------------------------------------------------

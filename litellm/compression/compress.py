@@ -3,10 +3,14 @@ Main compress() function — orchestrates BM25/embedding scoring, message stubbi
 and retrieval tool injection.
 """
 
-from typing import Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set
 
 from litellm.caching.dual_cache import DualCache
-from litellm.compression.message_stubbing import extract_key, stub_message, truncate_message
+from litellm.compression.message_stubbing import (
+    extract_key,
+    stub_message,
+    truncate_message,
+)
 from litellm.compression.retrieval_tool import build_retrieval_tool
 from litellm.compression.scoring.bm25 import bm25_score_messages
 from litellm.litellm_core_utils.token_counter import token_counter
@@ -88,6 +92,7 @@ def compress(
     compression_trigger: int = 200_000,
     compression_target: Optional[int] = None,
     embedding_model: Optional[str] = None,
+    embedding_model_params: Optional[Dict[str, Any]] = None,
     compression_cache: Optional[DualCache] = None,
 ) -> CompressedResult:
     """
@@ -107,6 +112,8 @@ def compress(
             Defaults to ``compression_trigger // 2``.
         embedding_model: If provided, use BM25 + embeddings for scoring.
             If ``None``, BM25 only.
+        embedding_model_params: Optional kwargs forwarded to
+            ``litellm.embedding()`` when ``embedding_model`` is set.
         compression_cache: Passed through to ``litellm.embedding()`` for
             cross-turn caching of embedding vectors.
 
@@ -115,7 +122,7 @@ def compress(
         counts, a cache of original content, and the retrieval tool definition.
     """
     if compression_target is None:
-        compression_target = compression_trigger // 2
+        compression_target = compression_trigger * 7 // 10
 
     original_tokens = token_counter(model=model, messages=messages)
 
@@ -142,7 +149,11 @@ def compress(
         )
 
         emb_scores = embedding_score_messages(
-            query, messages, model=embedding_model, cache=compression_cache
+            query,
+            messages,
+            model=embedding_model,
+            cache=compression_cache,
+            embedding_model_params=embedding_model_params,
         )
         combined_scores = _combine_scores(bm25_scores, emb_scores, bm25_weight=0.4)
     else:
@@ -170,10 +181,10 @@ def compress(
     # For each candidate (ranked by relevance):
     #   - If it fits entirely → keep it as-is.
     #   - If it doesn't fit but there's meaningful remaining budget → truncate it
-    #     to fill that budget (so the LLM always has real content to work with).
+    #     to fill as much of the budget as possible.
     #   - Otherwise → stub it (pointer only, content goes to cache).
-    # We only truncate one message (the highest-scoring one that overflows) so
-    # the budget is consumed and the rest are stubbed cleanly.
+    # Multiple messages may be truncated so we preserve partial content from
+    # several high-scoring messages rather than fully stubbing all but one.
     truncated_overrides: Dict[int, dict] = {}  # idx -> truncated message dict
 
     for idx in ranked_indices:
@@ -183,17 +194,23 @@ def compress(
         msg_tokens = token_counter(model=model, text=msg_content)
         remaining = compression_target - current_tokens
 
+        if remaining <= 0:
+            break  # budget exhausted
+
         if current_tokens + msg_tokens <= compression_target:
             # Fits entirely
             kept_indices.add(idx)
             current_tokens += msg_tokens
-        elif remaining >= 100 and idx not in truncated_overrides:
+        elif remaining >= 100:
             # Too large to fit whole, but we have budget — truncate it.
-            # Only do this once (the highest-scoring overflow message).
             truncated = truncate_message(messages[idx], remaining)
+            truncated_tokens = token_counter(
+                model=model,
+                text=truncated.get("content", "") or "",
+            )
             truncated_overrides[idx] = truncated
             kept_indices.add(idx)
-            current_tokens = compression_target  # budget consumed
+            current_tokens += truncated_tokens
 
     # Build compressed messages and cache
     compressed_messages: List[dict] = []

@@ -5,7 +5,7 @@ Computes cosine similarity between the query embedding and each message embeddin
 """
 
 import math
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from litellm.caching.dual_cache import DualCache
 
@@ -49,6 +49,7 @@ def embedding_score_messages(
     messages: List[dict],
     model: str,
     cache: Optional[DualCache] = None,
+    embedding_model_params: Optional[Dict[str, Any]] = None,
 ) -> List[float]:
     """
     Score each message's semantic similarity to the query using embeddings.
@@ -58,6 +59,8 @@ def embedding_score_messages(
         messages: List of message dicts with "content" fields.
         model: The embedding model to use (e.g., "text-embedding-3-small").
         cache: Optional DualCache for cross-turn embedding caching.
+        embedding_model_params: Optional additional kwargs forwarded to
+            ``litellm.embedding()``.
 
     Returns:
         List of float scores (cosine similarity), one per message.
@@ -71,11 +74,13 @@ def embedding_score_messages(
     # Filter out empty texts — replace with a placeholder to maintain indexing
     processed_texts = [t if t.strip() else "empty" for t in texts]
 
-    kwargs = {
+    kwargs: Dict[str, Any] = {
         "model": model,
         "input": processed_texts,
         "caching": cache is not None,
     }
+    if embedding_model_params:
+        kwargs = {**kwargs, **embedding_model_params}
 
     response = litellm.embedding(**kwargs)
 

@@ -4,9 +4,9 @@ Prompt Compression Evaluation Harness
 Compare model performance on coding tasks with and without prompt compression.
 
 Usage:
-    python tests/eval_compression.py --model gpt-4o --problems 5
-    python tests/eval_compression.py --model claude-sonnet-4-20250514 --problems 12 --runs 3
-    python tests/eval_compression.py --model gpt-4o-mini --padding-factor 50
+    python scripts/eval_compression.py --model gpt-4o --problems 5
+    python scripts/eval_compression.py --model claude-sonnet-4-20250514 --problems 12 --runs 3
+    python scripts/eval_compression.py --model gpt-4o-mini --padding-factor 50
 
 The harness runs each problem in two modes:
   1. **baseline** — raw prompt sent directly to the model.

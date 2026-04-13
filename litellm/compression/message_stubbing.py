@@ -80,7 +80,11 @@ def stub_message(message: dict, key: str) -> dict:
 def truncate_message(message: dict, max_tokens: int) -> dict:
     """
     Truncate a message's content to approximately max_tokens by keeping
-    the first 70% and last 30% of words with a separator in between.
+    the first 70% and last 30% of lines with a separator in between.
+
+    Uses line-based splitting to preserve code structure (function
+    boundaries, indentation) rather than word-based splitting which
+    mangles code.
 
     Used when a message is too large to fit entirely in the budget but
     too relevant to fully stub out.
@@ -91,18 +95,26 @@ def truncate_message(message: dict, max_tokens: int) -> dict:
             p.get("text", "") if isinstance(p, dict) else str(p) for p in content
         )
 
-    # Rough conversion: 1 token ≈ 0.75 words
-    target_words = max(1, int(max_tokens * 0.75))
-    words = content.split()
+    # Rough conversion: 1 token ≈ 3 characters
+    target_chars = max(100, max_tokens * 3)
 
-    if len(words) <= target_words:
+    if len(content) <= target_chars:
         return {**message, "content": content}
 
-    first_count = (target_words * 2) // 3
-    last_count = target_words - first_count
+    lines = content.split("\n")
+
+    # Estimate target line count from character budget
+    avg_line_len = max(1, len(content) // max(1, len(lines)))
+    target_lines = max(2, target_chars // avg_line_len)
+
+    if len(lines) <= target_lines:
+        return {**message, "content": content}
+
+    first_count = (target_lines * 7) // 10
+    last_count = target_lines - first_count
     truncated = (
-        " ".join(words[:first_count])
+        "\n".join(lines[:first_count])
         + "\n...[truncated for context window]...\n"
-        + " ".join(words[-last_count:])
+        + "\n".join(lines[-last_count:])
     )
     return {**message, "content": truncated}
