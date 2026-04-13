@@ -10,7 +10,6 @@ from litellm.exceptions import (
     AuthenticationError,
     BadRequestError,
     ContentPolicyViolationError,
-    InternalServerError,
     RateLimitError,
     Timeout,
 )
@@ -31,6 +30,11 @@ def get_num_retries_from_retry_policy(
     ContentPolicyViolationErrorRetries: Optional[int] = None
     InternalServerErrorRetries: Optional[int] = None
     """
+    # Lazy import: `InternalServerError` is defined late in `litellm/exceptions.py`,
+    # after a cyclic import re-enters this module during exceptions.py evaluation.
+    # A module-level import would be flagged by CodeQL as potentially undefined.
+    from litellm.exceptions import InternalServerError
+
     # if we can find the exception then in the retry policy -> return the number of retries
 
     if (
