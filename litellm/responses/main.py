@@ -643,6 +643,29 @@ def _apply_prompt_management_to_responses_call(
     return input, model, custom_llm_provider
 
 
+# Opt-in via model id (mirrors the `responses/` prefix pattern on chat completions).
+_OPENAI_CHAT_COMPLETIONS_RESPONSES_MODEL_PREFIX = "openai/chat_completions/"
+
+
+def _normalize_openai_chat_completions_responses_model(model: str) -> tuple[str, bool]:
+    """
+    Strip `openai/chat_completions/<name>` → `openai/<name>` and return True when the
+    prefix was applied (same effect as use_chat_completions_api=True).
+    """
+    if not model.startswith(_OPENAI_CHAT_COMPLETIONS_RESPONSES_MODEL_PREFIX):
+        return model, False
+    remainder = model[len(_OPENAI_CHAT_COMPLETIONS_RESPONSES_MODEL_PREFIX) :]
+    if not remainder:
+        return model, False
+    return f"openai/{remainder}", True
+
+
+def _pop_use_chat_completions_api_kw(kwargs: Dict[str, Any]) -> bool:
+    """Pop bridge flags; True if either requests the chat-completions path."""
+    use_cc = kwargs.pop("use_chat_completions_api", None)
+    return bool(use_cc)
+
+
 def _resolve_model_provider_for_responses(
     model: str,
     custom_llm_provider: Optional[str],
@@ -754,7 +777,7 @@ def responses(
         litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
         litellm_call_id: Optional[str] = kwargs.get("litellm_call_id", None)
         _is_async = kwargs.pop("aresponses", False) is True
-        use_responses_api_bridge = kwargs.pop("use_responses_api_bridge", None)
+        use_chat_completions_api = _pop_use_chat_completions_api_kw(kwargs)
 
         # Convert text_format to text parameter if provided
         text = ResponsesAPIRequestUtils.convert_text_format_to_text_param(
@@ -776,6 +799,15 @@ def responses(
             return mock_responses_api_response(
                 mock_response=litellm_params.mock_response
             )
+
+        _stripped_model, _from_chat_completions_prefix = (
+            _normalize_openai_chat_completions_responses_model(model)
+        )
+        model = _stripped_model
+        local_vars["model"] = model
+        use_chat_completions_api = (
+            use_chat_completions_api or _from_chat_completions_prefix
+        )
 
         model, custom_llm_provider = _resolve_model_provider_for_responses(
             model=model,
@@ -872,7 +904,7 @@ def responses(
 
         if _has_file_search_tool(tools) and (
             responses_api_provider_config is None
-            or use_responses_api_bridge is True
+            or use_chat_completions_api is True
             or not responses_api_provider_config.supports_native_file_search()
         ):
             from litellm.responses.file_search.emulated_handler import (
@@ -907,7 +939,11 @@ def responses(
                 "extra_body": extra_body,
                 "timeout": timeout,
                 "custom_llm_provider": custom_llm_provider,
-                **({"use_responses_api_bridge": True} if use_responses_api_bridge else {}),
+                **(
+                    {"use_chat_completions_api": True}
+                    if use_chat_completions_api
+                    else {}
+                ),
                 **{k: v for k, v in kwargs.items() if k not in _internal_skip},
             }
             if _is_async:
@@ -922,7 +958,7 @@ def responses(
                 **emulated_kwargs,
             )
 
-        if responses_api_provider_config is None or use_responses_api_bridge is True:
+        if responses_api_provider_config is None or use_chat_completions_api is True:
             return litellm_completion_transformation_handler.response_api_handler(
                 model=model,
                 input=input,
