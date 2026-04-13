@@ -178,7 +178,6 @@ async def test_get_response():
 async def test_aavertex_ai_anthropic_async():
     # load_vertex_ai_credentials()
     try:
-
         model = "claude-3-5-sonnet@20240620"
 
         vertex_ai_project = "pathrise-convert-1606954137718"
@@ -351,7 +350,6 @@ def test_avertex_ai_stream():
 @pytest.mark.flaky(retries=3, delay=1)
 @pytest.mark.asyncio
 async def test_async_vertexai_response_basic():
-
     load_vertex_ai_credentials()
     try:
         user_message = "Hello, how are you?"
@@ -1382,7 +1380,6 @@ async def test_gemini_pro_json_schema_args_sent_httpx(
                     ]
                 )
         elif resp is not None:
-
             assert resp.model == model.split("/")[1]
 
 
@@ -2291,6 +2288,8 @@ def test_prompt_factory_nested():
 async def test_completion_fine_tuned_model():
     load_vertex_ai_credentials()
     mock_response = AsyncMock()
+    mock_response.headers = {}
+    mock_response.status_code = 200
 
     def return_val():
         return {
@@ -2326,7 +2325,6 @@ async def test_completion_fine_tuned_model():
         }
 
     mock_response.json = return_val
-    mock_response.status_code = 200
 
     expected_payload = {
         "contents": [

@@ -13,14 +13,18 @@ from litellm.proxy._types import TeamCallbackMetadata, UserAPIKeyAuth
 from litellm.proxy.litellm_pre_call_utils import (
     KeyAndTeamLoggingSettings,
     LiteLLMProxyRequestSetup,
+    _apply_credential_overrides_from_model_config,
+    _extract_credential_from_entry,
     _get_dynamic_logging_metadata,
     _get_enforced_params,
     _get_metadata_variable_name,
+    _resolve_credential_from_model_config,
     _update_model_if_key_alias_exists,
     add_guardrails_from_policy_engine,
     add_litellm_data_to_request,
     check_if_token_is_service_account,
 )
+from litellm.types.utils import CredentialItem
 
 sys.path.insert(
     0, os.path.abspath("../../..")
@@ -1912,3 +1916,542 @@ async def test_bearer_token_not_in_debug_logs():
         f"Bearer token leaked in debug logs. "
         f"Found token in log output:\n{log_output[:500]}"
     )
+
+
+# ============================================================================
+# Tests for credential overrides from model_config (team/project metadata)
+# ============================================================================
+
+
+@pytest.fixture()
+def setup_test_credentials():
+    """Populate litellm.credential_list with test credentials and enable feature flag, clean up after."""
+    original = litellm.credential_list[:]
+    original_flag = litellm.enable_model_config_credential_overrides
+    litellm.enable_model_config_credential_overrides = True
+    litellm.credential_list.extend(
+        [
+            CredentialItem(
+                credential_name="hotel-azure-eastus",
+                credential_info={},
+                credential_values={
+                    "api_base": "https://hotel-eastus.openai.azure.com/",
+                    "api_key": "key-hotel-eastus",
+                },
+            ),
+            CredentialItem(
+                credential_name="hotel-azure-westus",
+                credential_info={},
+                credential_values={
+                    "api_base": "https://hotel-westus.openai.azure.com/",
+                    "api_key": "key-hotel-westus",
+                },
+            ),
+            CredentialItem(
+                credential_name="hotel-rec-azure",
+                credential_info={},
+                credential_values={
+                    "api_base": "https://hotel-rec-app.openai.azure.com/",
+                    "api_key": "key-hotel-rec",
+                },
+            ),
+            CredentialItem(
+                credential_name="hotel-rec-vision",
+                credential_info={},
+                credential_values={
+                    "api_base": "https://hotel-rec-vision.openai.azure.com/",
+                    "api_key": "key-hotel-rec-vision",
+                    "api_version": "2024-06-01",
+                },
+            ),
+            CredentialItem(
+                credential_name="flight-azure-centralus",
+                credential_info={},
+                credential_values={
+                    "api_base": "https://flight-centralus.openai.azure.com/",
+                    "api_key": "key-flight-centralus",
+                },
+            ),
+        ]
+    )
+    yield
+    litellm.credential_list[:] = original
+    litellm.enable_model_config_credential_overrides = original_flag
+
+
+# --- Unit tests for _extract_credential_from_entry ---
+
+
+def test_extract_credential_from_entry_azure():
+    entry = {"azure": {"litellm_credentials": "my-cred"}}
+    assert _extract_credential_from_entry(entry) == "my-cred"
+
+
+def test_extract_credential_from_entry_no_credential():
+    entry = {"azure": {"some_other_key": "value"}}
+    assert _extract_credential_from_entry(entry) is None
+
+
+def test_extract_credential_from_entry_empty():
+    assert _extract_credential_from_entry({}) is None
+
+
+def test_extract_credential_from_entry_non_dict_value():
+    entry = {"azure": "not-a-dict"}
+    assert _extract_credential_from_entry(entry) is None
+
+
+def test_extract_credential_from_entry_non_dict_entry():
+    """Non-dict entry (e.g. string) should return None, not crash."""
+    assert _extract_credential_from_entry("my-cred-name") is None
+    assert _extract_credential_from_entry(["a", "list"]) is None
+    assert _extract_credential_from_entry(42) is None
+
+
+# --- Unit tests for _resolve_credential_from_model_config ---
+
+
+def test_resolve_project_model_specific_wins():
+    project_config = {
+        "gpt-4": {"azure": {"litellm_credentials": "proj-gpt4"}},
+        "defaultconfig": {"azure": {"litellm_credentials": "proj-default"}},
+    }
+    team_config = {
+        "gpt-4": {"azure": {"litellm_credentials": "team-gpt4"}},
+        "defaultconfig": {"azure": {"litellm_credentials": "team-default"}},
+    }
+    result = _resolve_credential_from_model_config(
+        "gpt-4", project_config, team_config
+    )
+    assert result == "proj-gpt4"
+
+
+def test_resolve_project_default_wins_over_team():
+    project_config = {
+        "defaultconfig": {"azure": {"litellm_credentials": "proj-default"}},
+    }
+    team_config = {
+        "gpt-4": {"azure": {"litellm_credentials": "team-gpt4"}},
+        "defaultconfig": {"azure": {"litellm_credentials": "team-default"}},
+    }
+    result = _resolve_credential_from_model_config(
+        "gpt-4", project_config, team_config
+    )
+    assert result == "proj-default"
+
+
+def test_resolve_team_model_specific_wins_over_team_default():
+    team_config = {
+        "gpt-4": {"azure": {"litellm_credentials": "team-gpt4"}},
+        "defaultconfig": {"azure": {"litellm_credentials": "team-default"}},
+    }
+    result = _resolve_credential_from_model_config("gpt-4", None, team_config)
+    assert result == "team-gpt4"
+
+
+def test_resolve_team_default_used_as_fallback():
+    team_config = {
+        "defaultconfig": {"azure": {"litellm_credentials": "team-default"}},
+    }
+    result = _resolve_credential_from_model_config("gpt-3.5", None, team_config)
+    assert result == "team-default"
+
+
+def test_resolve_no_match_returns_none():
+    result = _resolve_credential_from_model_config("gpt-4", None, None)
+    assert result is None
+
+
+def test_resolve_empty_configs_returns_none():
+    result = _resolve_credential_from_model_config("gpt-4", {}, {})
+    assert result is None
+
+
+def test_resolve_model_not_in_any_config():
+    project_config = {"gpt-4": {"azure": {"litellm_credentials": "x"}}}
+    result = _resolve_credential_from_model_config("gpt-3.5", project_config, None)
+    assert result is None
+
+
+# --- Integration tests for _apply_credential_overrides_from_model_config ---
+
+
+def test_apply_overrides_project_model_specific(setup_test_credentials):
+    """Scenario 2: Hotel Rec App -> gpt-4-vision -> project model-specific."""
+    data = {"model": "gpt-4-vision"}
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test-key",
+        team_metadata={
+            "model_config": {
+                "defaultconfig": {
+                    "azure": {"litellm_credentials": "hotel-azure-eastus"}
+                },
+                "gpt-4": {"azure": {"litellm_credentials": "hotel-azure-westus"}},
+            }
+        },
+        project_metadata={
+            "model_config": {
+                "defaultconfig": {
+                    "azure": {"litellm_credentials": "hotel-rec-azure"}
+                },
+                "gpt-4-vision": {
+                    "azure": {"litellm_credentials": "hotel-rec-vision"}
+                },
+            }
+        },
+    )
+    _apply_credential_overrides_from_model_config(
+        data=data, user_api_key_dict=user_api_key_dict
+    )
+    assert data["api_base"] == "https://hotel-rec-vision.openai.azure.com/"
+    assert data["api_key"] == "key-hotel-rec-vision"
+    assert data["api_version"] == "2024-06-01"
+
+
+def test_apply_overrides_project_default(setup_test_credentials):
+    """Scenario 1: Hotel Rec App -> gpt-4 -> project default."""
+    data = {"model": "gpt-4"}
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test-key",
+        team_metadata={
+            "model_config": {
+                "defaultconfig": {
+                    "azure": {"litellm_credentials": "hotel-azure-eastus"}
+                },
+                "gpt-4": {"azure": {"litellm_credentials": "hotel-azure-westus"}},
+            }
+        },
+        project_metadata={
+            "model_config": {
+                "defaultconfig": {
+                    "azure": {"litellm_credentials": "hotel-rec-azure"}
+                },
+                "gpt-4-vision": {
+                    "azure": {"litellm_credentials": "hotel-rec-vision"}
+                },
+            }
+        },
+    )
+    _apply_credential_overrides_from_model_config(
+        data=data, user_api_key_dict=user_api_key_dict
+    )
+    assert data["api_base"] == "https://hotel-rec-app.openai.azure.com/"
+    assert data["api_key"] == "key-hotel-rec"
+
+
+def test_apply_overrides_team_model_specific(setup_test_credentials):
+    """Scenario 4: Hotel Review App -> gpt-4 -> team model-specific."""
+    data = {"model": "gpt-4"}
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test-key",
+        team_metadata={
+            "model_config": {
+                "defaultconfig": {
+                    "azure": {"litellm_credentials": "hotel-azure-eastus"}
+                },
+                "gpt-4": {"azure": {"litellm_credentials": "hotel-azure-westus"}},
+            }
+        },
+        project_metadata={},
+    )
+    _apply_credential_overrides_from_model_config(
+        data=data, user_api_key_dict=user_api_key_dict
+    )
+    assert data["api_base"] == "https://hotel-westus.openai.azure.com/"
+    assert data["api_key"] == "key-hotel-westus"
+
+
+def test_apply_overrides_team_default(setup_test_credentials):
+    """Scenario 3: Hotel Review App -> gpt-3.5 -> team default."""
+    data = {"model": "gpt-3.5"}
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test-key",
+        team_metadata={
+            "model_config": {
+                "defaultconfig": {
+                    "azure": {"litellm_credentials": "hotel-azure-eastus"}
+                },
+                "gpt-4": {"azure": {"litellm_credentials": "hotel-azure-westus"}},
+            }
+        },
+        project_metadata={},
+    )
+    _apply_credential_overrides_from_model_config(
+        data=data, user_api_key_dict=user_api_key_dict
+    )
+    assert data["api_base"] == "https://hotel-eastus.openai.azure.com/"
+    assert data["api_key"] == "key-hotel-eastus"
+
+
+def test_apply_overrides_no_config(setup_test_credentials):
+    """Scenario 6: No model_config anywhere -> data unchanged."""
+    data = {"model": "gpt-4"}
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test-key",
+        team_metadata={},
+        project_metadata={},
+    )
+    _apply_credential_overrides_from_model_config(
+        data=data, user_api_key_dict=user_api_key_dict
+    )
+    assert "api_base" not in data
+    assert "api_key" not in data
+
+
+def test_apply_overrides_clientside_credentials_take_precedence(
+    setup_test_credentials,
+):
+    """Clientside api_base/api_key in data should block model_config override."""
+    data = {
+        "model": "gpt-4",
+        "api_base": "https://my-custom-endpoint.openai.azure.com/",
+        "api_key": "my-custom-key",
+    }
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test-key",
+        team_metadata={
+            "model_config": {
+                "defaultconfig": {
+                    "azure": {"litellm_credentials": "hotel-azure-eastus"}
+                }
+            }
+        },
+    )
+    _apply_credential_overrides_from_model_config(
+        data=data, user_api_key_dict=user_api_key_dict
+    )
+    assert data["api_base"] == "https://my-custom-endpoint.openai.azure.com/"
+    assert data["api_key"] == "my-custom-key"
+
+
+def test_apply_overrides_missing_credential_name(setup_test_credentials):
+    """model_config references a credential that doesn't exist -> no override."""
+    data = {"model": "gpt-4"}
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test-key",
+        team_metadata={
+            "model_config": {
+                "gpt-4": {
+                    "azure": {"litellm_credentials": "nonexistent-credential"}
+                }
+            }
+        },
+    )
+    _apply_credential_overrides_from_model_config(
+        data=data, user_api_key_dict=user_api_key_dict
+    )
+    assert "api_base" not in data
+    assert "api_key" not in data
+
+
+def test_apply_overrides_api_version_only_if_present(setup_test_credentials):
+    """api_version should only be set if the credential contains it."""
+    data = {"model": "gpt-3.5"}
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test-key",
+        team_metadata={
+            "model_config": {
+                "defaultconfig": {
+                    "azure": {"litellm_credentials": "hotel-azure-eastus"}
+                }
+            }
+        },
+    )
+    _apply_credential_overrides_from_model_config(
+        data=data, user_api_key_dict=user_api_key_dict
+    )
+    assert data["api_base"] == "https://hotel-eastus.openai.azure.com/"
+    assert data["api_key"] == "key-hotel-eastus"
+    assert "api_version" not in data
+
+
+def test_apply_overrides_no_model_in_data(setup_test_credentials):
+    """No model in request data -> skip override."""
+    data = {"messages": [{"role": "user", "content": "hello"}]}
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test-key",
+        team_metadata={
+            "model_config": {
+                "defaultconfig": {
+                    "azure": {"litellm_credentials": "some-cred"}
+                }
+            }
+        },
+    )
+    _apply_credential_overrides_from_model_config(
+        data=data, user_api_key_dict=user_api_key_dict
+    )
+    assert "api_base" not in data
+
+
+def test_apply_overrides_none_metadata(setup_test_credentials):
+    """None metadata on both team and project -> skip override."""
+    data = {"model": "gpt-4"}
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test-key",
+        team_metadata=None,
+        project_metadata=None,
+    )
+    _apply_credential_overrides_from_model_config(
+        data=data, user_api_key_dict=user_api_key_dict
+    )
+    assert "api_base" not in data
+
+
+def test_apply_overrides_clientside_api_version_preserved(setup_test_credentials):
+    """Clientside api_version should not be overwritten by credential."""
+    data = {"model": "gpt-4-vision", "api_version": "2025-01-01"}
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test-key",
+        team_metadata={
+            "model_config": {
+                "gpt-4-vision": {
+                    "azure": {"litellm_credentials": "hotel-rec-vision"}
+                }
+            }
+        },
+    )
+    _apply_credential_overrides_from_model_config(
+        data=data, user_api_key_dict=user_api_key_dict
+    )
+    # api_base and api_key should be set from credential
+    assert data["api_base"] == "https://hotel-rec-vision.openai.azure.com/"
+    assert data["api_key"] == "key-hotel-rec-vision"
+    # api_version should be preserved from the request, not overwritten
+    assert data["api_version"] == "2025-01-01"
+
+
+def test_resolve_non_dict_model_config_ignored():
+    """Non-dict model_config (e.g. string) should be safely skipped."""
+    result = _resolve_credential_from_model_config("gpt-4", "not-a-dict", None)
+    assert result is None
+
+    result = _resolve_credential_from_model_config(
+        "gpt-4", None, ["also", "not", "a", "dict"]
+    )
+    assert result is None
+
+    # Valid config still works alongside invalid one
+    result = _resolve_credential_from_model_config(
+        "gpt-4",
+        "invalid",
+        {"gpt-4": {"azure": {"litellm_credentials": "valid-cred"}}},
+    )
+    assert result == "valid-cred"
+
+
+def test_resolve_pre_alias_model_name_fallback():
+    """model_config keyed on pre-alias name should match after alias resolution."""
+    team_config = {
+        "gpt-4": {"azure": {"litellm_credentials": "team-gpt4"}},
+    }
+    # Post-alias name doesn't match, but pre-alias does (team scope)
+    result = _resolve_credential_from_model_config(
+        "azure/gpt-4-0613", None, team_config, pre_alias_model_name="gpt-4"
+    )
+    assert result == "team-gpt4"
+
+    # Same test for project scope
+    project_config = {
+        "gpt-4": {"azure": {"litellm_credentials": "proj-gpt4"}},
+    }
+    result = _resolve_credential_from_model_config(
+        "azure/gpt-4-0613", project_config, None, pre_alias_model_name="gpt-4"
+    )
+    assert result == "proj-gpt4"
+
+
+def test_resolve_post_alias_name_takes_priority():
+    """Post-alias (resolved) name should be tried before pre-alias name."""
+    team_config = {
+        "gpt-4": {"azure": {"litellm_credentials": "pre-alias-cred"}},
+        "gpt-4o-team-1": {"azure": {"litellm_credentials": "post-alias-cred"}},
+    }
+    # Team scope
+    result = _resolve_credential_from_model_config(
+        "gpt-4o-team-1", None, team_config, pre_alias_model_name="gpt-4"
+    )
+    assert result == "post-alias-cred"
+
+    # Project scope
+    result = _resolve_credential_from_model_config(
+        "gpt-4o-team-1", team_config, None, pre_alias_model_name="gpt-4"
+    )
+    assert result == "post-alias-cred"
+
+
+def test_apply_overrides_with_alias(setup_test_credentials):
+    """Credential override should work when model name was changed by alias."""
+    # Simulate: user called "my-gpt4", alias resolved to "azure/gpt-4-custom"
+    # model_config is keyed on "my-gpt4" (the pre-alias name)
+    data = {"model": "azure/gpt-4-custom"}
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test-key",
+        team_metadata={
+            "model_config": {
+                "my-gpt4": {"azure": {"litellm_credentials": "hotel-azure-eastus"}},
+            }
+        },
+    )
+    _apply_credential_overrides_from_model_config(
+        data=data,
+        user_api_key_dict=user_api_key_dict,
+        pre_alias_model_name="my-gpt4",
+    )
+    assert data["api_base"] == "https://hotel-eastus.openai.azure.com/"
+    assert data["api_key"] == "key-hotel-eastus"
+
+
+def test_apply_overrides_feature_flag_disabled_by_default():
+    """Feature flag defaults to False — credential overrides are inert until explicitly enabled."""
+    assert litellm.enable_model_config_credential_overrides is False
+    data = {"model": "gpt-4"}
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test-key",
+        team_metadata={
+            "model_config": {
+                "gpt-4": {"azure": {"litellm_credentials": "hotel-azure-eastus"}}
+            }
+        },
+    )
+    _apply_credential_overrides_from_model_config(
+        data=data, user_api_key_dict=user_api_key_dict
+    )
+    assert "api_base" not in data
+    assert "api_key" not in data
+
+
+def test_extract_credential_provider_hint_prefers_exact_match():
+    """Provider hint selects the correct provider in a multi-provider entry."""
+    entry = {
+        "openai": {"litellm_credentials": "openai-cred"},
+        "azure": {"litellm_credentials": "azure-cred"},
+    }
+    # With provider hint, should pick the exact match
+    assert _extract_credential_from_entry(entry, provider="azure") == "azure-cred"
+    assert _extract_credential_from_entry(entry, provider="openai") == "openai-cred"
+
+    # Without provider hint, falls back to first key (insertion order)
+    result = _extract_credential_from_entry(entry)
+    assert result in ("openai-cred", "azure-cred")
+
+    # Unknown provider falls back to first available
+    result = _extract_credential_from_entry(entry, provider="bedrock")
+    assert result in ("openai-cred", "azure-cred")
+
+
+def test_resolve_provider_hint_from_model_name():
+    """Provider prefix in model name (e.g. azure/gpt-4) threads through to entry extraction."""
+    config = {
+        "gpt-4": {
+            "openai": {"litellm_credentials": "openai-cred"},
+            "azure": {"litellm_credentials": "azure-cred"},
+        },
+    }
+    # Model name "azure/gpt-4" -> provider="azure" -> should prefer azure-cred
+    # But _resolve_credential_from_model_config tries "azure/gpt-4" first (no match),
+    # then falls to defaultconfig (no match). So we need to use pre_alias_model_name.
+    result = _resolve_credential_from_model_config(
+        "azure/gpt-4", config, None, pre_alias_model_name="gpt-4", provider="azure"
+    )
+    assert result == "azure-cred"

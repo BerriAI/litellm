@@ -94,9 +94,15 @@ class SkillsSandboxExecutor:
 
                 # Create a temp directory to stage files
                 with tempfile.TemporaryDirectory() as tmpdir:
+                    tmpdir_abs = os.path.abspath(tmpdir)
                     for path, content in skill_files.items():
                         # Create the file in temp directory
-                        local_path = os.path.join(tmpdir, path)
+                        local_path = os.path.abspath(os.path.join(tmpdir, path))
+                        if not local_path.startswith(tmpdir_abs + os.sep):
+                            verbose_logger.warning(
+                                f"SkillsSandboxExecutor: Skipping file with invalid path: {path}"
+                            )
+                            continue
                         os.makedirs(os.path.dirname(local_path), exist_ok=True)
                         with open(local_path, "wb") as f:
                             f.write(content)
