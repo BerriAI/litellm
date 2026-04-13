@@ -52,27 +52,6 @@ class BaseTranslation(ABC):
 
         return transformed
 
-    def _ensure_litellm_metadata(self, data: dict) -> None:
-        """
-        Populate data['litellm_metadata'] from data['metadata']['user_api_key_auth']
-        if not already present.
-
-        This makes user API key info available to guardrails during pre-call
-        processing, matching the behavior of process_output_response which
-        receives user_api_key_dict directly.
-        """
-        if "litellm_metadata" in data:
-            return
-        metadata = data.get("metadata")
-        if not isinstance(metadata, dict):
-            return
-        user_api_key_auth = metadata.get("user_api_key_auth")
-        if user_api_key_auth is None:
-            return
-        user_metadata = self.transform_user_api_key_dict_to_metadata(user_api_key_auth)
-        if user_metadata:
-            data["litellm_metadata"] = user_metadata
-
     @abstractmethod
     async def process_input_messages(
         self,
