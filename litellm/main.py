@@ -2711,7 +2711,6 @@ def completion(  # type: ignore # noqa: PLR0915
                         provider_config=provider_config,
                     )
                 else:
-                    print("[debug] openai_chat_completions.completion", timeout)
                     response = openai_chat_completions.completion(
                         model=model,
                         messages=messages,
