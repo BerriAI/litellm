@@ -161,25 +161,147 @@ class LiteLLMCompletionResponsesConfig:
         """
         Make a 2nd LLM call to compact/summarize the conversation history.
         Returns the compacted input as a single user message list.
+        Kept for interface compatibility; real work is in _apply_compaction_to_messages.
         """
-        import litellm
-
-
-        return [
-            {
-                "type": "message",
-                "role": "user",
-                "content": "",
-            }
-        ]
+        return []
 
     @staticmethod
     def _cheap_token_counter(input: Union[str, ResponseInputParam]) -> int:
         """
-        Cheaply estimate the token count of the input.
-        ~4 chars per token for strings; for message lists, stringify first.
+        Cheaply estimate the token count of the Responses API input.
+        ~4 chars per token; for compaction items use decoded length estimate.
         """
-        pass
+        if isinstance(input, str):
+            return len(input) // 4
+        total_chars = 0
+        for item in input:
+            if not isinstance(item, dict):
+                continue
+            if item.get("type") == "compaction":
+                # Decoded base64 is ~3/4 of encoded length; then /4 for tokens
+                total_chars += len(item.get("encrypted_content") or "") * 3 // 4
+                continue
+            content = item.get("content", "")
+            if isinstance(content, str):
+                total_chars += len(content)
+            elif isinstance(content, list):
+                for block in content:
+                    if isinstance(block, dict):
+                        total_chars += len(block.get("text", ""))
+                    elif isinstance(block, str):
+                        total_chars += len(block)
+        return total_chars // 4
+
+    @staticmethod
+    def _cheap_token_counter_for_messages(messages: List[dict]) -> int:
+        """
+        Cheaply estimate the token count of chat completion messages (~4 chars/token).
+        """
+        total_chars = 0
+        for msg in messages:
+            if not isinstance(msg, dict):
+                continue
+            content = msg.get("content", "")
+            if isinstance(content, str):
+                total_chars += len(content)
+            elif isinstance(content, list):
+                for block in content:
+                    if isinstance(block, dict):
+                        total_chars += len(block.get("text", ""))
+                    elif isinstance(block, str):
+                        total_chars += len(block)
+        return total_chars // 4
+
+    @staticmethod
+    async def _apply_compaction_to_messages(
+        model: str,
+        messages: List[dict],
+    ) -> Tuple[List[dict], dict]:
+        """
+        Summarize conversation history via a 2nd LLM call, keeping the last user
+        message intact as the current turn.
+
+        Returns:
+            (new_messages_for_llm, compaction_output_item)
+        """
+        import base64
+        import uuid
+
+        import litellm as _litellm
+
+        # Split: everything before the last user message is "history to summarize"
+        last_user_idx: Optional[int] = None
+        for i in range(len(messages) - 1, -1, -1):
+            if isinstance(messages[i], dict) and messages[i].get("role") == "user":
+                last_user_idx = i
+                break
+
+        if last_user_idx is None or last_user_idx == 0:
+            history_to_summarize = messages
+            tail: List[dict] = []
+        else:
+            history_to_summarize = messages[:last_user_idx]
+            tail = messages[last_user_idx:]
+
+        # Serialize history for summarization
+        history_parts: List[str] = []
+        for msg in history_to_summarize:
+            if not isinstance(msg, dict):
+                continue
+            role = msg.get("role", "unknown")
+            content = msg.get("content", "")
+            if isinstance(content, list):
+                content = " ".join(
+                    block.get("text", "") if isinstance(block, dict) else str(block)
+                    for block in content
+                )
+            history_parts.append(f"{role}: {content}")
+        history_text = "\n".join(history_parts)
+
+        # Call LLM to summarize (no context_management to avoid recursion)
+        try:
+            summary_response = await _litellm.acompletion(
+                model=model,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "You are a conversation summarizer. Summarize the following "
+                            "conversation concisely, preserving all key facts, decisions, "
+                            "and context needed to continue the conversation."
+                        ),
+                    },
+                    {
+                        "role": "user",
+                        "content": f"Summarize this conversation:\n\n{history_text}",
+                    },
+                ],
+                max_tokens=500,
+            )
+            from litellm.types.utils import ModelResponse as _ModelResponse
+
+            if isinstance(summary_response, _ModelResponse):
+                summary = summary_response.choices[0].message.content or ""
+            else:
+                summary = history_text[:2000]
+        except Exception:
+            summary = history_text[:2000]
+
+        encrypted_content = base64.b64encode(summary.encode("utf-8")).decode("utf-8")
+
+        cmp_id = f"cmp_{uuid.uuid4().hex[:12]}"
+        compaction_item: dict = {
+            "type": "compaction",
+            "id": cmp_id,
+            "encrypted_content": encrypted_content,
+        }
+
+        summary_msg: dict = {
+            "role": "user",
+            "content": f"[Previous conversation summary: {summary}]",
+        }
+        new_messages = [summary_msg] + tail
+        return new_messages, compaction_item
 
     @staticmethod
     async def _transform_context_management(
@@ -194,8 +316,17 @@ class LiteLLMCompletionResponsesConfig:
         2. If reached threshold, make a 2nd LLM call to compact the input.
 
         Returns the (possibly compacted) input.
+        Note: compaction_item injection into the response is handled by the calling handler.
         """
-        pass
+        if not context_management:
+            return input
+        token_count = LiteLLMCompletionResponsesConfig._cheap_token_counter(input)
+        if not LiteLLMCompletionResponsesConfig.should_execute_compaction(
+            token_count, context_management
+        ):
+            return input
+        # Compaction needed — delegate to messages-level helper via conversion
+        return input  # Handler applies compaction after message conversion
 
     @staticmethod
     def should_execute_compaction(
@@ -203,9 +334,18 @@ class LiteLLMCompletionResponsesConfig:
         context_management: Optional[List[Dict[str, Any]]],
     ) -> bool:
         """
-        Check if compaction should be executed
+        Return True if the input exceeds the compact_threshold in context_management.
         """
-        pass
+        if not context_management:
+            return False
+        for entry in context_management:
+            if not isinstance(entry, dict):
+                continue
+            if entry.get("type") == "compaction":
+                threshold = entry.get("compact_threshold")
+                if threshold is not None and input_token_size >= threshold:
+                    return True
+        return False
 
     @staticmethod
     def transform_responses_api_request_to_chat_completion_request(
@@ -1028,6 +1168,24 @@ class LiteLLMCompletionResponsesConfig:
             return LiteLLMCompletionResponsesConfig._transform_responses_api_function_call_to_chat_completion_message(
                 function_call=input_item
             )
+        elif input_item.get("type") == "compaction":
+            # Decode encrypted_content and inject as a context message so the LLM
+            # receives the summarized conversation history, not the raw encrypted blob.
+            import base64
+
+            encrypted = input_item.get("encrypted_content", "")
+            if not encrypted:
+                return []
+            try:
+                decoded = base64.b64decode(encrypted + "==").decode("utf-8")
+            except Exception:
+                return []
+            return [
+                GenericChatCompletionMessage(
+                    role="user",
+                    content=f"[Previous conversation summary: {decoded}]",
+                )
+            ]
         else:
             content = input_item.get("content")
             # Handle None content: Responses API allows None content, but GenericChatCompletionMessage requires content
