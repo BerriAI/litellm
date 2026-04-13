@@ -1509,11 +1509,10 @@ curl http://localhost:4000/v1/responses \
 
 If you're using an **OpenAI-compatible third-party provider** (e.g. llama.cpp, vLLM, LM Studio) via `openai/` prefix with a custom `api_base`, LiteLLM will normally forward `/responses` requests directly to that endpoint. If the provider only supports `/chat/completions`, the request will fail.
 
-Use any of these to force the `/responses` → `/chat/completions` bridge:
+Use either of these to force the `/responses` → `/chat/completions` bridge:
 
-1. **`use_chat_completions_api: true`** (recommended) — makes it explicit that LiteLLM will call the provider’s chat-completions API.
+1. **`use_chat_completions_api: true`** — makes it explicit that LiteLLM will call the provider’s chat-completions API.
 2. **`openai/chat_completions/<model_name>`** — same pattern as `responses/` on chat completions: the model id encodes the routing choice.
-3. **`use_responses_api_bridge: true`** — deprecated alias for `use_chat_completions_api` (kept for backward compatibility).
 
 #### Python SDK Usage
 

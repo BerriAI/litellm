@@ -1,7 +1,6 @@
 """
 Tests for forcing the /responses → /chat/completions bridge for `openai/` models
-(via `use_chat_completions_api`, deprecated `use_responses_api_bridge`, or the
-`openai/chat_completions/<model>` model id).
+(via `use_chat_completions_api` or the `openai/chat_completions/<model>` model id).
 
 Includes file_search emulation: the flag must be forwarded on inner aresponses
 calls so routed requests do not hit a custom api_base /v1/responses endpoint.
@@ -21,28 +20,6 @@ from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
 
 class TestUseResponsesApiBridgeFlag:
     """Test that bridge opt-in forces the chat completions path."""
-
-    @patch(
-        "litellm.responses.main.litellm_completion_transformation_handler.response_api_handler"
-    )
-    @patch(
-        "litellm.responses.main.ProviderConfigManager.get_provider_responses_api_config"
-    )
-    def test_bridge_used_when_flag_is_true(self, mock_get_config, mock_bridge_handler):
-        """When use_responses_api_bridge=True (deprecated alias), the bridge runs."""
-        # Setup: provider config returns a non-None config (native support exists)
-        mock_get_config.return_value = litellm.OpenAIResponsesAPIConfig()
-
-        mock_bridge_handler.return_value = MagicMock()
-
-        litellm.responses(
-            model="openai/my-custom-model",
-            input="Hello",
-            use_responses_api_bridge=True,
-            litellm_logging_obj=MagicMock(),
-        )
-
-        mock_bridge_handler.assert_called_once()
 
     @patch(
         "litellm.responses.main.litellm_completion_transformation_handler.response_api_handler"
@@ -96,7 +73,7 @@ class TestUseResponsesApiBridgeFlag:
     def test_native_forwarding_when_flag_absent(
         self, mock_get_config, mock_native_handler
     ):
-        """When use_responses_api_bridge is not set, openai/ models should use
+        """When use_chat_completions_api is not set, openai/ models should use
         native responses API forwarding (existing behavior)."""
         mock_get_config.return_value = litellm.OpenAIResponsesAPIConfig()
         mock_native_handler.return_value = MagicMock()
@@ -116,22 +93,19 @@ class TestUseResponsesApiBridgeFlag:
         "litellm.responses.main.ProviderConfigManager.get_provider_responses_api_config"
     )
     def test_flag_does_not_leak_into_kwargs(self, mock_get_config, mock_bridge_handler):
-        """The use_responses_api_bridge flag should be popped from kwargs and not
-        passed through to the bridge handler."""
+        """use_chat_completions_api should be popped and not passed to the bridge handler."""
         mock_get_config.return_value = litellm.OpenAIResponsesAPIConfig()
         mock_bridge_handler.return_value = MagicMock()
 
         litellm.responses(
             model="openai/my-custom-model",
             input="Hello",
-            use_responses_api_bridge=True,
+            use_chat_completions_api=True,
             litellm_logging_obj=MagicMock(),
         )
 
         call_kwargs = mock_bridge_handler.call_args
-        # Bridge flags should not appear in the kwargs passed to the bridge handler
         all_kwargs = call_kwargs.kwargs if call_kwargs.kwargs else {}
-        assert "use_responses_api_bridge" not in all_kwargs
         assert "use_chat_completions_api" not in all_kwargs
 
     @patch(
@@ -163,7 +137,7 @@ class TestUseResponsesApiBridgeFlag:
     async def test_bridge_flag_forwarded_to_file_search_emulation(
         self, mock_get_config, mock_call_aresponses
     ):
-        """When use_responses_api_bridge=True and file_search tool is present,
+        """When use_chat_completions_api=True and file_search tool is present,
         the flag should be forwarded to the inner aresponses call in the
         file_search emulation path."""
         # Setup: provider has native responses API support
@@ -187,7 +161,7 @@ class TestUseResponsesApiBridgeFlag:
             model="openai/my-custom-model",
             input="Search for information",
             tools=[{"type": "file_search"}],
-            use_responses_api_bridge=True,
+            use_chat_completions_api=True,
             litellm_logging_obj=MagicMock(),
         )
 
@@ -257,7 +231,7 @@ class TestUseResponsesApiBridgeFlag:
                     "file_search": {"vector_store_ids": ["vs_123"]},
                 }
             ],
-            use_responses_api_bridge=True,
+            use_chat_completions_api=True,
             api_base="http://localhost:8080/v1",
             litellm_logging_obj=MagicMock(),
         )
@@ -268,7 +242,6 @@ class TestUseResponsesApiBridgeFlag:
         )
         for call in mock_bridge_handler.call_args_list:
             all_kwargs = call.kwargs if call.kwargs else {}
-            assert "use_responses_api_bridge" not in all_kwargs
             assert "use_chat_completions_api" not in all_kwargs
         assert result is not None
         assert result.id is not None
