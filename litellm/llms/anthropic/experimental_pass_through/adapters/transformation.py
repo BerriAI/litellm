@@ -1008,6 +1008,9 @@ class LiteLLMAnthropicMessagesAdapter:
             new_kwargs["web_search_options"] = {}  # type: ignore
 
         if not regular_tools:
+            # No regular tools left — drop tool_choice to avoid
+            # "tools are required when tool choice is specified" errors.
+            new_kwargs.pop("tool_choice", None)
             return {}
 
         translated_tools, tool_name_mapping = self.translate_anthropic_tools_to_openai(
