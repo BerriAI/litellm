@@ -125,8 +125,11 @@ class TestAzureAIResponsesURL:
         )
         assert url == "https://custom-proxy.example.com/v1/responses"
 
-    def test_missing_api_base_raises(self):
+    def test_missing_api_base_raises(self, monkeypatch):
         """ValueError raised when api_base is None and no env var set."""
+        # Patch litellm.api_base to None so the test is isolated from
+        # any global state set by other tests or config.
+        monkeypatch.setattr(litellm, "api_base", None)
         config = AzureAIResponsesAPIConfig()
         with patch.dict(os.environ, {}, clear=False):
             # Ensure env var is not set

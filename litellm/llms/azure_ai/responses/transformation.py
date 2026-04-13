@@ -114,9 +114,11 @@ class AzureAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
             query_params["api-version"] = api_version
 
         # Build the responses endpoint path.
-        # Check /projects/ first: project-based endpoints under
-        # services.ai.azure.com need /openai/v1/responses, which differs
-        # from the non-project services.ai.azure.com path (/models/responses).
+        # IMPORTANT: The /projects/ check MUST come before the general
+        # services.ai.azure.com check (_should_use_api_key_header), because
+        # project URLs also contain that domain. If we checked
+        # services.ai.azure.com first, project URLs would incorrectly get
+        # the /models/responses path instead of /openai/v1/responses.
         if "/projects/" in api_base:
             new_url = _add_path_to_api_base(
                 api_base=api_base, ending_path="/openai/v1/responses"
