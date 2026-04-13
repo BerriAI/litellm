@@ -526,3 +526,42 @@ class TestVertexBatchCustomIdLabels:
         # Step 4: Verify custom_id was preserved
         assert openai_output["custom_id"] == "my-custom-request-id"
         assert openai_output["response"]["status_code"] == 200
+
+    def test_custom_id_label_sanitization(self):
+        """Test that custom_id values are sanitized to meet GCP label constraints"""
+        from litellm.llms.vertex_ai.files.transformation import (
+            VertexAIJsonlFilesTransformation,
+            _sanitize_gcp_label_value,
+        )
+
+        transformation = VertexAIJsonlFilesTransformation()
+
+        # Test sanitization function
+        assert _sanitize_gcp_label_value("MyRequest-1") == "myrequest-1"
+        assert _sanitize_gcp_label_value("Request.With.Dots") == "request_with_dots"
+        assert _sanitize_gcp_label_value("Request With Spaces") == "request_with_spaces"
+        assert _sanitize_gcp_label_value("Request@#$%Special") == "request____special"
+        
+        # Test max length (63 chars)
+        long_id = "a" * 100
+        assert len(_sanitize_gcp_label_value(long_id)) == 63
+
+        # Test in actual transformation
+        openai_input = [
+            {
+                "custom_id": "MyRequest-1",
+                "method": "POST",
+                "url": "/v1/chat/completions",
+                "body": {
+                    "model": "gemini-1.5-flash-001",
+                    "messages": [{"role": "user", "content": "Hello"}],
+                }
+            }
+        ]
+
+        vertex_input = transformation._transform_openai_jsonl_content_to_vertex_ai_jsonl_content(
+            openai_input
+        )
+
+        # Verify label was sanitized
+        assert vertex_input[0]["request"]["labels"]["litellm_custom_id"] == "myrequest-1"
