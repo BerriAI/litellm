@@ -163,7 +163,6 @@ def test_get_redis_async_client_with_connection_pool():
     with patch("litellm._redis.async_redis.Redis") as mock_redis, patch(
         "litellm._redis._get_redis_client_logic"
     ) as mock_logic:
-
         # Configure mock to return basic redis kwargs
         mock_logic.return_value = {"host": "localhost", "port": 6379, "db": 0}
 
@@ -185,7 +184,6 @@ def test_get_redis_async_client_without_connection_pool():
     with patch("litellm._redis.async_redis.Redis") as mock_redis, patch(
         "litellm._redis._get_redis_client_logic"
     ) as mock_logic:
-
         # Configure mock to return basic redis kwargs
         mock_logic.return_value = {"host": "localhost", "port": 6379, "db": 0}
 
@@ -354,6 +352,52 @@ def test_sync_client_prefers_cluster_over_url_via_env_var(
         "startup_nodes" in call_kwargs
     ), "startup_nodes must be forwarded to init_redis_cluster"
     assert len(call_kwargs["startup_nodes"]) == 1
+
+
+@patch("litellm._redis.redis.Sentinel")
+def test_sync_sentinel_uses_sentinel_password_and_master_password(mock_sentinel_cls):
+    """Sentinel auth must be passed to the sentinel, not the Redis master client."""
+    mock_sentinel = MagicMock()
+    mock_sentinel_cls.return_value = mock_sentinel
+
+    get_redis_client(
+        sentinel_nodes=[("sentinel-1", 26379)],
+        sentinel_password="sentinel-secret",
+        service_name="mymaster",
+        password="redis-secret",
+    )
+
+    mock_sentinel_cls.assert_called_once()
+    sentinel_call_kwargs = mock_sentinel_cls.call_args[1]
+    assert sentinel_call_kwargs["sentinel_kwargs"] == {"password": "sentinel-secret"}
+    assert "password" not in sentinel_call_kwargs
+    mock_sentinel.master_for.assert_called_once_with(
+        "mymaster", password="redis-secret"
+    )
+
+
+@patch("litellm._redis.async_redis.Sentinel")
+def test_async_sentinel_uses_sentinel_password_and_master_password(
+    mock_sentinel_cls,
+):
+    """Async sentinel auth must mirror the sync sentinel password routing."""
+    mock_sentinel = MagicMock()
+    mock_sentinel_cls.return_value = mock_sentinel
+
+    get_redis_async_client(
+        sentinel_nodes=[("sentinel-1", 26379)],
+        sentinel_password="sentinel-secret",
+        service_name="mymaster",
+        password="redis-secret",
+    )
+
+    mock_sentinel_cls.assert_called_once()
+    sentinel_call_kwargs = mock_sentinel_cls.call_args[1]
+    assert sentinel_call_kwargs["sentinel_kwargs"] == {"password": "sentinel-secret"}
+    assert "password" not in sentinel_call_kwargs
+    mock_sentinel.master_for.assert_called_once_with(
+        "mymaster", password="redis-secret"
+    )
 
 
 @patch("litellm._redis.init_redis_cluster")
