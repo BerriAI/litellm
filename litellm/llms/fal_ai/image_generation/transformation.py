@@ -132,31 +132,20 @@ class FalAIImageGenerationConfig(FalAIBaseConfig):
         self, model: str
     ) -> List[OpenAIImageGenerationOptionalParams]:
         """
-        Get supported OpenAI parameters for fal.ai image generation.
+        Get supported OpenAI-standard parameters for fal.ai image generation.
 
-        FAL models accept many model-specific params (loras, guidance_scale, etc.)
-        that vary by model. We list known params explicitly and pass through all
-        others in map_openai_params to avoid silently dropping them.
+        IMPORTANT: Only list standard OpenAI params here, NOT FAL-specific params.
+        FAL-specific params (image_urls, loras, guidance_scale, etc.) must NOT be
+        listed here because LiteLLM's add_provider_specific_params_to_optional_params()
+        uses this list as an exclusion filter -- params IN this list are assumed to be
+        handled by map_openai_params via _get_non_default_params, but that function
+        only processes keys matching default_params (n, quality, size, style, user).
+        Unlisted params flow through the provider-specific safety net instead.
         """
         return [
             "n",
             "response_format",
             "size",
-            # FAL-specific params used across models
-            "image_url",
-            "image_urls",
-            "loras",
-            "num_inference_steps",
-            "guidance_scale",
-            "output_format",
-            "image_size",
-            "aspect_ratio",
-            "enable_safety_checker",
-            "seed",
-            "strength",
-            "num_images",
-            "expand_prompt",
-            "safety_tolerance",
         ]
 
     def map_openai_params(
