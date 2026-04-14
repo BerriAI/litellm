@@ -316,6 +316,38 @@ class TestVertexBatchOutputTransformation:
         assert "Invalid request" in result["error"]["message"]
         assert result["custom_id"] == "request-error"
 
+    def test_transform_vertex_batch_output_legacy_labels_only_sanitized(self, config):
+        """Older LiteLLM batches only stored litellm_custom_id (sanitized); read path still works."""
+        vertex_output = {
+            "status": "",
+            "processed_time": "2024-11-01T18:13:16.826+00:00",
+            "request": {
+                "contents": [{"role": "user", "parts": [{"text": "Hello world!"}]}],
+                "labels": {"litellm_custom_id": "myrequest-1"},
+            },
+            "response": {
+                "candidates": [{
+                    "content": {
+                        "parts": [{"text": "Hello!"}],
+                        "role": "model",
+                    },
+                    "finishReason": "STOP",
+                }],
+                "modelVersion": "gemini-2.0-flash-001@default",
+                "usageMetadata": {
+                    "promptTokenCount": 10,
+                    "candidatesTokenCount": 20,
+                    "totalTokenCount": 30,
+                },
+            },
+        }
+
+        content = json.dumps(vertex_output).encode("utf-8")
+        transformed_content = config._try_transform_vertex_batch_output_to_openai(content)
+        result = json.loads(transformed_content.decode("utf-8"))
+
+        assert result["custom_id"] == "myrequest-1"
+
     def test_transform_multiple_vertex_batch_outputs(self, config):
         """Test transformation of multiple Vertex AI batch outputs (JSONL)"""
         vertex_outputs = [
@@ -421,6 +453,7 @@ class TestVertexBatchCustomIdLabels:
         assert "labels" in vertex_request["request"]
         assert "litellm_custom_id" in vertex_request["request"]["labels"]
         assert vertex_request["request"]["labels"]["litellm_custom_id"] == "request-1"
+        assert vertex_request["request"]["labels"]["litellm_custom_id_raw"] == "request-1"
 
     def test_multiple_requests_each_get_their_own_label(self):
         """Test that multiple requests each get their own custom_id label"""
@@ -448,6 +481,7 @@ class TestVertexBatchCustomIdLabels:
         for i, vertex_request in enumerate(vertex_jsonl_content):
             expected_custom_id = f"request-{i+1}"
             assert vertex_request["request"]["labels"]["litellm_custom_id"] == expected_custom_id
+            assert vertex_request["request"]["labels"]["litellm_custom_id_raw"] == expected_custom_id
 
     def test_request_without_custom_id_has_no_label(self):
         """Test that requests without custom_id don't get a label"""
@@ -479,10 +513,10 @@ class TestVertexBatchCustomIdLabels:
         transformation = VertexAIJsonlFilesTransformation()
         config = VertexAIFilesConfig()
 
-        # Step 1: Transform OpenAI input to Vertex AI format
+        # Step 1: Transform OpenAI input to Vertex AI format (mixed case exercises raw label)
         openai_input = [
             {
-                "custom_id": "my-custom-request-id",
+                "custom_id": "MyRequest-1",
                 "method": "POST",
                 "url": "/v1/chat/completions",
                 "body": {
@@ -496,8 +530,9 @@ class TestVertexBatchCustomIdLabels:
             openai_input
         )
 
-        # Verify label was added
-        assert vertex_input[0]["request"]["labels"]["litellm_custom_id"] == "my-custom-request-id"
+        # Verify GCP-safe label and preserved raw for round-trip
+        assert vertex_input[0]["request"]["labels"]["litellm_custom_id"] == "myrequest-1"
+        assert vertex_input[0]["request"]["labels"]["litellm_custom_id_raw"] == "MyRequest-1"
 
         # Step 2: Simulate Vertex AI batch output (with the label echoed back)
         vertex_output = {
@@ -523,8 +558,8 @@ class TestVertexBatchCustomIdLabels:
         transformed_content = config._try_transform_vertex_batch_output_to_openai(content)
         openai_output = json.loads(transformed_content.decode("utf-8"))
 
-        # Step 4: Verify custom_id was preserved
-        assert openai_output["custom_id"] == "my-custom-request-id"
+        # Step 4: Verify custom_id was preserved (original casing, not sanitized label)
+        assert openai_output["custom_id"] == "MyRequest-1"
         assert openai_output["response"]["status_code"] == 200
 
     def test_custom_id_label_sanitization(self):
@@ -563,5 +598,6 @@ class TestVertexBatchCustomIdLabels:
             openai_input
         )
 
-        # Verify label was sanitized
+        # Verify label was sanitized and original retained for read-back
         assert vertex_input[0]["request"]["labels"]["litellm_custom_id"] == "myrequest-1"
+        assert vertex_input[0]["request"]["labels"]["litellm_custom_id_raw"] == "MyRequest-1"
