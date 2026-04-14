@@ -27,7 +27,6 @@ class MCPServer(BaseModel):
     spec_path: Optional[str] = None
     auth_type: Optional[MCPAuthType] = None
     authentication_token: Optional[str] = None
-    # Optional text returned on MCP `initialize` (InitializeResult.instructions)
     instructions: Optional[str] = None
     mcp_info: Optional[MCPInfo] = None
     extra_headers: Optional[

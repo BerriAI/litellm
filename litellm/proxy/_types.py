@@ -1137,7 +1137,6 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
     tool_name_to_description: Optional[Dict[str, str]] = None
     extra_headers: Optional[List[str]] = None
     static_headers: Optional[Dict[str, str]] = None
-    # Shown to MCP clients in InitializeResult.instructions (optional)
     instructions: Optional[str] = None
     # Stdio-specific fields
     command: Optional[str] = None
