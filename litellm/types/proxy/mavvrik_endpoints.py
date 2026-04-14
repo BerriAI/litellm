@@ -105,3 +105,23 @@ class MavvrikSettingsUpdate(BaseModel):
         "Use when Mavvrik asks you to re-export from a specific date. "
         "The next scheduled run will export from (marker + 1 day) onwards.",
     )
+
+    @field_validator("api_key", "api_endpoint", "connection_id")
+    @classmethod
+    def must_not_be_empty_if_set(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None and not v.strip():
+            raise ValueError("must not be empty if provided")
+        return v
+
+    @field_validator("marker")
+    @classmethod
+    def must_be_valid_date(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return v
+        try:
+            from datetime import date
+
+            date.fromisoformat(v)
+        except ValueError:
+            raise ValueError("marker must be a valid date in YYYY-MM-DD format")
+        return v

@@ -10,45 +10,7 @@ Data flow:
     → PUT session URI to upload gzip payload
 """
 
-from typing import Any, Dict, Optional
-
-
-class MavvrikRecord(Dict[str, Any]):
-    """A single cost record in Mavvrik's NDJSON format.
-
-    One record is written per LiteLLM_DailyUserSpend row.
-    Multiple records are newline-joined and gzip-compressed
-    before being uploaded to GCS via a Mavvrik-issued signed URL.
-
-    Fields:
-        metricname:          Always "litellm_cost" (identifies the data source)
-        timestamp:           ISO-8601 UTC datetime string (from spend row date)
-        value:               Cost in USD (float)
-        tags:                JSON-encoded string of all dimension metadata
-
-    Tags sub-fields:
-        model:               LLM model name (e.g. "gpt-4o")
-        provider:            LLM provider (e.g. "openai", "anthropic")
-        model_group:         Model family/group
-        api_key:             Hashed API key
-        api_key_alias:       Human-readable key alias
-        team_id:             Team identifier
-        team_alias:          Human-readable team name
-        user_id:             User identifier (nullable)
-        prompt_tokens:       Input tokens used
-        completion_tokens:   Output tokens used
-        total_tokens:        Total tokens (prompt + completion)
-        api_requests:        Total API requests
-        successful_requests: Successful API requests
-        failed_requests:     Failed API requests
-        spend:               Cost in USD (also top-level as value)
-    """
-
-    pass
-
-
-# Type alias for function signatures
-MavvrikRecordDict = Dict[str, Any]
+from typing import Optional
 
 
 class MavvrikSignedUrlResponse:

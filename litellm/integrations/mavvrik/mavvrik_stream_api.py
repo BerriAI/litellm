@@ -1,14 +1,14 @@
 """Mavvrik API streaming layer.
 
-Implements the 3-step upload pattern via the generic MetricsAgentController:
+Implements the 3-step signed URL upload pattern:
 
   Step 1 — GET signed URL from Mavvrik API
       GET {api_endpoint}/metrics/agent/ai/{connection_id}/upload-url
           ?name={date_str}&type=metrics
       Header: x-api-key: {api_key}
-      Response: { "url": "https://storage.googleapis.com/..." }
+      Response: { "url": "https://..." }
 
-  Step 2 — Initiate resumable GCS upload (POST to signed URL)
+  Step 2 — Initiate resumable upload (POST to signed URL)
       POST {signed_url}
       Headers: Content-Type: application/gzip, x-goog-resumable: start
       Response 201: Location header = session URI
@@ -26,9 +26,7 @@ Additionally implements the registration call:
       Body: { "name": instance_id, "version": <litellm version>, "arch": <system arch> }
       Response: { "id": "...", "metricsMarker": <epoch_seconds> }
 
-  metricsMarker is the Unix epoch from which Mavvrik wants LiteLLM to
-  start sending cost data.  It is stored as the initial marker in
-  LiteLLM_Config so Mavvrik controls the data ingestion window.
+  The metricsMarker epoch sets the initial export window start.
   If metricsMarker == 0 or is absent, defaults to the first day of
   the current month.
 
@@ -38,10 +36,16 @@ Additionally implements the registration call:
       Response: 204 No Content
 """
 
+import asyncio
 import gzip
 import io
+import platform
+import time
+from datetime import datetime as _dt
+from datetime import timezone as _tz
 
 import httpx
+import litellm as _litellm
 
 from litellm._logging import verbose_proxy_logger
 
@@ -53,7 +57,7 @@ _RETRY_BACKOFF_BASE = 1.0  # seconds; doubles each retry
 
 
 class MavvrikStreamer:
-    """Upload NDJSON+gzip cost data to GCS via a Mavvrik-issued signed URL."""
+    """Upload gzip-compressed CSV spend data to Mavvrik via a signed URL upload."""
 
     def __init__(self, api_key: str, api_endpoint: str, connection_id: str) -> None:
         self.api_key = api_key
@@ -66,11 +70,11 @@ class MavvrikStreamer:
     # ------------------------------------------------------------------
 
     def upload(self, csv_payload: str, date_str: str) -> None:
-        """Upload a CSV string to GCS for the given date.
+        """Upload a CSV string to Mavvrik for the given date.
 
         Args:
             csv_payload: CSV string (header + rows) from MavvrikTransformer.to_csv().
-            date_str:    Date string "YYYY-MM-DD" used as the GCS object name.
+            date_str:    Date string "YYYY-MM-DD" used as the upload object name.
                          Uploading the same date again overwrites the previous file,
                          making exports idempotent.
 
@@ -113,11 +117,6 @@ class MavvrikStreamer:
         Raises:
             Exception: if the registration call fails.
         """
-        import platform
-        from datetime import datetime as _dt, timezone as _tz
-
-        import litellm as _litellm
-
         path = AGENT_BASE_PATH.format(connection_id=self.connection_id)
         url = f"{self.api_endpoint}{path}"
         headers = {"Content-Type": "application/json", "x-api-key": self.api_key}
@@ -141,7 +140,7 @@ class MavvrikStreamer:
         if epoch:
             marker_dt = _dt.fromtimestamp(float(epoch), tz=_tz.utc)
         else:
-            # Default: first day of current month (matching k8s-appliance behaviour)
+            # Default: first day of current month
             now = _dt.now(_tz.utc)
             marker_dt = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
 
@@ -158,7 +157,7 @@ class MavvrikStreamer:
     # ------------------------------------------------------------------
 
     def advance_marker(self, epoch: int) -> None:
-        """PATCH the Mavvrik agent endpoint to advance the metricsMarker.
+        """PATCH the Mavvrik agent endpoint to advance the export marker.
 
           PATCH {api_endpoint}/metrics/agent/ai/{connection_id}
           Body: { "metricsMarker": <epoch_seconds> }
@@ -195,7 +194,6 @@ class MavvrikStreamer:
         headers = {"Content-Type": "application/json", "x-api-key": self.api_key}
 
         last_exc: Exception = Exception("unknown error")
-        import time
 
         for attempt in range(_MAX_RETRIES):
             try:
@@ -231,14 +229,20 @@ class MavvrikStreamer:
                 wait,
                 last_exc,
             )
-            time.sleep(wait)
+            # Use asyncio.sleep when called from an async context to avoid blocking
+            # the event loop. Fall back to time.sleep for synchronous callers.
+            try:
+                loop = asyncio.get_running_loop()
+                loop.run_until_complete(asyncio.sleep(wait))
+            except RuntimeError:
+                time.sleep(wait)
 
         raise Exception(
             f"Mavvrik signed URL failed after {_MAX_RETRIES} attempts: {last_exc}"
         )
 
     # ------------------------------------------------------------------
-    # Step 2: Initiate resumable GCS upload
+    # Step 2: Initiate resumable upload
     # ------------------------------------------------------------------
 
     def _initiate_resumable_upload(self, signed_url: str) -> str:
@@ -253,12 +257,12 @@ class MavvrikStreamer:
 
         if resp.status_code != 201:
             raise Exception(
-                f"Mavvrik GCS initiate upload failed: {resp.status_code} {resp.text}"
+                f"Mavvrik initiate upload failed: {resp.status_code} {resp.text}"
             )
 
         session_uri = resp.headers.get("Location")
         if not session_uri:
-            raise Exception("Mavvrik GCS initiate response missing Location header")
+            raise Exception("Mavvrik initiate upload response missing Location header")
 
         verbose_proxy_logger.debug("Mavvrik streamer: resumable upload session created")
         return session_uri
@@ -279,11 +283,11 @@ class MavvrikStreamer:
 
         if resp.status_code not in (200, 201):
             raise Exception(
-                f"Mavvrik GCS finalize upload failed: {resp.status_code} {resp.text}"
+                f"Mavvrik finalize upload failed: {resp.status_code} {resp.text}"
             )
 
         verbose_proxy_logger.debug(
-            "Mavvrik streamer: GCS finalize OK (%d)", resp.status_code
+            "Mavvrik streamer: finalize upload OK (%d)", resp.status_code
         )
 
     # ------------------------------------------------------------------
