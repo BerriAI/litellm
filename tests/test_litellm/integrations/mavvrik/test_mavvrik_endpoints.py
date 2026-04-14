@@ -102,7 +102,7 @@ class TestInitMavvrikSettings:
             "litellm.proxy.spend_tracking.mavvrik_endpoints.encrypt_value_helper",
             return_value="encrypted_key",
         ), patch(
-            "litellm.proxy.spend_tracking.mavvrik_endpoints.prisma_client",
+            "litellm.proxy.proxy_server.prisma_client",
             mock_prisma,
         ), patch(
             "litellm.proxy.spend_tracking.mavvrik_endpoints._pserver",
@@ -135,7 +135,7 @@ class TestInitMavvrikSettings:
             "litellm.proxy.spend_tracking.mavvrik_endpoints.encrypt_value_helper",
             return_value="enc",
         ), patch(
-            "litellm.proxy.spend_tracking.mavvrik_endpoints.prisma_client",
+            "litellm.proxy.proxy_server.prisma_client",
             mock_prisma,
         ), patch(
             "litellm.proxy.spend_tracking.mavvrik_endpoints._pserver",
@@ -167,7 +167,7 @@ class TestGetMavvrikSettings:
         mock_prisma.db.litellm_config.find_first = AsyncMock(return_value=None)
 
         with patch(
-            "litellm.proxy.spend_tracking.mavvrik_endpoints.prisma_client",
+            "litellm.proxy.proxy_server.prisma_client",
             mock_prisma,
         ):
             resp = await get_mavvrik_settings(user_api_key_dict=_admin_user())
@@ -189,7 +189,7 @@ class TestGetMavvrikSettings:
         mock_prisma.db.litellm_config.find_first = AsyncMock(return_value=row)
 
         with patch(
-            "litellm.proxy.spend_tracking.mavvrik_endpoints.prisma_client",
+            "litellm.proxy.proxy_server.prisma_client",
             mock_prisma,
         ), patch(
             "litellm.proxy.spend_tracking.mavvrik_endpoints.decrypt_value_helper",
@@ -235,7 +235,7 @@ class TestUpdateMavvrikSettings:
         req = MavvrikSettingsUpdate(marker="2024-06-01")
 
         with patch(
-            "litellm.proxy.spend_tracking.mavvrik_endpoints.prisma_client",
+            "litellm.proxy.proxy_server.prisma_client",
             mock_prisma,
         ), patch(
             "litellm.proxy.spend_tracking.mavvrik_endpoints.decrypt_value_helper",
@@ -277,7 +277,7 @@ class TestDeleteMavvrikSettings:
         mock_prisma.db.litellm_config.find_first = AsyncMock(return_value=None)
 
         with patch(
-            "litellm.proxy.spend_tracking.mavvrik_endpoints.prisma_client",
+            "litellm.proxy.proxy_server.prisma_client",
             mock_prisma,
         ):
             with pytest.raises(HTTPException) as exc_info:
@@ -294,7 +294,7 @@ class TestDeleteMavvrikSettings:
         mock_prisma.db.litellm_config.delete = AsyncMock()
 
         with patch(
-            "litellm.proxy.spend_tracking.mavvrik_endpoints.prisma_client",
+            "litellm.proxy.proxy_server.prisma_client",
             mock_prisma,
         ):
             resp = await delete_mavvrik_settings(user_api_key_dict=_admin_user())
@@ -338,7 +338,7 @@ class TestDryRunMavvrikExport:
         req = MavvrikExportRequest(date_str="2024-01-14")
 
         with patch(
-            "litellm.proxy.spend_tracking.mavvrik_endpoints.prisma_client",
+            "litellm.proxy.proxy_server.prisma_client",
             mock_prisma,
         ), patch(
             "litellm.proxy.spend_tracking.mavvrik_endpoints.decrypt_value_helper",

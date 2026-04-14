@@ -379,10 +379,10 @@ class MavvrikLogger(CustomLogger):
     @staticmethod
     async def init_mavvrik_background_job(scheduler: AsyncIOScheduler):
         """Register the hourly export job with APScheduler."""
-        loggers: List[
-            CustomLogger
-        ] = litellm.logging_callback_manager.get_custom_loggers_for_type(
-            callback_type=MavvrikLogger
+        loggers: List[CustomLogger] = (
+            litellm.logging_callback_manager.get_custom_loggers_for_type(
+                callback_type=MavvrikLogger
+            )
         )
         verbose_logger.debug("MavvrikLogger: found %d logger instance(s)", len(loggers))
 
