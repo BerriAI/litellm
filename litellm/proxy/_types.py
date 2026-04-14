@@ -1137,6 +1137,8 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
     tool_name_to_description: Optional[Dict[str, str]] = None
     extra_headers: Optional[List[str]] = None
     static_headers: Optional[Dict[str, str]] = None
+    # Shown to MCP clients in InitializeResult.instructions (optional)
+    instructions: Optional[str] = None
     # Stdio-specific fields
     command: Optional[str] = None
     args: List[str] = Field(default_factory=list)
@@ -1219,6 +1221,7 @@ class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
     tool_name_to_description: Optional[Dict[str, str]] = None
     extra_headers: Optional[List[str]] = None
     static_headers: Optional[Dict[str, str]] = None
+    instructions: Optional[str] = None
     # Stdio-specific fields
     command: Optional[str] = None
     args: List[str] = Field(default_factory=list)
@@ -1270,6 +1273,7 @@ class LiteLLM_MCPServerTable(LiteLLMPydanticObjectBase):
     transport: MCPTransportType
     auth_type: Optional[MCPAuthType] = None
     credentials: Optional[MCPCredentials] = None
+    instructions: Optional[str] = None
     created_at: Optional[datetime] = None
     created_by: Optional[str] = None
     updated_at: Optional[datetime] = None

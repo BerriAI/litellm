@@ -6,6 +6,7 @@ LiteLLM MCP Server Routes
 
 import asyncio
 import contextlib
+import contextvars
 import time
 import traceback
 import uuid
@@ -37,7 +38,10 @@ from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
 from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
     get_request_base_url,
 )
-from litellm.proxy._experimental.mcp_server.mcp_context import _mcp_active_toolset_id
+from litellm.proxy._experimental.mcp_server.mcp_context import (
+    _mcp_active_toolset_id,
+    _mcp_gateway_initialize_instructions,
+)
 from litellm.proxy._experimental.mcp_server.mcp_debug import MCPDebug
 from litellm.proxy._experimental.mcp_server.utils import (
     LITELLM_MCP_SERVER_DESCRIPTION,
@@ -122,6 +126,8 @@ _INITIALIZATION_LOCK = asyncio.Lock()
 
 if MCP_AVAILABLE:
     from mcp.server import Server
+    from mcp.server.lowlevel.server import NotificationOptions
+    from mcp.server.models import InitializationOptions
 
     # Import auth context variables and middleware
     from mcp.server.auth.middleware.auth_context import (
@@ -200,10 +206,27 @@ if MCP_AVAILABLE:
                 )
         return normalized
 
+    class _LitellmMcpGatewayServer(Server):
+        """Gateway server that injects per-request ``InitializeResult.instructions``."""
+
+        def create_initialization_options(  # type: ignore[override]
+            self,
+            notification_options: Optional[NotificationOptions] = None,
+            experimental_capabilities: Optional[Dict[str, Dict[str, Any]]] = None,
+        ) -> InitializationOptions:
+            opts = super().create_initialization_options(
+                notification_options=notification_options,
+                experimental_capabilities=experimental_capabilities or {},
+            )
+            merged = _mcp_gateway_initialize_instructions.get()
+            if merged is not None:
+                return opts.model_copy(update={"instructions": merged})
+            return opts
+
     ########################################################
     ############ Initialize the MCP Server #################
     ########################################################
-    server: Server = Server(
+    server: Server = _LitellmMcpGatewayServer(
         name=LITELLM_MCP_SERVER_NAME,
         version=LITELLM_MCP_SERVER_VERSION,
     )
@@ -814,10 +837,7 @@ if MCP_AVAILABLE:
         return tools
 
     def _get_client_ip_from_context() -> Optional[str]:
-        """
-        Extract client_ip from auth context.
-        Returns None if context not set (caller should handle this as "no IP filtering").
-        """
+        """Return ``client_ip`` from MCP auth context (set by HTTP/SSE handlers), or None."""
         try:
             auth_user = auth_context_var.get()
             if auth_user and isinstance(auth_user, MCPAuthenticatedUser):
@@ -836,19 +856,15 @@ if MCP_AVAILABLE:
         Args:
             user_api_key_auth: The authenticated user's API key info.
             mcp_servers: Optional list of server names to filter to.
-            client_ip: Client IP for IP-based access control. If None, falls back to
-                      auth context. Pass explicitly from request handlers for safety.
-        Note: If client_ip is None and auth context is not set, IP filtering is skipped.
-              This is intentional for internal callers but may indicate a bug if called
-              from a request handler without proper context setup.
+            client_ip: Client IP for IP-based access control. MCP HTTP/SSE handlers set auth context (including ``client_ip``) before MCP work; when this is
+                ``None``, ``client_ip`` is taken from that context. Callers may still
+                pass ``client_ip`` explicitly when already computed.
         """
-        # Use explicit client_ip if provided, otherwise try auth context
         if client_ip is None:
             client_ip = _get_client_ip_from_context()
             if client_ip is None:
                 verbose_logger.debug(
-                    "MCP _get_allowed_mcp_servers called without client_ip and no auth context. "
-                    "IP filtering will be skipped. This is expected for internal calls."
+                    "MCP _get_allowed_mcp_servers: client IP unknown; skipping public-internet IP filter."
                 )
 
         allowed_mcp_server_ids = (
@@ -1102,6 +1118,112 @@ if MCP_AVAILABLE:
             server_auth_header = mcp_auth_header
 
         return server_auth_header, extra_headers
+
+    async def _merge_gateway_initialize_instructions(
+        allowed_mcp_servers: List[MCPServer],
+        user_api_key_auth: Optional[UserAPIKeyAuth],
+        mcp_auth_header: Optional[str],
+        mcp_server_auth_headers: Optional[Dict[str, Dict[str, str]]],
+        oauth2_headers: Optional[Dict[str, str]],
+        raw_headers: Optional[Dict[str, str]],
+    ) -> Optional[str]:
+        """Merge ``instructions`` for gateway ``initialize``: YAML/API overrides upstream."""
+        if not allowed_mcp_servers:
+            return None
+
+        _has_oauth2_server = any(
+            getattr(s, "auth_type", None) == MCPAuth.oauth2
+            for s in allowed_mcp_servers
+        )
+        _prefetched_oauth_creds = (
+            await _prefetch_oauth_creds_for_user(user_api_key_auth)
+            if _has_oauth2_server
+            else {}
+        )
+
+        async def _one(server: MCPServer) -> Optional[Tuple[str, str]]:
+            label = (
+                server.alias
+                or server.server_name
+                or server.name
+                or server.server_id
+                or "mcp"
+            )
+            if server.instructions and server.instructions.strip():
+                return (label, server.instructions.strip())
+            if server.spec_path:
+                return None
+
+            server_auth_header, extra_headers = _prepare_mcp_server_headers(
+                server=server,
+                mcp_server_auth_headers=mcp_server_auth_headers,
+                mcp_auth_header=mcp_auth_header,
+                oauth2_headers=oauth2_headers,
+                raw_headers=raw_headers,
+            )
+            if extra_headers is None and server.auth_type == MCPAuth.oauth2:
+                extra_headers = await _get_user_oauth_extra_headers_from_db(
+                    server,
+                    user_api_key_auth,
+                    prefetched_creds=_prefetched_oauth_creds,
+                )
+            try:
+                if server.static_headers:
+                    if extra_headers is None:
+                        extra_headers = {}
+                    extra_headers.update(server.static_headers)
+                stdio_env = global_mcp_server_manager._build_stdio_env(
+                    server, raw_headers
+                )
+                client = await global_mcp_server_manager._create_mcp_client(
+                    server=server,
+                    mcp_auth_header=server_auth_header,
+                    extra_headers=extra_headers,
+                    stdio_env=stdio_env,
+                )
+                text = await client.fetch_upstream_initialize_instructions()
+                if text and text.strip():
+                    return (label, text.strip())
+            except Exception as e:
+                verbose_logger.debug(
+                    "MCP gateway: upstream instructions fetch failed for %s: %s",
+                    server.name,
+                    e,
+                )
+            return None
+
+        pairs = await asyncio.gather(*(_one(s) for s in allowed_mcp_servers))
+        texts = [p for p in pairs if p is not None]
+        if not texts:
+            return None
+        if len(texts) == 1:
+            return texts[0][1]
+        return "\n\n---\n\n".join(f"[{lbl}]\n{txt}" for lbl, txt in texts)
+
+    async def _set_mcp_gateway_initialize_instructions_token(
+        user_api_key_auth: Optional[UserAPIKeyAuth],
+        mcp_servers: Optional[List[str]],
+        client_ip: Optional[str],
+        mcp_auth_header: Optional[str],
+        mcp_server_auth_headers: Optional[Dict[str, Dict[str, str]]],
+        oauth2_headers: Optional[Dict[str, str]],
+        raw_headers: Optional[Dict[str, str]],
+    ) -> contextvars.Token[Optional[str]]:
+        """Resolve merged gateway ``instructions``; return ContextVar token to reset."""
+        allowed = await _get_allowed_mcp_servers(
+            user_api_key_auth=user_api_key_auth,
+            mcp_servers=mcp_servers,
+            client_ip=client_ip,
+        )
+        merged = await _merge_gateway_initialize_instructions(
+            allowed_mcp_servers=allowed,
+            user_api_key_auth=user_api_key_auth,
+            mcp_auth_header=mcp_auth_header,
+            mcp_server_auth_headers=mcp_server_auth_headers,
+            oauth2_headers=oauth2_headers,
+            raw_headers=raw_headers,
+        )
+        return _mcp_gateway_initialize_instructions.set(merged)
 
     async def _get_tools_from_mcp_servers(  # noqa: PLR0915
         user_api_key_auth: Optional[UserAPIKeyAuth],
@@ -2670,7 +2792,19 @@ if MCP_AVAILABLE:
                 # Request was fully handled (e.g., DELETE on non-existent session)
                 return
 
-            await session_manager.handle_request(scope, receive, send)
+            _instr_tok = await _set_mcp_gateway_initialize_instructions_token(
+                user_api_key_auth,
+                mcp_servers,
+                _client_ip,
+                mcp_auth_header,
+                mcp_server_auth_headers,
+                oauth2_headers,
+                raw_headers,
+            )
+            try:
+                await session_manager.handle_request(scope, receive, send)
+            finally:
+                _mcp_gateway_initialize_instructions.reset(_instr_tok)
         except HTTPException:
             # Re-raise HTTP exceptions to preserve status codes and details
             raise
@@ -2729,7 +2863,19 @@ if MCP_AVAILABLE:
                 await initialize_session_managers()
                 await asyncio.sleep(0.1)
 
-            await sse_session_manager.handle_request(scope, receive, send)
+            _sse_instr_tok = await _set_mcp_gateway_initialize_instructions_token(
+                user_api_key_auth,
+                mcp_servers,
+                _sse_client_ip,
+                mcp_auth_header,
+                mcp_server_auth_headers,
+                oauth2_headers,
+                raw_headers,
+            )
+            try:
+                await sse_session_manager.handle_request(scope, receive, send)
+            finally:
+                _mcp_gateway_initialize_instructions.reset(_sse_instr_tok)
         except Exception as e:
             verbose_logger.exception(f"Error handling MCP request: {e}")
             # Instead of re-raising, try to send a graceful error response

@@ -351,6 +351,7 @@ class MCPServerManager:
                 aws_service_name=server_config.get("aws_service_name", None),
                 aws_role_name=server_config.get("aws_role_name", None),
                 aws_session_name=server_config.get("aws_session_name", None),
+                instructions=server_config.get("instructions", None),
             )
             self.config_mcp_servers[server_id] = new_server
 
@@ -693,6 +694,7 @@ class MCPServerManager:
             aws_service_name=aws_creds.get("aws_service_name"),
             aws_role_name=aws_creds.get("aws_role_name"),
             aws_session_name=aws_creds.get("aws_session_name"),
+            instructions=mcp_server.instructions,
         )
         return new_server
 
@@ -2946,6 +2948,7 @@ class MCPServerManager:
             token_url=server.token_url,
             registration_url=server.registration_url,
             allow_all_keys=server.allow_all_keys,
+            instructions=server.instructions,
         )
 
     async def get_all_mcp_servers_with_health_and_teams(
@@ -3041,6 +3044,7 @@ class MCPServerManager:
             is_byok=server.is_byok,
             byok_description=server.byok_description,
             byok_api_key_help_url=server.byok_api_key_help_url,
+            instructions=server.instructions,
         )
 
     async def get_all_mcp_servers_unfiltered(self) -> List[LiteLLM_MCPServerTable]:
