@@ -545,9 +545,7 @@ class GraySwanGuardrail(CustomGuardrail):
         if "metadata" in dynamic_body:
             payload["metadata"] = dynamic_body["metadata"]
 
-        litellm_metadata = request_data.get("litellm_metadata") or request_data.get(
-            "_guardrail_litellm_metadata"
-        )
+        litellm_metadata = request_data.get("litellm_metadata")
         if isinstance(litellm_metadata, dict) and litellm_metadata:
             cleaned_litellm_metadata = dict(litellm_metadata)
             # cleaned_litellm_metadata.pop("user_api_key_auth", None)
