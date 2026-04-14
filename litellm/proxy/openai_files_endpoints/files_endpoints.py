@@ -21,7 +21,6 @@ from fastapi import (
     UploadFile,
     status,
 )
-
 import litellm
 from litellm import CreateFileRequest, get_secret_str
 from litellm._logging import verbose_proxy_logger
@@ -47,7 +46,7 @@ from litellm.types.llms.openai import (
     OpenAIFilesPurpose,
 )
 
-from .common_utils import (
+from litellm.proxy.openai_files_endpoints.common_utils import (
     _is_base64_encoded_unified_file_id,
     encode_file_id_with_model,
     extract_file_creation_params,
@@ -55,7 +54,6 @@ from .common_utils import (
     handle_model_based_routing,
     prepare_data_with_credentials,
 )
-from .storage_backend_service import StorageBackendFileService
 
 router = APIRouter()
 
@@ -158,6 +156,9 @@ async def route_create_file(
     if target_storage and target_storage != "default":
         from litellm.litellm_core_utils.prompt_templates.common_utils import (
             extract_file_data,
+        )
+        from litellm.proxy.openai_files_endpoints.storage_backend_service import (
+            StorageBackendFileService,
         )
 
         # Extract file data
@@ -633,7 +634,7 @@ async def get_file_content(  # noqa: PLR0915
             or await get_custom_llm_provider_from_request_body(request=request)
             or "openai"
         )
-
+           
         ## check if file_id is a litellm managed file
         is_base64_unified_file_id = _is_base64_encoded_unified_file_id(file_id)
         if is_base64_unified_file_id:
@@ -731,6 +732,41 @@ async def get_file_content(  # noqa: PLR0915
                 check_file_id_encoding=True,
             )
 
+            from litellm.proxy.openai_files_endpoints.file_content_streaming_handler import (
+                FileContentStreamingHandler,
+            )
+            (
+                resolved_custom_llm_provider,
+                resolved_file_id,
+                resolved_streaming_data,
+            ) = FileContentStreamingHandler.resolve_streaming_request_params(
+                custom_llm_provider=custom_llm_provider,
+                file_id=file_id,
+                data=data,
+                should_route=should_route,
+                original_file_id=original_file_id,
+                credentials=credentials,
+            )
+
+            if FileContentStreamingHandler.should_stream_file_content(
+                custom_llm_provider=resolved_custom_llm_provider,
+            ):
+                verbose_proxy_logger.debug(
+                    "Using streaming file content helper for custom_llm_provider=%s, original_file_id=%s, file_id=%s, model_used=%s",
+                    resolved_custom_llm_provider,
+                    original_file_id,
+                    resolved_file_id,
+                    model_used,
+                )
+                return await FileContentStreamingHandler.get_streaming_file_content_response(
+                    custom_llm_provider=resolved_custom_llm_provider,
+                    file_id=resolved_file_id,
+                    data=resolved_streaming_data,
+                    proxy_logging_obj=proxy_logging_obj,
+                    user_api_key_dict=user_api_key_dict,
+                    version=version,
+                )
+
             if should_route:
                 # Use model-based routing with credentials from config
                 prepare_data_with_credentials(
@@ -738,7 +774,6 @@ async def get_file_content(  # noqa: PLR0915
                     credentials=credentials,  # type: ignore
                     file_id=original_file_id,  # Use decoded file ID if from encoded ID
                 )
-
                 response = await litellm.afile_content(
                     custom_llm_provider=credentials["custom_llm_provider"],  # type: ignore
                     **data,
@@ -1115,7 +1150,10 @@ async def delete_file(
                 file_id=original_file_id,
             )
 
-            response = await litellm.afile_delete(**data)  # type: ignore
+            response = await litellm.afile_delete(
+                custom_llm_provider=credentials["custom_llm_provider"],  # type: ignore
+                **data,
+            )  # type: ignore
 
             verbose_proxy_logger.debug(
                 f"Deleted file using model: {model_used}"

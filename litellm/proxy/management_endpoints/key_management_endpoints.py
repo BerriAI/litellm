@@ -456,6 +456,34 @@ def handle_key_type(data: GenerateKeyRequest, data_json: dict) -> dict:
     return data_json
 
 
+def _check_allowed_routes_caller_permission(
+    allowed_routes: Optional[list],
+    user_api_key_dict: UserAPIKeyAuth,
+) -> None:
+    """
+    Only proxy admins may set `allowed_routes` on a key.
+
+    `allowed_routes` bypasses the standard role-based route gate in
+    RouteChecks.non_proxy_admin_allowed_routes_check, so if a non-admin is
+    allowed to set it they can grant themselves access to any endpoint.
+    Non-admins should use `key_type` to pick a preset route bucket instead.
+    """
+    # Empty list is the default on GenerateKeyRequest — treat as "not set".
+    if not allowed_routes:
+        return
+    if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
+        return
+    raise HTTPException(
+        status_code=403,
+        detail={
+            "error": (
+                "Only proxy admins can set `allowed_routes` on a key. "
+                "Use `key_type` to pick a preset route bucket instead."
+            )
+        },
+    )
+
+
 async def validate_team_id_used_in_service_account_request(
     team_id: Optional[str],
     prisma_client: Optional[PrismaClient],
@@ -1254,6 +1282,12 @@ async def generate_key_fn(
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN, detail=message
                 )
+
+        _check_allowed_routes_caller_permission(
+            allowed_routes=data.allowed_routes,
+            user_api_key_dict=user_api_key_dict,
+        )
+
         # For non-admin internal users: auto-assign caller's user_id if not provided
         # This prevents creating unbound keys with no user association (LIT-1884)
         _is_proxy_admin = (
@@ -1888,6 +1922,11 @@ async def _validate_update_key_data(
     """Validate permissions and constraints for key update."""
     _is_proxy_admin = user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
 
+    _check_allowed_routes_caller_permission(
+        allowed_routes=data.allowed_routes,
+        user_api_key_dict=user_api_key_dict,
+    )
+
     # Prevent non-admin from removing user_id (setting to empty string) (LIT-1884)
     if data.user_id is not None and data.user_id == "" and not _is_proxy_admin:
         raise HTTPException(
@@ -1922,8 +1961,13 @@ async def _validate_update_key_data(
         user_api_key_cache=user_api_key_cache,
     )
 
-    # Admin-only: only proxy admins, team admins, or org admins can modify max_budget
-    if data.max_budget is not None and data.max_budget != existing_key_row.max_budget:
+    # Admin-only: only proxy admins, team admins, or org admins can modify max_budget or spend
+    if (
+        data.max_budget is not None and data.max_budget != existing_key_row.max_budget
+    ) or (
+        data.spend is not None
+        and data.spend != getattr(existing_key_row, "spend", None)
+    ):
         if prisma_client is not None:
             hashed_key = existing_key_row.token
             await _check_key_admin_access(
@@ -1931,7 +1975,7 @@ async def _validate_update_key_data(
                 hashed_token=hashed_key,
                 prisma_client=prisma_client,
                 user_api_key_cache=user_api_key_cache,
-                route="/key/update (max_budget)",
+                route="/key/update (max_budget/spend)",
             )
 
     # Check team limits if key has a team_id (from request or existing key)

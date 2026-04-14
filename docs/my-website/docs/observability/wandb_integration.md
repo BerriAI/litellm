@@ -21,9 +21,9 @@ join our [discord](https://discord.gg/wuPM9dRgDw)
 ::: 
 
 ## Pre-Requisites
-Ensure you have run `pip install wandb` for this integration
+Ensure you have run `uv add wandb` for this integration
 ```shell
-pip install wandb litellm
+uv add wandb litellm
 ```
 
 ## Quick Start
@@ -33,7 +33,7 @@ Use just 2 lines of code, to instantly log your responses **across all providers
 litellm.success_callback = ["wandb"]
 ```
 ```python
-# pip install wandb 
+# uv add wandb 
 import litellm
 import os
 
