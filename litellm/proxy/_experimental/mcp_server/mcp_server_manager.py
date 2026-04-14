@@ -186,9 +186,6 @@ class MCPServerManager:
         """
         self._upstream_initialize_instructions_by_server_id: Dict[str, str] = {}
 
-    def get_upstream_initialize_instructions(self, server_id: str) -> Optional[str]:
-        return self._upstream_initialize_instructions_by_server_id.get(server_id)
-
     def _remember_upstream_initialize_instructions(
         self, server: MCPServer, client: MCPClient
     ) -> None:
