@@ -69,12 +69,12 @@ class SkillsSandboxExecutor:
         except ImportError:
             verbose_logger.error(
                 "SkillsSandboxExecutor: llm-sandbox not installed. "
-                "Install with: pip install llm-sandbox"
+                "Install `llm-sandbox`."
             )
             return {
                 "success": False,
                 "output": "",
-                "error": "llm-sandbox not installed. Install with: pip install llm-sandbox",
+                "error": "llm-sandbox not installed. Install `llm-sandbox`.",
                 "files": [],
             }
 
@@ -115,21 +115,49 @@ class SkillsSandboxExecutor:
                     f"SkillsSandboxExecutor: Copied {len(skill_files)} files to sandbox"
                 )
 
-                # 2. Install requirements if present
-                req_packages = None
+                # 2. Install requirements if present. Let pip parse the
+                # requirements file inside the sandbox so standard syntax like
+                # `-r`, `-e`, VCS URLs, and inline `#egg=` fragments continue to
+                # work.
+                requirements_filename: Optional[str] = None
                 if requirements:
-                    req_packages = requirements.strip().replace("\n", " ")
+                    with tempfile.NamedTemporaryFile(
+                        mode="w",
+                        encoding="utf-8",
+                        delete=False,
+                    ) as f:
+                        f.write(requirements)
+                        local_requirements_path = f.name
+                    session.copy_to_runtime(
+                        local_requirements_path,
+                        "/sandbox/.litellm_requirements.txt",
+                    )
+                    os.unlink(local_requirements_path)
+                    requirements_filename = ".litellm_requirements.txt"
                 elif "requirements.txt" in skill_files:
-                    req_content = skill_files["requirements.txt"].decode("utf-8")
-                    req_packages = req_content.strip().replace("\n", " ")
+                    requirements_filename = "requirements.txt"
 
-                if req_packages:
-                    # Run pip install as code
+                if requirements_filename:
                     pip_code = f"""
 import subprocess
-subprocess.run(['pip', 'install'] + '{req_packages}'.split(), check=True)
+import sys
+subprocess.run(
+    [sys.executable, '-m', 'pip', 'install', '-r', '{requirements_filename}'],
+    check=True,
+    cwd='/sandbox',
+)
 """
-                    result = session.run(pip_code)
+                    install_result = session.run(pip_code)
+                    if install_result.exit_code != 0:
+                        verbose_logger.debug(
+                            "SkillsSandboxExecutor: Requirements installation failed"
+                        )
+                        return {
+                            "success": False,
+                            "output": install_result.stdout or "",
+                            "error": install_result.stderr or "",
+                            "files": [],
+                        }
                     verbose_logger.debug(
                         "SkillsSandboxExecutor: Installed requirements"
                     )

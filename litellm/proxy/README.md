@@ -5,7 +5,7 @@ A local, fast, and lightweight **OpenAI-compatible server** to call 100+ LLM API
 ## usage 
 
 ```shell 
-$ pip install litellm
+$ uv tool install litellm
 ```
 ```shell
 $ litellm --model ollama/codellama 
