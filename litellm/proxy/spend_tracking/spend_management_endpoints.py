@@ -4569,6 +4569,14 @@ async def concurrent_request_logs(
         default=None,
         description="Optional API key filter (e.g., sk-...gQxg)"
     ),
+    key_alias: Optional[str] = fastapi.Query(
+        default=None,
+        description="Optional key alias filter (partial match supported)"
+    ),
+    match_status: Optional[str] = fastapi.Query(
+        default=None,
+        description="Filter by match status: 'matching', 'mismatching', or null for all"
+    ),
     page: int = fastapi.Query(
         default=1,
         ge=1,
@@ -4582,23 +4590,34 @@ async def concurrent_request_logs(
     ),
 ):
     """
-    Get concurrent request logs by first querying Prometheus for metrics,
+    Get concurrent request logs by querying GCP Cloud Logging for parallel requests metrics,
     then fetching SpendLogs concurrency for those keys.
 
     Query flow:
-    1. Query Prometheus /query_range with time range [timestamp-10s, timestamp+10s]
-    2. For each key found in Prometheus, query SpendLogs for concurrency count
-    3. Return combined data with both Prometheus metrics and SpendLogs data
+    1. Query GCP Cloud Logging for [METRICS] log entries from last 5 minutes before target timestamp
+       (searches from input_timestamp - 5min to input_timestamp)
+    2. For each token, find the log entry with the LATEST timestamp (closest to input_timestamp)
+       The current_count from this entry represents the Redis counter value at that time
+    3. Query SpendLogs using the input timestamp directly (not GCP log timestamps)
+    4. Return combined data with Redis counter (from GCP logs) and SpendLogs concurrency
+
+    Requires GOOGLE_CLOUD_PROJECT or GCP_PROJECT environment variable to be set,
+    and appropriate GCP credentials (GOOGLE_APPLICATION_CREDENTIALS).
     """
-    from litellm.integrations.prometheus_helpers.prometheus_api import (
-        PROMETHEUS_URL,
-        async_http_handler,
-    )
+    try:
+        from litellm.integrations.gcp_logging_helpers import (
+            get_concurrent_requests_from_gcp_logs,
+            GCP_LOGGING_AVAILABLE,
+        )
+    except Exception as import_err:
+        verbose_proxy_logger.error(
+            f"[concurrent_request_logs] Failed to import GCP logging helpers: {import_err}"
+        )
+        return {"data": [], "total": 0, "error": f"Import error: {str(import_err)}"}
 
     prisma_client = _get_read_prisma_client()
 
     try:
-
         # Parse ISO timestamp and convert to Unix timestamp
         try:
             target_time = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
@@ -4608,178 +4627,144 @@ async def concurrent_request_logs(
 
         unix_timestamp = target_time.timestamp()  # Keep float for millisecond precision
 
-        # Step 1: Query Prometheus for metrics with timestamp
-        # Use companion timestamp metric to find the most recently updated value per key
-        if PROMETHEUS_URL is None:
-            verbose_proxy_logger.warning("[concurrent_request_logs] PROMETHEUS_URL is not configured. Set PROMETHEUS_URL environment variable.")
-            return {"data": [], "total": 0}
-
-        prometheus_url = PROMETHEUS_URL
-        query_url = f"{prometheus_url}/api/v1/query"
-
-        # Query at input_time + 10 seconds so 20s lookback covers [input_time - 10s, input_time + 10s]
-        query_time = unix_timestamp + 10
-
-        # Escape api_key for safe PromQL label value interpolation
-        # PromQL requires escaping backslashes, double quotes, and newlines
-        def escape_promql_label_value(value: str) -> str:
-            return value.replace('\\', '\\\\').replace('"', '\\"').replace('\n', '\\n')
-
-        # Build queries - range query with 20s lookback
-        if api_key:
-            escaped_key = escape_promql_label_value(api_key)
-            value_query = f'litellm_current_parallel_requests{{key_name="{escaped_key}"}}[20s]'
-            timestamp_query = f'litellm_current_parallel_requests_timestamp{{key_name="{escaped_key}"}}[20s]'
-        else:
-            value_query = 'litellm_current_parallel_requests[20s]'
-            timestamp_query = 'litellm_current_parallel_requests_timestamp[20s]'
-
-        # Query both metrics in parallel
-        try:
-            ts_response, value_response = await asyncio.gather(
-                async_http_handler.get(
-                    query_url,
-                    params={
-                        "query": timestamp_query,
-                        "time": query_time,
-                    }
-                ),
-                async_http_handler.get(
-                    query_url,
-                    params={
-                        "query": value_query,
-                        "time": query_time,
-                    }
-                ),
+        # Step 1: Query GCP Cloud Logging for metrics
+        if not GCP_LOGGING_AVAILABLE:
+            verbose_proxy_logger.warning(
+                "[concurrent_request_logs] google-cloud-logging not available. "
+                "Install with: pip install google-cloud-logging"
             )
-            ts_data = ts_response.json()
-            value_data = value_response.json()
-        except Exception as http_err:
-            verbose_proxy_logger.warning(f"[concurrent_request_logs] Prometheus query failed: {http_err}")
             return {"data": [], "total": 0}
 
-        # Step 2: Parse timestamp metric to find the latest update time per key
-        # The timestamp metric value IS the unix timestamp when the gauge was set
-        # key_key = (token, key_name, key_alias, team_alias)
-        # {key_key: {"max_update_ts": float, "instance": str}}
-        latest_update_info: Dict[tuple, Dict] = {}
+        gcp_results, success = await get_concurrent_requests_from_gcp_logs(
+            target_timestamp=unix_timestamp,
+            api_key_filter=api_key,
+            key_alias_filter=key_alias,
+        )
 
-        if ts_data.get("data", {}).get("result"):
-            for result in ts_data["data"]["result"]:
-                metric = result.get("metric", {})
-                token = metric.get("token", "")
-                key_name_from_prom = metric.get("key_name", "")
-                key_alias = metric.get("key_alias", "")
-                team_alias = metric.get("team_alias", "")
-                instance = metric.get("instance", "")
-                key_key = (token, key_name_from_prom, key_alias or "", team_alias or "")
+        if not success:
+            verbose_proxy_logger.warning(
+                "[concurrent_request_logs] Failed to query GCP logs"
+            )
+            return {"data": [], "total": 0}
 
-                # Range query returns "values" array: [[scrape_ts, update_ts], ...]
-                values = result.get("values", [])
+        if not gcp_results:
+            return {"data": [], "total": 0}
 
-                if values:
-                    # Find the sample closest to the target timestamp (input_time)
-                    closest_sample = None
-                    min_diff = float('inf')
-                    for sample in values:
-                        if isinstance(sample, list) and len(sample) >= 2:
-                            scrape_ts = float(sample[0])
-                            diff = abs(scrape_ts - unix_timestamp)
-                            if diff < min_diff:
-                                min_diff = diff
-                                closest_sample = sample
+        # Build results (already sorted by token from GCP helper)
+        # Transform to the format expected by spend logs query
+        gcp_results = [
+            {
+                "token": r["token"],
+                "key_name": r["key_name"],
+                "key_alias": r["key_alias"],
+                "redis_concurrency": r["redis_concurrency"],
+                "scrape_timestamp": r["timestamp"],  # Log entry timestamp
+                "update_timestamp": r["timestamp"],  # Same as scrape for GCP logs
+            }
+            for r in gcp_results
+        ]
 
-                    if closest_sample:
-                        scrape_ts = float(closest_sample[0])
-                        update_ts = float(closest_sample[1])  # This is when the gauge was actually set
+        # Sort by redis_concurrency descending (highest first), then by token for stable ordering
+        # This ensures consistent pagination when multiple keys have the same concurrency
+        gcp_results.sort(key=lambda x: (-x["redis_concurrency"], x["token"]))
 
-                        # Keep track of the instance with the latest update time for this key
-                        if key_key not in latest_update_info or update_ts > latest_update_info[key_key]["max_update_ts"]:
-                            latest_update_info[key_key] = {
-                                "max_update_ts": update_ts,
-                                "scrape_ts": scrape_ts,
-                                "instance": instance,
-                            }
+        # Use the INPUT timestamp directly for SpendLogs query
+        reference_time = datetime.fromtimestamp(unix_timestamp, tz=timezone.utc)
+        reference_time_str = reference_time.isoformat()
 
-        # Step 3: Parse value metric and match with latest update info
-        # {key_key: {"value": float, "scrape_ts": float, "update_ts": float, ...}}
-        key_values: Dict[tuple, Dict] = {}
-
-        if value_data.get("data", {}).get("result"):
-            for result in value_data["data"]["result"]:
-                metric = result.get("metric", {})
-                token = metric.get("token", "")
-                key_name_from_prom = metric.get("key_name", "")
-                key_alias = metric.get("key_alias", "")
-                team_alias = metric.get("team_alias", "")
-                instance = metric.get("instance", "")
-                key_key = (token, key_name_from_prom, key_alias or "", team_alias or "")
-
-                # Only process if this key has a latest update record
-                if key_key not in latest_update_info:
-                    continue
-
-                # Only take value from the instance that had the latest update
-                if instance != latest_update_info[key_key]["instance"]:
-                    continue
-
-                values = result.get("values", [])
-
-                if values:
-                    # Find the sample closest to the target timestamp (input_time)
-                    closest_sample = None
-                    min_diff = float('inf')
-                    for sample in values:
-                        if isinstance(sample, list) and len(sample) >= 2:
-                            scrape_ts = float(sample[0])
-                            diff = abs(scrape_ts - unix_timestamp)
-                            if diff < min_diff:
-                                min_diff = diff
-                                closest_sample = sample
-
-                    if closest_sample:
-                        scrape_ts = float(closest_sample[0])
-                        value = float(closest_sample[1])
-
-                        key_values[key_key] = {
-                            "value": value,
-                            "scrape_ts": scrape_ts,
-                            "update_ts": latest_update_info[key_key]["max_update_ts"],
-                            "key_alias": key_alias,
+        # Helper function to query SpendLogs for given tokens
+        async def query_spend_logs_for_tokens(tokens: List[str]) -> Dict[str, Dict]:
+            if not tokens:
+                return {}
+            token_placeholders = ", ".join([f"${i+2}" for i in range(len(tokens))])
+            sql_query = f"""
+            SELECT
+                vt.key_alias as key_alias,
+                l.api_key as key_token,
+                COUNT(l.api_key)::int AS spend_logs_concurrency
+            FROM "LiteLLM_SpendLogs" l
+            LEFT JOIN "LiteLLM_VerificationToken" vt
+                ON l.api_key = vt.token
+            WHERE l."startTime" >= ($1::timestamptz - INTERVAL '60 minutes')
+               AND l."startTime" <= $1::timestamptz
+               AND l."endTime" >= $1::timestamptz
+               AND l.api_key IN ({token_placeholders})
+            GROUP BY
+                vt.key_alias,
+                l.api_key
+            """
+            response = await prisma_client.db.query_raw(sql_query, reference_time_str, *tokens)
+            spend_logs_map = {}
+            if response and isinstance(response, list):
+                for row in response:
+                    if isinstance(row, dict):
+                        token = row.get("key_token")
+                        spend_logs_map[token] = {
+                            "key_alias": row.get("key_alias") or "—",
+                            "spend_logs_concurrency": row.get("spend_logs_concurrency") or 0,
                         }
+            return spend_logs_map
 
-        # Build results (sorted for consistent pagination)
-        prom_results = []
-        for key_key in sorted(key_values.keys()):
-            data = key_values[key_key]
-            token, key_name_from_prom, key_alias, team_alias = key_key
-            prom_results.append({
-                "token": token,
-                "key_name": key_name_from_prom,
-                "key_alias": key_alias,
-                "metrics_concurrency": data["value"],
-                "scrape_timestamp": data["scrape_ts"],  # Prometheus scrape time
-                "update_timestamp": data["update_ts"],  # When gauge was actually set
-            })
+        # Helper function to build data with is_match
+        def build_data_with_match(results: List[Dict], spend_map: Dict[str, Dict]) -> List[Dict]:
+            data = []
+            for r in results:
+                token = r["token"]
+                spend_data = spend_map.get(token, {})
+                spend_logs_concurrency = spend_data.get("spend_logs_concurrency", 0)
+                redis_concurrency = r["redis_concurrency"]
+                is_match = (
+                    isinstance(spend_logs_concurrency, int)
+                    and spend_logs_concurrency == redis_concurrency
+                )
+                data.append({
+                    "key_alias": spend_data.get("key_alias") or r["key_alias"] or "—",
+                    "key_token": token,
+                    "redis_concurrency": redis_concurrency,
+                    "spend_logs_concurrency": spend_logs_concurrency,
+                    "is_match": is_match,
+                })
+            return data
 
-        # Apply pagination
-        total = len(prom_results)
+        # If match_status filter is requested, we need to query ALL keys first
+        # to properly filter before pagination
+        if match_status:
+            # Query SpendLogs for ALL keys
+            all_tokens = [r["token"] for r in gcp_results if r["token"]]
+            all_spend_logs_map = await query_spend_logs_for_tokens(all_tokens)
+            all_data = build_data_with_match(gcp_results, all_spend_logs_map)
+
+            # Apply match_status filter
+            if match_status == "matching":
+                filtered_data = [d for d in all_data if d["is_match"] is True]
+            elif match_status == "mismatching":
+                filtered_data = [d for d in all_data if d["is_match"] is False]
+            else:
+                filtered_data = all_data
+
+            # Apply pagination AFTER filtering
+            total = len(filtered_data)
+            offset = (page - 1) * page_size
+            paginated_data = filtered_data[offset:offset + page_size]
+            return {"data": paginated_data, "total": total}
+
+        # No match_status filter: paginate first, then query SpendLogs for efficiency
+        total = len(gcp_results)
         offset = (page - 1) * page_size
-        paginated_results = prom_results[offset:offset + page_size]
+        paginated_results = gcp_results[offset:offset + page_size]
 
         if not paginated_results:
             return {"data": [], "total": total}
 
-        # Step 2: Query SpendLogs for the keys from Prometheus
-        # Get unique tokens for the IN clause
+        # Query SpendLogs only for paginated keys
         tokens = [r["token"] for r in paginated_results if r["token"]]
         if not tokens:
-            # Return Prometheus data only (no spend logs data available)
+            # Return GCP data only (no spend logs data available)
             data = [
                 {
                     "key_alias": r["key_alias"] or "—",
                     "key_token": r["token"],
-                    "metrics_concurrency": r["metrics_concurrency"],
+                    "redis_concurrency": r["redis_concurrency"],
                     "scrape_timestamp": r["scrape_timestamp"],
                     "update_timestamp": r.get("update_timestamp"),
                     "spend_logs_concurrency": "—",
@@ -4788,60 +4773,8 @@ async def concurrent_request_logs(
             ]
             return {"data": data, "total": total}
 
-        # Get the min scrape timestamp to use as reference for SpendLogs query
-        # Use the scrape timestamp from Prometheus as the reference time
-        min_scrape_ts = min(r["scrape_timestamp"] for r in paginated_results)
-        scrape_time = datetime.fromtimestamp(min_scrape_ts, tz=timezone.utc)
-        scrape_time_str = scrape_time.isoformat()
-
-        # Build token placeholders for SQL IN clause
-        token_placeholders = ", ".join([f"${i+2}" for i in range(len(tokens))])
-
-        sql_query = f"""
-        SELECT
-            vt.key_alias as key_alias,
-            l.api_key as key_token,
-            COUNT(l.api_key)::int AS spend_logs_concurrency
-        FROM "LiteLLM_SpendLogs" l
-        LEFT JOIN "LiteLLM_VerificationToken" vt
-            ON l.api_key = vt.token
-        WHERE l."startTime" >= ($1::timestamptz - INTERVAL '5 minutes')
-           AND l."startTime" <= $1::timestamptz
-           AND l."endTime" >= $1::timestamptz
-           AND l.api_key IN ({token_placeholders})
-        GROUP BY
-            vt.key_alias,
-            l.api_key
-        """
-
-        response = await prisma_client.db.query_raw(sql_query, scrape_time_str, *tokens)
-
-        # Build spend logs map
-        spend_logs_map = {}
-        if response and isinstance(response, list):
-            for row in response:
-                if isinstance(row, dict):
-                    token = row.get("key_token")
-                    spend_logs_map[token] = {
-                        "key_alias": row.get("key_alias") or "—",
-                        "spend_logs_concurrency": row.get("spend_logs_concurrency") or 0,
-                    }
-
-        # Combine Prometheus and SpendLogs data
-        data = []
-        for r in paginated_results:
-            token = r["token"]
-            spend_data = spend_logs_map.get(token, {})
-
-            data.append({
-                "key_alias": spend_data.get("key_alias") or r["key_alias"] or "—",
-                "key_token": token,
-                "metrics_concurrency": r["metrics_concurrency"],
-                "scrape_timestamp": r["scrape_timestamp"],
-                "update_timestamp": r.get("update_timestamp"),
-                "spend_logs_concurrency": spend_data.get("spend_logs_concurrency", 0),
-            })
-
+        spend_logs_map = await query_spend_logs_for_tokens(tokens)
+        data = build_data_with_match(paginated_results, spend_logs_map)
         return {"data": data, "total": total}
 
     except Exception as e:

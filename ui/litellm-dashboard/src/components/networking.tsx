@@ -10020,6 +10020,68 @@ export const deleteClaudeCodePlugin = async (accessToken: string, pluginName: st
 
 // Compliance check types and functions
 
+/**
+ * Fetch concurrent request logs (GCP Logs + SpendLogs combined)
+ */
+export const concurrentRequestLogsPaginatedCall = async (
+  accessToken: string,
+  isoTimestamp: string,
+  page: number,
+  pageSize: number,
+  apiKey?: string,
+  keyAlias?: string,
+  matchStatus?: string
+): Promise<{ data: any[]; total: number }> => {
+  try {
+    const proxyBaseUrl = getProxyBaseUrl();
+    const params = new URLSearchParams({
+      timestamp: isoTimestamp,
+      page: page.toString(),
+      page_size: pageSize.toString(),
+    });
+
+    if (apiKey) {
+      params.append("api_key", apiKey);
+    }
+
+    if (keyAlias) {
+      params.append("key_alias", keyAlias);
+    }
+
+    if (matchStatus) {
+      params.append("match_status", matchStatus);
+    }
+
+    const url = proxyBaseUrl
+      ? `${proxyBaseUrl}/concurrent_request_logs?${params.toString()}`
+      : `/concurrent_request_logs?${params.toString()}`;
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+    const data = await response.json();
+    return {
+      data: data.data || [],
+      total: data.total || 0,
+    };
+  } catch (error) {
+    console.error("Failed to fetch concurrent request logs:", error);
+    throw error;
+  }
+};
+
 export interface ComplianceCheckResult {
   check_name: string;
   article: string;
