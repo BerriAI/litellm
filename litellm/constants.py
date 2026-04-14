@@ -135,11 +135,31 @@ MCP_OAUTH2_TOKEN_CACHE_DEFAULT_TTL = int(
 MCP_NPM_CACHE_DIR = os.getenv("MCP_NPM_CACHE_DIR", "/tmp/.npm_mcp_cache")
 MCP_OAUTH2_TOKEN_CACHE_MIN_TTL = int(os.getenv("MCP_OAUTH2_TOKEN_CACHE_MIN_TTL", "10"))
 
+# Per-user OAuth token Redis cache (for server-side token storage)
+MCP_PER_USER_TOKEN_REDIS_KEY_PREFIX = "mcp:per_user_token"
+MCP_PER_USER_TOKEN_DEFAULT_TTL = int(
+    os.getenv("MCP_PER_USER_TOKEN_DEFAULT_TTL", "43200")  # 12 hours
+)
+MCP_PER_USER_TOKEN_EXPIRY_BUFFER_SECONDS = int(
+    os.getenv("MCP_PER_USER_TOKEN_EXPIRY_BUFFER_SECONDS", "60")
+)
+
 # MCP timeout defaults (seconds). Override via env vars for slow/custom MCP servers.
 MCP_CLIENT_TIMEOUT = float(os.getenv("LITELLM_MCP_CLIENT_TIMEOUT", "60.0"))
 MCP_TOOL_LISTING_TIMEOUT = float(os.getenv("LITELLM_MCP_TOOL_LISTING_TIMEOUT", "30.0"))
 MCP_METADATA_TIMEOUT = float(os.getenv("LITELLM_MCP_METADATA_TIMEOUT", "10.0"))
 MCP_HEALTH_CHECK_TIMEOUT = float(os.getenv("LITELLM_MCP_HEALTH_CHECK_TIMEOUT", "10.0"))
+
+# Allowlist of commands permitted for MCP stdio transport.
+# Prevents arbitrary command execution via /mcp-rest/test/* endpoints or server creation.
+# Note: allowlisted runtimes can still execute code via args (e.g. python -c "...").
+# This is an accepted residual risk since these endpoints require PROXY_ADMIN.
+# Extend via LITELLM_MCP_STDIO_EXTRA_COMMANDS env var (comma-separated).
+_MCP_STDIO_EXTRA_COMMANDS = os.getenv("LITELLM_MCP_STDIO_EXTRA_COMMANDS", "")
+MCP_STDIO_ALLOWED_COMMANDS: frozenset = frozenset(
+    {"npx", "uvx", "python", "python3", "node", "docker", "deno"}
+    | (set(_MCP_STDIO_EXTRA_COMMANDS.split(",")) - {""})
+)
 
 LITELLM_UI_ALLOW_HEADERS = [
     "x-litellm-semantic-filter",
@@ -1401,7 +1421,7 @@ APSCHEDULER_REPLACE_EXISTING = os.getenv(
     "1",
 ]  # always replace existing jobs
 
-# The number of tag entries are higher than number of user, team entries. This leads to a higher QPS. 
+# The number of tag entries are higher than number of user, team entries. This leads to a higher QPS.
 # This will run tag spcific tasks at a later time to smooth QPS
 DAILY_TAG_SPEND_BATCH_MULTIPLIER = 2.3
 
@@ -1561,3 +1581,16 @@ MAX_PAYLOAD_SIZE_FOR_DEBUG_LOG = int(
 MAX_COMPETITOR_NAMES = int(os.getenv("MAX_COMPETITOR_NAMES", 100))
 COMPETITOR_LLM_TEMPERATURE = float(os.getenv("COMPETITOR_LLM_TEMPERATURE", 0.3))
 DEFAULT_COMPETITOR_DISCOVERY_MODEL = "gpt-4o-mini"
+
+# Advisor tool orchestration
+# Providers that support advisor_20260301 natively (no LiteLLM orchestration needed).
+# Add vertex_ai here once verified.
+ADVISOR_NATIVE_PROVIDERS: frozenset = frozenset({"anthropic"})
+# Hard cap on advisor iterations per request to prevent runaway loops.
+ADVISOR_MAX_USES: int = 5
+# Description injected into the synthetic advisor tool definition sent to non-native providers.
+ADVISOR_TOOL_DESCRIPTION: str = (
+    "Consult a highly intelligent advisor model when you need expert guidance, "
+    "want to verify your reasoning, or face a complex decision. "
+    "Describe your question or challenge clearly in the 'question' field."
+)

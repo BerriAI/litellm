@@ -52,7 +52,7 @@ You can use LiteLLM through either the Proxy Server or Python SDK. Both gives yo
 </a>
 
 ```shell
-pip install litellm
+uv add litellm
 ```
 
 <Tabs>
@@ -691,14 +691,14 @@ Go here for a complete tutorial with keys + rate limits - [**here**](./proxy/doc
 ### Quick Start Proxy - CLI
 
 ```shell
-pip install 'litellm[proxy]'
+uv tool install 'litellm[proxy]'
 ```
 
 #### Step 1: Start litellm proxy
 
 <Tabs>
 
-<TabItem label="pip package" value="pip">
+<TabItem label="LiteLLM CLI" value="cli">
 
 ```shell
 $ litellm --model huggingface/bigcode/starcoder
