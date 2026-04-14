@@ -612,7 +612,6 @@ function CreateKeyPageContent() {
                       userRole={userRole}
                       token={token}
                       accessToken={accessToken}
-                      allTeams={(teams as Team[]) ?? []}
                       premiumUser={premiumUser}
                     />
                   ) : page == "mcp-servers" ? (
