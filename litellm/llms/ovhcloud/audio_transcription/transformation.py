@@ -143,6 +143,10 @@ class OVHCloudAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
     ) -> TranscriptionResponse:
         """
         Transform OVHCloud audio transcription response to OpenAI-compatible TranscriptionResponse.
+
+        For `response_format=verbose_json`, the response includes additional fields
+        such as `segments`, `words`, `language`, `duration`, and `task`, which
+        are preserved alongside the required `text` field.
         """
         try:
             response_json = raw_response.json()
@@ -155,6 +159,11 @@ class OVHCloudAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
 
         text = response_json.get("text") or response_json.get("transcript") or ""
         response = TranscriptionResponse(text=text)
+
+        # Preserve verbose_json fields returned by OVHCloud Whisper API
+        for field in ("segments", "words", "language", "duration", "task"):
+            if field in response_json:
+                response[field] = response_json[field]
 
         response._hidden_params = response_json
         return response
