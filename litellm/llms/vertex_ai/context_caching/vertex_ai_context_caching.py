@@ -358,7 +358,9 @@ class ContextCachingEndpoints(VertexBase):
             client = client
 
         ## CHECK IF CACHED ALREADY
-        generated_cache_key = local_cache_obj.get_cache_key(messages=cached_messages, tools=tools, model=model)
+        generated_cache_key = local_cache_obj.get_cache_key(
+            messages=cached_messages, tools=tools, tool_choice=tool_choice, model=model
+        )
         google_cache_name = self.check_cache(
             cache_key=generated_cache_key,
             client=client,
@@ -500,7 +502,9 @@ class ContextCachingEndpoints(VertexBase):
             client = client
 
         ## CHECK IF CACHED ALREADY
-        generated_cache_key = local_cache_obj.get_cache_key(messages=cached_messages, tools=tools, model=model)
+        generated_cache_key = local_cache_obj.get_cache_key(
+            messages=cached_messages, tools=tools, tool_choice=tool_choice, model=model
+        )
         google_cache_name = await self.async_check_cache(
             cache_key=generated_cache_key,
             client=client,
