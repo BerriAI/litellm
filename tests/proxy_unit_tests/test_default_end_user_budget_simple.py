@@ -170,13 +170,25 @@ async def test_budget_enforcement_blocks_over_budget_users():
     mock_cache.async_get_cache = AsyncMock(return_value=None)
     mock_cache.async_set_cache = AsyncMock()
     
-    # Should raise BudgetExceededError
+    # 1. Fetch the user object (this no longer throws an exception)
+    result = await get_end_user_object(
+        end_user_id=end_user_id,
+        prisma_client=mock_prisma_client,
+        user_api_key_cache=mock_cache,
+        route="/chat/completions",
+    )
+    
+    from litellm.proxy.hooks.max_budget_limiter import _PROXY_MaxBudgetLimiter
+    budget_limiter = _PROXY_MaxBudgetLimiter()
+    assert default_budget.max_budget is not None
+
+    # 2. Check that the new limiter function correctly enforces the budget using the mocked values
     with pytest.raises(litellm.BudgetExceededError) as exc_info:
-        await get_end_user_object(
+        await budget_limiter.is_end_user_within_budget(
             end_user_id=end_user_id,
-            prisma_client=mock_prisma_client,
-            user_api_key_cache=mock_cache,
-            route="/chat/completions",
+            end_user_max_budget=default_budget.max_budget,
+            end_user_spend=mock_end_user_data["spend"],
+            route="/chat/completions"
         )
     
     assert "ExceededBudget" in str(exc_info.value)
