@@ -1244,7 +1244,7 @@ def get_async_httpx_client(
         _new_client = AsyncHTTPHandler(**handler_params)
     else:
         _new_client = AsyncHTTPHandler(
-            timeout=httpx.Timeout(timeout=600.0, connect=5.0),
+            timeout=httpx.Timeout(timeout=float(litellm.request_timeout), connect=5.0),
             shared_session=shared_session,
         )
 
@@ -1293,7 +1293,7 @@ def _get_httpx_client(params: Optional[dict] = None) -> HTTPHandler:
         }
         _new_client = HTTPHandler(**handler_params)
     else:
-        _new_client = HTTPHandler(timeout=httpx.Timeout(timeout=600.0, connect=5.0))
+        _new_client = HTTPHandler(timeout=httpx.Timeout(timeout=float(litellm.request_timeout), connect=5.0))
 
     cache.set_cache(
         key=_cache_key_name,

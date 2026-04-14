@@ -1400,12 +1400,11 @@ def completion(  # type: ignore # noqa: PLR0915
             )  # support region-based pricing for bedrock
 
         ### TIMEOUT LOGIC ###
-        timeout = timeout or kwargs.get("request_timeout", 600) or 600
-        # set timeout for 10 minutes by default
+        timeout = timeout or kwargs.get("request_timeout", litellm.request_timeout) or litellm.request_timeout
         if isinstance(timeout, httpx.Timeout) and not supports_httpx_timeout(
             custom_llm_provider
         ):
-            timeout = timeout.read or 600  # default 10 min timeout
+            timeout = timeout.read or litellm.request_timeout
         elif not isinstance(timeout, httpx.Timeout):
             timeout = float(timeout)  # type: ignore
 

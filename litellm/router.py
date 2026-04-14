@@ -530,6 +530,16 @@ class Router:
         self.timeout = timeout or litellm.request_timeout
         self.stream_timeout = stream_timeout
 
+        # Store request_timeout independently when explicitly configured via
+        # litellm_settings (i.e., different from the default constant), so it's
+        # not shadowed by router_settings.timeout in the fallback chain.
+        from litellm.constants import request_timeout as _default_request_timeout
+
+        if timeout is not None and litellm.request_timeout != _default_request_timeout:
+            self.request_timeout = litellm.request_timeout
+        else:
+            self.request_timeout = None
+
         self.retry_after = retry_after
         self.routing_strategy = routing_strategy
 
@@ -2477,7 +2487,8 @@ class Router:
             or data.get(
                 "request_timeout", None
             )  # timeout set on litellm_params for this deployment
-            or self.timeout  # timeout set on router
+            or self.request_timeout  # litellm_settings.request_timeout (per-attempt)
+            or self.timeout  # timeout set on router (router_settings.timeout)
             or self.default_litellm_params.get("timeout", None)
         )
         return timeout
