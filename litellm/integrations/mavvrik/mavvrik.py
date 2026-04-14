@@ -19,7 +19,7 @@ Environment variables (fallback when DB settings are absent):
     MAVVRIK_API_KEY          x-api-key sent to Mavvrik API
     MAVVRIK_API_ENDPOINT     Mavvrik API base URL (includes tenant)
     MAVVRIK_CONNECTION_ID    Connection/instance ID
-    MAVVRIK_LOOKBACK_DAYS    First-run lookback (default: all data since MIN(date))
+    MAVVRIK_LOOKBACK_START_DATE  First-run start date YYYY-MM-DD (default: all data since MIN(date))
 """
 
 import os
@@ -31,7 +31,7 @@ from litellm._logging import verbose_logger
 from litellm.constants import (
     MAVVRIK_EXPORT_INTERVAL_MINUTES,
     MAVVRIK_EXPORT_USAGE_DATA_JOB_NAME,
-    MAVVRIK_LOOKBACK_DAYS,
+    MAVVRIK_LOOKBACK_START_DATE,
     MAVVRIK_MAX_FETCHED_DATA_RECORDS,
 )
 from litellm.integrations.custom_logger import CustomLogger
@@ -143,18 +143,26 @@ class MavvrikLogger(CustomLogger):
                 start_date = yesterday
         else:
             # First run — determine the lookback window.
-            # If MAVVRIK_LOOKBACK_DAYS is set, start from (today - N days).
+            # If MAVVRIK_LOOKBACK_START_DATE is set, start from that specific date.
             # Otherwise, start from the earliest date that has data in the DB
             # (MIN(date) in LiteLLM_DailyUserSpend). Falls back to yesterday if
             # the query fails or the table is empty.
-            if MAVVRIK_LOOKBACK_DAYS is not None:
-                start_date = today - timedelta(days=MAVVRIK_LOOKBACK_DAYS)
-                verbose_logger.info(
-                    "MavvrikLogger: no marker found, MAVVRIK_LOOKBACK_DAYS=%d → "
-                    "starting from %s",
-                    MAVVRIK_LOOKBACK_DAYS,
-                    start_date,
-                )
+            if MAVVRIK_LOOKBACK_START_DATE is not None:
+                try:
+                    start_date = date.fromisoformat(MAVVRIK_LOOKBACK_START_DATE)
+                    verbose_logger.info(
+                        "MavvrikLogger: no marker found, MAVVRIK_LOOKBACK_START_DATE=%s → "
+                        "starting from %s",
+                        MAVVRIK_LOOKBACK_START_DATE,
+                        start_date,
+                    )
+                except ValueError:
+                    verbose_logger.warning(
+                        "MavvrikLogger: invalid MAVVRIK_LOOKBACK_START_DATE '%s', "
+                        "falling back to earliest DB date",
+                        MAVVRIK_LOOKBACK_START_DATE,
+                    )
+                    start_date = yesterday
             else:
                 earliest_str = await db.get_earliest_date()
                 if earliest_str:
