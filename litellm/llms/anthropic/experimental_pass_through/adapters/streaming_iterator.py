@@ -438,15 +438,8 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         if processed_chunk.get("type") != "content_block_delta":
             return False
         delta = processed_chunk.get("delta", {})
-        delta_type = delta.get("type", "")
-        if delta_type == "input_json_delta":
+        if delta.get("type") == "input_json_delta":
             return bool(delta.get("partial_json"))
-        elif delta_type == "text_delta":
-            return bool(delta.get("text"))
-        elif delta_type == "thinking_delta":
-            return bool(delta.get("thinking"))
-        elif delta_type == "signature_delta":
-            return bool(delta.get("signature"))
         return False
 
     def _increment_content_block_index(self):

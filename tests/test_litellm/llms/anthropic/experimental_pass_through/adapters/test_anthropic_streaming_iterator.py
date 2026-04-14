@@ -308,25 +308,13 @@ def test_has_meaningful_delta():
         is False
     )
 
-    # text_delta with content -> meaningful
+    # text_delta is not emitted during block transitions
     assert (
         wrapper._has_meaningful_delta(
             {
                 "type": "content_block_delta",
                 "index": 0,
                 "delta": {"type": "text_delta", "text": "hello"},
-            }
-        )
-        is True
-    )
-
-    # text_delta with empty string -> not meaningful
-    assert (
-        wrapper._has_meaningful_delta(
-            {
-                "type": "content_block_delta",
-                "index": 0,
-                "delta": {"type": "text_delta", "text": ""},
             }
         )
         is False
@@ -340,7 +328,7 @@ def test_has_meaningful_delta():
         is False
     )
 
-    # thinking_delta with content -> meaningful
+    # thinking_delta is not emitted during block transitions
     assert (
         wrapper._has_meaningful_delta(
             {
@@ -349,7 +337,7 @@ def test_has_meaningful_delta():
                 "delta": {"type": "thinking_delta", "thinking": "Let me think..."},
             }
         )
-        is True
+        is False
     )
 
 
