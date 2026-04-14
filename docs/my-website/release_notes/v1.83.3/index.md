@@ -14,7 +14,7 @@ authors:
   - name: Ryan Crabbe
     title: Full Stack Engineer, LiteLLM
     url: https://www.linkedin.com/in/ryan-crabbe-0b9687214
-    image_url: https://media.licdn.com/dms/image/v2/D5603AQHt1t9Z4BJ6Gw/profile-displayphoto-shrink_400_400/profile-displayphoto-shrink_400_400/0/1724453682340?e=1772064000&v=beta&t=VXdmr13rsNB05wyA2F1TENOB5UuDHUZ0FCHTolNyR5M
+    image_url: https://github.com/ryan-crabbe.png
   - name: Yuneng Jiang
     title: Senior Full Stack Engineer, LiteLLM
     url: https://www.linkedin.com/in/yuneng-david-jiang-455676139/
