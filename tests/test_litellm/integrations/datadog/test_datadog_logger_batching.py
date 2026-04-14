@@ -107,3 +107,27 @@ async def test_async_send_batch_requeues_events_on_413(datadog_env):
         '{"event": 0}',
         '{"event": 1}',
     ]
+
+
+@pytest.mark.asyncio
+async def test_flush_queue_updates_last_flush_time(datadog_env):
+    with patch("asyncio.create_task"):
+        logger = DataDogLogger()
+
+    logger.log_queue = [
+        DatadogPayload(
+            ddsource="litellm",
+            ddtags="env:test",
+            hostname="host",
+            message='{"event": 0}',
+            service="svc",
+            status="info",
+        )
+    ]
+    logger.last_flush_time = 0
+    logger.async_send_batch = AsyncMock()
+
+    await logger.flush_queue()
+
+    logger.async_send_batch.assert_awaited_once()
+    assert logger.last_flush_time > 0

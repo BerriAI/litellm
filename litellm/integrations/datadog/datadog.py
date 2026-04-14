@@ -16,6 +16,7 @@ For batching specific details see CustomBatchLogger class
 import asyncio
 import datetime
 import os
+import time
 import traceback
 from datetime import datetime as datetimeObj
 from typing import Any, Dict, List, Optional, Union
