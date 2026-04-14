@@ -701,8 +701,9 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
             # Prepare the signed headers
             signed_headers = dict(aws_request.headers.items())
 
+            request_url = prepped.url or url
             response = await self.async_httpx_client.get(
-                prepped.url, headers=signed_headers
+                request_url, headers=signed_headers
             )
 
             if response.status_code != 200:
