@@ -1,4 +1,5 @@
 import React from "react";
+import ContentRoutingConfiguration, { ContentRoutingConfig } from "./ContentRoutingConfiguration";
 import LatencyBasedConfiguration from "./LatencyBasedConfiguration";
 import ReliabilityRetriesSection from "./ReliabilityRetriesSection";
 import RoutingStrategySelector from "./RoutingStrategySelector";
@@ -16,6 +17,7 @@ interface RouterSettingsFormProps {
   routerFieldsMetadata: { [key: string]: any };
   availableRoutingStrategies: string[];
   routingStrategyDescriptions: { [key: string]: string };
+  accessToken?: string | null;
 }
 
 const RouterSettingsForm: React.FC<RouterSettingsFormProps> = ({
@@ -24,6 +26,7 @@ const RouterSettingsForm: React.FC<RouterSettingsFormProps> = ({
   routerFieldsMetadata,
   availableRoutingStrategies,
   routingStrategyDescriptions,
+  accessToken,
 }) => {
   const handleStrategyChange = (strategy: string) => {
     onChange({
@@ -36,6 +39,16 @@ const RouterSettingsForm: React.FC<RouterSettingsFormProps> = ({
     onChange({
       ...value,
       enableTagFiltering: enabled,
+    });
+  };
+
+  const handleContentRoutingChange = (config: ContentRoutingConfig) => {
+    onChange({
+      ...value,
+      routerSettings: {
+        ...value.routerSettings,
+        content_routing: config,
+      },
     });
   };
 
@@ -74,6 +87,16 @@ const RouterSettingsForm: React.FC<RouterSettingsFormProps> = ({
       {value.selectedStrategy === "latency-based-routing" && (
         <LatencyBasedConfiguration routingStrategyArgs={value.routerSettings["routing_strategy_args"]} />
       )}
+
+      {/* Content-Aware Routing */}
+      <ContentRoutingConfiguration
+        config={value.routerSettings.content_routing ?? { enabled: false, classifier: "rule_based" }}
+        onChange={handleContentRoutingChange}
+        accessToken={accessToken ?? null}
+      />
+
+      {/* Divider */}
+      <div className="border-t border-gray-200" />
 
       {/* Other Settings */}
       <ReliabilityRetriesSection routerSettings={value.routerSettings} routerFieldsMetadata={routerFieldsMetadata} />

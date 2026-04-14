@@ -4361,6 +4361,68 @@ export const getRouterSettingsCall = async (accessToken: string) => {
   }
 };
 
+export const testContentRoutingCall = async (
+  accessToken: string,
+  prompt: string,
+  messages?: Array<{ role: string; content: string }>
+) => {
+  try {
+    const url = proxyBaseUrl
+      ? `${proxyBaseUrl}/utils/content_route_test`
+      : `/utils/content_route_test`;
+
+    const body: Record<string, unknown> = messages ? { messages } : { prompt };
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(body),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      throw new Error(errorMessage);
+    }
+
+    return await response.json();
+  } catch (error) {
+    console.error("Failed to test content routing:", error);
+    throw error;
+  }
+};
+
+export const getContentRoutingPreferencesCall = async (accessToken: string) => {
+  try {
+    const url = proxyBaseUrl
+      ? `${proxyBaseUrl}/router/content_routing/preferences`
+      : `/router/content_routing/preferences`;
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+    return await response.json();
+  } catch (error) {
+    console.error("Failed to get content routing preferences:", error);
+    throw error;
+  }
+};
+
 export const getCacheSettingsCall = async (accessToken: string) => {
   try {
     let url = proxyBaseUrl ? `${proxyBaseUrl}/cache/settings` : `/cache/settings`;

@@ -359,6 +359,44 @@ class DeploymentTypedDict(TypedDict, total=False):
     model_info: dict
 
 
+class RoutingPreference(BaseModel):
+    """A content-based routing preference declaration for a model deployment."""
+
+    name: str
+    description: str
+
+
+class ContentRoutingConfig(BaseModel):
+    """Global content-aware routing configuration set in router_settings.content_routing."""
+
+    enabled: bool = False
+    classifier: Literal["rule_based", "embedding_similarity", "external_model"] = (
+        "rule_based"
+    )
+    default_model: Optional[str] = None
+    confidence_threshold: float = 0.1
+    # embedding_similarity only
+    embedding_model: Optional[str] = None
+    # external_model only
+    external_classifier_url: Optional[str] = None
+
+
+class ModelAffinityConfig(BaseModel):
+    """
+    Session-pinning configuration set in router_settings.model_affinity.
+
+    When enabled, the first request for a given X-Model-Affinity session-id
+    selects a model normally; all subsequent requests reuse that model for the
+    lifetime of the pin (ttl seconds), regardless of content.
+    """
+
+    enabled: bool = False
+    ttl: int = 600  # seconds before a session pin expires (default 10 min)
+    max_sessions: int = 10_000  # LRU capacity for the local cache
+    storage: Literal["local", "redis"] = "local"
+    redis_url: Optional[str] = None  # required when storage="redis"
+
+
 SPECIAL_MODEL_INFO_PARAMS = [
     "input_cost_per_token",
     "output_cost_per_token",
@@ -371,6 +409,7 @@ class Deployment(BaseModel):
     model_name: str
     litellm_params: LiteLLM_Params
     model_info: ModelInfo
+    routing_preferences: Optional[List[RoutingPreference]] = None
 
     model_config = ConfigDict(extra="allow", protected_namespaces=())
 

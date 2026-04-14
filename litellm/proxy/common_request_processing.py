@@ -561,6 +561,30 @@ class ProxyBaseLLMRequestProcessing:
             if logging_caching_headers:
                 headers.update(logging_caching_headers)
 
+            # Content-aware routing decision header
+            content_routing_decision = (
+                request_data.get("metadata", {}) or {}
+            ).get("content_routing_decision")
+            if content_routing_decision:
+                pref = content_routing_decision.get("matched_preference", "")
+                model = content_routing_decision.get("model", "")
+                if pref and model:
+                    headers["x-litellm-content-route"] = f"{pref} -> {model}"
+
+            # Model affinity (session pinning) header
+            model_affinity_decision = (
+                request_data.get("metadata", {}) or {}
+            ).get("model_affinity_decision")
+            if model_affinity_decision:
+                status = model_affinity_decision.get("status", "")
+                affinity_model = model_affinity_decision.get("model", "")
+                session_id = model_affinity_decision.get("session_id", "")
+                if status and affinity_model:
+                    headers["x-litellm-model-affinity-status"] = status
+                    headers["x-litellm-model-affinity-model"] = affinity_model
+                if session_id:
+                    headers["x-litellm-model-affinity-session"] = session_id
+
         try:
             return {
                 key: str(value)

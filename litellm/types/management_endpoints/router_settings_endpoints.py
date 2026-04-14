@@ -265,4 +265,18 @@ ROUTER_SETTINGS_FIELDS: List[RouterSettingsField] = [
         field_default=None,
         ui_field_name="Disable Cooldowns",
     ),
+    RouterSettingsField(
+        field_name="content_routing",
+        field_type="Dictionary",
+        field_value=None,
+        field_description=(
+            "Content-aware routing configuration. When enabled, classifies incoming "
+            "prompt content against per-model routing_preferences and routes to the "
+            "best-matched model. Supports rule_based (TF-IDF), embedding_similarity, "
+            "and external_model classifiers."
+        ),
+        field_default=None,
+        ui_field_name="Content Routing",
+        link="https://docs.litellm.ai/docs/routing",
+    ),
 ]

@@ -410,6 +410,9 @@ from litellm.proxy.management_endpoints.policy_endpoints import router as policy
 from litellm.proxy.management_endpoints.project_endpoints import (
     router as project_router,
 )
+from litellm.proxy.management_endpoints.content_routing_endpoints import (
+    router as content_routing_router,
+)
 from litellm.proxy.management_endpoints.router_settings_endpoints import (
     router as router_settings_router,
 )
@@ -13938,6 +13941,7 @@ app.include_router(tag_management_router)
 app.include_router(tool_management_router)
 app.include_router(cost_tracking_settings_router)
 app.include_router(router_settings_router)
+app.include_router(content_routing_router)
 app.include_router(fallback_management_router)
 app.include_router(cache_settings_router)
 app.include_router(config_override_router)

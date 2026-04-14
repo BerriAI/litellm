@@ -200,12 +200,23 @@ if TYPE_CHECKING:
     from litellm.router_strategy.complexity_router.complexity_router import (
         ComplexityRouter,
     )
+    from litellm.router_strategy.content_aware_router.content_aware_router import (
+        ContentAwareRouter,
+    )
+    from litellm.router_strategy.model_affinity_router.model_affinity_router import (
+        ModelAffinityRouter,
+    )
+    from litellm.types.router import ContentRoutingConfig, ModelAffinityConfig
 
     Span = Union[_Span, Any]
 else:
     Span = Any
     AutoRouter = Any
     ComplexityRouter = Any
+    ContentAwareRouter = Any
+    ModelAffinityRouter = Any
+    ContentRoutingConfig = Any
+    ModelAffinityConfig = Any
     PreRoutingHookResponse = Any
 
 
@@ -311,6 +322,8 @@ class Router:
         enable_health_check_routing: bool = False,
         health_check_staleness_threshold: Optional[int] = None,
         health_check_ignore_transient_errors: bool = False,
+        content_routing: Optional[Union[Dict, "ContentRoutingConfig"]] = None,
+        model_affinity: Optional[Union[Dict, "ModelAffinityConfig"]] = None,
     ) -> None:
         """
         Initialize the Router class with the given parameters for caching, reliability, and routing strategy.
@@ -464,6 +477,9 @@ class Router:
         )  # {"TEAM_ID": PatternMatchRouter}
         self.auto_routers: Dict[str, "AutoRouter"] = {}
         self.complexity_routers: Dict[str, "ComplexityRouter"] = {}
+        self.content_aware_router: Optional["ContentAwareRouter"] = None
+        self._content_routing_config: Optional["ContentRoutingConfig"] = None
+        self.model_affinity_router: Optional["ModelAffinityRouter"] = None
 
         # Initialize model_group_alias early since it's used in set_model_list
         self.model_group_alias: Dict[str, Union[str, RouterModelGroupAliasItem]] = (
@@ -705,6 +721,14 @@ class Router:
 
         if self.alerting_config is not None:
             self._initialize_alerting()
+
+        ### CONTENT-AWARE ROUTING SETUP ###
+        if content_routing is not None:
+            self._init_content_aware_router(content_routing)
+
+        ### MODEL AFFINITY (SESSION PINNING) SETUP ###
+        if model_affinity is not None:
+            self._init_model_affinity_router(model_affinity)
 
         self.initialize_assistants_endpoint()
         self.initialize_router_endpoints()
@@ -6914,6 +6938,96 @@ class Router:
             )
         self.complexity_routers[deployment.model_name] = complexity_router
 
+    def _init_content_aware_router(
+        self,
+        content_routing: Union[Dict, "ContentRoutingConfig"],
+    ) -> None:
+        """
+        Build a ContentAwareRouter from all deployments that have routing_preferences.
+
+        Called once at Router init (if content_routing config is present) and again
+        whenever deployments change (_refresh_content_aware_router).
+        """
+        from litellm.router_strategy.content_aware_router.content_aware_router import (
+            ContentAwareRouter,
+        )
+        from litellm.types.router import ContentRoutingConfig
+
+        if isinstance(content_routing, dict):
+            config = ContentRoutingConfig(**content_routing)
+        else:
+            config = content_routing
+
+        if not config.enabled:
+            self.content_aware_router = None
+            self._content_routing_config = config
+            return
+
+        self._content_routing_config = config
+
+        # Collect routing_preferences from all deployed models.
+        # self.model_list stores plain dicts (deployment.to_json()), so
+        # routing_preferences entries are plain dicts and must be coerced.
+        from litellm.types.router import RoutingPreference
+
+        preferences_by_model: Dict[str, list] = {}
+        for deployment in self.model_list:
+            if isinstance(deployment, dict):
+                prefs_raw = deployment.get("routing_preferences")
+                model_name = deployment.get("model_name")
+            else:
+                prefs_raw = getattr(deployment, "routing_preferences", None)
+                model_name = getattr(deployment, "model_name", None)
+
+            if prefs_raw and model_name:
+                coerced = [
+                    RoutingPreference(**p) if isinstance(p, dict) else p
+                    for p in prefs_raw
+                ]
+                preferences_by_model[model_name] = coerced
+
+        if not preferences_by_model:
+            verbose_router_logger.warning(
+                "ContentAwareRouter: content_routing.enabled=true but no deployments "
+                "have routing_preferences configured. Content routing will be skipped."
+            )
+
+        self.content_aware_router = ContentAwareRouter(
+            preferences_by_model=preferences_by_model,
+            config=config,
+            litellm_router_instance=self,
+        )
+
+    def _refresh_content_aware_router(self) -> None:
+        """Rebuild the ContentAwareRouter index after deployments change."""
+        if self._content_routing_config is not None:
+            self._init_content_aware_router(self._content_routing_config)
+
+    def _init_model_affinity_router(
+        self,
+        model_affinity: Union[Dict, "ModelAffinityConfig"],
+    ) -> None:
+        """
+        Instantiate a ModelAffinityRouter from the model_affinity config.
+
+        Called once at Router init and can be re-called to update config.
+        """
+        from litellm.router_strategy.model_affinity_router.model_affinity_router import (
+            ModelAffinityRouter,
+        )
+        from litellm.types.router import ModelAffinityConfig
+
+        if isinstance(model_affinity, dict):
+            config = ModelAffinityConfig(**model_affinity)
+        else:
+            config = model_affinity
+
+        if not config.enabled:
+            self.model_affinity_router = None
+            return
+
+        self.model_affinity_router = ModelAffinityRouter(config=config)
+
     def deployment_is_active_for_environment(self, deployment: Deployment) -> bool:
         """
         Function to check if a llm deployment is active for a given environment. Allows using the same config.yaml across multople environments
@@ -7133,6 +7247,11 @@ class Router:
             litellm_params=deployment.litellm_params
         ):
             self.init_complexity_router_deployment(deployment=deployment)
+
+        #########################################################
+        # Refresh content-aware router index if needed
+        #########################################################
+        self._refresh_content_aware_router()
 
         return deployment
 
@@ -9621,6 +9740,61 @@ class Router:
 
         Used for the litellm auto-router to modify the request before the routing decision is made.
         """
+        #########################################################
+        # Model Affinity — session pinning (runs before content routing)
+        #########################################################
+        from litellm.types.router import (
+            PreRoutingHookResponse as _PreRoutingHookResponse,
+        )
+
+        session_id: Optional[str] = None
+        if self.model_affinity_router is not None and not specific_deployment:
+            headers = (request_kwargs.get("metadata") or {}).get("headers") or {}
+            session_id = headers.get("x-model-affinity") or headers.get(
+                "X-Model-Affinity"
+            )
+            if session_id:
+                pinned_model = await self.model_affinity_router.get_pinned_model(
+                    session_id
+                )
+                if pinned_model:
+                    metadata = request_kwargs.setdefault("metadata", {})
+                    metadata["model_affinity_decision"] = {
+                        "session_id": session_id,
+                        "model": pinned_model,
+                        "status": "pinned",
+                    }
+                    return _PreRoutingHookResponse(
+                        model=pinned_model, messages=messages
+                    )
+
+        #########################################################
+        # Check if content-aware routing is enabled (global, runs second)
+        #########################################################
+        content_result: Optional[PreRoutingHookResponse] = None
+        if self.content_aware_router is not None and not specific_deployment:
+            content_result = await self.content_aware_router.async_pre_routing_hook(
+                model=model,
+                request_kwargs=request_kwargs,
+                messages=messages,
+                input=input,
+                specific_deployment=specific_deployment,
+            )
+
+        # Pin the selected model for new sessions before returning
+        if session_id and self.model_affinity_router is not None:
+            selected_model = content_result.model if content_result else model
+            await self.model_affinity_router.pin_model(session_id, selected_model)
+            metadata = request_kwargs.setdefault("metadata", {})
+            metadata["model_affinity_decision"] = {
+                "session_id": session_id,
+                "model": selected_model,
+                "status": "new",
+            }
+
+        if content_result is not None:
+            return content_result
+
         #########################################################
         # Check if any auto-router should be used
         #########################################################

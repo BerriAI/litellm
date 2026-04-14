@@ -493,6 +493,7 @@ export default function ModelInfoView({
       <TabGroup>
         <TabList className="mb-6">
           <Tab>Overview</Tab>
+          <Tab>Routing Preferences</Tab>
           <Tab>Raw JSON</Tab>
         </TabList>
 
@@ -1203,6 +1204,31 @@ export default function ModelInfoView({
           </TabPanel>
 
           <TabPanel>
+            <RoutingPreferencesTab
+              modelData={modelData}
+              accessToken={accessToken}
+              onSave={async (preferences) => {
+                if (!accessToken) return;
+                setIsSaving(true);
+                try {
+                  await modelPatchUpdateCall(accessToken, {
+                    routing_preferences: preferences,
+                  }, modelData.model_info?.id);
+                  NotificationsManager.success("Routing preferences saved");
+                  setLocalModelData((prev: any) => ({
+                    ...prev,
+                    routing_preferences: preferences,
+                  }));
+                } catch (e: any) {
+                  NotificationsManager.fromBackend("Failed to save routing preferences: " + e?.message);
+                } finally {
+                  setIsSaving(false);
+                }
+              }}
+            />
+          </TabPanel>
+
+          <TabPanel>
             <Card>
               <pre className="bg-gray-100 p-4 rounded text-xs overflow-auto">{JSON.stringify(modelData, null, 2)}</pre>
             </Card>
@@ -1267,5 +1293,112 @@ export default function ModelInfoView({
         userRole={userRole || ""}
       />
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// RoutingPreferencesTab — inline sub-component
+// ---------------------------------------------------------------------------
+
+interface RoutingPreference {
+  name: string;
+  description: string;
+}
+
+interface RoutingPreferencesTabProps {
+  modelData: any;
+  accessToken: string | null;
+  onSave: (preferences: RoutingPreference[]) => Promise<void>;
+}
+
+function RoutingPreferencesTab({ modelData, accessToken, onSave }: RoutingPreferencesTabProps) {
+  const [preferences, setPreferences] = useState<RoutingPreference[]>(
+    modelData?.routing_preferences ?? []
+  );
+  const [saving, setSaving] = useState(false);
+
+  const add = () => setPreferences((prev) => [...prev, { name: "", description: "" }]);
+
+  const remove = (idx: number) =>
+    setPreferences((prev) => prev.filter((_, i) => i !== idx));
+
+  const update = (idx: number, field: keyof RoutingPreference, value: string) =>
+    setPreferences((prev) =>
+      prev.map((p, i) => (i === idx ? { ...p, [field]: value } : p))
+    );
+
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      await onSave(preferences);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Card>
+      <div className="space-y-4">
+        <div>
+          <Title className="text-sm">Routing Preferences</Title>
+          <Text className="text-xs text-gray-500 mt-1">
+            Define content-based routing preferences for this model. When{" "}
+            <code className="bg-gray-100 px-1 rounded">content_routing</code> is enabled in
+            router settings, incoming prompts are classified against these descriptions.
+          </Text>
+        </div>
+
+        {preferences.length === 0 && (
+          <Text className="text-xs text-gray-400 italic">
+            No routing preferences configured. Click &quot;Add Preference&quot; to get started.
+          </Text>
+        )}
+
+        {preferences.map((pref, idx) => (
+          <div key={idx} className="border border-gray-200 rounded-lg p-3 space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-medium text-gray-600">Preference {idx + 1}</span>
+              <Button
+                type="link"
+                danger
+                size="small"
+                onClick={() => remove(idx)}
+              >
+                Remove
+              </Button>
+            </div>
+            <div className="space-y-2">
+              <div>
+                <label className="block text-xs font-medium text-gray-700 mb-1">Name</label>
+                <TextInput
+                  placeholder="e.g. code_generation"
+                  value={pref.name}
+                  onChange={(e) => update(idx, "name", e.target.value)}
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-700 mb-1">
+                  Description
+                </label>
+                <TextInput
+                  placeholder="e.g. generating, debugging, and explaining code"
+                  value={pref.description}
+                  onChange={(e) => update(idx, "description", e.target.value)}
+                />
+              </div>
+            </div>
+          </div>
+        ))}
+
+        <div className="flex gap-2">
+          <TremorButton size="xs" variant="secondary" onClick={add}>
+            + Add Preference
+          </TremorButton>
+          <TremorButton size="xs" loading={saving} onClick={handleSave}>
+            Save Preferences
+          </TremorButton>
+        </div>
+      </div>
+    </Card>
   );
 }
