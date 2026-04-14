@@ -16,11 +16,11 @@ import PolicyTemplates from "./policy_templates";
 import GuardrailSelectionModal from "./guardrail_selection_modal";
 import TemplateParameterModal from "./template_parameter_modal";
 import AiSuggestionModal from "./ai_suggestion_modal";
+import { useDeletePolicyAttachment } from "@/hooks/policies/useDeletePolicyAttachment";
 import {
   getPoliciesList,
   deletePolicyCall,
   getPolicyAttachmentsList,
-  deletePolicyAttachmentCall,
   getGuardrailsList,
   getPolicyInfo,
   createPolicyCall,
@@ -169,22 +169,11 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({
     setPolicyToDelete(null);
   };
 
-  const deleteAttachmentMutation = useMutation({
-    mutationFn: async (attachmentId: string) => {
-      if (!accessToken) {
-        throw new Error("Access token is required");
-      }
-      return deletePolicyAttachmentCall(accessToken, attachmentId);
-    },
-    onSuccess: async () => {
-      MessageManager.success("Attachment deleted successfully");
-      await fetchAttachments();
-    },
-    onError: (error) => {
-      console.error("Error deleting attachment:", error);
-      MessageManager.error("Failed to delete attachment");
-    },
+  const deleteAttachmentMutation = useDeletePolicyAttachment({
+    accessToken,
+    onSuccess: fetchAttachments,
   });
+
   const handleDeleteAttachmentClick = (attachmentId: string) => {
     const attachment = attachmentsList.find((a) => a.attachment_id === attachmentId) || null;
     setAttachmentToDelete(attachment);
@@ -196,14 +185,14 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({
     setAttachmentToDelete(null);
   };
 
-  const handleAttachmentDeleteConfirm = async () => {
+  const handleAttachmentDeleteConfirm = () => {
     if (!attachmentToDelete) return;
-    try {
-      await deleteAttachmentMutation.mutateAsync(attachmentToDelete.attachment_id);
-    } finally {
-      setIsDeleteAttachmentModalOpen(false);
-      setAttachmentToDelete(null);
-    }
+    deleteAttachmentMutation.mutate(attachmentToDelete.attachment_id, {
+      onSettled: () => {
+        setIsDeleteAttachmentModalOpen(false);
+        setAttachmentToDelete(null);
+      },
+    });
   };
 
   const handleAttachmentSuccess = () => {
