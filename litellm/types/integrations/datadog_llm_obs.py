@@ -59,6 +59,7 @@ class LLMObsPayload(TypedDict, total=False):
     metrics: LLMMetrics
     tags: List
     status: Literal["ok", "error"]  # Error status ("ok" or "error"). Defaults to "ok".
+    _dd_ml_app: str  # Internal: per-request ml_app override from caller metadata. Stripped before sending to Datadog.
 
 
 class DDSpanAttributes(TypedDict):
