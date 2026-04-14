@@ -1060,6 +1060,9 @@ WANDB_MODELS: set = set(
         "Qwen/Qwen3-235B-A22B-Thinking-2507",
         # moonshotai
         "moonshotai/Kimi-K2-Instruct",
+        "moonshotai/Kimi-K2.5",
+        # MiniMaxAI
+        "MiniMaxAI/MiniMax-M2.5",
         # meta models
         "meta-llama/Llama-3.1-8B-Instruct",
         "meta-llama/Llama-3.3-70B-Instruct",

@@ -32414,6 +32414,34 @@
         "litellm_provider": "wandb",
         "mode": "chat"
     },
+    "wandb/moonshotai/Kimi-K2.5": {
+        "max_tokens": 262144,
+        "max_input_tokens": 262144,
+        "max_output_tokens": 262144,
+        "cache_read_input_token_cost": 1e-07,
+        "input_cost_per_token": 6e-07,
+        "output_cost_per_token": 3e-06,
+        "litellm_provider": "wandb",
+        "mode": "chat",
+        "source": "https://wandb.ai/inference/coreweave/cw_moonshotai_Kimi-K2.5",
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_vision": true
+    },
+    "wandb/MiniMaxAI/MiniMax-M2.5": {
+        "max_tokens": 197000,
+        "max_input_tokens": 197000,
+        "max_output_tokens": 197000,
+        "input_cost_per_token": 3e-07,
+        "output_cost_per_token": 1.2e-06,
+        "litellm_provider": "wandb",
+        "mode": "chat",
+        "source": "https://wandb.ai/inference/coreweave/cw_MiniMaxAI_MiniMax-M2.5",
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true
+    },
     "wandb/meta-llama/Llama-3.1-8B-Instruct": {
         "max_tokens": 128000,
         "max_input_tokens": 128000,
