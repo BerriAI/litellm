@@ -5385,9 +5385,15 @@ async def test_bulk_update_keys_success(monkeypatch):
                 ) as mock_hash:
                     mock_hash.side_effect = ["hashed-key-1", "hashed-key-2"]
 
+                    def _hash_for_bulk_success(token: str) -> str:
+                        return {
+                            "test-key-1": "hashed-key-1",
+                            "test-key-2": "hashed-key-2",
+                        }[token]
+
                     with patch(
                         "litellm.proxy.management_endpoints.key_management_endpoints._hash_token_if_needed",
-                        side_effect=["hashed-key-1", "hashed-key-2"],
+                        side_effect=_hash_for_bulk_success,
                     ):
                         with patch(
                             "litellm.proxy.management_endpoints.key_management_endpoints.KeyManagementEventHooks.async_key_updated_hook"
@@ -5511,9 +5517,15 @@ async def test_bulk_update_keys_partial_failures(monkeypatch):
                 ) as mock_hash:
                     mock_hash.return_value = "hashed-key-1"
 
+                    def _hash_for_bulk_partial(token: str) -> str:
+                        return {
+                            "test-key-1": "hashed-key-1",
+                            "non-existent-key": "hashed-non-existent-key",
+                        }[token]
+
                     with patch(
                         "litellm.proxy.management_endpoints.key_management_endpoints._hash_token_if_needed",
-                        side_effect=["hashed-key-1", "hashed-non-existent-key"],
+                        side_effect=_hash_for_bulk_partial,
                     ):
                         with patch(
                             "litellm.proxy.management_endpoints.key_management_endpoints.KeyManagementEventHooks.async_key_updated_hook"
