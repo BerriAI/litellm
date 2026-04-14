@@ -4,6 +4,8 @@ from typing import Any, Dict, List, Optional, Union
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from pydantic import ConfigDict, create_model
+from pydantic.fields import FieldInfo
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -75,6 +77,8 @@ class UIThemeSettingsResponse(SettingsResponse):
 class UISettings(BaseModel):
     """Configuration for UI-specific flags"""
 
+    model_config = ConfigDict(extra="allow")
+
     disable_model_add_for_internal_users: bool = Field(
         default=False,
         description="If true, internal users cannot add models from the UI",
@@ -98,11 +102,6 @@ class UISettings(BaseModel):
     forward_client_headers_to_llm_api: bool = Field(
         default=False,
         description="If enabled, forwards client headers (e.g. Authorization) to the LLM API. Required for Claude Code with Max subscription.",
-    )
-
-    enable_projects_ui: bool = Field(
-        default=False,
-        description="If enabled, shows the Projects feature in the UI sidebar and the project field in key management.",
     )
 
     disable_agents_for_internal_users: bool = Field(
@@ -149,7 +148,6 @@ ALLOWED_UI_SETTINGS_FIELDS = {
     "enabled_ui_pages_internal_users",
     "require_auth_for_public_ai_hub",
     "forward_client_headers_to_llm_api",
-    "enable_projects_ui",
     "disable_agents_for_internal_users",
     "allow_agents_for_team_admins",
     "disable_vector_stores_for_internal_users",
@@ -167,6 +165,36 @@ _RUNTIME_GENERAL_SETTINGS_FLAGS = [
     "disable_vector_stores_for_internal_users",
     "allow_vector_stores_for_team_admins",
 ]
+
+# Extension point: packages outside OSS (e.g. litellm_enterprise) can
+# contribute additional UI settings fields at import time. Each entry
+# maps a field name to a (type, FieldInfo) tuple suitable for pydantic's
+# create_model. Registering a field also appends it to
+# ALLOWED_UI_SETTINGS_FIELDS so GET/PATCH pass it through.
+_EXTRA_UI_SETTINGS_FIELDS: Dict[str, tuple] = {}
+
+# Settings OSS knows about as enterprise-gated. If a caller sends one of
+# these keys and no extension package has registered it, the PATCH
+# endpoint returns 403 instead of silently dropping the value, so the
+# client gets a clear signal that the feature requires LiteLLM Enterprise.
+_ENTERPRISE_ONLY_UI_SETTINGS: set[str] = {"enable_projects_ui"}
+
+
+def register_extra_ui_setting(name: str, type_: Any, field: FieldInfo) -> None:
+    """Register an additional UI settings field contributed by an extension package."""
+    _EXTRA_UI_SETTINGS_FIELDS[name] = (type_, field)
+    ALLOWED_UI_SETTINGS_FIELDS.add(name)
+
+
+def _get_effective_ui_settings_class() -> type:
+    """Return UISettings with any extension-registered fields merged in."""
+    if not _EXTRA_UI_SETTINGS_FIELDS:
+        return UISettings
+    return create_model(
+        "EffectiveUISettings",
+        __base__=UISettings,
+        **_EXTRA_UI_SETTINGS_FIELDS,
+    )
 
 
 class MCPSemanticFilterSettings(BaseModel):
@@ -1136,7 +1164,7 @@ async def get_ui_settings():
 
     return await _get_settings_with_schema(
         settings_key="ui_settings",
-        settings_class=UISettings,
+        settings_class=_get_effective_ui_settings_class(),
         config=config,
     )
 
@@ -1176,6 +1204,23 @@ async def update_ui_settings(
 
     # Only include fields the caller actually sent (not Pydantic defaults).
     settings_dict = settings.model_dump(exclude_unset=True)
+
+    # Reject enterprise-only settings up front so the caller gets a clear
+    # signal instead of a silent drop.
+    blocked_enterprise_keys = sorted(
+        (settings_dict.keys() & _ENTERPRISE_ONLY_UI_SETTINGS)
+        - ALLOWED_UI_SETTINGS_FIELDS
+    )
+    if blocked_enterprise_keys:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": (
+                    f"Setting(s) {blocked_enterprise_keys} are a LiteLLM "
+                    "Enterprise feature and are not available on this build."
+                )
+            },
+        )
 
     # Enforce allowlist and drop anything unexpected
     incoming = {

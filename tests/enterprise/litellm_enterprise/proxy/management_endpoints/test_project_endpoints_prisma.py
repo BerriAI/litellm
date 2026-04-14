@@ -20,7 +20,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.proxy.management_endpoints.team_endpoints import (
     new_team,
 )
-from litellm.proxy.management_endpoints.project_endpoints import (
+from litellm_enterprise.proxy.management_endpoints.project_endpoints import (
     new_project,
     update_project,
     delete_project,
