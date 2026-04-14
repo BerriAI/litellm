@@ -1,5 +1,6 @@
 from typing import List, Optional, Tuple
 
+
 from litellm.exceptions import AuthenticationError
 from litellm.llms.openai.openai import OpenAIConfig
 from litellm.types.llms.openai import AllMessageValues
@@ -150,7 +151,7 @@ class GithubCopilotConfig(OpenAIConfig):
            (``POST /v1/messages``), it may contain a ``thinking`` parameter
            instead of ``reasoning_effort``.  Copilot's API is OpenAI-compatible
            and does not understand ``thinking``, so when thinking is enabled and
-           no explicit ``reasoning_effort`` is set, default to ``"high"``.
+           no explicit ``reasoning_effort`` is set, default to ``"medium"``.
            Users can override this by setting ``reasoning_effort`` in
            ``litellm_params`` in the proxy config YAML.
         """
