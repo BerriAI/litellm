@@ -147,36 +147,65 @@ class MavvrikLogger(CustomLogger):
             # Otherwise, start from the earliest date that has data in the DB
             # (MIN(date) in LiteLLM_DailyUserSpend). Falls back to yesterday if
             # the query fails or the table is empty.
+            # Resolve the effective start date:
+            #   1. Parse MAVVRIK_LOOKBACK_START_DATE if set (validated YYYY-MM-DD).
+            #   2. Clamp to MIN(date) in the DB so we skip empty days before the
+            #      first real row — avoids iterating hundreds of no-op days when
+            #      the customer sets a date earlier than actual data.
+            #   3. Fall back to yesterday if the DB is empty or the query fails.
+            requested_start: Optional[date] = None
             if MAVVRIK_LOOKBACK_START_DATE is not None:
                 try:
-                    start_date = date.fromisoformat(MAVVRIK_LOOKBACK_START_DATE)
-                    verbose_logger.info(
-                        "MavvrikLogger: no marker found, MAVVRIK_LOOKBACK_START_DATE=%s → "
-                        "starting from %s",
-                        MAVVRIK_LOOKBACK_START_DATE,
-                        start_date,
-                    )
+                    requested_start = date.fromisoformat(MAVVRIK_LOOKBACK_START_DATE)
                 except ValueError:
                     verbose_logger.warning(
-                        "MavvrikLogger: invalid MAVVRIK_LOOKBACK_START_DATE '%s', "
-                        "falling back to earliest DB date",
+                        "MavvrikLogger: invalid MAVVRIK_LOOKBACK_START_DATE '%s' "
+                        "(expected YYYY-MM-DD), falling back to earliest DB date",
                         MAVVRIK_LOOKBACK_START_DATE,
                     )
-                    start_date = yesterday
-            else:
-                earliest_str = await db.get_earliest_date()
-                if earliest_str:
-                    try:
-                        start_date = date.fromisoformat(earliest_str)
-                        verbose_logger.info(
-                            "MavvrikLogger: no marker found, starting from earliest "
-                            "DB date %s",
-                            start_date,
-                        )
-                    except ValueError:
-                        start_date = yesterday
+
+            earliest_str = await db.get_earliest_date()
+            earliest_db: Optional[date] = None
+            if earliest_str:
+                try:
+                    earliest_db = date.fromisoformat(earliest_str)
+                except ValueError:
+                    pass
+
+            if requested_start is not None and earliest_db is not None:
+                # Clamp: don't start before the first row in the DB
+                start_date = max(requested_start, earliest_db)
+                if start_date != requested_start:
+                    verbose_logger.info(
+                        "MavvrikLogger: MAVVRIK_LOOKBACK_START_DATE=%s is before "
+                        "earliest DB date %s — starting from %s",
+                        requested_start,
+                        earliest_db,
+                        start_date,
+                    )
                 else:
-                    start_date = yesterday
+                    verbose_logger.info(
+                        "MavvrikLogger: no marker found, starting from "
+                        "MAVVRIK_LOOKBACK_START_DATE %s",
+                        start_date,
+                    )
+            elif requested_start is not None:
+                # DB empty — honour the customer's date anyway; loop will no-op
+                start_date = requested_start
+                verbose_logger.info(
+                    "MavvrikLogger: no marker found, no DB data yet, "
+                    "starting from MAVVRIK_LOOKBACK_START_DATE %s",
+                    start_date,
+                )
+            elif earliest_db is not None:
+                start_date = earliest_db
+                verbose_logger.info(
+                    "MavvrikLogger: no marker found, starting from earliest "
+                    "DB date %s",
+                    start_date,
+                )
+            else:
+                start_date = yesterday
 
         if start_date > yesterday:
             verbose_logger.debug(
