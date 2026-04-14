@@ -87,12 +87,12 @@ class LiteLLMDatabase:
         """Return the earliest date string (YYYY-MM-DD) in LiteLLM_DailyUserSpend, or None."""
         client = self._ensure_prisma_client()
         try:
-            # Avoid PostgreSQL-specific ::text cast; let Python coerce the value.
-            rows = await client.db.query_raw(
-                'SELECT MIN(date) AS earliest FROM "LiteLLM_DailyUserSpend"'
+            row = await client.db.litellm_dailyuserspend.find_first(
+                order={"date": "asc"},
+                where={"date": {"not": None}},
             )
-            if rows and rows[0].get("earliest") is not None:
-                return str(rows[0]["earliest"])[:10]  # trim to YYYY-MM-DD
+            if row is not None and row.date is not None:
+                return str(row.date)[:10]  # trim to YYYY-MM-DD
         except Exception:
             pass
         return None

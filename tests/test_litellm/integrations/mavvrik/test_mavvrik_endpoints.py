@@ -1,6 +1,5 @@
 """Unit tests for Mavvrik FastAPI admin endpoints."""
 
-import json
 import os
 import sys
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -11,11 +10,8 @@ sys.path.insert(0, os.path.abspath("../../../.."))
 
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.spend_tracking.mavvrik_endpoints import (
-    _get_mavvrik_settings,
-    _set_mavvrik_settings,
     delete_mavvrik_settings,
     dry_run_mavvrik_export,
-    export_mavvrik_data,
     get_mavvrik_settings,
     init_mavvrik_settings,
     update_mavvrik_settings,
@@ -26,6 +22,9 @@ from litellm.types.proxy.mavvrik_endpoints import (
     MavvrikSettingsUpdate,
 )
 
+# Patch target for LiteLLMDatabase used inside the endpoints module
+_DB_PATH = "litellm.proxy.spend_tracking.mavvrik_endpoints.LiteLLMDatabase"
+
 
 def _admin_user() -> UserAPIKeyAuth:
     return UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
@@ -35,10 +34,12 @@ def _non_admin_user() -> UserAPIKeyAuth:
     return UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER)
 
 
-def _make_prisma_row(settings: dict):
-    row = MagicMock()
-    row.param_value = json.dumps(settings)
-    return row
+def _mock_db(settings: dict = None, set_ok: bool = True):
+    """Return a mock LiteLLMDatabase instance with pre-configured returns."""
+    db = MagicMock()
+    db.get_mavvrik_settings = AsyncMock(return_value=settings or {})
+    db.set_mavvrik_settings = AsyncMock()
+    return db
 
 
 # ---------------------------------------------------------------------------
@@ -91,9 +92,7 @@ class TestInitMavvrikSettings:
 
         mock_streamer = MagicMock()
         mock_streamer.register = AsyncMock(return_value="2024-01-01T00:00:00+00:00")
-
-        mock_prisma = MagicMock()
-        mock_prisma.db.litellm_config.upsert = AsyncMock()
+        mock_db = _mock_db()
 
         with patch(
             "litellm.proxy.spend_tracking.mavvrik_endpoints.MavvrikStreamer",
@@ -102,8 +101,7 @@ class TestInitMavvrikSettings:
             "litellm.proxy.spend_tracking.mavvrik_endpoints.encrypt_value_helper",
             return_value="encrypted_key",
         ), patch(
-            "litellm.proxy.proxy_server.prisma_client",
-            mock_prisma,
+            _DB_PATH, return_value=mock_db
         ), patch(
             "litellm.proxy.spend_tracking.mavvrik_endpoints._pserver",
             MagicMock(scheduler=None),
@@ -112,7 +110,10 @@ class TestInitMavvrikSettings:
             resp = await init_mavvrik_settings(req, user_api_key_dict=_admin_user())
 
         assert resp.status == "success"
-        mock_prisma.db.litellm_config.upsert.assert_called_once()
+        mock_db.set_mavvrik_settings.assert_called_once()
+        stored = mock_db.set_mavvrik_settings.call_args[0][0]
+        assert stored["api_key"] == "encrypted_key"
+        assert stored["marker"] == "2024-01-01T00:00:00+00:00"
 
     @pytest.mark.asyncio
     async def test_init_falls_back_to_first_of_month_when_register_fails(self):
@@ -124,9 +125,7 @@ class TestInitMavvrikSettings:
 
         mock_streamer = MagicMock()
         mock_streamer.register = AsyncMock(side_effect=Exception("network error"))
-
-        mock_prisma = MagicMock()
-        mock_prisma.db.litellm_config.upsert = AsyncMock()
+        mock_db = _mock_db()
 
         with patch(
             "litellm.proxy.spend_tracking.mavvrik_endpoints.MavvrikStreamer",
@@ -135,8 +134,7 @@ class TestInitMavvrikSettings:
             "litellm.proxy.spend_tracking.mavvrik_endpoints.encrypt_value_helper",
             return_value="enc",
         ), patch(
-            "litellm.proxy.proxy_server.prisma_client",
-            mock_prisma,
+            _DB_PATH, return_value=mock_db
         ), patch(
             "litellm.proxy.spend_tracking.mavvrik_endpoints._pserver",
             MagicMock(scheduler=None),
@@ -145,14 +143,9 @@ class TestInitMavvrikSettings:
             resp = await init_mavvrik_settings(req, user_api_key_dict=_admin_user())
 
         assert resp.status == "success"
-        # marker should have been stored — check upsert was called
-        mock_prisma.db.litellm_config.upsert.assert_called_once()
-        stored_payload = json.loads(
-            mock_prisma.db.litellm_config.upsert.call_args[1]["data"]["create"][
-                "param_value"
-            ]
-        )
-        assert "marker" in stored_payload
+        mock_db.set_mavvrik_settings.assert_called_once()
+        stored = mock_db.set_mavvrik_settings.call_args[0][0]
+        assert "marker" in stored
 
 
 # ---------------------------------------------------------------------------
@@ -163,13 +156,9 @@ class TestInitMavvrikSettings:
 class TestGetMavvrikSettings:
     @pytest.mark.asyncio
     async def test_returns_not_configured_when_no_row(self):
-        mock_prisma = MagicMock()
-        mock_prisma.db.litellm_config.find_first = AsyncMock(return_value=None)
+        mock_db = _mock_db(settings={})
 
-        with patch(
-            "litellm.proxy.proxy_server.prisma_client",
-            mock_prisma,
-        ):
+        with patch(_DB_PATH, return_value=mock_db):
             resp = await get_mavvrik_settings(user_api_key_dict=_admin_user())
 
         assert resp.status == "not_configured"
@@ -177,21 +166,16 @@ class TestGetMavvrikSettings:
 
     @pytest.mark.asyncio
     async def test_returns_masked_key_when_configured(self):
-        row = _make_prisma_row(
-            {
-                "api_key": "mav_plaintextkey",
+        mock_db = _mock_db(
+            settings={
+                "api_key": "enc_key",
                 "api_endpoint": "https://api.mavvrik.dev/acme",
                 "connection_id": "prod",
                 "marker": "2024-01-14",
             }
         )
-        mock_prisma = MagicMock()
-        mock_prisma.db.litellm_config.find_first = AsyncMock(return_value=row)
 
-        with patch(
-            "litellm.proxy.proxy_server.prisma_client",
-            mock_prisma,
-        ), patch(
+        with patch(_DB_PATH, return_value=mock_db), patch(
             "litellm.proxy.spend_tracking.mavvrik_endpoints.decrypt_value_helper",
             return_value="mav_plaintextkey",
         ):
@@ -202,6 +186,27 @@ class TestGetMavvrikSettings:
         assert "mav_plaintextkey" not in (resp.api_key_masked or "")
         assert resp.marker == "2024-01-14"
         assert resp.connection_id == "prod"
+
+    @pytest.mark.asyncio
+    async def test_raises_500_on_decrypt_failure(self):
+        from fastapi import HTTPException
+
+        mock_db = _mock_db(
+            settings={"api_key": "enc_key", "api_endpoint": "e", "connection_id": "c"}
+        )
+
+        with patch(_DB_PATH, return_value=mock_db), patch(
+            "litellm.proxy.spend_tracking.mavvrik_endpoints.decrypt_value_helper",
+            return_value=None,  # decrypt failure returns None
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await get_mavvrik_settings(user_api_key_dict=_admin_user())
+
+        assert exc_info.value.status_code == 500
+        assert (
+            "salt" in str(exc_info.value.detail).lower()
+            or "decrypt" in str(exc_info.value.detail).lower()
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -227,17 +232,10 @@ class TestUpdateMavvrikSettings:
             "connection_id": "prod",
             "marker": "2024-01-01",
         }
-        row = _make_prisma_row(current)
-        mock_prisma = MagicMock()
-        mock_prisma.db.litellm_config.find_first = AsyncMock(return_value=row)
-        mock_prisma.db.litellm_config.upsert = AsyncMock()
-
+        mock_db = _mock_db(settings=current)
         req = MavvrikSettingsUpdate(marker="2024-06-01")
 
-        with patch(
-            "litellm.proxy.proxy_server.prisma_client",
-            mock_prisma,
-        ), patch(
+        with patch(_DB_PATH, return_value=mock_db), patch(
             "litellm.proxy.spend_tracking.mavvrik_endpoints.decrypt_value_helper",
             return_value="plain_key",
         ), patch(
@@ -247,11 +245,8 @@ class TestUpdateMavvrikSettings:
             resp = await update_mavvrik_settings(req, user_api_key_dict=_admin_user())
 
         assert resp.status == "success"
-        stored = json.loads(
-            mock_prisma.db.litellm_config.upsert.call_args[1]["data"]["update"][
-                "param_value"
-            ]
-        )
+        mock_db.set_mavvrik_settings.assert_called_once()
+        stored = mock_db.set_mavvrik_settings.call_args[0][0]
         assert stored["marker"] == "2024-06-01"
 
     def test_update_rejects_invalid_marker_date(self):
@@ -286,11 +281,10 @@ class TestDeleteMavvrikSettings:
 
     @pytest.mark.asyncio
     async def test_delete_removes_row_and_returns_success(self):
-        row = _make_prisma_row(
-            {"api_key": "enc", "api_endpoint": "e", "connection_id": "c"}
-        )
         mock_prisma = MagicMock()
-        mock_prisma.db.litellm_config.find_first = AsyncMock(return_value=row)
+        mock_prisma.db.litellm_config.find_first = AsyncMock(
+            return_value=MagicMock(param_value="{}")
+        )
         mock_prisma.db.litellm_config.delete = AsyncMock()
 
         with patch(
@@ -316,9 +310,7 @@ class TestDryRunMavvrikExport:
             "api_endpoint": "https://api.mavvrik.dev/acme",
             "connection_id": "prod",
         }
-        row = _make_prisma_row(settings)
-        mock_prisma = MagicMock()
-        mock_prisma.db.litellm_config.find_first = AsyncMock(return_value=row)
+        mock_db = _mock_db(settings=settings)
 
         dry_run_result = {
             "usage_data": [{"date": "2024-01-14", "model": "gpt-4o", "spend": 1.5}],
@@ -337,10 +329,7 @@ class TestDryRunMavvrikExport:
 
         req = MavvrikExportRequest(date_str="2024-01-14")
 
-        with patch(
-            "litellm.proxy.proxy_server.prisma_client",
-            mock_prisma,
-        ), patch(
+        with patch(_DB_PATH, return_value=mock_db), patch(
             "litellm.proxy.spend_tracking.mavvrik_endpoints.decrypt_value_helper",
             return_value="plain_key",
         ), patch(

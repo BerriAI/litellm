@@ -9,7 +9,6 @@ Endpoints (all require PROXY_ADMIN role):
     POST   /mavvrik/export        Trigger a manual upload to Mavvrik
 """
 
-import json
 import os
 from datetime import datetime, timedelta
 from datetime import timezone as _tz
@@ -23,6 +22,7 @@ from litellm.constants import (
     MAVVRIK_EXPORT_INTERVAL_MINUTES,
     MAVVRIK_EXPORT_USAGE_DATA_JOB_NAME,
 )
+from litellm.integrations.mavvrik.database import LiteLLMDatabase
 from litellm.integrations.mavvrik.mavvrik import MavvrikLogger
 from litellm.integrations.mavvrik.mavvrik_stream_api import MavvrikStreamer
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
@@ -62,15 +62,7 @@ async def _set_mavvrik_settings(
     connection_id: str,
     marker: Optional[str] = None,
 ) -> None:
-    """Encrypt API key and upsert all settings into LiteLLM_Config."""
-    from litellm.proxy.proxy_server import prisma_client
-
-    if prisma_client is None:
-        raise HTTPException(
-            status_code=500,
-            detail={"error": CommonProxyErrors.db_not_connected_error.value},
-        )
-
+    """Encrypt API key and upsert all settings into LiteLLM_Config via LiteLLMDatabase."""
     encrypted_api_key = encrypt_value_helper(api_key)
     settings: dict = {
         "api_key": encrypted_api_key,
@@ -80,49 +72,41 @@ async def _set_mavvrik_settings(
     if marker is not None:
         settings["marker"] = marker
 
-    payload = json.dumps(settings)
-    await prisma_client.db.litellm_config.upsert(
-        where={"param_name": _CONFIG_KEY},
-        data={
-            "create": {"param_name": _CONFIG_KEY, "param_value": payload},
-            "update": {"param_value": payload},
-        },
-    )
+    try:
+        db = LiteLLMDatabase()
+        await db.set_mavvrik_settings(settings)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail={"error": f"Failed to save Mavvrik settings: {exc}"},
+        ) from exc
 
 
 async def _get_mavvrik_settings() -> dict:
-    """Retrieve and decrypt Mavvrik settings from LiteLLM_Config."""
-    from litellm.proxy.proxy_server import prisma_client
-
-    if prisma_client is None:
+    """Retrieve and decrypt Mavvrik settings from LiteLLM_Config via LiteLLMDatabase."""
+    try:
+        db = LiteLLMDatabase()
+        value = await db.get_mavvrik_settings()
+    except Exception as exc:
         raise HTTPException(
             status_code=500,
             detail={"error": CommonProxyErrors.db_not_connected_error.value},
-        )
+        ) from exc
 
-    row = await prisma_client.db.litellm_config.find_first(
-        where={"param_name": _CONFIG_KEY}
-    )
-    if row is None or row.param_value is None:
-        return {}
-
-    value = row.param_value
-    if isinstance(value, str):
-        try:
-            value = json.loads(value)
-        except json.JSONDecodeError:
-            return {}
-    if not isinstance(value, dict):
+    if not value:
         return {}
 
     encrypted_key = value.get("api_key", "")
     if encrypted_key:
-        try:
-            value["api_key"] = decrypt_value_helper(
-                encrypted_key, key="mavvrik_api_key"
+        decrypted = decrypt_value_helper(encrypted_key, key="mavvrik_api_key")
+        if decrypted is None:
+            raise HTTPException(
+                status_code=500,
+                detail={
+                    "error": "Failed to decrypt Mavvrik API key. Check your salt key configuration."
+                },
             )
-        except Exception:
-            value["api_key"] = encrypted_key
+        value["api_key"] = decrypted
 
     return value
 

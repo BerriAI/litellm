@@ -35,6 +35,9 @@ from litellm.constants import (
     MAVVRIK_MAX_FETCHED_DATA_RECORDS,
 )
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.mavvrik.database import LiteLLMDatabase
+from litellm.integrations.mavvrik.mavvrik_stream_api import MavvrikStreamer
+from litellm.integrations.mavvrik.transform import MavvrikTransformer
 
 if TYPE_CHECKING:
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -88,8 +91,6 @@ class MavvrikLogger(CustomLogger):
 
     async def _scheduled_export(self):
         """Export all complete days since the last marker, one file per day."""
-        from litellm.integrations.mavvrik.database import LiteLLMDatabase
-
         db = LiteLLMDatabase()
         settings = await db.get_mavvrik_settings()
         marker_str: Optional[str] = settings.get("marker")
@@ -187,20 +188,24 @@ class MavvrikLogger(CustomLogger):
             date_str = export_date.isoformat()  # "YYYY-MM-DD"
             verbose_logger.info("MavvrikLogger: exporting date %s", date_str)
 
-            await self.export_usage_data(
-                date_str=date_str,
-                limit=MAVVRIK_MAX_FETCHED_DATA_RECORDS,
-            )
+            try:
+                await self.export_usage_data(
+                    date_str=date_str,
+                    limit=MAVVRIK_MAX_FETCHED_DATA_RECORDS,
+                )
+            except ValueError as exc:
+                verbose_logger.error(
+                    "MavvrikLogger: export skipped for %s — config error: %s",
+                    date_str,
+                    exc,
+                )
+                return
 
             # Advance marker one day at a time so partial failures don't lose progress
             await db.advance_marker(date_str)
 
             # Notify Mavvrik of the new marker epoch via PATCH (best-effort)
             try:
-                from litellm.integrations.mavvrik.mavvrik_stream_api import (
-                    MavvrikStreamer,
-                )
-
                 export_epoch = int(
                     datetime(
                         export_date.year,
@@ -237,10 +242,6 @@ class MavvrikLogger(CustomLogger):
         overwrites the previous file — exports are idempotent.
         Called by the scheduler and manual /mavvrik/export.
         """
-        from litellm.integrations.mavvrik.database import LiteLLMDatabase
-        from litellm.integrations.mavvrik.mavvrik_stream_api import MavvrikStreamer
-        from litellm.integrations.mavvrik.transform import MavvrikTransformer
-
         self._validate_config()
 
         verbose_logger.debug("MavvrikLogger: exporting date %s", date_str)
@@ -298,9 +299,6 @@ class MavvrikLogger(CustomLogger):
             date_str: Date to preview in YYYY-MM-DD format. Defaults to yesterday.
             limit:    Max rows to fetch.
         """
-        from litellm.integrations.mavvrik.database import LiteLLMDatabase
-        from litellm.integrations.mavvrik.transform import MavvrikTransformer
-
         if not date_str:
             date_str = (
                 datetime.now(timezone.utc).date() - timedelta(days=1)
@@ -378,40 +376,19 @@ class MavvrikLogger(CustomLogger):
 
     @staticmethod
     async def init_mavvrik_background_job(scheduler: AsyncIOScheduler):
-        """Register the hourly export job with APScheduler."""
+        """Register the hourly export job with APScheduler.
+
+        Only registers if a MavvrikLogger instance exists in the callback manager
+        (i.e. the operator has added ``callbacks: ["mavvrik"]`` in config.yaml or
+        called ``POST /mavvrik/init``). Does not auto-create a logger from env vars
+        to avoid silently injecting callbacks without explicit opt-in.
+        """
         loggers: List[CustomLogger] = (
             litellm.logging_callback_manager.get_custom_loggers_for_type(
                 callback_type=MavvrikLogger
             )
         )
         verbose_logger.debug("MavvrikLogger: found %d logger instance(s)", len(loggers))
-
-        # If no instance exists yet, auto-create from env vars.
-        # This covers two cases:
-        # 1. success_callback: ["mavvrik"] in config.yaml — string never gets instantiated by proxy
-        # 2. Container starts with MAVVRIK_* env vars but no config.yaml callback set
-        if not loggers and all(
-            os.getenv(v)
-            for v in (
-                "MAVVRIK_API_KEY",
-                "MAVVRIK_API_ENDPOINT",
-                "MAVVRIK_CONNECTION_ID",
-            )
-        ):
-            verbose_logger.info(
-                "MavvrikLogger: env vars detected, auto-creating logger from environment"
-            )
-            mavvrik_logger = MavvrikLogger()
-            litellm.logging_callback_manager.add_litellm_success_callback(
-                mavvrik_logger
-            )
-            litellm.logging_callback_manager.add_litellm_async_success_callback(
-                mavvrik_logger
-            )
-            for cb_list in (litellm.success_callback, litellm._async_success_callback):
-                if "mavvrik" in cb_list:
-                    cb_list.remove("mavvrik")
-            loggers = [mavvrik_logger]
 
         if loggers:
             mavvrik_logger = cast(MavvrikLogger, loggers[0])
