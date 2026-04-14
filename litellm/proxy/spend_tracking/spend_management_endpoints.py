@@ -4241,6 +4241,206 @@ async def _assert_user_can_view_request_id(
     )
 
 
+@router.get(
+    "/concurrent_request_logs",
+    tags=["Budget & Spend Tracking"],
+    dependencies=[Depends(user_api_key_auth)],
+    include_in_schema=False,
+)
+async def concurrent_request_logs(
+    timestamp: str = fastapi.Query(
+        description="Target timestamp in ISO 8601 format (e.g., 2026-03-27T15:30:00.123Z)"
+    ),
+    api_key: Optional[str] = fastapi.Query(
+        default=None,
+        description="Optional API key filter (e.g., sk-...gQxg)",
+    ),
+    key_alias: Optional[str] = fastapi.Query(
+        default=None,
+        description="Optional key alias filter (partial match supported)",
+    ),
+    match_status: Optional[str] = fastapi.Query(
+        default=None,
+        description="Filter by match status: 'matching', 'mismatching', or null for all",
+    ),
+    page: int = fastapi.Query(
+        default=1,
+        ge=1,
+        description="Page number (1-indexed)",
+    ),
+    page_size: int = fastapi.Query(
+        default=50,
+        ge=1,
+        le=100,
+        description="Number of items per page",
+    ),
+):
+    """
+    Get concurrent request logs by querying GCP Cloud Logging for parallel requests
+    metrics, then compare them with SpendLogs concurrency for those keys.
+    """
+    try:
+        from litellm.integrations.gcp_logging_helpers import (
+            GCP_LOGGING_AVAILABLE,
+            get_concurrent_requests_from_gcp_logs,
+        )
+    except Exception as import_err:
+        verbose_proxy_logger.error(
+            f"[concurrent_request_logs] Failed to import GCP logging helpers: {import_err}"
+        )
+        return {"data": [], "total": 0, "error": f"Import error: {str(import_err)}"}
+
+    prisma_client = _get_read_prisma_client()
+
+    try:
+        try:
+            target_time = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+        except ValueError:
+            target_time = datetime.fromisoformat(timestamp).replace(tzinfo=timezone.utc)
+
+        unix_timestamp = target_time.timestamp()
+
+        if not GCP_LOGGING_AVAILABLE:
+            verbose_proxy_logger.warning(
+                "[concurrent_request_logs] google-cloud-logging not available. "
+                "Install with: pip install google-cloud-logging"
+            )
+            return {"data": [], "total": 0}
+
+        gcp_results, success = await get_concurrent_requests_from_gcp_logs(
+            target_timestamp=unix_timestamp,
+            api_key_filter=api_key,
+            key_alias_filter=key_alias,
+        )
+
+        if not success:
+            verbose_proxy_logger.warning("[concurrent_request_logs] Failed to query GCP logs")
+            return {"data": [], "total": 0}
+
+        if not gcp_results:
+            return {"data": [], "total": 0}
+
+        gcp_rows = [
+            {
+                "token": row["token"],
+                "key_name": row["key_name"],
+                "key_alias": row["key_alias"],
+                "redis_concurrency": row["redis_concurrency"],
+                "scrape_timestamp": row["timestamp"],
+                "update_timestamp": row["timestamp"],
+            }
+            for row in gcp_results
+        ]
+        gcp_rows.sort(key=lambda row: (-row["redis_concurrency"], row["token"]))
+
+        reference_time = datetime.fromtimestamp(unix_timestamp, tz=timezone.utc)
+        reference_time_str = reference_time.isoformat()
+
+        async def query_spend_logs_for_tokens(tokens: List[str]) -> Dict[str, Dict]:
+            if not tokens:
+                return {}
+
+            token_placeholders = ", ".join([f"${i + 2}" for i in range(len(tokens))])
+            sql_query = f"""
+            SELECT
+                vt.key_alias as key_alias,
+                l.api_key as key_token,
+                COUNT(l.api_key)::int AS spend_logs_concurrency
+            FROM "LiteLLM_SpendLogs" l
+            LEFT JOIN "LiteLLM_VerificationToken" vt
+                ON l.api_key = vt.token
+            WHERE l."startTime" >= ($1::timestamptz - INTERVAL '60 minutes')
+               AND l."startTime" <= $1::timestamptz
+               AND l."endTime" >= $1::timestamptz
+               AND l.api_key IN ({token_placeholders})
+            GROUP BY
+                vt.key_alias,
+                l.api_key
+            """
+            response = await asyncio.wait_for(
+                prisma_client.db.query_raw(sql_query, reference_time_str, *tokens),
+                timeout=10.0,
+            )
+            spend_logs_map = {}
+            if response and isinstance(response, list):
+                for row in response:
+                    if isinstance(row, dict):
+                        token = row.get("key_token")
+                        spend_logs_map[token] = {
+                            "key_alias": row.get("key_alias") or "-",
+                            "spend_logs_concurrency": row.get("spend_logs_concurrency") or 0,
+                        }
+            return spend_logs_map
+
+        def build_data_with_match(results: List[Dict], spend_map: Dict[str, Dict]) -> List[Dict]:
+            data = []
+            for row in results:
+                token = row["token"]
+                spend_data = spend_map.get(token, {})
+                spend_logs_concurrency = spend_data.get("spend_logs_concurrency", 0)
+                redis_concurrency = row["redis_concurrency"]
+                is_match = isinstance(spend_logs_concurrency, int) and spend_logs_concurrency == redis_concurrency
+                data.append(
+                    {
+                        "key_alias": spend_data.get("key_alias") or row["key_alias"] or "-",
+                        "key_token": token,
+                        "redis_concurrency": redis_concurrency,
+                        "spend_logs_concurrency": spend_logs_concurrency,
+                        "is_match": is_match,
+                    }
+                )
+            return data
+
+        if match_status:
+            all_tokens = [row["token"] for row in gcp_rows if row["token"]]
+            all_spend_logs_map = await query_spend_logs_for_tokens(all_tokens)
+            all_data = build_data_with_match(gcp_rows, all_spend_logs_map)
+
+            if match_status == "matching":
+                filtered_data = [row for row in all_data if row["is_match"] is True]
+            elif match_status == "mismatching":
+                filtered_data = [row for row in all_data if row["is_match"] is False]
+            else:
+                filtered_data = all_data
+
+            total = len(filtered_data)
+            offset = (page - 1) * page_size
+            return {"data": filtered_data[offset:offset + page_size], "total": total}
+
+        total = len(gcp_rows)
+        offset = (page - 1) * page_size
+        paginated_results = gcp_rows[offset:offset + page_size]
+
+        if not paginated_results:
+            return {"data": [], "total": total}
+
+        tokens = [row["token"] for row in paginated_results if row["token"]]
+        if not tokens:
+            data = [
+                {
+                    "key_alias": row["key_alias"] or "-",
+                    "key_token": row["token"],
+                    "redis_concurrency": row["redis_concurrency"],
+                    "scrape_timestamp": row["scrape_timestamp"],
+                    "update_timestamp": row.get("update_timestamp"),
+                    "spend_logs_concurrency": "-",
+                    "is_match": False,
+                }
+                for row in paginated_results
+            ]
+            return {"data": data, "total": total}
+
+        spend_logs_map = await query_spend_logs_for_tokens(tokens)
+        return {"data": build_data_with_match(paginated_results, spend_logs_map), "total": total}
+
+    except Exception as e:
+        verbose_proxy_logger.error(f"[concurrent_request_logs] Error: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"error": str(e)},
+        )
+
+
 async def _get_permitted_team_ids_for_spend_logs(
     prisma_client,
     user_api_key_dict: UserAPIKeyAuth,
