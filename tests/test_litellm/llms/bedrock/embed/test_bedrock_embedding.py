@@ -1295,3 +1295,92 @@ def test_nova_image_only_standalone():
         params = request_body.get('singleEmbeddingParams', {})
         assert 'image' in params
         assert 'text' not in params
+
+def test_titan_combine_flag_unpaired_elements():
+    """With combine_text_image_pairs=True, [text, image, lone_text] → 2 calls: 1 fused + 1 standalone."""
+    client = HTTPHandler()
+    embed_response = {
+        'embedding': [0.1, 0.2, 0.3],
+        'inputTextTokenCount': 5,
+    }
+
+    with patch.object(client, 'post') as mock_post:
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.text = json.dumps(embed_response)
+        mock_response.json = lambda: json.loads(mock_response.text)
+        mock_post.return_value = mock_response
+
+        response = litellm.embedding(
+            model='bedrock/amazon.titan-embed-image-v1',
+            input=[
+                'Red leather handbag',
+                'data:image/png;base64,iVBORw0KGgoAAAANSUhEUg==',
+                'lone text without image partner',
+            ],
+            client=client,
+            aws_access_key_id='fake',
+            aws_secret_access_key='fake',
+            aws_region_name='us-east-1',
+            combine_text_image_pairs=True,
+        )
+
+        assert isinstance(response, litellm.EmbeddingResponse)
+        # 2 HTTP calls: 1 fused (text+image) + 1 standalone (lone text)
+        assert mock_post.call_count == 2
+
+        # First call: fused
+        first_body = json.loads(mock_post.call_args_list[0].kwargs.get('data', '{}'))
+        assert 'inputText' in first_body
+        assert 'inputImage' in first_body
+
+        # Second call: standalone text
+        second_body = json.loads(mock_post.call_args_list[1].kwargs.get('data', '{}'))
+        assert 'inputText' in second_body
+        assert 'inputImage' not in second_body
+
+def test_nova_combine_flag_unpaired_elements():
+    """With combine_text_image_pairs=True, [text, image, lone_text] → 2 calls: 1 fused + 1 standalone."""
+    client = HTTPHandler()
+    nova_response = {
+        'embeddings': [
+            {'embeddingType': 'TEXT', 'embedding': [0.1, 0.2, 0.3]},
+        ]
+    }
+
+    with patch.object(client, 'post') as mock_post:
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.text = json.dumps(nova_response)
+        mock_response.json = lambda: json.loads(mock_response.text)
+        mock_post.return_value = mock_response
+
+        response = litellm.embedding(
+            model='bedrock/amazon.nova-2-multimodal-embeddings-v1:0',
+            input=[
+                'shoes photo',
+                'data:image/jpeg;base64,/9j/4AAQSkZJRgAB',
+                'lone text without image partner',
+            ],
+            client=client,
+            aws_access_key_id='fake',
+            aws_secret_access_key='fake',
+            aws_region_name='us-east-1',
+            combine_text_image_pairs=True,
+        )
+
+        assert isinstance(response, litellm.EmbeddingResponse)
+        # 2 HTTP calls: 1 fused (text+image) + 1 standalone (lone text)
+        assert mock_post.call_count == 2
+
+        # First call: fused
+        first_body = json.loads(mock_post.call_args_list[0].kwargs.get('data', '{}'))
+        params = first_body.get('singleEmbeddingParams', {})
+        assert 'image' in params
+        assert 'text' in params
+
+        # Second call: standalone text
+        second_body = json.loads(mock_post.call_args_list[1].kwargs.get('data', '{}'))
+        params2 = second_body.get('singleEmbeddingParams', {})
+        assert 'text' in params2
+        assert 'image' not in params2
