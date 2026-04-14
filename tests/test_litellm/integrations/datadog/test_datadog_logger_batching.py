@@ -1,4 +1,4 @@
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 from httpx import Request, Response
@@ -156,7 +156,7 @@ async def test_log_async_event_threshold_flush_uses_flush_queue(datadog_env):
 
     logger.batch_size = 1
     logger.flush_queue = AsyncMock()
-    logger.create_datadog_logging_payload = AsyncMock(
+    logger.create_datadog_logging_payload = Mock(
         return_value=DatadogPayload(
             ddsource="litellm",
             ddtags="env:test",
