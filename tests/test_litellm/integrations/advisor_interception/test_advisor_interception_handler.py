@@ -1,5 +1,6 @@
 import pytest
 
+import litellm
 from litellm.integrations.advisor_interception.handler import AdvisorInterceptionLogger
 from litellm.integrations.advisor_interception.tools import (
     LITELLM_ADVISOR_TOOL_NAME,
@@ -148,3 +149,98 @@ async def test_should_run_chat_completion_agentic_loop_detects_legacy_function_c
     assert should_run is True
     assert len(tools_dict["advisor_calls"]) == 1
     assert tools_dict["advisor_calls"][0]["question"] == "Can you confirm advisor path?"
+
+
+@pytest.mark.asyncio
+async def test_run_chat_completion_agentic_loop_aggregates_subcall_costs(monkeypatch):
+    logger = AdvisorInterceptionLogger(enabled_providers=["openai"])
+    initial_response = ModelResponse(
+        id="initial",
+        choices=[
+            Choices(
+                finish_reason="tool_calls",
+                index=0,
+                message=Message(
+                    role="assistant",
+                    content=None,
+                    tool_calls=[
+                        ChatCompletionMessageToolCall(
+                            id="call_abc",
+                            type="function",
+                            function=Function(
+                                name=LITELLM_ADVISOR_TOOL_NAME,
+                                arguments='{"question":"Need advisor guidance"}',
+                            ),
+                        )
+                    ],
+                ),
+            )
+        ],
+        model="gpt-4o-mini",
+        object="chat.completion",
+        created=123,
+    )
+    initial_response._hidden_params["response_cost"] = 1.0
+
+    advisor_subcall_response = ModelResponse(
+        id="advisor-subcall",
+        choices=[
+            Choices(
+                finish_reason="stop",
+                index=0,
+                message=Message(
+                    role="assistant",
+                    content="Advisor says this looks good.",
+                ),
+            )
+        ],
+        model="claude-opus-4-6",
+        object="chat.completion",
+        created=124,
+    )
+    advisor_subcall_response._hidden_params["response_cost"] = 0.3
+
+    final_response = ModelResponse(
+        id="final",
+        choices=[
+            Choices(
+                finish_reason="stop",
+                index=0,
+                message=Message(
+                    role="assistant",
+                    content="integration ok.",
+                ),
+            )
+        ],
+        model="gpt-4o-mini",
+        object="chat.completion",
+        created=125,
+    )
+    final_response._hidden_params["response_cost"] = 0.7
+
+    calls = {"count": 0}
+
+    async def mock_acompletion(*args, **kwargs):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            return advisor_subcall_response
+        if calls["count"] == 2:
+            return final_response
+        raise AssertionError("Unexpected extra acompletion call")
+
+    monkeypatch.setattr(litellm, "acompletion", mock_acompletion)
+
+    response = await logger.async_run_chat_completion_agentic_loop(
+        tools={"advisor_config": {"advisor_model": "claude-opus-4-6", "max_uses": 3}},
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "Test"}],
+        response=initial_response,
+        optional_params={"tools": [get_litellm_advisor_tool_openai()], "max_tokens": 256},
+        logging_obj=None,
+        stream=False,
+        kwargs={"litellm_call_id": "cost-loop-1", "custom_llm_provider": "openai"},
+    )
+
+    assert calls["count"] == 2
+    assert response is final_response
+    assert response._hidden_params["response_cost"] == pytest.approx(2.0)

@@ -1,10 +1,11 @@
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+
 # Advisor Tool
 
-Pair a faster executor model with a higher-intelligence advisor model that provides strategic guidance mid-generation.
+LiteLLM now supports the Anthropic advisor tool across `chat/completions` and `messages` APIs (SDK + proxy).
 
-The advisor tool lets a fast, lower-cost executor model (Sonnet or Haiku) consult a high-intelligence advisor model (Opus 4.6) mid-generation. The advisor reads the full conversation and produces a plan or course correction — typically 400–700 text tokens — and the executor continues with the task.
-
-This pattern is well-suited for long-horizon agentic workloads (coding agents, computer use, multi-step research) where most turns are mechanical but having an excellent plan is crucial. You get close to advisor-solo quality while the bulk of token generation happens at executor-model rates.
+Use the advisor tool to let an executor model call a stronger advisor model during generation. For non-Anthropic providers, LiteLLM runs the advisor orchestration loop automatically.
 
 :::info Beta
 
@@ -22,32 +23,14 @@ The advisor tool is in beta. Include `anthropic-beta: advisor-tool-2026-03-01` i
 | **Google Vertex AI** | ✅ | ✅ | LiteLLM orchestration loop |
 | **Groq / Mistral / others** | ✅ | ✅ | LiteLLM orchestration loop |
 
-## How it works (LiteLLM native orchestration)
+For non-Anthropic providers, LiteLLM implements the advisor loop itself.
 
-For non-Anthropic providers, LiteLLM implements the advisor loop itself. The API you call is identical — LiteLLM handles everything transparently.
+- **Messages API** (`litellm.anthropic.messages.create/acreate`): built-in interception in the messages handler
+- **Chat Completions API** (`litellm.completion/acompletion`): enable `AdvisorInterceptionLogger` to convert advisor tools + run the loop
 
-When a request arrives with an `advisor_20260301` tool and a non-Anthropic provider, `AdvisorOrchestrationHandler` intercepts it. It translates the advisor tool into a regular function tool the provider understands, then runs an orchestration loop:
+When a request arrives with an `advisor_20260301` tool and a non-Anthropic provider, LiteLLM translates the advisor tool into a regular function tool the provider understands, then runs an orchestration loop:
 
-```mermaid
-flowchart TD
-    A["Your request\ntools: advisor_20260301\nmodel: e.g. openai/gpt-4.1-mini"] --> B["AdvisorOrchestrationHandler\ntranslates advisor → regular fn tool"]
-
-    B --> C["EXECUTOR CALL\nopenai / bedrock / vertex / etc."]
-
-    C --> D{"executor calls\nadvisor tool?"}
-
-    D -->|"yes — tool_use\nname=advisor"| E{"max_uses\nexceeded?"}
-
-    E -->|no| F["ADVISOR SUB-CALL\nclaude-opus-4-6\nfull transcript forwarded\nno tools"]
-
-    F --> G["Inject advice as\ntool_result into history"]
-
-    G --> C
-
-    E -->|yes| H["AdvisorMaxIterationsError"]
-
-    D -->|"no — end_turn\nor other stop reason"| I["Clean final response\nno advisor blocks in output"]
-```
+![Advisor Orchestration Flow](/img/advisor_orchestration_flow.svg)
 
 **What LiteLLM does for you:**
 
@@ -71,9 +54,10 @@ The executor and advisor models must form a valid pair. Currently the only suppo
 
 ## Chat Completions API
 
-### SDK Usage
+<Tabs>
+<TabItem value="chat-completions-sdk" label="SDK">
 
-#### Basic Example
+#### Basic Example (Anthropic-native executor)
 
 ```python showLineNumbers title="Advisor Tool — litellm.completion()"
 import litellm
@@ -85,9 +69,18 @@ response = litellm.completion(
     ],
     tools=[
         {
-            "type": "advisor_20260301",
-            "name": "advisor",
-            "model": "claude-opus-4-6",
+            "type": "function",
+            "function": {
+                "name": "litellm_advisor",
+                "description": "Consult a stronger advisor model.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "question": {"type": "string"}
+                    },
+                    "required": ["question"],
+                },
+            },
         }
     ],
     max_tokens=4096,
@@ -95,6 +88,39 @@ response = litellm.completion(
 
 print(response.choices[0].message.content)
 ```
+
+#### Non-Anthropic Executor (Chat Completions interception)
+
+```python showLineNumbers title="Advisor Tool with OpenAI executor via chat-completions"
+import asyncio
+import litellm
+from litellm.integrations.advisor_interception import (
+    AdvisorInterceptionLogger,
+    get_litellm_advisor_tool,
+)
+
+litellm.callbacks = [AdvisorInterceptionLogger(enabled_providers=["openai"])]
+
+async def main():
+    response = await litellm.acompletion(
+        model="gpt-5.4-mini",
+        messages=[
+            {"role": "user", "content": "Build a concurrent worker pool in Go with graceful shutdown."}
+        ],
+        # You can still use Anthropic-native advisor tool format.
+        tools=[get_litellm_advisor_tool(model="claude-opus-4-6")],
+        max_tokens=4096,
+    )
+    print(response.choices[0].message.content)
+
+asyncio.run(main())
+```
+
+::::note
+
+`AdvisorInterceptionLogger` converts advisor tool definitions to provider-compatible function tools for non-Anthropic chat-completions providers and runs the advisor sub-call loop server-side.
+
+::::
 
 #### With Optional Parameters
 
@@ -195,7 +221,8 @@ LiteLLM automatically strips `advisor_tool_result` blocks from message history w
 
 :::
 
-### AI Gateway Usage
+</TabItem>
+<TabItem value="chat-completions-proxy" label="Proxy">
 
 #### Proxy Configuration
 
@@ -233,11 +260,61 @@ response = client.chat.completions.create(
 )
 ```
 
+#### Client Request via Proxy (OpenAI-compatible function tool)
+
+Use this format when your chat-completions client sends OpenAI-style tools.
+
+```python showLineNumbers title="Proxy Chat Completions with litellm_advisor"
+from openai import OpenAI
+
+client = OpenAI(
+    api_key="your-litellm-proxy-key",
+    base_url="http://0.0.0.0:4000/v1",
+)
+
+response = client.chat.completions.create(
+    model="gemini-flash",
+    messages=[
+        {"role": "user", "content": "Call advisor once, then answer in one line: integration ok."}
+    ],
+    tools=[
+        {
+            "type": "function",
+            "function": {
+                "name": "litellm_advisor",
+                "description": "Consult a stronger advisor model.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "question": {"type": "string"}
+                    },
+                    "required": ["question"],
+                },
+            },
+        }
+    ],
+    max_tokens=512,
+)
+print(response.choices[0].message.content)
+```
+
+::::note
+
+For non-Anthropic chat-completions providers behind proxy, this OpenAI-compatible
+`litellm_advisor` function tool is the recommended request shape.
+The advisor model defaults to `claude-opus-4-6` unless overridden by your integration config.
+
+::::
+
+</TabItem>
+</Tabs>
+
 ---
 
 ## Messages API
 
-### SDK Usage
+<Tabs>
+<TabItem value="messages-sdk" label="SDK">
 
 #### Basic Example
 
@@ -301,7 +378,8 @@ async def main():
 asyncio.run(main())
 ```
 
-### AI Gateway Usage
+</TabItem>
+<TabItem value="messages-proxy" label="Proxy">
 
 #### Proxy Configuration
 
@@ -371,6 +449,9 @@ async def main():
 
 asyncio.run(main())
 ```
+
+</TabItem>
+</Tabs>
 
 ---
 
@@ -444,44 +525,6 @@ Advisor calls run as a separate sub-inference billed at the advisor model's rate
 ```
 
 Top-level `usage` reflects executor tokens only. Advisor tokens appear in `iterations` entries with `type: "advisor_message"` and are billed at Opus rates.
-
-**Tips:**
-- Enable `caching` on the tool definition only when you expect 3+ advisor calls per conversation; it costs more than it saves below that threshold.
-- Use `max_uses` to cap advisor calls per request. Once reached, the executor continues without further advice.
-- For conversation-level caps, count advisor calls client-side. When you reach your limit, remove the advisor tool from `tools`.
-
----
-
-## Recommended System Prompt
-
-For coding and agent tasks, Anthropic recommends prepending these blocks to your system prompt for consistent advisor timing and optimal cost/quality:
-
-```text title="Timing guidance (prepend to system prompt)"
-You have access to an `advisor` tool backed by a stronger reviewer model. It takes NO parameters — when you call advisor(), your entire conversation history is automatically forwarded. They see the task, every tool call you've made, every result you've seen.
-
-Call advisor BEFORE substantive work — before writing, before committing to an interpretation, before building on an assumption. If the task requires orientation first (finding files, fetching a source, seeing what's there), do that, then call advisor. Orientation is not substantive work. Writing, editing, and declaring an answer are.
-
-Also call advisor:
-- When you believe the task is complete. BEFORE this call, make your deliverable durable: write the file, save the result, commit the change.
-- When stuck — errors recurring, approach not converging, results that don't fit.
-- When considering a change of approach.
-
-On tasks longer than a few steps, call advisor at least once before committing to an approach and once before declaring done. On short reactive tasks where the next action is dictated by tool output you just read, you don't need to keep calling.
-```
-
-```text title="Advice weight guidance (add after timing block)"
-Give the advice serious weight. If you follow a step and it fails empirically, or you have primary-source evidence that contradicts a specific claim, adapt. A passing self-test is not evidence the advice is wrong.
-
-If you've already retrieved data pointing one way and the advisor points another: don't silently switch. Surface the conflict in one more advisor call — "I found X, you suggest Y, which constraint breaks the tie?"
-```
-
-To reduce advisor output length by 35–45% without losing quality, add:
-
-```text title="Cost reduction (optional, add before timing block)"
-The advisor should respond in under 100 words and use enumerated steps, not explanations.
-```
-
----
 
 ## Additional Resources
 
