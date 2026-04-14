@@ -193,9 +193,75 @@ async def test_flush_queue_updates_last_flush_time(datadog_env):
         )
     ]
     logger.last_flush_time = 0
-    logger.async_send_batch = AsyncMock()
+
+    async def _successful_send():
+        logger.log_queue = []
+
+    logger.async_send_batch = AsyncMock(side_effect=_successful_send)
 
     await logger.flush_queue()
 
     logger.async_send_batch.assert_awaited_once()
     assert logger.last_flush_time > 0
+
+
+@pytest.mark.asyncio
+async def test_flush_queue_does_not_update_last_flush_time_when_send_requeues(
+    datadog_env,
+):
+    with patch("asyncio.create_task"):
+        logger = DataDogLogger()
+
+    logger.log_queue = [
+        DatadogPayload(
+            ddsource="litellm",
+            ddtags="env:test",
+            hostname="host",
+            message='{"event": 0}',
+            service="svc",
+            status="info",
+        )
+    ]
+    logger.last_flush_time = 123.0
+
+    async def _requeue_batch():
+        logger.log_queue = [
+            DatadogPayload(
+                ddsource="litellm",
+                ddtags="env:test",
+                hostname="host",
+                message='{"event": 0}',
+                service="svc",
+                status="info",
+            )
+        ]
+
+    logger.async_send_batch = AsyncMock(side_effect=_requeue_batch)
+
+    await logger.flush_queue()
+
+    logger.async_send_batch.assert_awaited_once()
+    assert logger.last_flush_time == 123.0
+
+
+@pytest.mark.asyncio
+async def test_flush_queue_returns_without_lock(datadog_env):
+    with patch("asyncio.create_task"):
+        logger = DataDogLogger()
+
+    logger.flush_lock = None
+    logger.log_queue = [
+        DatadogPayload(
+            ddsource="litellm",
+            ddtags="env:test",
+            hostname="host",
+            message='{"event": 0}',
+            service="svc",
+            status="info",
+        )
+    ]
+    logger.async_send_batch = AsyncMock()
+
+    await logger.flush_queue()
+
+    logger.async_send_batch.assert_not_awaited()

@@ -378,7 +378,8 @@ class DataDogLogger(
                     "Datadog: Flushing batch of %s events", len(self.log_queue)
                 )
                 await self.async_send_batch()
-                self.last_flush_time = time.time()
+                if not self.log_queue:
+                    self.last_flush_time = time.time()
 
     def log_success_event(self, kwargs, response_obj, start_time, end_time):
         """
