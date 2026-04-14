@@ -301,6 +301,24 @@ class StandardBuiltInToolCostTracking:
         return None
 
     @staticmethod
+    def _usage_includes_web_search_requests(usage: Any) -> bool:
+        """
+        Return True when usage indicates web search calls were made.
+
+        Handles both typed objects and dict-shaped usage payloads that can appear
+        in passthrough streaming response reconstruction.
+        """
+        server_tool_use = getattr(usage, "server_tool_use", None)
+        if server_tool_use is not None:
+            if isinstance(server_tool_use, dict):
+                if server_tool_use.get("web_search_requests") is not None:
+                    return True
+            elif getattr(server_tool_use, "web_search_requests", None) is not None:
+                return True
+
+        return False
+
+    @staticmethod
     def response_object_includes_web_search_call(
         response_object: Any, usage: Optional[Usage] = None
     ) -> bool:
@@ -337,10 +355,8 @@ class StandardBuiltInToolCostTracking:
                 # Anthropic Claude (direct API and Vertex AI) uses server_tool_use.web_search_requests.
                 # Without this check, Claude ModelResponse always falls through to return False
                 # and _handle_web_search_cost() is never called.
-                if (
-                    hasattr(usage, "server_tool_use")
-                    and usage.server_tool_use is not None
-                    and usage.server_tool_use.web_search_requests is not None
+                if StandardBuiltInToolCostTracking._usage_includes_web_search_requests(
+                    usage
                 ):
                     return True
             return False
@@ -350,10 +366,8 @@ class StandardBuiltInToolCostTracking:
                 response_object=response_object, output_type="web_search_call"
             )
         elif usage is not None:
-            if (
-                hasattr(usage, "server_tool_use")
-                and usage.server_tool_use is not None
-                and usage.server_tool_use.web_search_requests is not None
+            if StandardBuiltInToolCostTracking._usage_includes_web_search_requests(
+                usage
             ):
                 return True
             elif (
