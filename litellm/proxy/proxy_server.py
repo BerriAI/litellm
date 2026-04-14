@@ -7057,6 +7057,51 @@ async def model_info(
     )
 
 
+def _get_model_mode(model: str) -> Optional[str]:
+    """
+    Safely look up the mode ('chat', 'image_generation', etc.) for a model.
+    Returns None if the model is not found in the model cost map.
+    """
+    try:
+        info = litellm.get_model_info(model=model)
+        return info.get("mode")
+    except Exception:
+        return None
+
+
+def _image_response_to_chat_response(image_response: Any, model: str) -> dict:
+    """
+    Convert an ImageResponse to a chat completion dict so that clients that
+    only speak /chat/completions (e.g. OpenWebUI) can receive image results.
+    Each generated image URL is rendered as a Markdown image.
+    """
+    import time
+    import uuid
+
+    images = getattr(image_response, "data", None) or []
+    parts: List[str] = []
+    for img in images:
+        url = getattr(img, "url", None)
+        if url:
+            parts.append(f"![image]({url})")
+    content = "\n\n".join(parts) if parts else "Image generation completed."
+
+    return {
+        "id": f"chatcmpl-{uuid.uuid4().hex[:10]}",
+        "object": "chat.completion",
+        "created": int(time.time()),
+        "model": model,
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": content},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+    }
+
+
 @router.post(
     "/v1/chat/completions",
     dependencies=[Depends(user_api_key_auth)],
@@ -7140,6 +7185,34 @@ async def chat_completion(  # noqa: PLR0915
             and user_api_key_dict.agent_id is not None
         ):
             data["metadata"]["agent_id"] = user_api_key_dict.agent_id
+
+    # Auto-route qwen-image series models: when a client (e.g. OpenWebUI) sends a
+    # /chat/completions request for a qwen-image model, extract the prompt from messages
+    # and route to the image generation handler instead. Intentionally scoped to
+    # qwen-image series only — other image_generation providers are not affected.
+    _model_name = data.get("model") or ""
+    if (
+        _model_name
+        and "qwen-image" in _model_name.lower()
+        and _get_model_mode(_model_name) == "image_generation"
+    ):
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            get_str_from_messages,
+        )
+
+        _messages = data.get("messages") or []
+        _prompt = get_str_from_messages(_messages) if _messages else data.get("prompt", "")
+        _image_data = {k: v for k, v in data.items() if k != "messages"}
+        _image_data["prompt"] = _prompt
+        _llm_call = await route_request(
+            data=_image_data,
+            route_type="aimage_generation",
+            llm_router=llm_router,
+            user_model=user_model,
+        )
+        _image_response = await _llm_call
+        return _image_response_to_chat_response(_image_response, model=_model_name)
+
     base_llm_response_processor = ProxyBaseLLMRequestProcessing(data=data)
     try:
         result = await base_llm_response_processor.base_process_llm_request(
