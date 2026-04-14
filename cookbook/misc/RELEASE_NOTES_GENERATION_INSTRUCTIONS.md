@@ -9,6 +9,15 @@ This document provides comprehensive instructions for AI agents to generate rele
 3. **Previous Version Commit Hash** - To compare model pricing changes
 4. **Reference Release Notes** - Use recent stable releases (v1.76.3-stable, v1.77.2-stable) as templates for consistent formatting
 
+### Resolving Staging PRs
+
+The GitHub release page (e.g. `https://github.com/BerriAI/litellm/releases/tag/v1.83.3-stable`) does **not** list the real changelog directly. The "What's Changed" section contains **staging PRs** that each bundle many individual commits/PRs. For example:
+
+- `Litellm oss staging 03 14 2026 by @RheagalFire in #23686`
+- `Litellm ryan march 16 by @ryan-crabbe in #23822`
+
+To get the real changelog, you MUST click into each staging PR (e.g. `#23686`, `#23822`), open its **Commits** tab, and extract every underlying commit/PR (look for the `(#NNNNN)` suffix on commit titles). Those underlying PRs — not the staging PRs — are what get categorized in the release notes. Never treat a staging PR title as a single changelog entry.
+
 ## Step-by-Step Process
 
 ### 1. Initial Setup and Analysis
