@@ -238,6 +238,11 @@ class AdvisorInterceptionLogger(CustomLogger):
                         response=current_response, response_cost=total_response_cost
                     )
                     return current_response
+                if len(advisor_calls) != len(raw_tool_calls):
+                    verbose_logger.debug(
+                        "AdvisorInterception: Mixed tool calls detected inside advisor loop, stopping interception"
+                    )
+                    return current_response
 
                 assistant_content = self._extract_message_content(current_response)
                 assistant_message: Dict[str, Any] = {
@@ -410,6 +415,7 @@ class AdvisorInterceptionLogger(CustomLogger):
         raw_tool_calls: List[Dict] = []
 
         for tool_call in tool_calls:
+            raw_tool_calls.append(tool_call)
             function = tool_call.get("function", {})
             function_name = function.get("name")
             if function_name not in {"advisor", LITELLM_ADVISOR_TOOL_NAME}:
@@ -432,7 +438,6 @@ class AdvisorInterceptionLogger(CustomLogger):
                     "question": parsed_args.get("question"),
                 }
             )
-            raw_tool_calls.append(tool_call)
 
         # Some providers (e.g. Gemini in certain modes) can return legacy function_call.
         if not advisor_calls and function_call is not None:
@@ -633,6 +638,7 @@ class AdvisorInterceptionLogger(CustomLogger):
             "safety_identifier",
             "service_tier",
             "stream",
+            "litellm_call_id",
         }
         return {
             k: v

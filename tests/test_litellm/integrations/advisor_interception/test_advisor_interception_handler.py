@@ -323,3 +323,74 @@ async def test_post_call_hook_cleans_up_config_when_should_run_is_false():
 
     assert result is None
     assert "cleanup-call-2" not in logger._advisor_config_by_call_id
+
+
+@pytest.mark.asyncio
+async def test_should_run_chat_completion_agentic_loop_skips_mixed_tool_calls():
+    logger = AdvisorInterceptionLogger(enabled_providers=["openai"])
+    logger._advisor_config_by_call_id["mixed-call-1"] = {
+        "advisor_model": "claude-opus-4-6",
+        "max_uses": 3,
+    }
+    mock_response = ModelResponse(
+        id="test-mixed",
+        choices=[
+            Choices(
+                finish_reason="tool_calls",
+                index=0,
+                message=Message(
+                    role="assistant",
+                    content=None,
+                    tool_calls=[
+                        ChatCompletionMessageToolCall(
+                            id="call_advisor",
+                            type="function",
+                            function=Function(
+                                name=LITELLM_ADVISOR_TOOL_NAME,
+                                arguments='{"question":"Need advisor guidance"}',
+                            ),
+                        ),
+                        ChatCompletionMessageToolCall(
+                            id="call_weather",
+                            type="function",
+                            function=Function(
+                                name="get_weather",
+                                arguments='{"city":"San Francisco"}',
+                            ),
+                        ),
+                    ],
+                ),
+            )
+        ],
+        model="gpt-4o-mini",
+        object="chat.completion",
+        created=123,
+    )
+
+    should_run, tools_dict = await logger.async_should_run_chat_completion_agentic_loop(
+        response=mock_response,
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "Help"}],
+        tools=[get_litellm_advisor_tool_openai()],
+        stream=False,
+        custom_llm_provider="openai",
+        kwargs={"litellm_call_id": "mixed-call-1"},
+    )
+
+    assert should_run is False
+    assert tools_dict == {}
+    assert "mixed-call-1" not in logger._advisor_config_by_call_id
+
+
+def test_prepare_followup_kwargs_removes_litellm_call_id():
+    kwargs = {
+        "litellm_call_id": "original-call-id",
+        "metadata": {"k": "v"},
+        "user_defined_key": "should_remain",
+    }
+
+    filtered_kwargs = AdvisorInterceptionLogger._prepare_followup_kwargs(kwargs)
+
+    assert "litellm_call_id" not in filtered_kwargs
+    assert "metadata" not in filtered_kwargs
+    assert filtered_kwargs["user_defined_key"] == "should_remain"
