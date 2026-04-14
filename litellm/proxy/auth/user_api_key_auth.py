@@ -271,10 +271,13 @@ async def _check_end_user_budget(
 
     # Check if model has zero cost - if so, skip budget check
     model = get_model_from_request(request_data, route)
-    if model is not None and llm_router is not None:
-        from litellm.proxy.auth.auth_checks import _is_model_cost_zero
+    from litellm.proxy.auth.auth_checks import _is_model_cost_zero
 
-        if _is_model_cost_zero(model=model, llm_router=llm_router):
+    if _is_model_cost_zero(model=model, llm_router=llm_router):
+        verbose_proxy_logger.info(
+            f"Skipping all budget checks for zero-cost model: {model}"
+        )
+        return
             verbose_proxy_logger.info(
                 f"Skipping all budget checks for zero-cost model: {model}"
             )
