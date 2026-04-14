@@ -26,13 +26,13 @@ import Image from '@theme/IdealImage';
 ## Installation
 
 ```shell
-pip install litellm
+uv add litellm
 ```
 
 To run the full Proxy Server (LLM Gateway):
 
 ```shell
-pip install 'litellm[proxy]'
+uv tool install 'litellm[proxy]'
 ```
 
 ---
@@ -336,7 +336,7 @@ The proxy is a self-hosted OpenAI-compatible gateway. Any client that works with
 #### Step 1 — Start the proxy
 
 <Tabs>
-<TabItem value="pip" label="pip">
+<TabItem value="cli" label="LiteLLM CLI">
 
 ```shell
 litellm --model huggingface/bigcode/starcoder

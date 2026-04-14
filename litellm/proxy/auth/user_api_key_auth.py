@@ -645,13 +645,14 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                 )
             if response is not None and isinstance(response, UserAPIKeyAuth):
                 validated = UserAPIKeyAuth.model_validate(response)
-                validated = await _run_post_custom_auth_checks(
-                    valid_token=validated,
-                    request=request,
-                    request_data=request_data,
-                    route=route,
-                    parent_otel_span=parent_otel_span,
-                )
+                if getattr(litellm, "enable_post_custom_auth_checks", False):
+                    validated = await _run_post_custom_auth_checks(
+                        valid_token=validated,
+                        request=request,
+                        request_data=request_data,
+                        route=route,
+                        parent_otel_span=parent_otel_span,
+                    )
                 return validated
             elif response is not None and isinstance(response, str):
                 api_key = response
@@ -659,13 +660,14 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
         elif user_custom_auth is not None:
             response = await user_custom_auth(request=request, api_key=api_key)  # type: ignore
             validated = UserAPIKeyAuth.model_validate(response)
-            validated = await _run_post_custom_auth_checks(
-                valid_token=validated,
-                request=request,
-                request_data=request_data,
-                route=route,
-                parent_otel_span=parent_otel_span,
-            )
+            if getattr(litellm, "enable_post_custom_auth_checks", False):
+                validated = await _run_post_custom_auth_checks(
+                    valid_token=validated,
+                    request=request,
+                    request_data=request_data,
+                    route=route,
+                    parent_otel_span=parent_otel_span,
+                )
             return validated
 
         ### LITELLM-DEFINED AUTH FUNCTION ###
@@ -690,42 +692,39 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
 
         ########## End of Route Checks Before Reading DB / Cache for "token" ########
 
-        if general_settings.get("enable_oauth2_auth", False) is True:
-            # Only apply OAuth2 M2M authentication to LLM API routes and info routes, not UI/management routes
-            # This allows UI SSO to work separately from API M2M authentication
-            # Note: Info routes are already scoped to the user
-            if RouteChecks.is_llm_api_route(route=route) or RouteChecks.is_info_route(
-                route=route
-            ):
-                # When both OAuth2 and JWT auth are enabled, use token format to decide:
-                # - JWT tokens (3 dot-separated parts) -> skip OAuth2, fall through to JWT handler
-                # - Opaque tokens -> use OAuth2 handler
-                # This allows JWT for users and OAuth2 for M2M on the same instance
-                is_jwt = (
-                    jwt_handler.is_jwt(token=api_key)
-                    if general_settings.get("enable_jwt_auth", False) is True
-                    else False
-                )
-                # Routing uses unverified JWT claims only to choose auth path.
-                # Final authentication is enforced by the selected validator.
-                route_jwt_to_oauth2 = (
-                    is_jwt
-                    and _should_route_jwt_to_oauth2_override(
-                        token=api_key, jwt_handler=jwt_handler
-                    )
-                )
-                if not is_jwt or route_jwt_to_oauth2:
-                    # return UserAPIKeyAuth object
-                    # helper to check if the api_key is a valid oauth2 token
-                    from litellm.proxy.proxy_server import premium_user
+        enable_oauth2_auth = general_settings.get("enable_oauth2_auth", False) is True
+        enable_jwt_auth = general_settings.get("enable_jwt_auth", False) is True
+        is_jwt = jwt_handler.is_jwt(token=api_key) if enable_jwt_auth else False
 
-                    if premium_user is not True:
-                        raise ValueError(
-                            "Oauth2 token validation is only available for premium users"
-                            + CommonProxyErrors.not_premium_user.value
-                        )
+        # Routing uses unverified JWT claims only to choose auth path.
+        # Final authentication is enforced by the selected validator.
+        route_jwt_to_oauth2 = (
+            is_jwt
+            and _should_route_jwt_to_oauth2_override(
+                token=api_key, jwt_handler=jwt_handler
+            )
+        )
 
-                    return await Oauth2Handler.check_oauth2_token(token=api_key)
+        # OAuth2 applies for:
+        # 1) when global OAuth2 auth is enabled on LLM + info routes
+        # 2) JWT tokens that explicitly match routing_overrides on LLM + info routes
+        should_apply_override_oauth2 = route_jwt_to_oauth2 and (
+            RouteChecks.is_llm_api_route(route=route)
+            or RouteChecks.is_info_route(route=route)
+        )
+        should_apply_global_oauth2 = enable_oauth2_auth and (
+            RouteChecks.is_llm_api_route(route=route)
+            or RouteChecks.is_info_route(route=route)
+        )
+        if (should_apply_global_oauth2 and not is_jwt) or should_apply_override_oauth2:
+            from litellm.proxy.proxy_server import premium_user
+            if premium_user is not True:
+                raise ValueError(
+                    "Oauth2 token validation is only available for premium users"
+                    + CommonProxyErrors.not_premium_user.value
+                )
+
+            return await Oauth2Handler.check_oauth2_token(token=api_key)
 
         if general_settings.get("enable_oauth2_proxy_auth", False) is True:
             return await handle_oauth2_proxy_request(request=request)

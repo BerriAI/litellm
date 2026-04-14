@@ -1134,7 +1134,11 @@ class CustomStreamWrapper:
             ):
                 if self.received_finish_reason is not None:
                     _chunk_has_content = isinstance(chunk, dict) and (
-                        bool(chunk.get("text", "")) or chunk.get("tool_use") is not None
+                        bool(chunk.get("text", ""))
+                        or chunk.get("tool_use") is not None
+                        # Usage-only final chunks are valid and needed to surface
+                        # finish_reason/usage to downstream translators.
+                        or chunk.get("usage") is not None
                     )
                     if not _chunk_has_content and (
                         not isinstance(chunk, dict)
@@ -1282,9 +1286,9 @@ class CustomStreamWrapper:
                             and chunk.candidates[0].finish_reason.name  # type: ignore
                             != "FINISH_REASON_UNSPECIFIED"
                         ):  # every non-final chunk in vertex ai has this
-                            self.received_finish_reason = chunk.candidates[  # type: ignore
-                                0
-                            ].finish_reason.name
+                            self.received_finish_reason = map_finish_reason(  # type: ignore
+                                chunk.candidates[0].finish_reason.name
+                            )
                     except Exception:
                         if chunk.candidates[0].finish_reason.name == "SAFETY":  # type: ignore
                             raise Exception(

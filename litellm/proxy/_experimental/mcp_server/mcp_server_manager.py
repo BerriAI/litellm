@@ -10,6 +10,7 @@ import asyncio
 import datetime
 import hashlib
 import json
+import os
 import re
 from typing import Any, Callable, Dict, List, Literal, Optional, Set, Tuple, Union, cast
 from urllib.parse import urlparse
@@ -35,6 +36,8 @@ from litellm.constants import (
     MCP_CLIENT_TIMEOUT,
     MCP_HEALTH_CHECK_TIMEOUT,
     MCP_METADATA_TIMEOUT,
+    MCP_NPM_CACHE_DIR,
+    MCP_STDIO_ALLOWED_COMMANDS,
     MCP_TOOL_LISTING_TIMEOUT,
 )
 from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
@@ -1119,9 +1122,19 @@ class MCPServerManager:
             # In containers the default (~/.npm or /app/.npm) may not exist
             # or be read-only, causing npx to fail with ENOENT.
             if "NPM_CONFIG_CACHE" not in resolved_env:
-                from litellm.constants import MCP_NPM_CACHE_DIR
-
                 resolved_env["NPM_CONFIG_CACHE"] = MCP_NPM_CACHE_DIR
+            # Defense-in-depth: block commands not in the allowlist.
+            # The Pydantic validator blocks new servers; this catches legacy
+            # config/DB records predating the allowlist.
+            if server.command:
+                base_command = os.path.basename(server.command)
+                if base_command not in MCP_STDIO_ALLOWED_COMMANDS:
+                    raise HTTPException(
+                        status_code=403,
+                        detail=f"MCP stdio command '{server.command}' is not in the allowlist ({sorted(MCP_STDIO_ALLOWED_COMMANDS)}). "
+                        f"Add it to LITELLM_MCP_STDIO_EXTRA_COMMANDS to allow this command.",
+                    )
+
             stdio_config: Optional[MCPStdioConfig] = None
             if server.command and server.args is not None:
                 stdio_config = MCPStdioConfig(
@@ -2441,6 +2454,37 @@ class MCPServerManager:
                 start_time=start_time,
             )
             tasks.append(during_hook_task)
+
+        # For per-user OAuth servers: if the client didn't supply a token in
+        # oauth2_headers, look up the stored token from Redis / DB.  This is the
+        # call_tool equivalent of _get_user_oauth_extra_headers_from_db used in
+        # list_tools.
+        if (
+            mcp_server.needs_user_oauth_token
+            and not oauth2_headers
+            and user_api_key_auth is not None
+        ):
+            user_id = getattr(user_api_key_auth, "user_id", None)
+            if user_id:
+                try:
+                    from litellm.proxy._experimental.mcp_server.server import (  # noqa: PLC0415
+                        _get_user_oauth_extra_headers_from_db,
+                    )
+
+                    stored_headers = await _get_user_oauth_extra_headers_from_db(
+                        server=mcp_server,
+                        user_api_key_auth=user_api_key_auth,
+                    )
+                    if stored_headers:
+                        oauth2_headers = stored_headers
+                except Exception as _lookup_exc:
+                    verbose_logger.debug(
+                        "call_tool: per-user token lookup failed for "
+                        "user=%s server=%s: %s",
+                        user_id,
+                        mcp_server.server_id,
+                        _lookup_exc,
+                    )
 
         # For OpenAPI servers, call the tool handler directly instead of via MCP client
         if mcp_server.spec_path:

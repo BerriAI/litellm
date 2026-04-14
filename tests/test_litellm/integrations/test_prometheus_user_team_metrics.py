@@ -525,6 +525,61 @@ async def test_set_user_budget_metrics_after_api_request_inf_when_genuinely_no_b
     )
 
 
+def test_per_request_metrics_emit_all_identity_labels(prometheus_logger):
+    """Verify org labels appear when flag is on and are absent when flag is off."""
+    import litellm
+    from litellm.types.integrations.prometheus import UserAPIKeyLabelValues
+
+    prometheus_logger.litellm_requests_metric = MagicMock()
+    prometheus_logger.litellm_spend_metric = MagicMock()
+
+    enum_values = UserAPIKeyLabelValues(
+        hashed_api_key="hashed-key",
+        api_key_alias="my-key",
+        model="gpt-4",
+        team="team-abc",
+        team_alias="my-team",
+        org_id="org-abc",
+        org_alias="my-org",
+        user="user-1",
+    )
+
+    common_kwargs = dict(
+        end_user_id=None,
+        user_api_key="hashed-key",
+        user_api_key_alias="my-key",
+        model="gpt-4",
+        user_api_team="team-abc",
+        user_api_team_alias="my-team",
+        user_id="user-1",
+        response_cost=0.001,
+        enum_values=enum_values,
+    )
+
+    try:
+        # org labels are always included in per-request metrics
+        prometheus_logger._increment_top_level_request_and_spend_metrics(**common_kwargs)
+        label_kwargs = prometheus_logger.litellm_requests_metric.labels.call_args.kwargs
+        assert label_kwargs["org_id"] == "org-abc"
+        assert label_kwargs["org_alias"] == "my-org"
+        assert label_kwargs["team"] == "team-abc"
+        assert label_kwargs["user"] == "user-1"
+
+        # Metrics not in the org-emission list must NOT get org labels
+        from litellm.types.integrations.prometheus import PrometheusMetricLabels
+        for metric in ("litellm_remaining_api_key_budget_metric", "litellm_remaining_team_budget_metric"):
+            labels = PrometheusMetricLabels.get_labels(metric)
+            assert "org_id" not in labels, f"{metric} should not have org_id"
+            assert "org_alias" not in labels, f"{metric} should not have org_alias"
+
+        # org_id in custom_prometheus_metadata_labels must not produce duplicate labels
+        litellm.custom_prometheus_metadata_labels = ["org_id"]
+        labels = PrometheusMetricLabels.get_labels("litellm_requests_metric")
+        assert labels.count("org_id") == 1
+    finally:
+        litellm.custom_prometheus_metadata_labels = []
+
+
 # ---------------------------------------------------------------------------
 # Org budget metric tests
 # ---------------------------------------------------------------------------
@@ -713,3 +768,42 @@ async def test_initialize_org_budget_metrics(prometheus_logger):
     prometheus_logger.litellm_org_max_budget_metric.labels().set.assert_called_once_with(
         500.0
     )
+
+
+def test_default_latency_buckets(prometheus_logger):
+    """PrometheusLogger uses the new reduced default latency buckets."""
+    from litellm.types.integrations.prometheus import LATENCY_BUCKETS
+
+    assert prometheus_logger.latency_buckets == LATENCY_BUCKETS
+    # 420 and 600 should be present
+    assert 420.0 in prometheus_logger.latency_buckets
+    assert 600.0 in prometheus_logger.latency_buckets
+    # dense half-second buckets from old defaults should be gone
+    assert 1.5 not in prometheus_logger.latency_buckets
+    assert 9.5 not in prometheus_logger.latency_buckets
+
+
+def test_custom_latency_buckets():
+    """prometheus_latency_buckets in litellm settings overrides the defaults."""
+    import litellm
+    from prometheus_client import REGISTRY
+
+    custom_buckets = [0.1, 0.5, 1.0, 5.0, 10.0]
+    original = litellm.prometheus_latency_buckets
+    # Clear registry before creating a new PrometheusLogger
+    for collector in list(REGISTRY._collector_to_names.keys()):
+        try:
+            REGISTRY.unregister(collector)
+        except Exception:
+            pass
+    try:
+        litellm.prometheus_latency_buckets = custom_buckets
+        logger = PrometheusLogger()
+        assert logger.latency_buckets == tuple(custom_buckets)
+    finally:
+        litellm.prometheus_latency_buckets = original
+        for collector in list(REGISTRY._collector_to_names.keys()):
+            try:
+                REGISTRY.unregister(collector)
+            except Exception:
+                pass

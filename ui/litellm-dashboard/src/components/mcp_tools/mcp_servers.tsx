@@ -20,6 +20,7 @@ import MCPSemanticFilterSettings from "../Settings/AdminSettings/MCPSemanticFilt
 import MCPNetworkSettings from "./MCPNetworkSettings";
 import MCPDiscovery from "./mcp_discovery";
 import { ByokCredentialModal } from "./ByokCredentialModal";
+import { getSecureItem } from "@/utils/secureStorage";
 
 const { Text: AntdText, Title: AntdTitle } = Typography;
 const EDIT_OAUTH_UI_STATE_KEY = "litellm-mcp-oauth-edit-state";
@@ -70,7 +71,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
       return;
     }
     try {
-      const stored = window.sessionStorage.getItem(EDIT_OAUTH_UI_STATE_KEY);
+      const stored = getSecureItem(EDIT_OAUTH_UI_STATE_KEY);
       if (!stored) {
         return;
       }

@@ -41,7 +41,7 @@ git clone https://github.com/BerriAI/litellm.git
 Step 2: Install dev dependencies
 
 ```shell
-poetry install --with dev --extras proxy
+uv sync --group dev --extra proxy
 ```
 
 ### 2. Adding tests

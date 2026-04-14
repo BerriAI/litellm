@@ -12,7 +12,7 @@ The [OpenAI Agents SDK](https://github.com/openai/openai-agents-python) is a lig
 ### 1. Install Dependencies
 
 ```bash
-pip install "openai-agents[litellm]"
+uv add "openai-agents[litellm]"
 ```
 
 ### 2. Add Model to Config

@@ -3,53 +3,72 @@ ARG LITELLM_BUILD_IMAGE=cgr.dev/chainguard/wolfi-base@sha256:a5a619c1793039dcf92
 
 # Runtime image
 ARG LITELLM_RUNTIME_IMAGE=cgr.dev/chainguard/wolfi-base@sha256:a5a619c1793039dcf92f02178f37c94bb3d6001403716da59d6092dfe8d9b502
-# Builder stage
+ARG UV_IMAGE=ghcr.io/astral-sh/uv:0.10.9@sha256:10902f58a1606787602f303954cea099626a4adb02acbac4c69920fe9d278f82
+
+FROM $UV_IMAGE AS uvbin
+
 FROM $LITELLM_BUILD_IMAGE AS builder
 
-# Set the working directory to /app
 WORKDIR /app
-
 USER root
 
-# Install build dependencies
+COPY --from=uvbin /uv /usr/local/bin/uv
+COPY --from=uvbin /uvx /usr/local/bin/uvx
+
 RUN apk add --no-cache \
     bash \
     gcc \
-    py3-pip \
     python3 \
     python3-dev \
     openssl \
-    openssl-dev
+    openssl-dev \
+    nodejs \
+    npm \
+    libsndfile
 
-RUN python -m pip install build==1.4.2
+ENV PRISMA_BINARY_CACHE_DIR=/app/.cache/prisma-python/binaries \
+    UV_PROJECT_ENVIRONMENT=/app/.venv \
+    UV_LINK_MODE=copy \
+    XDG_CACHE_HOME=/app/.cache \
+    PATH="/app/.venv/bin:${PATH}"
 
-# Copy the current directory contents into the container at /app
+# Copy dependency metadata first for layer caching
+COPY pyproject.toml uv.lock ./
+COPY enterprise/pyproject.toml enterprise/
+COPY litellm-proxy-extras/pyproject.toml litellm-proxy-extras/
+
+# Install third-party dependencies (cached unless pyproject.toml/uv.lock change)
+RUN uv sync --frozen --no-install-project --no-install-workspace --no-default-groups --no-editable \
+    --extra proxy \
+    --extra proxy-runtime \
+    --extra extra_proxy \
+    --extra semantic-router \
+    --python python3
+
+# Copy full source tree
 COPY . .
 
-# Build Admin UI
-# Convert Windows line endings to Unix and make executable
+# Build Admin UI before final sync
 RUN sed -i 's/\r$//' docker/build_admin_ui.sh && chmod +x docker/build_admin_ui.sh && ./docker/build_admin_ui.sh
 
-# Build the package
-RUN rm -rf dist/* && python -m build
+# Install project and workspace packages (fast - deps already cached)
+RUN uv sync --frozen --no-default-groups --no-editable \
+    --extra proxy \
+    --extra proxy-runtime \
+    --extra extra_proxy \
+    --extra semantic-router \
+    --python python3
 
-# There should be only one wheel file now, assume the build only creates one
-RUN ls -1 dist/*.whl | head -1
+RUN prisma generate --schema=./schema.prisma
 
-# Install the package
-RUN pip install dist/*.whl
+RUN sed -i 's/\r$//' docker/entrypoint.sh && chmod +x docker/entrypoint.sh && \
+    sed -i 's/\r$//' docker/prod_entrypoint.sh && chmod +x docker/prod_entrypoint.sh
 
-# install dependencies as wheels
-RUN pip wheel --no-cache-dir --wheel-dir=/wheels/ -r requirements.txt
-
-# Runtime stage
 FROM $LITELLM_RUNTIME_IMAGE AS runtime
 
-# Ensure runtime stage runs as root
 USER root
 
-# Install runtime dependencies
-RUN apk add --no-cache bash openssl tzdata nodejs npm python3 py3-pip libsndfile && \
+RUN apk add --no-cache bash openssl tzdata nodejs npm python3 libsndfile supervisor && \
     npm install -g npm@11.12.1 tar@7.5.11 glob@11.1.0 @isaacs/brace-expansion@5.0.1 minimatch@10.2.4 diff@8.0.3 && \
     GLOBAL="$(npm root -g)" && \
     find "$GLOBAL/npm" -type d -name "tar" -path "*/node_modules/tar" | while read d; do \
@@ -73,66 +92,18 @@ RUN apk add --no-cache bash openssl tzdata nodejs npm python3 py3-pip libsndfile
     { apk del --no-cache npm 2>/dev/null || true; }
 
 WORKDIR /app
-# Copy the current directory contents into the container at /app
-COPY . .
-RUN ls -la /app
+ENV PRISMA_BINARY_CACHE_DIR=/app/.cache/prisma-python/binaries \
+    XDG_CACHE_HOME=/app/.cache \
+    PATH="/app/.venv/bin:${PATH}"
 
-# Copy the built wheel from the builder stage to the runtime stage; assumes only one wheel file is present
-COPY --from=builder /app/dist/*.whl .
-COPY --from=builder /wheels/ /wheels/
+COPY --from=builder /app /app
 
-# Install the built wheel using pip; again using a wildcard if it's the only file
-RUN pip install *.whl /wheels/* --no-index --find-links=/wheels/ --no-deps && rm -f *.whl && rm -rf /wheels
+RUN find /app/.venv -type f -path "*/tornado/test/*" -delete && \
+    find /app/.venv -type d -path "*/tornado/test" -delete
 
-# SECURITY FIX: nodejs-wheel-binaries (pip package used by Prisma) bundles a complete
-# npm with old vulnerable deps at /usr/lib/python3.*/site-packages/nodejs_wheel/.
-# Patch every copy of tar, glob, and brace-expansion inside that tree.
-RUN GLOBAL="$(npm root -g)" && \
-    [ -n "$GLOBAL" ] || { echo "ERROR: npm root -g returned empty; aborting"; exit 1; } && \
-    find /usr/lib -type d -name "tar" -path "*/node_modules/tar" | while read d; do \
-        rm -rf "$d" && cp -rL "$GLOBAL/tar" "$d"; \
-    done && \
-    find /usr/lib -type d -name "glob" -path "*/node_modules/glob" | while read d; do \
-        rm -rf "$d" && cp -rL "$GLOBAL/glob" "$d"; \
-    done && \
-    find /usr/lib -type d -name "brace-expansion" -path "*/node_modules/@isaacs/brace-expansion" | while read d; do \
-        rm -rf "$d" && cp -rL "$GLOBAL/@isaacs/brace-expansion" "$d"; \
-    done && \
-    find /usr/lib -type d -name "minimatch" -path "*/node_modules/minimatch" | while read d; do \
-        rm -rf "$d" && cp -rL "$GLOBAL/minimatch" "$d"; \
-    done && \
-    find /usr/lib -type d -name "diff" -path "*/node_modules/diff" | while read d; do \
-        rm -rf "$d" && cp -rL "$GLOBAL/diff" "$d"; \
-    done
-
-# Install semantic_router and aurelio-sdk using script
-# Convert Windows line endings to Unix and make executable
-RUN sed -i 's/\r$//' docker/install_auto_router.sh && chmod +x docker/install_auto_router.sh && ./docker/install_auto_router.sh
-
-# ensure pyjwt is used, not jwt
-RUN pip uninstall jwt -y
-RUN pip uninstall PyJWT -y
-RUN pip install PyJWT==2.12.0 --no-cache-dir
-
-# Build Admin UI (runtime stage)
-# Convert Windows line endings to Unix and make executable
-RUN sed -i 's/\r$//' docker/build_admin_ui.sh && chmod +x docker/build_admin_ui.sh && ./docker/build_admin_ui.sh
-
-# Generate prisma client
-RUN prisma generate
-# Convert Windows line endings to Unix for entrypoint scripts
-RUN sed -i 's/\r$//' docker/entrypoint.sh && chmod +x docker/entrypoint.sh
-RUN sed -i 's/\r$//' docker/prod_entrypoint.sh && chmod +x docker/prod_entrypoint.sh
 EXPOSE 4000/tcp
 
-RUN apk add --no-cache supervisor
 COPY docker/supervisord.conf /etc/supervisord.conf
 
-# # Set your entrypoint and command
-
-
 ENTRYPOINT ["docker/prod_entrypoint.sh"]
-
-# Append "--detailed_debug" to the end of CMD to view detailed debug logs 
-# CMD ["--port", "4000", "--detailed_debug"]
 CMD ["--port", "4000"]

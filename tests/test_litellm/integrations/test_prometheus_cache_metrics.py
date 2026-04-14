@@ -1,7 +1,7 @@
 """
 Unit tests for cache Prometheus metrics.
 
-Run with: poetry run pytest tests/test_litellm/integrations/test_prometheus_cache_metrics.py -v
+Run with: uv run pytest tests/test_litellm/integrations/test_prometheus_cache_metrics.py -v
 """
 import pytest
 from unittest.mock import MagicMock, patch
