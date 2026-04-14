@@ -42,6 +42,7 @@ import ObjectPermissionsView from "../object_permissions_view";
 import NumericalInput from "../shared/numerical_input";
 import VectorStoreSelector from "../vector_store_management/VectorStoreSelector";
 import EditLoggingSettings from "./EditLoggingSettings";
+import RouterSettingsAccordion, { RouterSettingsAccordionRef } from "../common_components/RouterSettingsAccordion";
 import MemberModal from "./EditMembership";
 import MemberPermissions from "./member_permissions";
 import {
@@ -99,6 +100,7 @@ export interface TeamData {
     access_group_models?: string[];
     access_group_mcp_server_ids?: string[];
     access_group_agent_ids?: string[];
+    router_settings?: Record<string, any>;
     guardrails?: string[];
     policies?: string[];
     object_permission?: {
@@ -189,6 +191,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [isTeamSaving, setIsTeamSaving] = useState(false);
+  const routerSettingsRef = React.useRef<RouterSettingsAccordionRef>(null);
   const [organization, setOrganization] = useState<Organization | null>(null);
   const { userRole, userId } = useAuthorized();
   const { data: userOrganizations = [] } = useOrganizations();
@@ -585,6 +588,26 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       // Pass access_group_ids to the update request
       if (values.access_group_ids !== undefined) {
         updateData.access_group_ids = values.access_group_ids;
+      }
+
+      // Handle router_settings - read fresh values from DOM at save time.
+      const currentRouterSettings = routerSettingsRef.current?.getValue();
+      if (currentRouterSettings?.router_settings) {
+        const isMeaningfulValue = (value: unknown) =>
+          value !== null &&
+          value !== undefined &&
+          value !== "" &&
+          value !== false &&
+          !(Array.isArray(value) && value.length === 0);
+
+        const hasNewValues = Object.values(currentRouterSettings.router_settings).some(isMeaningfulValue);
+        const hadExistingSettings = info.router_settings &&
+          Object.values(info.router_settings).some(isMeaningfulValue);
+
+        // Send if there are new values OR if the user is clearing existing ones
+        if (hasNewValues || hadExistingSettings) {
+          updateData.router_settings = currentRouterSettings.router_settings;
+        }
       }
 
       const response = await teamUpdateCall(accessToken, updateData);
@@ -1121,6 +1144,14 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                       </Form.List>
                     </Form.Item>
 
+                    <Form.Item label="Router Settings">
+                      <RouterSettingsAccordion
+                        ref={routerSettingsRef}
+                        accessToken={accessToken || ""}
+                        value={info.router_settings ? { router_settings: info.router_settings } : undefined}
+                      />
+                    </Form.Item>
+
                     <Form.Item
                       label={
                         <span>
@@ -1440,6 +1471,44 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                       <div>Key Duration: {info.metadata?.team_member_key_duration || "No Limit"}</div>
                       <div>TPM Limit: {info.team_member_budget_table?.tpm_limit || "No Limit"}</div>
                       <div>RPM Limit: {info.team_member_budget_table?.rpm_limit || "No Limit"}</div>
+                    </div>
+                    <div>
+                      <Text className="font-medium">Router Settings</Text>
+                      {info.router_settings && Object.values(info.router_settings).some(
+                        (v) => v !== null && v !== undefined && v !== "" && !(Array.isArray(v) && v.length === 0)
+                      ) ? (
+                        <div className="mt-1 space-y-1">
+                          {info.router_settings.routing_strategy && (
+                            <div>
+                              Routing Strategy:{" "}
+                              <Badge color="blue">{info.router_settings.routing_strategy}</Badge>
+                            </div>
+                          )}
+                          {info.router_settings.num_retries != null && (
+                            <div>Number of Retries: {info.router_settings.num_retries}</div>
+                          )}
+                          {info.router_settings.allowed_fails != null && (
+                            <div>Allowed Failures: {info.router_settings.allowed_fails}</div>
+                          )}
+                          {info.router_settings.cooldown_time != null && (
+                            <div>Cooldown Time: {info.router_settings.cooldown_time}s</div>
+                          )}
+                          {info.router_settings.timeout != null && (
+                            <div>Timeout: {info.router_settings.timeout}s</div>
+                          )}
+                          {info.router_settings.retry_after != null && (
+                            <div>Retry After: {info.router_settings.retry_after}s</div>
+                          )}
+                          {info.router_settings.fallbacks && Array.isArray(info.router_settings.fallbacks) && info.router_settings.fallbacks.length > 0 && (
+                            <div>Fallbacks: {info.router_settings.fallbacks.length} configured</div>
+                          )}
+                          {info.router_settings.enable_tag_filtering && (
+                            <div>Tag Filtering: Enabled</div>
+                          )}
+                        </div>
+                      ) : (
+                        <div className="text-gray-400">No router settings configured</div>
+                      )}
                     </div>
                     <div>
                       <Text className="font-medium">Organization ID</Text>
