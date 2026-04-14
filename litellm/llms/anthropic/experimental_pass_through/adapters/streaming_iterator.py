@@ -129,8 +129,6 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
 
                 if should_start_new_block and not self.sent_content_block_finish:
                     # Queue the sequence: content_block_stop -> content_block_start
-                    # The trigger chunk itself is not emitted as a delta since the
-                    # content_block_start already carries the relevant information.
                     self.chunk_queue.append(
                         {
                             "type": "content_block_stop",
@@ -144,6 +142,18 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                             "content_block": self.current_content_block_start,
                         }
                     )
+                    # Some providers (e.g. Vertex AI Gemini, DashScope) return
+                    # tool name AND arguments in the same streaming chunk.
+                    # Forward the content_block_delta so the input_json_delta
+                    # carrying tool arguments is not silently dropped.
+                    # Skip empty deltas from name-only trigger chunks.
+                    if processed_chunk.get("type") == "content_block_delta":
+                        delta = processed_chunk.get("delta", {})
+                        is_empty_input = delta.get(
+                            "type"
+                        ) == "input_json_delta" and not delta.get("partial_json")
+                        if not is_empty_input:
+                            self.chunk_queue.append(processed_chunk)
                     self.sent_content_block_finish = False
                     return self.chunk_queue.popleft()
 
@@ -282,16 +292,16 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                         hasattr(chunk.usage, "_cache_creation_input_tokens")
                         and chunk.usage._cache_creation_input_tokens > 0
                     ):
-                        usage_dict[
-                            "cache_creation_input_tokens"
-                        ] = chunk.usage._cache_creation_input_tokens
+                        usage_dict["cache_creation_input_tokens"] = (
+                            chunk.usage._cache_creation_input_tokens
+                        )
                     if (
                         hasattr(chunk.usage, "_cache_read_input_tokens")
                         and chunk.usage._cache_read_input_tokens > 0
                     ):
-                        usage_dict[
-                            "cache_read_input_tokens"
-                        ] = chunk.usage._cache_read_input_tokens
+                        usage_dict["cache_read_input_tokens"] = (
+                            chunk.usage._cache_read_input_tokens
+                        )
                     merged_chunk["usage"] = usage_dict
 
                     # Queue the merged chunk and reset
@@ -305,8 +315,6 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 if not self.queued_usage_chunk:
                     if should_start_new_block and not self.sent_content_block_finish:
                         # Queue the sequence: content_block_stop -> content_block_start
-                        # The trigger chunk itself is not emitted as a delta since the
-                        # content_block_start already carries the relevant information.
 
                         # 1. Stop current content block
                         self.chunk_queue.append(
@@ -324,6 +332,20 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                                 "content_block": self.current_content_block_start,
                             }
                         )
+
+                        # Some providers (e.g. Vertex AI Gemini, DashScope)
+                        # return tool name AND arguments in the same streaming
+                        # chunk. Forward the content_block_delta so the
+                        # input_json_delta carrying tool arguments is not
+                        # silently dropped.
+                        # Skip empty deltas from name-only trigger chunks.
+                        if processed_chunk.get("type") == "content_block_delta":
+                            delta = processed_chunk.get("delta", {})
+                            is_empty_input = delta.get(
+                                "type"
+                            ) == "input_json_delta" and not delta.get("partial_json")
+                            if not is_empty_input:
+                                self.chunk_queue.append(processed_chunk)
 
                         # Reset state for new block
                         self.sent_content_block_finish = False
