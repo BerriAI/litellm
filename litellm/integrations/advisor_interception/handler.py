@@ -167,8 +167,10 @@ class AdvisorInterceptionLogger(CustomLogger):
         has_advisor_config = isinstance(call_id, str) and (
             call_id in self._advisor_config_by_call_id
         )
+        tools_list: List[Dict] = tools or []
         has_advisor_tool = has_advisor_config or (
-            bool(tools) and any(is_advisor_tool_chat_completion(t) for t in tools)
+            bool(tools_list)
+            and any(is_advisor_tool_chat_completion(t) for t in tools_list)
         )
         if not has_advisor_tool:
             return False, {}
@@ -218,6 +220,7 @@ class AdvisorInterceptionLogger(CustomLogger):
         current_messages: List[Dict] = list(messages)
         current_response = response
         advisor_uses = 0
+        total_response_cost = self._safe_get_response_cost(current_response)
 
         try:
             while True:
@@ -225,6 +228,9 @@ class AdvisorInterceptionLogger(CustomLogger):
                     current_response
                 )
                 if not advisor_calls:
+                    self._set_response_cost_if_possible(
+                        response=current_response, response_cost=total_response_cost
+                    )
                     return current_response
 
                 assistant_content = self._extract_message_content(current_response)
@@ -262,6 +268,7 @@ class AdvisorInterceptionLogger(CustomLogger):
                         api_base=advisor_api_base,
                         _advisor_interception_skip_post_hook=True,
                     )
+                    total_response_cost += self._safe_get_response_cost(advisor_response)
                     advisor_text = self._extract_text_content(advisor_response)
                     tool_messages.append(
                         {
@@ -294,6 +301,7 @@ class AdvisorInterceptionLogger(CustomLogger):
                     **optional_params_clean,
                     **kwargs_for_followup,
                 )
+                total_response_cost += self._safe_get_response_cost(current_response)
         finally:
             if isinstance(call_id, str):
                 self._advisor_config_by_call_id.pop(call_id, None)
@@ -529,6 +537,46 @@ class AdvisorInterceptionLogger(CustomLogger):
                         parts.append(text)
             return "\n".join(parts).strip()
         return ""
+
+    @staticmethod
+    def _safe_get_response_cost(response: Any) -> float:
+        if response is None:
+            return 0.0
+
+        if isinstance(response, dict):
+            hidden_params = response.get("_hidden_params", {})
+        else:
+            hidden_params = getattr(response, "_hidden_params", {})
+
+        if isinstance(hidden_params, dict):
+            hidden_response_cost = hidden_params.get("response_cost")
+            if isinstance(hidden_response_cost, (int, float)):
+                return float(hidden_response_cost)
+
+        try:
+            response_cost = litellm.completion_cost(completion_response=response)
+            if isinstance(response_cost, (int, float)):
+                return float(response_cost)
+        except Exception:
+            return 0.0
+        return 0.0
+
+    @staticmethod
+    def _set_response_cost_if_possible(response: Any, response_cost: float) -> None:
+        if response is None:
+            return
+        if response_cost <= 0:
+            return
+
+        if isinstance(response, dict):
+            hidden_params = response.setdefault("_hidden_params", {})
+            if isinstance(hidden_params, dict):
+                hidden_params["response_cost"] = response_cost
+            return
+
+        hidden_params = getattr(response, "_hidden_params", None)
+        if isinstance(hidden_params, dict):
+            hidden_params["response_cost"] = response_cost
 
     @staticmethod
     def _build_advisor_context(
