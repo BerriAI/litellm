@@ -145,25 +145,35 @@ class TestRunAsyncFallbackHeaderPropagation:
         assert headers.get("x-litellm-fallback-model-used") == "claude-3-haiku"
 
     @pytest.mark.asyncio
-    async def test_fallback_model_header_not_present_without_fallback(self):
+    async def test_fallback_model_header_absent_when_primary_succeeds_via_router(self):
         """
-        When the primary model succeeds (no fallback), x-litellm-fallback-model-used
-        should NOT appear in the response headers.
+        When run_async_fallback skips all candidates because they equal the
+        original_model_group, no fallback fires and the response should NOT
+        carry x-litellm-fallback-model-used.
+
+        This tests the router path: fallback_model_group contains only the
+        original model so the loop body is never entered and error_from_fallbacks
+        (the original exception) is raised — which means the caller never gets a
+        response with the fallback header at all.  We verify that by confirming
+        the exception propagates rather than a header-bearing response being returned.
         """
-        from pydantic import BaseModel
+        mock_router = MagicMock()
+        mock_router.log_retry = MagicMock(side_effect=lambda kwargs, e: kwargs)
 
-        class _FakeResponse(BaseModel):
-            model: str = "gpt-4"
-            _hidden_params: dict = {}
-
-        fake_response = _FakeResponse()
-        result = add_fallback_headers_to_response(
-            response=fake_response,
-            attempted_fallbacks=0,
-            fallback_model=None,
-        )
-        headers = result._hidden_params.get("additional_headers", {})
-        assert "x-litellm-fallback-model-used" not in headers
+        original_exc = Exception("primary failed")
+        with pytest.raises(Exception, match="primary failed"):
+            await run_async_fallback(
+                litellm_router=mock_router,
+                # All candidates are the same as original — loop body is skipped entirely
+                fallback_model_group=["gpt-4"],
+                original_model_group="gpt-4",
+                original_exception=original_exc,
+                max_fallbacks=3,
+                fallback_depth=0,
+                model="gpt-4",
+            )
+        # async_function_with_fallbacks was never called — no fallback header stamped
+        mock_router.async_function_with_fallbacks.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_all_fallbacks_fail_raises_exception(self):

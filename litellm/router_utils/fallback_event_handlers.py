@@ -132,8 +132,10 @@ async def run_async_fallback(
                 kwargs.update(mg)
             # Capture the effective fallback model name before the recursive call
             # so we can stamp it on the response header regardless of further fallbacks.
+            # For dict fallbacks, read "model" directly from mg rather than from kwargs
+            # to avoid picking up the stale model that was already in kwargs.
             effective_fallback_model: Optional[str] = (
-                mg if isinstance(mg, str) else kwargs.get("model")
+                mg if isinstance(mg, str) else mg.get("model") if isinstance(mg, dict) else None
             )
             kwargs.setdefault("metadata", {}).update(
                 {"model_group": kwargs.get("model", None)}
