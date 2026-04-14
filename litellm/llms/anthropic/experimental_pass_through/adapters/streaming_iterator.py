@@ -128,9 +128,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 )
 
                 if should_start_new_block and not self.sent_content_block_finish:
-                    # Queue the sequence: content_block_stop -> content_block_start
-                    # The trigger chunk itself is not emitted as a delta since the
-                    # content_block_start already carries the relevant information.
+                    # Queue the sequence: content_block_stop -> content_block_start -> trigger delta
                     self.chunk_queue.append(
                         {
                             "type": "content_block_stop",
@@ -144,6 +142,8 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                             "content_block": self.current_content_block_start,
                         }
                     )
+                    # Emit the trigger chunk's delta so its content is not lost
+                    self.chunk_queue.append(processed_chunk)
                     self.sent_content_block_finish = False
                     return self.chunk_queue.popleft()
 
@@ -282,16 +282,16 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                         hasattr(chunk.usage, "_cache_creation_input_tokens")
                         and chunk.usage._cache_creation_input_tokens > 0
                     ):
-                        usage_dict[
-                            "cache_creation_input_tokens"
-                        ] = chunk.usage._cache_creation_input_tokens
+                        usage_dict["cache_creation_input_tokens"] = (
+                            chunk.usage._cache_creation_input_tokens
+                        )
                     if (
                         hasattr(chunk.usage, "_cache_read_input_tokens")
                         and chunk.usage._cache_read_input_tokens > 0
                     ):
-                        usage_dict[
-                            "cache_read_input_tokens"
-                        ] = chunk.usage._cache_read_input_tokens
+                        usage_dict["cache_read_input_tokens"] = (
+                            chunk.usage._cache_read_input_tokens
+                        )
                     merged_chunk["usage"] = usage_dict
 
                     # Queue the merged chunk and reset
@@ -304,10 +304,6 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
 
                 if not self.queued_usage_chunk:
                     if should_start_new_block and not self.sent_content_block_finish:
-                        # Queue the sequence: content_block_stop -> content_block_start
-                        # The trigger chunk itself is not emitted as a delta since the
-                        # content_block_start already carries the relevant information.
-
                         # 1. Stop current content block
                         self.chunk_queue.append(
                             {
@@ -324,6 +320,9 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                                 "content_block": self.current_content_block_start,
                             }
                         )
+
+                        # 3. Emit the trigger chunk's delta so its content is not lost
+                        self.chunk_queue.append(processed_chunk)
 
                         # Reset state for new block
                         self.sent_content_block_finish = False
