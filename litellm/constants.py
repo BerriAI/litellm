@@ -420,7 +420,10 @@ DEFAULT_MAX_TOKENS_FOR_TRITON = int(os.getenv("DEFAULT_MAX_TOKENS_FOR_TRITON", 2
 # per-request/model timeout—see ``CompletionTimeout.resolve`` in completion_timeout.py. MCP uses
 # dedicated timeouts (e.g. `MCP_CLIENT_TIMEOUT`), not `request_timeout`.
 DEFAULT_REQUEST_TIMEOUT_SECONDS: float = 6000.0
+# Pair used for default httpx clients when no custom timeout is passed: read/write
+# deadline and connect handshake (see ``http_handler`` cached handler paths).
 COMPLETION_HTTP_FALLBACK_SECONDS: float = 600.0
+HTTP_HANDLER_CONNECT_TIMEOUT_SECONDS: float = 5.0
 request_timeout: float = float(
     os.getenv("REQUEST_TIMEOUT", str(int(DEFAULT_REQUEST_TIMEOUT_SECONDS)))
 )
