@@ -243,10 +243,6 @@ def _apply_budget_limits_to_end_user_params(
 
     if budget_info.model_max_budget is not None:
         end_user_params["end_user_model_max_budget"] = budget_info.model_max_budget
-
-    verbose_proxy_logger.debug(f"Applied budget limits to end user {end_user_id}")
-
-
 async def _check_end_user_budget(
     end_user_object: Optional[Any],
     request_data: dict,
@@ -269,9 +265,17 @@ async def _check_end_user_budget(
     if end_user_object is None:
         return
 
+    # Skip budget check for info routes (e.g. /models, /model/info)
+    if RouteChecks.is_info_route(route):
+        return
+
     # Check if model has zero cost - if so, skip budget check
     model = get_model_from_request(request_data, route)
+    if model is not None and llm_router is not None:
+        from litellm.proxy.auth.auth_checks import _is_model_cost_zero
+
         if _is_model_cost_zero(model=model, llm_router=llm_router):
+            verbose_proxy_logger.info(
                 f"Skipping all budget checks for zero-cost model: {model}"
             )
             return
@@ -285,7 +289,6 @@ async def _check_end_user_budget(
                 max_budget=end_user_budget,
                 message=f"ExceededBudget: End User={end_user_object.user_id} over budget. Spend={end_user_object.spend}, Budget={end_user_budget}",
             )
-
 
 async def user_api_key_auth_websocket(websocket: WebSocket):
     # Accept the WebSocket connection
