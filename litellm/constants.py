@@ -420,6 +420,7 @@ DEFAULT_MAX_TOKENS_FOR_TRITON = int(os.getenv("DEFAULT_MAX_TOKENS_FOR_TRITON", 2
 # per-request/model timeout—see ``CompletionTimeout.resolve`` in completion_timeout.py. MCP uses
 # dedicated timeouts (e.g. `MCP_CLIENT_TIMEOUT`), not `request_timeout`.
 DEFAULT_REQUEST_TIMEOUT_SECONDS: float = 6000.0
+COMPLETION_HTTP_FALLBACK_SECONDS: float = 600.0
 request_timeout: float = float(
     os.getenv("REQUEST_TIMEOUT", str(int(DEFAULT_REQUEST_TIMEOUT_SECONDS)))
 )
