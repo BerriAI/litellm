@@ -5,7 +5,8 @@ Importing this module has the side effect of extending both the GET schema
 and the PATCH allowlist served by ``/get/ui_settings`` and
 ``/update/ui_settings``.
 """
-from pydantic import Field
+
+from pydantic.fields import FieldInfo
 
 from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import (
     register_extra_ui_setting,
@@ -14,7 +15,7 @@ from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import (
 register_extra_ui_setting(
     "enable_projects_ui",
     bool,
-    Field(
+    FieldInfo(
         default=False,
         description=(
             "If enabled, shows the Projects feature in the UI sidebar and "

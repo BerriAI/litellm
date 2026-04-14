@@ -1,6 +1,6 @@
 #### CRUD ENDPOINTS for UI Settings #####
 import json
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Set, Tuple, Union
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
@@ -168,38 +168,57 @@ _RUNTIME_GENERAL_SETTINGS_FLAGS = [
 
 # Extension point: packages outside OSS (e.g. litellm_enterprise) can
 # contribute additional UI settings fields at import time. Each entry
-# maps a field name to a (type, FieldInfo) tuple suitable for pydantic's
-# create_model. Registering a field also appends it to
-# ALLOWED_UI_SETTINGS_FIELDS so GET/PATCH pass it through.
-_EXTRA_UI_SETTINGS_FIELDS: Dict[str, tuple] = {}
+# maps a field name to a (annotation, FieldInfo) tuple in pydantic
+# create_model's field-definitions format. Registering a field also
+# appends it to ALLOWED_UI_SETTINGS_FIELDS so GET/PATCH pass it through.
+#
+# The annotation is typed ``Any`` because pydantic field annotations
+# include generics like ``Optional[int]`` / ``List[str]`` that are not
+# instances of ``type`` — so tightening this to ``type`` would reject
+# valid inputs.
+_EXTRA_UI_SETTINGS_FIELDS: Dict[str, Tuple[Any, FieldInfo]] = {}
 
 # Settings OSS knows about as enterprise-gated. If a caller sends one of
 # these keys and no extension package has registered it, the PATCH
 # endpoint returns 403 instead of silently dropping the value, so the
 # client gets a clear signal that the feature requires LiteLLM Enterprise.
-_ENTERPRISE_ONLY_UI_SETTINGS: set[str] = {"enable_projects_ui"}
+_ENTERPRISE_ONLY_UI_SETTINGS: Set[str] = {"enable_projects_ui"}
+
+# Memoized effective class; invalidated on registration.
+_EFFECTIVE_UI_SETTINGS_CLASS: Optional[type] = None
 
 
-def register_extra_ui_setting(name: str, type_: Any, field: Any) -> None:
+def register_extra_ui_setting(name: str, annotation: Any, field: FieldInfo) -> None:
     """Register an additional UI settings field contributed by an extension package.
 
-    ``field`` should be a pydantic ``Field(...)`` result (``FieldInfo`` at
-    runtime); typed as ``Any`` because pydantic's ``Field`` stub reports the
-    default value's type instead of ``FieldInfo``.
+    ``field`` must be a ``FieldInfo`` instance — construct it directly
+    (e.g. ``FieldInfo(default=..., description=...)``) rather than via
+    the ``pydantic.Field`` factory, whose stub reports the default's
+    type instead of ``FieldInfo`` and trips mypy at the call site.
     """
-    _EXTRA_UI_SETTINGS_FIELDS[name] = (type_, field)
+    global _EFFECTIVE_UI_SETTINGS_CLASS
+    _EXTRA_UI_SETTINGS_FIELDS[name] = (annotation, field)
     ALLOWED_UI_SETTINGS_FIELDS.add(name)
+    _EFFECTIVE_UI_SETTINGS_CLASS = None
 
 
 def _get_effective_ui_settings_class() -> type:
-    """Return UISettings with any extension-registered fields merged in."""
+    """Return UISettings with any extension-registered fields merged in.
+
+    Memoized — pydantic ``create_model`` runs metaclass + schema work
+    each call, so we cache until a new registration invalidates it.
+    """
+    global _EFFECTIVE_UI_SETTINGS_CLASS
+    if _EFFECTIVE_UI_SETTINGS_CLASS is not None:
+        return _EFFECTIVE_UI_SETTINGS_CLASS
     if not _EXTRA_UI_SETTINGS_FIELDS:
         return UISettings
-    return create_model(  # type: ignore[call-overload]
+    _EFFECTIVE_UI_SETTINGS_CLASS = create_model(  # type: ignore[call-overload]
         "EffectiveUISettings",
         __base__=UISettings,
         **_EXTRA_UI_SETTINGS_FIELDS,
     )
+    return _EFFECTIVE_UI_SETTINGS_CLASS
 
 
 class MCPSemanticFilterSettings(BaseModel):
