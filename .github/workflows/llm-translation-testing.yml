@@ -31,26 +31,25 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install Poetry
-        run: |
-          pip install 'poetry==2.3.2'
-          poetry config virtualenvs.create true
-          poetry config virtualenvs.in-project true
+      - name: Set up uv
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
+        with:
+          version: "0.10.9"
+          enable-cache: false
 
-      - name: Restore Poetry dependencies cache
-        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.0.0
+      - name: Restore uv dependencies cache
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: |
-            ~/.cache/pypoetry
+            ~/.cache/uv
             .venv
-          key: ${{ runner.os }}-poetry-${{ hashFiles('**/poetry.lock') }}
+          key: ${{ runner.os }}-uv-${{ hashFiles('uv.lock') }}
           restore-keys: |
-            ${{ runner.os }}-poetry-
+            ${{ runner.os }}-uv-
 
       - name: Install dependencies
         run: |
-          poetry install --with dev
-          poetry run pip install 'pytest-xdist==3.8.0' 'pytest-timeout==2.4.0'
+          uv sync --frozen
 
       - name: Create test results directory
         run: mkdir -p test-results
