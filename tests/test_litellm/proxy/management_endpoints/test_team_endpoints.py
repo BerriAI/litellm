@@ -37,11 +37,13 @@ from litellm.proxy.management_endpoints.team_endpoints import (
     _save_deleted_team_records,
     _transform_teams_to_deleted_records,
     _validate_and_populate_member_user_info,
+    _verify_team_access,
     delete_team,
     list_available_teams,
     router,
     team_member_add_duplication_check,
     team_member_delete,
+    update_team,
     validate_team_org_change,
 )
 from litellm.proxy.management_helpers.team_member_permission_checks import (
@@ -447,10 +449,10 @@ async def test_new_team_with_object_permission(mock_db_client, mock_admin_auth):
     assert mock_team_create.call_count == 1
     created_team_kwargs = mock_team_create.call_args.kwargs
     team_data = created_team_kwargs["data"]
-    
+
     # Verify object_permission_id is in the team data
     assert team_data.get("object_permission_id") == "objperm123"
-    
+
     # Verify object_permission dict is NOT in the team data
     assert "object_permission" not in team_data
 
@@ -459,7 +461,7 @@ async def test_new_team_with_object_permission(mock_db_client, mock_admin_auth):
 async def test_new_team_with_mcp_tool_permissions(mock_db_client, mock_admin_auth):
     """
     Test that /team/new correctly handles mcp_tool_permissions in object_permission.
-    
+
     This test verifies that:
     1. mcp_tool_permissions is accepted in the object_permission field
     2. The field is properly stored in the LiteLLM_ObjectPermissionTable
@@ -497,9 +499,13 @@ async def test_new_team_with_mcp_tool_permissions(mock_db_client, mock_admin_aut
         "object_permission_id": "objperm_team_mcp_456",
     }
     mock_db_client.db.litellm_teamtable = MagicMock()
-    mock_db_client.db.litellm_teamtable.create = AsyncMock(return_value=team_create_result)
+    mock_db_client.db.litellm_teamtable.create = AsyncMock(
+        return_value=team_create_result
+    )
     mock_db_client.db.litellm_teamtable.count = AsyncMock(return_value=0)
-    mock_db_client.db.litellm_teamtable.update = AsyncMock(return_value=team_create_result)
+    mock_db_client.db.litellm_teamtable.update = AsyncMock(
+        return_value=team_create_result
+    )
 
     # Mock user table
     mock_db_client.db.litellm_usertable = MagicMock()
@@ -532,6 +538,7 @@ async def test_new_team_with_mcp_tool_permissions(mock_db_client, mock_admin_aut
 
     # Verify mcp_tool_permissions was stored
     import json
+
     assert "mcp_tool_permissions" in created_permission_data
     # mcp_tool_permissions is stored as a JSON string
     assert json.loads(created_permission_data["mcp_tool_permissions"]) == {
@@ -1263,7 +1270,6 @@ async def test_update_team_team_member_budget_not_passed_to_db():
     ) as mock_cache_team, patch(
         "litellm.proxy.management_endpoints.team_endpoints.TeamMemberBudgetHandler.upsert_team_member_budget_table"
     ) as mock_upsert_budget:
-
         # Setup mock prisma client
         mock_existing_team = MagicMock()
         mock_existing_team.model_dump.return_value = {
@@ -1288,7 +1294,13 @@ async def test_update_team_team_member_budget_not_passed_to_db():
 
         # Mock budget upsert to return updated_kv without team_member_budget
         def mock_upsert_side_effect(
-            team_table, user_api_key_dict, updated_kv, team_member_budget=None, team_member_rpm_limit=None, team_member_tpm_limit=None, team_member_budget_duration=None
+            team_table,
+            user_api_key_dict,
+            updated_kv,
+            team_member_budget=None,
+            team_member_rpm_limit=None,
+            team_member_tpm_limit=None,
+            team_member_budget_duration=None,
         ):
             # Remove team_member_budget from updated_kv as the real function does
             result_kv = updated_kv.copy()
@@ -1468,7 +1480,7 @@ async def test_create_team_member_budget_table():
 
     with patch(
         "litellm.proxy.management_endpoints.budget_management_endpoints.new_budget",
-        new_callable=AsyncMock
+        new_callable=AsyncMock,
     ) as mock_new_budget:
         mock_new_budget.return_value = mock_budget_response
 
@@ -1529,7 +1541,7 @@ async def test_create_team_member_budget_table_without_team_alias():
 
     with patch(
         "litellm.proxy.management_endpoints.budget_management_endpoints.new_budget",
-        new_callable=AsyncMock
+        new_callable=AsyncMock,
     ) as mock_new_budget:
         mock_new_budget.return_value = mock_budget_response
 
@@ -1579,7 +1591,7 @@ async def test_upsert_team_member_budget_table_existing_budget():
 
     with patch(
         "litellm.proxy.management_endpoints.budget_management_endpoints.update_budget",
-        new_callable=AsyncMock
+        new_callable=AsyncMock,
     ) as mock_update_budget:
         mock_update_budget.return_value = mock_budget_response
 
@@ -1641,7 +1653,7 @@ async def test_upsert_team_member_budget_table_no_existing_budget():
 
     with patch(
         "litellm.proxy.management_endpoints.budget_management_endpoints.new_budget",
-        new_callable=AsyncMock
+        new_callable=AsyncMock,
     ) as mock_new_budget:
         mock_new_budget.return_value = mock_budget_response
 
@@ -1691,7 +1703,6 @@ async def test_update_team_with_team_member_budget_duration():
     ) as mock_cache_team, patch(
         "litellm.proxy.management_endpoints.team_endpoints.TeamMemberBudgetHandler.upsert_team_member_budget_table"
     ) as mock_upsert_budget:
-
         mock_existing_team = MagicMock()
         mock_existing_team.model_dump.return_value = {
             "team_id": "test_team_id",
@@ -1714,7 +1725,13 @@ async def test_update_team_with_team_member_budget_duration():
         )
 
         def mock_upsert_side_effect(
-            team_table, user_api_key_dict, updated_kv, team_member_budget=None, team_member_rpm_limit=None, team_member_tpm_limit=None, team_member_budget_duration=None
+            team_table,
+            user_api_key_dict,
+            updated_kv,
+            team_member_budget=None,
+            team_member_rpm_limit=None,
+            team_member_tpm_limit=None,
+            team_member_budget_duration=None,
         ):
             result_kv = updated_kv.copy()
             result_kv.pop("team_member_budget", None)
@@ -1828,7 +1845,6 @@ async def test_bulk_team_member_add_success():
         new_callable=AsyncMock,
         return_value=mock_team_response,
     ) as mock_team_member_add:
-
         mock_auth = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
 
         result = await bulk_team_member_add(
@@ -1944,7 +1960,6 @@ async def test_bulk_team_member_add_all_users_flag():
         new_callable=AsyncMock,
         return_value=mock_team_response,
     ) as mock_team_member_add:
-
         # Mock the database find_many call
         mock_prisma.db.litellm_usertable.find_many = AsyncMock(
             return_value=mock_db_users
@@ -1992,7 +2007,6 @@ async def test_bulk_team_member_add_failure_scenario():
         new_callable=AsyncMock,
         side_effect=Exception("Database connection failed"),
     ) as mock_team_member_add:
-
         mock_auth = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
 
         result = await bulk_team_member_add(
@@ -2062,14 +2076,13 @@ async def test_list_team_v2_security_check_non_admin_user():
         user_id="non_admin_user_123",
     )
 
-    with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma_client, \
-         patch("litellm.proxy.proxy_server.user_api_key_cache"), \
-         patch("litellm.proxy.proxy_server.proxy_logging_obj"), \
-         patch(
-             "litellm.proxy.management_endpoints.team_endpoints.get_user_object",
-             new_callable=AsyncMock,
-             return_value=None,
-         ):
+    with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma_client, patch(
+        "litellm.proxy.proxy_server.user_api_key_cache"
+    ), patch("litellm.proxy.proxy_server.proxy_logging_obj"), patch(
+        "litellm.proxy.management_endpoints.team_endpoints.get_user_object",
+        new_callable=AsyncMock,
+        return_value=None,
+    ):
         mock_prisma_client.return_value = MagicMock()  # Mock non-None prisma client
 
         # Should raise HTTPException with 401 status
@@ -2110,14 +2123,13 @@ async def test_list_team_v2_security_check_non_admin_user_other_user():
         user_id="non_admin_user_123",
     )
 
-    with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma_client, \
-         patch("litellm.proxy.proxy_server.user_api_key_cache"), \
-         patch("litellm.proxy.proxy_server.proxy_logging_obj"), \
-         patch(
-             "litellm.proxy.management_endpoints.team_endpoints.get_user_object",
-             new_callable=AsyncMock,
-             return_value=None,
-         ):
+    with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma_client, patch(
+        "litellm.proxy.proxy_server.user_api_key_cache"
+    ), patch("litellm.proxy.proxy_server.proxy_logging_obj"), patch(
+        "litellm.proxy.management_endpoints.team_endpoints.get_user_object",
+        new_callable=AsyncMock,
+        return_value=None,
+    ):
         mock_prisma_client.return_value = MagicMock()  # Mock non-None prisma client
 
         # Should raise HTTPException with 401 status
@@ -2156,9 +2168,9 @@ async def test_list_team_v2_security_check_non_admin_user_own_teams():
         user_id="non_admin_user_123",
     )
 
-    with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma_client, \
-         patch("litellm.proxy.proxy_server.user_api_key_cache"), \
-         patch("litellm.proxy.proxy_server.proxy_logging_obj"):
+    with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma_client, patch(
+        "litellm.proxy.proxy_server.user_api_key_cache"
+    ), patch("litellm.proxy.proxy_server.proxy_logging_obj"):
         # Mock prisma client and database operations
         mock_db = Mock()
         mock_prisma_client.db = mock_db
@@ -2226,7 +2238,7 @@ async def test_list_team_v2_security_check_admin_user():
         # Mock prisma client and database operations
         mock_db = Mock()
         mock_prisma_client.db = mock_db
-        
+
         # Mock team lookup
         mock_teams = [
             Mock(model_dump=lambda: {"team_id": "team_1", "team_alias": "Team 1"}),
@@ -2257,38 +2269,44 @@ async def test_list_team_v2_with_status_deleted():
     Test that status="deleted" parameter correctly queries the deleted teams table.
     """
     from unittest.mock import AsyncMock, Mock, patch
-    
+
     from fastapi import Request
-    
+
     from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
     from litellm.proxy.management_endpoints.team_endpoints import list_team_v2
-    
+
     # Mock request
     mock_request = Mock(spec=Request)
-    
+
     # Mock admin user
     mock_user_api_key_dict_admin = UserAPIKeyAuth(
         user_role=LitellmUserRoles.PROXY_ADMIN,
         user_id="admin_user_123",
     )
-    
+
     with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma_client:
         # Mock prisma client and database operations
         mock_db = Mock()
         mock_prisma_client.db = mock_db
-        
+
         # Mock deleted teams
-        mock_deleted_team1 = Mock(model_dump=lambda: {"team_id": "team_1", "team_alias": "Deleted Team 1"})
-        mock_deleted_team2 = Mock(model_dump=lambda: {"team_id": "team_2", "team_alias": "Deleted Team 2"})
-        
+        mock_deleted_team1 = Mock(
+            model_dump=lambda: {"team_id": "team_1", "team_alias": "Deleted Team 1"}
+        )
+        mock_deleted_team2 = Mock(
+            model_dump=lambda: {"team_id": "team_2", "team_alias": "Deleted Team 2"}
+        )
+
         # Mock deleted teams table (should be called)
-        mock_db.litellm_deletedteamtable.find_many = AsyncMock(return_value=[mock_deleted_team1, mock_deleted_team2])
+        mock_db.litellm_deletedteamtable.find_many = AsyncMock(
+            return_value=[mock_deleted_team1, mock_deleted_team2]
+        )
         mock_db.litellm_deletedteamtable.count = AsyncMock(return_value=2)
-        
+
         # Mock regular teams table (should NOT be called)
         mock_db.litellm_teamtable.find_many = AsyncMock(return_value=[])
         mock_db.litellm_teamtable.count = AsyncMock(return_value=0)
-        
+
         # Should NOT raise an exception
         result = await list_team_v2(
             http_request=mock_request,
@@ -2298,15 +2316,15 @@ async def test_list_team_v2_with_status_deleted():
             page_size=10,
             status="deleted",  # Test the status parameter
         )
-        
+
         # Verify that deleted table was queried
         mock_db.litellm_deletedteamtable.find_many.assert_called_once()
         mock_db.litellm_deletedteamtable.count.assert_called_once()
-        
+
         # Verify that regular table was NOT queried
         mock_db.litellm_teamtable.find_many.assert_not_called()
         mock_db.litellm_teamtable.count.assert_not_called()
-        
+
         # Should return results without error
         assert "teams" in result
         assert "total" in result
@@ -2354,14 +2372,13 @@ async def test_list_team_v2_org_admin_sees_org_teams():
         ],
     )
 
-    with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma, \
-         patch("litellm.proxy.proxy_server.user_api_key_cache"), \
-         patch("litellm.proxy.proxy_server.proxy_logging_obj"), \
-         patch(
-             "litellm.proxy.management_endpoints.team_endpoints.get_user_object",
-             new_callable=AsyncMock,
-             return_value=mock_user,
-         ):
+    with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma, patch(
+        "litellm.proxy.proxy_server.user_api_key_cache"
+    ), patch("litellm.proxy.proxy_server.proxy_logging_obj"), patch(
+        "litellm.proxy.management_endpoints.team_endpoints.get_user_object",
+        new_callable=AsyncMock,
+        return_value=mock_user,
+    ):
         mock_db = Mock()
         mock_prisma.db = mock_db
 
@@ -2438,14 +2455,13 @@ async def test_list_team_v2_org_admin_cannot_view_other_orgs():
         ],
     )
 
-    with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma, \
-         patch("litellm.proxy.proxy_server.user_api_key_cache"), \
-         patch("litellm.proxy.proxy_server.proxy_logging_obj"), \
-         patch(
-             "litellm.proxy.management_endpoints.team_endpoints.get_user_object",
-             new_callable=AsyncMock,
-             return_value=mock_user,
-         ):
+    with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma, patch(
+        "litellm.proxy.proxy_server.user_api_key_cache"
+    ), patch("litellm.proxy.proxy_server.proxy_logging_obj"), patch(
+        "litellm.proxy.management_endpoints.team_endpoints.get_user_object",
+        new_callable=AsyncMock,
+        return_value=mock_user,
+    ):
         mock_prisma.db = Mock()
 
         with pytest.raises(HTTPException) as exc_info:
@@ -2464,9 +2480,10 @@ async def test_list_team_v2_org_admin_cannot_view_other_orgs():
             )
 
         assert exc_info.value.status_code == 403
-        assert "only view teams within your organizations" in str(
-            exc_info.value.detail
-        ).lower()
+        assert (
+            "only view teams within your organizations"
+            in str(exc_info.value.detail).lower()
+        )
 
 
 @pytest.mark.asyncio
@@ -2526,13 +2543,12 @@ async def test_list_team_v2_org_admin_with_user_id_returns_user_teams():
             return mock_org_admin
         return mock_target_user
 
-    with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma, \
-         patch("litellm.proxy.proxy_server.user_api_key_cache"), \
-         patch("litellm.proxy.proxy_server.proxy_logging_obj"), \
-         patch(
-             "litellm.proxy.management_endpoints.team_endpoints.get_user_object",
-             side_effect=mock_get_user_object,
-         ):
+    with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma, patch(
+        "litellm.proxy.proxy_server.user_api_key_cache"
+    ), patch("litellm.proxy.proxy_server.proxy_logging_obj"), patch(
+        "litellm.proxy.management_endpoints.team_endpoints.get_user_object",
+        side_effect=mock_get_user_object,
+    ):
         mock_db = Mock()
         mock_prisma.db = mock_db
 
@@ -2589,7 +2605,7 @@ async def test_list_team_v2_with_invalid_status():
     )
 
     mock_prisma_client = Mock()
-    
+
     # Mock prisma_client to be non-None
     with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client):
         # Should raise HTTPException for invalid status
@@ -2602,7 +2618,7 @@ async def test_list_team_v2_with_invalid_status():
                 page_size=10,
                 status="invalid_status",  # Invalid status value
             )
-        
+
         assert exc_info.value.status_code == 400
         assert "Invalid status value" in str(exc_info.value.detail)
         assert "deleted" in str(exc_info.value.detail)
@@ -2634,24 +2650,32 @@ async def test_team_member_delete_cleans_membership(mock_db_client, mock_admin_a
     }
 
     # Configure DB mocks used by team_member_delete
-    mock_db_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=mock_team_row)
+    mock_db_client.db.litellm_teamtable.find_unique = AsyncMock(
+        return_value=mock_team_row
+    )
     mock_db_client.db.litellm_teamtable.update = AsyncMock(return_value=mock_team_row)
 
     # User row to allow removal from user's teams list
     mock_user_row = MagicMock()
     mock_user_row.user_id = test_user_id
     mock_user_row.teams = [test_team_id]
-    mock_db_client.db.litellm_usertable.find_many = AsyncMock(return_value=[mock_user_row])
+    mock_db_client.db.litellm_usertable.find_many = AsyncMock(
+        return_value=[mock_user_row]
+    )
     mock_db_client.db.litellm_usertable.update = AsyncMock(return_value=MagicMock())
 
     # Membership deletion should be called
     mock_db_client.db.litellm_teammembership = MagicMock()
-    mock_db_client.db.litellm_teammembership.delete_many = AsyncMock(return_value=MagicMock())
+    mock_db_client.db.litellm_teammembership.delete_many = AsyncMock(
+        return_value=MagicMock()
+    )
 
     # Verification token deletion should be called
     mock_db_client.db.litellm_verificationtoken = MagicMock()
     mock_db_client.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
-    mock_db_client.db.litellm_verificationtoken.delete_many = AsyncMock(return_value=MagicMock())
+    mock_db_client.db.litellm_verificationtoken.delete_many = AsyncMock(
+        return_value=MagicMock()
+    )
 
     # Execute
     await team_member_delete(
@@ -2663,10 +2687,12 @@ async def test_team_member_delete_cleans_membership(mock_db_client, mock_admin_a
     mock_db_client.db.litellm_teammembership.delete_many.assert_awaited_with(
         where={"team_id": test_team_id, "user_id": test_user_id}
     )
-    
+
 
 @pytest.mark.asyncio
-async def test_team_member_delete_cleans_verification_tokens(mock_db_client, mock_admin_auth):
+async def test_team_member_delete_cleans_verification_tokens(
+    mock_db_client, mock_admin_auth
+):
     from litellm.proxy._types import TeamMemberDeleteRequest
     from litellm.proxy.management_endpoints.team_endpoints import team_member_delete
 
@@ -2685,21 +2711,29 @@ async def test_team_member_delete_cleans_verification_tokens(mock_db_client, moc
         "spend": 0.0,
     }
 
-    mock_db_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=mock_team_row)
+    mock_db_client.db.litellm_teamtable.find_unique = AsyncMock(
+        return_value=mock_team_row
+    )
     mock_db_client.db.litellm_teamtable.update = AsyncMock(return_value=mock_team_row)
 
     mock_user_row = MagicMock()
     mock_user_row.user_id = test_user_id
     mock_user_row.teams = [test_team_id]
-    mock_db_client.db.litellm_usertable.find_many = AsyncMock(return_value=[mock_user_row])
+    mock_db_client.db.litellm_usertable.find_many = AsyncMock(
+        return_value=[mock_user_row]
+    )
     mock_db_client.db.litellm_usertable.update = AsyncMock(return_value=MagicMock())
 
     mock_db_client.db.litellm_teammembership = MagicMock()
-    mock_db_client.db.litellm_teammembership.delete_many = AsyncMock(return_value=MagicMock())
+    mock_db_client.db.litellm_teammembership.delete_many = AsyncMock(
+        return_value=MagicMock()
+    )
 
     mock_db_client.db.litellm_verificationtoken = MagicMock()
     mock_db_client.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
-    mock_db_client.db.litellm_verificationtoken.delete_many = AsyncMock(return_value=MagicMock())
+    mock_db_client.db.litellm_verificationtoken.delete_many = AsyncMock(
+        return_value=MagicMock()
+    )
 
     await team_member_delete(
         data=TeamMemberDeleteRequest(team_id=test_team_id, user_id=test_user_id),
@@ -2718,7 +2752,7 @@ async def test_team_member_delete_cleans_verification_tokens(mock_db_client, moc
 async def test_new_team_max_budget_exceeds_user_max_budget():
     """
     Test that /team/new raises ProxyException when max_budget exceeds user's end_user_max_budget.
-    
+
     This validates the budget enforcement logic where non-admin users cannot create teams
     with budgets higher than their personal maximum budget limit.
     """
@@ -2755,15 +2789,16 @@ async def test_new_team_max_budget_exceeds_user_max_budget():
         mock_prisma.db.litellm_teamtable.count = AsyncMock(return_value=0)
         mock_license.is_team_count_over_limit.return_value = False
         mock_prisma.get_data = AsyncMock(return_value=None)
-        
+
         # Mock user cache to return a user object with max_budget=100.0
         from litellm.proxy._types import LiteLLM_UserTable
+
         mock_user_obj = LiteLLM_UserTable(
             user_id="non-admin-user-123",
             max_budget=100.0,
         )
         mock_cache.async_get_cache = AsyncMock(return_value=mock_user_obj)
-        
+
         # Should raise ProxyException (HTTPException gets converted by handle_exception_on_proxy)
         with pytest.raises(ProxyException) as exc_info:
             await new_team(
@@ -2774,9 +2809,11 @@ async def test_new_team_max_budget_exceeds_user_max_budget():
 
         # Verify exception details
         # ProxyException stores status_code in 'code' attribute
-        assert exc_info.value.code == '400'
+        assert exc_info.value.code == "400"
         assert "max budget higher than user max" in str(exc_info.value.message)
-        assert "100.0" in str(exc_info.value.message)  # User's user_max_budget should be mentioned
+        assert "100.0" in str(
+            exc_info.value.message
+        )  # User's user_max_budget should be mentioned
         assert LitellmUserRoles.INTERNAL_USER.value in str(exc_info.value.message)
 
 
@@ -2784,7 +2821,7 @@ async def test_new_team_max_budget_exceeds_user_max_budget():
 async def test_new_team_max_budget_within_user_limit():
     """
     Test that /team/new succeeds when max_budget is within user's user_max_budget.
-    
+
     This ensures that users can create teams with budgets at or below their personal limit.
     """
     from fastapi import Request
@@ -2817,22 +2854,22 @@ async def test_new_team_max_budget_within_user_limit():
     ), patch(
         "litellm.proxy.proxy_server.create_audit_log_for_update", new=AsyncMock()
     ) as mock_audit:
-
         # Setup mocks
         mock_prisma.db.litellm_teamtable.count = AsyncMock(return_value=0)
         mock_license.is_team_count_over_limit.return_value = False
         mock_prisma.jsonify_team_object = lambda db_data: db_data
         mock_prisma.get_data = AsyncMock(return_value=None)
         mock_prisma.update_data = AsyncMock()
-        
+
         # Mock user cache to return a user object with max_budget=100.0
         from litellm.proxy._types import LiteLLM_UserTable
+
         mock_user_obj = LiteLLM_UserTable(
             user_id="non-admin-user-456",
             max_budget=100.0,
         )
         mock_cache.async_get_cache = AsyncMock(return_value=mock_user_obj)
-        
+
         # Mock team creation
         mock_created_team = MagicMock()
         mock_created_team.team_id = "team-within-budget-789"
@@ -2846,21 +2883,30 @@ async def test_new_team_max_budget_within_user_limit():
             "max_budget": 50.0,
             "members_with_roles": [],
         }
-        mock_prisma.db.litellm_teamtable.create = AsyncMock(return_value=mock_created_team)
-        mock_prisma.db.litellm_teamtable.update = AsyncMock(return_value=mock_created_team)
-        
+        mock_prisma.db.litellm_teamtable.create = AsyncMock(
+            return_value=mock_created_team
+        )
+        mock_prisma.db.litellm_teamtable.update = AsyncMock(
+            return_value=mock_created_team
+        )
+
         # Mock model table
         mock_prisma.db.litellm_modeltable = MagicMock()
-        mock_prisma.db.litellm_modeltable.create = AsyncMock(return_value=MagicMock(id="model123"))
-        
+        mock_prisma.db.litellm_modeltable.create = AsyncMock(
+            return_value=MagicMock(id="model123")
+        )
+
         # Mock user table operations for adding the creator as a member
         mock_user = MagicMock()
         mock_user.user_id = "non-admin-user-456"
-        mock_user.model_dump.return_value = {"user_id": "non-admin-user-456", "teams": ["team-within-budget-789"]}
+        mock_user.model_dump.return_value = {
+            "user_id": "non-admin-user-456",
+            "teams": ["team-within-budget-789"],
+        }
         mock_prisma.db.litellm_usertable = MagicMock()
         mock_prisma.db.litellm_usertable.upsert = AsyncMock(return_value=mock_user)
         mock_prisma.db.litellm_usertable.update = AsyncMock(return_value=mock_user)
-        
+
         # Mock team membership table
         mock_membership = MagicMock()
         mock_membership.model_dump.return_value = {
@@ -2869,7 +2915,9 @@ async def test_new_team_max_budget_within_user_limit():
             "budget_id": None,
         }
         mock_prisma.db.litellm_teammembership = MagicMock()
-        mock_prisma.db.litellm_teammembership.create = AsyncMock(return_value=mock_membership)
+        mock_prisma.db.litellm_teammembership.create = AsyncMock(
+            return_value=mock_membership
+        )
 
         # Should NOT raise an exception
         result = await new_team(
@@ -2937,7 +2985,6 @@ async def test_new_team_org_scoped_budget_bypasses_user_limit():
     ) as mock_audit, patch(
         "litellm.proxy.management_endpoints.team_endpoints.get_org_object"
     ) as mock_get_org:
-
         # Setup mocks
         mock_prisma.db.litellm_teamtable.count = AsyncMock(return_value=0)
         mock_license.is_team_count_over_limit.return_value = False
@@ -2975,17 +3022,26 @@ async def test_new_team_org_scoped_budget_bypasses_user_limit():
             "organization_id": "test-org-123",
             "members_with_roles": [],
         }
-        mock_prisma.db.litellm_teamtable.create = AsyncMock(return_value=mock_created_team)
-        mock_prisma.db.litellm_teamtable.update = AsyncMock(return_value=mock_created_team)
+        mock_prisma.db.litellm_teamtable.create = AsyncMock(
+            return_value=mock_created_team
+        )
+        mock_prisma.db.litellm_teamtable.update = AsyncMock(
+            return_value=mock_created_team
+        )
 
         # Mock model table
         mock_prisma.db.litellm_modeltable = MagicMock()
-        mock_prisma.db.litellm_modeltable.create = AsyncMock(return_value=MagicMock(id="model123"))
+        mock_prisma.db.litellm_modeltable.create = AsyncMock(
+            return_value=MagicMock(id="model123")
+        )
 
         # Mock user table operations
         mock_user = MagicMock()
         mock_user.user_id = "org-admin-user-123"
-        mock_user.model_dump.return_value = {"user_id": "org-admin-user-123", "teams": ["team-org-scoped-789"]}
+        mock_user.model_dump.return_value = {
+            "user_id": "org-admin-user-123",
+            "teams": ["team-org-scoped-789"],
+        }
         mock_prisma.db.litellm_usertable = MagicMock()
         mock_prisma.db.litellm_usertable.upsert = AsyncMock(return_value=mock_user)
         mock_prisma.db.litellm_usertable.update = AsyncMock(return_value=mock_user)
@@ -2998,7 +3054,9 @@ async def test_new_team_org_scoped_budget_bypasses_user_limit():
             "budget_id": None,
         }
         mock_prisma.db.litellm_teammembership = MagicMock()
-        mock_prisma.db.litellm_teammembership.create = AsyncMock(return_value=mock_membership)
+        mock_prisma.db.litellm_teammembership.create = AsyncMock(
+            return_value=mock_membership
+        )
 
         # Should NOT raise an exception - the fix should bypass user budget validation for org-scoped teams
         result = await new_team(
@@ -3050,7 +3108,9 @@ async def test_new_team_org_scoped_models_bypasses_user_limit():
     # Create team request with models that are within org's allowed models but not user's
     team_request = NewTeamRequest(
         team_alias="org-scoped-models-team",
-        models=["gpt-4"],  # Within org's allowed models, but not in user's personal models
+        models=[
+            "gpt-4"
+        ],  # Within org's allowed models, but not in user's personal models
         organization_id="test-org-456",  # This makes it an org-scoped team
     )
 
@@ -3067,7 +3127,6 @@ async def test_new_team_org_scoped_models_bypasses_user_limit():
     ) as mock_audit, patch(
         "litellm.proxy.management_endpoints.team_endpoints.get_org_object"
     ) as mock_get_org:
-
         # Setup mocks
         mock_prisma.db.litellm_teamtable.count = AsyncMock(return_value=0)
         mock_license.is_team_count_over_limit.return_value = False
@@ -3107,17 +3166,26 @@ async def test_new_team_org_scoped_models_bypasses_user_limit():
             "models": ["gpt-4"],
             "members_with_roles": [],
         }
-        mock_prisma.db.litellm_teamtable.create = AsyncMock(return_value=mock_created_team)
-        mock_prisma.db.litellm_teamtable.update = AsyncMock(return_value=mock_created_team)
+        mock_prisma.db.litellm_teamtable.create = AsyncMock(
+            return_value=mock_created_team
+        )
+        mock_prisma.db.litellm_teamtable.update = AsyncMock(
+            return_value=mock_created_team
+        )
 
         # Mock model table
         mock_prisma.db.litellm_modeltable = MagicMock()
-        mock_prisma.db.litellm_modeltable.create = AsyncMock(return_value=MagicMock(id="model123"))
+        mock_prisma.db.litellm_modeltable.create = AsyncMock(
+            return_value=MagicMock(id="model123")
+        )
 
         # Mock user table operations
         mock_user = MagicMock()
         mock_user.user_id = "org-admin-user-456"
-        mock_user.model_dump.return_value = {"user_id": "org-admin-user-456", "teams": ["team-org-scoped-models-789"]}
+        mock_user.model_dump.return_value = {
+            "user_id": "org-admin-user-456",
+            "teams": ["team-org-scoped-models-789"],
+        }
         mock_prisma.db.litellm_usertable = MagicMock()
         mock_prisma.db.litellm_usertable.upsert = AsyncMock(return_value=mock_user)
         mock_prisma.db.litellm_usertable.update = AsyncMock(return_value=mock_user)
@@ -3130,7 +3198,9 @@ async def test_new_team_org_scoped_models_bypasses_user_limit():
             "budget_id": None,
         }
         mock_prisma.db.litellm_teammembership = MagicMock()
-        mock_prisma.db.litellm_teammembership.create = AsyncMock(return_value=mock_membership)
+        mock_prisma.db.litellm_teammembership.create = AsyncMock(
+            return_value=mock_membership
+        )
 
         # Should NOT raise an exception - the fix should bypass user model validation for org-scoped teams
         result = await new_team(
@@ -3207,7 +3277,7 @@ async def test_new_team_standalone_validates_against_user_models(monkeypatch):
             )
 
         # Verify exception details
-        assert exc_info.value.code == '400'
+        assert exc_info.value.code == "400"
         assert "Model not in allowed user models" in str(exc_info.value.message)
         assert "no-default-models" in str(exc_info.value.message)
 
@@ -3283,9 +3353,11 @@ async def test_new_team_standalone_validates_against_user_budget():
             )
 
         # Verify exception details
-        assert exc_info.value.code == '400'
+        assert exc_info.value.code == "400"
         assert "max budget higher than user max" in str(exc_info.value.message)
-        assert "3.0" in str(exc_info.value.message)  # User's max_budget should be mentioned
+        assert "3.0" in str(
+            exc_info.value.message
+        )  # User's max_budget should be mentioned
 
 
 @pytest.mark.asyncio
@@ -3336,7 +3408,6 @@ async def test_new_team_org_scoped_budget_exceeds_org_limit():
     ) as mock_audit, patch(
         "litellm.proxy.management_endpoints.team_endpoints.get_org_object"
     ) as mock_get_org:
-
         # Setup mocks
         mock_prisma.db.litellm_teamtable.count = AsyncMock(return_value=0)
         mock_license.is_team_count_over_limit.return_value = False
@@ -3361,8 +3432,11 @@ async def test_new_team_org_scoped_budget_exceeds_org_limit():
             )
 
         # Verify exception details
-        assert exc_info.value.code == '400'
-        assert "exceeds organization" in str(exc_info.value.message).lower() or "organization" in str(exc_info.value.message).lower()
+        assert exc_info.value.code == "400"
+        assert (
+            "exceeds organization" in str(exc_info.value.message).lower()
+            or "organization" in str(exc_info.value.message).lower()
+        )
 
 
 @pytest.mark.asyncio
@@ -3413,7 +3487,6 @@ async def test_new_team_org_scoped_models_not_in_org_models():
     ) as mock_audit, patch(
         "litellm.proxy.management_endpoints.team_endpoints.get_org_object"
     ) as mock_get_org:
-
         # Setup mocks
         mock_prisma.db.litellm_teamtable.count = AsyncMock(return_value=0)
         mock_license.is_team_count_over_limit.return_value = False
@@ -3435,8 +3508,11 @@ async def test_new_team_org_scoped_models_not_in_org_models():
             )
 
         # Verify exception details
-        assert exc_info.value.code == '400'
-        assert "claude-3-opus" in str(exc_info.value.message) or "organization" in str(exc_info.value.message).lower()
+        assert exc_info.value.code == "400"
+        assert (
+            "claude-3-opus" in str(exc_info.value.message)
+            or "organization" in str(exc_info.value.message).lower()
+        )
 
 
 @pytest.mark.asyncio
@@ -3482,7 +3558,6 @@ async def test_update_team_standalone_budget_exceeds_user_limit():
     ), patch(
         "litellm.proxy.proxy_server.create_audit_log_for_update", new=AsyncMock()
     ) as mock_audit:
-
         # Mock existing standalone team (no organization_id)
         mock_existing_team = MagicMock()
         mock_existing_team.team_id = "standalone-team-123"
@@ -3492,8 +3567,13 @@ async def test_update_team_standalone_budget_exceeds_user_limit():
             "team_id": "standalone-team-123",
             "organization_id": None,
             "max_budget": 30.0,
+            "members_with_roles": [
+                {"user_id": "non-admin-update-test", "role": "admin"}
+            ],
         }
-        mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=mock_existing_team)
+        mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(
+            return_value=mock_existing_team
+        )
 
         # Mock user cache to return user with restrictive budget
         mock_user_obj = LiteLLM_UserTable(
@@ -3511,7 +3591,7 @@ async def test_update_team_standalone_budget_exceeds_user_limit():
             )
 
         # Verify exception details
-        assert exc_info.value.code == '400'
+        assert exc_info.value.code == "400"
         assert "budget" in str(exc_info.value.message).lower()
 
 
@@ -3569,9 +3649,8 @@ async def test_update_team_org_scoped_budget_exceeds_org_limit():
         "litellm.proxy.proxy_server.create_audit_log_for_update", new=AsyncMock()
     ) as mock_audit, patch(
         "litellm.proxy.management_endpoints.team_endpoints.get_org_object",
-        new=AsyncMock(return_value=mock_org)
+        new=AsyncMock(return_value=mock_org),
     ) as mock_get_org:
-
         # Mock existing org-scoped team
         mock_existing_team = MagicMock()
         mock_existing_team.team_id = "org-team-456"
@@ -3581,8 +3660,13 @@ async def test_update_team_org_scoped_budget_exceeds_org_limit():
             "team_id": "org-team-456",
             "organization_id": "test-org-update",
             "max_budget": 80.0,
+            "members_with_roles": [
+                {"user_id": "org-admin-update-test", "role": "admin"}
+            ],
         }
-        mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=mock_existing_team)
+        mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(
+            return_value=mock_existing_team
+        )
 
         # Should raise ProxyException because new budget exceeds org's max_budget
         with pytest.raises(ProxyException) as exc_info:
@@ -3593,8 +3677,11 @@ async def test_update_team_org_scoped_budget_exceeds_org_limit():
             )
 
         # Verify exception details
-        assert exc_info.value.code == '400'
-        assert "organization" in str(exc_info.value.message).lower() or "budget" in str(exc_info.value.message).lower()
+        assert exc_info.value.code == "400"
+        assert (
+            "organization" in str(exc_info.value.message).lower()
+            or "budget" in str(exc_info.value.message).lower()
+        )
 
 
 @pytest.mark.asyncio
@@ -3635,7 +3722,6 @@ async def test_update_team_standalone_models_exceeds_user_limit():
     ), patch(
         "litellm.proxy.proxy_server.create_audit_log_for_update", new=AsyncMock()
     ) as mock_audit:
-
         # Mock existing standalone team (no organization_id)
         mock_existing_team = MagicMock()
         mock_existing_team.team_id = "standalone-team-models-123"
@@ -3645,8 +3731,13 @@ async def test_update_team_standalone_models_exceeds_user_limit():
             "team_id": "standalone-team-models-123",
             "organization_id": None,
             "models": ["gpt-3.5-turbo"],
+            "members_with_roles": [
+                {"user_id": "non-admin-update-models-test", "role": "admin"}
+            ],
         }
-        mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=mock_existing_team)
+        mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(
+            return_value=mock_existing_team
+        )
 
         # Should raise ProxyException because model not in user's allowed models
         with pytest.raises(ProxyException) as exc_info:
@@ -3657,7 +3748,7 @@ async def test_update_team_standalone_models_exceeds_user_limit():
             )
 
         # Verify exception details
-        assert exc_info.value.code == '400'
+        assert exc_info.value.code == "400"
         assert "model" in str(exc_info.value.message).lower()
 
 
@@ -3716,9 +3807,8 @@ async def test_update_team_org_scoped_budget_bypasses_user_limit():
         "litellm.proxy.proxy_server.create_audit_log_for_update", new=AsyncMock()
     ) as mock_audit, patch(
         "litellm.proxy.management_endpoints.team_endpoints.get_org_object",
-        new=AsyncMock(return_value=mock_org)
+        new=AsyncMock(return_value=mock_org),
     ) as mock_get_org:
-
         # Mock existing org-scoped team
         mock_existing_team = MagicMock()
         mock_existing_team.team_id = "org-team-update-budget-123"
@@ -3729,8 +3819,13 @@ async def test_update_team_org_scoped_budget_bypasses_user_limit():
             "team_id": "org-team-update-budget-123",
             "organization_id": "test-org-update-budget",
             "max_budget": 30.0,
+            "members_with_roles": [
+                {"user_id": "org-admin-update-budget-test", "role": "admin"}
+            ],
         }
-        mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=mock_existing_team)
+        mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(
+            return_value=mock_existing_team
+        )
         mock_prisma.jsonify_team_object = lambda db_data: db_data
 
         # Mock user cache to return user with restrictive budget
@@ -3739,7 +3834,9 @@ async def test_update_team_org_scoped_budget_bypasses_user_limit():
             max_budget=3.0,  # Restrictive personal budget
         )
         mock_cache.async_get_cache = AsyncMock(return_value=mock_user_obj)
-        mock_cache.async_set_cache = AsyncMock()  # Mock cache set for _cache_team_object
+        mock_cache.async_set_cache = (
+            AsyncMock()
+        )  # Mock cache set for _cache_team_object
 
         # Mock team update
         mock_updated_team = MagicMock()
@@ -3752,7 +3849,9 @@ async def test_update_team_org_scoped_budget_bypasses_user_limit():
             "organization_id": "test-org-update-budget",
             "max_budget": 50.0,
         }
-        mock_prisma.db.litellm_teamtable.update = AsyncMock(return_value=mock_updated_team)
+        mock_prisma.db.litellm_teamtable.update = AsyncMock(
+            return_value=mock_updated_team
+        )
 
         # Should NOT raise an exception - bypass user budget validation for org-scoped teams
         result = await update_team(
@@ -3816,9 +3915,8 @@ async def test_update_team_org_scoped_models_bypasses_user_limit():
         "litellm.proxy.proxy_server.create_audit_log_for_update", new=AsyncMock()
     ) as mock_audit, patch(
         "litellm.proxy.management_endpoints.team_endpoints.get_org_object",
-        new=AsyncMock(return_value=mock_org)
+        new=AsyncMock(return_value=mock_org),
     ) as mock_get_org:
-
         # Mock existing org-scoped team
         mock_existing_team = MagicMock()
         mock_existing_team.team_id = "org-team-update-models-123"
@@ -3829,10 +3927,17 @@ async def test_update_team_org_scoped_models_bypasses_user_limit():
             "team_id": "org-team-update-models-123",
             "organization_id": "test-org-update-models",
             "models": ["gpt-3.5-turbo"],
+            "members_with_roles": [
+                {"user_id": "org-admin-update-models-test", "role": "admin"}
+            ],
         }
-        mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=mock_existing_team)
+        mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(
+            return_value=mock_existing_team
+        )
         mock_prisma.jsonify_team_object = lambda db_data: db_data
-        mock_cache.async_set_cache = AsyncMock()  # Mock cache set for _cache_team_object
+        mock_cache.async_set_cache = (
+            AsyncMock()
+        )  # Mock cache set for _cache_team_object
 
         # Mock team update
         mock_updated_team = MagicMock()
@@ -3845,7 +3950,9 @@ async def test_update_team_org_scoped_models_bypasses_user_limit():
             "organization_id": "test-org-update-models",
             "models": ["gpt-4"],
         }
-        mock_prisma.db.litellm_teamtable.update = AsyncMock(return_value=mock_updated_team)
+        mock_prisma.db.litellm_teamtable.update = AsyncMock(
+            return_value=mock_updated_team
+        )
 
         # Should NOT raise an exception - bypass user models validation for org-scoped teams
         result = await update_team(
@@ -3909,9 +4016,8 @@ async def test_update_team_org_scoped_models_not_in_org_models():
         "litellm.proxy.proxy_server.create_audit_log_for_update", new=AsyncMock()
     ) as mock_audit, patch(
         "litellm.proxy.management_endpoints.team_endpoints.get_org_object",
-        new=AsyncMock(return_value=mock_org)
+        new=AsyncMock(return_value=mock_org),
     ) as mock_get_org:
-
         # Mock existing org-scoped team
         mock_existing_team = MagicMock()
         mock_existing_team.team_id = "org-team-update-models-fail-123"
@@ -3921,8 +4027,13 @@ async def test_update_team_org_scoped_models_not_in_org_models():
             "team_id": "org-team-update-models-fail-123",
             "organization_id": "test-org-update-models-fail",
             "models": ["gpt-4"],
+            "members_with_roles": [
+                {"user_id": "org-admin-update-models-fail-test", "role": "admin"}
+            ],
         }
-        mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=mock_existing_team)
+        mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(
+            return_value=mock_existing_team
+        )
 
         # Should raise ProxyException because claude-3-opus is not in org's allowed models
         with pytest.raises(ProxyException) as exc_info:
@@ -3933,8 +4044,11 @@ async def test_update_team_org_scoped_models_not_in_org_models():
             )
 
         # Verify exception details
-        assert exc_info.value.code == '400'
-        assert "claude-3-opus" in str(exc_info.value.message) or "organization" in str(exc_info.value.message).lower()
+        assert exc_info.value.code == "400"
+        assert (
+            "claude-3-opus" in str(exc_info.value.message)
+            or "organization" in str(exc_info.value.message).lower()
+        )
 
 
 @pytest.mark.asyncio
@@ -3988,9 +4102,8 @@ async def test_update_team_org_scoped_models_with_all_proxy_models():
         "litellm.proxy.proxy_server.create_audit_log_for_update", new=AsyncMock()
     ) as mock_audit, patch(
         "litellm.proxy.management_endpoints.team_endpoints.get_org_object",
-        new=AsyncMock(return_value=mock_org)
+        new=AsyncMock(return_value=mock_org),
     ) as mock_get_org:
-
         # Mock existing org-scoped team
         mock_existing_team = MagicMock()
         mock_existing_team.team_id = "org-team-all-proxy-models-123"
@@ -4001,23 +4114,40 @@ async def test_update_team_org_scoped_models_with_all_proxy_models():
             "team_id": "org-team-all-proxy-models-123",
             "organization_id": "test-org-all-proxy-models",
             "models": ["gpt-4"],
+            "members_with_roles": [
+                {"user_id": "org-admin-all-proxy-models-test", "role": "admin"}
+            ],
         }
-        mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=mock_existing_team)
+        mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(
+            return_value=mock_existing_team
+        )
         mock_prisma.jsonify_team_object = lambda db_data: db_data
-        mock_cache.async_set_cache = AsyncMock()  # Mock cache set for _cache_team_object
+        mock_cache.async_set_cache = (
+            AsyncMock()
+        )  # Mock cache set for _cache_team_object
 
         # Mock team update
         mock_updated_team = MagicMock()
         mock_updated_team.team_id = "org-team-all-proxy-models-123"
         mock_updated_team.organization_id = "test-org-all-proxy-models"
-        mock_updated_team.models = ["rerank-english-v3.0", "text-embedding-3-small", "gpt-4o-mini-test"]
+        mock_updated_team.models = [
+            "rerank-english-v3.0",
+            "text-embedding-3-small",
+            "gpt-4o-mini-test",
+        ]
         mock_updated_team.litellm_model_table = None
         mock_updated_team.model_dump.return_value = {
             "team_id": "org-team-all-proxy-models-123",
             "organization_id": "test-org-all-proxy-models",
-            "models": ["rerank-english-v3.0", "text-embedding-3-small", "gpt-4o-mini-test"],
+            "models": [
+                "rerank-english-v3.0",
+                "text-embedding-3-small",
+                "gpt-4o-mini-test",
+            ],
         }
-        mock_prisma.db.litellm_teamtable.update = AsyncMock(return_value=mock_updated_team)
+        mock_prisma.db.litellm_teamtable.update = AsyncMock(
+            return_value=mock_updated_team
+        )
 
         # Should NOT raise an exception - 'all-proxy-models' allows all models
         result = await update_team(
@@ -4028,7 +4158,11 @@ async def test_update_team_org_scoped_models_with_all_proxy_models():
 
         # Verify the team was updated successfully with the new models
         assert result is not None
-        assert result["data"].models == ["rerank-english-v3.0", "text-embedding-3-small", "gpt-4o-mini-test"]
+        assert result["data"].models == [
+            "rerank-english-v3.0",
+            "text-embedding-3-small",
+            "gpt-4o-mini-test",
+        ]
 
 
 @pytest.mark.asyncio
@@ -4067,7 +4201,6 @@ async def test_update_team_tpm_limit_exceeds_user_limit():
     ) as mock_cache, patch(
         "litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"
     ):
-
         # Mock existing standalone team
         mock_existing_team = MagicMock()
         mock_existing_team.team_id = "team-tpm-test-123"
@@ -4077,8 +4210,11 @@ async def test_update_team_tpm_limit_exceeds_user_limit():
             "team_id": "team-tpm-test-123",
             "organization_id": None,
             "tpm_limit": 500,
+            "members_with_roles": [{"user_id": "tpm-limit-user", "role": "admin"}],
         }
-        mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=mock_existing_team)
+        mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(
+            return_value=mock_existing_team
+        )
 
         # Should raise ProxyException because new TPM exceeds user's limit
         with pytest.raises(ProxyException) as exc_info:
@@ -4089,7 +4225,7 @@ async def test_update_team_tpm_limit_exceeds_user_limit():
             )
 
         # Verify exception details
-        assert exc_info.value.code == '400'
+        assert exc_info.value.code == "400"
         assert "tpm" in str(exc_info.value.message).lower()
 
 
@@ -4129,7 +4265,6 @@ async def test_update_team_rpm_limit_exceeds_user_limit():
     ) as mock_cache, patch(
         "litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"
     ):
-
         # Mock existing standalone team
         mock_existing_team = MagicMock()
         mock_existing_team.team_id = "team-rpm-test-123"
@@ -4139,8 +4274,11 @@ async def test_update_team_rpm_limit_exceeds_user_limit():
             "team_id": "team-rpm-test-123",
             "organization_id": None,
             "rpm_limit": 50,
+            "members_with_roles": [{"user_id": "rpm-limit-user", "role": "admin"}],
         }
-        mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=mock_existing_team)
+        mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(
+            return_value=mock_existing_team
+        )
 
         # Should raise ProxyException because new RPM exceeds user's limit
         with pytest.raises(ProxyException) as exc_info:
@@ -4151,7 +4289,7 @@ async def test_update_team_rpm_limit_exceeds_user_limit():
             )
 
         # Verify exception details
-        assert exc_info.value.code == '400'
+        assert exc_info.value.code == "400"
         assert "rpm" in str(exc_info.value.message).lower()
 
 
@@ -4212,7 +4350,7 @@ async def test_new_team_org_scoped_tpm_exceeds_org_limit():
         "litellm.proxy.proxy_server._license_check"
     ) as mock_license, patch(
         "litellm.proxy.management_endpoints.team_endpoints.get_org_object",
-        new=AsyncMock(return_value=mock_org)
+        new=AsyncMock(return_value=mock_org),
     ):
         mock_license.is_team_count_over_limit.return_value = False
         mock_prisma.db.litellm_teamtable.count = AsyncMock(return_value=0)
@@ -4227,7 +4365,7 @@ async def test_new_team_org_scoped_tpm_exceeds_org_limit():
             )
 
         # Verify exception details
-        assert exc_info.value.code == '400'
+        assert exc_info.value.code == "400"
         assert "tpm" in str(exc_info.value.message).lower()
 
 
@@ -4288,7 +4426,7 @@ async def test_new_team_org_scoped_rpm_exceeds_org_limit():
         "litellm.proxy.proxy_server._license_check"
     ) as mock_license, patch(
         "litellm.proxy.management_endpoints.team_endpoints.get_org_object",
-        new=AsyncMock(return_value=mock_org)
+        new=AsyncMock(return_value=mock_org),
     ):
         mock_license.is_team_count_over_limit.return_value = False
         mock_prisma.db.litellm_teamtable.count = AsyncMock(return_value=0)
@@ -4303,7 +4441,7 @@ async def test_new_team_org_scoped_rpm_exceeds_org_limit():
             )
 
         # Verify exception details
-        assert exc_info.value.code == '400'
+        assert exc_info.value.code == "400"
         assert "rpm" in str(exc_info.value.message).lower()
 
 
@@ -4335,7 +4473,7 @@ async def test_new_team_org_scoped_tpm_rpm_bypasses_user_limit():
         user_id="org-admin-bypass-test",
         models=[],
         tpm_limit=1000,  # Restrictive user TPM limit
-        rpm_limit=100,   # Restrictive user RPM limit
+        rpm_limit=100,  # Restrictive user RPM limit
     )
 
     # Create team request exceeding user limits but within org limits
@@ -4343,7 +4481,7 @@ async def test_new_team_org_scoped_tpm_rpm_bypasses_user_limit():
         team_alias="org-bypass-test-team",
         organization_id="test-org-bypass",
         tpm_limit=10000,  # Exceeds user's 1000 but within org's 50000
-        rpm_limit=1000,   # Exceeds user's 100 but within org's 5000
+        rpm_limit=1000,  # Exceeds user's 100 but within org's 5000
     )
 
     dummy_request = MagicMock(spec=Request)
@@ -4351,7 +4489,7 @@ async def test_new_team_org_scoped_tpm_rpm_bypasses_user_limit():
     # Mock organization with generous limits
     mock_budget_table = MagicMock(spec=LiteLLM_BudgetTable)
     mock_budget_table.tpm_limit = 50000  # Generous org TPM limit
-    mock_budget_table.rpm_limit = 5000   # Generous org RPM limit
+    mock_budget_table.rpm_limit = 5000  # Generous org RPM limit
     mock_budget_table.max_budget = None
 
     mock_org = MagicMock(spec=LiteLLM_OrganizationTable)
@@ -4369,10 +4507,10 @@ async def test_new_team_org_scoped_tpm_rpm_bypasses_user_limit():
         "litellm.proxy.proxy_server.create_audit_log_for_update", new=AsyncMock()
     ), patch(
         "litellm.proxy.management_endpoints.team_endpoints.get_org_object",
-        new=AsyncMock(return_value=mock_org)
+        new=AsyncMock(return_value=mock_org),
     ), patch(
         "litellm.proxy.management_endpoints.team_endpoints._add_team_members_to_team",
-        new=AsyncMock()
+        new=AsyncMock(),
     ):
         mock_license.is_team_count_over_limit.return_value = False
         mock_prisma.db.litellm_teamtable.count = AsyncMock(return_value=0)
@@ -4394,8 +4532,12 @@ async def test_new_team_org_scoped_tpm_rpm_bypasses_user_limit():
             "metadata": None,
             "members_with_roles": [],
         }
-        mock_prisma.db.litellm_teamtable.create = AsyncMock(return_value=mock_created_team)
-        mock_prisma.db.litellm_teamtable.update = AsyncMock(return_value=mock_created_team)
+        mock_prisma.db.litellm_teamtable.create = AsyncMock(
+            return_value=mock_created_team
+        )
+        mock_prisma.db.litellm_teamtable.update = AsyncMock(
+            return_value=mock_created_team
+        )
         mock_prisma.jsonify_team_object = MagicMock(side_effect=lambda db_data: db_data)
 
         # Should succeed - bypasses user limits since org-scoped
@@ -4463,9 +4605,8 @@ async def test_update_team_org_scoped_tpm_exceeds_org_limit():
         "litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"
     ), patch(
         "litellm.proxy.management_endpoints.team_endpoints.get_org_object",
-        new=AsyncMock(return_value=mock_org)
+        new=AsyncMock(return_value=mock_org),
     ):
-
         # Mock existing org-scoped team
         mock_existing_team = MagicMock()
         mock_existing_team.team_id = "org-team-update-tpm-123"
@@ -4475,8 +4616,13 @@ async def test_update_team_org_scoped_tpm_exceeds_org_limit():
             "team_id": "org-team-update-tpm-123",
             "organization_id": "test-org-update-tpm",
             "tpm_limit": 5000,
+            "members_with_roles": [
+                {"user_id": "org-admin-update-tpm-test", "role": "admin"}
+            ],
         }
-        mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=mock_existing_team)
+        mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(
+            return_value=mock_existing_team
+        )
 
         # Should raise ProxyException because TPM exceeds org limit
         with pytest.raises(ProxyException) as exc_info:
@@ -4487,7 +4633,7 @@ async def test_update_team_org_scoped_tpm_exceeds_org_limit():
             )
 
         # Verify exception details
-        assert exc_info.value.code == '400'
+        assert exc_info.value.code == "400"
         assert "tpm" in str(exc_info.value.message).lower()
 
 
@@ -4545,9 +4691,8 @@ async def test_update_team_org_scoped_rpm_exceeds_org_limit():
         "litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"
     ), patch(
         "litellm.proxy.management_endpoints.team_endpoints.get_org_object",
-        new=AsyncMock(return_value=mock_org)
+        new=AsyncMock(return_value=mock_org),
     ):
-
         # Mock existing org-scoped team
         mock_existing_team = MagicMock()
         mock_existing_team.team_id = "org-team-update-rpm-123"
@@ -4557,8 +4702,13 @@ async def test_update_team_org_scoped_rpm_exceeds_org_limit():
             "team_id": "org-team-update-rpm-123",
             "organization_id": "test-org-update-rpm",
             "rpm_limit": 500,
+            "members_with_roles": [
+                {"user_id": "org-admin-update-rpm-test", "role": "admin"}
+            ],
         }
-        mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=mock_existing_team)
+        mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(
+            return_value=mock_existing_team
+        )
 
         # Should raise ProxyException because RPM exceeds org limit
         with pytest.raises(ProxyException) as exc_info:
@@ -4569,7 +4719,7 @@ async def test_update_team_org_scoped_rpm_exceeds_org_limit():
             )
 
         # Verify exception details
-        assert exc_info.value.code == '400'
+        assert exc_info.value.code == "400"
         assert "rpm" in str(exc_info.value.message).lower()
 
 
@@ -4601,14 +4751,14 @@ async def test_update_team_org_scoped_tpm_rpm_bypasses_user_limit():
         user_id="org-admin-update-bypass-test",
         models=[],
         tpm_limit=1000,  # Restrictive user TPM limit
-        rpm_limit=100,   # Restrictive user RPM limit
+        rpm_limit=100,  # Restrictive user RPM limit
     )
 
     # Create update request exceeding user limits but within org limits
     update_request = UpdateTeamRequest(
         team_id="org-team-update-bypass-123",
         tpm_limit=10000,  # Exceeds user's 1000 but within org's 50000
-        rpm_limit=1000,   # Exceeds user's 100 but within org's 5000
+        rpm_limit=1000,  # Exceeds user's 100 but within org's 5000
     )
 
     dummy_request = MagicMock(spec=Request)
@@ -4616,7 +4766,7 @@ async def test_update_team_org_scoped_tpm_rpm_bypasses_user_limit():
     # Mock organization with generous limits
     mock_budget_table = MagicMock(spec=LiteLLM_BudgetTable)
     mock_budget_table.tpm_limit = 50000  # Generous org TPM limit
-    mock_budget_table.rpm_limit = 5000   # Generous org RPM limit
+    mock_budget_table.rpm_limit = 5000  # Generous org RPM limit
     mock_budget_table.max_budget = None
 
     mock_org = MagicMock(spec=LiteLLM_OrganizationTable)
@@ -4632,9 +4782,8 @@ async def test_update_team_org_scoped_tpm_rpm_bypasses_user_limit():
         "litellm.proxy.proxy_server.proxy_logging_obj"
     ) as mock_logging, patch(
         "litellm.proxy.management_endpoints.team_endpoints.get_org_object",
-        new=AsyncMock(return_value=mock_org)
+        new=AsyncMock(return_value=mock_org),
     ):
-
         # Mock existing org-scoped team
         mock_existing_team = MagicMock()
         mock_existing_team.team_id = "org-team-update-bypass-123"
@@ -4647,8 +4796,13 @@ async def test_update_team_org_scoped_tpm_rpm_bypasses_user_limit():
             "organization_id": "test-org-update-bypass",
             "tpm_limit": 5000,
             "rpm_limit": 500,
+            "members_with_roles": [
+                {"user_id": "org-admin-update-bypass-test", "role": "admin"}
+            ],
         }
-        mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=mock_existing_team)
+        mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(
+            return_value=mock_existing_team
+        )
         mock_cache.async_set_cache = AsyncMock()
 
         # Mock team update
@@ -4661,7 +4815,9 @@ async def test_update_team_org_scoped_tpm_rpm_bypasses_user_limit():
             "tpm_limit": 10000,
             "rpm_limit": 1000,
         }
-        mock_prisma.db.litellm_teamtable.update = AsyncMock(return_value=mock_updated_team)
+        mock_prisma.db.litellm_teamtable.update = AsyncMock(
+            return_value=mock_updated_team
+        )
         mock_prisma.jsonify_team_object = MagicMock(side_effect=lambda db_data: db_data)
 
         # Should succeed - bypasses user limits since org-scoped
@@ -4709,6 +4865,7 @@ async def test_update_team_guardrails_with_org_id():
 
     # Mock organization with all required fields including teams (the fix)
     from datetime import datetime
+
     mock_org = MagicMock(spec=LiteLLM_OrganizationTable)
     mock_org.organization_id = "test-org-guardrails"
     mock_org.models = ["gpt-4", "gpt-3.5-turbo"]
@@ -4718,7 +4875,9 @@ async def test_update_team_guardrails_with_org_id():
     mock_org.created_at = datetime(2024, 1, 1)
     mock_org.updated_at = datetime(2024, 1, 1)
     mock_org.litellm_budget_table = None
-    mock_org.members = []
+    mock_org_member = MagicMock()
+    mock_org_member.user_id = "org-admin-guardrails-test"
+    mock_org.members = [mock_org_member]
     mock_org.teams = []  # Must be a list, not None
     mock_org.model_dump.return_value = {
         "organization_id": "test-org-guardrails",
@@ -4729,7 +4888,14 @@ async def test_update_team_guardrails_with_org_id():
         "created_at": datetime(2024, 1, 1),
         "updated_at": datetime(2024, 1, 1),
         "litellm_budget_table": None,
-        "members": [],
+        "members": [
+            {
+                "user_id": "org-admin-guardrails-test",
+                "organization_id": "test-org-guardrails",
+                "created_at": datetime(2024, 1, 1),
+                "updated_at": datetime(2024, 1, 1),
+            }
+        ],
         "teams": [],
     }
 
@@ -4740,7 +4906,10 @@ async def test_update_team_guardrails_with_org_id():
     ), patch(
         "litellm.proxy.proxy_server.create_audit_log_for_update", new=AsyncMock()
     ), patch(
-        "litellm.proxy.proxy_server.premium_user", True  # Required for guardrails feature
+        "litellm.proxy.proxy_server.premium_user",
+        True,  # Required for guardrails feature
+    ), patch(
+        "litellm.proxy.proxy_server.llm_router", MagicMock()
     ):
         # Mock existing team - must have compatible models with organization
         mock_existing_team = MagicMock()
@@ -4760,6 +4929,9 @@ async def test_update_team_guardrails_with_org_id():
             "max_budget": None,
             "tpm_limit": None,
             "rpm_limit": None,
+            "members_with_roles": [
+                {"user_id": "org-admin-guardrails-test", "role": "admin"}
+            ],
         }
         mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(
             return_value=mock_existing_team
@@ -4776,7 +4948,9 @@ async def test_update_team_guardrails_with_org_id():
         mock_updated_team = MagicMock(spec=LiteLLM_TeamTable)
         mock_updated_team.team_id = "team-guardrails-123"
         mock_updated_team.organization_id = "test-org-guardrails"
-        mock_updated_team.metadata = {"guardrails": ["aporia-pre-call", "aporia-post-call"]}
+        mock_updated_team.metadata = {
+            "guardrails": ["aporia-pre-call", "aporia-post-call"]
+        }
         mock_updated_team.litellm_model_table = None
         mock_updated_team.model_dump.return_value = {
             "team_id": "team-guardrails-123",
@@ -4801,16 +4975,23 @@ async def test_update_team_guardrails_with_org_id():
             # Verify the team was updated successfully with guardrails
             assert result is not None
             assert result["data"].organization_id == "test-org-guardrails"
-            assert result["data"].metadata["guardrails"] == ["aporia-pre-call", "aporia-post-call"]
+            assert result["data"].metadata["guardrails"] == [
+                "aporia-pre-call",
+                "aporia-post-call",
+            ]
 
             # Verify that organization fetch was called with proper include clause
             # The function is called twice: once by fetch_and_validate_organization (with include)
             # and once by get_org_object (without include). We verify the first call has 'teams'.
             assert mock_prisma.db.litellm_organizationtable.find_unique.call_count >= 1
-            
+
             # Get the first call (from fetch_and_validate_organization)
-            first_call_kwargs = mock_prisma.db.litellm_organizationtable.find_unique.call_args_list[0].kwargs
-            
+            first_call_kwargs = (
+                mock_prisma.db.litellm_organizationtable.find_unique.call_args_list[
+                    0
+                ].kwargs
+            )
+
             # Verify that 'teams' is included in the fetch
             assert "include" in first_call_kwargs
             assert "teams" in first_call_kwargs["include"]
@@ -4860,7 +5041,9 @@ def test_transform_teams_to_deleted_records():
     assert all("litellm_changed_by" in record for record in records)
     assert all(record["deleted_by"] == "user-123" for record in records)
     # UserAPIKeyAuth hashes the api_key, so we check against the hashed value
-    assert all(record["deleted_by_api_key"] == user_api_key_dict.api_key for record in records)
+    assert all(
+        record["deleted_by_api_key"] == user_api_key_dict.api_key for record in records
+    )
     assert all(record["litellm_changed_by"] == "admin-user" for record in records)
 
     record1 = records[0]
@@ -5159,16 +5342,18 @@ async def test_team_member_delete_persists_deleted_keys(monkeypatch):
     assert all(record["team_id"] == "team-1" for record in records)
     assert all(record["user_id"] == "user-123" for record in records)
     mock_delete_keys.assert_called_once()
+
+
 @pytest.mark.asyncio
 async def test_new_team_negative_max_budget():
     """
     Test that NewTeamRequest model allows negative max_budget values.
     Validation is done at API level, not model level.
-    
+
     This prevents GET requests from breaking when they receive data with negative budgets.
     """
     from litellm.proxy._types import NewTeamRequest
-    
+
     # Should not raise any errors at model level
     request = NewTeamRequest(team_alias="test-team", max_budget=-7.0)
     assert request.max_budget == -7.0
@@ -5181,7 +5366,7 @@ async def test_new_team_negative_team_member_budget():
     Validation is done at API level, not model level.
     """
     from litellm.proxy._types import NewTeamRequest
-    
+
     # Should not raise any errors at model level
     request = NewTeamRequest(team_alias="test-team", team_member_budget=-10.0)
     assert request.team_member_budget == -10.0
@@ -5194,7 +5379,7 @@ async def test_update_team_negative_max_budget():
     Validation is done at API level, not model level.
     """
     from litellm.proxy._types import UpdateTeamRequest
-    
+
     # Should not raise any errors at model level
     request = UpdateTeamRequest(team_id="test-team-id", max_budget=-5.0)
     assert request.max_budget == -5.0
@@ -5207,7 +5392,7 @@ async def test_update_team_negative_team_member_budget():
     Validation is done at API level, not model level.
     """
     from litellm.proxy._types import UpdateTeamRequest
-    
+
     # Should not raise any errors at model level
     request = UpdateTeamRequest(team_id="test-team-id", team_member_budget=-15.0)
     assert request.team_member_budget == -15.0
@@ -5222,18 +5407,37 @@ async def test_update_team_negative_team_member_budget():
         # Test 2: Soft budget with higher max budget, success with both set
         (50.0, 100.0, True, 50.0, 100.0, None),
         # Test 3: Soft budget with lower max budget, fail
-        (100.0, 50.0, False, None, None, "soft_budget (100.0) must be strictly lower than max_budget (50.0)"),
+        (
+            100.0,
+            50.0,
+            False,
+            None,
+            None,
+            "soft_budget (100.0) must be strictly lower than max_budget (50.0)",
+        ),
         # Test 4: Soft budget equal to max budget, fail
-        (100.0, 100.0, False, None, None, "soft_budget (100.0) must be strictly lower than max_budget (100.0)"),
+        (
+            100.0,
+            100.0,
+            False,
+            None,
+            None,
+            "soft_budget (100.0) must be strictly lower than max_budget (100.0)",
+        ),
     ],
 )
 @pytest.mark.asyncio
 async def test_new_team_soft_budget_validation(
-    soft_budget, max_budget, should_succeed, expected_soft_budget, expected_max_budget, error_message
+    soft_budget,
+    max_budget,
+    should_succeed,
+    expected_soft_budget,
+    expected_max_budget,
+    error_message,
 ):
     """
     Test soft_budget validation in /team/new endpoint.
-    
+
     Covers:
     - Soft budget only - success + soft budget set
     - Soft budget with higher max budget, success with both set
@@ -5269,22 +5473,22 @@ async def test_new_team_soft_budget_validation(
     ), patch(
         "litellm.proxy.proxy_server.create_audit_log_for_update", new=AsyncMock()
     ) as mock_audit:
-
         # Setup mocks
         mock_prisma.db.litellm_teamtable.count = AsyncMock(return_value=0)
         mock_license.is_team_count_over_limit.return_value = False
         mock_prisma.jsonify_team_object = lambda db_data: db_data
         mock_prisma.get_data = AsyncMock(return_value=None)
         mock_prisma.update_data = AsyncMock()
-        
+
         # Mock user cache
         from litellm.proxy._types import LiteLLM_UserTable
+
         mock_user_obj = LiteLLM_UserTable(
             user_id="admin-user",
             max_budget=None,  # Admin has no budget limit
         )
         mock_cache.async_get_cache = AsyncMock(return_value=mock_user_obj)
-        
+
         # Mock team creation
         mock_created_team = MagicMock()
         mock_created_team.team_id = "test-team-123"
@@ -5300,21 +5504,30 @@ async def test_new_team_soft_budget_validation(
             "max_budget": expected_max_budget,
             "members_with_roles": [],
         }
-        mock_prisma.db.litellm_teamtable.create = AsyncMock(return_value=mock_created_team)
-        mock_prisma.db.litellm_teamtable.update = AsyncMock(return_value=mock_created_team)
-        
+        mock_prisma.db.litellm_teamtable.create = AsyncMock(
+            return_value=mock_created_team
+        )
+        mock_prisma.db.litellm_teamtable.update = AsyncMock(
+            return_value=mock_created_team
+        )
+
         # Mock model table
         mock_prisma.db.litellm_modeltable = MagicMock()
-        mock_prisma.db.litellm_modeltable.create = AsyncMock(return_value=MagicMock(id="model123"))
-        
+        mock_prisma.db.litellm_modeltable.create = AsyncMock(
+            return_value=MagicMock(id="model123")
+        )
+
         # Mock user table operations
         mock_user = MagicMock()
         mock_user.user_id = "admin-user"
-        mock_user.model_dump.return_value = {"user_id": "admin-user", "teams": ["test-team-123"]}
+        mock_user.model_dump.return_value = {
+            "user_id": "admin-user",
+            "teams": ["test-team-123"],
+        }
         mock_prisma.db.litellm_usertable = MagicMock()
         mock_prisma.db.litellm_usertable.upsert = AsyncMock(return_value=mock_user)
         mock_prisma.db.litellm_usertable.update = AsyncMock(return_value=mock_user)
-        
+
         # Mock team membership table
         mock_membership = MagicMock()
         mock_membership.model_dump.return_value = {
@@ -5323,7 +5536,9 @@ async def test_new_team_soft_budget_validation(
             "budget_id": None,
         }
         mock_prisma.db.litellm_teammembership = MagicMock()
-        mock_prisma.db.litellm_teammembership.create = AsyncMock(return_value=mock_membership)
+        mock_prisma.db.litellm_teammembership.create = AsyncMock(
+            return_value=mock_membership
+        )
 
         if should_succeed:
             # Should NOT raise an exception
@@ -5350,7 +5565,7 @@ async def test_new_team_soft_budget_validation(
                 )
 
             # Verify exception details
-            assert exc_info.value.code == '400'
+            assert exc_info.value.code == "400"
             if error_message:
                 assert error_message in str(exc_info.value.message)
 
@@ -5364,25 +5579,58 @@ async def test_new_team_soft_budget_validation(
         # Test 2: Soft budget with max budget - success if soft budget is strictly lower than max budget
         (None, None, 50.0, 100.0, True, 50.0, 100.0, None),
         # Test 3: Soft budget with max budget - fail if soft budget >= max budget
-        (None, None, 100.0, 50.0, False, None, None, "soft_budget (100.0) must be strictly lower than max_budget (50.0)"),
+        (
+            None,
+            None,
+            100.0,
+            50.0,
+            False,
+            None,
+            None,
+            "soft_budget (100.0) must be strictly lower than max_budget (50.0)",
+        ),
         # Test 4: Only max budget with existing soft_budget, success with max_budget strictly greater
         (50.0, None, None, 100.0, True, 50.0, 100.0, None),
         # Test 5: Only max budget with existing soft_budget, fail if max_budget <= soft_budget
-        (50.0, None, None, 50.0, False, None, None, "max_budget (50.0) must be strictly greater than soft_budget (50.0)"),
+        (
+            50.0,
+            None,
+            None,
+            50.0,
+            False,
+            None,
+            None,
+            "max_budget (50.0) must be strictly greater than soft_budget (50.0)",
+        ),
         # Test 6: Update both soft_budget and max_budget - success if soft < max
         (30.0, 100.0, 40.0, 80.0, True, 40.0, 80.0, None),
         # Test 7: Update both soft_budget and max_budget - fail if soft >= max
-        (30.0, 100.0, 80.0, 40.0, False, None, None, "soft_budget (80.0) must be strictly lower than max_budget (40.0)"),
+        (
+            30.0,
+            100.0,
+            80.0,
+            40.0,
+            False,
+            None,
+            None,
+            "soft_budget (80.0) must be strictly lower than max_budget (40.0)",
+        ),
     ],
 )
 @pytest.mark.asyncio
 async def test_update_team_soft_budget_validation(
-    existing_soft_budget, existing_max_budget, update_soft_budget, update_max_budget,
-    should_succeed, expected_soft_budget, expected_max_budget, error_message
+    existing_soft_budget,
+    existing_max_budget,
+    update_soft_budget,
+    update_max_budget,
+    should_succeed,
+    expected_soft_budget,
+    expected_max_budget,
+    error_message,
 ):
     """
     Test soft_budget validation in /team/update endpoint.
-    
+
     Covers:
     - Soft budget only (no previous max_budget) - success with soft budget set
     - Soft budget with max budget - success if soft budget is strictly lower than max budget, fail otherwise
@@ -5421,7 +5669,6 @@ async def test_update_team_soft_budget_validation(
     ), patch(
         "litellm.proxy.proxy_server.create_audit_log_for_update", new=AsyncMock()
     ) as mock_audit:
-
         # Mock existing team with existing budgets
         mock_existing_team = MagicMock()
         mock_existing_team.team_id = "test-team-123"
@@ -5434,7 +5681,9 @@ async def test_update_team_soft_budget_validation(
             "soft_budget": existing_soft_budget,
             "max_budget": existing_max_budget,
         }
-        mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=mock_existing_team)
+        mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(
+            return_value=mock_existing_team
+        )
 
         # Mock user cache
         mock_user_obj = LiteLLM_UserTable(
@@ -5444,9 +5693,15 @@ async def test_update_team_soft_budget_validation(
         mock_cache.async_get_cache = AsyncMock(return_value=mock_user_obj)
 
         # Mock updated team - preserve existing values if not being updated
-        final_soft_budget = update_soft_budget if update_soft_budget is not None else existing_soft_budget
-        final_max_budget = update_max_budget if update_max_budget is not None else existing_max_budget
-        
+        final_soft_budget = (
+            update_soft_budget
+            if update_soft_budget is not None
+            else existing_soft_budget
+        )
+        final_max_budget = (
+            update_max_budget if update_max_budget is not None else existing_max_budget
+        )
+
         mock_updated_team = MagicMock()
         mock_updated_team.team_id = "test-team-123"
         mock_updated_team.organization_id = None
@@ -5458,9 +5713,13 @@ async def test_update_team_soft_budget_validation(
             "soft_budget": final_soft_budget,
             "max_budget": final_max_budget,
         }
-        mock_prisma.db.litellm_teamtable.update = AsyncMock(return_value=mock_updated_team)
+        mock_prisma.db.litellm_teamtable.update = AsyncMock(
+            return_value=mock_updated_team
+        )
         mock_prisma.jsonify_team_object = lambda db_data: db_data
-        mock_cache.async_set_cache = AsyncMock()  # Mock cache set for _cache_team_object
+        mock_cache.async_set_cache = (
+            AsyncMock()
+        )  # Mock cache set for _cache_team_object
 
         if should_succeed:
             # Should NOT raise an exception
@@ -5493,7 +5752,7 @@ async def test_update_team_soft_budget_validation(
                 )
 
             # Verify exception details
-            assert exc_info.value.code == '400'
+            assert exc_info.value.code == "400"
             if error_message:
                 assert error_message in str(exc_info.value.message)
 
@@ -5504,12 +5763,10 @@ async def test_new_team_positive_budgets_accepted():
     Test that NewTeamRequest accepts positive budget values.
     """
     from litellm.proxy._types import NewTeamRequest
-    
+
     # Should not raise any errors
     request = NewTeamRequest(
-        team_alias="test-team", 
-        max_budget=100.0, 
-        team_member_budget=50.0
+        team_alias="test-team", max_budget=100.0, team_member_budget=50.0
     )
     assert request.max_budget == 100.0
     assert request.team_member_budget == 50.0
@@ -5644,9 +5901,7 @@ async def test_get_team_daily_activity_non_admin_filters_by_user_api_keys(
     user_api_key_2.token = "user_key_2"
 
     # Setup mocks
-    mock_db_client.db.litellm_teamtable.find_many = AsyncMock(
-        return_value=[mock_team]
-    )
+    mock_db_client.db.litellm_teamtable.find_many = AsyncMock(return_value=[mock_team])
     mock_db_client.db.litellm_verificationtoken.find_many = AsyncMock(
         return_value=[user_api_key_1, user_api_key_2]
     )
@@ -5732,9 +5987,7 @@ async def test_get_team_daily_activity_team_admin_sees_all_spend(mock_db_client)
     }
 
     # Setup mocks
-    mock_db_client.db.litellm_teamtable.find_many = AsyncMock(
-        return_value=[mock_team]
-    )
+    mock_db_client.db.litellm_teamtable.find_many = AsyncMock(return_value=[mock_team])
 
     # Mock get_user_object
     with patch(
@@ -5770,9 +6023,10 @@ async def test_get_team_daily_activity_team_admin_sees_all_spend(mock_db_client)
             assert call_kwargs["entity_id"] == [team_id]
 
             # Verify user's API keys were NOT fetched (since they're admin)
-            if hasattr(
-                mock_db_client.db.litellm_verificationtoken, "find_many"
-            ) and mock_db_client.db.litellm_verificationtoken.find_many.called:
+            if (
+                hasattr(mock_db_client.db.litellm_verificationtoken, "find_many")
+                and mock_db_client.db.litellm_verificationtoken.find_many.called
+            ):
                 # If it was called, that's unexpected for admin users
                 assert False, "API keys should not be fetched for team admin users"
 
@@ -5821,9 +6075,7 @@ async def test_get_team_daily_activity_member_with_permission_sees_all_spend(
     }
 
     # Setup mocks
-    mock_db_client.db.litellm_teamtable.find_many = AsyncMock(
-        return_value=[mock_team]
-    )
+    mock_db_client.db.litellm_teamtable.find_many = AsyncMock(return_value=[mock_team])
 
     # Mock get_user_object
     with patch(
@@ -5859,9 +6111,10 @@ async def test_get_team_daily_activity_member_with_permission_sees_all_spend(
             assert call_kwargs["entity_id"] == [team_id]
 
             # Verify user's API keys were NOT fetched
-            if hasattr(
-                mock_db_client.db.litellm_verificationtoken, "find_many"
-            ) and mock_db_client.db.litellm_verificationtoken.find_many.called:
+            if (
+                hasattr(mock_db_client.db.litellm_verificationtoken, "find_many")
+                and mock_db_client.db.litellm_verificationtoken.find_many.called
+            ):
                 assert (
                     False
                 ), "API keys should not be fetched for members with /team/daily/activity permission"
@@ -5917,9 +6170,7 @@ async def test_get_team_daily_activity_member_without_permission_filters_by_keys
     user_api_key_2.token = "user_key_def"
 
     # Setup mocks
-    mock_db_client.db.litellm_teamtable.find_many = AsyncMock(
-        return_value=[mock_team]
-    )
+    mock_db_client.db.litellm_teamtable.find_many = AsyncMock(return_value=[mock_team])
     mock_db_client.db.litellm_verificationtoken.find_many = AsyncMock(
         return_value=[user_api_key_1, user_api_key_2]
     )
@@ -6087,9 +6338,7 @@ async def test_get_team_daily_activity_non_admin_filters_by_user_api_keys(
     user_api_key_2.token = "user_key_2"
 
     # Setup mocks
-    mock_db_client.db.litellm_teamtable.find_many = AsyncMock(
-        return_value=[mock_team]
-    )
+    mock_db_client.db.litellm_teamtable.find_many = AsyncMock(return_value=[mock_team])
     mock_db_client.db.litellm_verificationtoken.find_many = AsyncMock(
         return_value=[user_api_key_1, user_api_key_2]
     )
@@ -6175,9 +6424,7 @@ async def test_get_team_daily_activity_team_admin_sees_all_spend(mock_db_client)
     }
 
     # Setup mocks
-    mock_db_client.db.litellm_teamtable.find_many = AsyncMock(
-        return_value=[mock_team]
-    )
+    mock_db_client.db.litellm_teamtable.find_many = AsyncMock(return_value=[mock_team])
 
     # Mock get_user_object
     with patch(
@@ -6213,9 +6460,10 @@ async def test_get_team_daily_activity_team_admin_sees_all_spend(mock_db_client)
             assert call_kwargs["entity_id"] == [team_id]
 
             # Verify user's API keys were NOT fetched (since they're admin)
-            if hasattr(
-                mock_db_client.db.litellm_verificationtoken, "find_many"
-            ) and mock_db_client.db.litellm_verificationtoken.find_many.called:
+            if (
+                hasattr(mock_db_client.db.litellm_verificationtoken, "find_many")
+                and mock_db_client.db.litellm_verificationtoken.find_many.called
+            ):
                 # If it was called, that's unexpected for admin users
                 assert False, "API keys should not be fetched for team admin users"
 
@@ -6228,28 +6476,28 @@ async def test_validate_and_populate_member_user_info_both_provided_match():
     """
     # Create member with both user_email and user_id
     member = Member(user_email="test@example.com", user_id="user-123", role="user")
-    
+
     # Mock prisma client
     mock_prisma_client = MagicMock()
-    
+
     # Mock user object that matches both email and user_id
     mock_user = MagicMock()
     mock_user.user_id = "user-123"
     mock_user.user_email = "test@example.com"
-    
+
     # Mock get_data to return single user matching email
     mock_prisma_client.get_data = AsyncMock(return_value=[mock_user])
-    
+
     # Call the function
     result = await _validate_and_populate_member_user_info(
         member=member,
         prisma_client=mock_prisma_client,
     )
-    
+
     # Verify result matches input (both already provided and match)
     assert result.user_email == "test@example.com"
     assert result.user_id == "user-123"
-    
+
     # Verify get_data was called with correct parameters
     mock_prisma_client.get_data.assert_called_once_with(
         key_val={"user_email": "test@example.com"},
@@ -6266,38 +6514,38 @@ async def test_validate_and_populate_member_user_info_only_email_provided():
     """
     # Create member with only user_email
     member = Member(user_email="test@example.com", user_id=None, role="user")
-    
+
     # Mock prisma client
     mock_prisma_client = MagicMock()
-    
+
     # Mock user object from find_first
     mock_user_find_first = MagicMock()
     mock_user_find_first.user_id = "user-456"
     mock_user_find_first.user_email = "test@example.com"
-    
+
     # Mock find_first to return the user
     mock_prisma_client.db.litellm_usertable.find_first = AsyncMock(
         return_value=mock_user_find_first
     )
-    
+
     # Mock get_data to return single user (no duplicates)
     mock_prisma_client.get_data = AsyncMock(return_value=[mock_user_find_first])
-    
+
     # Call the function
     result = await _validate_and_populate_member_user_info(
         member=member,
         prisma_client=mock_prisma_client,
     )
-    
+
     # Verify user_id was populated
     assert result.user_email == "test@example.com"
     assert result.user_id == "user-456"
-    
+
     # Verify find_first was called with correct parameters
     mock_prisma_client.db.litellm_usertable.find_first.assert_called_once_with(
         where={"user_email": {"equals": "test@example.com", "mode": "insensitive"}}
     )
-    
+
     # Verify get_data was called to check for duplicates
     mock_prisma_client.get_data.assert_called_once_with(
         key_val={"user_email": "test@example.com"},
@@ -6315,24 +6563,24 @@ async def test_validate_and_populate_member_user_info_only_user_id_not_found():
     """
     # Create member with only user_id
     member = Member(user_email=None, user_id="nonexistent-user", role="user")
-    
+
     # Mock prisma client
     mock_prisma_client = MagicMock()
-    
+
     # Mock find_unique to return None (user not found)
     mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
-    
+
     # Call the function - should NOT raise an exception
     result = await _validate_and_populate_member_user_info(
         member=member,
         prisma_client=mock_prisma_client,
     )
-    
+
     # Verify the result - should return member with user_id set and user_email as None
     assert result.user_id == "nonexistent-user"
     assert result.user_email is None
     assert result.role == "user"
-    
+
     # Verify find_unique was called with correct parameters
     mock_prisma_client.db.litellm_usertable.find_unique.assert_called_once_with(
         where={"user_id": "nonexistent-user"}
@@ -6350,9 +6598,7 @@ async def test_list_available_teams_returns_empty_list_when_none_configured():
     mock_request = MagicMock()
     mock_user_key = UserAPIKeyAuth(user_id="test-user", token="fake-token")
 
-    with patch(
-        "litellm.proxy.proxy_server.prisma_client", mock_prisma_client
-    ):
+    with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client):
         # Case 1: default_internal_user_params is None
         original = litellm.default_internal_user_params
         litellm.default_internal_user_params = None
@@ -6411,9 +6657,7 @@ async def test_list_team_v1_batches_key_queries():
     key3 = MagicMock()
     key3.team_id = "team-2"
 
-    with patch(
-        "litellm.proxy.proxy_server.prisma_client"
-    ) as mock_prisma_client, patch(
+    with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma_client, patch(
         "litellm.proxy.management_endpoints.team_endpoints._authorize_and_filter_teams",
         new_callable=AsyncMock,
         return_value=[team1, team2],
@@ -6422,6 +6666,7 @@ async def test_list_team_v1_batches_key_queries():
         new_callable=AsyncMock,
         return_value=[],
     ):
+
         async def filtered_find_many(**kwargs):
             where = kwargs.get("where", {})
             tid = where.get("team_id")
@@ -6466,12 +6711,12 @@ async def test_create_team_member_budget_table_with_duration():
     """Verify that create_team_member_budget_table passes budget_duration
     through to the new_budget call when team_member_budget_duration is provided."""
     from litellm.proxy._types import NewTeamRequest, UserAPIKeyAuth, LitellmUserRoles
-    from litellm.proxy.management_endpoints.team_endpoints import TeamMemberBudgetHandler
+    from litellm.proxy.management_endpoints.team_endpoints import (
+        TeamMemberBudgetHandler,
+    )
 
     mock_budget_response = MagicMock(budget_id="budget-abc")
-    mock_admin = UserAPIKeyAuth(
-        user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN
-    )
+    mock_admin = UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN)
 
     data = NewTeamRequest(
         team_alias="test-team",
@@ -6530,7 +6775,9 @@ class TestBatchResolveAccessGroupResources:
         fake_row.access_agent_ids = ["agent-1", "agent-2"]
 
         fake_prisma = MagicMock()
-        fake_prisma.db.litellm_accessgrouptable.find_many = AsyncMock(return_value=[fake_row])
+        fake_prisma.db.litellm_accessgrouptable.find_many = AsyncMock(
+            return_value=[fake_row]
+        )
 
         with patch("litellm.proxy.proxy_server.prisma_client", fake_prisma):
             result = await _batch_resolve_access_group_resources(["ag-1"])
@@ -6559,7 +6806,9 @@ class TestBatchResolveAccessGroupResources:
         row2.access_agent_ids = ["agent-2"]
 
         fake_prisma = MagicMock()
-        fake_prisma.db.litellm_accessgrouptable.find_many = AsyncMock(return_value=[row1, row2])
+        fake_prisma.db.litellm_accessgrouptable.find_many = AsyncMock(
+            return_value=[row1, row2]
+        )
 
         with patch("litellm.proxy.proxy_server.prisma_client", fake_prisma):
             result = await _batch_resolve_access_group_resources(["ag-1", "ag-2"])
@@ -6581,7 +6830,9 @@ class TestBatchResolveAccessGroupResources:
         row1.access_agent_ids = []
 
         fake_prisma = MagicMock()
-        fake_prisma.db.litellm_accessgrouptable.find_many = AsyncMock(return_value=[row1])
+        fake_prisma.db.litellm_accessgrouptable.find_many = AsyncMock(
+            return_value=[row1]
+        )
 
         with patch("litellm.proxy.proxy_server.prisma_client", fake_prisma):
             result = await _batch_resolve_access_group_resources(["ag-1", "ag-missing"])
@@ -6619,9 +6870,102 @@ class TestBatchResolveAccessGroupResources:
         fake_prisma.db.litellm_accessgrouptable.find_many = fake_find_many
 
         with patch("litellm.proxy.proxy_server.prisma_client", fake_prisma):
-            result = await _batch_resolve_access_group_resources(["ag-1", "ag-1", "ag-1"])
+            result = await _batch_resolve_access_group_resources(
+                ["ag-1", "ag-1", "ag-1"]
+            )
 
         # Should have been called with deduplicated list
         call_args = fake_find_many.call_args
         assert len(call_args.kwargs["where"]["access_group_id"]["in"]) == 1
         assert "ag-1" in result
+
+
+@pytest.mark.asyncio
+async def test_verify_team_access_denies_unauthorized_user():
+    """
+    Test that _verify_team_access raises 403 when the caller is not a proxy admin,
+    not a team admin, and not an org admin for the team's organization.
+    """
+    team_obj = LiteLLM_TeamTable(
+        team_id="team-123",
+        team_alias="test-team",
+        members_with_roles=[
+            Member(role="admin", user_id="other_admin_user"),
+        ],
+        organization_id="org-456",
+    )
+
+    # Caller is an internal user with no admin role and not in the team
+    caller = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="unauthorized_user",
+    )
+
+    with patch(
+        "litellm.proxy.management_endpoints.team_endpoints._is_user_org_admin_for_team",
+        new_callable=AsyncMock,
+        return_value=False,
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await _verify_team_access(
+                team_obj=team_obj,
+                user_api_key_dict=caller,
+            )
+        assert exc_info.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_update_team_rejects_unauthorized_caller():
+    """
+    Test that /team/update returns 403 when the caller is not a proxy admin,
+    not a team admin, and not an org admin — exercising the _verify_team_access
+    guard added to the update_team endpoint.
+    """
+    from unittest.mock import Mock
+
+    from fastapi import Request
+
+    mock_request = Mock(spec=Request)
+    caller = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="unauthorized_user",
+    )
+
+    from litellm.proxy._types import UpdateTeamRequest
+
+    with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma_client, patch(
+        "litellm.proxy.proxy_server.llm_router"
+    ), patch("litellm.proxy.proxy_server.user_api_key_cache"), patch(
+        "litellm.proxy.proxy_server.proxy_logging_obj"
+    ), patch(
+        "litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"
+    ), patch(
+        "litellm.proxy.management_endpoints.team_endpoints._is_user_org_admin_for_team",
+        new_callable=AsyncMock,
+        return_value=False,
+    ):
+        mock_existing_team = MagicMock()
+        mock_existing_team.model_dump.return_value = {
+            "team_id": "team-123",
+            "team_alias": "test-team",
+            "members_with_roles": [
+                {"role": "admin", "user_id": "other_admin_user"},
+            ],
+            "organization_id": "org-456",
+        }
+        mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(
+            return_value=mock_existing_team
+        )
+
+        update_request = UpdateTeamRequest(
+            team_id="team-123",
+            team_alias="updated-alias",
+        )
+
+        with pytest.raises(ProxyException) as exc_info:
+            await update_team(
+                data=update_request,
+                http_request=mock_request,
+                user_api_key_dict=caller,
+            )
+        assert exc_info.value.code == "403"

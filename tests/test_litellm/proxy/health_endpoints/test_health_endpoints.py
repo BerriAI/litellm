@@ -450,10 +450,10 @@ async def test_test_model_connection_loads_config_from_router():
         params["messages"] = [{"role": "user", "content": "test"}]
         return params
     
-    # Mock _resolve_os_environ_variables
-    def mock_resolve_os_environ(params):
-        return params
-    
+    # Mock _reject_os_environ_references
+    def mock_reject_os_environ(params):
+        return None
+
     with patch(
         "litellm.proxy.proxy_server.prisma_client",
         mock_prisma_client,
@@ -476,8 +476,8 @@ async def test_test_model_connection_loads_config_from_router():
         "litellm.proxy.health_endpoints._health_endpoints._update_litellm_params_for_health_check",
         mock_update_params,
     ), patch(
-        "litellm.proxy.health_endpoints._health_endpoints._resolve_os_environ_variables",
-        mock_resolve_os_environ,
+        "litellm.proxy.health_endpoints._health_endpoints._reject_os_environ_references",
+        mock_reject_os_environ,
     ):
         # Call the endpoint with only model name (no credentials)
         result = await health_test_model_connection(
