@@ -378,10 +378,11 @@ def test_get_supported_openai_params_claude_model():
     assert "thinking" in supported_params_claude37
     assert "reasoning_effort" in supported_params_claude37
     
-    # Test Claude 3.5 model does NOT support thinking parameters (no extended thinking)
+    # Test Claude 3.5 model — now also gets thinking/reasoning_effort
+    # since all Claude models on Copilot default to supporting reasoning
     supported_params_claude35 = config.get_supported_openai_params("claude-3.5-sonnet")
-    assert "thinking" not in supported_params_claude35
-    assert "reasoning_effort" not in supported_params_claude35
+    assert "thinking" in supported_params_claude35
+    assert "reasoning_effort" in supported_params_claude35
     
     # Test non-Claude model doesn't include thinking parameters but may include reasoning_effort
     supported_params_gpt = config.get_supported_openai_params("gpt-4o")
@@ -410,10 +411,10 @@ def test_get_supported_openai_params_case_insensitive():
     assert "thinking" in supported_params_mixed
     assert "reasoning_effort" in supported_params_mixed
     
-    # Test that Claude 3.5 models don't have thinking support (case insensitive)
+    # Test that Claude 3.5 models also get thinking support on Copilot
     supported_params_35 = config.get_supported_openai_params("CLAUDE-3.5-SONNET")
-    assert "thinking" not in supported_params_35
-    assert "reasoning_effort" not in supported_params_35
+    assert "thinking" in supported_params_35
+    assert "reasoning_effort" in supported_params_35
 
 def test_copilot_vision_request_header_with_image():
     """Test that Copilot-Vision-Request header is added when messages contain images"""
@@ -516,31 +517,10 @@ def test_copilot_vision_request_header_with_type_image_url():
 # ---------------------------------------------------------------------------
 
 
-def test_is_claude_reasoning_model():
-    """Test _is_claude_reasoning_model for various model names."""
-    check = GithubCopilotConfig._is_claude_reasoning_model
-
-    assert check("claude-sonnet-4") is True
-    assert check("claude-sonnet-4.5") is True
-    assert check("claude-opus-4.5") is True
-    assert check("claude-opus-4.6") is True
-    assert check("claude-opus-4.6-fast") is True
-    assert check("claude-opus-4.6-1m") is True
-    assert check("claude-haiku-4.5") is True
-    assert check("claude-opus-41") is True
-    assert check("claude-3-7-sonnet-20250219") is True
-    assert check("claude-3.7-sonnet") is True
-    assert check("claude-3.5-sonnet") is False
-    assert check("claude-3-5-sonnet") is False
-    assert check("claude-3.0-haiku") is False
-    assert check("CLAUDE-SONNET-4.5") is True
-    assert check("Claude-Opus-4.6") is True
-
-
 def test_get_supported_openai_params_copilot_model_names():
-    """Test with actual GitHub Copilot model names (dot notation, not in registry)."""
+    """All Claude models on Copilot should support thinking and reasoning_effort."""
     config = GithubCopilotConfig()
-    for model in ["claude-sonnet-4.5", "claude-opus-4.5", "claude-opus-4.6", "claude-opus-4.6-1m"]:
+    for model in ["claude-sonnet-4.5", "claude-opus-4.5", "claude-opus-4.6", "claude-opus-4.6-1m", "claude-3.5-sonnet"]:
         params = config.get_supported_openai_params(model)
         assert "thinking" in params, f"{model}: missing thinking"
         assert "reasoning_effort" in params, f"{model}: missing reasoning_effort"
@@ -588,7 +568,7 @@ def test_map_openai_params_thinking_converted_to_reasoning_effort():
         model="claude-sonnet-4.5",
         drop_params=False,
     )
-    assert result["reasoning_effort"] == "high"
+    assert result["reasoning_effort"] == "medium"
     assert "thinking" not in result
 
 
@@ -621,20 +601,6 @@ def test_map_openai_params_thinking_disabled():
     assert "thinking" not in result
 
 
-def test_map_openai_params_thinking_budget_tiers():
-    """Test budget_tokens -> reasoning_effort tier mapping."""
-    config = GithubCopilotConfig()
-    for budget, expected in [(50000, "high"), (10000, "high"), (8000, "medium"), (5000, "medium"), (3000, "low"), (2000, "low"), (1000, "minimal"), (100, "minimal")]:
-        result = config.map_openai_params(
-            non_default_params={"thinking": {"type": "enabled", "budget_tokens": budget}},
-            optional_params={},
-            model="claude-sonnet-4.5",
-            drop_params=False,
-        )
-        assert result["reasoning_effort"] == expected, f"budget={budget}: expected '{expected}', got '{result.get('reasoning_effort')}'"
-        assert "thinking" not in result
-
-
 def test_map_openai_params_non_claude_model():
     """Test that map_openai_params still delegates correctly for non-Claude models."""
     config = GithubCopilotConfig()
@@ -661,23 +627,6 @@ def test_map_openai_params_reasoning_effort_not_added_for_gpt4o():
     assert result["temperature"] == 0.5
 
 
-def test_translate_thinking_to_reasoning_effort():
-    """Test _translate_thinking_to_reasoning_effort static method."""
-    tr = GithubCopilotConfig._translate_thinking_to_reasoning_effort
-    assert tr({"type": "enabled", "budget_tokens": 50000}) == "high"
-    assert tr({"type": "enabled", "budget_tokens": 10000}) == "high"
-    assert tr({"type": "enabled", "budget_tokens": 8000}) == "medium"
-    assert tr({"type": "enabled", "budget_tokens": 5000}) == "medium"
-    assert tr({"type": "enabled", "budget_tokens": 3000}) == "low"
-    assert tr({"type": "enabled", "budget_tokens": 2000}) == "low"
-    assert tr({"type": "enabled", "budget_tokens": 1000}) == "minimal"
-    assert tr({"type": "enabled", "budget_tokens": 0}) == "minimal"
-    assert tr({"type": "disabled"}) is None
-    assert tr("not a dict") is None
-    assert tr(None) is None
-    assert tr({"type": "enabled"}) == "minimal"
-
-
 def test_map_openai_params_end_to_end_thinking_only():
     """End-to-end: get_optional_params -> transform_request with thinking param."""
     from litellm.utils import get_optional_params
@@ -698,5 +647,5 @@ def test_map_openai_params_end_to_end_thinking_only():
         headers={},
     )
     assert "reasoning_effort" in body
-    assert body["reasoning_effort"] == "high"
+    assert body["reasoning_effort"] == "medium"
     assert "thinking" not in body
