@@ -509,3 +509,194 @@ def test_copilot_vision_request_header_with_type_image_url():
     
     assert headers["Copilot-Vision-Request"] == "true"
     assert headers["X-Initiator"] == "user"
+
+
+# ---------------------------------------------------------------------------
+# Tests for reasoning_effort / thinking fix
+# ---------------------------------------------------------------------------
+
+
+def test_is_claude_reasoning_model():
+    """Test _is_claude_reasoning_model for various model names."""
+    check = GithubCopilotConfig._is_claude_reasoning_model
+
+    assert check("claude-sonnet-4") is True
+    assert check("claude-sonnet-4.5") is True
+    assert check("claude-opus-4.5") is True
+    assert check("claude-opus-4.6") is True
+    assert check("claude-opus-4.6-fast") is True
+    assert check("claude-opus-4.6-1m") is True
+    assert check("claude-haiku-4.5") is True
+    assert check("claude-opus-41") is True
+    assert check("claude-3-7-sonnet-20250219") is True
+    assert check("claude-3.7-sonnet") is True
+    assert check("claude-3.5-sonnet") is False
+    assert check("claude-3-5-sonnet") is False
+    assert check("claude-3.0-haiku") is False
+    assert check("CLAUDE-SONNET-4.5") is True
+    assert check("Claude-Opus-4.6") is True
+
+
+def test_get_supported_openai_params_copilot_model_names():
+    """Test with actual GitHub Copilot model names (dot notation, not in registry)."""
+    config = GithubCopilotConfig()
+    for model in ["claude-sonnet-4.5", "claude-opus-4.5", "claude-opus-4.6", "claude-opus-4.6-1m"]:
+        params = config.get_supported_openai_params(model)
+        assert "thinking" in params, f"{model}: missing thinking"
+        assert "reasoning_effort" in params, f"{model}: missing reasoning_effort"
+
+
+def test_map_openai_params_reasoning_effort_claude():
+    """Test that reasoning_effort passes through for Claude models."""
+    config = GithubCopilotConfig()
+    result = config.map_openai_params(
+        non_default_params={"reasoning_effort": "high", "temperature": 0.7},
+        optional_params={},
+        model="claude-sonnet-4.5",
+        drop_params=False,
+    )
+    assert result["reasoning_effort"] == "high"
+    assert result["temperature"] == 0.7
+
+
+def test_map_openai_params_reasoning_effort_unregistered_model():
+    """Test that reasoning_effort passes through for models NOT in the JSON registry."""
+    config = GithubCopilotConfig()
+    result = config.map_openai_params(
+        non_default_params={"reasoning_effort": "high"},
+        optional_params={},
+        model="claude-opus-4.6",
+        drop_params=False,
+    )
+    assert result["reasoning_effort"] == "high"
+
+    result2 = config.map_openai_params(
+        non_default_params={"reasoning_effort": "medium"},
+        optional_params={},
+        model="claude-opus-4.6-1m",
+        drop_params=False,
+    )
+    assert result2["reasoning_effort"] == "medium"
+
+
+def test_map_openai_params_thinking_converted_to_reasoning_effort():
+    """Test that Anthropic 'thinking' is converted to reasoning_effort and stripped."""
+    config = GithubCopilotConfig()
+    result = config.map_openai_params(
+        non_default_params={"thinking": {"type": "enabled", "budget_tokens": 10000}},
+        optional_params={},
+        model="claude-sonnet-4.5",
+        drop_params=False,
+    )
+    assert result["reasoning_effort"] == "high"
+    assert "thinking" not in result
+
+
+def test_map_openai_params_thinking_with_existing_reasoning_effort():
+    """Test that explicit reasoning_effort takes precedence over thinking conversion."""
+    config = GithubCopilotConfig()
+    result = config.map_openai_params(
+        non_default_params={
+            "thinking": {"type": "enabled", "budget_tokens": 10000},
+            "reasoning_effort": "medium",
+        },
+        optional_params={},
+        model="claude-sonnet-4.5",
+        drop_params=False,
+    )
+    assert result["reasoning_effort"] == "medium"
+    assert "thinking" not in result
+
+
+def test_map_openai_params_thinking_disabled():
+    """Test that thinking with type=disabled does NOT produce reasoning_effort."""
+    config = GithubCopilotConfig()
+    result = config.map_openai_params(
+        non_default_params={"thinking": {"type": "disabled"}},
+        optional_params={},
+        model="claude-sonnet-4.5",
+        drop_params=False,
+    )
+    assert "reasoning_effort" not in result
+    assert "thinking" not in result
+
+
+def test_map_openai_params_thinking_budget_tiers():
+    """Test budget_tokens -> reasoning_effort tier mapping."""
+    config = GithubCopilotConfig()
+    for budget, expected in [(50000, "high"), (10000, "high"), (8000, "medium"), (5000, "medium"), (3000, "low"), (2000, "low"), (1000, "minimal"), (100, "minimal")]:
+        result = config.map_openai_params(
+            non_default_params={"thinking": {"type": "enabled", "budget_tokens": budget}},
+            optional_params={},
+            model="claude-sonnet-4.5",
+            drop_params=False,
+        )
+        assert result["reasoning_effort"] == expected, f"budget={budget}: expected '{expected}', got '{result.get('reasoning_effort')}'"
+        assert "thinking" not in result
+
+
+def test_map_openai_params_non_claude_model():
+    """Test that map_openai_params still delegates correctly for non-Claude models."""
+    config = GithubCopilotConfig()
+    result = config.map_openai_params(
+        non_default_params={"temperature": 0.5, "max_tokens": 100},
+        optional_params={},
+        model="gpt-4o",
+        drop_params=False,
+    )
+    assert result["temperature"] == 0.5
+    assert result["max_tokens"] == 100
+
+
+def test_map_openai_params_reasoning_effort_not_added_for_gpt4o():
+    """Test that reasoning_effort is NOT passed through for non-reasoning models."""
+    config = GithubCopilotConfig()
+    result = config.map_openai_params(
+        non_default_params={"reasoning_effort": "high", "temperature": 0.5},
+        optional_params={},
+        model="gpt-4o",
+        drop_params=False,
+    )
+    assert "reasoning_effort" not in result
+    assert result["temperature"] == 0.5
+
+
+def test_translate_thinking_to_reasoning_effort():
+    """Test _translate_thinking_to_reasoning_effort static method."""
+    tr = GithubCopilotConfig._translate_thinking_to_reasoning_effort
+    assert tr({"type": "enabled", "budget_tokens": 50000}) == "high"
+    assert tr({"type": "enabled", "budget_tokens": 10000}) == "high"
+    assert tr({"type": "enabled", "budget_tokens": 8000}) == "medium"
+    assert tr({"type": "enabled", "budget_tokens": 5000}) == "medium"
+    assert tr({"type": "enabled", "budget_tokens": 3000}) == "low"
+    assert tr({"type": "enabled", "budget_tokens": 2000}) == "low"
+    assert tr({"type": "enabled", "budget_tokens": 1000}) == "minimal"
+    assert tr({"type": "enabled", "budget_tokens": 0}) == "minimal"
+    assert tr({"type": "disabled"}) is None
+    assert tr("not a dict") is None
+    assert tr(None) is None
+    assert tr({"type": "enabled"}) == "minimal"
+
+
+def test_map_openai_params_end_to_end_thinking_only():
+    """End-to-end: get_optional_params -> transform_request with thinking param."""
+    from litellm.utils import get_optional_params
+
+    config = GithubCopilotConfig()
+    optional_params = get_optional_params(
+        model="claude-sonnet-4.5",
+        custom_llm_provider="github_copilot",
+        thinking={"type": "enabled", "budget_tokens": 10000},
+        max_tokens=200,
+        drop_params=True,
+    )
+    body = config.transform_request(
+        model="claude-sonnet-4.5",
+        messages=[{"role": "user", "content": "test"}],
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+    assert "reasoning_effort" in body
+    assert body["reasoning_effort"] == "high"
+    assert "thinking" not in body
