@@ -781,9 +781,9 @@ def function_setup(  # noqa: PLR0915
         coroutine_checker = get_coroutine_checker_fn()
 
         ## DYNAMIC CALLBACKS ##
-        dynamic_callbacks: Optional[
-            List[Union[str, Callable, "CustomLogger"]]
-        ] = kwargs.pop("callbacks", None)
+        dynamic_callbacks: Optional[List[Union[str, Callable, "CustomLogger"]]] = (
+            kwargs.pop("callbacks", None)
+        )
         all_callbacks = get_dynamic_callbacks(dynamic_callbacks=dynamic_callbacks)
 
         if len(all_callbacks) > 0:
@@ -1689,9 +1689,9 @@ def client(original_function):  # noqa: PLR0915
                         exception=e,
                         retry_policy=kwargs.get("retry_policy"),
                     )
-                    kwargs[
-                        "retry_policy"
-                    ] = reset_retry_policy()  # prevent infinite loops
+                    kwargs["retry_policy"] = (
+                        reset_retry_policy()
+                    )  # prevent infinite loops
                 litellm.num_retries = (
                     None  # set retries to None to prevent infinite loops
                 )
@@ -1738,9 +1738,9 @@ def client(original_function):  # noqa: PLR0915
                         exception=e,
                         retry_policy=kwargs.get("retry_policy"),
                     )
-                    kwargs[
-                        "retry_policy"
-                    ] = reset_retry_policy()  # prevent infinite loops
+                    kwargs["retry_policy"] = (
+                        reset_retry_policy()
+                    )  # prevent infinite loops
                 litellm.num_retries = (
                     None  # set retries to None to prevent infinite loops
                 )
@@ -3774,10 +3774,10 @@ def pre_process_non_default_params(
 
     if "response_format" in non_default_params:
         if provider_config is not None:
-            non_default_params[
-                "response_format"
-            ] = provider_config.get_json_schema_from_pydantic_object(
-                response_format=non_default_params["response_format"]
+            non_default_params["response_format"] = (
+                provider_config.get_json_schema_from_pydantic_object(
+                    response_format=non_default_params["response_format"]
+                )
             )
         else:
             non_default_params["response_format"] = type_to_response_format_param(
@@ -3906,16 +3906,16 @@ def pre_process_optional_params(
                     True  # so that main.py adds the function call to the prompt
                 )
                 if "tools" in non_default_params:
-                    optional_params[
-                        "functions_unsupported_model"
-                    ] = non_default_params.pop("tools")
+                    optional_params["functions_unsupported_model"] = (
+                        non_default_params.pop("tools")
+                    )
                     non_default_params.pop(
                         "tool_choice", None
                     )  # causes ollama requests to hang
                 elif "functions" in non_default_params:
-                    optional_params[
-                        "functions_unsupported_model"
-                    ] = non_default_params.pop("functions")
+                    optional_params["functions_unsupported_model"] = (
+                        non_default_params.pop("functions")
+                    )
             elif (
                 litellm.add_function_to_prompt
             ):  # if user opts to add it to prompt instead
@@ -4896,9 +4896,7 @@ def _get_order_filtered_deployments(
 ) -> List:
     if target_order is not None:
         filtered = [
-            d
-            for d in healthy_deployments
-            if _get_deployment_order(d) == target_order
+            d for d in healthy_deployments if _get_deployment_order(d) == target_order
         ]
         if filtered:
             return filtered
@@ -5875,8 +5873,12 @@ def _get_model_info_helper(  # noqa: PLR0915
                 supports_web_search=_model_info.get("supports_web_search", None),
                 supports_url_context=_model_info.get("supports_url_context", None),
                 supports_reasoning=_model_info.get("supports_reasoning", None),
-                supports_none_reasoning_effort=_model_info.get("supports_none_reasoning_effort", None),
-                supports_xhigh_reasoning_effort=_model_info.get("supports_xhigh_reasoning_effort", None),
+                supports_none_reasoning_effort=_model_info.get(
+                    "supports_none_reasoning_effort", None
+                ),
+                supports_xhigh_reasoning_effort=_model_info.get(
+                    "supports_xhigh_reasoning_effort", None
+                ),
                 supports_computer_use=_model_info.get("supports_computer_use", None),
                 search_context_cost_per_query=_model_info.get(
                     "search_context_cost_per_query", None
@@ -7554,9 +7556,9 @@ class ModelResponseIterator:
         if convert_to_delta is True:
             _stream_response = ModelResponseStream()
             _stream_response.choices[0].delta.content = model_response.choices[0].message.content  # type: ignore
-            self.model_response: Union[
-                ModelResponse, ModelResponseStream
-            ] = _stream_response
+            self.model_response: Union[ModelResponse, ModelResponseStream] = (
+                _stream_response
+            )
         else:
             self.model_response = model_response
         self.is_done = False

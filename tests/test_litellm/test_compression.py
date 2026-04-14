@@ -13,6 +13,9 @@ from litellm.compression.content_detection import detect_content_type
 from litellm.compression.message_stubbing import extract_key, stub_message
 from litellm.compression.retrieval_tool import build_retrieval_tool
 
+INPUT_TYPE = "openai_chat_completions"
+ANTHROPIC_INPUT_TYPE = "anthropic_messages"
+
 
 # ---------------------------------------------------------------------------
 # BM25 scorer
@@ -149,7 +152,7 @@ def test_retrieval_tool_description_lists_keys():
 
 def test_compress_below_trigger_passthrough():
     messages = [{"role": "user", "content": "hello"}]
-    result = litellm.compress(messages, model="gpt-4o")
+    result = litellm.compress(messages, model="gpt-4o", input_type=INPUT_TYPE)
     assert result["messages"] == messages
     assert result["cache"] == {}
     assert result["tools"] == []
@@ -178,6 +181,7 @@ def test_compress_above_trigger():
     result = litellm.compress(
         big_messages,
         model="gpt-4o",
+        input_type=INPUT_TYPE,
         compression_trigger=1000,
         compression_target=500,
     )
@@ -189,13 +193,62 @@ def test_compress_above_trigger():
     assert result["tools"][0]["function"]["name"] == "litellm_content_retrieve"
 
 
+def test_compress_anthropic_list_content_is_boundary_stable():
+    messages = [
+        {"role": "system", "content": [{"type": "text", "text": "System prompt"}]},
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "# a.py\n" + "alpha " * 2000},
+                {
+                    "type": "image_url",
+                    "image_url": {"url": "https://example.com/a.png"},
+                },
+            ],
+        },
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "# b.py\n" + "beta " * 2000},
+                {
+                    "type": "image_url",
+                    "image_url": {"url": "https://example.com/b.png"},
+                },
+            ],
+        },
+        {
+            "role": "user",
+            "content": [{"type": "text", "text": "Fix alpha bug in a.py"}],
+        },
+    ]
+
+    result = litellm.compress(
+        messages=messages,
+        model="claude-sonnet-4-20250514",
+        input_type=ANTHROPIC_INPUT_TYPE,
+        compression_trigger=1000,
+        compression_target=500,
+    )
+
+    assert result["compressed_tokens"] < result["original_tokens"]
+    assert len(result["messages"]) == len(messages)
+    assert [m["role"] for m in result["messages"]] == [m["role"] for m in messages]
+    assert len(result["cache"]) > 0
+    assert len(result["tools"]) == 1
+    assert result["tools"][0]["type"] == "custom"
+    assert result["tools"][0]["name"] == "litellm_content_retrieve"
+    assert "input_schema" in result["tools"][0]
+
+
 def test_compress_preserves_system_message():
     messages = [
         {"role": "system", "content": "System prompt. " * 500},
         {"role": "user", "content": "Large file content. " * 5000},
         {"role": "user", "content": "Fix the bug"},
     ]
-    result = litellm.compress(messages, model="gpt-4o", compression_trigger=1000)
+    result = litellm.compress(
+        messages, model="gpt-4o", input_type=INPUT_TYPE, compression_trigger=1000
+    )
     assert result["messages"][0]["role"] == "system"
     assert "System prompt" in result["messages"][0]["content"]
 
@@ -205,7 +258,9 @@ def test_compress_preserves_last_user_message():
         {"role": "user", "content": "Big context " * 5000},
         {"role": "user", "content": "Fix the bug in auth.py"},
     ]
-    result = litellm.compress(messages, model="gpt-4o", compression_trigger=1000)
+    result = litellm.compress(
+        messages, model="gpt-4o", input_type=INPUT_TYPE, compression_trigger=1000
+    )
     last_user = [m for m in result["messages"] if m["role"] == "user"][-1]
     assert "Fix the bug in auth.py" in last_user["content"]
 
@@ -216,7 +271,9 @@ def test_compress_preserves_last_assistant_message():
         {"role": "assistant", "content": "I'll help with that. " * 2000},
         {"role": "user", "content": "Now fix the bug"},
     ]
-    result = litellm.compress(messages, model="gpt-4o", compression_trigger=1000)
+    result = litellm.compress(
+        messages, model="gpt-4o", input_type=INPUT_TYPE, compression_trigger=1000
+    )
     assistant_msgs = [m for m in result["messages"] if m["role"] == "assistant"]
     assert len(assistant_msgs) >= 1
     # The last assistant message should be preserved (not stubbed)
@@ -229,7 +286,9 @@ def test_cache_keys_match_stubs():
         {"role": "user", "content": "# auth.py\n" + "code " * 5000},
         {"role": "user", "content": "Fix it"},
     ]
-    result = litellm.compress(messages, model="gpt-4o", compression_trigger=1000)
+    result = litellm.compress(
+        messages, model="gpt-4o", input_type=INPUT_TYPE, compression_trigger=1000
+    )
     if result["tools"]:
         tool_desc = result["tools"][0]["function"]["description"]
         for key in result["cache"]:
@@ -242,9 +301,73 @@ def test_compress_default_target():
         {"role": "user", "content": "content " * 5000},
         {"role": "user", "content": "query"},
     ]
-    result = litellm.compress(messages, model="gpt-4o", compression_trigger=2000)
+    result = litellm.compress(
+        messages, model="gpt-4o", input_type=INPUT_TYPE, compression_trigger=2000
+    )
     # Should have compressed — target = 1000
     assert result["compressed_tokens"] <= result["original_tokens"]
+
+
+def test_compress_nested_tool_result_extracts_text_only():
+    messages = [
+        {"role": "system", "content": [{"type": "text", "text": "System rules"}]},
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "prefix"},
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_1",
+                    "content": [
+                        {"type": "text", "text": "nested text fragment"},
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": "https://example.com/secret-tool.png",
+                            },
+                        },
+                    ],
+                },
+                {
+                    "type": "image_url",
+                    "image_url": {"url": "https://example.com/top.png"},
+                },
+                {"type": "text", "text": " " + ("irrelevant " * 3000)},
+            ],
+        },
+        {
+            "role": "user",
+            "content": [{"type": "text", "text": "final query that must remain"}],
+        },
+    ]
+
+    result = litellm.compress(
+        messages=messages,
+        model="claude-sonnet-4-20250514",
+        input_type=ANTHROPIC_INPUT_TYPE,
+        compression_trigger=500,
+        compression_target=100,
+    )
+
+    cached_text = " ".join(result["cache"].values())
+    assert "nested text fragment" in cached_text
+    assert "https://example.com/secret-tool.png" not in cached_text
+    assert "https://example.com/top.png" not in cached_text
+
+
+def test_compress_default_input_type_is_openai_chat_completions():
+    result = litellm.compress(
+        messages=[
+            {"role": "user", "content": "Large context " * 4000},
+            {"role": "user", "content": "query"},
+        ],
+        model="gpt-4o",
+        compression_trigger=1000,
+        compression_target=500,
+    )
+
+    assert result["compressed_tokens"] <= result["original_tokens"]
+    assert isinstance(result["tools"], list)
 
 
 def test_compress_forwards_embedding_model_params(monkeypatch):
@@ -269,6 +392,7 @@ def test_compress_forwards_embedding_model_params(monkeypatch):
             {"role": "user", "content": "Fix auth"},
         ],
         model="gpt-4o",
+        input_type=INPUT_TYPE,
         compression_trigger=1000,
         embedding_model="text-embedding-3-small",
         embedding_model_params={"api_base": "https://example-embeddings.test"},
@@ -326,6 +450,7 @@ def test_embedding_scorer():
             {"role": "user", "content": "Fix auth"},
         ],
         model="gpt-4o",
+        input_type=INPUT_TYPE,
         compression_trigger=1000,
         embedding_model="text-embedding-3-small",
     )
@@ -346,8 +471,9 @@ def test_simple_compression(final_user_message, expected_content):
         {"role": "user", "content": "Unrelated cooking recipes " * 2000},
         {"role": "user", "content": final_user_message},
     ]
-    result = litellm.compress(messages, model="gpt-4o", compression_trigger=1000)
-    print(result["messages"])
+    result = litellm.compress(
+        messages, model="gpt-4o", input_type=INPUT_TYPE, compression_trigger=1000
+    )
     if expected_content == "Unrelated cooking recipes ":
         assert "Unrelated cooking recipes " in result["messages"][1]["content"]
         assert "Authentication code " not in result["messages"][0]["content"]

@@ -2,7 +2,9 @@
 Type definitions for litellm.compress().
 """
 
-from typing import Dict, List, TypedDict
+from typing import Dict, List, Literal, TypedDict
+
+CompressionInputType = Literal["anthropic_messages", "openai_chat_completions"]
 
 
 class CompressedResult(TypedDict):

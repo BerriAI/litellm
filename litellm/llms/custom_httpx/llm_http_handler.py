@@ -4488,7 +4488,9 @@ class BaseLLMHTTPHandler:
 
         full_model_name = model
         if logging_obj is not None:
-            agentic_params = logging_obj.model_call_details.get("agentic_loop_params", {})
+            agentic_params = logging_obj.model_call_details.get(
+                "agentic_loop_params", {}
+            )
             full_model_name = cast(str, agentic_params.get("model", model))
 
         optional_params = dict(anthropic_messages_optional_request_params)
@@ -4508,7 +4510,9 @@ class BaseLLMHTTPHandler:
         kwargs_for_followup = {
             k: v
             for k, v in kwargs.items()
-            if not k.startswith("_websearch_interception") and k not in internal_keys
+            if not k.startswith("_websearch_interception")
+            and not k.startswith("_compression_interception")
+            and k not in internal_keys
         }
         kwargs_for_followup.update(patch.kwargs)
         kwargs_for_followup["_agentic_loop_depth"] = depth + 1
@@ -4562,6 +4566,7 @@ class BaseLLMHTTPHandler:
             k: v
             for k, v in kwargs.items()
             if not k.startswith("_websearch_interception")
+            and not k.startswith("_compression_interception")
             and k not in internal_params
         }
         kwargs_for_followup.update(patch.kwargs)
@@ -4632,7 +4637,9 @@ class BaseLLMHTTPHandler:
                             )
 
                         kwargs_with_provider = kwargs.copy() if kwargs else {}
-                        kwargs_with_provider["custom_llm_provider"] = custom_llm_provider
+                        kwargs_with_provider[
+                            "custom_llm_provider"
+                        ] = custom_llm_provider
                         build_plan_overridden = (
                             callback.__class__.async_build_agentic_loop_plan
                             is not CustomLogger.async_build_agentic_loop_plan
@@ -4797,21 +4804,25 @@ class BaseLLMHTTPHandler:
                             )
 
                         kwargs_with_provider = kwargs.copy() if kwargs else {}
-                        kwargs_with_provider["custom_llm_provider"] = custom_llm_provider
+                        kwargs_with_provider[
+                            "custom_llm_provider"
+                        ] = custom_llm_provider
                         build_plan_overridden = (
                             callback.__class__.async_build_chat_completion_agentic_loop_plan
                             is not CustomLogger.async_build_chat_completion_agentic_loop_plan
                         )
                         if not build_plan_overridden:
-                            return await callback.async_run_chat_completion_agentic_loop(
-                                tools=tool_calls,
-                                model=model,
-                                messages=messages,
-                                response=response,
-                                optional_params=optional_params,
-                                logging_obj=logging_obj,
-                                stream=stream,
-                                kwargs=kwargs_with_provider,
+                            return (
+                                await callback.async_run_chat_completion_agentic_loop(
+                                    tools=tool_calls,
+                                    model=model,
+                                    messages=messages,
+                                    response=response,
+                                    optional_params=optional_params,
+                                    logging_obj=logging_obj,
+                                    stream=stream,
+                                    kwargs=kwargs_with_provider,
+                                )
                             )
 
                         plan = await callback.async_build_chat_completion_agentic_loop_plan(
