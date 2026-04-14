@@ -1,6 +1,6 @@
 ---
-title: "[Preview] v1.83.3.rc.1 - Introducing MCP Skills Marketplace"
-slug: "v1-83-3-rc-1"
+title: "v1.83.3-stable - Introducing MCP Skills Marketplace"
+slug: "v1-83-3-stable"
 date: 2026-04-04T00:00:00
 authors:
   - name: Krrish Dholakia
@@ -14,7 +14,7 @@ authors:
   - name: Ryan Crabbe
     title: Full Stack Engineer, LiteLLM
     url: https://www.linkedin.com/in/ryan-crabbe-0b9687214
-    image_url: https://media.licdn.com/dms/image/v2/D5603AQHt1t9Z4BJ6Gw/profile-displayphoto-shrink_400_400/profile-displayphoto-shrink_400_400/0/1724453682340?e=1772064000&v=beta&t=VXdmr13rsNB05wyA2F1TENOB5UuDHUZ0FCHTolNyR5M
+    image_url: https://github.com/ryan-crabbe.png
   - name: Yuneng Jiang
     title: Senior Full Stack Engineer, LiteLLM
     url: https://www.linkedin.com/in/yuneng-david-jiang-455676139/
@@ -38,14 +38,14 @@ import TabItem from '@theme/TabItem';
 docker run \
 -e STORE_MODEL_IN_DB=True \
 -p 4000:4000 \
-docker.litellm.ai/berriai/litellm:main-v1.83.3.rc.1
+docker.litellm.ai/berriai/litellm:main-v1.83.3-stable
 ```
 
 </TabItem>
 <TabItem value="pip" label="Pip">
 
 ```bash
-pip install litellm==1.83.3rc1
+pip install litellm==1.83.3
 ```
 
 </TabItem>
@@ -233,4 +233,4 @@ MCP Toolsets let AI platform admins create curated subsets of tools from one or 
 * @vanhtuan0409 made their first contribution in https://github.com/BerriAI/litellm/pull/24078
 * @clfhhc made their first contribution in https://github.com/BerriAI/litellm/pull/24932
 
-**Full Changelog**: https://github.com/BerriAI/litellm/compare/v1.83.0-nightly...v1.83.3.rc.1
+**Full Changelog**: https://github.com/BerriAI/litellm/compare/v1.83.0-nightly...v1.83.3-stable
