@@ -68,6 +68,7 @@ if TYPE_CHECKING:
 from litellm.constants import (
     DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT,
     DEFAULT_MOCK_RESPONSE_PROMPT_TOKEN_COUNT,
+    DEFAULT_REQUEST_TIMEOUT_SECONDS,
 )
 from litellm.exceptions import LiteLLMUnknownProvider
 from litellm.integrations.custom_logger import CustomLogger
@@ -1060,9 +1061,14 @@ def _resolve_completion_timeout(
     - **Model config alias:** ``kwargs["request_timeout"]`` when the caller passes the
       per-model ``request_timeout`` field from model config (same idea as deployment
       `litellm_params.request_timeout`).
-    - **Global proxy settings:** :attr:`litellm.request_timeout`, set from
-      ``litellm_settings.request_timeout`` when the proxy loads config.
-    - **Default:** ``600`` seconds if nothing above is set.
+    - **Global module default:** :attr:`litellm.request_timeout` (from
+      ``litellm_settings.request_timeout`` on the proxy when set, otherwise
+      :data:`~litellm.constants.DEFAULT_REQUEST_TIMEOUT_SECONDS`, i.e. ``6000`` seconds).
+      That long default is shared with Router, speech/TTS, and other subsystems; for
+      chat completion only, if the timeout came solely from this module attribute and
+      still equals ``6000``, it is treated as unset and ``600`` seconds is used instead.
+
+    - **Fallback:** ``600`` seconds if no timeout is resolved above.
 
     Also accepts ``kwargs["timeout"]`` as a fallback when the named ``timeout`` argument
     is omitted.
@@ -1076,9 +1082,21 @@ def _resolve_completion_timeout(
         timeout = kwargs.get("timeout")
     if timeout is None:
         timeout = kwargs.get("request_timeout")
+    resolved_from_litellm_request_timeout_attr = False
     if timeout is None:
         timeout = getattr(litellm, "request_timeout", None)
+        if timeout is not None:
+            resolved_from_litellm_request_timeout_attr = True
     if timeout is None:
+        timeout = 600
+    elif (
+        resolved_from_litellm_request_timeout_attr
+        and not isinstance(timeout, httpx.Timeout)
+        and float(timeout) == float(DEFAULT_REQUEST_TIMEOUT_SECONDS)
+    ):
+        # 6000s is the package default for litellm.request_timeout so MCP, speech/TTS,
+        # Router, and similar paths keep a long deadline. completion() uses 600s when
+        # nothing more specific was supplied (explicit kwargs still win above).
         timeout = 600
     if isinstance(timeout, httpx.Timeout) and not supports_httpx_timeout(
         custom_llm_provider

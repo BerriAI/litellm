@@ -393,7 +393,16 @@ MAX_SIZE_PER_ITEM_IN_MEMORY_CACHE_IN_KB = int(
 )
 DEFAULT_MAX_TOKENS_FOR_TRITON = int(os.getenv("DEFAULT_MAX_TOKENS_FOR_TRITON", 2000))
 #### Networking settings ####
-request_timeout: float = float(os.getenv("REQUEST_TIMEOUT", 600))  # time in seconds
+# Sentinel used when `REQUEST_TIMEOUT` is unset: `litellm.request_timeout` keeps this
+# value so longer-running surfaces (Router `timeout or litellm.request_timeout`,
+# speech/TTS, responses, vector stores, etc.) get a long HTTP deadline. Chat
+# `completion()` maps this sentinel down to 600s when the caller did not set a
+# per-request/model timeout—see `_resolve_completion_timeout` in main.py. MCP uses
+# dedicated timeouts (e.g. `MCP_CLIENT_TIMEOUT`), not `request_timeout`.
+DEFAULT_REQUEST_TIMEOUT_SECONDS: float = 6000.0
+request_timeout: float = float(
+    os.getenv("REQUEST_TIMEOUT", str(int(DEFAULT_REQUEST_TIMEOUT_SECONDS)))
+)
 DEFAULT_A2A_AGENT_TIMEOUT: float = float(
     os.getenv("DEFAULT_A2A_AGENT_TIMEOUT", 6000)
 )  # 10 minutes
