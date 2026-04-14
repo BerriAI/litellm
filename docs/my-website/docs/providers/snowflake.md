@@ -8,9 +8,19 @@ import TabItem from '@theme/TabItem';
 | Description                | The Snowflake Cortex LLM REST API lets you access the COMPLETE and EMBED functions via HTTP POST requests |
 | Provider Route on LiteLLM  | `snowflake/`                                                                                              |
 | Link to Provider Doc       | [Snowflake ↗](https://docs.snowflake.com/en/user-guide/snowflake-cortex/cortex-llm-rest-api)              |
-| Base URLs                  | `https://{account-id}.snowflakecomputing.com/api/v2/cortex/inference:complete`,`https://{account-id}.snowflakecomputing.com/api/v2/cortex/inference:embed`|
+| Base URLs                  | **Cortex LLM (v1):** `https://{account-id}.snowflakecomputing.com/api/v2/cortex/v1` <br/> **Cortex Search:** `https://{account-id}.snowflakecomputing.com/api/v2/databases/{db}/schemas/{schema}/cortex-search-services/{service}:query` <br/> **Cortex Agents:** `https://{account-id}.snowflakecomputing.com/api/v2/databases/{db}/schemas/{schema}/agents` <br/> **Cortex inference (COMPLETE/EMBED):** `https://{account-id}.snowflakecomputing.com/api/v2/cortex/inference:complete`, `https://{account-id}.snowflakecomputing.com/api/v2/cortex/inference:embed` |
 | Supported OpenAI Endpoints | `/chat/completions`, `/completions`, `/embeddings`                                                        |
 
+
+## Available APIs
+
+Snowflake Cortex exposes three REST API surfaces:
+
+| API | Endpoint Pattern | Description | Reference |
+|-----|-----------------|-------------|-----------|
+| **Cortex LLM (v1)** | `POST /api/v2/cortex/v1/chat/completions` <br/> `POST /api/v2/cortex/v1/messages` | OpenAI-compatible chat completions and Anthropic-compatible messages. Supports all Cortex models. | [Cortex REST API ↗](https://docs.snowflake.com/en/user-guide/snowflake-cortex/cortex-rest-api) |
+| **Cortex Search** | `POST /api/v2/databases/{db}/schemas/{schema}/cortex-search-services/{service}:query` | Query a Cortex Search Service for low-latency semantic/hybrid search. | [Query Cortex Search ↗](https://docs.snowflake.com/en/user-guide/snowflake-cortex/cortex-search/query-cortex-search-service) |
+| **Cortex Agents** | `POST /api/v2/databases/{db}/schemas/{schema}/agents` <br/> `GET /api/v2/databases/{db}/schemas/{schema}/agents/{name}` <br/> `PUT /api/v2/databases/{db}/schemas/{schema}/agents/{name}` <br/> `DELETE /api/v2/databases/{db}/schemas/{schema}/agents/{name}` | Create, manage, and interact with Cortex Agent objects. | [Cortex Agents REST API ↗](https://docs.snowflake.com/en/user-guide/snowflake-cortex/cortex-agents-rest-api) |
 
 ## Supported OpenAI Parameters
 ```
