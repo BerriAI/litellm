@@ -157,8 +157,8 @@ class GithubCopilotConfig(OpenAIConfig):
         """
         if "claude" in model.lower():
             # Convert Anthropic-native ``thinking`` -> ``reasoning_effort``.
-            # If the user already set reasoning_effort (e.g. via litellm config
-            # YAML), respect that and don't overwrite.
+            # Work on a shallow copy so we never mutate the caller's dict.
+            non_default_params = {**non_default_params}
             thinking = non_default_params.get("thinking")
             if thinking and "reasoning_effort" not in non_default_params:
                 if self._is_thinking_enabled(thinking):
