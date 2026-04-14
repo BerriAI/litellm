@@ -45,7 +45,7 @@ docker.litellm.ai/berriai/litellm:main-v1.83.3-stable
 <TabItem value="pip" label="Pip">
 
 ```bash
-pip install litellm==1.83.3.post1
+pip install litellm==1.83.3
 ```
 
 </TabItem>
