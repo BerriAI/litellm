@@ -241,7 +241,6 @@ export default function SpendLogsTable({
     filters,
     filteredLogs,
     hasBackendFilters,
-    allTeams: hookAllTeams,
     handleFilterChange,
     handleFilterReset: handleFilterResetFromHook,
   } = useLogFilterLogic({

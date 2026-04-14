@@ -1,9 +1,6 @@
 import moment from "moment";
 import { useCallback, useEffect, useState, useRef, useMemo } from "react";
 import { uiSpendLogsCall } from "../networking";
-import { Team } from "../key_team_helpers/key_list";
-import { useQuery } from "@tanstack/react-query";
-import { fetchAllTeams } from "../../components/key_team_helpers/filter_helpers";
 import { debounce } from "lodash";
 import { defaultPageSize } from "../constants";
 import { PaginatedResponse } from ".";
@@ -249,19 +246,6 @@ export function useLogFilterLogic({
     return clientDerivedFilteredLogs;
   }, [hasBackendFilters, backendFilteredLogs, clientDerivedFilteredLogs]);
 
-  // Fetch all teams and users for potential filter dropdowns (optional, can be adapted)
-  const { data: allTeams } = useQuery<Team[], Error>({
-    queryKey: ["allTeamsForLogFilters", accessToken],
-    queryFn: async () => {
-      if (!accessToken) return [];
-      // Use fetchAllTeams helper function for consistency and abstraction
-      // Assuming fetchAllTeams returns Team[] directly
-      const teamsData = await fetchAllTeams(accessToken);
-      return teamsData || []; // Ensure it returns an array
-    },
-    enabled: !!accessToken,
-  });
-
   // Update filters state
   const handleFilterChange = (newFilters: Partial<LogFilterState>) => {
     setFilters((prev) => {
@@ -303,7 +287,6 @@ export function useLogFilterLogic({
     filters,
     filteredLogs,
     hasBackendFilters,
-    allTeams,
     handleFilterChange,
     handleFilterReset,
   };
