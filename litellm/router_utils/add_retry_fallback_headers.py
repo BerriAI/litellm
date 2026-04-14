@@ -50,6 +50,7 @@ def add_retry_headers_to_response(
 def add_fallback_headers_to_response(
     response: Any,
     attempted_fallbacks: int,
+    fallback_model: Optional[str] = None,
 ) -> Any:
     """
     Add fallback headers to the response
@@ -57,6 +58,8 @@ def add_fallback_headers_to_response(
     Args:
         response: The response to add the headers to
         attempted_fallbacks: The number of fallbacks attempted
+        fallback_model: The model that was actually used for the successful fallback.
+            Set to None when the primary model succeeded (no fallback occurred).
 
     Returns:
         The response with the headers added
@@ -64,7 +67,9 @@ def add_fallback_headers_to_response(
     Note: It's intentional that we don't add max_fallbacks in response headers
     Want to avoid bloat in the response headers for performance.
     """
-    fallback_headers = {
+    fallback_headers: dict = {
         "x-litellm-attempted-fallbacks": attempted_fallbacks,
     }
+    if fallback_model is not None:
+        fallback_headers["x-litellm-fallback-model-used"] = fallback_model
     return _add_headers_to_response(response, fallback_headers)

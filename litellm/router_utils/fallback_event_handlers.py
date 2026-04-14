@@ -130,6 +130,11 @@ async def run_async_fallback(
                 kwargs["model"] = mg
             elif isinstance(mg, dict):
                 kwargs.update(mg)
+            # Capture the effective fallback model name before the recursive call
+            # so we can stamp it on the response header regardless of further fallbacks.
+            effective_fallback_model: Optional[str] = (
+                mg if isinstance(mg, str) else kwargs.get("model")
+            )
             kwargs.setdefault("metadata", {}).update(
                 {"model_group": kwargs.get("model", None)}
             )  # update model_group used, if fallbacks are done
@@ -143,6 +148,7 @@ async def run_async_fallback(
             response = add_fallback_headers_to_response(
                 response=response,
                 attempted_fallbacks=fallback_depth,
+                fallback_model=effective_fallback_model,
             )
             # callback for successfull_fallback_event():
             await log_success_fallback_event(
