@@ -289,7 +289,7 @@ model LiteLLM_MCPServerTable {
   server_name  String?
   alias        String?
   description  String?
-  instructions String?        // MCP InitializeResult.instructions (optional)
+  instructions String?
   url          String?
   spec_path    String?
   transport    String         @default("sse")

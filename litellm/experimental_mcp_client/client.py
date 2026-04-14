@@ -221,6 +221,7 @@ class MCPClient:
         self.extra_headers: Optional[Dict[str, str]] = extra_headers
         self.ssl_verify: Optional[VerifyTypes] = ssl_verify
         self._aws_auth: Optional[httpx.Auth] = aws_auth
+        self._last_initialize_instructions: Optional[str] = None
         # handle the basic auth value if provided
         if auth_value:
             self.update_auth_value(auth_value)
@@ -296,7 +297,12 @@ class MCPClient:
             session_ctx = ClientSession(read_stream, write_stream)
             session = await session_ctx.__aenter__()
             try:
-                await session.initialize()
+                init_result = await session.initialize()
+                self._last_initialize_instructions = None
+                if init_result is not None:
+                    ins = getattr(init_result, "instructions", None)
+                    if isinstance(ins, str) and ins.strip():
+                        self._last_initialize_instructions = ins.strip()
                 return await operation(session)
             finally:
                 try:
@@ -315,6 +321,7 @@ class MCPClient:
         """Open a session, run the provided coroutine, and clean up."""
         http_client: Optional[httpx.AsyncClient] = None
         try:
+            self._last_initialize_instructions = None
             transport_ctx, http_client = self._create_transport_context()
             return await self._execute_session_operation(transport_ctx, operation)
         except Exception:
@@ -328,52 +335,6 @@ class MCPClient:
                     await http_client.aclose()
                 except BaseException as e:
                     verbose_logger.debug(f"Error during http_client cleanup: {e}")
-
-    async def fetch_upstream_initialize_instructions(self) -> Optional[str]:
-        """Open a transport, run ``initialize`` once, return upstream ``instructions``."""
-        http_client: Optional[httpx.AsyncClient] = None
-        try:
-            transport_ctx, http_client = self._create_transport_context()
-            transport = await transport_ctx.__aenter__()
-            try:
-                read_stream, write_stream = transport[0], transport[1]
-                session_ctx = ClientSession(read_stream, write_stream)
-                session = await session_ctx.__aenter__()
-                try:
-                    init = await session.initialize()
-                    return init.instructions
-                finally:
-                    try:
-                        await session_ctx.__aexit__(None, None, None)
-                    except BaseException as e:
-                        verbose_logger.debug(
-                            "Error during session context exit (instructions fetch): %s",
-                            e,
-                        )
-            finally:
-                try:
-                    await transport_ctx.__aexit__(None, None, None)
-                except BaseException as e:
-                    verbose_logger.debug(
-                        "Error during transport context exit (instructions fetch): %s",
-                        e,
-                    )
-        except Exception as e:
-            verbose_logger.debug(
-                "fetch_upstream_initialize_instructions failed for %s: %s",
-                self.server_url or "stdio",
-                e,
-            )
-            return None
-        finally:
-            if http_client is not None:
-                try:
-                    await http_client.aclose()
-                except BaseException as e:
-                    verbose_logger.debug(
-                        "Error during http_client cleanup (instructions fetch): %s",
-                        e,
-                    )
 
     def update_auth_value(self, mcp_auth_value: Union[str, Dict[str, str]]):
         """
