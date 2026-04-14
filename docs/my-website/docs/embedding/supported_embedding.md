@@ -162,7 +162,9 @@ curl -X POST 'http://0.0.0.0:4000/v1/embeddings' \
 
 Bedrock multimodal embedding models (`amazon.titan-embed-image-v1` and `amazon.nova-2-multimodal-embeddings-v1:0`) support sending both text and image together in a single embedding request.
 
-Pass the text string **immediately before** its paired image in the `input` list. LiteLLM will detect the adjacent `[text, base64_image]` pair and merge them into a single Bedrock request containing both `inputText` and `inputImage` (Titan) or both `text` and `image` (Nova).
+Pass the text string **immediately before** its paired image in the `input` list and set `combine_text_image_pairs=True`. LiteLLM will detect the adjacent `[text, base64_image]` pair and merge them into a single Bedrock request containing both `inputText` and `inputImage` (Titan) or both `text` and `image` (Nova).
+
+When `combine_text_image_pairs` is omitted or `False` (the default), each element in `input` is sent as a separate request — preserving backward compatibility for existing code.
 
 <Tabs>
 <TabItem value="sdk" label="SDK">
@@ -181,6 +183,7 @@ response = embedding(
         "Red leather handbag with gold buckle",       # text
         f"data:image/jpeg;base64,{image_b64}",        # image (immediately after text)
     ],
+    combine_text_image_pairs=True,
     dimensions=1024,
     aws_region_name="us-east-1",
 )
@@ -192,6 +195,7 @@ response = embedding(
         "shoes photo",                                # text
         f"data:image/jpeg;base64,{image_b64}",        # image (immediately after text)
     ],
+    combine_text_image_pairs=True,
     aws_region_name="us-east-1",
 )
 ```
@@ -220,6 +224,7 @@ model_list:
     litellm_params:
       model: bedrock/amazon.titan-embed-image-v1
       aws_region_name: us-east-1
+      combine_text_image_pairs: true
 ```
 
 2. Start proxy
