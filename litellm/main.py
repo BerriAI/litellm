@@ -91,6 +91,7 @@ from litellm.litellm_core_utils.mock_functions import (
 )
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_content_from_model_response,
+    get_str_from_messages,
 )
 from litellm.llms.base_llm import BaseConfig, BaseImageGenerationConfig
 from litellm.llms.base_llm.base_model_iterator import (
@@ -595,10 +596,6 @@ async def acompletion(  # noqa: PLR0915
             pass  # model not in cost map — treat as normal completion
 
         if _is_image_model:
-            from litellm.litellm_core_utils.prompt_templates.common_utils import (
-                get_str_from_messages,
-            )
-
             _prompt = get_str_from_messages(messages) if messages else ""
             _img_kwargs = {
                 k: v
@@ -610,6 +607,7 @@ async def acompletion(  # noqa: PLR0915
                 prompt=_prompt,
                 api_key=api_key,
                 api_base=base_url,
+                n=n,
                 **_img_kwargs,
             )
             # Convert ImageResponse → ModelResponse for chat completion clients
