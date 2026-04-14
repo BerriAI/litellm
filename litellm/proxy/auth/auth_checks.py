@@ -440,7 +440,7 @@ async def common_checks(  # noqa: PLR0915
     from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
 
     # 0. [OPTIONAL] IP allowlist - key/team metadata.allowed_ips (no DB in hot path)
-    _check_key_or_team_allowed_ips(valid_token=valid_token, request=request)
+    _check_key_or_team_allowed_ips(valid_token=valid_token, request=request, general_settings=general_settings)
 
     _model: Optional[Union[str, List[str]]] = get_model_from_request(
         request_body, route
