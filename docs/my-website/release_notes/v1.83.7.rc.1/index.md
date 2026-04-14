@@ -91,11 +91,16 @@ pip install litellm==1.83.7
 #### Features
 
 - **[AWS Bedrock](../../docs/providers/bedrock)**
+    - AWS GovCloud mode support (`us-gov` prefix routing) - [PR #25254](https://github.com/BerriAI/litellm/pull/25254)
     - Update GovCloud Claude Sonnet 4.5 pricing, raise `max_tokens` to 8192, and add prompt-caching costs
     - Skip dummy `user` continue message when assistant prefix prefill is set - [PR #25419](https://github.com/BerriAI/litellm/pull/25419)
     - Avoid double-counting cache tokens in Anthropic Messages streaming usage - [PR #25517](https://github.com/BerriAI/litellm/pull/25517)
 - **[Anthropic](../../docs/providers/anthropic)**
     - Support `advisor_20260301` tool type - [PR #25525](https://github.com/BerriAI/litellm/pull/25525)
+- **[Triton](../../docs/providers/triton-inference-server)**
+    - Embedding usage estimation for self-hosted Triton responses - [PR #25345](https://github.com/BerriAI/litellm/pull/25345)
+- **[Baseten](../../docs/providers/baseten)**
+    - Add pricing entries for 11 new Baseten-hosted models - [PR #25358](https://github.com/BerriAI/litellm/pull/25358)
 - **[Google Gemini / Vertex AI](../../docs/providers/gemini)**
     - Mark applicable Gemini 2.5/3 models with `supports_service_tier`
 
@@ -123,6 +128,9 @@ pip install litellm==1.83.7
 - **[Responses API](../../docs/response_api)**
     - Map refusal `stop_reason` to `incomplete` status in streaming - [PR #25498](https://github.com/BerriAI/litellm/pull/25498)
     - Fix duplicate keyword argument error in Responses WebSocket path - [PR #25513](https://github.com/BerriAI/litellm/pull/25513)
+- **Router**
+    - Pass `custom_llm_provider` to `get_llm_provider` for unprefixed model names - [PR #25334](https://github.com/BerriAI/litellm/pull/25334)
+    - Fix tag-based routing when `encrypted_content_affinity` is enabled - [PR #25347](https://github.com/BerriAI/litellm/pull/25347)
 - **General**
     - Ensure spend/cost logging runs when `stream=True` for web-search interception - [PR #25424](https://github.com/BerriAI/litellm/pull/25424)
 
@@ -137,6 +145,7 @@ pip install litellm==1.83.7
 - **Virtual Keys**
     - Align `/v2/key/info` response handling with v1 - [PR #25313](https://github.com/BerriAI/litellm/pull/25313)
 - **Authentication / Routing**
+    - Allow JWT to override OAuth2 routing without requiring global OAuth2 enablement - [PR #25252](https://github.com/BerriAI/litellm/pull/25252)
     - Consolidate route auth for UI and API tokens - [PR #25473](https://github.com/BerriAI/litellm/pull/25473)
     - Use parameterized query for `combined_view` token lookup - [PR #25467](https://github.com/BerriAI/litellm/pull/25467)
 - **Provider Credentials**
@@ -155,6 +164,8 @@ pip install litellm==1.83.7
 
 ### Logging
 
+- **[Ramp](../../docs/proxy/logging)**
+    - Add Ramp as a built-in success callback - [PR #23769](https://github.com/BerriAI/litellm/pull/23769)
 - **[Langfuse](../../docs/proxy/logging#langfuse)**
     - Preserve proxy key-auth metadata on `/v1/messages` Langfuse traces - [PR #25448](https://github.com/BerriAI/litellm/pull/25448)
 - **[Prometheus](../../docs/proxy/logging#prometheus)**
@@ -171,6 +182,7 @@ pip install litellm==1.83.7
 ## Spend Tracking, Budgets and Rate Limiting
 
 - Session-TZ-independent date filtering for spend / error log queries - [PR #25542](https://github.com/BerriAI/litellm/pull/25542)
+- Batch-limit stale managed-object cleanup to prevent 300K+ row updates - [PR #25258](https://github.com/BerriAI/litellm/pull/25258)
 
 ## MCP Gateway
 
@@ -204,6 +216,7 @@ pip install litellm==1.83.7
 
 ## New Contributors
 
+* @kedarthakkar made their first contribution in https://github.com/BerriAI/litellm/pull/23769
 * @csoni-cweave made their first contribution in https://github.com/BerriAI/litellm/pull/25441
 * @jimmychen-p72 made their first contribution in https://github.com/BerriAI/litellm/pull/25530
 
