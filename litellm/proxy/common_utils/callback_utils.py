@@ -281,6 +281,13 @@ def initialize_callbacks_on_proxy(  # noqa: PLR0915
                     )
                 )
                 imported_list.append(websearch_interception_obj)
+            elif isinstance(callback, str) and callback == "advisor_interception":
+                from litellm.integrations.advisor_interception.handler import (
+                    AdvisorInterceptionLogger,
+                )
+
+                advisor_interception_obj = AdvisorInterceptionLogger()
+                imported_list.append(advisor_interception_obj)
             elif isinstance(callback, str) and callback == "datadog_cost_management":
                 from litellm.integrations.datadog.datadog_cost_management import (
                     DatadogCostManagementLogger,
