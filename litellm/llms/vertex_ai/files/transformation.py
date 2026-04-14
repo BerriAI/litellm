@@ -40,6 +40,9 @@ from ..common_utils import VertexAIError
 from ..vertex_llm_base import VertexBase
 
 
+_GCP_LABEL_VALUE_MAX_LEN = 63
+
+
 def _sanitize_gcp_label_value(value: str) -> str:
     """
     Sanitize a string to meet GCP label value constraints.
@@ -56,7 +59,28 @@ def _sanitize_gcp_label_value(value: str) -> str:
         A sanitized string that meets GCP label constraints
     """
     sanitized = re.sub(r"[^a-z0-9_-]", "_", value.lower())
-    return sanitized[:63]
+    return sanitized[:_GCP_LABEL_VALUE_MAX_LEN]
+
+
+def _set_litellm_batch_custom_id_labels(labels: Dict[str, str], custom_id: Any) -> None:
+    """
+    Store OpenAI batch custom_id for Vertex batch correlation.
+
+    ``litellm_custom_id`` is GCP-label-safe (may alter casing and characters).
+    ``litellm_custom_id_raw`` preserves the original string (truncated) for
+    round-trip correlation in batch output transforms.
+    """
+    custom_id_str = str(custom_id)
+    labels["litellm_custom_id"] = _sanitize_gcp_label_value(custom_id_str)
+    labels["litellm_custom_id_raw"] = custom_id_str[:_GCP_LABEL_VALUE_MAX_LEN]
+
+
+def _get_litellm_batch_custom_id_from_labels(labels: Dict[str, Any]) -> str:
+    """Prefer unsanitized custom_id when present (see _set_litellm_batch_custom_id_labels)."""
+    raw = labels.get("litellm_custom_id_raw")
+    if raw:
+        return str(raw)
+    return str(labels.get("litellm_custom_id", "unknown"))
 
 
 class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
@@ -275,7 +299,7 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
             if custom_id:
                 if "labels" not in vertex_request_body:
                     vertex_request_body["labels"] = {}
-                vertex_request_body["labels"]["litellm_custom_id"] = _sanitize_gcp_label_value(str(custom_id))
+                _set_litellm_batch_custom_id_labels(vertex_request_body["labels"], custom_id)
             
             vertex_jsonl_content.append({"request": vertex_request_body})
         return vertex_jsonl_content
@@ -529,7 +553,7 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
         
         Vertex AI batch output format (predictions.jsonl):
         {
-          "request": {"contents": [...], "labels": {"litellm_custom_id": "request-1"}},
+          "request": {"contents": [...], "labels": {"litellm_custom_id": "request-1", "litellm_custom_id_raw": "..."}},
           "status": "",
           "response": {"candidates": [...], "modelVersion": "gemini-2.5-flash", ...},
           "processed_time": "2026-04-13T10:18:18.102004+00:00"
@@ -606,12 +630,10 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
         Transform a single Vertex AI batch output line to OpenAI format.
         Uses the existing VertexGeminiConfig transformation for the response.
         """
-        # Extract custom_id from request labels
-        custom_id = "unknown"
+        # Extract custom_id from request labels (prefer raw for OpenAI round-trip)
         request_data = vertex_output.get("request", {})
-        labels = request_data.get("labels", {})
-        if "litellm_custom_id" in labels:
-            custom_id = labels["litellm_custom_id"]
+        labels = request_data.get("labels", {}) or {}
+        custom_id = _get_litellm_batch_custom_id_from_labels(labels)
         
         # Check if there's an error
         status = vertex_output.get("status", "")
@@ -783,7 +805,7 @@ class VertexAIJsonlFilesTransformation(VertexGeminiConfig):
             if custom_id:
                 if "labels" not in vertex_request_body:
                     vertex_request_body["labels"] = {}
-                vertex_request_body["labels"]["litellm_custom_id"] = _sanitize_gcp_label_value(str(custom_id))
+                _set_litellm_batch_custom_id_labels(vertex_request_body["labels"], custom_id)
             
             vertex_jsonl_content.append({"request": vertex_request_body})
         return vertex_jsonl_content
