@@ -25,9 +25,10 @@ test.describe("Add Model", () => {
   test("Edit team model TPM and RPM limits", async ({ page }) => {
     const masterKey = users[Role.ProxyAdmin].password;
     const modelName = `e2e-team-model-${Date.now()}`;
-    let createdModelId: string | null = null;
 
-    // Create a team-scoped model via API so the test has something to edit
+    // Create a team-scoped model via API so the test has something to edit.
+    // The e2e runner spins up a fresh postgres container per invocation, so
+    // there's no cleanup step — the DB is thrown away at the end of the run.
     const createResponse = await page.request.post("/model/new", {
       headers: { Authorization: `Bearer ${masterKey}` },
       data: {
@@ -45,43 +46,30 @@ test.describe("Add Model", () => {
       },
     });
     expect(createResponse.ok()).toBe(true);
-    const created = await createResponse.json();
-    createdModelId = created?.model_info?.id ?? created?.model_id ?? null;
-    expect(createdModelId).toBeTruthy();
 
-    try {
+    // Navigate to Models + Endpoints
+    await page.goto("/ui");
+    await page.getByText("Models + Endpoints").click();
 
-      // Navigate to Models + Endpoints
-      await page.goto("/ui");
-      await page.getByText("Models + Endpoints").click();
+    // Click the new model row to open its detail view. The table renders
+    // a clickable outer row plus a nested detail row for the same model,
+    // so we target the first match (outer row) explicitly.
+    const modelRow = page.locator("tr", { hasText: modelName }).first();
+    await expect(modelRow).toBeVisible({ timeout: 10_000 });
+    await modelRow.click();
 
-      // Click the new model row to open its detail view. The table renders
-      // a clickable outer row plus a nested detail row for the same model,
-      // so we target the first match (outer row) explicitly.
-      const modelRow = page.locator("tr", { hasText: modelName }).first();
-      await expect(modelRow).toBeVisible({ timeout: 10_000 });
-      await modelRow.click();
+    await expect(page.getByText("Back to Models").first()).toBeVisible({ timeout: 10_000 });
 
-      await expect(page.getByText("Back to Models").first()).toBeVisible({ timeout: 10_000 });
+    // Edit Settings → change TPM/RPM → Save
+    await page.getByRole("button", { name: "Edit Settings" }).click();
 
-      // Edit Settings → change TPM/RPM → Save
-      await page.getByRole("button", { name: "Edit Settings" }).click();
+    await page.getByPlaceholder("Enter TPM").fill("999");
+    await page.getByPlaceholder("Enter RPM").fill("888");
 
-      await page.getByPlaceholder("Enter TPM").fill("999");
-      await page.getByPlaceholder("Enter RPM").fill("888");
+    await page.getByRole("button", { name: "Save Changes" }).click();
 
-      await page.getByRole("button", { name: "Save Changes" }).click();
-
-      // Verify the new values render back in view mode
-      await expect(page.getByText("999", { exact: true })).toBeVisible({ timeout: 10_000 });
-      await expect(page.getByText("888", { exact: true })).toBeVisible({ timeout: 10_000 });
-    } finally {
-      if (createdModelId) {
-        await page.request.post("/model/delete", {
-          headers: { Authorization: `Bearer ${masterKey}` },
-          data: { id: createdModelId },
-        });
-      }
-    }
+    // Verify the new values render back in view mode
+    await expect(page.getByText("999", { exact: true })).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText("888", { exact: true })).toBeVisible({ timeout: 10_000 });
   });
 });
