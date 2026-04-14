@@ -32,6 +32,21 @@ from litellm.constants import (
     AIOHTTP_TTL_DNS_CACHE,
     DEFAULT_SSL_CIPHERS,
 )
+from litellm.constants import request_timeout as _DEFAULT_REQUEST_TIMEOUT
+
+_HARDCODED_HTTPX_FALLBACK_TIMEOUT = 600.0
+
+
+def _get_default_httpx_client_timeout() -> float:
+    """Return the default timeout for cached httpx clients when no params are provided.
+
+    Uses litellm.request_timeout when it was explicitly configured (different from the
+    default constant), otherwise falls back to the historical 600s to preserve
+    backwards compatibility.
+    """
+    if litellm.request_timeout != _DEFAULT_REQUEST_TIMEOUT:
+        return float(litellm.request_timeout)
+    return _HARDCODED_HTTPX_FALLBACK_TIMEOUT
 from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
 from litellm.types.llms.custom_http import *
 
@@ -1244,7 +1259,9 @@ def get_async_httpx_client(
         _new_client = AsyncHTTPHandler(**handler_params)
     else:
         _new_client = AsyncHTTPHandler(
-            timeout=httpx.Timeout(timeout=float(litellm.request_timeout), connect=5.0),
+            timeout=httpx.Timeout(
+                timeout=_get_default_httpx_client_timeout(), connect=5.0
+            ),
             shared_session=shared_session,
         )
 
@@ -1293,7 +1310,11 @@ def _get_httpx_client(params: Optional[dict] = None) -> HTTPHandler:
         }
         _new_client = HTTPHandler(**handler_params)
     else:
-        _new_client = HTTPHandler(timeout=httpx.Timeout(timeout=float(litellm.request_timeout), connect=5.0))
+        _new_client = HTTPHandler(
+            timeout=httpx.Timeout(
+                timeout=_get_default_httpx_client_timeout(), connect=5.0
+            )
+        )
 
     cache.set_cache(
         key=_cache_key_name,
