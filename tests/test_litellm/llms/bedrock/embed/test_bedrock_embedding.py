@@ -1021,6 +1021,7 @@ def test_titan_multimodal_combined_text_and_image_request():
             aws_access_key_id='fake',
             aws_secret_access_key='fake',
             aws_region_name='us-east-1',
+            combine_text_image_pairs=True,
         )
 
         assert isinstance(response, litellm.EmbeddingResponse)
@@ -1140,6 +1141,7 @@ def test_nova_combined_text_and_image_http_request():
             aws_access_key_id='fake',
             aws_secret_access_key='fake',
             aws_region_name='us-east-1',
+            combine_text_image_pairs=True,
         )
 
         assert isinstance(response, litellm.EmbeddingResponse)
@@ -1151,3 +1153,145 @@ def test_nova_combined_text_and_image_http_request():
         assert 'image' in params
         assert 'text' in params
         assert params['text']['value'] == 'shoes photo'
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# combine_text_image_pairs opt-in flag tests
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+def test_titan_multimodal_no_combine_flag_returns_separate():
+    """Without combine_text_image_pairs, [text, image] must produce 2 separate HTTP calls (backward compat)."""
+    client = HTTPHandler()
+    embed_response = {
+        'embedding': [0.1, 0.2, 0.3],
+        'inputTextTokenCount': 5,
+    }
+
+    with patch.object(client, 'post') as mock_post:
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.text = json.dumps(embed_response)
+        mock_response.json = lambda: json.loads(mock_response.text)
+        mock_post.return_value = mock_response
+
+        response = litellm.embedding(
+            model='bedrock/amazon.titan-embed-image-v1',
+            input=[
+                'Red leather handbag',
+                'data:image/png;base64,iVBORw0KGgoAAAANSUhEUg==',
+            ],
+            client=client,
+            aws_access_key_id='fake',
+            aws_secret_access_key='fake',
+            aws_region_name='us-east-1',
+            # NOTE: combine_text_image_pairs NOT passed — default False
+        )
+
+        assert isinstance(response, litellm.EmbeddingResponse)
+        # Each element processed independently → 2 separate HTTP calls
+        assert mock_post.call_count == 2
+
+
+def test_titan_multimodal_combine_flag_returns_fused():
+    """With combine_text_image_pairs=True, [text, image] must produce 1 fused HTTP call."""
+    client = HTTPHandler()
+    embed_response = {
+        'embedding': [0.1, 0.2, 0.3],
+        'inputTextTokenCount': 5,
+    }
+
+    with patch.object(client, 'post') as mock_post:
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.text = json.dumps(embed_response)
+        mock_response.json = lambda: json.loads(mock_response.text)
+        mock_post.return_value = mock_response
+
+        response = litellm.embedding(
+            model='bedrock/amazon.titan-embed-image-v1',
+            input=[
+                'Red leather handbag',
+                'data:image/png;base64,iVBORw0KGgoAAAANSUhEUg==',
+            ],
+            client=client,
+            aws_access_key_id='fake',
+            aws_secret_access_key='fake',
+            aws_region_name='us-east-1',
+            combine_text_image_pairs=True,
+        )
+
+        assert isinstance(response, litellm.EmbeddingResponse)
+        assert mock_post.call_count == 1
+
+        request_body = json.loads(mock_post.call_args.kwargs.get('data', '{}'))
+        assert 'inputText' in request_body
+        assert 'inputImage' in request_body
+
+
+def test_nova_text_only_standalone():
+    """Nova with a single text input (no pairing) produces 1 call with only text in singleEmbeddingParams."""
+    client = HTTPHandler()
+    nova_response = {
+        'embeddings': [
+            {'embeddingType': 'TEXT', 'embedding': [0.1, 0.2, 0.3]},
+        ]
+    }
+
+    with patch.object(client, 'post') as mock_post:
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.text = json.dumps(nova_response)
+        mock_response.json = lambda: json.loads(mock_response.text)
+        mock_post.return_value = mock_response
+
+        response = litellm.embedding(
+            model='bedrock/amazon.nova-2-multimodal-embeddings-v1:0',
+            input=['just some text'],
+            client=client,
+            aws_access_key_id='fake',
+            aws_secret_access_key='fake',
+            aws_region_name='us-east-1',
+        )
+
+        assert isinstance(response, litellm.EmbeddingResponse)
+        assert mock_post.call_count == 1
+
+        request_body = json.loads(mock_post.call_args.kwargs.get('data', '{}'))
+        params = request_body.get('singleEmbeddingParams', {})
+        assert 'text' in params
+        assert 'image' not in params
+
+
+def test_nova_image_only_standalone():
+    """Nova with a single data:image/... input (no pairing) produces 1 call with only image in singleEmbeddingParams."""
+    client = HTTPHandler()
+    nova_response = {
+        'embeddings': [
+            {'embeddingType': 'IMAGE', 'embedding': [0.1, 0.2, 0.3]},
+        ]
+    }
+
+    with patch.object(client, 'post') as mock_post:
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.text = json.dumps(nova_response)
+        mock_response.json = lambda: json.loads(mock_response.text)
+        mock_post.return_value = mock_response
+
+        response = litellm.embedding(
+            model='bedrock/amazon.nova-2-multimodal-embeddings-v1:0',
+            input=['data:image/jpeg;base64,/9j/4AAQSkZJRgAB'],
+            client=client,
+            aws_access_key_id='fake',
+            aws_secret_access_key='fake',
+            aws_region_name='us-east-1',
+        )
+
+        assert isinstance(response, litellm.EmbeddingResponse)
+        assert mock_post.call_count == 1
+
+        request_body = json.loads(mock_post.call_args.kwargs.get('data', '{}'))
+        params = request_body.get('singleEmbeddingParams', {})
+        assert 'image' in params
+        assert 'text' not in params
