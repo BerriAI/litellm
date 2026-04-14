@@ -180,8 +180,13 @@ _EXTRA_UI_SETTINGS_FIELDS: Dict[str, tuple] = {}
 _ENTERPRISE_ONLY_UI_SETTINGS: set[str] = {"enable_projects_ui"}
 
 
-def register_extra_ui_setting(name: str, type_: Any, field: FieldInfo) -> None:
-    """Register an additional UI settings field contributed by an extension package."""
+def register_extra_ui_setting(name: str, type_: Any, field: Any) -> None:
+    """Register an additional UI settings field contributed by an extension package.
+
+    ``field`` should be a pydantic ``Field(...)`` result (``FieldInfo`` at
+    runtime); typed as ``Any`` because pydantic's ``Field`` stub reports the
+    default value's type instead of ``FieldInfo``.
+    """
     _EXTRA_UI_SETTINGS_FIELDS[name] = (type_, field)
     ALLOWED_UI_SETTINGS_FIELDS.add(name)
 
@@ -190,7 +195,7 @@ def _get_effective_ui_settings_class() -> type:
     """Return UISettings with any extension-registered fields merged in."""
     if not _EXTRA_UI_SETTINGS_FIELDS:
         return UISettings
-    return create_model(
+    return create_model(  # type: ignore[call-overload]
         "EffectiveUISettings",
         __base__=UISettings,
         **_EXTRA_UI_SETTINGS_FIELDS,
