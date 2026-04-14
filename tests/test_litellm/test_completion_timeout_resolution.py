@@ -1,4 +1,4 @@
-"""Unit tests for litellm.main._resolve_completion_timeout (completion() timeout chain)."""
+"""Unit tests for litellm.litellm_core_utils.completion_timeout.CompletionTimeout."""
 
 import os
 import sys
@@ -9,16 +9,18 @@ sys.path.insert(
     0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../.."))
 )
 
-import litellm
-from litellm.main import _resolve_completion_timeout
+from litellm.litellm_core_utils.completion_timeout import CompletionTimeout
+from litellm.utils import supports_httpx_timeout
 
 
 def test_explicit_timeout_wins():
     assert (
-        _resolve_completion_timeout(
-            timeout=12.5,
-            kwargs={"timeout": 99.0, "request_timeout": 88.0},
-            custom_llm_provider="openai",
+        CompletionTimeout.resolve(
+            12.5,
+            {"timeout": 99.0, "request_timeout": 88.0},
+            "openai",
+            global_timeout=None,
+            supports_httpx_timeout=supports_httpx_timeout,
         )
         == 12.5
     )
@@ -26,10 +28,12 @@ def test_explicit_timeout_wins():
 
 def test_kwargs_timeout_when_param_none():
     assert (
-        _resolve_completion_timeout(
-            timeout=None,
-            kwargs={"timeout": 21.0},
-            custom_llm_provider="azure_ai",
+        CompletionTimeout.resolve(
+            None,
+            {"timeout": 21.0},
+            "azure_ai",
+            global_timeout=None,
+            supports_httpx_timeout=supports_httpx_timeout,
         )
         == 21.0
     )
@@ -37,35 +41,66 @@ def test_kwargs_timeout_when_param_none():
 
 def test_request_timeout_alias_in_kwargs():
     assert (
-        _resolve_completion_timeout(
-            timeout=None,
-            kwargs={"request_timeout": 33.0},
-            custom_llm_provider="bedrock",
+        CompletionTimeout.resolve(
+            None,
+            {"request_timeout": 33.0},
+            "bedrock",
+            global_timeout=None,
+            supports_httpx_timeout=supports_httpx_timeout,
         )
         == 33.0
     )
 
 
-def test_litellm_module_request_timeout(monkeypatch):
-    monkeypatch.setattr(litellm, "request_timeout", 360.0)
+def test_global_timeout_from_litellm_settings():
     assert (
-        _resolve_completion_timeout(
-            timeout=None,
-            kwargs={},
-            custom_llm_provider="vertex_ai",
+        CompletionTimeout.resolve(
+            None,
+            {},
+            "vertex_ai",
+            global_timeout=360.0,
+            supports_httpx_timeout=supports_httpx_timeout,
         )
         == 360.0
     )
 
 
-def test_fallback_600_when_no_timeout_anywhere(monkeypatch):
-    """600 applies only when named, kwargs, and litellm.request_timeout are all unset."""
-    monkeypatch.setattr(litellm, "request_timeout", None)
+def test_global_timeout_package_default_coerced_to_600_for_completion():
+    """Package default 6000s → 600s for completion-only path."""
     assert (
-        _resolve_completion_timeout(
-            timeout=None,
-            kwargs={},
-            custom_llm_provider="azure_ai",
+        CompletionTimeout.resolve(
+            None,
+            {},
+            "openai",
+            global_timeout=6000.0,
+            supports_httpx_timeout=supports_httpx_timeout,
+        )
+        == 600.0
+    )
+
+
+def test_explicit_request_timeout_6000_normalized_to_completion_default():
+    """6000 is the package sentinel; completion always uses 600 instead."""
+    assert (
+        CompletionTimeout.resolve(
+            None,
+            {"request_timeout": 6000.0},
+            "openai",
+            global_timeout=None,
+            supports_httpx_timeout=supports_httpx_timeout,
+        )
+        == 600.0
+    )
+
+
+def test_fallback_600_when_no_global_timeout():
+    assert (
+        CompletionTimeout.resolve(
+            None,
+            {},
+            "azure_ai",
+            global_timeout=None,
+            supports_httpx_timeout=supports_httpx_timeout,
         )
         == 600.0
     )
@@ -73,10 +108,12 @@ def test_fallback_600_when_no_timeout_anywhere(monkeypatch):
 
 def test_httpx_timeout_coerced_for_provider_without_httpx_timeout_support():
     t = httpx.Timeout(50.0, connect=2.0)
-    out = _resolve_completion_timeout(
-        timeout=t,
-        kwargs={},
-        custom_llm_provider="azure_ai",
+    out = CompletionTimeout.resolve(
+        t,
+        {},
+        "azure_ai",
+        global_timeout=None,
+        supports_httpx_timeout=supports_httpx_timeout,
     )
     assert out == 50.0
     assert not isinstance(out, httpx.Timeout)
@@ -84,10 +121,12 @@ def test_httpx_timeout_coerced_for_provider_without_httpx_timeout_support():
 
 def test_httpx_timeout_preserved_for_openai():
     t = httpx.Timeout(40.0, connect=5.0)
-    out = _resolve_completion_timeout(
-        timeout=t,
-        kwargs={},
-        custom_llm_provider="openai",
+    out = CompletionTimeout.resolve(
+        t,
+        {},
+        "openai",
+        global_timeout=None,
+        supports_httpx_timeout=supports_httpx_timeout,
     )
     assert out is t
     assert isinstance(out, httpx.Timeout)

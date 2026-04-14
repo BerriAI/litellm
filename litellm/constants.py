@@ -417,7 +417,7 @@ DEFAULT_MAX_TOKENS_FOR_TRITON = int(os.getenv("DEFAULT_MAX_TOKENS_FOR_TRITON", 2
 # value so longer-running surfaces (Router `timeout or litellm.request_timeout`,
 # speech/TTS, responses, vector stores, etc.) get a long HTTP deadline. Chat
 # `completion()` maps this sentinel down to 600s when the caller did not set a
-# per-request/model timeout—see `_resolve_completion_timeout` in main.py. MCP uses
+# per-request/model timeout—see ``CompletionTimeout.resolve`` in completion_timeout.py. MCP uses
 # dedicated timeouts (e.g. `MCP_CLIENT_TIMEOUT`), not `request_timeout`.
 DEFAULT_REQUEST_TIMEOUT_SECONDS: float = 6000.0
 request_timeout: float = float(

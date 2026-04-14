@@ -68,7 +68,6 @@ if TYPE_CHECKING:
 from litellm.constants import (
     DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT,
     DEFAULT_MOCK_RESPONSE_PROMPT_TOKEN_COUNT,
-    DEFAULT_REQUEST_TIMEOUT_SECONDS,
 )
 from litellm.exceptions import LiteLLMUnknownProvider
 from litellm.integrations.custom_logger import CustomLogger
@@ -77,6 +76,7 @@ from litellm.litellm_core_utils.audio_utils.utils import (
     calculate_request_duration,
     get_audio_file_for_health_check,
 )
+from litellm.litellm_core_utils.completion_timeout import CompletionTimeout
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.get_provider_specific_headers import (
     ProviderSpecificHeaderUtils,
@@ -1046,70 +1046,6 @@ def _build_custom_pricing_entry(
     return entry
 
 
-def _resolve_completion_timeout(
-    timeout: Optional[Union[float, str, httpx.Timeout]],
-    kwargs: dict,
-    custom_llm_provider: str,
-) -> Union[float, httpx.Timeout]:
-    """
-    Resolve timeout inside completion().
-
-    Sources (first match wins):
-
-    - **Model / deployment config:** the `timeout` argument (e.g. from router merging
-      per-model `litellm_params`, including a deployment-level `timeout`).
-    - **Model config alias:** ``kwargs["request_timeout"]`` when the caller passes the
-      per-model ``request_timeout`` field from model config (same idea as deployment
-      `litellm_params.request_timeout`).
-    - **Global module default:** :attr:`litellm.request_timeout` (from
-      ``litellm_settings.request_timeout`` on the proxy when set, otherwise
-      :data:`~litellm.constants.DEFAULT_REQUEST_TIMEOUT_SECONDS`, i.e. ``6000`` seconds).
-      That long default is shared with Router, speech/TTS, and other subsystems; for
-      chat completion only, if the timeout came solely from this module attribute and
-      still equals ``6000``, it is treated as unset and ``600`` seconds is used instead.
-
-    - **Fallback:** ``600`` seconds if no timeout is resolved above.
-
-    Also accepts ``kwargs["timeout"]`` as a fallback when the named ``timeout`` argument
-    is omitted.
-
-    If the resolved value is :class:`httpx.Timeout` and the provider does not support
-    passing it through (:func:`litellm.utils.supports_httpx_timeout`), coerce to a
-    float (read timeout, or ``600.0`` if read is unset). Otherwise numeric strings /
-    floats are coerced with ``float(...)``.
-    """
-    if timeout is None:
-        timeout = kwargs.get("timeout")
-    if timeout is None:
-        timeout = kwargs.get("request_timeout")
-    resolved_from_litellm_request_timeout_attr = False
-    if timeout is None:
-        timeout = getattr(litellm, "request_timeout", None)
-        if timeout is not None:
-            resolved_from_litellm_request_timeout_attr = True
-    if timeout is None:
-        timeout = 600
-    elif (
-        resolved_from_litellm_request_timeout_attr
-        and not isinstance(timeout, httpx.Timeout)
-        and float(timeout) == float(DEFAULT_REQUEST_TIMEOUT_SECONDS)
-    ):
-        # 6000s is the package default for litellm.request_timeout so MCP, speech/TTS,
-        # Router, and similar paths keep a long deadline. completion() uses 600s when
-        # nothing more specific was supplied (explicit kwargs still win above).
-        timeout = 600
-    if isinstance(timeout, httpx.Timeout) and not supports_httpx_timeout(
-        custom_llm_provider
-    ):
-        read_timeout = timeout.read
-        timeout = (
-            float(read_timeout) if read_timeout is not None else 600.0
-        )  # default 10 min timeout
-    elif not isinstance(timeout, httpx.Timeout):
-        timeout = float(timeout)  # type: ignore
-    return timeout
-
-
 @tracer.wrap()
 @client
 def completion(  # type: ignore # noqa: PLR0915
@@ -1465,10 +1401,12 @@ def completion(  # type: ignore # noqa: PLR0915
             )  # support region-based pricing for bedrock
 
         ### TIMEOUT LOGIC ###
-        timeout = _resolve_completion_timeout(
-            timeout=timeout,
-            kwargs=kwargs,
-            custom_llm_provider=custom_llm_provider,
+        timeout = CompletionTimeout.resolve(
+            timeout,
+            kwargs,
+            custom_llm_provider,
+            global_timeout=getattr(litellm, "request_timeout", None),
+            supports_httpx_timeout=supports_httpx_timeout,
         )
 
         ### REGISTER CUSTOM MODEL PRICING -- IF GIVEN ###
