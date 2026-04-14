@@ -23,7 +23,7 @@ Response format:
 }
 """
 
-from typing import TYPE_CHECKING, Any, List, Optional, Union
+from typing import TYPE_CHECKING, Any, List, Optional
 
 import httpx
 
