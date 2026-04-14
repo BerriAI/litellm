@@ -4797,7 +4797,9 @@ def embedding(  # noqa: PLR0915
             }
         )
 
-    litellm_params_dict = get_litellm_params(**kwargs)
+    litellm_params_dict = get_litellm_params(
+        custom_llm_provider=custom_llm_provider, **kwargs
+    )
 
     logging: LiteLLMLoggingObj = litellm_logging_obj  # type: ignore
     logging.update_environment_variables(
@@ -6488,7 +6490,9 @@ def transcription(
         **non_default_params,
     )
 
-    litellm_params_dict = get_litellm_params(**kwargs)
+    litellm_params_dict = get_litellm_params(
+        custom_llm_provider=custom_llm_provider, **kwargs
+    )
 
     litellm_logging_obj.update_environment_variables(
         model=model,
@@ -6717,7 +6721,9 @@ def speech(  # noqa: PLR0915
 
     if max_retries is None:
         max_retries = litellm.num_retries or openai.DEFAULT_MAX_RETRIES
-    litellm_params_dict = get_litellm_params(**kwargs)
+    litellm_params_dict = get_litellm_params(
+        custom_llm_provider=custom_llm_provider, **kwargs
+    )
 
     # Get provider-specific text-to-speech config and map parameters
     text_to_speech_provider_config = (
