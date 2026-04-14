@@ -73,13 +73,15 @@ async def test_create_budget_with_duration(budget_setup):
     ), "The budget_reset_at field should not be None"
 
     # Calculate the expected reset time: created_at + 1 day.
-    expected_reset_at_date = datetime.fromisoformat(
-        budget_setup["created_at"]
-    ) + timedelta(days=1)
+    # Replace trailing 'Z' with '+00:00' for Python 3.9 compat (fromisoformat
+    # only learned to accept 'Z' in Python 3.11).
+    created_at_str = budget_setup["created_at"].replace("Z", "+00:00")
+    expected_reset_at_date = datetime.fromisoformat(created_at_str) + timedelta(days=1)
 
     # Allow for a small tolerance in seconds for the timestamp calculation.
     tolerance_seconds = 3
-    actual_reset_at_date = datetime.fromisoformat(budget_setup["budget_reset_at"])
+    reset_at_str = budget_setup["budget_reset_at"].replace("Z", "+00:00")
+    actual_reset_at_date = datetime.fromisoformat(reset_at_str)
     time_difference = abs(
         (actual_reset_at_date - expected_reset_at_date).total_seconds()
     )

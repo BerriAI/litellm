@@ -1,16 +1,22 @@
+ARG UV_IMAGE=ghcr.io/astral-sh/uv:0.10.9@sha256:10902f58a1606787602f303954cea099626a4adb02acbac4c69920fe9d278f82
+FROM $UV_IMAGE AS uvbin
+
 FROM python:3.13-slim@sha256:739e7213785e88c0f702dcdc12c0973afcbd606dbf021a589cab77d6b00b579d
 
 WORKDIR /app
 
-# Copy health check script and requirements
+# Copy the uv binary and the health check script.
+COPY --from=uvbin /uv /usr/local/bin/uv
+COPY pyproject.toml uv.lock /app/
 COPY scripts/health_check/health_check_client.py /app/health_check_client.py
-COPY scripts/health_check/health_check_requirements.txt /app/requirements.txt
 
-# Install dependencies
-RUN pip install --no-cache-dir -r requirements.txt
-
-# Make script executable
-RUN chmod +x /app/health_check_client.py
+# Resolve and install the health-check dependencies from the project lockfile
+# so the runtime image stays self-contained and reproducible.
+RUN uv export --frozen --no-default-groups --only-group healthcheck --no-emit-project --no-hashes --output-file /tmp/health-check-requirements.txt \
+  && uv pip install --system -r /tmp/health-check-requirements.txt \
+  && rm /tmp/health-check-requirements.txt \
+  && rm /app/pyproject.toml /app/uv.lock \
+  && chmod +x /app/health_check_client.py
 
 # Run as non-root user
 RUN groupadd --gid 1000 appuser && useradd --uid 1000 --gid 1000 --no-create-home appuser

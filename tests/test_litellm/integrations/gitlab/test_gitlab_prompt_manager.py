@@ -87,7 +87,7 @@ def test_gitlab_client_missing_required_fields():
 # GitLabClient: get_file_content
 # -----------------------
 
-@patch("litellm.llms.custom_httpx.http_handler.HTTPHandler.get")
+@patch("litellm.integrations.gitlab.gitlab_client.HTTPHandler.get")
 def test_gitlab_client_get_file_content_raw_success(mock_get):
     """Successful file content retrieval via RAW endpoint."""
     mock_response = MagicMock()
@@ -104,7 +104,7 @@ def test_gitlab_client_get_file_content_raw_success(mock_get):
     mock_get.assert_called_once()
 
 
-@patch("litellm.llms.custom_httpx.http_handler.HTTPHandler.get")
+@patch("litellm.integrations.gitlab.gitlab_client.HTTPHandler.get")
 def test_gitlab_client_get_file_content_raw_404_fallback_json_base64(mock_get):
     """When RAW returns 404, fallback to JSON endpoint and decode base64 content."""
     import base64
@@ -136,7 +136,7 @@ def test_gitlab_client_get_file_content_raw_404_fallback_json_base64(mock_get):
     assert content == "json-content"
 
 
-@patch("litellm.llms.custom_httpx.http_handler.HTTPHandler.get")
+@patch("litellm.integrations.gitlab.gitlab_client.HTTPHandler.get")
 def test_gitlab_client_get_file_content_not_found(mock_get):
     """File not found returns None."""
     # Simulate RAW 404 and JSON 404
@@ -152,7 +152,7 @@ def test_gitlab_client_get_file_content_not_found(mock_get):
     assert content is None
 
 
-@patch("litellm.llms.custom_httpx.http_handler.HTTPHandler.get")
+@patch("litellm.integrations.gitlab.gitlab_client.HTTPHandler.get")
 def test_gitlab_client_get_file_content_access_denied(mock_get):
     """403 raises a helpful message."""
     import httpx
@@ -168,7 +168,7 @@ def test_gitlab_client_get_file_content_access_denied(mock_get):
         client.get_file_content("test.prompt")
 
 
-@patch("litellm.llms.custom_httpx.http_handler.HTTPHandler.get")
+@patch("litellm.integrations.gitlab.gitlab_client.HTTPHandler.get")
 def test_gitlab_client_get_file_content_auth_failed(mock_get):
     """401 raises auth error."""
     import httpx
@@ -186,7 +186,7 @@ def test_gitlab_client_get_file_content_auth_failed(mock_get):
 # GitLabClient: list_files
 # -----------------------
 
-@patch("litellm.llms.custom_httpx.http_handler.HTTPHandler.get")
+@patch("litellm.integrations.gitlab.gitlab_client.HTTPHandler.get")
 def test_gitlab_client_list_files_success(mock_get):
     """List .prompt files via repository tree API."""
     mock_response = MagicMock()
@@ -816,5 +816,4 @@ def test_cache_get_by_file_returns_exact_entry(mock_pm_cls, fake_managers):
 
     assert alpha and alpha["id"] == "alpha"
     assert beta and beta["id"] == "nested/beta"
-
 
