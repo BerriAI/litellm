@@ -1856,6 +1856,16 @@ class Logging(LiteLLMLoggingBaseClass):
                         end_time=end_time,
                     )
                 elif isinstance(result, dict) or isinstance(result, list):
+                    # Compute response_cost for dict/list responses (e.g.
+                    # non-streaming rawPredict) that bypass
+                    # _process_hidden_params_and_response_cost.  Without this,
+                    # spend is logged as $0.00.
+                    if self.model_call_details.get("response_cost") is None:
+                        self.model_call_details[
+                            "response_cost"
+                        ] = self._response_cost_calculator(
+                            result=logging_result  # type: ignore[arg-type]
+                        )
                     self.model_call_details[
                         "standard_logging_object"
                     ] = self._build_standard_logging_payload(

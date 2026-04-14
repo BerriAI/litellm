@@ -2299,3 +2299,116 @@ def test_merge_hidden_params_from_response_into_metadata_no_op_when_empty():
     assert "hidden_params" not in logging_obj.model_call_details["litellm_params"][
         "metadata"
     ]
+
+
+def test_success_handler_computes_cost_for_dict_responses():
+    """
+    When success_handler receives a dict result (e.g. non-streaming
+    rawPredict), it should compute response_cost via
+    _response_cost_calculator before building the standard logging payload.
+
+    Previously, the dict branch skipped cost calculation entirely, causing
+    spend to be logged as $0.00 for non-streaming Vertex AI Claude requests.
+    """
+    logging_obj = LitellmLogging(
+        model="claude-sonnet-4-6@default",
+        messages=[{"role": "user", "content": "test"}],
+        stream=False,
+        call_type="acompletion",
+        litellm_call_id="test-123",
+        start_time=time.time(),
+        function_id="test",
+    )
+    logging_obj.model_call_details = {
+        "model": "claude-sonnet-4-6@default",
+        "custom_llm_provider": "vertex_ai",
+        "litellm_params": {"metadata": {}},
+        "response_cost": None,
+    }
+
+    mock_cost = 0.42
+
+    with patch.object(
+        logging_obj,
+        "_response_cost_calculator",
+        return_value=mock_cost,
+    ) as mock_calc, patch.object(
+        logging_obj,
+        "_build_standard_logging_payload",
+        return_value={"response_cost": mock_cost},
+    ), patch(
+        "litellm.litellm_core_utils.litellm_logging.emit_standard_logging_payload"
+    ), patch.object(
+        logging_obj,
+        "_is_recognized_call_type_for_logging",
+        return_value=False,
+    ), patch.object(
+        logging_obj,
+        "_transform_usage_objects",
+        side_effect=lambda result: result,
+    ):
+        dict_result = {"id": "msg_123", "content": [{"text": "hello"}]}
+        logging_obj.success_handler(
+            result=dict_result,
+            start_time=time.time(),
+            end_time=time.time(),
+        )
+
+        mock_calc.assert_called_once()
+        assert logging_obj.model_call_details["response_cost"] == mock_cost
+
+
+def test_success_handler_preserves_precomputed_cost_for_dict_responses():
+    """
+    When response_cost is already set on model_call_details (e.g.
+    precomputed by a pass-through handler), success_handler must NOT
+    overwrite it by calling _response_cost_calculator again.
+    """
+    logging_obj = LitellmLogging(
+        model="claude-sonnet-4-6@default",
+        messages=[{"role": "user", "content": "test"}],
+        stream=False,
+        call_type="acompletion",
+        litellm_call_id="test-456",
+        start_time=time.time(),
+        function_id="test",
+    )
+
+    precomputed_cost = 1.23
+    logging_obj.model_call_details = {
+        "model": "claude-sonnet-4-6@default",
+        "custom_llm_provider": "vertex_ai",
+        "litellm_params": {"metadata": {}},
+        "response_cost": precomputed_cost,
+    }
+
+    with patch.object(
+        logging_obj,
+        "_response_cost_calculator",
+        return_value=9.99,
+    ) as mock_calc, patch.object(
+        logging_obj,
+        "_build_standard_logging_payload",
+        return_value={"response_cost": precomputed_cost},
+    ), patch(
+        "litellm.litellm_core_utils.litellm_logging.emit_standard_logging_payload"
+    ), patch.object(
+        logging_obj,
+        "_is_recognized_call_type_for_logging",
+        return_value=False,
+    ), patch.object(
+        logging_obj,
+        "_transform_usage_objects",
+        side_effect=lambda result: result,
+    ):
+        dict_result = {"id": "msg_456", "content": [{"text": "hello"}]}
+        logging_obj.success_handler(
+            result=dict_result,
+            start_time=time.time(),
+            end_time=time.time(),
+        )
+
+        # _response_cost_calculator should NOT have been called
+        mock_calc.assert_not_called()
+        # Precomputed cost should be preserved
+        assert logging_obj.model_call_details["response_cost"] == precomputed_cost
