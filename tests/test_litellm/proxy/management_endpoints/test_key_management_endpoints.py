@@ -8746,3 +8746,196 @@ def test_validate_public_image_url_accepts_http_and_noop_empty():
     _validate_public_image_url(None, "logo_url")
     _validate_public_image_url("", "logo_url")
     _validate_public_image_url("   ", "logo_url")
+
+
+@pytest.mark.asyncio
+async def test_info_key_fn_include_daily_spend():
+    """
+    When include_daily_spend is set, /key/info should return a daily_spend
+    array from LiteLLM_DailyUserSpend alongside the normal key info.
+    """
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        info_key_fn,
+    )
+
+    hashed_key = "abc123def456"
+    mock_prisma_client = MagicMock()
+
+    # Mock key lookup
+    mock_key_row = MagicMock()
+    mock_key_row.model_dump.return_value = {
+        "token": hashed_key,
+        "key_alias": "test-user@example.com",
+        "spend": 500.0,
+        "max_budget": None,
+        "models": ["gpt-4"],
+        "team_id": "team-1",
+        "user_id": "user-1",
+        "object_permission_id": None,
+    }
+    mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(
+        return_value=mock_key_row
+    )
+
+    # Mock daily spend rows
+    class MockDailySpendRow:
+        def __init__(self, data):
+            self._data = data
+
+        def model_dump(self):
+            return self._data
+
+    mock_daily_rows = [
+        MockDailySpendRow(
+            {
+                "id": "row-1",
+                "user_id": "user-1",
+                "date": "2026-04-13",
+                "api_key": hashed_key,
+                "model": "vertex_ai/claude-sonnet-4-6@default",
+                "model_group": "claude-sonnet-4-6",
+                "custom_llm_provider": "vertex_ai",
+                "prompt_tokens": 1000000,
+                "completion_tokens": 50000,
+                "cache_read_input_tokens": 800000,
+                "cache_creation_input_tokens": 100000,
+                "spend": 3.50,
+                "api_requests": 25,
+                "successful_requests": 24,
+                "failed_requests": 1,
+                "mcp_namespaced_tool_name": None,
+                "endpoint": None,
+                "created_at": "2026-04-13T00:00:00Z",
+                "updated_at": "2026-04-13T23:59:59Z",
+            }
+        ),
+        MockDailySpendRow(
+            {
+                "id": "row-2",
+                "user_id": "user-1",
+                "date": "2026-04-12",
+                "api_key": hashed_key,
+                "model": "vertex_ai/claude-opus-4-6@default",
+                "model_group": "claude-opus-4-6",
+                "custom_llm_provider": "vertex_ai",
+                "prompt_tokens": 500000,
+                "completion_tokens": 10000,
+                "cache_read_input_tokens": 400000,
+                "cache_creation_input_tokens": 50000,
+                "spend": 12.75,
+                "api_requests": 10,
+                "successful_requests": 10,
+                "failed_requests": 0,
+                "mcp_namespaced_tool_name": None,
+                "endpoint": None,
+                "created_at": "2026-04-12T00:00:00Z",
+                "updated_at": "2026-04-12T23:59:59Z",
+            }
+        ),
+    ]
+    mock_prisma_client.db.litellm_dailyuserspend.find_many = AsyncMock(
+        return_value=mock_daily_rows
+    )
+
+    with patch(
+        "litellm.proxy.proxy_server.prisma_client",
+        mock_prisma_client,
+    ), patch(
+        "litellm.proxy.management_endpoints.key_management_endpoints._can_user_query_key_info",
+        new_callable=AsyncMock,
+        return_value=True,
+    ), patch(
+        "litellm.proxy.management_endpoints.key_management_endpoints._hash_token_if_needed",
+        return_value=hashed_key,
+    ), patch(
+        "litellm.proxy.management_endpoints.key_management_endpoints.attach_object_permission_to_dict",
+        new_callable=AsyncMock,
+        side_effect=lambda d, _: d,
+    ):
+        result = await info_key_fn(
+            key=hashed_key,
+            include_daily_spend=7,
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.PROXY_ADMIN,
+                api_key="sk-admin",
+                user_id="admin",
+            ),
+        )
+
+    assert "daily_spend" in result["info"]
+    daily = result["info"]["daily_spend"]
+    assert len(daily) == 2
+    assert daily[0]["date"] == "2026-04-13"
+    assert daily[0]["spend"] == 3.50
+    assert daily[0]["model_group"] == "claude-sonnet-4-6"
+    assert daily[1]["date"] == "2026-04-12"
+    assert daily[1]["spend"] == 12.75
+    # Sensitive fields should be excluded
+    assert "id" not in daily[0]
+    assert "api_key" not in daily[0]
+
+    # Verify the daily spend query was called with correct params
+    mock_prisma_client.db.litellm_dailyuserspend.find_many.assert_called_once()
+    call_kwargs = (
+        mock_prisma_client.db.litellm_dailyuserspend.find_many.call_args.kwargs
+    )
+    assert call_kwargs["where"]["api_key"] == hashed_key
+    assert "gte" in call_kwargs["where"]["date"]
+
+
+@pytest.mark.asyncio
+async def test_info_key_fn_without_daily_spend():
+    """
+    When include_daily_spend is not set, /key/info should NOT return
+    daily_spend and should NOT query LiteLLM_DailyUserSpend.
+    """
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        info_key_fn,
+    )
+
+    hashed_key = "abc123def456"
+    mock_prisma_client = MagicMock()
+
+    mock_key_row = MagicMock()
+    mock_key_row.model_dump.return_value = {
+        "token": hashed_key,
+        "key_alias": "test-user@example.com",
+        "spend": 500.0,
+        "max_budget": None,
+        "models": ["gpt-4"],
+        "team_id": "team-1",
+        "user_id": "user-1",
+        "object_permission_id": None,
+    }
+    mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(
+        return_value=mock_key_row
+    )
+
+    with patch(
+        "litellm.proxy.proxy_server.prisma_client",
+        mock_prisma_client,
+    ), patch(
+        "litellm.proxy.management_endpoints.key_management_endpoints._can_user_query_key_info",
+        new_callable=AsyncMock,
+        return_value=True,
+    ), patch(
+        "litellm.proxy.management_endpoints.key_management_endpoints._hash_token_if_needed",
+        return_value=hashed_key,
+    ), patch(
+        "litellm.proxy.management_endpoints.key_management_endpoints.attach_object_permission_to_dict",
+        new_callable=AsyncMock,
+        side_effect=lambda d, _: d,
+    ):
+        result = await info_key_fn(
+            key=hashed_key,
+            include_daily_spend=None,
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.PROXY_ADMIN,
+                api_key="sk-admin",
+                user_id="admin",
+            ),
+        )
+
+    assert "daily_spend" not in result["info"]
+    # Should not have queried daily spend table at all
+    mock_prisma_client.db.litellm_dailyuserspend.find_many.assert_not_called()

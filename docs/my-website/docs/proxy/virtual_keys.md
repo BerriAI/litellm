@@ -103,7 +103,7 @@ This is automatically updated (in USD) when calls are made to /completions, /cha
     "key": "sk-tXL0wt5-lOOVK9sfY2UacA",
     "info": {
         "token": "sk-tXL0wt5-lOOVK9sfY2UacA",
-        "spend": 0.0001065, # 👈 SPEND
+        "spend": 0.0001065, # 👈 SPEND (cumulative, all-time)
         "expires": "2023-11-24T23:19:11.131000Z",
         "models": [
             "gpt-3.5-turbo",
@@ -117,6 +117,68 @@ This is automatically updated (in USD) when calls are made to /completions, /cha
     }
 }
 ```
+
+#### Daily Spend Breakdown
+
+Use the `include_daily_spend` query parameter to get a per-day, per-model spend breakdown alongside the key info. This is useful for monitoring usage trends, detecting cost anomalies, and reconciling against cloud provider billing.
+
+```bash
+curl 'http://0.0.0.0:4000/key/info?key=<user-key>&include_daily_spend=7' \
+     -X GET \
+     -H 'Authorization: Bearer <your-master-key>'
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `include_daily_spend` | `int` (1-90) | Number of days of daily spend to include |
+
+The response includes a `daily_spend` array in the `info` object with per-model entries:
+
+```python
+{
+    "key": "sk-tXL0wt5-lOOVK9sfY2UacA",
+    "info": {
+        "spend": 1500.00,
+        ...
+        "daily_spend": [  # 👈 DAILY BREAKDOWN
+            {
+                "date": "2026-04-14",
+                "user_id": "user-123",
+                "model": "vertex_ai/claude-opus-4-6@default",
+                "model_group": "claude-opus-4-6",
+                "custom_llm_provider": "vertex_ai",
+                "prompt_tokens": 832429,
+                "completion_tokens": 1485,
+                "cache_read_input_tokens": 800000,
+                "cache_creation_input_tokens": 30000,
+                "spend": 5.34,
+                "api_requests": 150,
+                "successful_requests": 148,
+                "failed_requests": 2
+            },
+            {
+                "date": "2026-04-13",
+                "user_id": "user-123",
+                "model": "vertex_ai/claude-sonnet-4-6@default",
+                "model_group": "claude-sonnet-4-6",
+                "custom_llm_provider": "vertex_ai",
+                "prompt_tokens": 500000,
+                "completion_tokens": 10000,
+                "cache_read_input_tokens": 400000,
+                "cache_creation_input_tokens": 50000,
+                "spend": 12.75,
+                "api_requests": 200,
+                "successful_requests": 200,
+                "failed_requests": 0
+            }
+        ]
+    }
+}
+```
+
+:::info
+Daily spend data is sourced from `LiteLLM_DailyUserSpend`, which is populated on every request. This works for all keys, including keys without a `user_id`.
+:::
 
 </TabItem>
 <TabItem value="user-info" label="User Spend">
