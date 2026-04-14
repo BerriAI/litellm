@@ -27,6 +27,10 @@ authors:
     title: Engineer, LiteLLM
     url: https://github.com/harish876
     image_url: https://github.com/harish876.png
+  - name: Sameer Kankute
+    title: Engineer, LiteLLM
+    url: https://github.com/Sameerlite
+    image_url: https://github.com/Sameerlite.png
 hide_table_of_contents: false
 ---
 
@@ -59,11 +63,11 @@ pip install litellm==1.83.7rc1
 
 - **Anthropic Advisor Tool** — [Support for the new `advisor_20260301` tool type, enabling Anthropic's structured advisor capabilities](../../docs/completion/anthropic_advisor_tool)
 - **MCP Per-User OAuth Token Storage** — [Store and reuse per-user OAuth tokens for interactive MCP flows — no repeated auth prompts](../../docs/mcp)
-- **AWS GovCloud Bedrock Claude Sonnet 4.5** — Support for `claude-sonnet-4-5` in `us-gov-east-1` and `us-gov-west-1` regions with correct pricing and prompt caching
-- **11 New Baseten Models** — MiniMax, Nvidia Nemotron, GLM, Kimi, DeepSeek and GPT-OSS models added to the Baseten catalog
-- **MCP stdio RCE Fix** — [Blocked arbitrary command execution via stdio transport](../../docs/mcp)
-- **Team Spend Logs** — Team members can now view team-wide spend logs directly from the UI with proper RBAC enforcement
-- **File Content Streaming** — OpenAI file content endpoint now supports streaming responses
+- **AWS GovCloud Bedrock Claude Sonnet 4.5** — Support for `claude-sonnet-4-5` in `us-gov-east-1` and `us-gov-west-1` with correct pricing, prompt caching, and GovCloud routing mode
+- **Containers: Azure Routing + Managed IDs** — Azure container routing, managed container ID support, and delete response parsing for the Containers API
+- **Team/Project Credential Overrides** — Override provider credentials per team or project via `model_config` metadata — no proxy restart needed
+- **Ramp Built-In Callback** — Ramp is now a first-class built-in success callback
+- **11 New Baseten Models** — MiniMax, Nvidia Nemotron, GLM, Kimi, DeepSeek, and GPT-OSS models added to the Baseten catalog
 
 ---
 
@@ -93,8 +97,18 @@ pip install litellm==1.83.7rc1
 - **[Anthropic](../../docs/providers/anthropic)**
     - Support `advisor_20260301` tool type for structured advisor responses - [PR #25525](https://github.com/BerriAI/litellm/pull/25525), [PR #25545](https://github.com/BerriAI/litellm/pull/25545)
 
+- **[AWS Bedrock](../../docs/providers/bedrock)**
+    - Add GovCloud routing mode (`us-gov` prefix) for Bedrock models - [PR #25254](https://github.com/BerriAI/litellm/pull/25254)
+    - Skip dummy user/continue message for assistant prefix prefill - [PR #25419](https://github.com/BerriAI/litellm/pull/25419)
+
+- **[Triton](../../docs/providers/triton-inference-server)**
+    - Add embedding usage estimation for self-hosted Triton responses - [PR #25345](https://github.com/BerriAI/litellm/pull/25345)
+
 - **[Google Gemini](../../docs/providers/gemini)**
     - Add `supports_service_tier` flag to `gemini-2.5-flash`, `gemini-2.5-pro`, `gemini-3-pro`, `gemini-3-flash`, `gemini-2.5-flash-lite`, and related image preview models - [PR #25562](https://github.com/BerriAI/litellm/pull/25562)
+
+- **[Baseten](../../docs/providers/baseten)**
+    - Add pricing entries for 11 new Baseten models - [PR #25358](https://github.com/BerriAI/litellm/pull/25358)
 
 ### Bug Fixes
 
@@ -102,21 +116,29 @@ pip install litellm==1.83.7rc1
     - Fix double-counting of cache tokens in Anthropic Messages streaming usage - [PR #25517](https://github.com/BerriAI/litellm/pull/25517)
     - Update `us-gov` Claude Sonnet 4.5 pricing: $3.30/$16.50 per 1M tokens, 8K max output, add native structured output - [PR #25562](https://github.com/BerriAI/litellm/pull/25562)
 
+- **General**
+    - Fix `custom_llm_provider` not being passed to `get_llm_provider` for unprefixed model names in router - [PR #25334](https://github.com/BerriAI/litellm/pull/25334)
+
 ## LLM API Endpoints
 
 #### Features
 
 - **[Responses API (/responses)](../../docs/response_api)**
     - Append `?model=` query param to backend WebSocket URL for correct model routing - [PR #25437](https://github.com/BerriAI/litellm/pull/25437)
-    - Fix duplicate keyword argument error in Responses WebSocket handler - [PR #25513](https://github.com/BerriAI/litellm/pull/25513)
+    - Map `refusal` stop reason to `incomplete` status in streaming responses - [PR #25498](https://github.com/BerriAI/litellm/pull/25498)
 
 - **[Files API (/files)](../../docs/proxy/pass_through)**
     - Add file content streaming support for OpenAI-compatible file endpoints - [PR #25450](https://github.com/BerriAI/litellm/pull/25450), [PR #25569](https://github.com/BerriAI/litellm/pull/25569)
 
+- **[Containers API](../../docs/providers/openai_compatible)**
+    - Add Azure routing, managed container ID support, and delete response parsing - [PR #25287](https://github.com/BerriAI/litellm/pull/25287)
+
 #### Bugs
 
 - **General**
+    - Fix duplicate keyword argument error in Responses WebSocket handler - [PR #25513](https://github.com/BerriAI/litellm/pull/25513)
     - Fix pass-through of multipart uploads and Bedrock JSON body in proxy requests - [PR #25464](https://github.com/BerriAI/litellm/pull/25464)
+    - Fix tag-based routing broken when `encrypted_content_affinity` is enabled - [PR #25347](https://github.com/BerriAI/litellm/pull/25347)
     - Align v1 guardrail and agent list response field handling with v2 - [PR #25478](https://github.com/BerriAI/litellm/pull/25478)
 
 ## Management Endpoints / UI
@@ -131,11 +153,15 @@ pip install litellm==1.83.7rc1
 - **Spend Logs**
     - Team members can view team-wide spend logs from the UI with RBAC enforcement - [PR #25458](https://github.com/BerriAI/litellm/pull/25458)
 
+- **Models + Credentials**
+    - Add credential overrides per team/project via `model_config` metadata — no proxy restart needed - [PR #24438](https://github.com/BerriAI/litellm/pull/24438)
+
 - **Virtual Keys**
     - Align `/v2/key/info` response field handling with `/v1/key/info` - [PR #25313](https://github.com/BerriAI/litellm/pull/25313)
 
 #### Bugs
 
+- Allow JWT to override OAuth2 routing without requiring global OAuth2 enablement - [PR #25252](https://github.com/BerriAI/litellm/pull/25252)
 - Improve input validation on management endpoints to reject malformed requests - [PR #25445](https://github.com/BerriAI/litellm/pull/25445)
 - Use parameterized query for combined-view token lookup to prevent SQL injection - [PR #25467](https://github.com/BerriAI/litellm/pull/25467)
 - Fix session-timezone-independent date filtering for spend/error log queries - [PR #25542](https://github.com/BerriAI/litellm/pull/25542)
@@ -145,17 +171,31 @@ pip install litellm==1.83.7rc1
 
 ### Logging
 
+- **[Ramp](../../docs/proxy/logging)**
+    - Add Ramp as a built-in success callback - [PR #23769](https://github.com/BerriAI/litellm/pull/23769)
+
+- **[Langfuse](../../docs/proxy/logging#langfuse)**
+    - Preserve proxy key-auth metadata on `/v1/messages` Langfuse traces - [PR #25448](https://github.com/BerriAI/litellm/pull/25448)
+
+- **[S3](../../docs/proxy/logging#s3)**
+    - Add retry with exponential backoff for transient S3 503/500 errors - [PR #25530](https://github.com/BerriAI/litellm/pull/25530)
+
+- **[Prometheus](../../docs/proxy/prometheus)**
+    - Reduce default latency histogram bucket cardinality to lower memory overhead - [PR #25527](https://github.com/BerriAI/litellm/pull/25527)
+
 - **General**
     - Ensure spend/cost logging runs correctly when `stream=True` in websearch interception - [PR #25424](https://github.com/BerriAI/litellm/pull/25424)
 
 ### Guardrails
 
 - Add `applyGuardrail` support for inline IAM-based guardrails - [PR #25241](https://github.com/BerriAI/litellm/pull/25241)
-- Add UI option to skip system messages in guardrail processing - [PR #25562](https://github.com/BerriAI/litellm/pull/25562)
+- Add optional skip of system messages in unified guardrail inputs - [PR #25481](https://github.com/BerriAI/litellm/pull/25481)
+- Fix preserving dict guardrail `HTTPException.detail` and Bedrock context - [PR #25558](https://github.com/BerriAI/litellm/pull/25558)
 
 ## Spend Tracking, Budgets and Rate Limiting
 
 - Team members can now access team-wide spend logs with proper RBAC enforcement - [PR #25458](https://github.com/BerriAI/litellm/pull/25458)
+- Fix batch-limit stale managed object cleanup to prevent large row updates - [PR #25258](https://github.com/BerriAI/litellm/pull/25258)
 - Fix timezone-independent date filtering in spend/error log queries - [PR #25542](https://github.com/BerriAI/litellm/pull/25542)
 
 ## MCP Gateway
@@ -166,6 +206,8 @@ pip install litellm==1.83.7rc1
 
 ## Performance / Loadbalancing / Reliability improvements
 
+- Reduce default Prometheus latency histogram bucket cardinality to lower memory overhead - [PR #25527](https://github.com/BerriAI/litellm/pull/25527)
+- Fix batch-limit stale managed object cleanup to prevent 300K+ row updates - [PR #25258](https://github.com/BerriAI/litellm/pull/25258)
 - Fix node-gyp symlink path after npm upgrade in Dockerfile - [PR #25048](https://github.com/BerriAI/litellm/pull/25048)
 - Handle missing `.npmrc` gracefully in `Dockerfile.non_root` - [PR #25307](https://github.com/BerriAI/litellm/pull/25307)
 - Harden file path resolution in skill archive extraction - [PR #25475](https://github.com/BerriAI/litellm/pull/25475)
@@ -173,12 +215,16 @@ pip install litellm==1.83.7rc1
 ## Documentation Updates
 
 - Add Anthropic Advisor Tool guide - [PR #25545](https://github.com/BerriAI/litellm/pull/25545)
+- Add Docker Image Security Guide (cosign verification and deployment best practices) - [PR #25439](https://github.com/BerriAI/litellm/pull/25439)
 - Add missing MCP per-user token env vars to `config_settings` reference - [PR #25471](https://github.com/BerriAI/litellm/pull/25471)
 - Update guardrails quick-start and proxy config settings docs - [PR #25562](https://github.com/BerriAI/litellm/pull/25562)
 
 ## New Contributors
 
+* @kedarthakkar made their first contribution in https://github.com/BerriAI/litellm/pull/23769
 * @csoni-cweave made their first contribution in https://github.com/BerriAI/litellm/pull/25441
 * @jaydns made their first contribution in https://github.com/BerriAI/litellm/pull/25445
+* @J-Byron made their first contribution in https://github.com/BerriAI/litellm/pull/25527
+* @jimmychen-p72 made their first contribution in https://github.com/BerriAI/litellm/pull/25530
 
 **Full Changelog**: https://github.com/BerriAI/litellm/compare/v1.83.3.rc.1...v1.83.7.rc.1
