@@ -957,6 +957,19 @@ def responses_api_bridge_check(
             model_info["mode"] = "responses"
             model = model.replace("responses/", "")
 
+        # Auto-bridge to Responses API when web_search_options is requested
+        # and the model supports web search and the /v1/responses endpoint,
+        # but its current mode is not already "responses". The bridge
+        # converts web_search_options into a web_search_preview tool.
+        if (
+            web_search_options is not None
+            and model_info.get("mode") != "responses"
+            and model_info.get("supports_web_search") is True
+            and "/v1/responses"
+            in (model_info.get("supported_endpoints") or [])
+        ):
+            model_info["mode"] = "responses"
+
     except Exception as e:
         verbose_logger.debug("Error getting model info: {}".format(e))
 
@@ -1514,6 +1527,20 @@ def completion(  # type: ignore # noqa: PLR0915
             "service_tier": service_tier,
             "allowed_openai_params": kwargs.get("allowed_openai_params"),
         }
+
+        # If the model will be bridged to the Responses API, allow params
+        # that the bridge can handle (e.g. web_search_options) even if the
+        # provider's chat/completions config doesn't list them.
+        if responses_api_model_info.get("mode") == "responses":
+            _bridge_params = []
+            if web_search_options is not None:
+                _bridge_params.append("web_search_options")
+            if _bridge_params:
+                existing = optional_param_args.get("allowed_openai_params") or []
+                optional_param_args["allowed_openai_params"] = list(
+                    set(existing + _bridge_params)
+                )
+
         optional_params = get_optional_params(
             **optional_param_args, **non_default_params
         )
