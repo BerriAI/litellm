@@ -79,8 +79,8 @@ def test_global_timeout_package_default_coerced_to_600_for_completion():
     )
 
 
-def test_explicit_request_timeout_6000_normalized_to_completion_default():
-    """6000 is the package sentinel; completion always uses 600 instead."""
+def test_explicit_request_timeout_6000_preserved():
+    """Explicit deployment/request timeout must not be truncated by the package sentinel."""
     assert (
         CompletionTimeout.resolve(
             None,
@@ -89,7 +89,20 @@ def test_explicit_request_timeout_6000_normalized_to_completion_default():
             global_timeout=None,
             supports_httpx_timeout=supports_httpx_timeout,
         )
-        == 600.0
+        == 6000.0
+    )
+
+
+def test_explicit_model_timeout_6000_preserved():
+    assert (
+        CompletionTimeout.resolve(
+            6000.0,
+            {"timeout": 1.0, "request_timeout": 2.0},
+            "openai",
+            global_timeout=None,
+            supports_httpx_timeout=supports_httpx_timeout,
+        )
+        == 6000.0
     )
 
 
