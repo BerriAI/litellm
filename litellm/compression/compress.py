@@ -3,7 +3,7 @@ Main compress() function — orchestrates BM25/embedding scoring, message stubbi
 and retrieval tool injection.
 """
 
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set, Union, cast
 
 from litellm.caching.dual_cache import DualCache
 from litellm.compression.message_stubbing import (
@@ -15,6 +15,7 @@ from litellm.compression.retrieval_tool import build_retrieval_tool
 from litellm.compression.scoring.bm25 import bm25_score_messages
 from litellm.litellm_core_utils.token_counter import token_counter
 from litellm.types.compression import CompressedResult
+from litellm.types.utils import AllMessageValues, Message
 
 
 def _extract_last_user_message(messages: List[dict]) -> str:
@@ -124,7 +125,9 @@ def compress(
     if compression_target is None:
         compression_target = compression_trigger * 7 // 10
 
-    original_tokens = token_counter(model=model, messages=messages)
+    original_tokens = token_counter(
+        model=model, messages=cast(List[Union[AllMessageValues, Message]], messages)
+    )
 
     # Pass through if below trigger
     if original_tokens <= compression_trigger:
@@ -235,7 +238,10 @@ def compress(
     # Build retrieval tool
     tools = [build_retrieval_tool(list(cache.keys()))] if cache else []
 
-    compressed_tokens = token_counter(model=model, messages=compressed_messages)
+    compressed_tokens = token_counter(
+        model=model,
+        messages=cast(List[Union[AllMessageValues, Message]], compressed_messages),
+    )
 
     return CompressedResult(
         messages=compressed_messages,
