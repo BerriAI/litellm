@@ -410,6 +410,7 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.CLIENT_IP.value,
         UserAPIKeyLabelNames.USER_AGENT.value,
         UserAPIKeyLabelNames.MODEL_ID.value,
+        UserAPIKeyLabelNames.API_PROVIDER.value,
     ]
 
     litellm_input_tokens_metric = [
