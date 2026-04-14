@@ -69,6 +69,9 @@ from litellm.constants import (
     DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT,
     DEFAULT_MOCK_RESPONSE_PROMPT_TOKEN_COUNT,
 )
+from litellm.constants import request_timeout as _DEFAULT_REQUEST_TIMEOUT
+
+_HARDCODED_COMPLETION_FALLBACK_TIMEOUT = 600
 from litellm.exceptions import LiteLLMUnknownProvider
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.asyncify import run_async_function
@@ -1400,12 +1403,24 @@ def completion(  # type: ignore # noqa: PLR0915
             )  # support region-based pricing for bedrock
 
         ### TIMEOUT LOGIC ###
-        timeout = timeout or kwargs.get("request_timeout", 600) or 600
+        # Use litellm.request_timeout as the fallback only when it was explicitly
+        # configured (different from the default constant); otherwise preserve the
+        # historical 600s hardcoded fallback for backwards compatibility.
+        _completion_fallback_timeout = (
+            litellm.request_timeout
+            if litellm.request_timeout != _DEFAULT_REQUEST_TIMEOUT
+            else _HARDCODED_COMPLETION_FALLBACK_TIMEOUT
+        )
+        timeout = (
+            timeout
+            or kwargs.get("request_timeout", _completion_fallback_timeout)
+            or _completion_fallback_timeout
+        )
         # set timeout for 10 minutes by default
         if isinstance(timeout, httpx.Timeout) and not supports_httpx_timeout(
             custom_llm_provider
         ):
-            timeout = timeout.read or 600  # default 10 min timeout
+            timeout = timeout.read or _completion_fallback_timeout
         elif not isinstance(timeout, httpx.Timeout):
             timeout = float(timeout)  # type: ignore
 

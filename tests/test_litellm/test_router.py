@@ -3200,3 +3200,101 @@ async def test_multiregion_team_failover_between_regions():
         "response from us-east-1",
         "response from us-west-2",
     ]
+
+
+class TestRouterRequestTimeoutPropagation:
+    """Tests for litellm_settings.request_timeout propagation through the Router.
+
+    Covers the fix for: litellm_settings.request_timeout being shadowed by
+    router_settings.timeout when both are configured.
+    """
+
+    def _make_router(self, timeout=None):
+        """Create a minimal Router for testing timeout resolution."""
+        return litellm.Router(
+            model_list=[
+                {
+                    "model_name": "test-model",
+                    "litellm_params": {
+                        "model": "openai/gpt-4",
+                        "api_key": "sk-test",
+                    },
+                }
+            ],
+            timeout=timeout,
+        )
+
+    def test_request_timeout_stored_independently_when_both_set(self):
+        """request_timeout should be stored separately when router timeout is also set."""
+        original = litellm.request_timeout
+        try:
+            litellm.request_timeout = 300
+            router = self._make_router(timeout=330)
+            assert router.timeout == 330
+            assert router.request_timeout == 300
+        finally:
+            litellm.request_timeout = original
+
+    def test_request_timeout_none_when_only_router_timeout_set(self):
+        """request_timeout should be None when only router_settings.timeout is set (default request_timeout)."""
+        router = self._make_router(timeout=330)
+        assert router.timeout == 330
+        assert router.request_timeout is None
+
+    def test_request_timeout_none_when_only_request_timeout_set(self):
+        """When only request_timeout is set (no router timeout), it flows into self.timeout."""
+        original = litellm.request_timeout
+        try:
+            litellm.request_timeout = 300
+            router = self._make_router(timeout=None)
+            assert router.timeout == 300  # via timeout or litellm.request_timeout
+            assert router.request_timeout is None  # timeout param was None
+        finally:
+            litellm.request_timeout = original
+
+    def test_request_timeout_none_when_neither_set(self):
+        """Default state: request_timeout should be None."""
+        router = self._make_router(timeout=None)
+        assert router.request_timeout is None
+
+    def test_get_non_stream_timeout_prefers_request_timeout_over_router_timeout(self):
+        """_get_non_stream_timeout should return request_timeout (300) not router timeout (330)."""
+        original = litellm.request_timeout
+        try:
+            litellm.request_timeout = 300
+            router = self._make_router(timeout=330)
+            # Simulate a request with no per-request or per-deployment timeout
+            result = router._get_non_stream_timeout(kwargs={}, data={})
+            assert result == 300
+        finally:
+            litellm.request_timeout = original
+
+    def test_get_non_stream_timeout_falls_through_to_router_timeout(self):
+        """When request_timeout is not explicitly set, should fall through to router timeout."""
+        router = self._make_router(timeout=330)
+        result = router._get_non_stream_timeout(kwargs={}, data={})
+        assert result == 330
+
+    def test_per_deployment_timeout_overrides_request_timeout(self):
+        """Per-deployment timeout in litellm_params should override request_timeout."""
+        original = litellm.request_timeout
+        try:
+            litellm.request_timeout = 300
+            router = self._make_router(timeout=330)
+            result = router._get_non_stream_timeout(kwargs={}, data={"timeout": 120})
+            assert result == 120
+        finally:
+            litellm.request_timeout = original
+
+    def test_per_request_timeout_overrides_all(self):
+        """Per-request kwargs timeout should override everything."""
+        original = litellm.request_timeout
+        try:
+            litellm.request_timeout = 300
+            router = self._make_router(timeout=330)
+            result = router._get_non_stream_timeout(
+                kwargs={"timeout": 60}, data={"timeout": 120}
+            )
+            assert result == 60
+        finally:
+            litellm.request_timeout = original

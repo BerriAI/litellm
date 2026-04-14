@@ -59,6 +59,7 @@ from litellm.constants import (
     DEFAULT_HEALTH_CHECK_STALENESS_MULTIPLIER,
     DEFAULT_MAX_LRU_CACHE_SIZE,
 )
+from litellm.constants import request_timeout as _DEFAULT_REQUEST_TIMEOUT
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.core_helpers import (
@@ -529,6 +530,14 @@ class Router:
 
         self.timeout = timeout or litellm.request_timeout
         self.stream_timeout = stream_timeout
+
+        # Store request_timeout independently when explicitly configured via
+        # litellm_settings (i.e., different from the default constant), so it's
+        # not shadowed by router_settings.timeout in the fallback chain.
+        if timeout is not None and litellm.request_timeout != _DEFAULT_REQUEST_TIMEOUT:
+            self.request_timeout = litellm.request_timeout
+        else:
+            self.request_timeout = None
 
         self.retry_after = retry_after
         self.routing_strategy = routing_strategy
@@ -2477,7 +2486,8 @@ class Router:
             or data.get(
                 "request_timeout", None
             )  # timeout set on litellm_params for this deployment
-            or self.timeout  # timeout set on router
+            or self.request_timeout  # litellm_settings.request_timeout (per-attempt)
+            or self.timeout  # timeout set on router (router_settings.timeout)
             or self.default_litellm_params.get("timeout", None)
         )
         return timeout
