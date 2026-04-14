@@ -214,7 +214,7 @@ class MavvrikLogger(CustomLogger):
                     api_endpoint=self.api_endpoint or "",
                     connection_id=self.connection_id or "",
                 )
-                streamer.advance_marker(export_epoch)
+                await streamer.advance_marker(export_epoch)
             except Exception as exc:
                 verbose_logger.warning(
                     "MavvrikLogger: advance_marker PATCH failed (non-fatal): %s", exc
@@ -274,7 +274,7 @@ class MavvrikLogger(CustomLogger):
             api_endpoint=self.api_endpoint or "",
             connection_id=self.connection_id or "",
         )
-        streamer.upload(csv_payload, date_str=date_str)
+        await streamer.upload(csv_payload, date_str=date_str)
 
         verbose_logger.info(
             "MavvrikLogger: uploaded %d CSV bytes for date %s",
@@ -379,10 +379,10 @@ class MavvrikLogger(CustomLogger):
     @staticmethod
     async def init_mavvrik_background_job(scheduler: AsyncIOScheduler):
         """Register the hourly export job with APScheduler."""
-        loggers: List[CustomLogger] = (
-            litellm.logging_callback_manager.get_custom_loggers_for_type(
-                callback_type=MavvrikLogger
-            )
+        loggers: List[
+            CustomLogger
+        ] = litellm.logging_callback_manager.get_custom_loggers_for_type(
+            callback_type=MavvrikLogger
         )
         verbose_logger.debug("MavvrikLogger: found %d logger instance(s)", len(loggers))
 

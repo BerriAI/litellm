@@ -95,10 +95,22 @@ class TestMavvrikTransformerToCsv:
         df = _make_df()
         header = transformer.to_csv(df).split("\n")[0]
         for col in [
-            "date", "user_id", "api_key", "model", "model_group",
-            "custom_llm_provider", "prompt_tokens", "completion_tokens",
-            "spend", "api_requests", "successful_requests", "failed_requests",
-            "team_id", "api_key_alias", "team_alias", "user_email",
+            "date",
+            "user_id",
+            "api_key",
+            "model",
+            "model_group",
+            "custom_llm_provider",
+            "prompt_tokens",
+            "completion_tokens",
+            "spend",
+            "api_requests",
+            "successful_requests",
+            "failed_requests",
+            "team_id",
+            "api_key_alias",
+            "team_alias",
+            "user_email",
         ]:
             assert col in header, f"Expected column '{col}' in CSV header"
 

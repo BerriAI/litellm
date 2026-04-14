@@ -195,7 +195,7 @@ async def init_mavvrik_settings(
                 api_endpoint=request.api_endpoint,
                 connection_id=request.connection_id,
             )
-            initial_marker = streamer.register()
+            initial_marker = await streamer.register()
             verbose_proxy_logger.info(
                 "Mavvrik register returned initial marker: %s", initial_marker
             )

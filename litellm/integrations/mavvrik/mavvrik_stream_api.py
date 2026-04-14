@@ -40,7 +40,6 @@ import asyncio
 import gzip
 import io
 import platform
-import time
 from datetime import datetime as _dt
 from datetime import timezone as _tz
 
@@ -69,7 +68,7 @@ class MavvrikStreamer:
     # Public interface
     # ------------------------------------------------------------------
 
-    def upload(self, csv_payload: str, date_str: str) -> None:
+    async def upload(self, csv_payload: str, date_str: str) -> None:
         """Upload a CSV string to Mavvrik for the given date.
 
         Args:
@@ -89,9 +88,9 @@ class MavvrikStreamer:
 
         upload_data = self._compress(csv_payload)
 
-        signed_url = self._get_signed_url(date_str)
-        session_uri = self._initiate_resumable_upload(signed_url)
-        self._finalize_upload(session_uri, upload_data)
+        signed_url = await self._get_signed_url(date_str)
+        session_uri = await self._initiate_resumable_upload(signed_url)
+        await self._finalize_upload(session_uri, upload_data)
 
         verbose_proxy_logger.info(
             "Mavvrik streamer: successfully uploaded %d bytes for date %s",
@@ -103,7 +102,7 @@ class MavvrikStreamer:
     # Registration — called once during POST /mavvrik/init
     # ------------------------------------------------------------------
 
-    def register(self) -> str:
+    async def register(self) -> str:
         """POST to Mavvrik agent endpoint and return the initial marker as an ISO-8601 string.
 
           POST {api_endpoint}/metrics/agent/ai/{connection_id}
@@ -126,8 +125,8 @@ class MavvrikStreamer:
             "arch": platform.machine(),
         }
 
-        with httpx.Client(timeout=30.0) as client:
-            resp = client.post(url, headers=headers, json=body)
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.post(url, headers=headers, json=body)
 
         if resp.status_code != 200:
             raise Exception(
@@ -156,7 +155,7 @@ class MavvrikStreamer:
     # Marker advance — called after each successful upload
     # ------------------------------------------------------------------
 
-    def advance_marker(self, epoch: int) -> None:
+    async def advance_marker(self, epoch: int) -> None:
         """PATCH the Mavvrik agent endpoint to advance the export marker.
 
           PATCH {api_endpoint}/metrics/agent/ai/{connection_id}
@@ -171,8 +170,8 @@ class MavvrikStreamer:
         headers = {"Content-Type": "application/json", "x-api-key": self.api_key}
         body = {"metricsMarker": epoch}
 
-        with httpx.Client(timeout=30.0) as client:
-            resp = client.patch(url, headers=headers, json=body)
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.patch(url, headers=headers, json=body)
 
         if resp.status_code not in (200, 204):
             raise Exception(
@@ -187,7 +186,7 @@ class MavvrikStreamer:
     # Step 1: Get signed URL from Mavvrik API
     # ------------------------------------------------------------------
 
-    def _get_signed_url(self, date_str: str) -> str:
+    async def _get_signed_url(self, date_str: str) -> str:
         path = UPLOAD_URL_PATH.format(connection_id=self.connection_id)
         url = f"{self.api_endpoint}{path}"
         params = {"name": date_str, "type": "metrics"}
@@ -197,8 +196,8 @@ class MavvrikStreamer:
 
         for attempt in range(_MAX_RETRIES):
             try:
-                with httpx.Client(timeout=30.0) as client:
-                    resp = client.get(url, headers=headers, params=params)
+                async with httpx.AsyncClient(timeout=30.0) as client:
+                    resp = await client.get(url, headers=headers, params=params)
 
                 if resp.status_code == 200:
                     body = resp.json()
@@ -222,20 +221,15 @@ class MavvrikStreamer:
 
             wait = _RETRY_BACKOFF_BASE * (2**attempt)
             verbose_proxy_logger.warning(
-                "Mavvrik streamer: signed URL attempt %d/%d failed for date %s, retrying in %.1fs: %s",
+                "Mavvrik streamer: signed URL attempt %d/%d failed for date %s, "
+                "retrying in %.1fs: %s",
                 attempt + 1,
                 _MAX_RETRIES,
                 date_str,
                 wait,
                 last_exc,
             )
-            # Use asyncio.sleep when called from an async context to avoid blocking
-            # the event loop. Fall back to time.sleep for synchronous callers.
-            try:
-                loop = asyncio.get_running_loop()
-                loop.run_until_complete(asyncio.sleep(wait))
-            except RuntimeError:
-                time.sleep(wait)
+            await asyncio.sleep(wait)
 
         raise Exception(
             f"Mavvrik signed URL failed after {_MAX_RETRIES} attempts: {last_exc}"
@@ -245,15 +239,15 @@ class MavvrikStreamer:
     # Step 2: Initiate resumable upload
     # ------------------------------------------------------------------
 
-    def _initiate_resumable_upload(self, signed_url: str) -> str:
+    async def _initiate_resumable_upload(self, signed_url: str) -> str:
         headers = {
             "Content-Type": "application/gzip",
             "x-goog-resumable": "start",
         }
         metadata = b'{"contentEncoding":"gzip","contentDisposition":"attachment"}'
 
-        with httpx.Client(timeout=30.0) as client:
-            resp = client.post(signed_url, headers=headers, content=metadata)
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.post(signed_url, headers=headers, content=metadata)
 
         if resp.status_code != 201:
             raise Exception(
@@ -271,15 +265,15 @@ class MavvrikStreamer:
     # Step 3: Finalize upload — PUT gzip bytes to session URI
     # ------------------------------------------------------------------
 
-    def _finalize_upload(self, session_uri: str, csv_data: bytes) -> None:
+    async def _finalize_upload(self, session_uri: str, csv_data: bytes) -> None:
         headers = {
             "Content-Type": "application/gzip",
             "Content-Encoding": "gzip",
             "x-goog-resumable": "stop",
         }
 
-        with httpx.Client(timeout=120.0) as client:
-            resp = client.put(session_uri, headers=headers, content=csv_data)
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            resp = await client.put(session_uri, headers=headers, content=csv_data)
 
         if resp.status_code not in (200, 201):
             raise Exception(

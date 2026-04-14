@@ -90,6 +90,7 @@ class TestE2ERegister:
         print(f"\n  First call:  {m1}")
         print(f"  Second call: {m2}")
         from datetime import datetime
+
         datetime.fromisoformat(m1)
         datetime.fromisoformat(m2)
 
@@ -101,9 +102,9 @@ class TestE2EGetSignedUrl:
         url = streamer._get_signed_url(_TEST_DATE)
         print(f"\n  signed URL: {url[:80]}...")
         assert url.startswith("https://"), f"Expected https URL, got: {url[:40]}"
-        assert "storage.googleapis.com" in url or "storage.google" in url, (
-            f"Expected GCS URL, got: {url[:80]}"
-        )
+        assert (
+            "storage.googleapis.com" in url or "storage.google" in url
+        ), f"Expected GCS URL, got: {url[:80]}"
 
 
 @_skip_if_no_creds
