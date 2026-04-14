@@ -1,5 +1,6 @@
 from fastapi import HTTPException
 
+import litellm
 from litellm import verbose_logger
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
@@ -11,6 +12,33 @@ class _PROXY_MaxBudgetLimiter(CustomLogger):
     # Class variables or attributes
     def __init__(self):
         pass
+
+    async def is_end_user_within_budget(
+        self,
+        end_user_id: str,
+        end_user_max_budget: float,
+        end_user_spend: float,
+        route: str,
+    ) -> bool:
+        """
+        Check if an end-user is within their overall max budget.
+
+        Raises:
+            BudgetExceededError: If the end-user has exceeded overall budget.
+        """
+        from litellm.proxy.auth.route_checks import RouteChecks
+
+        if RouteChecks.is_info_route(route):
+            return True
+
+        if end_user_spend > end_user_max_budget:
+            raise litellm.BudgetExceededError(
+                current_cost=end_user_spend,
+                max_budget=end_user_max_budget,
+                message=f"ExceededBudget: End User={end_user_id} over budget. Spend={end_user_spend}, Budget={end_user_max_budget}",
+            )
+
+        return True
 
     async def async_pre_call_hook(
         self,
