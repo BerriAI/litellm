@@ -3,10 +3,10 @@ Mavvrik integration types for LiteLLM.
 
 Data flow:
   LiteLLM_DailyUserSpend rows
-    → MavvrikRecord (NDJSON lines)
+    → CSV via MavvrikTransformer
     → gzip compress
     → GET signed URL from Mavvrik API (x-api-key auth)
-    → POST signed URL to initiate resumable GCS upload
+    → POST to initiate resumable upload session
     → PUT session URI to upload gzip payload
 """
 
@@ -72,7 +72,6 @@ class MavvrikSettings:
         "api_key",
         "api_endpoint",
         "connection_id",
-        "timezone",
         "marker",
     )
 
@@ -81,13 +80,11 @@ class MavvrikSettings:
         api_key: str,
         api_endpoint: str,
         connection_id: str,
-        timezone: str = "UTC",
         marker: Optional[str] = None,
     ) -> None:
         self.api_key = api_key
         self.api_endpoint = api_endpoint
         self.connection_id = connection_id
-        self.timezone = timezone
         # ISO-8601 UTC timestamp of the last successfully uploaded interval.
         # None means no upload has occurred yet — first run will query all history.
         self.marker = marker

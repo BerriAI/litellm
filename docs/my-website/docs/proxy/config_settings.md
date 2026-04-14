@@ -609,7 +609,7 @@ router_settings:
 | MAVVRIK_CONNECTION_ID | Connection ID for Mavvrik data submission
 | MAVVRIK_EXPORT_INTERVAL_MINUTES | Interval in minutes between Mavvrik cost data exports. Default is 60
 | MAVVRIK_MAX_FETCHED_DATA_RECORDS | Maximum number of spend records to fetch per Mavvrik export cycle. Default is 50000
-| MAVVRIK_TIMEZONE | Timezone for date handling in Mavvrik exports. Default is UTC
+| MAVVRIK_LOOKBACK_DAYS | First-run lookback window in days for Mavvrik exports. Unset (default) exports all data since the earliest row in `LiteLLM_DailyUserSpend`
 | DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT | Default token count for mock response completions. Default is 20
 | DEFAULT_MOCK_RESPONSE_PROMPT_TOKEN_COUNT | Default token count for mock response prompts. Default is 10
 | DEFAULT_MODEL_CREATED_AT_TIME | Default creation timestamp for models. Default is 1677610602

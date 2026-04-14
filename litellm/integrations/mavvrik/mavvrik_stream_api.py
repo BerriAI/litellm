@@ -147,7 +147,7 @@ class MavvrikStreamer:
 
         marker_iso = marker_dt.isoformat()
         verbose_proxy_logger.info(
-            "Mavvrik register: metricsMarker=%s → initial marker %s",
+            "Mavvrik register: remote epoch=%s → initial marker %s",
             epoch,
             marker_iso,
         )
@@ -181,7 +181,7 @@ class MavvrikStreamer:
             )
 
         verbose_proxy_logger.info(
-            "Mavvrik streamer: metricsMarker advanced to epoch %d", epoch
+            "Mavvrik streamer: marker advanced to epoch %d", epoch
         )
 
     # ------------------------------------------------------------------

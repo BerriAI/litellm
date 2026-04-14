@@ -19,7 +19,6 @@ class MavvrikInitRequest(BaseModel):
         ...,
         description="Connection/instance ID used in the agent path",
     )
-    timezone: str = Field(default="UTC", description="Timezone for date handling")
 
     @field_validator("api_key", "api_endpoint", "connection_id")
     @classmethod
@@ -49,7 +48,7 @@ class MavvrikExportRequest(BaseModel):
     date_str: Optional[str] = Field(
         None,
         description="Date to export in YYYY-MM-DD format (default: yesterday). "
-        "Re-uploading the same date overwrites the GCS file — idempotent.",
+        "Re-uploading the same date overwrites the previous upload — idempotent.",
     )
     limit: Optional[int] = Field(
         None,
@@ -86,7 +85,6 @@ class MavvrikSettingsView(BaseModel):
     api_key_masked: Optional[str] = Field(None, description="Masked API key")
     api_endpoint: Optional[str] = None
     connection_id: Optional[str] = None
-    timezone: Optional[str] = None
     marker: Optional[str] = Field(
         None, description="Last successfully exported date (YYYY-MM-DD)"
     )
@@ -101,10 +99,9 @@ class MavvrikSettingsUpdate(BaseModel):
         None, description="New Mavvrik API base URL (includes tenant)"
     )
     connection_id: Optional[str] = None
-    timezone: Optional[str] = None
     marker: Optional[str] = Field(
         None,
         description="Reset the export cursor to this date (YYYY-MM-DD). "
-        "Use when Mavvrik resets their metricsMarker and asks you to re-export from a specific date. "
+        "Use when Mavvrik asks you to re-export from a specific date. "
         "The next scheduled run will export from (marker + 1 day) onwards.",
     )

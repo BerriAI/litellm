@@ -19,7 +19,7 @@ Environment variables (fallback when DB settings are absent):
     MAVVRIK_API_KEY          x-api-key sent to Mavvrik API
     MAVVRIK_API_ENDPOINT     Mavvrik API base URL (includes tenant)
     MAVVRIK_CONNECTION_ID    Connection/instance ID
-    MAVVRIK_TIMEZONE         Timezone for date handling (default: UTC)
+    MAVVRIK_LOOKBACK_DAYS    First-run lookback (default: all data since MIN(date))
 """
 
 import os
@@ -31,6 +31,7 @@ from litellm._logging import verbose_logger
 from litellm.constants import (
     MAVVRIK_EXPORT_INTERVAL_MINUTES,
     MAVVRIK_EXPORT_USAGE_DATA_JOB_NAME,
+    MAVVRIK_LOOKBACK_DAYS,
     MAVVRIK_MAX_FETCHED_DATA_RECORDS,
 )
 from litellm.integrations.custom_logger import CustomLogger
@@ -49,20 +50,17 @@ class MavvrikLogger(CustomLogger):
         api_key: Optional[str] = None,
         api_endpoint: Optional[str] = None,
         connection_id: Optional[str] = None,
-        timezone: Optional[str] = None,
         **kwargs,
     ):
         super().__init__(**kwargs)
         self.api_key = api_key or os.getenv("MAVVRIK_API_KEY")
         self.api_endpoint = api_endpoint or os.getenv("MAVVRIK_API_ENDPOINT", "")
         self.connection_id = connection_id or os.getenv("MAVVRIK_CONNECTION_ID", "")
-        self.timezone = timezone or os.getenv("MAVVRIK_TIMEZONE", "UTC")
 
         verbose_logger.debug(
-            "MavvrikLogger initialised: endpoint=%s connection_id=%s timezone=%s",
+            "MavvrikLogger initialised: endpoint=%s connection_id=%s",
             self.api_endpoint,
             self.connection_id,
-            self.timezone,
         )
 
     # ------------------------------------------------------------------
@@ -96,10 +94,10 @@ class MavvrikLogger(CustomLogger):
         settings = await db.get_mavvrik_settings()
         marker_str: Optional[str] = settings.get("marker")
 
-        # Call register() to verify connectivity and honour Mavvrik's metricsMarker.
-        # If Mavvrik's marker is earlier than our local one (e.g. Mavvrik reset their
-        # cursor), we use Mavvrik's date so we re-export from the right point.
-        # This is best-effort — failure falls back to the local marker.
+        # Call register() to verify connectivity and honour the marker returned by
+        # Mavvrik. If Mavvrik's marker is earlier than our local one (e.g. Mavvrik
+        # reset their cursor), we use Mavvrik's date so we re-export from the right
+        # point. This is best-effort — failure falls back to the local marker.
         try:
             from litellm.integrations.mavvrik.mavvrik_stream_api import MavvrikStreamer
 
@@ -113,8 +111,8 @@ class MavvrikLogger(CustomLogger):
             local_date = date.fromisoformat(marker_str[:10]) if marker_str else None
             if local_date is None or mavvrik_date < local_date:
                 verbose_logger.info(
-                    "MavvrikLogger: Mavvrik metricsMarker %s is earlier than local "
-                    "marker %s — honouring Mavvrik's cursor",
+                    "MavvrikLogger: remote marker %s is earlier than local marker "
+                    "%s — honouring remote cursor",
                     mavvrik_date,
                     marker_str,
                 )
@@ -144,20 +142,33 @@ class MavvrikLogger(CustomLogger):
                 )
                 start_date = yesterday
         else:
-            # First run — start from the earliest date that has data in the DB.
-            # Falls back to yesterday if the query fails or the table is empty.
-            earliest_str = await db.get_earliest_date()
-            if earliest_str:
-                try:
-                    start_date = date.fromisoformat(earliest_str)
-                    verbose_logger.info(
-                        "MavvrikLogger: no marker found, starting from earliest DB date %s",
-                        start_date,
-                    )
-                except ValueError:
-                    start_date = yesterday
+            # First run — determine the lookback window.
+            # If MAVVRIK_LOOKBACK_DAYS is set, start from (today - N days).
+            # Otherwise, start from the earliest date that has data in the DB
+            # (MIN(date) in LiteLLM_DailyUserSpend). Falls back to yesterday if
+            # the query fails or the table is empty.
+            if MAVVRIK_LOOKBACK_DAYS is not None:
+                start_date = today - timedelta(days=MAVVRIK_LOOKBACK_DAYS)
+                verbose_logger.info(
+                    "MavvrikLogger: no marker found, MAVVRIK_LOOKBACK_DAYS=%d → "
+                    "starting from %s",
+                    MAVVRIK_LOOKBACK_DAYS,
+                    start_date,
+                )
             else:
-                start_date = yesterday
+                earliest_str = await db.get_earliest_date()
+                if earliest_str:
+                    try:
+                        start_date = date.fromisoformat(earliest_str)
+                        verbose_logger.info(
+                            "MavvrikLogger: no marker found, starting from earliest "
+                            "DB date %s",
+                            start_date,
+                        )
+                    except ValueError:
+                        start_date = yesterday
+                else:
+                    start_date = yesterday
 
         if start_date > yesterday:
             verbose_logger.debug(
@@ -179,7 +190,7 @@ class MavvrikLogger(CustomLogger):
             # Advance marker one day at a time so partial failures don't lose progress
             await db.advance_marker(date_str)
 
-            # Notify Mavvrik of the new marker epoch (best-effort)
+            # Notify Mavvrik of the new marker epoch via PATCH (best-effort)
             try:
                 from litellm.integrations.mavvrik.mavvrik_stream_api import (
                     MavvrikStreamer,

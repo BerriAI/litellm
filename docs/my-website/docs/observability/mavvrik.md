@@ -9,11 +9,36 @@ LiteLLM provides an integration with Mavvrik, allowing you to export your LLM us
 
 | Property | Details |
 |----------|---------|
-| Description | Export LiteLLM daily usage data to Mavvrik via GCS signed URL uploads |
+| Description | Export LiteLLM daily usage data to Mavvrik |
 | callback name | `mavvrik` |
 | Supported Operations | Automatic daily data export, manual data export, dry run testing, cost and token usage tracking |
-| Data Format | CSV (gzip-compressed) uploaded to GCS via Mavvrik-issued signed URLs |
+| Data Format | CSV (gzip-compressed) |
 | Export Frequency | Hourly scheduler check — exports complete calendar days (never today's partial data) |
+
+## Setup
+
+### Step 1: Add the Mavvrik callback to `config.yaml`
+
+```yaml
+litellm_settings:
+  callbacks: ["mavvrik"]
+```
+
+### Step 2: Set the Mavvrik credentials as environment variables
+
+```bash
+export MAVVRIK_API_KEY="mav_xxxxxxxxxx"
+export MAVVRIK_API_ENDPOINT="https://api.mavvrik.dev/my-tenant"
+export MAVVRIK_CONNECTION_ID="litellm-prod"
+```
+
+### Step 3: Start LiteLLM Proxy
+
+```bash
+litellm --config /path/to/config.yaml
+```
+
+LiteLLM will automatically register with the Mavvrik API on startup and begin scheduling hourly exports. The initial export window is determined by the marker returned by Mavvrik during registration.
 
 ## Environment Variables
 
@@ -22,46 +47,9 @@ LiteLLM provides an integration with Mavvrik, allowing you to export your LLM us
 | `MAVVRIK_API_KEY` | Yes | Your Mavvrik API key (`x-api-key` header) | `mav_xxxxxxxxxx` |
 | `MAVVRIK_API_ENDPOINT` | Yes | Mavvrik API base URL including your tenant path | `https://api.mavvrik.dev/my-tenant` |
 | `MAVVRIK_CONNECTION_ID` | Yes | Connection/instance ID assigned by Mavvrik | `litellm-prod` |
-| `MAVVRIK_TIMEZONE` | No | Timezone for date handling (default: `UTC`) | `America/New_York` |
+| `MAVVRIK_LOOKBACK_DAYS` | No | First-run lookback window (days). Default: export all data since the earliest row in `LiteLLM_DailyUserSpend` | `30` |
 | `MAVVRIK_EXPORT_INTERVAL_MINUTES` | No | Scheduler check frequency in minutes (default: `60`) | `60` |
-
-## Setup
-
-### Step 1: Configure Environment Variables
-
-Set your Mavvrik credentials in your environment:
-
-```bash
-export MAVVRIK_API_KEY="mav_xxxxxxxxxx"
-export MAVVRIK_API_ENDPOINT="https://api.mavvrik.dev/my-tenant"
-export MAVVRIK_CONNECTION_ID="litellm-prod"
-export MAVVRIK_TIMEZONE="UTC"  # Optional, defaults to UTC
-```
-
-### Step 2: Enable Mavvrik Integration
-
-Add the Mavvrik callback to your LiteLLM configuration YAML file:
-
-```yaml
-model_list:
-  - model_name: gpt-4o
-    litellm_params:
-      model: openai/gpt-4o
-      api_key: sk-xxxxxxx
-
-litellm_settings:
-  callbacks: ["mavvrik"]  # Enable Mavvrik integration
-```
-
-### Step 3: Start LiteLLM Proxy
-
-Start your LiteLLM proxy with the configuration:
-
-```bash
-litellm --config /path/to/config.yaml
-```
-
-LiteLLM will automatically register with the Mavvrik API on startup and begin scheduling hourly exports. The initial export window is determined by the `metricsMarker` returned by Mavvrik during registration.
+| `MAVVRIK_MAX_FETCHED_DATA_RECORDS` | No | Max spend rows to fetch per export cycle (default: `50000`) | `50000` |
 
 ## Alternative Setup: API-Based Initialization
 
@@ -74,8 +62,7 @@ curl -X POST "http://localhost:4000/mavvrik/init" \
   -d '{
     "api_key": "mav_xxxxxxxxxx",
     "api_endpoint": "https://api.mavvrik.dev/my-tenant",
-    "connection_id": "litellm-prod",
-    "timezone": "UTC"
+    "connection_id": "litellm-prod"
   }' | jq
 ```
 
@@ -93,7 +80,7 @@ This stores encrypted credentials in the database and registers the background e
 
 ### Dry Run Export
 
-Preview the CSV records that would be uploaded for a given date without sending any data to GCS:
+Preview the CSV records that would be uploaded for a given date without sending any data to Mavvrik:
 
 ```bash
 curl -X POST "http://localhost:4000/mavvrik/dry-run" \
@@ -125,7 +112,7 @@ curl -X POST "http://localhost:4000/mavvrik/dry-run" \
 
 ### Manual Export
 
-Trigger an immediate upload to GCS for a specific date:
+Trigger an immediate upload to Mavvrik for a specific date:
 
 ```bash
 curl -X POST "http://localhost:4000/mavvrik/export" \
@@ -146,7 +133,7 @@ curl -X POST "http://localhost:4000/mavvrik/export" \
 }
 ```
 
-Omitting `date_str` defaults to yesterday. Re-exporting the same date overwrites the existing GCS file — exports are idempotent.
+Omitting `date_str` defaults to yesterday. Re-exporting the same date overwrites the previously uploaded object — exports are idempotent.
 
 ### View Current Settings
 
@@ -163,7 +150,6 @@ curl -X GET "http://localhost:4000/mavvrik/settings" \
   "api_key_masked": "mav_****xxxx",
   "api_endpoint": "https://api.mavvrik.dev/my-tenant",
   "connection_id": "litellm-prod",
-  "timezone": "UTC",
   "marker": "2024-01-14",
   "status": "configured"
 }
@@ -177,16 +163,9 @@ The `marker` field shows the last successfully exported date. The next scheduled
 
 - **Frequency**: Scheduler runs every 60 minutes (configurable via `MAVVRIK_EXPORT_INTERVAL_MINUTES`)
 - **Scope**: Each run exports all complete calendar days since the last marker — never today's partial data
+- **First run**: If no marker exists, the lookback window is determined by `MAVVRIK_LOOKBACK_DAYS`. If unset, LiteLLM starts from the earliest date present in `LiteLLM_DailyUserSpend` (i.e. all available history)
 - **Catch-up**: If the proxy was offline for multiple days, the scheduler automatically back-fills all missed days on the next run
-- **Idempotency**: Each day's data is uploaded to a GCS object named by date (e.g. `2024-01-15`). Re-exporting the same date safely overwrites the previous file
-
-### Upload Flow
-
-Each export follows a 3-step GCS resumable upload pattern:
-
-1. **GET signed URL** — LiteLLM requests a time-limited GCS signed URL from Mavvrik
-2. **POST initiate** — LiteLLM initiates a resumable upload session with GCS
-3. **PUT payload** — LiteLLM uploads the gzip-compressed CSV to GCS
+- **Idempotency**: Each day's data is uploaded to an object named by date (e.g. `2024-01-15`). Re-exporting the same date safely overwrites the previous upload
 
 ### Data Format
 
@@ -230,6 +209,16 @@ Change how often the scheduler checks for new days to export:
 ```bash
 export MAVVRIK_EXPORT_INTERVAL_MINUTES=120  # Check every 2 hours
 ```
+
+### Custom First-Run Lookback
+
+By default, the first export back-fills every day present in `LiteLLM_DailyUserSpend`. To limit how far back LiteLLM looks on the first run, set `MAVVRIK_LOOKBACK_DAYS`:
+
+```bash
+export MAVVRIK_LOOKBACK_DAYS=30  # Only export the last 30 days on first run
+```
+
+This applies only when no marker exists yet. Once a marker is stored, subsequent runs always resume from `(marker + 1 day)`.
 
 ### Remove Mavvrik Integration
 

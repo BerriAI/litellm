@@ -6,7 +6,7 @@ Endpoints (all require PROXY_ADMIN role):
     PUT    /mavvrik/settings      Update existing settings
     DELETE /mavvrik/delete        Remove all Mavvrik settings
     POST   /mavvrik/dry-run       Preview CSV records without uploading
-    POST   /mavvrik/export        Trigger manual upload to GCS
+    POST   /mavvrik/export        Trigger a manual upload to Mavvrik
 """
 
 import json
@@ -60,7 +60,6 @@ async def _set_mavvrik_settings(
     api_key: str,
     api_endpoint: str,
     connection_id: str,
-    timezone: str,
     marker: Optional[str] = None,
 ) -> None:
     """Encrypt API key and upsert all settings into LiteLLM_Config."""
@@ -77,7 +76,6 @@ async def _set_mavvrik_settings(
         "api_key": encrypted_api_key,
         "api_endpoint": api_endpoint,
         "connection_id": connection_id,
-        "timezone": timezone,
     }
     if marker is not None:
         settings["marker"] = marker
@@ -180,7 +178,7 @@ async def init_mavvrik_settings(
 ):
     """Initialize Mavvrik settings and store encrypted credentials in the database.
 
-    Calls the Mavvrik register endpoint to obtain the initial metricsMarker (the
+    Calls the Mavvrik register endpoint to obtain the initial export marker (the
     earliest date Mavvrik wants LiteLLM to export from). If that call fails, the
     marker defaults to the first day of the current month.
 
@@ -216,7 +214,6 @@ async def init_mavvrik_settings(
             api_key=request.api_key,
             api_endpoint=request.api_endpoint,
             connection_id=request.connection_id,
-            timezone=request.timezone,
             marker=initial_marker,
         )
         verbose_proxy_logger.info(
@@ -230,7 +227,6 @@ async def init_mavvrik_settings(
                 api_key=request.api_key,
                 api_endpoint=request.api_endpoint,
                 connection_id=request.connection_id,
-                timezone=request.timezone,
             )
             litellm.logging_callback_manager.add_litellm_success_callback(
                 mavvrik_logger
@@ -304,7 +300,6 @@ async def get_mavvrik_settings(
             api_key_masked=masked.get("api_key"),
             api_endpoint=settings.get("api_endpoint"),
             connection_id=settings.get("connection_id"),
-            timezone=settings.get("timezone"),
             marker=settings.get("marker"),
             status="configured",
         )
@@ -332,8 +327,7 @@ async def update_mavvrik_settings(
     """Update one or more Mavvrik settings fields. All fields are optional.
 
     Use the `marker` field to reset the export cursor to a specific date (YYYY-MM-DD),
-    for example when Mavvrik resets their metricsMarker and asks you to re-export
-    from an earlier date.
+    for example when Mavvrik asks you to re-export from an earlier date.
     """
     _require_admin(user_api_key_dict)
 
@@ -353,7 +347,6 @@ async def update_mavvrik_settings(
             api_key=_pick(request.api_key, "api_key"),
             api_endpoint=_pick(request.api_endpoint, "api_endpoint"),
             connection_id=_pick(request.connection_id, "connection_id"),
-            timezone=_pick(request.timezone, "timezone", "UTC"),
             marker=(
                 request.marker if request.marker is not None else current.get("marker")
             ),
@@ -445,7 +438,7 @@ async def dry_run_mavvrik_export(
     request: MavvrikExportRequest,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
-    """Preview the CSV records that would be uploaded for a given date without sending data to GCS.
+    """Preview the CSV records that would be uploaded for a given date without sending data to Mavvrik.
 
     Defaults to yesterday if `date_str` is not provided.
     """
@@ -462,7 +455,6 @@ async def dry_run_mavvrik_export(
             api_key=settings.get("api_key"),
             api_endpoint=settings.get("api_endpoint"),
             connection_id=settings.get("connection_id"),
-            timezone=settings.get("timezone", "UTC"),
         )
         result = await logger.dry_run_export_usage_data(
             date_str=date_str, limit=request.limit
@@ -497,10 +489,10 @@ async def export_mavvrik_data(
     request: MavvrikExportRequest,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
-    """Manually trigger a Mavvrik export for a specific date (uploads to GCS via signed URL).
+    """Manually trigger a Mavvrik export for a specific date.
 
     Defaults to yesterday if `date_str` is not provided. Re-uploading the same date
-    overwrites the existing GCS object — exports are idempotent.
+    overwrites the previously uploaded object — exports are idempotent.
     """
     _require_admin(user_api_key_dict)
 
@@ -523,7 +515,6 @@ async def export_mavvrik_data(
             api_key=settings.get("api_key"),
             api_endpoint=settings.get("api_endpoint"),
             connection_id=settings.get("connection_id"),
-            timezone=settings.get("timezone", "UTC"),
         )
         records_exported = await logger.export_usage_data(
             date_str=date_str,
