@@ -2722,12 +2722,19 @@ async def info_key_fn(
     key: Optional[str] = fastapi.Query(
         default=None, description="Key in the request parameters"
     ),
+    include_daily_spend: Optional[int] = fastapi.Query(
+        default=None,
+        description="Number of days of daily spend breakdown to include (e.g. 7 for last 7 days). Returns per-model daily spend from LiteLLM_DailyUserSpend.",
+        ge=1,
+        le=90,
+    ),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
     Retrieve information about a key.
     Parameters:
         key: Optional[str] = Query parameter representing the key in the request
+        include_daily_spend: Optional[int] = Number of days of daily spend to include
         user_api_key_dict: UserAPIKeyAuth = Dependency representing the user's API key
     Returns:
         Dict containing the key and its associated information
@@ -2742,6 +2749,12 @@ async def info_key_fn(
     ```
     curl -X GET "http://0.0.0.0:4000/key/info" \
 -H "Authorization: Bearer sk-test-example-key-123"
+    ```
+
+    Example Curl - include last 7 days of daily spend breakdown
+    ```
+    curl -X GET "http://0.0.0.0:4000/key/info?key=sk-test-example-key-123&include_daily_spend=7" \
+-H "Authorization: Bearer sk-1234"
     ```
     """
     from litellm.proxy.proxy_server import prisma_client
@@ -2793,6 +2806,29 @@ async def info_key_fn(
 
         # Attach object_permission if object_permission_id is set
         key_info = await attach_object_permission_to_dict(key_info, prisma_client)
+
+        # Optionally include daily spend breakdown
+        if include_daily_spend is not None and hashed_key is not None:
+            from datetime import datetime, timedelta, timezone
+
+            start_date_str = (
+                datetime.now(timezone.utc) - timedelta(days=include_daily_spend)
+            ).strftime("%Y-%m-%d")
+            daily_spend_rows = await prisma_client.db.litellm_dailyuserspend.find_many(
+                where={
+                    "api_key": hashed_key,
+                    "date": {"gte": start_date_str},
+                },
+                order={"date": "desc"},
+            )
+            key_info["daily_spend"] = [
+                {
+                    k: int(v) if isinstance(v, int) and k != "spend" else v
+                    for k, v in row.model_dump().items()
+                    if k not in ("id", "api_key")
+                }
+                for row in daily_spend_rows
+            ]
 
         return {"key": key, "info": key_info}
     except Exception as e:
