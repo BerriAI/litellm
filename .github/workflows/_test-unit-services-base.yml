@@ -86,44 +86,37 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install Poetry
-        run: pip install 'poetry==2.3.2'
+      - name: Set up uv
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
+        with:
+          version: "0.10.9"
 
-      - name: Cache Poetry dependencies
+      - name: Cache uv dependencies
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: |
-            ~/.cache/pypoetry
-            ~/.cache/pip
+            ~/.cache/uv
             .venv
-          key: ${{ runner.os }}-poetry-services-${{ hashFiles('poetry.lock') }}
+          key: ${{ runner.os }}-uv-services-${{ hashFiles('uv.lock') }}
           restore-keys: |
-            ${{ runner.os }}-poetry-services-
+            ${{ runner.os }}-uv-services-
 
       - name: Install dependencies
         run: |
-          poetry config virtualenvs.in-project true
-          poetry install --with dev,proxy-dev --extras "proxy semantic-router"
-          poetry run pip install google-genai==1.22.0 \
-            google-cloud-aiplatform==1.115.0 fastapi-offline==1.7.3 python-multipart==0.0.22 openapi-core==0.23.0
-
-      - name: Setup litellm-enterprise
-        run: |
-          poetry run pip install --force-reinstall --no-deps -e enterprise/
+          uv sync --frozen --group ci --group proxy-dev --extra google --extra proxy --extra semantic-router
 
       - name: Generate Prisma client
         env:
           PRISMA_BINARY_CACHE_DIR: ${{ runner.temp }}/prisma-cache
         run: |
-          poetry run pip install nodejs-wheel-binaries==24.13.1
-          poetry run prisma generate --schema litellm/proxy/schema.prisma
+          uv run --no-sync prisma generate --schema litellm/proxy/schema.prisma
 
       - name: Run Prisma migrations
         if: ${{ inputs.enable-postgres }}
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: |
-          poetry run prisma db push --schema litellm/proxy/schema.prisma --accept-data-loss
+          uv run --no-sync prisma db push --schema litellm/proxy/schema.prisma --accept-data-loss
 
       - name: Run tests
         env:
@@ -134,7 +127,7 @@ jobs:
           DATABASE_URL: ${{ inputs.enable-postgres && secrets.DATABASE_URL || '' }}
         run: |
           if [ "${WORKERS}" = "0" ]; then
-            poetry run pytest ${TEST_PATH:?} \
+            uv run --no-sync pytest ${TEST_PATH:?} \
               --tb=short -vv \
               --maxfail="${MAX_FAILURES}" \
               --reruns "${RERUNS}" \
@@ -144,7 +137,7 @@ jobs:
               --cov-report=xml:coverage.xml \
               --cov-config=pyproject.toml
           else
-            poetry run pytest ${TEST_PATH:?} \
+            uv run --no-sync pytest ${TEST_PATH:?} \
               --tb=short -vv \
               --maxfail="${MAX_FAILURES}" \
               -n "${WORKERS}" \

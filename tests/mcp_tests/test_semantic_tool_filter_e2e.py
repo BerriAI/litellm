@@ -23,7 +23,7 @@ except ImportError:
 @pytest.mark.asyncio
 @pytest.mark.skipif(
     not SEMANTIC_ROUTER_AVAILABLE,
-    reason="semantic-router not installed. Install with: pip install 'litellm[semantic-router]'"
+    reason="semantic-router not installed. Install the `litellm[semantic-router]` extra."
 )
 @pytest.mark.skipif(
     not os.environ.get("OPENAI_API_KEY"),
