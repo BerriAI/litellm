@@ -649,8 +649,6 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
             model = model.split("@")[0]
         
         # Create logging object for transformation
-        from litellm.litellm_core_utils.litellm_logging import Logging
-        
         logging_obj = Logging(
             model=model,
             messages=[],
