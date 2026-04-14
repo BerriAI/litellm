@@ -341,6 +341,7 @@ class DataDogLogger(
             response = await self.async_send_compressed_data(batch_to_send)
             if response.status_code == 413:
                 verbose_logger.exception(DD_ERRORS.DATADOG_413_ERROR.value)
+                self.log_queue = batch_to_send + self.log_queue
                 return
 
             response.raise_for_status()
@@ -373,10 +374,10 @@ class DataDogLogger(
         async with self.flush_lock:
             if self.log_queue:
                 verbose_logger.debug(
-                    "CustomLogger: Flushing batch of %s events", len(self.log_queue)
+                    "Datadog: Flushing batch of %s events", len(self.log_queue)
                 )
                 await self.async_send_batch()
-                self.last_flush_time = datetime.datetime.now().timestamp()
+                self.last_flush_time = time.time()
 
     def log_success_event(self, kwargs, response_obj, start_time, end_time):
         """

@@ -72,3 +72,38 @@ async def test_failure_hook_threshold_flush_uses_flush_queue(datadog_env):
     )
 
     logger.flush_queue.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_async_send_batch_requeues_events_on_413(datadog_env):
+    with patch("asyncio.create_task"):
+        logger = DataDogLogger()
+
+    logger.log_queue = [
+        DatadogPayload(
+            ddsource="litellm",
+            ddtags="env:test",
+            hostname="host",
+            message=f'{{"event": {i}}}',
+            service="svc",
+            status="info",
+        )
+        for i in range(2)
+    ]
+
+    logger.async_send_compressed_data = AsyncMock(
+        return_value=Response(
+            413,
+            request=Request("POST", "https://example.com"),
+            text="Payload Too Large",
+        )
+    )
+
+    await logger.async_send_batch()
+
+    assert logger.async_send_compressed_data.await_count == 1
+    assert len(logger.log_queue) == 2
+    assert [event["message"] for event in logger.log_queue] == [
+        '{"event": 0}',
+        '{"event": 1}',
+    ]
