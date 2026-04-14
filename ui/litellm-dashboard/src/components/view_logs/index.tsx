@@ -11,7 +11,8 @@ import { Button, Tag, Tooltip } from "antd";
 import { internalUserRoles } from "../../utils/roles";
 import DeletedKeysPage from "../DeletedKeysPage/DeletedKeysPage";
 import DeletedTeamsPage from "../DeletedTeamsPage/DeletedTeamsPage";
-import { KeyResponse, Team } from "../key_team_helpers/key_list";
+import FilterTeamDropdown from "../common_components/FilterTeamDropdown";
+import { KeyResponse } from "../key_team_helpers/key_list";
 import { PaginatedKeyAliasSelect } from "../KeyAliasSelect/PaginatedKeyAliasSelect/PaginatedKeyAliasSelect";
 import { PaginatedModelSelect } from "../ModelSelect/PaginatedModelSelect/PaginatedModelSelect";
 import FilterComponent, { FilterOption } from "../molecules/filter";
@@ -36,7 +37,6 @@ interface SpendLogsTableProps {
   token: string | null;
   userRole: string | null;
   userID: string | null;
-  allTeams: Team[];
   premiumUser: boolean;
 }
 
@@ -53,7 +53,6 @@ export default function SpendLogsTable({
   token,
   userRole,
   userID,
-  allTeams,
   premiumUser,
 }: SpendLogsTableProps) {
   const [searchTerm, setSearchTerm] = useState("");
@@ -241,7 +240,7 @@ export default function SpendLogsTable({
     filters,
     filteredLogs,
     hasBackendFilters,
-    allTeams: hookAllTeams,
+    allTeams,
     handleFilterChange,
     handleFilterReset: handleFilterResetFromHook,
   } = useLogFilterLogic({
@@ -394,20 +393,7 @@ export default function SpendLogsTable({
     {
       name: "Team ID",
       label: "Team ID",
-      isSearchable: true,
-      searchFn: async (searchText: string) => {
-        if (!allTeams || allTeams.length === 0) return [];
-        const filtered = allTeams.filter((team: Team) => {
-          return (
-            team.team_id.toLowerCase().includes(searchText.toLowerCase()) ||
-            (team.team_alias && team.team_alias.toLowerCase().includes(searchText.toLowerCase()))
-          );
-        });
-        return filtered.map((team: Team) => ({
-          label: `${team.team_alias || team.team_id} (${team.team_id})`,
-          value: team.team_id,
-        }));
-      },
+      customComponent: FilterTeamDropdown,
     },
     {
       name: "Status",
@@ -506,7 +492,7 @@ export default function SpendLogsTable({
               <KeyInfoView
                 keyId={selectedKeyIdInfoView}
                 keyData={selectedKeyInfo}
-                teams={allTeams}
+                teams={allTeams ?? []}
                 onClose={() => setSelectedKeyIdInfoView(null)}
                 backButtonText="Back to Logs"
               />
