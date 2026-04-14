@@ -99,7 +99,9 @@ class FalAIImageEditConfig(BaseImageEditConfig):
         base_url = base_url.rstrip("/")
         # model arrives without provider prefix (e.g. "nano-banana-2/edit")
         # FAL API expects fal-ai/ prefix in the URL path
-        return f"{base_url}/fal-ai/{model}"
+        # Strip fal-ai/ if already present to avoid double prefix
+        model_path = model.removeprefix("fal-ai/")
+        return f"{base_url}/fal-ai/{model_path}"
 
     def _read_image_bytes(
         self,
@@ -220,9 +222,7 @@ class FalAIImageEditConfig(BaseImageEditConfig):
                 image_objects.append(ImageObject(url=single_image))
 
         if not image_objects:
-            raise ValueError(
-                f"No images in Fal AI response: {response_data}"
-            )
+            raise ValueError(f"No images in Fal AI response: {response_data}")
 
         return ImageResponse(
             created=int(time.time()),

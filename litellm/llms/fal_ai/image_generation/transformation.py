@@ -53,7 +53,9 @@ class FalAIBaseConfig(BaseImageGenerationConfig):
         else:
             # Generic models need the model name in the URL path
             # model arrives without provider prefix (e.g. "nano-banana-2/edit")
-            complete_url = f"{complete_url}/fal-ai/{model}"
+            # Strip fal-ai/ if already present to avoid double prefix
+            model_path = model.removeprefix("fal-ai/")
+            complete_url = f"{complete_url}/fal-ai/{model_path}"
         return complete_url
 
     def validate_environment(
