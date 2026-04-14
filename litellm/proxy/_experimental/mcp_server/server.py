@@ -1148,7 +1148,7 @@ if MCP_AVAILABLE:
                 continue
             if server.spec_path:
                 continue
-            cached = global_mcp_server_manager.get_upstream_initialize_instructions(
+            cached = global_mcp_server_manager._upstream_initialize_instructions_by_server_id.get(
                 server.server_id
             )
             if cached and cached.strip():

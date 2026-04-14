@@ -2494,7 +2494,7 @@ class TestMCPServerManagerUpstreamInstructionsCache:
     def test_get_returns_none_when_empty(self):
         """Empty cache returns None for any key."""
         manager = MCPServerManager()
-        assert manager.get_upstream_initialize_instructions("nonexistent") is None
+        assert manager._upstream_initialize_instructions_by_server_id.get("nonexistent") is None
 
     def test_remember_stores_stripped_value(self):
         """_remember_upstream_initialize_instructions stores a stripped string."""
@@ -2502,7 +2502,7 @@ class TestMCPServerManagerUpstreamInstructionsCache:
         fake_server = MagicMock(server_id="srv")
         fake_client = MagicMock(_last_initialize_instructions="  hello \n")
         manager._remember_upstream_initialize_instructions(fake_server, fake_client)
-        assert manager.get_upstream_initialize_instructions("srv") == "hello"
+        assert manager._upstream_initialize_instructions_by_server_id.get("srv") == "hello"
 
     def test_remember_ignores_empty_string(self):
         """Whitespace-only instructions are not stored."""
@@ -2510,7 +2510,7 @@ class TestMCPServerManagerUpstreamInstructionsCache:
         fake_server = MagicMock(server_id="srv")
         fake_client = MagicMock(_last_initialize_instructions="   ")
         manager._remember_upstream_initialize_instructions(fake_server, fake_client)
-        assert manager.get_upstream_initialize_instructions("srv") is None
+        assert manager._upstream_initialize_instructions_by_server_id.get("srv") is None
 
     def test_remember_ignores_none(self):
         """None instructions are not stored."""
@@ -2518,7 +2518,7 @@ class TestMCPServerManagerUpstreamInstructionsCache:
         fake_server = MagicMock(server_id="srv")
         fake_client = MagicMock(_last_initialize_instructions=None)
         manager._remember_upstream_initialize_instructions(fake_server, fake_client)
-        assert manager.get_upstream_initialize_instructions("srv") is None
+        assert manager._upstream_initialize_instructions_by_server_id.get("srv") is None
 
     @pytest.mark.asyncio
     async def test_load_servers_from_config_clears_cache(self):
@@ -2533,7 +2533,7 @@ class TestMCPServerManagerUpstreamInstructionsCache:
                 }
             }
         )
-        assert manager.get_upstream_initialize_instructions("old") is None
+        assert manager._upstream_initialize_instructions_by_server_id.get("old") is None
 
     @pytest.mark.asyncio
     async def test_load_servers_reads_instructions_from_config(self):
