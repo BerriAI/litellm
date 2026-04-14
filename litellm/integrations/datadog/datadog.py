@@ -356,6 +356,7 @@ class DataDogLogger(
                     response.status_code,
                     response.text,
                 )
+            self.log_queue.clear()
         except Exception as e:
             verbose_logger.exception(
                 f"Datadog Error sending batch API - {str(e)}\n{traceback.format_exc()}"
