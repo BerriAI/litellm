@@ -1833,7 +1833,6 @@ class BaseLLMHTTPHandler:
         max_attempts = max(provider_config.max_retry_on_anthropic_messages_http_error, 1)
         litellm_params_dict = dict(litellm_params)
         optional_params_dict = dict(litellm_params)
-        response: Optional[httpx.Response] = None
         for attempt_idx in range(max_attempts):
             try:
                 response = await async_httpx_client.post(
@@ -1844,6 +1843,7 @@ class BaseLLMHTTPHandler:
                     logging_obj=logging_obj,
                 )
                 response.raise_for_status()
+                return response
             except httpx.HTTPStatusError as e:
                 hit_max_attempt = attempt_idx + 1 == max_attempts
                 should_retry = provider_config.should_retry_anthropic_messages_on_http_error(
@@ -1874,14 +1874,10 @@ class BaseLLMHTTPHandler:
                 raise self._handle_error(e=e, provider_config=provider_config)
             except Exception as e:
                 raise self._handle_error(e=e, provider_config=provider_config)
-            break
 
-        if response is None:
-            raise self._handle_error(
-                e=ValueError("No response from Anthropic /v1/messages"),
-                provider_config=provider_config,
-            )
-        return response
+        raise RuntimeError(
+            "unreachable: anthropic messages HTTP retry loop exited without return"
+        )
 
     async def async_anthropic_messages_handler(
         self,

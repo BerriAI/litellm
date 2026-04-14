@@ -1181,6 +1181,24 @@ class TestAnthropicThinkingSignatureSelfHeal:
         assert out[1]["content"][0]["type"] == "text"
         assert messages[1]["content"][0]["type"] == "thinking"
 
+    def test_strip_thinking_blocks_drops_message_when_only_thinking_blocks(self):
+        from litellm.llms.anthropic.common_utils import (
+            strip_thinking_blocks_from_anthropic_messages,
+        )
+
+        messages = [
+            {"role": "user", "content": "hi"},
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "thinking", "thinking": "plan", "signature": "sig"},
+                ],
+            },
+        ]
+        out = strip_thinking_blocks_from_anthropic_messages(messages)
+        assert len(out) == 1
+        assert out[0]["role"] == "user"
+
     def test_strip_thinking_blocks_from_anthropic_messages_request_dict(self):
         from litellm.llms.anthropic.common_utils import (
             strip_thinking_blocks_from_anthropic_messages_request_dict,
@@ -1204,7 +1222,7 @@ class TestAnthropicThinkingSignatureSelfHeal:
         }
         strip_thinking_blocks_from_anthropic_messages_request_dict(data)
         assert "thinking" not in data
-        assert data["messages"][0]["content"] == []
+        assert data["messages"] == []
 
     def test_anthropic_messages_config_http_retry_helpers(self):
         import httpx
@@ -1230,6 +1248,10 @@ class TestAnthropicThinkingSignatureSelfHeal:
         err_bad = httpx.HTTPStatusError("bad", request=req, response=resp_bad)
         assert config.should_retry_anthropic_messages_on_http_error(err_bad, {}) is False
 
+        resp_500 = httpx.Response(500, request=req, text=err_text)
+        err_500 = httpx.HTTPStatusError("bad", request=req, response=resp_500)
+        assert config.should_retry_anthropic_messages_on_http_error(err_500, {}) is False
+
         data = {
             "model": "claude-sonnet-4-20250514",
             "messages": [
@@ -1248,4 +1270,4 @@ class TestAnthropicThinkingSignatureSelfHeal:
         }
         config.transform_anthropic_messages_request_on_http_error(err, data)
         assert "thinking" not in data
-        assert data["messages"][0]["content"] == []
+        assert data["messages"] == []
