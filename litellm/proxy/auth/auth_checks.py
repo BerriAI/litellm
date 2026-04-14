@@ -362,12 +362,17 @@ async def check_tools_allowlist(
 def _check_key_or_team_allowed_ips(
     valid_token: Optional[UserAPIKeyAuth],
     request: Request,
+    general_settings: dict,
 ) -> None:
     """
     Check IP allowlist stored in key/team metadata.
     Key-level `metadata.allowed_ips` takes priority over team-level.
     No-op when neither is set.
     """
+    import os
+    LITELLM_ALLOWED_IPS_ENABLED = os.environ.get("LITELLM_ALLOWED_IPS_ENABLED", 'true')
+    if LITELLM_ALLOWED_IPS_ENABLED != "true":
+        return
     if valid_token is None:
         return
     key_meta = (
@@ -386,7 +391,7 @@ def _check_key_or_team_allowed_ips(
     is_valid, client_ip = _check_valid_ip(
         allowed_ips=allowed_ips,
         request=request,
-        use_x_forwarded_for=False,
+        use_x_forwarded_for=general_settings.get("use_x_forwarded_for", False),
     )
     if not is_valid:
         raise ProxyException(
