@@ -1131,3 +1131,121 @@ class TestPassthroughAuthToken:
             )
 
         assert url == "https://custom.example.com/v1/messages"
+
+
+class TestAnthropicThinkingSignatureSelfHeal:
+    """Helpers for retrying after invalid encrypted thinking signatures."""
+
+    def test_is_anthropic_invalid_thinking_signature_error_positive(self):
+        from litellm.llms.anthropic.common_utils import (
+            is_anthropic_invalid_thinking_signature_error,
+        )
+
+        raw = (
+            '{"type":"error","error":{"type":"invalid_request_error",'
+            '"message":"messages.3.content.3: Invalid `signature` in `thinking` block"},'
+            '"request_id":"req_011Ca2EtQDxp7x6RGUY2jVn9"}'
+        )
+        assert is_anthropic_invalid_thinking_signature_error(raw) is True
+
+    def test_is_anthropic_invalid_thinking_signature_error_negative(self):
+        from litellm.llms.anthropic.common_utils import (
+            is_anthropic_invalid_thinking_signature_error,
+        )
+
+        assert is_anthropic_invalid_thinking_signature_error("") is False
+        assert (
+            is_anthropic_invalid_thinking_signature_error("rate limit exceeded")
+            is False
+        )
+
+    def test_strip_thinking_blocks_from_anthropic_messages(self):
+        from litellm.llms.anthropic.common_utils import (
+            strip_thinking_blocks_from_anthropic_messages,
+        )
+
+        messages = [
+            {"role": "user", "content": "hi"},
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "thinking", "thinking": "plan", "signature": "sig"},
+                    {"type": "text", "text": "hello"},
+                ],
+            },
+        ]
+        out = strip_thinking_blocks_from_anthropic_messages(messages)
+        assert len(out) == 2
+        assert out[0] == messages[0]
+        assert len(out[1]["content"]) == 1
+        assert out[1]["content"][0]["type"] == "text"
+        assert messages[1]["content"][0]["type"] == "thinking"
+
+    def test_strip_thinking_blocks_from_anthropic_messages_request_dict(self):
+        from litellm.llms.anthropic.common_utils import (
+            strip_thinking_blocks_from_anthropic_messages_request_dict,
+        )
+
+        data = {
+            "model": "claude-sonnet-4-20250514",
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "thinking",
+                            "thinking": "x",
+                            "signature": "y",
+                        },
+                    ],
+                }
+            ],
+            "thinking": {"type": "enabled", "budget_tokens": 1024},
+        }
+        strip_thinking_blocks_from_anthropic_messages_request_dict(data)
+        assert "thinking" not in data
+        assert data["messages"][0]["content"] == []
+
+    def test_anthropic_messages_config_http_retry_helpers(self):
+        import httpx
+
+        from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
+            AnthropicMessagesConfig,
+        )
+
+        config = AnthropicMessagesConfig()
+        assert config.max_retry_on_anthropic_messages_http_error == 2
+
+        req = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+        err_text = (
+            '{"type":"error","error":{"type":"invalid_request_error",'
+            '"message":"messages.3.content.3: Invalid `signature` in `thinking` block"},'
+            '"request_id":"req_011Ca2EtQDxp7x6RGUY2jVn9"}'
+        )
+        resp = httpx.Response(400, request=req, text=err_text)
+        err = httpx.HTTPStatusError("bad", request=req, response=resp)
+        assert config.should_retry_anthropic_messages_on_http_error(err, {}) is True
+
+        resp_bad = httpx.Response(400, request=req, text="rate limit exceeded")
+        err_bad = httpx.HTTPStatusError("bad", request=req, response=resp_bad)
+        assert config.should_retry_anthropic_messages_on_http_error(err_bad, {}) is False
+
+        data = {
+            "model": "claude-sonnet-4-20250514",
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "thinking",
+                            "thinking": "x",
+                            "signature": "y",
+                        },
+                    ],
+                }
+            ],
+            "thinking": {"type": "enabled", "budget_tokens": 1024},
+        }
+        config.transform_anthropic_messages_request_on_http_error(err, data)
+        assert "thinking" not in data
+        assert data["messages"][0]["content"] == []
