@@ -2483,5 +2483,77 @@ class TestHasClientCredentialsOAuth2Flow:
         assert server.needs_user_oauth_token is False
 
 
+# ---------------------------------------------------------------------------
+# Upstream initialize-instructions cache
+# ---------------------------------------------------------------------------
+
+
+class TestMCPServerManagerUpstreamInstructionsCache:
+    """Tests for the upstream initialize-instructions cache."""
+
+    def test_get_returns_none_when_empty(self):
+        """Empty cache returns None for any key."""
+        manager = MCPServerManager()
+        assert manager._upstream_initialize_instructions_by_server_id.get("nonexistent") is None
+
+    def test_remember_stores_stripped_value(self):
+        """_remember_upstream_initialize_instructions stores a stripped string."""
+        manager = MCPServerManager()
+        fake_server = MagicMock(server_id="srv")
+        fake_client = MagicMock(_last_initialize_instructions="  hello \n")
+        manager._remember_upstream_initialize_instructions(fake_server, fake_client)
+        assert manager._upstream_initialize_instructions_by_server_id.get("srv") == "hello"
+
+    def test_remember_ignores_empty_string(self):
+        """Whitespace-only instructions are not stored."""
+        manager = MCPServerManager()
+        fake_server = MagicMock(server_id="srv")
+        fake_client = MagicMock(_last_initialize_instructions="   ")
+        manager._remember_upstream_initialize_instructions(fake_server, fake_client)
+        assert manager._upstream_initialize_instructions_by_server_id.get("srv") is None
+
+    def test_remember_ignores_none(self):
+        """None instructions are not stored."""
+        manager = MCPServerManager()
+        fake_server = MagicMock(server_id="srv")
+        fake_client = MagicMock(_last_initialize_instructions=None)
+        manager._remember_upstream_initialize_instructions(fake_server, fake_client)
+        assert manager._upstream_initialize_instructions_by_server_id.get("srv") is None
+
+    @pytest.mark.asyncio
+    async def test_load_servers_from_config_clears_cache(self):
+        """Reloading config clears any previously cached upstream instructions."""
+        manager = MCPServerManager()
+        manager._upstream_initialize_instructions_by_server_id["old"] = "stale"
+        await manager.load_servers_from_config(
+            mcp_servers_config={
+                "fresh_srv": {
+                    "url": "https://example.com",
+                    "instructions": "from yaml",
+                }
+            }
+        )
+        assert manager._upstream_initialize_instructions_by_server_id.get("old") is None
+
+    @pytest.mark.asyncio
+    async def test_load_servers_reads_instructions_from_config(self):
+        """instructions field from YAML config is persisted on the MCPServer."""
+        manager = MCPServerManager()
+        await manager.load_servers_from_config(
+            mcp_servers_config={
+                "srv_a": {
+                    "url": "https://a.example.com",
+                    "instructions": "A instructions",
+                },
+                "srv_b": {
+                    "url": "https://b.example.com",
+                },
+            }
+        )
+        by_name = {s.server_name: s for s in manager.config_mcp_servers.values()}
+        assert "srv_a" in by_name and by_name["srv_a"].instructions == "A instructions"
+        assert "srv_b" in by_name and by_name["srv_b"].instructions is None
+
+
 if __name__ == "__main__":
     pytest.main([__file__])
