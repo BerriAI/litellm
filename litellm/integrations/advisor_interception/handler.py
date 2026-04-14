@@ -128,6 +128,8 @@ class AdvisorInterceptionLogger(CustomLogger):
             kwargs=request_data,
         )
         if not should_run:
+            if isinstance(call_id, str):
+                self._advisor_config_by_call_id.pop(call_id, None)
             return None
 
         optional_params = self._build_optional_params_from_request_data(request_data)
@@ -177,6 +179,8 @@ class AdvisorInterceptionLogger(CustomLogger):
 
         advisor_calls, raw_tool_calls = self._extract_advisor_tool_calls(response)
         if not advisor_calls:
+            if isinstance(call_id, str):
+                self._advisor_config_by_call_id.pop(call_id, None)
             return False, {}
 
         # If there are mixed tool calls, do not hijack the request.
@@ -184,6 +188,8 @@ class AdvisorInterceptionLogger(CustomLogger):
             verbose_logger.debug(
                 "AdvisorInterception: Mixed tool calls detected, skipping advisor interception"
             )
+            if isinstance(call_id, str):
+                self._advisor_config_by_call_id.pop(call_id, None)
             return False, {}
 
         advisor_config = {}

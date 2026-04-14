@@ -7,6 +7,7 @@ from litellm.integrations.advisor_interception.tools import (
     get_litellm_advisor_tool_openai,
 )
 from litellm.types.utils import (
+    CallTypes,
     ChatCompletionMessageToolCall,
     Choices,
     Function,
@@ -244,3 +245,81 @@ async def test_run_chat_completion_agentic_loop_aggregates_subcall_costs(monkeyp
     assert calls["count"] == 2
     assert response is final_response
     assert response._hidden_params["response_cost"] == pytest.approx(2.0)
+
+
+@pytest.mark.asyncio
+async def test_should_run_chat_completion_agentic_loop_cleans_up_config_on_no_tool_call():
+    logger = AdvisorInterceptionLogger(enabled_providers=["openai"])
+    logger._advisor_config_by_call_id["cleanup-call-1"] = {
+        "advisor_model": "claude-opus-4-6",
+        "max_uses": 3,
+    }
+
+    mock_response = ModelResponse(
+        id="test",
+        choices=[
+            Choices(
+                finish_reason="stop",
+                index=0,
+                message=Message(role="assistant", content="No tool was called."),
+            )
+        ],
+        model="gpt-4o-mini",
+        object="chat.completion",
+        created=123,
+    )
+
+    should_run, tools_dict = await logger.async_should_run_chat_completion_agentic_loop(
+        response=mock_response,
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "Help"}],
+        tools=[get_litellm_advisor_tool_openai()],
+        stream=False,
+        custom_llm_provider="openai",
+        kwargs={"litellm_call_id": "cleanup-call-1"},
+    )
+
+    assert should_run is False
+    assert tools_dict == {}
+    assert "cleanup-call-1" not in logger._advisor_config_by_call_id
+
+
+@pytest.mark.asyncio
+async def test_post_call_hook_cleans_up_config_when_should_run_is_false():
+    logger = AdvisorInterceptionLogger(enabled_providers=["openai"])
+    logger._advisor_config_by_call_id["cleanup-call-2"] = {
+        "advisor_model": "claude-opus-4-6",
+        "max_uses": 3,
+    }
+
+    mock_response = ModelResponse(
+        id="test",
+        choices=[
+            Choices(
+                finish_reason="stop",
+                index=0,
+                message=Message(role="assistant", content="Final answer without advisor."),
+            )
+        ],
+        model="gpt-4o-mini",
+        object="chat.completion",
+        created=123,
+    )
+
+    request_data = {
+        "litellm_call_id": "cleanup-call-2",
+        "model": "gpt-4o-mini",
+        "messages": [{"role": "user", "content": "Help"}],
+        "tools": [get_litellm_advisor_tool_openai()],
+        "stream": False,
+        "custom_llm_provider": "openai",
+    }
+
+    result = await logger.async_post_call_success_deployment_hook(
+        request_data=request_data,
+        response=mock_response,
+        call_type=CallTypes.acompletion,
+    )
+
+    assert result is None
+    assert "cleanup-call-2" not in logger._advisor_config_by_call_id
