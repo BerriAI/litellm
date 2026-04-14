@@ -2421,3 +2421,178 @@ async def test_get_tools_from_mcp_servers_injects_stored_oauth2_token():
     assert call_kwargs["extra_headers"] == {"Authorization": f"Bearer {STORED_TOKEN}"}
 
     assert tools == [tool_1]
+
+
+# ---------------------------------------------------------------------------
+# _merge_gateway_initialize_instructions + ContextVar / InitializationOptions
+# ---------------------------------------------------------------------------
+
+
+def _make_instruction_server(
+    server_id="s1",
+    name="s1",
+    *,
+    alias=None,
+    server_name=None,
+    instructions=None,
+    spec_path=None,
+    url="https://example.com",
+):
+    return MCPServer(
+        server_id=server_id,
+        name=name,
+        alias=alias,
+        server_name=server_name,
+        url=url,
+        transport=MCPTransport.http,
+        instructions=instructions,
+        spec_path=spec_path,
+    )
+
+
+class TestMergeGatewayInitializeInstructions:
+    """Tests for _merge_gateway_initialize_instructions."""
+
+    def _merge(self, servers):
+        try:
+            from litellm.proxy._experimental.mcp_server.server import (
+                _merge_gateway_initialize_instructions,
+            )
+        except ImportError:
+            pytest.skip("MCP server not available")
+        return _merge_gateway_initialize_instructions(servers)
+
+    def test_empty_server_list_returns_none(self):
+        """No servers yields no instructions."""
+        assert self._merge([]) is None
+
+    def test_single_server_yaml_instructions(self):
+        """A single server with YAML instructions returns them verbatim."""
+        s = _make_instruction_server(instructions="Use add() for sums.")
+        assert self._merge([s]) == "Use add() for sums."
+
+    def test_yaml_instructions_strips_whitespace(self):
+        """Leading/trailing whitespace is stripped."""
+        s = _make_instruction_server(instructions="  padded  \n")
+        assert self._merge([s]) == "padded"
+
+    def test_yaml_override_beats_upstream_cache(self):
+        """YAML/DB instructions take precedence over upstream cache."""
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+        global_mcp_server_manager._upstream_initialize_instructions_by_server_id["s1"] = "upstream"
+        try:
+            s = _make_instruction_server(instructions="yaml wins")
+            assert self._merge([s]) == "yaml wins"
+        finally:
+            global_mcp_server_manager._upstream_initialize_instructions_by_server_id.pop("s1", None)
+
+    def test_upstream_cache_used_when_no_yaml(self):
+        """Upstream cached instructions are used when no YAML override is set."""
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+        global_mcp_server_manager._upstream_initialize_instructions_by_server_id["s1"] = "from upstream"
+        try:
+            s = _make_instruction_server(instructions=None)
+            assert self._merge([s]) == "from upstream"
+        finally:
+            global_mcp_server_manager._upstream_initialize_instructions_by_server_id.pop("s1", None)
+
+    def test_spec_path_servers_skipped(self):
+        """OpenAPI (spec_path) servers do not contribute instructions."""
+        s = _make_instruction_server(spec_path="/openapi.json", url=None)
+        assert self._merge([s]) is None
+
+    def test_no_instructions_no_cache_returns_none(self):
+        """Server with no instructions and no cache yields None."""
+        s = _make_instruction_server()
+        assert self._merge([s]) is None
+
+    def test_multiple_servers_merged_with_labels(self):
+        """Multiple servers get label-prefixed and separator-joined."""
+        s1 = _make_instruction_server(server_id="a", name="a", alias="Alpha", instructions="instr A")
+        s2 = _make_instruction_server(server_id="b", name="b", alias="Beta", instructions="instr B")
+        result = self._merge([s1, s2])
+        assert result is not None
+        assert "[Alpha]" in result and "[Beta]" in result
+        assert "instr A" in result and "instr B" in result
+        assert "---" in result
+
+    def test_single_server_no_label_wrapping(self):
+        """A single server's instructions are not wrapped with a label."""
+        s = _make_instruction_server(alias="MyServer", instructions="single")
+        result = self._merge([s])
+        assert result == "single"
+        assert "[MyServer]" not in result
+
+    def test_mixed_yaml_cache_specpath(self):
+        """YAML, upstream-cache, and spec_path servers are handled correctly together."""
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+        global_mcp_server_manager._upstream_initialize_instructions_by_server_id["c"] = "cached C"
+        try:
+            s_yaml = _make_instruction_server(server_id="a", name="a", alias="A", instructions="yaml A")
+            s_spec = _make_instruction_server(server_id="b", name="b", alias="B", spec_path="/spec.json", url=None)
+            s_cached = _make_instruction_server(server_id="c", name="c", alias="C")
+            result = self._merge([s_yaml, s_spec, s_cached])
+            assert "yaml A" in result
+            assert "cached C" in result
+            assert "[B]" not in result
+        finally:
+            global_mcp_server_manager._upstream_initialize_instructions_by_server_id.pop("c", None)
+
+
+class TestGatewayCreateInitializationOptions:
+    """Tests for the patched server.create_initialization_options via ContextVar."""
+
+    def test_no_contextvar_returns_default_options(self):
+        """When ContextVar is None, instructions are absent."""
+        try:
+            from litellm.proxy._experimental.mcp_server.mcp_context import (
+                _mcp_gateway_initialize_instructions,
+            )
+            from litellm.proxy._experimental.mcp_server.server import server
+        except ImportError:
+            pytest.skip("MCP server not available")
+
+        tok = _mcp_gateway_initialize_instructions.set(None)
+        try:
+            opts = server.create_initialization_options()
+            assert getattr(opts, "instructions", None) is None
+        finally:
+            _mcp_gateway_initialize_instructions.reset(tok)
+
+    def test_contextvar_set_injects_instructions(self):
+        """When ContextVar has a value, it appears in InitializationOptions."""
+        try:
+            from litellm.proxy._experimental.mcp_server.mcp_context import (
+                _mcp_gateway_initialize_instructions,
+            )
+            from litellm.proxy._experimental.mcp_server.server import server
+        except ImportError:
+            pytest.skip("MCP server not available")
+
+        tok = _mcp_gateway_initialize_instructions.set("hello from merge")
+        try:
+            opts = server.create_initialization_options()
+            assert opts.instructions == "hello from merge"
+        finally:
+            _mcp_gateway_initialize_instructions.reset(tok)
+
+    def test_contextvar_reset_removes_instructions(self):
+        """After resetting the ContextVar, instructions disappear."""
+        try:
+            from litellm.proxy._experimental.mcp_server.mcp_context import (
+                _mcp_gateway_initialize_instructions,
+            )
+            from litellm.proxy._experimental.mcp_server.server import server
+        except ImportError:
+            pytest.skip("MCP server not available")
+
+        tok = _mcp_gateway_initialize_instructions.set("temporary")
+        _mcp_gateway_initialize_instructions.reset(tok)
+        opts = server.create_initialization_options()
+        assert getattr(opts, "instructions", None) is None

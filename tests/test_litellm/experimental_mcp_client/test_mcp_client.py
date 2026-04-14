@@ -312,5 +312,80 @@ class TestMCPClient:
         assert MCPAuth.token.value == "token"
 
 
+# ---------------------------------------------------------------------------
+# _last_initialize_instructions capture
+# ---------------------------------------------------------------------------
+
+
+class TestMCPClientInstructionsCapture:
+    """Tests for _last_initialize_instructions capture during session init."""
+
+    def test_initial_value_is_none(self):
+        """Fresh client has no cached instructions."""
+        client = MCPClient(
+            server_url="http://example.com/mcp",
+            transport_type="http",
+        )
+        assert client._last_initialize_instructions is None
+
+    @pytest.mark.asyncio
+    @patch("litellm.experimental_mcp_client.client.ClientSession")
+    async def test_captures_instructions_from_initialize(self, mock_session_cls):
+        """Instructions from upstream initialize() are captured and stripped."""
+        client = MCPClient(
+            server_url="http://example.com/mcp",
+            transport_type="http",
+        )
+
+        mock_session = AsyncMock()
+        init_result = MagicMock()
+        init_result.instructions = "  upstream says hello  "
+        mock_session.initialize = AsyncMock(return_value=init_result)
+
+        session_ctx = MagicMock()
+        session_ctx.__aenter__ = AsyncMock(return_value=mock_session)
+        session_ctx.__aexit__ = AsyncMock(return_value=False)
+        mock_session_cls.return_value = session_ctx
+
+        transport_ctx = MagicMock()
+        transport_ctx.__aenter__ = AsyncMock(return_value=(MagicMock(), MagicMock()))
+        transport_ctx.__aexit__ = AsyncMock(return_value=False)
+
+        async def _op(session):
+            return "done"
+
+        await client._execute_session_operation(transport_ctx, _op)
+        assert client._last_initialize_instructions == "upstream says hello"
+
+    @pytest.mark.asyncio
+    @patch("litellm.experimental_mcp_client.client.ClientSession")
+    async def test_none_instructions_stays_none(self, mock_session_cls):
+        """When upstream returns no instructions the field stays None."""
+        client = MCPClient(
+            server_url="http://example.com/mcp",
+            transport_type="http",
+        )
+
+        mock_session = AsyncMock()
+        init_result = MagicMock()
+        init_result.instructions = None
+        mock_session.initialize = AsyncMock(return_value=init_result)
+
+        session_ctx = MagicMock()
+        session_ctx.__aenter__ = AsyncMock(return_value=mock_session)
+        session_ctx.__aexit__ = AsyncMock(return_value=False)
+        mock_session_cls.return_value = session_ctx
+
+        transport_ctx = MagicMock()
+        transport_ctx.__aenter__ = AsyncMock(return_value=(MagicMock(), MagicMock()))
+        transport_ctx.__aexit__ = AsyncMock(return_value=False)
+
+        async def _op(session):
+            return "done"
+
+        await client._execute_session_operation(transport_ctx, _op)
+        assert client._last_initialize_instructions is None
+
+
 if __name__ == "__main__":
     pytest.main([__file__])

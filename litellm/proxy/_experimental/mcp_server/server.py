@@ -6,7 +6,6 @@ LiteLLM MCP Server Routes
 
 import asyncio
 import contextlib
-import contextvars
 import time
 import types
 import traceback
@@ -1161,18 +1160,23 @@ if MCP_AVAILABLE:
             return texts[0][1]
         return "\n\n---\n\n".join(f"[{lbl}]\n{txt}" for lbl, txt in texts)
 
-    async def _set_mcp_gateway_initialize_instructions_token(
+    @contextlib.asynccontextmanager
+    async def _gateway_initialize_instructions_request_scope(
         user_api_key_auth: Optional[UserAPIKeyAuth],
         mcp_servers: Optional[List[str]],
         client_ip: Optional[str],
-    ) -> contextvars.Token[Optional[str]]:
+    ) -> AsyncIterator[None]:
         allowed = await _get_allowed_mcp_servers(
             user_api_key_auth=user_api_key_auth,
             mcp_servers=mcp_servers,
             client_ip=client_ip,
         )
         merged = _merge_gateway_initialize_instructions(allowed_mcp_servers=allowed)
-        return _mcp_gateway_initialize_instructions.set(merged)
+        tok = _mcp_gateway_initialize_instructions.set(merged)
+        try:
+            yield
+        finally:
+            _mcp_gateway_initialize_instructions.reset(tok)
 
     async def _get_tools_from_mcp_servers(  # noqa: PLR0915
         user_api_key_auth: Optional[UserAPIKeyAuth],
@@ -2741,15 +2745,12 @@ if MCP_AVAILABLE:
                 # Request was fully handled (e.g., DELETE on non-existent session)
                 return
 
-            _instr_tok = await _set_mcp_gateway_initialize_instructions_token(
+            async with _gateway_initialize_instructions_request_scope(
                 user_api_key_auth,
                 mcp_servers,
                 _client_ip,
-            )
-            try:
+            ):
                 await session_manager.handle_request(scope, receive, send)
-            finally:
-                _mcp_gateway_initialize_instructions.reset(_instr_tok)
         except HTTPException:
             # Re-raise HTTP exceptions to preserve status codes and details
             raise
@@ -2808,15 +2809,12 @@ if MCP_AVAILABLE:
                 await initialize_session_managers()
                 await asyncio.sleep(0.1)
 
-            _sse_instr_tok = await _set_mcp_gateway_initialize_instructions_token(
+            async with _gateway_initialize_instructions_request_scope(
                 user_api_key_auth,
                 mcp_servers,
                 _sse_client_ip,
-            )
-            try:
+            ):
                 await sse_session_manager.handle_request(scope, receive, send)
-            finally:
-                _mcp_gateway_initialize_instructions.reset(_sse_instr_tok)
         except Exception as e:
             verbose_logger.exception(f"Error handling MCP request: {e}")
             # Instead of re-raising, try to send a graceful error response
