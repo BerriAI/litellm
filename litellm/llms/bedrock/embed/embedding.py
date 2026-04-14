@@ -464,7 +464,7 @@ class BedrockEmbedding(BaseAWSLLM):
                             and not current.startswith("data:")
                             and next_elem is not None
                             and isinstance(next_elem, str)
-                            and next_elem.startswith("data:")
+                            and next_elem.startswith("data:image/")
                         ):
                             # Text followed by image → combined request
                             transformed_request: (
