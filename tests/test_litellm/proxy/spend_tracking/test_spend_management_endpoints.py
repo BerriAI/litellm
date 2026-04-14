@@ -2761,3 +2761,176 @@ async def test_ui_view_spend_logs_team_member_no_permission_blocked(
         assert response.status_code == 403
     finally:
         app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+class _CaptureFilterDB:
+    """Mock DB that records the `where` filter passed to find_many."""
+
+    def __init__(self):
+        self.litellm_spendlogs = self
+        self.captured_where = None
+
+    async def find_many(self, *args, **kwargs):
+        self.captured_where = kwargs.get("where")
+        return []
+
+    async def group_by(self, *args, **kwargs):
+        self.captured_where = kwargs.get("where")
+        return []
+
+
+class _CapturePrismaClient:
+    def __init__(self):
+        self.db = _CaptureFilterDB()
+
+    def hash_token(self, token):
+        return "hashed::" + token
+
+
+@pytest.mark.asyncio
+async def test_view_spend_logs_internal_user_combines_user_with_api_key(
+    client, monkeypatch
+):
+    """Internal users must have their user filter applied alongside api_key."""
+    mock_client = _CapturePrismaClient()
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_client)
+
+    start_date = "2024-01-01"
+    end_date = "2024-12-31"
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="internal-user-1",
+    )
+    try:
+        response = client.get(
+            "/spend/logs",
+            params={
+                "start_date": start_date,
+                "end_date": end_date,
+                "summarize": "false",
+                "api_key": "sk-some-raw-token",
+            },
+            headers={"Authorization": "Bearer sk-test"},
+        )
+        assert response.status_code == 200
+        where = mock_client.db.captured_where
+        assert where is not None
+        assert where["user"] == "internal-user-1"
+        assert where["api_key"] == "hashed::sk-some-raw-token"
+        assert "startTime" in where
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
+async def test_view_spend_logs_internal_user_combines_user_with_request_id(
+    client, monkeypatch
+):
+    """Internal users must have their user filter applied alongside request_id."""
+    mock_client = _CapturePrismaClient()
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_client)
+
+    start_date = "2024-01-01"
+    end_date = "2024-12-31"
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="internal-user-2",
+    )
+    try:
+        response = client.get(
+            "/spend/logs",
+            params={
+                "start_date": start_date,
+                "end_date": end_date,
+                "summarize": "false",
+                "request_id": "req-abc",
+            },
+            headers={"Authorization": "Bearer sk-test"},
+        )
+        assert response.status_code == 200
+        where = mock_client.db.captured_where
+        assert where is not None
+        assert where["user"] == "internal-user-2"
+        assert where["request_id"] == "req-abc"
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
+async def test_view_spend_logs_non_date_range_combines_user_with_request_id(
+    client, monkeypatch
+):
+    """Non-date-range path must also combine user + request_id filters."""
+    mock_client = _CapturePrismaClient()
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_client)
+
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="internal-user-3",
+    )
+    try:
+        response = client.get(
+            "/spend/logs",
+            params={"request_id": "req-xyz"},
+            headers={"Authorization": "Bearer sk-test"},
+        )
+        assert response.status_code == 200
+        where = mock_client.db.captured_where
+        assert where is not None
+        assert where["user"] == "internal-user-3"
+        assert where["request_id"] == "req-xyz"
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
+async def test_view_spend_logs_non_date_range_hashes_sk_api_key(client, monkeypatch):
+    """Non-date-range path must hash sk- prefixed api_keys before filtering."""
+    mock_client = _CapturePrismaClient()
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_client)
+
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+    )
+    try:
+        response = client.get(
+            "/spend/logs",
+            params={"api_key": "sk-raw-admin-token"},
+            headers={"Authorization": "Bearer sk-test"},
+        )
+        assert response.status_code == 200
+        where = mock_client.db.captured_where
+        assert where is not None
+        assert where["api_key"] == "hashed::sk-raw-admin-token"
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
+async def test_view_spend_logs_date_range_hashes_sk_api_key(client, monkeypatch):
+    """Date-range path must hash sk- prefixed api_keys before filtering."""
+    mock_client = _CapturePrismaClient()
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_client)
+
+    start_date = "2024-01-01"
+    end_date = "2024-12-31"
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+    )
+    try:
+        response = client.get(
+            "/spend/logs",
+            params={
+                "start_date": start_date,
+                "end_date": end_date,
+                "summarize": "false",
+                "api_key": "sk-raw-admin-token",
+            },
+            headers={"Authorization": "Bearer sk-test"},
+        )
+        assert response.status_code == 200
+        where = mock_client.db.captured_where
+        assert where is not None
+        assert where["api_key"] == "hashed::sk-raw-admin-token"
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
