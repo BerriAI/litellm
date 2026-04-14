@@ -329,6 +329,52 @@ class MCPClient:
                 except BaseException as e:
                     verbose_logger.debug(f"Error during http_client cleanup: {e}")
 
+    async def fetch_upstream_initialize_instructions(self) -> Optional[str]:
+        """Open a transport, run ``initialize`` once, return upstream ``instructions``."""
+        http_client: Optional[httpx.AsyncClient] = None
+        try:
+            transport_ctx, http_client = self._create_transport_context()
+            transport = await transport_ctx.__aenter__()
+            try:
+                read_stream, write_stream = transport[0], transport[1]
+                session_ctx = ClientSession(read_stream, write_stream)
+                session = await session_ctx.__aenter__()
+                try:
+                    init = await session.initialize()
+                    return init.instructions
+                finally:
+                    try:
+                        await session_ctx.__aexit__(None, None, None)
+                    except BaseException as e:
+                        verbose_logger.debug(
+                            "Error during session context exit (instructions fetch): %s",
+                            e,
+                        )
+            finally:
+                try:
+                    await transport_ctx.__aexit__(None, None, None)
+                except BaseException as e:
+                    verbose_logger.debug(
+                        "Error during transport context exit (instructions fetch): %s",
+                        e,
+                    )
+        except Exception as e:
+            verbose_logger.debug(
+                "fetch_upstream_initialize_instructions failed for %s: %s",
+                self.server_url or "stdio",
+                e,
+            )
+            return None
+        finally:
+            if http_client is not None:
+                try:
+                    await http_client.aclose()
+                except BaseException as e:
+                    verbose_logger.debug(
+                        "Error during http_client cleanup (instructions fetch): %s",
+                        e,
+                    )
+
     def update_auth_value(self, mcp_auth_value: Union[str, Dict[str, str]]):
         """
         Set the authentication header for the MCP client.
