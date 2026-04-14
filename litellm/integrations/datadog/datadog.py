@@ -301,7 +301,7 @@ class DataDogLogger(
             self.log_queue.append(dd_payload)
 
             if len(self.log_queue) >= self.batch_size:
-                await self.async_send_batch()
+                await self.flush_queue()
         except Exception as e:
             verbose_logger.exception(
                 f"Datadog: async_post_call_failure_hook - {str(e)}\n{traceback.format_exc()}"
@@ -324,9 +324,12 @@ class DataDogLogger(
                 verbose_logger.exception("Datadog: log_queue does not exist")
                 return
 
+            batch_to_send = self.log_queue[:]
+            self.log_queue = []
+
             verbose_logger.debug(
                 "Datadog - about to flush %s events on %s",
-                len(self.log_queue),
+                len(batch_to_send),
                 self.intake_url,
             )
 
@@ -335,7 +338,7 @@ class DataDogLogger(
                     "[DATADOG MOCK] Mock mode enabled - API calls will be intercepted"
                 )
 
-            response = await self.async_send_compressed_data(self.log_queue)
+            response = await self.async_send_compressed_data(batch_to_send)
             if response.status_code == 413:
                 verbose_logger.exception(DD_ERRORS.DATADOG_413_ERROR.value)
                 return
@@ -348,7 +351,7 @@ class DataDogLogger(
 
             if self.is_mock_mode:
                 verbose_logger.debug(
-                    f"[DATADOG MOCK] Batch of {len(self.log_queue)} events successfully mocked"
+                    f"[DATADOG MOCK] Batch of {len(batch_to_send)} events successfully mocked"
                 )
             else:
                 verbose_logger.debug(
@@ -356,10 +359,24 @@ class DataDogLogger(
                     response.status_code,
                     response.text,
                 )
+
         except Exception as e:
+            self.log_queue = batch_to_send + self.log_queue
             verbose_logger.exception(
                 f"Datadog Error sending batch API - {str(e)}\n{traceback.format_exc()}"
             )
+
+    async def flush_queue(self):
+        if self.flush_lock is None:
+            return
+
+        async with self.flush_lock:
+            if self.log_queue:
+                verbose_logger.debug(
+                    "CustomLogger: Flushing batch of %s events", len(self.log_queue)
+                )
+                await self.async_send_batch()
+                self.last_flush_time = datetime.datetime.now().timestamp()
 
     def log_success_event(self, kwargs, response_obj, start_time, end_time):
         """
@@ -429,7 +446,7 @@ class DataDogLogger(
         )
 
         if len(self.log_queue) >= self.batch_size:
-            await self.async_send_batch()
+            await self.flush_queue()
 
     def _create_datadog_logging_payload_helper(
         self,
