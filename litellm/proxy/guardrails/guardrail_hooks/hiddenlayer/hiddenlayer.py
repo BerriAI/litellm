@@ -386,6 +386,7 @@ class HiddenlayerGuardrailV2(CustomGuardrail):
         if "hl-requester-id" not in hl_headers:
             hl_headers["hl-requester-id"] = "LiteLLM"
 
+        payload: Any
         if input_type == "request":
             payload = {
                 "messages": inputs.get("structured_messages"),
@@ -414,7 +415,7 @@ class HiddenlayerGuardrailV2(CustomGuardrail):
                 payload = {}
 
         response = await self._call_hiddenlayer(
-            payload, input_type, hl_headers  # ty:ignore[invalid-argument-type]
+            payload, input_type, hl_headers
         )
         output = response.json()
 
@@ -457,7 +458,7 @@ class HiddenlayerGuardrailV2(CustomGuardrail):
 
     async def _call_hiddenlayer(
         self,
-        payload: dict[str, Any],
+        payload: Any,
         input_type: Literal["request", "response"],
         hl_headers: dict[str, str],
     ) -> httpx.Response:

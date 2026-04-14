@@ -17,6 +17,7 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
         litellm_params.version if hasattr(litellm_params, "version") else None
     )
 
+    _hiddenlayer_callback: HiddenlayerGuardrail | HiddenlayerGuardrailV2
     if not version or version < 2:
         _hiddenlayer_callback = HiddenlayerGuardrail(
             api_base=litellm_params.api_base,
