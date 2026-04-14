@@ -577,17 +577,24 @@ async def acompletion(  # noqa: PLR0915
             api_base=completion_kwargs.get("base_url", None),
         )
 
-    # Auto-redirect image generation models: if the resolved model's mode is
-    # 'image_generation', extract the prompt from messages and call
-    # aimage_generation() instead.  The response is converted back to a
-    # ModelResponse so that clients speaking only /chat/completions (e.g.
-    # OpenWebUI) receive a valid response, while all proxy middleware
-    # (spend tracking, guardrails, observability) remains intact.
-    try:
-        _model_info = litellm.get_model_info(
-            model=model, custom_llm_provider=custom_llm_provider
-        )
-        if _model_info.get("mode") == "image_generation":
+    # Auto-redirect DashScope image generation models: if the provider is
+    # dashscope and the model's mode is 'image_generation', extract the prompt
+    # from messages and call aimage_generation() instead.  The response is
+    # converted back to a ModelResponse so that clients speaking only
+    # /chat/completions (e.g. OpenWebUI) receive a valid response, while all
+    # proxy middleware (spend tracking, guardrails, observability) remains
+    # intact.  Scoped to dashscope only to avoid breaking other providers.
+    if custom_llm_provider == "dashscope":
+        _is_image_model = False
+        try:
+            _model_info = litellm.get_model_info(
+                model=model, custom_llm_provider=custom_llm_provider
+            )
+            _is_image_model = _model_info.get("mode") == "image_generation"
+        except Exception:
+            pass  # model not in cost map — treat as normal completion
+
+        if _is_image_model:
             from litellm.litellm_core_utils.prompt_templates.common_utils import (
                 get_str_from_messages,
             )
@@ -606,9 +613,6 @@ async def acompletion(  # noqa: PLR0915
                 **_img_kwargs,
             )
             # Convert ImageResponse → ModelResponse for chat completion clients
-            import time
-            import uuid
-
             _images = getattr(_image_response, "data", None) or []
             _parts = [
                 f"![image]({img.url})"
@@ -634,8 +638,6 @@ async def acompletion(  # noqa: PLR0915
                     prompt_tokens=0, completion_tokens=0, total_tokens=0
                 ),
             )
-    except Exception:
-        pass  # mode lookup failed or not an image model — fall through to normal completion
 
     fallbacks = fallbacks or litellm.model_fallbacks
     if fallbacks is not None:
