@@ -14,6 +14,31 @@ if TYPE_CHECKING:
     from litellm.types.utils import ModelResponseStream
 
 
+def _trigger_delta_has_content(processed_chunk: Optional[Dict[str, Any]]) -> bool:
+    """Return True when a ``content_block_delta`` carries non-empty content.
+
+    Used on content-block transitions to decide whether the trigger chunk's delta
+    should be re-emitted alongside the synthetic ``content_block_stop`` /
+    ``content_block_start`` pair. Re-emitting is required for text and thinking
+    transitions (where the trigger chunk holds the first characters of the new
+    block) and is intentionally skipped for tool_use openers, whose delta is an
+    empty ``input_json_delta`` because the tool name is already carried by
+    ``content_block_start``.
+    """
+    if not processed_chunk or processed_chunk.get("type") != "content_block_delta":
+        return False
+    delta = processed_chunk.get("delta") or {}
+    if not isinstance(delta, dict):
+        return False
+    # Anthropic delta variants all carry their content under exactly one of
+    # these fields; any non-empty value means the chunk is worth emitting.
+    for key in ("text", "thinking", "partial_json", "signature"):
+        value = delta.get(key)
+        if value:
+            return True
+    return False
+
+
 class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
     """
     - first chunk return 'message_start'
@@ -129,8 +154,21 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
 
                 if should_start_new_block and not self.sent_content_block_finish:
                     # Queue the sequence: content_block_stop -> content_block_start
-                    # The trigger chunk itself is not emitted as a delta since the
-                    # content_block_start already carries the relevant information.
+                    # (-> content_block_delta, when the trigger chunk carries
+                    # content).
+                    #
+                    # NOTE: a non-empty trigger delta MUST be re-emitted here. The
+                    # `content_block_start` event carries only the block type and an
+                    # empty body (see
+                    # `_translate_streaming_openai_chunk_to_anthropic_content_block`
+                    # which returns `TextBlock(text="")` for text transitions), so
+                    # dropping a non-empty `processed_chunk` silently loses the first
+                    # characters of every new content block for providers that stream
+                    # reasoning then text (e.g. Bedrock Converse MiniMax / Kimi /
+                    # Claude extended thinking). For tool_use openers the trigger
+                    # chunk carries only the tool name + empty arguments, so its
+                    # delta is empty and is intentionally skipped - the tool name is
+                    # already part of `content_block_start`.
                     self.chunk_queue.append(
                         {
                             "type": "content_block_stop",
@@ -144,6 +182,8 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                             "content_block": self.current_content_block_start,
                         }
                     )
+                    if _trigger_delta_has_content(processed_chunk):
+                        self.chunk_queue.append(processed_chunk)
                     self.sent_content_block_finish = False
                     return self.chunk_queue.popleft()
 
@@ -305,8 +345,13 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 if not self.queued_usage_chunk:
                     if should_start_new_block and not self.sent_content_block_finish:
                         # Queue the sequence: content_block_stop -> content_block_start
-                        # The trigger chunk itself is not emitted as a delta since the
-                        # content_block_start already carries the relevant information.
+                        # (-> content_block_delta, when the trigger chunk carries
+                        # content). See the sync `__next__` path for a full
+                        # explanation - the short version is that
+                        # `content_block_start` only carries the block type and an
+                        # empty body, so a non-empty trigger delta must be emitted
+                        # separately or the first characters of every new content
+                        # block are silently dropped.
 
                         # 1. Stop current content block
                         self.chunk_queue.append(
@@ -324,6 +369,13 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                                 "content_block": self.current_content_block_start,
                             }
                         )
+
+                        # 3. Emit the trigger chunk's delta when it has content
+                        # (skip empty deltas such as tool_use openers whose
+                        # arguments are empty and whose name is already carried by
+                        # `content_block_start`).
+                        if _trigger_delta_has_content(processed_chunk):
+                            self.chunk_queue.append(processed_chunk)
 
                         # Reset state for new block
                         self.sent_content_block_finish = False
