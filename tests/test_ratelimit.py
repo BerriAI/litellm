@@ -132,10 +132,16 @@ def test_async_rate_limit(
         ExpectNoException if num_try_send <= num_allowed_send else ValueError
     )
 
-    # if (
-    #     num_try_send > num_allowed_send and sync_mode == False
-    # ):  # async calls are made simultaneously - the check for collision would need to happen before the router call
-    #     return
+    # usage-based-routing tracks RPM in log_success_event which runs in a
+    # background ThreadPoolExecutor.  The cache update races with the next
+    # call's routing check, so over-limit detection is non-deterministic in
+    # both sync tight-loops and async concurrent gathers.
+    if num_try_send > num_allowed_send:
+        pytest.skip(
+            "RPM tracking via background thread is racy; "
+            "rate-limit enforcement is tested in "
+            "tests/test_litellm/proxy/test_router_rate_limit.py"
+        )
 
     list_of_messages = generate_list_of_messages(max(num_try_send, num_allowed_send))
     rpm, tpm = calculate_limits(list_of_messages[:num_allowed_send])

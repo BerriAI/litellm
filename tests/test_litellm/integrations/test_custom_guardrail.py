@@ -197,7 +197,7 @@ class TestCustomGuardrailShouldRunGuardrail:
         data_with_disable_root = {
             "model": "gpt-3.5-turbo",
             "messages": [{"role": "user", "content": "test"}],
-            "disable_global_guardrail": True,
+            "disable_global_guardrails": True,
         }
         result = custom_guardrail.should_run_guardrail(
             data=data_with_disable_root, event_type=GuardrailEventHooks.pre_call
@@ -210,7 +210,7 @@ class TestCustomGuardrailShouldRunGuardrail:
         data_with_disable_litellm = {
             "model": "gpt-3.5-turbo",
             "messages": [{"role": "user", "content": "test"}],
-            "litellm_metadata": {"disable_global_guardrail": True},
+            "litellm_metadata": {"disable_global_guardrails": True},
         }
         result = custom_guardrail.should_run_guardrail(
             data=data_with_disable_litellm, event_type=GuardrailEventHooks.pre_call
@@ -223,7 +223,7 @@ class TestCustomGuardrailShouldRunGuardrail:
         data_with_disable_metadata = {
             "model": "gpt-3.5-turbo",
             "messages": [{"role": "user", "content": "test"}],
-            "metadata": {"disable_global_guardrail": True},
+            "metadata": {"disable_global_guardrails": True},
         }
         result = custom_guardrail.should_run_guardrail(
             data=data_with_disable_metadata, event_type=GuardrailEventHooks.pre_call
@@ -236,7 +236,7 @@ class TestCustomGuardrailShouldRunGuardrail:
         data_with_disable_false = {
             "model": "gpt-3.5-turbo",
             "messages": [{"role": "user", "content": "test"}],
-            "disable_global_guardrail": False,
+            "disable_global_guardrails": False,
         }
         result = custom_guardrail.should_run_guardrail(
             data=data_with_disable_false, event_type=GuardrailEventHooks.pre_call
@@ -244,6 +244,121 @@ class TestCustomGuardrailShouldRunGuardrail:
         assert (
             result is True
         ), "Global guardrail should still run when disable_global_guardrail=False"
+
+    def test_should_run_guardrail_with_opted_out_global_guardrails(self):
+        """Test the per-guardrail opt-out list for global (default_on=True) guardrails"""
+        from litellm.types.guardrails import GuardrailEventHooks
+
+        custom_guardrail = CustomGuardrail(
+            guardrail_name="global_guardrail",
+            default_on=True,
+            event_hook=GuardrailEventHooks.pre_call,
+        )
+
+        # Test 1: guardrail in the opt-out list at root level → skipped
+        data_root = {
+            "model": "gpt-3.5-turbo",
+            "messages": [{"role": "user", "content": "test"}],
+            "opted_out_global_guardrails": ["global_guardrail"],
+        }
+        assert (
+            custom_guardrail.should_run_guardrail(
+                data=data_root, event_type=GuardrailEventHooks.pre_call
+            )
+            is False
+        )
+
+        # Test 2: guardrail in the opt-out list inside litellm_metadata → skipped
+        data_litellm = {
+            "model": "gpt-3.5-turbo",
+            "messages": [{"role": "user", "content": "test"}],
+            "litellm_metadata": {"opted_out_global_guardrails": ["global_guardrail"]},
+        }
+        assert (
+            custom_guardrail.should_run_guardrail(
+                data=data_litellm, event_type=GuardrailEventHooks.pre_call
+            )
+            is False
+        )
+
+        # Test 3: guardrail in the opt-out list inside metadata → skipped
+        data_metadata = {
+            "model": "gpt-3.5-turbo",
+            "messages": [{"role": "user", "content": "test"}],
+            "metadata": {"opted_out_global_guardrails": ["global_guardrail"]},
+        }
+        assert (
+            custom_guardrail.should_run_guardrail(
+                data=data_metadata, event_type=GuardrailEventHooks.pre_call
+            )
+            is False
+        )
+
+        # Test 4: a different guardrail in the opt-out list → still runs
+        data_other = {
+            "model": "gpt-3.5-turbo",
+            "messages": [{"role": "user", "content": "test"}],
+            "metadata": {"opted_out_global_guardrails": ["some_other_guardrail"]},
+        }
+        assert (
+            custom_guardrail.should_run_guardrail(
+                data=data_other, event_type=GuardrailEventHooks.pre_call
+            )
+            is True
+        )
+
+        # Test 5: empty opt-out list → still runs
+        data_empty = {
+            "model": "gpt-3.5-turbo",
+            "messages": [{"role": "user", "content": "test"}],
+            "metadata": {"opted_out_global_guardrails": []},
+        }
+        assert (
+            custom_guardrail.should_run_guardrail(
+                data=data_empty, event_type=GuardrailEventHooks.pre_call
+            )
+            is True
+        )
+
+        # Test 6: malformed value (bool instead of list) → safely ignored, guardrail runs
+        data_malformed = {
+            "model": "gpt-3.5-turbo",
+            "messages": [{"role": "user", "content": "test"}],
+            "metadata": {"opted_out_global_guardrails": True},
+        }
+        assert (
+            custom_guardrail.should_run_guardrail(
+                data=data_malformed, event_type=GuardrailEventHooks.pre_call
+            )
+            is True
+        )
+
+    def test_should_run_guardrail_opt_out_does_not_affect_non_global(self):
+        """Opt-out list only matters for default_on=True guardrails"""
+        from litellm.types.guardrails import GuardrailEventHooks
+
+        non_global = CustomGuardrail(
+            guardrail_name="opt_in_guardrail",
+            default_on=False,
+            event_hook=GuardrailEventHooks.pre_call,
+        )
+
+        # An opt-in guardrail named in opted_out_global_guardrails is still controlled
+        # by the explicit `guardrails` request list, not by the global opt-out list.
+        data = {
+            "model": "gpt-3.5-turbo",
+            "messages": [{"role": "user", "content": "test"}],
+            "metadata": {
+                "opted_out_global_guardrails": ["opt_in_guardrail"],
+                "guardrails": ["opt_in_guardrail"],
+            },
+        }
+        assert (
+            non_global.should_run_guardrail(
+                data=data, event_type=GuardrailEventHooks.pre_call
+            )
+            is True
+        )
 
 
 class TestApplyGuardrailCheck:
