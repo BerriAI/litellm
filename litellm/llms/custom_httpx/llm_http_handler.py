@@ -1955,18 +1955,66 @@ class BaseLLMHTTPHandler:
             },
         )
 
-        try:
-            response = await async_httpx_client.post(
-                url=request_url,
-                headers=headers,
-                data=signed_json_body or json.dumps(request_body),
-                stream=stream or False,
-                logging_obj=logging_obj,
-            )
-            response.raise_for_status()
-        except Exception as e:
+        max_anthropic_messages_http_attempts = max(
+            anthropic_messages_provider_config.max_retry_on_anthropic_messages_http_error,
+            1,
+        )
+        response: Optional[httpx.Response] = None
+        litellm_params_dict = dict(litellm_params)
+        for attempt_idx in range(max_anthropic_messages_http_attempts):
+            try:
+                response = await async_httpx_client.post(
+                    url=request_url,
+                    headers=headers,
+                    data=signed_json_body or json.dumps(request_body),
+                    stream=stream or False,
+                    logging_obj=logging_obj,
+                )
+                response.raise_for_status()
+            except httpx.HTTPStatusError as e:
+                hit_max_attempt = (
+                    attempt_idx + 1 == max_anthropic_messages_http_attempts
+                )
+                should_retry = anthropic_messages_provider_config.should_retry_anthropic_messages_on_http_error(
+                    e=e, litellm_params=litellm_params_dict
+                )
+                if should_retry and not hit_max_attempt:
+                    verbose_logger.debug(
+                        "Retrying on HTTPStatusError (attempt %s/%s).",
+                        attempt_idx + 2,
+                        max_anthropic_messages_http_attempts,
+                    )
+               
+                    request_body = anthropic_messages_provider_config.transform_anthropic_messages_request_on_http_error(
+                        e=e, request_data=request_body
+                    )
+                    headers, signed_json_body = (
+                        anthropic_messages_provider_config.sign_request(
+                            headers=headers,
+                            optional_params=dict(litellm_params),
+                            request_data=request_body,
+                            api_base=request_url,
+                            api_key=api_key,
+                            stream=stream,
+                            fake_stream=False,
+                            model=model,
+                        )
+                    )
+                    logging_obj.model_call_details.update(request_body)
+                    continue
+                raise self._handle_error(
+                    e=e, provider_config=anthropic_messages_provider_config
+                )
+            except Exception as e:
+                raise self._handle_error(
+                    e=e, provider_config=anthropic_messages_provider_config
+                )
+            break
+
+        if response is None:
             raise self._handle_error(
-                e=e, provider_config=anthropic_messages_provider_config
+                e=ValueError("No response from Anthropic /v1/messages"),
+                provider_config=anthropic_messages_provider_config,
             )
 
         # used for logging + cost tracking
