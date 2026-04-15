@@ -51,7 +51,7 @@ The resource group is typically configured separately in your AI Core deployment
 ### Step 1: Install LiteLLM
 
 ```bash
-pip install litellm
+uv add litellm
 ```
 
 ### Step 2: Set Your Credentials

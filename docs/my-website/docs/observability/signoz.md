@@ -17,7 +17,7 @@ Instrumenting LiteLLM in your AI applications with telemetry ensures full observ
 - A [SigNoz Cloud account](https://signoz.io/teams/) with an active ingestion key
 - Internet access to send telemetry data to SigNoz Cloud
 - [LiteLLM](https://www.litellm.ai/) SDK or Proxy integration
-- For Python: `pip` installed for managing Python packages and _(optional but recommended)_ a Python virtual environment to isolate dependencies
+- For Python: `uv` installed for managing Python packages and _(optional but recommended)_ a Python virtual environment to isolate dependencies
 
 ## Monitoring LiteLLM
 
@@ -37,7 +37,7 @@ No-code auto-instrumentation is recommended for quick setup with minimal code ch
 **Step 1:** Install the necessary packages in your Python environment.
 
 ```bash
-pip install \
+uv add \
   opentelemetry-api \
   opentelemetry-distro \
   opentelemetry-exporter-otlp \
@@ -99,7 +99,7 @@ OTEL_PYTHON_DISABLED_INSTRUMENTATIONS=openai \
 opentelemetry-instrument <your_run_command>
 ```
 
-> Note: OTLP gRPC requires `grpcio`. Install via `pip install "litellm[grpc]"` (or `grpcio`).
+> Note: OTLP gRPC requires `grpcio`. Install via `uv add "litellm[grpc]"` (or `grpcio`).
 
 > 📌 Note: We're using `OTEL_PYTHON_DISABLED_INSTRUMENTATIONS=openai` in the run command to disable the OpenAI instrumentor for tracing. This avoids conflicts with LiteLLM's native telemetry/instrumentation, ensuring that telemetry is captured exclusively through LiteLLM's built-in instrumentation.
 
@@ -120,7 +120,7 @@ Code-based instrumentation gives you fine-grained control over your telemetry co
 **Step 1:** Install the necessary packages in your Python environment.
 
 ```bash
-pip install \
+uv add \
   opentelemetry-api \
   opentelemetry-sdk \
   opentelemetry-exporter-otlp \
@@ -338,7 +338,7 @@ You can also check out our custom LiteLLM SDK dashboard [here](https://signoz.i
 **Step 1:** Install the necessary packages in your Python environment.
 
 ```bash
-pip install opentelemetry-api \
+uv add opentelemetry-api \
   opentelemetry-sdk \
   opentelemetry-exporter-otlp \
   'litellm[proxy]'
@@ -364,7 +364,7 @@ export OTEL_METRICS_EXPORTER="otlp"
 export OTEL_LOGS_EXPORTER="otlp"
 ```
 
-> Note: OTLP gRPC requires `grpcio`. Install via `pip install "litellm[grpc]"` (or `grpcio`).
+> Note: OTLP gRPC requires `grpcio`. Install via `uv add "litellm[grpc]"` (or `grpcio`).
 
 - Set the `<region>` to match your SigNoz Cloud [region](https://signoz.io/docs/ingestion/signoz-cloud/overview/#endpoint)
 - Replace `<your_ingestion_key>` with your SigNoz [ingestion key](https://signoz.io/docs/ingestion/signoz-cloud/keys/)

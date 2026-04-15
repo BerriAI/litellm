@@ -93,6 +93,23 @@ def test_baseten_model_api_pricing_entries():
         assert model_info["output_cost_per_token"] == output_cost
 
 
+def test_wandb_model_api_pricing_entries():
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    expected_pricing = {
+        "wandb/moonshotai/Kimi-K2.5": (6e-07, 3e-06),
+        "wandb/MiniMaxAI/MiniMax-M2.5": (3e-07, 1.2e-06),
+    }
+
+    for model_name, (input_cost, output_cost) in expected_pricing.items():
+        model_info = litellm.model_cost.get(model_name)
+        assert model_info is not None, f"Missing model pricing entry: {model_name}"
+        assert model_info["litellm_provider"] == "wandb"
+        assert model_info["input_cost_per_token"] == input_cost
+        assert model_info["output_cost_per_token"] == output_cost
+
+
 def test_cost_calculator_with_usage(monkeypatch):
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")

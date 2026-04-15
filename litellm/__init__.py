@@ -1177,7 +1177,7 @@ from litellm.types.utils import LlmProviders
 
 ## Lazy loading this is not straightforward, will leave it here for now.
 from .main import *  # type: ignore
-from .compression import compress
+from .compression import compress  # type: ignore[no-redef]
 
 # Skills API
 from .skills.main import (

@@ -5321,6 +5321,19 @@ def get_error_message_str(e: Exception) -> str:
     return error_message
 
 
+def _get_openapi_url() -> Optional[str]:
+    """
+    Get the OpenAPI schema URL from the environment variables.
+
+    - If NO_OPENAPI is True, return None.
+    - Otherwise, default to "/openapi.json".
+    """
+    if str_to_bool(os.getenv("NO_OPENAPI")) is True:
+        return None
+
+    return "/openapi.json"
+
+
 def _get_redoc_url() -> Optional[str]:
     """
     Get the Redoc URL from the environment variables.
