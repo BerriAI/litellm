@@ -49,6 +49,10 @@ vi.mock("../../../common_components/team_multi_select", () => ({
   default: () => <div>Team Multi Select</div>,
 }));
 
+vi.mock("../../../common_components/user_single_select", () => ({
+  default: () => <div>User Single Select</div>,
+}));
+
 // Mock useTeams hook
 vi.mock("@/app/(dashboard)/hooks/useTeams", () => ({
   default: vi.fn(() => ({
