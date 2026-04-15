@@ -22,6 +22,7 @@ from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm._service_logger import ServiceLogging
 from litellm.caching import DualCache
 from litellm.litellm_core_utils.dd_tracing import tracer
+from litellm.constants import CLI_JWT_TOKEN_NAME
 from litellm.litellm_core_utils.dot_notation_indexing import get_nested_value
 from litellm.proxy._types import *
 from litellm.proxy.auth.auth_checks import (
@@ -983,9 +984,9 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                         route=route,
                     )
                 if _end_user_object is not None:
-                    end_user_params[
-                        "allowed_model_region"
-                    ] = _end_user_object.allowed_model_region
+                    end_user_params["allowed_model_region"] = (
+                        _end_user_object.allowed_model_region
+                    )
                     if _end_user_object.litellm_budget_table is not None:
                         _apply_budget_limits_to_end_user_params(
                             end_user_params=end_user_params,
@@ -1459,6 +1460,20 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                 key=valid_token.team_id, value=_team_obj
             )  # save team table in cache - used for tpm/rpm limiting - tpm_rpm_limiter.py
 
+            # CLI JWT tokens carry frozen spend/budget from the encrypted blob.
+            # Replace with real DB values so response headers are accurate.
+            # Note: token-level budget checks (lines above) see the frozen
+            # values and are a no-op (0.0 >= 0.25 = False). This is fine —
+            # real budget enforcement happens in common_checks() below,
+            # which uses _team_obj and user_obj directly, not valid_token.
+            if valid_token.token == CLI_JWT_TOKEN_NAME:
+                if user_obj is not None and user_obj.spend is not None:
+                    valid_token.spend = user_obj.spend
+                if _team_obj is not None and _team_obj.max_budget is not None:
+                    valid_token.max_budget = _team_obj.max_budget
+                elif user_obj is not None and user_obj.max_budget is not None:
+                    valid_token.max_budget = user_obj.max_budget
+
             # Fetch project object if key belongs to a project
             _project_obj = None
             if valid_token.project_id is not None:
@@ -1539,9 +1554,9 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
 
             if _end_user_object is not None:
                 valid_token_dict.update(end_user_params)
-                valid_token_dict[
-                    "end_user_object_permission"
-                ] = _end_user_object.object_permission
+                valid_token_dict["end_user_object_permission"] = (
+                    _end_user_object.object_permission
+                )
 
         # check if token is from litellm-ui, litellm ui makes keys to allow users to login with sso. These keys can only be used for LiteLLM UI functions
         # sso/login, ui/login, /key functions and /user functions

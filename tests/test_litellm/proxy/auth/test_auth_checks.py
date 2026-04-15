@@ -62,9 +62,9 @@ def reset_constants_module():
     # Reload modules before test
     importlib.reload(constants)
     importlib.reload(auth_checks)
-    
+
     yield
-    
+
     # Reload modules after test to clean up
     importlib.reload(constants)
     importlib.reload(auth_checks)
@@ -157,9 +157,9 @@ def test_experimental_ui_token_ignores_litellm_ui_session_duration(
     expires = datetime.fromisoformat(token_data["expires"].replace("Z", "+00:00"))
     now = get_utc_datetime()
     # Must be ~10 min, NOT 24h. If LITELLM_UI_SESSION_DURATION were incorrectly used, this would fail.
-    assert expires <= now + timedelta(minutes=11), (
-        "Experimental UI must use 10-min expiry, not LITELLM_UI_SESSION_DURATION"
-    )
+    assert expires <= now + timedelta(
+        minutes=11
+    ), "Experimental UI must use 10-min expiry, not LITELLM_UI_SESSION_DURATION"
 
 
 def test_get_experimental_ui_login_jwt_auth_token_invalid(
@@ -293,13 +293,15 @@ def test_get_cli_jwt_auth_token_custom_expiration(
 
     # Set custom expiration to 48 hours
     monkeypatch.setenv("LITELLM_CLI_JWT_EXPIRATION_HOURS", "48")
-    
+
     # Reload the constants module to pick up the new env var
     importlib.reload(constants)
     # Also reload auth_checks to pick up the new constant value
     importlib.reload(auth_checks)
-    
-    token = auth_checks.ExperimentalUIJWTToken.get_cli_jwt_auth_token(valid_sso_user_defined_values)
+
+    token = auth_checks.ExperimentalUIJWTToken.get_cli_jwt_auth_token(
+        valid_sso_user_defined_values
+    )
 
     # Decrypt and verify token contents
     decrypted_token = decrypt_value_helper(
@@ -314,6 +316,245 @@ def test_get_cli_jwt_auth_token_custom_expiration(
     assert expires > get_utc_datetime() + timedelta(hours=47, minutes=59)
     assert expires <= get_utc_datetime() + timedelta(hours=48, minutes=1)
 
+
+@pytest.mark.asyncio
+async def test_cli_jwt_auth_flow_updates_spend_and_budget(monkeypatch):
+    """Integration test: CLI JWT tokens get real spend/budget through the actual auth builder."""
+    import asyncio
+
+    from starlette.requests import Request
+
+    from litellm.proxy._types import LiteLLM_TeamTableCachedObj
+    from litellm.proxy.auth.user_api_key_auth import _user_api_key_auth_builder
+
+    import litellm.proxy.proxy_server as _proxy_server_mod
+
+    monkeypatch.setenv("EXPERIMENTAL_UI_LOGIN", "True")
+
+    # Create a CLI JWT token for an internal_user with a team
+    user_info = LiteLLM_UserTable(
+        user_id="test_user_spend",
+        user_email="test@example.com",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+        models=[],
+        max_budget=100.0,
+        teams=["test_team_budget"],
+    )
+    token = ExperimentalUIJWTToken.get_cli_jwt_auth_token(user_info)
+
+    # Mock DB objects with real spend/budget
+    mock_user_obj = LiteLLM_UserTable(
+        user_id="test_user_spend",
+        spend=42.50,
+        max_budget=100.0,
+    )
+    mock_team_obj = LiteLLM_TeamTableCachedObj(
+        team_id="test_team_budget",
+        max_budget=1000.0,
+        spend=150.0,
+        last_refreshed_at=None,
+    )
+
+    # Set up module globals
+    mock_cache = MagicMock()
+    mock_cache.async_get_cache = AsyncMock(return_value=None)
+    mock_cache.async_set_cache = AsyncMock()
+    mock_cache.set_cache = MagicMock()
+
+    mock_prisma = MagicMock()
+
+    mock_proxy_logging = MagicMock()
+    mock_proxy_logging.internal_usage_cache = MagicMock()
+    mock_proxy_logging.internal_usage_cache.dual_cache = MagicMock()
+    mock_proxy_logging.internal_usage_cache.dual_cache.async_get_cache = AsyncMock(
+        return_value=None
+    )
+    mock_proxy_logging.budget_alerts = AsyncMock()
+    mock_proxy_logging.post_call_failure_hook = AsyncMock(return_value=None)
+
+    attrs_to_set = {
+        "prisma_client": mock_prisma,
+        "user_api_key_cache": mock_cache,
+        "proxy_logging_obj": mock_proxy_logging,
+        "master_key": "sk-master-key-test",
+        "general_settings": {},
+        "llm_model_list": [],
+        "llm_router": None,
+        "open_telemetry_logger": None,
+        "model_max_budget_limiter": MagicMock(),
+        "user_custom_auth": None,
+        "jwt_handler": None,
+        "litellm_proxy_admin_name": "admin",
+    }
+    original_values = {
+        attr: getattr(_proxy_server_mod, attr, None) for attr in attrs_to_set
+    }
+    try:
+        for attr, val in attrs_to_set.items():
+            setattr(_proxy_server_mod, attr, val)
+
+        request = Request(
+            scope={
+                "type": "http",
+                "method": "POST",
+                "path": "/chat/completions",
+                "query_string": b"",
+                "headers": [],
+            }
+        )
+
+        with patch(
+            "litellm.proxy.auth.user_api_key_auth.get_key_object",
+            new_callable=AsyncMock,
+            return_value=None,
+        ), patch(
+            "litellm.proxy.auth.user_api_key_auth.get_user_object",
+            new_callable=AsyncMock,
+            return_value=mock_user_obj,
+        ), patch(
+            "litellm.proxy.auth.user_api_key_auth.get_team_object",
+            new_callable=AsyncMock,
+            return_value=mock_team_obj,
+        ), patch(
+            "litellm.proxy.auth.user_api_key_auth.common_checks",
+            new_callable=AsyncMock,
+            return_value=True,
+        ):
+            result = await _user_api_key_auth_builder(
+                request=request,
+                api_key=f"Bearer {token}",
+                azure_api_key_header="",
+                anthropic_api_key_header=None,
+                google_ai_studio_api_key_header=None,
+                azure_apim_header=None,
+                request_data={},
+            )
+
+        # The returned UserAPIKeyAuth should have real DB values
+        assert result.spend == 42.50, f"Expected spend=42.50, got {result.spend}"
+        assert (
+            result.max_budget == 1000.0
+        ), f"Expected max_budget=1000.0, got {result.max_budget}"
+
+        # Drain fire-and-forget tasks spawned by _user_api_key_auth_builder
+        await asyncio.sleep(0)
+    finally:
+        for attr, val in original_values.items():
+            setattr(_proxy_server_mod, attr, val)
+
+
+@pytest.mark.asyncio
+async def test_cli_jwt_auth_flow_fallback_to_user_budget(monkeypatch):
+    """Integration test: CLI JWT falls back to user budget when no team is assigned."""
+    import asyncio
+
+    from starlette.requests import Request
+
+    from litellm.proxy.auth.user_api_key_auth import _user_api_key_auth_builder
+
+    import litellm.proxy.proxy_server as _proxy_server_mod
+
+    monkeypatch.setenv("EXPERIMENTAL_UI_LOGIN", "True")
+
+    # Create a CLI JWT token for an internal_user WITHOUT a team
+    user_info = LiteLLM_UserTable(
+        user_id="test_user_no_team",
+        user_email="test@example.com",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+        models=[],
+        max_budget=200.0,
+    )
+    token = ExperimentalUIJWTToken.get_cli_jwt_auth_token(user_info)
+
+    # Mock DB: user with real spend/budget, no team
+    mock_user_obj = LiteLLM_UserTable(
+        user_id="test_user_no_team",
+        spend=10.0,
+        max_budget=200.0,
+    )
+
+    mock_cache = MagicMock()
+    mock_cache.async_get_cache = AsyncMock(return_value=None)
+    mock_cache.async_set_cache = AsyncMock()
+    mock_cache.set_cache = MagicMock()
+
+    mock_proxy_logging = MagicMock()
+    mock_proxy_logging.internal_usage_cache = MagicMock()
+    mock_proxy_logging.internal_usage_cache.dual_cache = MagicMock()
+    mock_proxy_logging.internal_usage_cache.dual_cache.async_get_cache = AsyncMock(
+        return_value=None
+    )
+    mock_proxy_logging.budget_alerts = AsyncMock()
+    mock_proxy_logging.post_call_failure_hook = AsyncMock(return_value=None)
+
+    attrs_to_set = {
+        "prisma_client": MagicMock(),
+        "user_api_key_cache": mock_cache,
+        "proxy_logging_obj": mock_proxy_logging,
+        "master_key": "sk-master-key-test",
+        "general_settings": {},
+        "llm_model_list": [],
+        "llm_router": None,
+        "open_telemetry_logger": None,
+        "model_max_budget_limiter": MagicMock(),
+        "user_custom_auth": None,
+        "jwt_handler": None,
+        "litellm_proxy_admin_name": "admin",
+    }
+    original_values = {
+        attr: getattr(_proxy_server_mod, attr, None) for attr in attrs_to_set
+    }
+    try:
+        for attr, val in attrs_to_set.items():
+            setattr(_proxy_server_mod, attr, val)
+
+        request = Request(
+            scope={
+                "type": "http",
+                "method": "POST",
+                "path": "/chat/completions",
+                "query_string": b"",
+                "headers": [],
+            }
+        )
+
+        with patch(
+            "litellm.proxy.auth.user_api_key_auth.get_key_object",
+            new_callable=AsyncMock,
+            return_value=None,
+        ), patch(
+            "litellm.proxy.auth.user_api_key_auth.get_user_object",
+            new_callable=AsyncMock,
+            return_value=mock_user_obj,
+        ), patch(
+            "litellm.proxy.auth.user_api_key_auth.get_team_object",
+            new_callable=AsyncMock,
+            return_value=None,
+        ), patch(
+            "litellm.proxy.auth.user_api_key_auth.common_checks",
+            new_callable=AsyncMock,
+            return_value=True,
+        ):
+            result = await _user_api_key_auth_builder(
+                request=request,
+                api_key=f"Bearer {token}",
+                azure_api_key_header="",
+                anthropic_api_key_header=None,
+                google_ai_studio_api_key_header=None,
+                azure_apim_header=None,
+                request_data={},
+            )
+
+        assert result.spend == 10.0, f"Expected spend=10.0, got {result.spend}"
+        assert (
+            result.max_budget == 200.0
+        ), f"Expected max_budget=200.0 (user fallback), got {result.max_budget}"
+
+        # Drain fire-and-forget tasks spawned by _user_api_key_auth_builder
+        await asyncio.sleep(0)
+    finally:
+        for attr, val in original_values.items():
+            setattr(_proxy_server_mod, attr, val)
 
 
 @pytest.mark.asyncio
@@ -436,7 +677,9 @@ async def test_get_user_object_upsert_includes_user_email():
     mock_prisma_client.db.litellm_usertable.create.assert_called_once()
     creation_args = mock_prisma_client.db.litellm_usertable.create.call_args[1]["data"]
 
-    assert "user_email" in creation_args, "user_email should be included when upserting a new user"
+    assert (
+        "user_email" in creation_args
+    ), "user_email should be included when upserting a new user"
     assert creation_args["user_email"] == "test@example.com"
     assert creation_args["user_id"] == "new_test_user"
 
@@ -463,7 +706,9 @@ def test_log_budget_lookup_failure_skips_user_not_found():
 
 
 @pytest.mark.asyncio
-@patch("litellm.proxy.management_endpoints.team_endpoints.new_team", new_callable=AsyncMock)
+@patch(
+    "litellm.proxy.management_endpoints.team_endpoints.new_team", new_callable=AsyncMock
+)
 async def test_get_team_db_check_calls_new_team_on_upsert(mock_new_team, monkeypatch):
     """
     Test that _get_team_db_check correctly calls the `new_team` function
@@ -497,8 +742,12 @@ async def test_get_team_db_check_calls_new_team_on_upsert(mock_new_team, monkeyp
 
 
 @pytest.mark.asyncio
-@patch("litellm.proxy.management_endpoints.team_endpoints.new_team", new_callable=AsyncMock)
-async def test_get_team_db_check_does_not_call_new_team_if_exists(mock_new_team, monkeypatch):
+@patch(
+    "litellm.proxy.management_endpoints.team_endpoints.new_team", new_callable=AsyncMock
+)
+async def test_get_team_db_check_does_not_call_new_team_if_exists(
+    mock_new_team, monkeypatch
+):
     """
     Test that _get_team_db_check does NOT call the `new_team` function
     if the team already exists in the database.
