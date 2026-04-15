@@ -1611,10 +1611,12 @@ def completion_cost(  # noqa: PLR0915
                         if (_cr or _cc) and model:
                             try:
                                 _mi = litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider)
-                                if _cr and _mi.get("cache_read_input_token_cost"):
-                                    _cache_read_cost = float(_cr) * float(_mi["cache_read_input_token_cost"])
-                                if _cc and _mi.get("cache_creation_input_token_cost"):
-                                    _cache_creation_cost = float(_cc) * float(_mi["cache_creation_input_token_cost"])
+                                _cr_rate = _mi.get("cache_read_input_token_cost")
+                                if _cr and _cr_rate is not None:
+                                    _cache_read_cost = float(_cr) * float(_cr_rate)
+                                _cc_rate = _mi.get("cache_creation_input_token_cost")
+                                if _cc and _cc_rate is not None:
+                                    _cache_creation_cost = float(_cc) * float(_cc_rate)
                             except Exception:
                                 pass
                     _store_cost_breakdown_in_logging_obj(
