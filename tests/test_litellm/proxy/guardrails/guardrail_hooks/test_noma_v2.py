@@ -137,7 +137,8 @@ class TestNomaV2Configuration:
         assert "x-noma-context" not in payload
         assert "input" not in payload
 
-    def test_build_scan_payload_deep_copies_request_data(self, noma_v2_guardrail):
+    def test_build_scan_payload_isolates_request_data(self, noma_v2_guardrail):
+        """Mutations to the payload copy must not affect the original request_data."""
         request_data = {
             "metadata": {"headers": {"x-noma-application-id": "header-app"}},
             "messages": [{"role": "user", "content": "hello"}],
@@ -155,6 +156,37 @@ class TestNomaV2Configuration:
 
         assert request_data["metadata"]["headers"]["x-noma-application-id"] == "header-app"
         assert request_data["messages"][0]["content"] == "hello"
+
+    def test_build_scan_payload_handles_non_serializable_request_data(self, noma_v2_guardrail):
+        """Regression: deepcopy crashed when request_data contained C-extension objects
+        like uvloop.Loop (post_call/during_call hooks). The JSON-safe copy must not raise."""
+
+        class _UndeepCopyable:
+            """Simulates uvloop.Loop: a Cython type whose __cinit__ prevents deepcopy."""
+
+            def __deepcopy__(self, memo):
+                raise TypeError("no default __reduce__ due to non-trivial __cinit__")
+
+            def __repr__(self):
+                return "<UndeepCopyable>"
+
+        request_data = {
+            "messages": [{"role": "user", "content": "hello"}],
+            "metadata": {"event_loop": _UndeepCopyable()},
+        }
+
+        # Must not raise even though request_data contains a non-serializable object.
+        payload = noma_v2_guardrail._build_scan_payload(
+            inputs={"texts": ["hello"]},
+            request_data=request_data,
+            input_type="request",
+            logging_obj=None,
+            application_id="test-app",
+        )
+
+        assert payload["request_data"]["messages"][0]["content"] == "hello"
+        # Non-serializable object is safely stringified rather than crashing.
+        assert isinstance(payload["request_data"]["metadata"]["event_loop"], str)
 
     def test_build_scan_payload_passes_model_call_details_as_is(self, noma_v2_guardrail):
         class _LoggingObj:
