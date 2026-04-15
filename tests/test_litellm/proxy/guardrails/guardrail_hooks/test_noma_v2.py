@@ -151,15 +151,22 @@ class TestNomaV2Configuration:
             application_id="dynamic-app",
         )
 
-        payload["request_data"]["metadata"]["headers"]["x-noma-application-id"] = "mutated-value"
+        payload["request_data"]["metadata"]["headers"][
+            "x-noma-application-id"
+        ] = "mutated-value"
         payload["request_data"]["messages"][0]["content"] = "changed-content"
 
-        assert request_data["metadata"]["headers"]["x-noma-application-id"] == "header-app"
+        assert (
+            request_data["metadata"]["headers"]["x-noma-application-id"] == "header-app"
+        )
         assert request_data["messages"][0]["content"] == "hello"
 
-    def test_build_scan_payload_handles_non_serializable_request_data(self, noma_v2_guardrail):
+    def test_build_scan_payload_handles_non_serializable_request_data(
+        self, noma_v2_guardrail
+    ):
         """Regression: deepcopy crashed when request_data contained C-extension objects
-        like uvloop.Loop (post_call/during_call hooks). safe_deep_copy must not raise."""
+        like uvloop.Loop (post_call/during_call hooks). safe_deep_copy must not raise.
+        """
 
         class _UndeepCopyable:
             """Simulates uvloop.Loop: a Cython type whose __cinit__ prevents deepcopy."""
@@ -191,7 +198,9 @@ class TestNomaV2Configuration:
         # _sanitize_payload_for_transport handles serialization before transport.
         assert payload["request_data"]["metadata"]["event_loop"] is loop_obj
 
-    def test_build_scan_payload_passes_model_call_details_as_is(self, noma_v2_guardrail):
+    def test_build_scan_payload_passes_model_call_details_as_is(
+        self, noma_v2_guardrail
+    ):
         class _LoggingObj:
             def __init__(self) -> None:
                 self.model_call_details = {
@@ -228,7 +237,9 @@ class TestNomaV2Configuration:
         assert request_data["litellm_logging_obj"] == "<Logging object>"
 
     @pytest.mark.asyncio
-    async def test_call_noma_scan_sanitizes_response_model_dump_object(self, noma_v2_guardrail):
+    async def test_call_noma_scan_sanitizes_response_model_dump_object(
+        self, noma_v2_guardrail
+    ):
         import json
 
         class _FakeModelResponse:
@@ -256,7 +267,9 @@ class TestNomaV2Configuration:
         json.dumps(sent_payload)
         assert sent_payload["request_data"]["response"]["id"] == "resp-1"
 
-    def test_sanitize_payload_for_transport_falls_back_to_safe_dumps(self, noma_v2_guardrail):
+    def test_sanitize_payload_for_transport_falls_back_to_safe_dumps(
+        self, noma_v2_guardrail
+    ):
         with patch(
             "litellm.proxy.guardrails.guardrail_hooks.noma.noma_v2.json.dumps",
             side_effect=TypeError("cannot serialize"),
@@ -265,12 +278,16 @@ class TestNomaV2Configuration:
                 "litellm.proxy.guardrails.guardrail_hooks.noma.noma_v2.safe_dumps",
                 return_value='{"fallback": true}',
             ) as mock_safe_dumps:
-                sanitized = noma_v2_guardrail._sanitize_payload_for_transport({"inputs": {"texts": ["hello"]}})
+                sanitized = noma_v2_guardrail._sanitize_payload_for_transport(
+                    {"inputs": {"texts": ["hello"]}}
+                )
 
         mock_safe_dumps.assert_called_once()
         assert sanitized == {"fallback": True}
 
-    def test_sanitize_payload_for_transport_logs_warning_when_payload_becomes_empty(self, noma_v2_guardrail):
+    def test_sanitize_payload_for_transport_logs_warning_when_payload_becomes_empty(
+        self, noma_v2_guardrail
+    ):
         with patch(
             "litellm.proxy.guardrails.guardrail_hooks.noma.noma_v2.safe_json_loads",
             return_value={},
@@ -278,14 +295,18 @@ class TestNomaV2Configuration:
             with patch(
                 "litellm.proxy.guardrails.guardrail_hooks.noma.noma_v2.verbose_proxy_logger.warning"
             ) as mock_warning:
-                sanitized = noma_v2_guardrail._sanitize_payload_for_transport({"inputs": {"texts": ["hello"]}})
+                sanitized = noma_v2_guardrail._sanitize_payload_for_transport(
+                    {"inputs": {"texts": ["hello"]}}
+                )
 
         assert sanitized == {}
         mock_warning.assert_called_once_with(
             "Noma v2 guardrail: payload serialization failed, falling back to empty payload"
         )
 
-    def test_sanitize_payload_for_transport_logs_warning_on_non_dict_output(self, noma_v2_guardrail):
+    def test_sanitize_payload_for_transport_logs_warning_on_non_dict_output(
+        self, noma_v2_guardrail
+    ):
         with patch(
             "litellm.proxy.guardrails.guardrail_hooks.noma.noma_v2.safe_json_loads",
             return_value=["not-a-dict"],
@@ -293,7 +314,9 @@ class TestNomaV2Configuration:
             with patch(
                 "litellm.proxy.guardrails.guardrail_hooks.noma.noma_v2.verbose_proxy_logger.warning"
             ) as mock_warning:
-                sanitized = noma_v2_guardrail._sanitize_payload_for_transport({"inputs": {"texts": ["hello"]}})
+                sanitized = noma_v2_guardrail._sanitize_payload_for_transport(
+                    {"inputs": {"texts": ["hello"]}}
+                )
 
         assert sanitized == {}
         mock_warning.assert_called_once_with(
@@ -306,7 +329,9 @@ class TestNomaV2Configuration:
 
 
 class TestNomaV2ActionBehavior:
-    def test_resolve_action_from_response_raises_on_unknown_action(self, noma_v2_guardrail):
+    def test_resolve_action_from_response_raises_on_unknown_action(
+        self, noma_v2_guardrail
+    ):
         with pytest.raises(ValueError, match="missing valid action"):
             noma_v2_guardrail._resolve_action_from_response({"action": "INVALID"})
 
@@ -331,7 +356,9 @@ class TestNomaV2ActionBehavior:
         assert result == inputs
 
     @pytest.mark.asyncio
-    async def test_native_action_guardrail_intervened_updates_supported_fields(self, noma_v2_guardrail):
+    async def test_native_action_guardrail_intervened_updates_supported_fields(
+        self, noma_v2_guardrail
+    ):
         inputs = {
             "texts": ["Name: Jane"],
             "images": ["https://old.example/image.png"],
@@ -357,7 +384,10 @@ class TestNomaV2ActionBehavior:
                         {
                             "id": "call_1",
                             "type": "function",
-                            "function": {"name": "new_tool", "arguments": '{"safe":"true"}'},
+                            "function": {
+                                "name": "new_tool",
+                                "arguments": '{"safe":"true"}',
+                            },
                         }
                     ],
                 }
@@ -371,7 +401,9 @@ class TestNomaV2ActionBehavior:
 
         assert result["texts"] == ["Name: *******"]
         assert result["images"] == ["https://new.example/image.png"]
-        assert result["tools"] == [{"type": "function", "function": {"name": "new_tool"}}]
+        assert result["tools"] == [
+            {"type": "function", "function": {"name": "new_tool"}}
+        ]
         assert result["tool_calls"] == [
             {
                 "id": "call_1",
@@ -402,7 +434,9 @@ class TestNomaV2ActionBehavior:
         assert exc_info.value.detail["details"]["blocked_reason"] == "blocked by policy"
 
     @pytest.mark.asyncio
-    async def test_intervened_without_modifications_returns_original_inputs(self, noma_v2_guardrail):
+    async def test_intervened_without_modifications_returns_original_inputs(
+        self, noma_v2_guardrail
+    ):
         inputs = {"texts": ["Name: Jane"]}
         with patch.object(
             noma_v2_guardrail,
@@ -499,7 +533,9 @@ class TestNomaV2ApplicationIdResolution:
         assert payload["application_id"] == "dynamic-app"
 
     @pytest.mark.asyncio
-    async def test_apply_guardrail_uses_configured_application_id(self, noma_v2_guardrail):
+    async def test_apply_guardrail_uses_configured_application_id(
+        self, noma_v2_guardrail
+    ):
         call_mock = AsyncMock(return_value={"action": "NONE"})
         with patch.object(
             noma_v2_guardrail,
@@ -543,7 +579,9 @@ class TestNomaV2ApplicationIdResolution:
         assert "application_id" not in payload
 
     @pytest.mark.asyncio
-    async def test_apply_guardrail_ignores_request_metadata_application_id(self, noma_v2_guardrail):
+    async def test_apply_guardrail_ignores_request_metadata_application_id(
+        self, noma_v2_guardrail
+    ):
         noma_v2_guardrail.application_id = None
         call_mock = AsyncMock(return_value={"action": "NONE"})
         request_data = {
