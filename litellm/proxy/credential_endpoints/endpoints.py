@@ -341,9 +341,8 @@ async def update_credential(
             },
         )
 
-        # Sync in-memory credential_list so GET calls reflect the update
-        # immediately. Build a plaintext merged credential from the existing
-        # in-memory entry (plaintext) + the incoming patch values.
+        # Sync in-memory credential_list (skip if not in memory - e.g., proxy restarted)
+        new_name = merged_credential.credential_name
         existing_in_memory: Optional[CredentialItem] = None
         for cred in litellm.credential_list:
             if cred.credential_name == credential_name:
@@ -357,16 +356,21 @@ async def update_credential(
             in_memory_info = dict(existing_in_memory.credential_info or {})
             if credential.credential_info:
                 in_memory_info.update(credential.credential_info)
-        else:
-            in_memory_values = credential.credential_values or {}
-            in_memory_info = credential.credential_info or {}
-
-        updated_in_memory = CredentialItem(
-            credential_name=credential_name,
-            credential_values=in_memory_values,
-            credential_info=in_memory_info,
-        )
-        CredentialAccessor.upsert_credentials([updated_in_memory])
+            updated_in_memory = CredentialItem(
+                credential_name=new_name,
+                credential_values=in_memory_values,
+                credential_info=in_memory_info,
+            )
+            # Remove old entry if renamed, then append updated one
+            if new_name != credential_name:
+                litellm.credential_list = [
+                    c for c in litellm.credential_list
+                    if c.credential_name != credential_name
+                ]
+            else:
+                CredentialAccessor.upsert_credentials([updated_in_memory])
+                return {"success": True, "message": "Credential updated successfully"}
+            litellm.credential_list.append(updated_in_memory)
 
         return {"success": True, "message": "Credential updated successfully"}
     except Exception as e:
