@@ -481,7 +481,7 @@ async def test_perform_health_check_and_save_passes_model_id_to_perform_health_c
     unhealthy = []
 
     async def mock_perform_health_check(model_list, model=None, cli_model=None, details=True, model_id=None, max_concurrency=None):
-        return healthy, unhealthy
+        return healthy, unhealthy, {}
 
     with patch(
         "litellm.proxy.health_endpoints._health_endpoints.perform_health_check",
