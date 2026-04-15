@@ -42,13 +42,17 @@ When a request arrives with an `advisor_20260301` tool and a non-Anthropic provi
 
 ## Model Compatibility
 
-The executor and advisor models must form a valid pair. Currently the only supported advisor model is `claude-opus-4-6`.
+The advisor model is fully configurable. You can use any model deployed in your proxy as the advisor — it does not need to be Anthropic.
+
+For **Anthropic-native** requests (where Anthropic runs the advisor server-side), the executor and advisor must form a valid Anthropic pair:
 
 | Executor | Advisor |
 |----------|---------|
 | `claude-haiku-4-5-20251001` | `claude-opus-4-6` |
 | `claude-sonnet-4-6` | `claude-opus-4-6` |
 | `claude-opus-4-6` | `claude-opus-4-6` |
+
+For **non-Anthropic** executors (where LiteLLM orchestrates the advisor loop), you can use any model as the advisor — including OpenAI, Vertex AI, Bedrock, etc.
 
 ---
 
@@ -226,13 +230,42 @@ LiteLLM automatically strips `advisor_tool_result` blocks from message history w
 
 #### Proxy Configuration
 
+Configure the advisor model as a deployment in your `model_list` and reference it in `advisor_interception_params`. This ensures the advisor sub-calls use the correct credentials and go through the proxy's deployment routing.
+
 ```yaml showLineNumbers title="config.yaml"
 model_list:
+  # The advisor model
+  - model_name: advisor-model
+    litellm_params:
+      model: anthropic/claude-sonnet-4-20250514
+      api_key: os.environ/ANTHROPIC_API_KEY
+
+  # Executor models
   - model_name: claude-sonnet
     litellm_params:
       model: anthropic/claude-sonnet-4-6
       api_key: os.environ/ANTHROPIC_API_KEY
+
+  - model_name: gemini-flash
+    litellm_params:
+      model: vertex_ai/gemini-2.5-flash
+      vertex_project: my-project
+      vertex_location: us-central1
+
+litellm_settings:
+  callbacks: ["advisor_interception"]
+  advisor_interception_params:
+    # Must match a model_name from model_list — the router resolves
+    # the correct deployment and credentials automatically.
+    default_advisor_model: "advisor-model"
 ```
+
+:::info Important
+
+- Use `callbacks`, not `success_callback`. The advisor interception hooks run through `litellm.callbacks`.
+- The `default_advisor_model` value must be a `model_name` from your `model_list`. The proxy router resolves it to the correct deployment with the correct API key. This means you can use any provider as your advisor model — not just Anthropic.
+
+:::
 
 #### Client Request via Proxy
 
@@ -253,7 +286,7 @@ response = client.chat.completions.create(
         {
             "type": "advisor_20260301",
             "name": "advisor",
-            "model": "claude-opus-4-6",
+            "model": "advisor-model",
         }
     ],
     max_tokens=4096,
@@ -262,7 +295,7 @@ response = client.chat.completions.create(
 
 #### Client Request via Proxy (OpenAI-compatible function tool)
 
-Use this format when your chat-completions client sends OpenAI-style tools.
+Use this format when your chat-completions client sends OpenAI-style tools. The proxy uses the `default_advisor_model` from your config.
 
 ```python showLineNumbers title="Proxy Chat Completions with litellm_advisor"
 from openai import OpenAI
@@ -302,7 +335,7 @@ print(response.choices[0].message.content)
 
 For non-Anthropic chat-completions providers behind proxy, this OpenAI-compatible
 `litellm_advisor` function tool is the recommended request shape.
-The advisor model defaults to `claude-opus-4-6` unless overridden by your integration config.
+The advisor model is determined by the `default_advisor_model` in your `advisor_interception_params` config.
 
 ::::
 
@@ -383,12 +416,23 @@ asyncio.run(main())
 
 #### Proxy Configuration
 
+Use the same config shown in the Chat Completions proxy tab. The `advisor_interception_params` config applies to both APIs.
+
 ```yaml showLineNumbers title="config.yaml"
 model_list:
+  - model_name: advisor-model
+    litellm_params:
+      model: anthropic/claude-sonnet-4-20250514
+      api_key: os.environ/ANTHROPIC_API_KEY
   - model_name: claude-sonnet
     litellm_params:
       model: anthropic/claude-sonnet-4-6
       api_key: os.environ/ANTHROPIC_API_KEY
+
+litellm_settings:
+  callbacks: ["advisor_interception"]
+  advisor_interception_params:
+    default_advisor_model: "advisor-model"
 ```
 
 #### Client Request via Proxy (Anthropic SDK)
@@ -412,7 +456,7 @@ response = client.beta.messages.create(
         {
             "type": "advisor_20260301",
             "name": "advisor",
-            "model": "claude-opus-4-6",
+            "model": "advisor-model",
         }
     ],
 )
