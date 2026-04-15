@@ -9,8 +9,8 @@ import time
 import uuid
 from typing import Any, Dict, List, Optional, Tuple, cast
 
-import litellm
 from litellm._logging import verbose_logger
+from litellm.compression import compress
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.types.integrations.compression_interception import (
     CompressionInterceptionConfig,
@@ -96,7 +96,7 @@ class CompressionInterceptionLogger(CustomLogger):
 
         self._prune_expired_cache()
 
-        compressed = litellm.compress(
+        compressed = compress(
             messages=messages,
             model=model,
             input_type="anthropic_messages",

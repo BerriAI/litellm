@@ -2,7 +2,14 @@
 Type definitions for litellm.compress().
 """
 
-from typing import Dict, List, Literal, NotRequired, TypedDict
+import sys
+
+if sys.version_info >= (3, 11):
+    from typing import Dict, List, Literal, NotRequired, TypedDict
+else:
+    from typing import Dict, List, Literal, TypedDict
+
+    from typing_extensions import NotRequired
 
 CompressionInputType = Literal["anthropic_messages", "openai_chat_completions"]
 
