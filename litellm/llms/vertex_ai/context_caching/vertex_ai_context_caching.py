@@ -26,9 +26,7 @@ from .transformation import (
     transform_openai_messages_to_gemini_context_caching,
 )
 
-local_cache_obj = Cache(
-    type=LiteLLMCacheType.LOCAL
-)  # only used for calling 'get_cache_key' function
+local_cache_obj = Cache(type=LiteLLMCacheType.LOCAL)  # only used for calling 'get_cache_key' function
 
 MAX_PAGINATION_PAGES = 100  # Reasonable upper bound for pagination
 
@@ -64,9 +62,7 @@ class ContextCachingEndpoints(VertexBase):
         if custom_llm_provider == "gemini":
             auth_header = None
             endpoint = "cachedContents"
-            url = "https://generativelanguage.googleapis.com/v1beta/{}?key={}".format(
-                endpoint, gemini_api_key
-            )
+            url = "https://generativelanguage.googleapis.com/v1beta/{}?key={}".format(endpoint, gemini_api_key)
         elif custom_llm_provider == "vertex_ai":
             auth_header = vertex_auth_header
             endpoint = "cachedContents"
@@ -93,9 +89,7 @@ class ContextCachingEndpoints(VertexBase):
             model=model,
             vertex_project=vertex_project,
             vertex_location=vertex_location,
-            vertex_api_version="v1beta1"
-            if custom_llm_provider == "vertex_ai_beta"
-            else "v1",
+            vertex_api_version="v1beta1" if custom_llm_provider == "vertex_ai_beta" else "v1",
         )
 
     def check_cache(
@@ -161,9 +155,7 @@ class ContextCachingEndpoints(VertexBase):
             except httpx.HTTPStatusError as e:
                 if e.response.status_code == 403:
                     return None
-                raise VertexAIError(
-                    status_code=e.response.status_code, message=e.response.text
-                )
+                raise VertexAIError(status_code=e.response.status_code, message=e.response.text)
             except Exception as e:
                 raise VertexAIError(status_code=500, message=str(e))
 
@@ -255,9 +247,7 @@ class ContextCachingEndpoints(VertexBase):
             except httpx.HTTPStatusError as e:
                 if e.response.status_code == 403:
                     return None
-                raise VertexAIError(
-                    status_code=e.response.status_code, message=e.response.text
-                )
+                raise VertexAIError(status_code=e.response.status_code, message=e.response.text)
             except Exception as e:
                 raise VertexAIError(status_code=500, message=str(e))
 
@@ -316,9 +306,7 @@ class ContextCachingEndpoints(VertexBase):
         if cached_content is not None:
             return messages, optional_params, cached_content
 
-        cached_messages, non_cached_messages = separate_cached_messages(
-            messages=messages
-        )
+        cached_messages, non_cached_messages = separate_cached_messages(messages=messages)
 
         if len(cached_messages) == 0:
             return messages, optional_params, None
@@ -338,6 +326,7 @@ class ContextCachingEndpoints(VertexBase):
             return messages, optional_params, None
 
         tools = optional_params.pop("tools", None)
+        tool_choice = optional_params.pop("tool_choice", None)
 
         ## AUTHORIZATION ##
         token, url = self._get_token_and_url_context_caching(
@@ -370,7 +359,7 @@ class ContextCachingEndpoints(VertexBase):
 
         ## CHECK IF CACHED ALREADY
         generated_cache_key = local_cache_obj.get_cache_key(
-            messages=cached_messages, tools=tools, model=model
+            messages=cached_messages, tools=tools, tool_choice=tool_choice, model=model
         )
         google_cache_name = self.check_cache(
             cache_key=generated_cache_key,
@@ -389,18 +378,18 @@ class ContextCachingEndpoints(VertexBase):
             return non_cached_messages, optional_params, google_cache_name
 
         ## TRANSFORM REQUEST
-        cached_content_request_body = (
-            transform_openai_messages_to_gemini_context_caching(
-                model=model,
-                messages=cached_messages,
-                cache_key=generated_cache_key,
-                custom_llm_provider=custom_llm_provider,
-                vertex_project=vertex_project,
-                vertex_location=vertex_location,
-            )
+        cached_content_request_body = transform_openai_messages_to_gemini_context_caching(
+            model=model,
+            messages=cached_messages,
+            cache_key=generated_cache_key,
+            custom_llm_provider=custom_llm_provider,
+            vertex_project=vertex_project,
+            vertex_location=vertex_location,
         )
 
         cached_content_request_body["tools"] = tools
+        if tool_choice is not None:
+            cached_content_request_body["toolConfig"] = tool_choice
 
         ## LOGGING
         logging_obj.pre_call(
@@ -415,7 +404,9 @@ class ContextCachingEndpoints(VertexBase):
 
         try:
             response = client.post(
-                url=url, headers=headers, json=cached_content_request_body  # type: ignore
+                url=url,
+                headers=headers,
+                json=cached_content_request_body,  # type: ignore
             )
             response.raise_for_status()
         except httpx.HTTPStatusError as err:
@@ -464,9 +455,7 @@ class ContextCachingEndpoints(VertexBase):
         if cached_content is not None:
             return messages, optional_params, cached_content
 
-        cached_messages, non_cached_messages = separate_cached_messages(
-            messages=messages
-        )
+        cached_messages, non_cached_messages = separate_cached_messages(messages=messages)
 
         if len(cached_messages) == 0:
             return messages, optional_params, None
@@ -486,6 +475,7 @@ class ContextCachingEndpoints(VertexBase):
             return messages, optional_params, None
 
         tools = optional_params.pop("tools", None)
+        tool_choice = optional_params.pop("tool_choice", None)
 
         ## AUTHORIZATION ##
         token, url = self._get_token_and_url_context_caching(
@@ -507,15 +497,13 @@ class ContextCachingEndpoints(VertexBase):
             headers.update(extra_headers)
 
         if client is None or not isinstance(client, AsyncHTTPHandler):
-            client = get_async_httpx_client(
-                params={"timeout": timeout}, llm_provider=litellm.LlmProviders.VERTEX_AI
-            )
+            client = get_async_httpx_client(params={"timeout": timeout}, llm_provider=litellm.LlmProviders.VERTEX_AI)
         else:
             client = client
 
         ## CHECK IF CACHED ALREADY
         generated_cache_key = local_cache_obj.get_cache_key(
-            messages=cached_messages, tools=tools, model=model
+            messages=cached_messages, tools=tools, tool_choice=tool_choice, model=model
         )
         google_cache_name = await self.async_check_cache(
             cache_key=generated_cache_key,
@@ -535,18 +523,18 @@ class ContextCachingEndpoints(VertexBase):
             return non_cached_messages, optional_params, google_cache_name
 
         ## TRANSFORM REQUEST
-        cached_content_request_body = (
-            transform_openai_messages_to_gemini_context_caching(
-                model=model,
-                messages=cached_messages,
-                cache_key=generated_cache_key,
-                custom_llm_provider=custom_llm_provider,
-                vertex_project=vertex_project,
-                vertex_location=vertex_location,
-            )
+        cached_content_request_body = transform_openai_messages_to_gemini_context_caching(
+            model=model,
+            messages=cached_messages,
+            cache_key=generated_cache_key,
+            custom_llm_provider=custom_llm_provider,
+            vertex_project=vertex_project,
+            vertex_location=vertex_location,
         )
 
         cached_content_request_body["tools"] = tools
+        if tool_choice is not None:
+            cached_content_request_body["toolConfig"] = tool_choice
 
         ## LOGGING
         logging_obj.pre_call(
@@ -561,7 +549,9 @@ class ContextCachingEndpoints(VertexBase):
 
         try:
             response = await client.post(
-                url=url, headers=headers, json=cached_content_request_body  # type: ignore
+                url=url,
+                headers=headers,
+                json=cached_content_request_body,  # type: ignore
             )
             response.raise_for_status()
         except httpx.HTTPStatusError as err:
