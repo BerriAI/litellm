@@ -5,7 +5,6 @@ import {
   WarningOutlined,
 } from "@ant-design/icons";
 import { useQuery } from "@tanstack/react-query";
-import { Col, Grid } from "@tremor/react";
 import { Button, Spin, Tabs } from "antd";
 import React, { useMemo, useState } from "react";
 import {
@@ -172,11 +171,11 @@ export function GuardrailDetail({
 
       {activeTab === "overview" && (
         <div className="space-y-6 mt-4">
-          <Grid numItems={2} numItemsMd={5} className="gap-4">
-            <Col>
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+            <div className="min-w-0">
               <MetricCard label="Requests Evaluated" value={data.requestsEvaluated.toLocaleString()} />
-            </Col>
-            <Col>
+            </div>
+            <div className="min-w-0">
               <MetricCard
                 label="Fail Rate"
                 value={`${data.failRate}%`}
@@ -186,13 +185,11 @@ export function GuardrailDetail({
                 subtitle={`${Math.round((data.requestsEvaluated * data.failRate) / 100).toLocaleString()} blocked`}
                 icon={data.failRate > 15 ? <WarningOutlined className="text-red-400" /> : undefined}
               />
-            </Col>
-            <Col>
+            </div>
+            <div className="min-w-0">
               <MetricCard
                 label="Avg. latency added"
-                value={
-                  data.avgLatency != null ? `${Math.round(data.avgLatency)}ms` : "—"
-                }
+                value={data.avgLatency != null ? `${Math.round(data.avgLatency)}ms` : "—"}
                 valueColor={
                   data.avgLatency != null
                     ? data.avgLatency > 150
@@ -204,8 +201,8 @@ export function GuardrailDetail({
                 }
                 subtitle={data.avgLatency != null ? "Per request (avg)" : "No data"}
               />
-            </Col>
-          </Grid>
+            </div>
+          </div>
 
           <LogViewer
             guardrailName={data.name}
