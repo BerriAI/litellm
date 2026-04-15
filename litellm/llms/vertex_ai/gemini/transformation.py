@@ -243,6 +243,65 @@ def _camel_to_snake(camel_str: str) -> str:
     return re.sub(r"(?<!^)(?=[A-Z])", "_", camel_str).lower()
 
 
+def _transform_part_to_httpx_format(part: dict, parent_key: Optional[str] = None) -> dict:
+    """
+    Recursively transform a Gemini part (PartType) to HttpxPartType (camelCase)
+    Required for Vertex AI REST API.
+    Google AI Studio REST API uses snake_case, so this is only for Vertex AI.
+    """
+    new_part = {}
+    for k, v in part.items():
+        camel_k = _snake_to_camel(k)
+
+        # Handle exceptions for keys that should not be camelCased or have special mapping
+        # These are user-defined keys that should be preserved.
+        should_preserve_keys = False
+        if isinstance(v, dict):
+            if k == "args" and parent_key == "functionCall":
+                should_preserve_keys = True
+            elif k == "response" and parent_key in [
+                "functionResponse",
+                "toolResponse",
+            ]:
+                should_preserve_keys = True
+            elif k == "properties":
+                # 'properties' keys in a JSON Schema are user-defined
+                should_preserve_keys = True
+            elif k == "labels" and parent_key is None:
+                # 'labels' is a top-level map for Vertex AI billing/tracking, keys are user-defined
+                should_preserve_keys = True
+            elif k == "default" and parent_key in ["properties", None]:
+                # 'default' values in a JSON Schema property are user-defined and should NOT be transformed
+                should_preserve_keys = True
+
+        if should_preserve_keys:
+            if k == "properties":
+                # 'properties' values are Schema objects, so they SHOULD be transformed recursively
+                new_part[camel_k] = {
+                    pk: _transform_part_to_httpx_format(pv, parent_key="properties")
+                    if isinstance(pv, dict)
+                    else pv
+                    for pk, pv in v.items()
+                }
+            else:
+                # 'args', 'response', 'labels' keys are user-defined and should NOT be transformed
+                new_part[camel_k] = v
+            continue
+
+        if isinstance(v, dict):
+            new_part[camel_k] = _transform_part_to_httpx_format(v, parent_key=camel_k)
+        elif isinstance(v, list):
+            new_part[camel_k] = [
+                _transform_part_to_httpx_format(i, parent_key=camel_k)
+                if isinstance(i, dict)
+                else i
+                for i in v
+            ]
+        else:
+            new_part[camel_k] = v
+    return new_part
+
+
 def _get_equivalent_key(key: str, available_keys: set) -> Optional[str]:
     """
     Get the equivalent key from available keys, checking both camelCase and snake_case variants
@@ -779,6 +838,21 @@ def _transform_request_body(  # noqa: PLR0915
         _pop_and_merge_extra_body(data, optional_params)
     except Exception as e:
         raise e
+
+    if custom_llm_provider in ["vertex_ai", "vertex_ai_beta"]:
+        if "contents" in data:
+            data["contents"] = _transform_part_to_httpx_format(
+                {"contents": data["contents"]}, parent_key=None
+            )["contents"]
+        if "system_instruction" in data:
+            data["systemInstruction"] = _transform_part_to_httpx_format(
+                {"system_instruction": data["system_instruction"]}, parent_key=None
+            )["systemInstruction"]
+            del data["system_instruction"]
+        if "tools" in data:
+            data["tools"] = _transform_part_to_httpx_format(
+                {"tools": data["tools"]}, parent_key=None
+            )["tools"]
 
     return data
 
