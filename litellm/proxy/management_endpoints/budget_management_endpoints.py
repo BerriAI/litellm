@@ -12,11 +12,9 @@ All /budget management endpoints
 """
 
 #### BUDGET TABLE MANAGEMENT ####
-from datetime import timedelta
-
 from fastapi import APIRouter, Depends, HTTPException
 
-from litellm.litellm_core_utils.duration_parser import duration_in_seconds
+from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.utils import jsonify_object
@@ -86,8 +84,8 @@ async def new_budget(
 
     # if no budget_reset_at date is set, but a budget_duration is given, then set budget_reset_at initially to the first completed duration interval in future
     if budget_obj.budget_reset_at is None and budget_obj.budget_duration is not None:
-        budget_obj.budget_reset_at = datetime.utcnow() + timedelta(
-            seconds=duration_in_seconds(duration=budget_obj.budget_duration)
+        budget_obj.budget_reset_at = get_budget_reset_time(
+            budget_duration=budget_obj.budget_duration
         )
 
     budget_obj_json = budget_obj.model_dump(exclude_none=True)
