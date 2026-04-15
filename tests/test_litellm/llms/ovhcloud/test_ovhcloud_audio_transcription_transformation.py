@@ -7,10 +7,14 @@ import pytest
 from litellm.llms.base_llm.audio_transcription.transformation import (
     BaseAudioTranscriptionConfig,
 )
+from litellm.llms.ovhcloud.audio_transcription.transformation import OVHCloudAudioTranscriptionConfig
+from litellm.types.utils import TranscriptionResponse
 from litellm.utils import ProviderConfigManager
 from tests.llm_translation.base_audio_transcription_unit_tests import (
     BaseLLMAudioTranscriptionTest,
 )
+from unittest.mock import MagicMock
+import httpx
 
 
 @pytest.mark.skipif(
@@ -55,5 +59,39 @@ def test_ovhcloud_audio_transcription_config_installed():
     assert config is not None
     assert isinstance(config, BaseAudioTranscriptionConfig)
 
+def test_ovhcloud_audio_transcription_response_transform_diarized():
+    """Test that diarized responses preserve segments and language."""
+    config = OVHCloudAudioTranscriptionConfig()
 
+    mock_response = MagicMock(spec=httpx.Response)
+    mock_response.json.return_value = {
+        "text": "Hello, how are you? I am fine.",
+        "language": "en",
+        "segments": [
+            {
+                "text": "Hello, how are you?",
+                "start": 0.3,
+                "end": 2.1
+            },
+            {
+                "text": "I am fine.",
+                "start": 2.5,
+                "end": 3.8
+            },
+        ],
+        "usage": {
+            "type": "duration",
+            "duration": 5,
+            "seconds": 5,
+        },
+    }
 
+    response = config.transform_audio_transcription_response(mock_response)
+
+    assert isinstance(response, TranscriptionResponse)
+    assert response.text == "Hello, how are you? I am fine."
+    assert response["segments"] is not None
+    assert len(response["segments"]) == 2
+    assert response["segments"][0]["text"] == "Hello, how are you?"
+    assert response["segments"][1]["text"] == "I am fine."
+    assert response["language"] == "en"
