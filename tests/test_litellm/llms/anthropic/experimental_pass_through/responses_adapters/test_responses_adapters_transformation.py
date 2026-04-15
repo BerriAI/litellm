@@ -544,16 +544,16 @@ class TestTranslateToolsToResponsesAPI:
         assert "parameters" not in result[0]
 
     def test_web_search_tool_by_name(self):
-        """Tool named 'web_search' maps to web_search_preview."""
+        """Tool named 'web_search' maps to web_search."""
         tools = [{"name": "web_search", "type": "custom"}]
         result = _ADAPTER.translate_tools_to_responses_api(tools)  # type: ignore[arg-type]
-        assert result == [{"type": "web_search_preview"}]
+        assert result == [{"type": "web_search"}]
 
     def test_web_search_tool_by_type_prefix(self):
-        """Tool with type starting with 'web_search' maps to web_search_preview."""
+        """Tool with type starting with 'web_search' maps to web_search."""
         tools = [{"name": "search", "type": "web_search_20250305"}]
         result = _ADAPTER.translate_tools_to_responses_api(tools)  # type: ignore[arg-type]
-        assert result == [{"type": "web_search_preview"}]
+        assert result == [{"type": "web_search"}]
 
     def test_multiple_tools_order_preserved(self):
         """Multiple tools are converted in order."""
@@ -565,7 +565,7 @@ class TestTranslateToolsToResponsesAPI:
         result = _ADAPTER.translate_tools_to_responses_api(tools)  # type: ignore[arg-type]
         assert len(result) == 3
         assert result[0]["name"] == "tool_a"
-        assert result[1] == {"type": "web_search_preview"}
+        assert result[1] == {"type": "web_search"}
         assert result[2]["name"] == "tool_b"
 
     def test_empty_tools_list(self):

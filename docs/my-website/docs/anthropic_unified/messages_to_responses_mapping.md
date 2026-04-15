@@ -50,7 +50,7 @@ Each Anthropic message is expanded into one or more Responses API input items. T
 
 | Anthropic tool | Responses API tool |
 |---|---|
-| Any tool where `type` starts with `"web_search"` or `name == "web_search"` | `{"type": "web_search_preview"}` |
+| Any tool where `type` starts with `"web_search"` or `name == "web_search"` | `{"type": "web_search"}` (with `filters.allowed_domains` if specified) |
 | All other tools | `{"type": "function", "name": "...", "description": "...", "parameters": <input_schema>}` |
 
 

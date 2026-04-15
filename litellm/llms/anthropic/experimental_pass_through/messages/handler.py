@@ -34,14 +34,23 @@ from .utils import AnthropicMessagesRequestUtils, mock_response
 _RESPONSES_API_PROVIDERS = frozenset({"openai"})
 
 
-def _should_route_to_responses_api(custom_llm_provider: Optional[str]) -> bool:
+def _should_route_to_responses_api(
+    custom_llm_provider: Optional[str],
+    model_info: Optional[Dict] = None,
+) -> bool:
     """Return True when the provider should use the Responses API path.
 
+    Routes to the Responses API when:
+    - The provider is in _RESPONSES_API_PROVIDERS (e.g. openai), OR
+    - The model has mode=responses in model_info (e.g. github_copilot GPT models)
+
     Set ``litellm.use_chat_completions_url_for_anthropic_messages = True`` to
-    opt out and route OpenAI/Azure requests through chat/completions instead.
+    opt out and route all requests through chat/completions instead.
     """
     if litellm.use_chat_completions_url_for_anthropic_messages:
         return False
+    if model_info and model_info.get("mode") == "responses":
+        return True
     return custom_llm_provider in _RESPONSES_API_PROVIDERS
 
 
@@ -420,7 +429,7 @@ def anthropic_messages_handler(
             custom_llm_provider=custom_llm_provider,
             **kwargs,
         )
-        if _should_route_to_responses_api(custom_llm_provider):
+        if _should_route_to_responses_api(custom_llm_provider, kwargs.get("model_info")):
             return LiteLLMMessagesToResponsesAPIHandler.anthropic_messages_handler(
                 **_shared_kwargs
             )

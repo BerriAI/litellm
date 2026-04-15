@@ -196,7 +196,11 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
             if (
                 isinstance(tool_type, str) and tool_type.startswith("web_search")
             ) or tool_name == "web_search":
-                result.append({"type": "web_search_preview"})
+                web_tool: Dict[str, Any] = {"type": "web_search"}
+                allowed = tool_dict.get("allowed_domains")
+                if allowed:
+                    web_tool["filters"] = {"allowed_domains": allowed}
+                result.append(web_tool)
                 continue
             func_tool: Dict[str, Any] = {"type": "function", "name": tool_name}
             if "description" in tool_dict:
@@ -215,7 +219,11 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         if tc_type == "any":
             return {"type": "required"}
         elif tc_type == "tool":
-            return {"type": "function", "name": tool_choice.get("name", "")}
+            name = tool_choice.get("name", "")
+            # web_search is a hosted tool, not a function
+            if name == "web_search":
+                return {"type": "web_search"}
+            return {"type": "function", "name": name}
         return {"type": "auto"}
 
     @staticmethod
