@@ -91,7 +91,6 @@ from litellm.litellm_core_utils.mock_functions import (
 )
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_content_from_model_response,
-    get_str_from_messages,
 )
 from litellm.llms.base_llm import BaseConfig, BaseImageGenerationConfig
 from litellm.llms.base_llm.base_model_iterator import (
@@ -577,65 +576,6 @@ async def acompletion(  # noqa: PLR0915
             custom_llm_provider=custom_llm_provider,
             api_base=completion_kwargs.get("base_url", None),
         )
-
-    # Auto-redirect DashScope image generation models: if the provider is
-    # dashscope and the model's mode is 'image_generation', extract the prompt
-    # from messages and call aimage_generation() instead.  The response is
-    # converted back to a ModelResponse so that clients speaking only
-    # /chat/completions (e.g. OpenWebUI) receive a valid response, while all
-    # proxy middleware (spend tracking, guardrails, observability) remains
-    # intact.  Scoped to dashscope only to avoid breaking other providers.
-    if custom_llm_provider == "dashscope":
-        _is_image_model = False
-        try:
-            _model_info = litellm.get_model_info(
-                model=model, custom_llm_provider=custom_llm_provider
-            )
-            _is_image_model = _model_info.get("mode") == "image_generation"
-        except Exception:
-            pass  # model not in cost map — treat as normal completion
-
-        if _is_image_model:
-            _prompt = get_str_from_messages(messages) if messages else ""
-            _img_kwargs = {
-                k: v
-                for k, v in kwargs.items()
-                if k not in ("messages", "prompt", "acompletion")
-            }
-            _image_response = await litellm.aimage_generation(
-                model=model,
-                prompt=_prompt,
-                api_key=api_key,
-                api_base=base_url,
-                n=n,
-                **_img_kwargs,
-            )
-            # Convert ImageResponse → ModelResponse for chat completion clients
-            _images = getattr(_image_response, "data", None) or []
-            _parts = [
-                f"![image]({img.url})"
-                for img in _images
-                if getattr(img, "url", None)
-            ]
-            _content = "\n\n".join(_parts) if _parts else "Image generation completed."
-            return litellm.ModelResponse(
-                id=f"chatcmpl-{uuid.uuid4().hex[:10]}",
-                object="chat.completion",
-                created=int(time.time()),
-                model=model,
-                choices=[
-                    litellm.utils.Choices(
-                        index=0,
-                        message=litellm.utils.Message(
-                            role="assistant", content=_content
-                        ),
-                        finish_reason="stop",
-                    )
-                ],
-                usage=litellm.Usage(
-                    prompt_tokens=0, completion_tokens=0, total_tokens=0
-                ),
-            )
 
     fallbacks = fallbacks or litellm.model_fallbacks
     if fallbacks is not None:
