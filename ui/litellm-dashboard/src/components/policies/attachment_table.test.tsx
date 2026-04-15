@@ -111,14 +111,14 @@ describe("AttachmentTable", () => {
     const attachment = makeAttachment({ attachment_id: "att-del-me1" });
     const user = userEvent.setup();
     renderWithProviders(<AttachmentTable {...defaultProps} attachments={[attachment]} />);
-    await user.click(screen.getByRole("button", { name: /TrashIcon/i }));
+    await user.click(screen.getByRole("button", { name: /delete attachment/i }));
     expect(defaultProps.onDeleteClick).toHaveBeenCalledWith("att-del-me1");
   });
 
   it("should not show the delete icon for non-admins", () => {
     const attachment = makeAttachment();
     renderWithProviders(<AttachmentTable {...defaultProps} attachments={[attachment]} isAdmin={false} />);
-    expect(screen.queryByRole("button", { name: /TrashIcon/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /delete attachment/i })).not.toBeInTheDocument();
   });
 
   it("should show a truncated attachment ID in the table", () => {
