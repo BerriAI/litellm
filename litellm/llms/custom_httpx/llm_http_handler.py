@@ -4513,18 +4513,23 @@ class BaseLLMHTTPHandler:
             if not k.startswith("_websearch_interception")
             and not k.startswith("_compression_interception")
             and k not in internal_keys
+            and k not in optional_params
         }
         kwargs_for_followup.update(patch.kwargs)
         kwargs_for_followup["_agentic_loop_depth"] = depth + 1
         kwargs_for_followup["max_agentic_loops"] = max_loops
         kwargs_for_followup["_agentic_loop_fingerprints"] = fingerprints + [fingerprint]
 
+        print("optional_params", optional_params)
+        print("kwargs_for_followup", kwargs_for_followup)
         return await anthropic_messages.acreate(
-            max_tokens=max_tokens,
-            messages=patch.messages,
-            model=patch.model or full_model_name,
-            **optional_params,
-            **kwargs_for_followup,
+            **{
+                "max_tokens": max_tokens,
+                "messages": patch.messages,
+                "model": patch.model or full_model_name,
+                **optional_params,
+                **kwargs_for_followup,
+            }
         )
 
     async def _execute_chat_completion_agentic_plan(
@@ -4637,9 +4642,9 @@ class BaseLLMHTTPHandler:
                             )
 
                         kwargs_with_provider = kwargs.copy() if kwargs else {}
-                        kwargs_with_provider[
-                            "custom_llm_provider"
-                        ] = custom_llm_provider
+                        kwargs_with_provider["custom_llm_provider"] = (
+                            custom_llm_provider
+                        )
                         build_plan_overridden = (
                             callback.__class__.async_build_agentic_loop_plan
                             is not CustomLogger.async_build_agentic_loop_plan
@@ -4804,9 +4809,9 @@ class BaseLLMHTTPHandler:
                             )
 
                         kwargs_with_provider = kwargs.copy() if kwargs else {}
-                        kwargs_with_provider[
-                            "custom_llm_provider"
-                        ] = custom_llm_provider
+                        kwargs_with_provider["custom_llm_provider"] = (
+                            custom_llm_provider
+                        )
                         build_plan_overridden = (
                             callback.__class__.async_build_chat_completion_agentic_loop_plan
                             is not CustomLogger.async_build_chat_completion_agentic_loop_plan
@@ -5339,7 +5344,10 @@ class BaseLLMHTTPHandler:
         _is_async: bool = False,
         fake_stream: bool = False,
         litellm_metadata: Optional[Dict[str, Any]] = None,
-    ) -> Union[ImageResponse, Coroutine[Any, Any, ImageResponse],]:
+    ) -> Union[
+        ImageResponse,
+        Coroutine[Any, Any, ImageResponse],
+    ]:
         """
 
         Handles image edit requests.
@@ -5551,7 +5559,10 @@ class BaseLLMHTTPHandler:
         fake_stream: bool = False,
         litellm_metadata: Optional[Dict[str, Any]] = None,
         api_key: Optional[str] = None,
-    ) -> Union[ImageResponse, Coroutine[Any, Any, ImageResponse],]:
+    ) -> Union[
+        ImageResponse,
+        Coroutine[Any, Any, ImageResponse],
+    ]:
         """
         Handles image generation requests.
         When _is_async=True, returns a coroutine instead of making the call directly.
@@ -5791,7 +5802,10 @@ class BaseLLMHTTPHandler:
         fake_stream: bool = False,
         litellm_metadata: Optional[Dict[str, Any]] = None,
         api_key: Optional[str] = None,
-    ) -> Union[VideoObject, Coroutine[Any, Any, VideoObject],]:
+    ) -> Union[
+        VideoObject,
+        Coroutine[Any, Any, VideoObject],
+    ]:
         """
         Handles video generation requests.
         When _is_async=True, returns a coroutine instead of making the call directly.
