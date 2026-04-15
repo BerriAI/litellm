@@ -142,6 +142,9 @@ export function LogDetailContent({ logEntry, onOpenSettings, isLoadingDetails = 
         promptTokens={logEntry.prompt_tokens}
         completionTokens={logEntry.completion_tokens}
         cacheHit={logEntry.cache_hit}
+        rawInputTokens={metadata?.additional_usage_values?.prompt_tokens_details?.text_tokens}
+        cacheReadTokens={metadata?.additional_usage_values?.cache_read_input_tokens}
+        cacheCreationTokens={metadata?.additional_usage_values?.cache_creation_input_tokens}
       />
 
       {/* Tools */}
