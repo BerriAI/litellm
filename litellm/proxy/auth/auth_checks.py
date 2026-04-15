@@ -2916,17 +2916,26 @@ async def _virtual_key_soft_budget_check(
     Triggers a budget alert if the token is over it's soft budget.
 
     """
+    if valid_token.soft_budget is None:
+        return
 
-    if valid_token.soft_budget and valid_token.spend >= valid_token.soft_budget:
+    from litellm.proxy.proxy_server import get_current_spend
+
+    spend = await get_current_spend(
+        counter_key=f"spend:key:{valid_token.token}",
+        fallback_spend=valid_token.spend or 0.0,
+    )
+
+    if spend >= valid_token.soft_budget:
         verbose_proxy_logger.debug(
             "Crossed Soft Budget for token %s, spend %s, soft_budget %s",
             valid_token.token,
-            valid_token.spend,
+            spend,
             valid_token.soft_budget,
         )
         call_info = CallInfo(
             token=valid_token.token,
-            spend=valid_token.spend,
+            spend=spend,
             max_budget=valid_token.max_budget,
             soft_budget=valid_token.soft_budget,
             user_id=valid_token.user_id,
@@ -2957,31 +2966,33 @@ async def _virtual_key_max_budget_alert_check(
     This is a warning alert before the token actually exceeds the max budget.
 
     """
+    if valid_token.max_budget is None:
+        return
 
-    if (
-        valid_token.max_budget is not None
-        and valid_token.spend is not None
-        and valid_token.spend > 0
-    ):
+    from litellm.proxy.proxy_server import get_current_spend
+
+    spend = await get_current_spend(
+        counter_key=f"spend:key:{valid_token.token}",
+        fallback_spend=valid_token.spend or 0.0,
+    )
+
+    if spend > 0:
         alert_threshold = (
             valid_token.max_budget * EMAIL_BUDGET_ALERT_MAX_SPEND_ALERT_PERCENTAGE
         )
 
         # Only alert if we've crossed the threshold but haven't exceeded max_budget yet
-        if (
-            valid_token.spend >= alert_threshold
-            and valid_token.spend < valid_token.max_budget
-        ):
+        if spend >= alert_threshold and spend < valid_token.max_budget:
             verbose_proxy_logger.debug(
                 "Reached Max Budget Alert Threshold for token %s, spend %s, max_budget %s, alert_threshold %s",
                 valid_token.token,
-                valid_token.spend,
+                spend,
                 valid_token.max_budget,
                 alert_threshold,
             )
             call_info = CallInfo(
                 token=valid_token.token,
-                spend=valid_token.spend,
+                spend=spend,
                 max_budget=valid_token.max_budget,
                 soft_budget=valid_token.soft_budget,
                 user_id=valid_token.user_id,
@@ -3104,16 +3115,21 @@ async def _team_soft_budget_check(
     """
     Triggers a budget alert if the team is over it's soft budget.
     """
-    if (
-        team_object is not None
-        and team_object.soft_budget is not None
-        and team_object.spend is not None
-        and team_object.spend >= team_object.soft_budget
-    ):
+    if team_object is None or team_object.soft_budget is None:
+        return
+
+    from litellm.proxy.proxy_server import get_current_spend
+
+    team_spend = await get_current_spend(
+        counter_key=f"spend:team:{team_object.team_id}",
+        fallback_spend=team_object.spend or 0.0,
+    )
+
+    if team_spend >= team_object.soft_budget:
         verbose_proxy_logger.debug(
             "Crossed Soft Budget for team %s, spend %s, soft_budget %s",
             team_object.team_id,
-            team_object.spend,
+            team_spend,
             team_object.soft_budget,
         )
         if valid_token:
@@ -3156,7 +3172,7 @@ async def _team_soft_budget_check(
 
             call_info = CallInfo(
                 token=valid_token.token,
-                spend=team_object.spend,
+                spend=team_spend,
                 max_budget=team_object.max_budget,
                 soft_budget=team_object.soft_budget,
                 user_id=valid_token.user_id,

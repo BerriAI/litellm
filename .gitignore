@@ -101,3 +101,5 @@ STABILIZATION_TODO.md
 **/playwright-report
 **/*.storageState.json
 **/coverage
+.venv312/
+litellm/proxy/_experimental/out/
