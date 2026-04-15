@@ -185,32 +185,17 @@ class AgenticAnthropicStreamingIterator:
             try:
                 chunk = await self._inner.__anext__()
                 self._collected_bytes.append(chunk)
-                print(
-                    f"\n[AgenticStreaming] Phase 1 — yielding chunk "
-                    f"#{len(self._collected_bytes)} ({len(chunk)} bytes)"
-                )
                 return chunk
             except StopAsyncIteration:
                 self._stream_exhausted = True
-                print(
-                    f"\n[AgenticStreaming] Phase 1 complete — "
-                    f"collected {len(self._collected_bytes)} chunks, "
-                    f"total {sum(len(c) for c in self._collected_bytes)} bytes. "
-                    f"Running agentic hooks..."
-                )
                 await self._process_agentic_hooks()
                 # Fall through to Phase 2
 
         # Phase 2: yield from follow-up stream if one was created
         if self._follow_up_iterator is not None:
             chunk = await self._follow_up_iterator.__anext__()
-            print(
-                f"\n[AgenticStreaming] Phase 2 — yielding follow-up chunk "
-                f"({len(chunk)} bytes)"
-            )
             return chunk
 
-        print("\n[AgenticStreaming] Stream fully exhausted (no follow-up)")
         raise StopAsyncIteration
 
     async def _process_agentic_hooks(self) -> None:
@@ -220,31 +205,22 @@ class AgenticAnthropicStreamingIterator:
         self._hook_processing_done = True
 
         if not self._collected_bytes:
-            print("[AgenticStreaming] No bytes collected, skipping hooks")
             return
 
         try:
             rebuilt = self._rebuild_anthropic_response_from_sse(self._collected_bytes)
             if rebuilt is None:
-                print("[AgenticStreaming] Could not rebuild response from SSE bytes")
                 verbose_logger.debug(
                     "AgenticStreamingIterator: Could not rebuild response from SSE bytes"
                 )
                 return
 
-            print(
-                f"[AgenticStreaming] Rebuilt response: id={rebuilt.get('id')}, "
-                f"model={rebuilt.get('model')}, "
-                f"stop_reason={rebuilt.get('stop_reason')}, "
-                f"content_blocks={len(rebuilt.get('content', []))}"
-            )
-            content_types = [
+            [
                 f"{b.get('type')}({b.get('name', '')})"
                 if b.get("type") == "tool_use"
                 else b.get("type")
                 for b in rebuilt.get("content", [])
             ]
-            print(f"[AgenticStreaming] Content block types: {content_types}")
 
             result = await self._http_handler._call_agentic_completion_hooks(
                 response=rebuilt,
@@ -259,23 +235,11 @@ class AgenticAnthropicStreamingIterator:
             )
 
             if result is None:
-                print(
-                    "[AgenticStreaming] Hooks returned None — "
-                    "no managed tool detected, no follow-up"
-                )
                 return
 
             if hasattr(result, "__aiter__"):
-                print(
-                    f"[AgenticStreaming] Hooks returned async iterator "
-                    f"({type(result).__name__}) — chaining as Phase 2"
-                )
                 self._follow_up_iterator = result.__aiter__()
             elif isinstance(result, dict):
-                print(
-                    f"[AgenticStreaming] Hooks returned dict response "
-                    f"(id={result.get('id')}) — wrapping in FakeStreamIterator for Phase 2"
-                )
                 from litellm.llms.anthropic.experimental_pass_through.messages.fake_stream_iterator import (
                     FakeAnthropicMessagesStreamIterator,
                 )
@@ -288,20 +252,12 @@ class AgenticAnthropicStreamingIterator:
                 )
                 self._follow_up_iterator = fake.__aiter__()
             else:
-                print(
-                    f"[AgenticStreaming] Hooks returned unexpected type: "
-                    f"{type(result).__name__}"
-                )
                 verbose_logger.warning(
                     "AgenticStreamingIterator: Unexpected result type from hooks: %s",
                     type(result).__name__,
                 )
         except Exception as e:
             _call_id = getattr(self._logging_obj, "litellm_call_id", "unknown")
-            print(
-                f"[AgenticStreaming] ERROR in hook processing: {e} "
-                f"(call_id={_call_id})"
-            )
             verbose_logger.exception(
                 "AgenticStreamingIterator: Error in agentic hook processing "
                 "[call_id=%s model=%s]: %s",

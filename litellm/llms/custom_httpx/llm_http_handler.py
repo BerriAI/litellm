@@ -1978,10 +1978,6 @@ class BaseLLMHTTPHandler:
 
         initial_response: Union[AsyncIterator, AnthropicMessagesResponse]
         if stream:
-            print(
-                f"\n[llm_http_handler] stream=True for model={model}, "
-                f"wrapping in AgenticAnthropicStreamingIterator"
-            )
             completion_stream = anthropic_messages_provider_config.get_async_streaming_response_iterator(
                 model=model,
                 httpx_response=response,
@@ -4501,10 +4497,6 @@ class BaseLLMHTTPHandler:
         fingerprint: str,
         stream: bool = False,
     ) -> Any:
-        print(
-            f"\n[_execute_anthropic_agentic_plan] "
-            f"model={model}, stream={stream}, depth={depth}/{max_loops}"
-        )
         from litellm.anthropic_interface import messages as anthropic_messages
 
         patch = plan.request_patch or AgenticLoopRequestPatch()
@@ -4637,12 +4629,6 @@ class BaseLLMHTTPHandler:
         tools = anthropic_messages_optional_request_params.get("tools", [])
         depth, max_loops, fingerprints = self._get_agentic_loop_settings(kwargs=kwargs)
 
-        print(
-            f"\n[_call_agentic_completion_hooks] model={model}, stream={stream}, "
-            f"depth={depth}/{max_loops}, "
-            f"response_type={type(response).__name__}, "
-            f"num_callbacks={len(callbacks)}"
-        )
 
         for callback in callbacks:
             try:
@@ -4661,11 +4647,6 @@ class BaseLLMHTTPHandler:
                         kwargs=kwargs,
                     )
 
-                    print(
-                        f"[_call_agentic_completion_hooks] "
-                        f"callback={callback.__class__.__name__}, "
-                        f"should_run={should_run}"
-                    )
 
                     if should_run:
                         fingerprint = self._fingerprint_agentic_tools(tool_calls)
