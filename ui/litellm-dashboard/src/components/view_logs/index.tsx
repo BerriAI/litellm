@@ -244,6 +244,7 @@ export default function SpendLogsTable({
     allTeams: hookAllTeams,
     handleFilterChange,
     handleFilterReset: handleFilterResetFromHook,
+    refetchWithFilters,
   } = useLogFilterLogic({
     logs: logsData,
     accessToken,
@@ -364,7 +365,14 @@ export default function SpendLogsTable({
 
   // Add this function to handle manual refresh
   const handleRefresh = () => {
-    logs.refetch();
+    if (hasBackendFilters) {
+      // When backend filters (e.g. Key Alias) are active the main TanStack Query
+      // is disabled and its params do not include filter values like key_alias.
+      // Route through the filter-aware refetch so all active filters are preserved.
+      refetchWithFilters();
+    } else {
+      logs.refetch();
+    }
   };
 
   const handleRowClick = (log: LogEntry) => {
