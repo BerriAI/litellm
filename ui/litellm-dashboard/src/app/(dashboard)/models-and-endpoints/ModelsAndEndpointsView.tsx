@@ -113,7 +113,7 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({ premiumUser, te
 
   const getProviderFromModel = (model: string) => {
     if (modelCostMapData !== null && modelCostMapData !== undefined) {
-      if (typeof modelCostMapData == "object" && model in modelCostMapData) {
+      if (typeof modelCostMapData === "object" && model in modelCostMapData) {
         return modelCostMapData[model]["litellm_provider"];
       }
     }
@@ -229,7 +229,7 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({ premiumUser, te
 
   const isLoading = isLoadingModels || isLoadingModelCostMap || isLoadingCredentials || isLoadingUISettings;
 
-  if (userRole && userRole == "Admin Viewer") {
+  if (userRole && userRole === "Admin Viewer") {
     const { Title, Paragraph } = Typography;
     return (
       <div>
