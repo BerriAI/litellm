@@ -34,7 +34,7 @@ def test_get_masked_api_base(logging_obj):
     api_base = "https://api.openai.com/v1"
     masked_api_base = logging_obj._get_masked_api_base(api_base)
     assert masked_api_base == "https://api.openai.com/v1"
-    assert type(masked_api_base) == str
+    assert isinstance(masked_api_base, str)
 
 
 def test_sentry_sample_rate():
@@ -418,15 +418,69 @@ class TestUpdateFromKwargs:
 
         assert logging_obj.litellm_params["metadata"] == lm_meta
 
-    def test_no_backfill_when_metadata_already_present(self, logging_obj):
-        metadata = {"user_api_key": "sk-real"}
-        lm_meta = {"model_info": {"id": "deploy-1"}}
+    def test_merges_litellm_metadata_into_existing_metadata(self, logging_obj):
+        """When both metadata and litellm_metadata exist, litellm_metadata keys
+        should be merged into metadata without overwriting existing keys."""
+        metadata = {"user_api_key": "sk-real", "trace_id": "t-1"}
+        lm_meta = {
+            "user_api_key_hash": "hashed-abc",
+            "user_api_key": "should-not-overwrite",
+        }
         kwargs = {"metadata": metadata, "litellm_metadata": lm_meta}
 
         logging_obj.update_from_kwargs(kwargs=kwargs)
 
-        assert logging_obj.litellm_params["metadata"] == metadata
+        result_meta = logging_obj.litellm_params["metadata"]
+        # Existing key preserved
+        assert result_meta["user_api_key"] == "sk-real"
+        assert result_meta["trace_id"] == "t-1"
+        # New key merged from litellm_metadata
+        assert result_meta["user_api_key_hash"] == "hashed-abc"
+        # litellm_metadata also stored
         assert logging_obj.litellm_params["litellm_metadata"] == lm_meta
+
+    def test_merge_does_not_mutate_original_kwargs_metadata(self, logging_obj):
+        """The merge must not mutate the caller's original metadata dict."""
+        original_metadata = {"user_api_key": "sk-real"}
+        lm_meta = {"user_api_key_hash": "hashed-abc", "team_id": "t-1"}
+        kwargs = {"metadata": original_metadata, "litellm_metadata": lm_meta}
+
+        logging_obj.update_from_kwargs(kwargs=kwargs)
+
+        # Original dict should be untouched
+        assert "user_api_key_hash" not in original_metadata
+        assert "team_id" not in original_metadata
+
+    def test_merge_survives_litellm_params_update(self, logging_obj):
+        """When caller passes litellm_params with its own metadata, litellm_metadata
+        keys should still be merged in (merge happens after .update())."""
+        caller_metadata = {"from_caller": True}
+        lm_meta = {"user_api_key_hash": "hashed-xyz"}
+        kwargs = {"litellm_metadata": lm_meta}
+
+        logging_obj.update_from_kwargs(
+            kwargs=kwargs,
+            litellm_params={"metadata": caller_metadata, "litellm_call_id": "x"},
+        )
+
+        result_meta = logging_obj.litellm_params["metadata"]
+        assert result_meta["from_caller"] is True
+        assert result_meta["user_api_key_hash"] == "hashed-xyz"
+        # caller's dict must not be mutated by the merge
+        assert "user_api_key_hash" not in caller_metadata
+
+    def test_merge_handles_metadata_none(self, logging_obj):
+        """When metadata=None is explicitly in kwargs alongside litellm_metadata,
+        the merge should not crash (dict(None) would TypeError)."""
+        kwargs = {
+            "metadata": None,
+            "litellm_metadata": {"user_api_key_hash": "hashed-abc"},
+        }
+
+        logging_obj.update_from_kwargs(kwargs=kwargs)
+
+        result_meta = logging_obj.litellm_params["metadata"]
+        assert result_meta["user_api_key_hash"] == "hashed-abc"
 
     def test_caller_litellm_params_win_over_kwargs(self, logging_obj):
         """Explicit litellm_params metadata merges into kwargs metadata without overwriting."""
@@ -2129,11 +2183,11 @@ def test_function_setup_litellm_metadata_populates_metadata():
     ), "litellm_params['metadata'] should be a copy, not the same object"
 
 
-def test_function_setup_metadata_takes_precedence_over_litellm_metadata():
+def test_function_setup_merges_litellm_metadata_without_overwriting():
     """
     Test that when BOTH metadata and litellm_metadata are present (e.g., user sets
-    Anthropic API metadata AND proxy adds litellm_metadata), metadata is used as
-    litellm_params["metadata"] and litellm_metadata is stored separately.
+    Anthropic API metadata AND proxy adds litellm_metadata), existing metadata keys
+    are preserved and litellm_metadata keys are merged in without overwriting.
     """
     import litellm
 
@@ -2147,6 +2201,7 @@ def test_function_setup_metadata_takes_precedence_over_litellm_metadata():
         "litellm_metadata": {
             "user_api_key_hash": "sk-hashed-xyz",
             "user_api_key_team_id": "team-xyz",
+            "user_id": "should-not-overwrite",
         },
     }
 
@@ -2159,15 +2214,22 @@ def test_function_setup_metadata_takes_precedence_over_litellm_metadata():
 
     litellm_params = logging_obj.model_call_details.get("litellm_params", {})
 
-    # When both are present, metadata should be the explicit "metadata" dict
+    # Existing metadata key preserved (not overwritten by litellm_metadata)
     metadata = litellm_params.get("metadata")
     assert metadata is not None
     assert metadata.get("user_id") == "anthropic-user-id"
 
-    # litellm_metadata should be preserved separately for merge_litellm_metadata()
+    # litellm_metadata keys merged into metadata
+    assert metadata.get("user_api_key_hash") == "sk-hashed-xyz"
+    assert metadata.get("user_api_key_team_id") == "team-xyz"
+
+    # litellm_metadata should be preserved separately
     litellm_metadata = litellm_params.get("litellm_metadata")
     assert litellm_metadata is not None
     assert litellm_metadata.get("user_api_key_hash") == "sk-hashed-xyz"
+
+    # metadata must be a copy — mutating it must not affect the original kwargs dict
+    assert metadata is not kwargs["metadata"]
 
 
 def test_update_from_kwargs_litellm_params_metadata_does_not_overwrite_proxy_fields():
