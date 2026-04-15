@@ -10,6 +10,7 @@ import asyncio
 import time
 from datetime import datetime
 from typing import List, Optional, cast
+from urllib.parse import quote
 
 import litellm
 from litellm._logging import print_verbose, verbose_logger
@@ -347,8 +348,16 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
             )
             verbose_logger.debug(f"s3_v2 logger - s3_verify setting: {self.s3_verify}")
 
+            # URL-encode the object key so that characters like '=' (from
+            # base64 padding) are percent-encoded.  This ensures the URL that
+            # httpx sends on the wire matches the canonical path that
+            # SigV4Auth uses when computing the request signature.
+            encoded_key = quote(
+                batch_logging_element.s3_object_key, safe="/"
+            )
+
             # Prepare the URL
-            url = f"https://{self.s3_bucket_name}.s3.{self.s3_region_name}.amazonaws.com/{batch_logging_element.s3_object_key}"
+            url = f"https://{self.s3_bucket_name}.s3.{self.s3_region_name}.amazonaws.com/{encoded_key}"
 
             if self.s3_endpoint_url and self.s3_bucket_name:
                 if self.s3_use_virtual_hosted_style:
@@ -361,7 +370,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
                         if self.s3_endpoint_url.startswith("https://")
                         else "http://"
                     )
-                    url = f"{protocol}{self.s3_bucket_name}.{endpoint_host}/{batch_logging_element.s3_object_key}"
+                    url = f"{protocol}{self.s3_bucket_name}.{endpoint_host}/{encoded_key}"
                 else:
                     # Path-style: endpoint/bucket/key
                     url = (
@@ -369,7 +378,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
                         + "/"
                         + self.s3_bucket_name
                         + "/"
-                        + batch_logging_element.s3_object_key
+                        + encoded_key
                     )
 
             # Convert JSON to string
@@ -536,8 +545,12 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
                 aws_region_name=self.s3_region_name,
             )
 
+            encoded_key = quote(
+                batch_logging_element.s3_object_key, safe="/"
+            )
+
             # Prepare the URL
-            url = f"https://{self.s3_bucket_name}.s3.{self.s3_region_name}.amazonaws.com/{batch_logging_element.s3_object_key}"
+            url = f"https://{self.s3_bucket_name}.s3.{self.s3_region_name}.amazonaws.com/{encoded_key}"
 
             if self.s3_endpoint_url and self.s3_bucket_name:
                 if self.s3_use_virtual_hosted_style:
@@ -550,7 +563,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
                         if self.s3_endpoint_url.startswith("https://")
                         else "http://"
                     )
-                    url = f"{protocol}{self.s3_bucket_name}.{endpoint_host}/{batch_logging_element.s3_object_key}"
+                    url = f"{protocol}{self.s3_bucket_name}.{endpoint_host}/{encoded_key}"
                 else:
                     # Path-style: endpoint/bucket/key
                     url = (
@@ -558,7 +571,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
                         + "/"
                         + self.s3_bucket_name
                         + "/"
-                        + batch_logging_element.s3_object_key
+                        + encoded_key
                     )
 
             # Convert JSON to string
@@ -662,8 +675,10 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
                 f"s3_v2 logger - downloading data from s3 - {s3_object_key}"
             )
 
+            encoded_key = quote(s3_object_key, safe="/")
+
             # Prepare the URL
-            url = f"https://{self.s3_bucket_name}.s3.{self.s3_region_name}.amazonaws.com/{s3_object_key}"
+            url = f"https://{self.s3_bucket_name}.s3.{self.s3_region_name}.amazonaws.com/{encoded_key}"
 
             if self.s3_endpoint_url and self.s3_bucket_name:
                 if self.s3_use_virtual_hosted_style:
@@ -676,7 +691,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
                         if self.s3_endpoint_url.startswith("https://")
                         else "http://"
                     )
-                    url = f"{protocol}{self.s3_bucket_name}.{endpoint_host}/{s3_object_key}"
+                    url = f"{protocol}{self.s3_bucket_name}.{endpoint_host}/{encoded_key}"
                 else:
                     # Path-style: endpoint/bucket/key
                     url = (
@@ -684,7 +699,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
                         + "/"
                         + self.s3_bucket_name
                         + "/"
-                        + s3_object_key
+                        + encoded_key
                     )
 
             # Prepare the request for GET operation
