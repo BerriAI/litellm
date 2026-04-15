@@ -6,7 +6,7 @@ import {
   WarningOutlined,
 } from "@ant-design/icons";
 import { useQuery } from "@tanstack/react-query";
-import { Button, Card, Spin, Table, Typography } from "antd";
+import { Button, Card, Col, Row, Spin, Table, Typography } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import React, { useMemo, useState } from "react";
 import { getGuardrailsUsageOverview } from "@/components/networking";
@@ -217,27 +217,27 @@ export function GuardrailsOverview({
         </div>
       </div>
 
-      <div className="grid grid-cols-2 lg:grid-cols-5 gap-4 mb-6 items-stretch">
-        <div className="flex flex-col min-w-0">
+      <Row gutter={[16, 16]} className="mb-6">
+        <Col xs={12} sm={12} md={8} flex="1 0 20%">
           <MetricCard label="Total Evaluations" value={metrics.totalRequests.toLocaleString()} />
-        </div>
-        <div className="flex flex-col min-w-0">
+        </Col>
+        <Col xs={12} sm={12} md={8} flex="1 0 20%">
           <MetricCard
             label="Blocked Requests"
             value={metrics.totalBlocked.toLocaleString()}
             valueColor="text-red-600"
             icon={<WarningOutlined className="text-red-400" />}
           />
-        </div>
-        <div className="flex flex-col min-w-0">
+        </Col>
+        <Col xs={12} sm={12} md={8} flex="1 0 20%">
           <MetricCard
             label="Pass Rate"
             value={`${metrics.passRate}%`}
             valueColor="text-green-600"
             icon={<RiseOutlined className="text-green-400" />}
           />
-        </div>
-        <div className="flex flex-col min-w-0">
+        </Col>
+        <Col xs={12} sm={12} md={8} flex="1 0 20%">
           <MetricCard
             label="Avg. latency added"
             value={`${metrics.avgLatency}ms`}
@@ -249,11 +249,11 @@ export function GuardrailsOverview({
                   : "text-green-600"
             }
           />
-        </div>
-        <div className="flex flex-col min-w-0">
+        </Col>
+        <Col xs={12} sm={12} md={8} flex="1 0 20%">
           <MetricCard label="Active Guardrails" value={metrics.count} />
-        </div>
-      </div>
+        </Col>
+      </Row>
 
       <div className="mb-6">
         <ScoreChart data={chartData} />
