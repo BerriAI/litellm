@@ -202,13 +202,6 @@ export const CreateUserButton: React.FC<CreateuserProps> = ({
         <Form.Item label="User Email" name="user_email">
           <TextInput placeholder="" />
         </Form.Item>
-        <Form.Item
-          label="Send invitation email"
-          name="send_invite_email"
-          valuePropName="checked"
-        >
-          <Checkbox />
-        </Form.Item>
         <Form.Item label="User Role" name="user_role">
           <Select2>
             {possibleUIRoles &&
@@ -230,6 +223,14 @@ export const CreateUserButton: React.FC<CreateuserProps> = ({
 
         <Form.Item label="Metadata" name="metadata">
           <Input.TextArea rows={4} placeholder="Enter metadata as JSON" />
+        </Form.Item>
+
+        <Form.Item
+          label="Send invitation email"
+          name="send_invite_email"
+          valuePropName="checked"
+        >
+          <Checkbox />
         </Form.Item>
 
         <div style={{ textAlign: "right", marginTop: "10px" }}>
@@ -284,13 +285,6 @@ export const CreateUserButton: React.FC<CreateuserProps> = ({
             <Input />
           </Form.Item>
           <Form.Item
-            label="Send invitation email"
-            name="send_invite_email"
-            valuePropName="checked"
-          >
-            <Checkbox />
-          </Form.Item>
-          <Form.Item
             label={
               <span>
                 Global Proxy Role{" "}
@@ -340,6 +334,13 @@ export const CreateUserButton: React.FC<CreateuserProps> = ({
 
           <Form.Item label="Metadata" name="metadata">
             <Input.TextArea rows={4} placeholder="Enter metadata as JSON" />
+          </Form.Item>
+          <Form.Item
+            label="Send invitation email"
+            name="send_invite_email"
+            valuePropName="checked"
+          >
+            <Checkbox />
           </Form.Item>
           <Accordion>
             <AccordionHeader>
