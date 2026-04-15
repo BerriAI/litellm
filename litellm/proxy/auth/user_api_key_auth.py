@@ -1432,6 +1432,10 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
 
                     # Check 5c. End user max budget
                     end_user_mb = valid_token.end_user_max_budget
+                    # Fallback in case end-user max budget not set on token
+                    if end_user_mb is None and _end_user_object is not None:
+                        budget_table = _end_user_object.litellm_budget_table
+                        end_user_mb = budget_table.max_budget if budget_table is not None else None         
                     if (
                         end_user_mb is not None
                         and _end_user_object is not None
@@ -1953,6 +1957,10 @@ async def _run_post_custom_auth_checks(
 
     # 4b. Check end-user max_budget
     end_user_mb = valid_token.end_user_max_budget
+    # Fallback in case end-user max budget not set on token
+    if end_user_mb is None and end_user_object is not None:
+        budget_table = end_user_object.litellm_budget_table
+        end_user_mb = budget_table.max_budget if budget_table is not None else None     
     if (
         end_user_mb is not None
         and end_user_object is not None
