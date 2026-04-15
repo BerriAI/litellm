@@ -175,10 +175,6 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         ):  # gpt-4 does not support 'response_format'
             model_specific_params.append("response_format")
 
-        # Normalize model name for responses API (e.g., "responses/gpt-4.1" -> "gpt-4.1")
-        model_for_check = (
-            model.split("responses/", 1)[1] if "responses/" in model else model
-        )
         return base_params + model_specific_params
 
     def _map_openai_params(
