@@ -32043,7 +32043,8 @@
         "output_cost_per_token": 1e-06,
         "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing",
         "supported_regions": [
-            "global"
+            "global",
+            "us-south1"
         ],
         "supports_function_calling": true,
         "supports_tool_choice": true
