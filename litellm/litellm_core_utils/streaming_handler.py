@@ -126,14 +126,12 @@ class _SyncToAsyncQueueIterator:
         finally:
             _put(_SYNC_ITER_EXHAUSTED)
 
-    def __aiter__(self) -> "_SyncToAsyncQueueIterator":
-        return self
+    # Intentionally no __aiter__: this class must NOT be detected as an
+    # AsyncIterable by is_async_iterable(), otherwise CustomStreamWrapper
+    # reroutes subsequent chunks to the async-for branch which has different
+    # first-chunk/usage handling than the Bedrock else-branch.
 
     async def __anext__(self) -> Any:
-        # After the sentinel has been consumed once, raise immediately on all
-        # subsequent calls. Without this guard, calls block forever on an empty
-        # queue — this matters because CustomStreamWrapper detects that the
-        # wrapper is async-iterable and may call __anext__ an extra time.
         if self._exhausted:
             raise StopAsyncIteration
         item = await self._queue.get()
