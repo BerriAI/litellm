@@ -3511,7 +3511,17 @@ def test_video_metadata_supported_for_all_gemini_models():
         assert file_part is not None, f"{model}: file part should exist"
         assert "video_metadata" in file_part, f"{model}: video_metadata should be present"
         assert file_part["video_metadata"]["fps"] == 5, f"{model}: fps should be 5"
+
+    # Per-part media_resolution is Gemini 3+ only; 2.x uses generation_config global
+    for model in ["gemini-3-pro-preview"]:
+        contents = _gemini_convert_messages_with_history(messages=messages, model=model)
+        file_part = next(p for p in contents[0]["parts"] if "file_data" in p)
         assert "media_resolution" in file_part, f"{model}: media_resolution should be present"
+
+    for model in ["gemini-1.5-pro", "gemini-2.5-flash", "gemini-2.5-pro"]:
+        contents = _gemini_convert_messages_with_history(messages=messages, model=model)
+        file_part = next(p for p in contents[0]["parts"] if "file_data" in p)
+        assert "media_resolution" not in file_part, f"{model}: per-part media_resolution should not be set"
 
 
 def test_chunk_parser_handles_prompt_feedback_block():

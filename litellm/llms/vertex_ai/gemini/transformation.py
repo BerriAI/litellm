@@ -139,14 +139,20 @@ def _apply_gemini_metadata(
 ) -> PartType:
     """
     Apply media_resolution and video_metadata parameters to a Gemini part.
-    Both are supported across all Gemini models (1.x, 2.x, 3+).
+
+    - Per-part media_resolution: Gemini 3+ only (2.x uses generation_config global).
+    - video_metadata (fps, startOffset, endOffset): all Gemini models (1.x, 2.x, 3+).
     """
     if model is None:
         return part
 
+    from .vertex_and_google_ai_studio_gemini import VertexGeminiConfig
+
     part_dict = dict(part)
 
-    if media_resolution_enum is not None:
+    if media_resolution_enum is not None and VertexGeminiConfig._is_gemini_3_or_newer(
+        model
+    ):
         part_dict["media_resolution"] = media_resolution_enum
 
     if video_metadata is not None:
