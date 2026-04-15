@@ -122,21 +122,21 @@ async def query_parallel_requests_metrics_last_n_seconds(
         where current_count represents the Redis counter value at the latest log entry
         for each token.
     """
+    # Determine project ID FIRST before creating the client
+    if project_id is None:
+        project_id = os.environ.get("GOOGLE_CLOUD_PROJECT") or os.environ.get("GCP_PROJECT")
+    if project_id is None:
+        verbose_proxy_logger.error(
+            "[gcp_logs_query] No GCP project ID provided. "
+            "Set GOOGLE_CLOUD_PROJECT or GCP_PROJECT env var"
+        )
+        return []
+
     client = get_gcp_logging_client(project_id)
     if client is None:
         return []
 
     try:
-        # Determine project ID
-        if project_id is None:
-            project_id = os.environ.get("GOOGLE_CLOUD_PROJECT") or os.environ.get("GCP_PROJECT")
-        if project_id is None:
-            verbose_proxy_logger.error(
-                "[gcp_logs_query] No GCP project ID provided. "
-                "Set GOOGLE_CLOUD_PROJECT or GCP_PROJECT env var"
-            )
-            return []
-
         # Calculate time window: last N seconds before target_timestamp
         # Query from (target_timestamp - N seconds) to target_timestamp
         end_time = target_timestamp

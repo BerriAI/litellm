@@ -18,6 +18,18 @@ services:
       DATABASE_URL: "postgresql://llmproxy:dbpassword9090@db:5432/litellm"
       READ_DATABASE_URL: "postgresql://llmproxy:dbpassword9090@db:5432/litellm"
       STORE_MODEL_IN_DB: "True" # allows adding models to proxy via UI
+      LITELLM_REDIS_HOST: "redis" # Redis service hostname in Docker network
+      LITELLM_REDIS_PASSWORD: "" # No password for local Redis
+      PROMETHEUS_URL: "http://prometheus:9090" # Prometheus URL for querying metrics
+    #########################################
+    ## Uncomment these lines to enable GCP connection ##
+    ## Requires a valid GCP service account key at ~/.config/gcloud/application_default_credentials.json
+    # environment:
+    #   GOOGLE_APPLICATION_CREDENTIALS: "/app/gcp-credentials.json"
+    #   GOOGLE_CLOUD_PROJECT: "your-project-id"
+    # volumes:
+    #   - ${HOME}/.config/gcloud/application_default_credentials.json:/app/gcp-credentials.json:ro
+    ##############################################
     env_file:
       - .env # Load local .env file
     depends_on:
