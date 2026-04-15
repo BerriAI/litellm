@@ -101,38 +101,23 @@ Sending `litellm_advisor` as a bare function tool without setting up `AdvisorInt
 
 Register `AdvisorInterceptionLogger` in `litellm.callbacks` and set `default_advisor_model`. This is what routes advisor sub-calls to the right model and credentials.
 
-```python showLineNumbers title="SDK setup — register AdvisorInterceptionLogger"
-import litellm
-from litellm.integrations.advisor_interception import AdvisorInterceptionLogger
-
-litellm.callbacks = [
-    AdvisorInterceptionLogger(
-
-        default_advisor_model="openai/gpt-4o",
-
-        enabled_providers=["anthropic", "openai"],
-    )
-]
-```
-
 `default_advisor_model` is used when the tool definition has no `model` field (i.e. the `litellm_advisor` function format). If you pass the `advisor_20260301` native format with an explicit `model` field, that takes precedence.
 
----
-
-### Anthropic executor (any advisor)
-
-```python showLineNumbers title="Anthropic executor + OpenAI advisor"
+```python showLineNumbers title="SDK setup — register AdvisorInterceptionLogger"
 import asyncio
 import litellm
 from litellm.integrations.advisor_interception import AdvisorInterceptionLogger
 
 litellm.callbacks = [
-    AdvisorInterceptionLogger(default_advisor_model="openai/gpt-4o")
+    AdvisorInterceptionLogger(
+        default_advisor_model="openai/o3",
+        enabled_providers=["anthropic", "openai"],
+    )
 ]
 
 async def main():
     response = await litellm.acompletion(
-        model="anthropic/claude-sonnet-4-6",
+        model="openai/gpt-4o",
         messages=[
             {"role": "user", "content": "Build a concurrent worker pool in Go with graceful shutdown."}
         ],
@@ -154,71 +139,8 @@ async def main():
     )
     print(response.choices[0].message.content)
 
-asyncio.run(main())
-```
-
-LiteLLM detects the `litellm_advisor` function tool, converts it to a provider-compatible tool, intercepts the tool call in the response, calls `openai/gpt-4o` as the advisor, and injects the advice before returning the final answer.
-
-**To use Anthropic's native advisor path** (Anthropic handles advisor inference server-side), use the `advisor_20260301` format with `model: "claude-opus-4-6"` — no callback needed:
-
-```python showLineNumbers title="Anthropic-native path (executor + advisor both Anthropic)"
-import litellm
-
-response = litellm.completion(
-    model="anthropic/claude-sonnet-4-6",
-    messages=[
-        {"role": "user", "content": "Build a concurrent worker pool in Go with graceful shutdown."}
-    ],
-    tools=[
-        {
-            "type": "advisor_20260301",
-            "name": "advisor",
-            "model": "claude-opus-4-6",   # advisor model — required
-        }
-    ],
-    max_tokens=4096,
-)
-print(response.choices[0].message.content)
-```
-
----
-
-### Non-Anthropic executor
-
-```python showLineNumbers title="OpenAI executor + OpenAI advisor"
-import asyncio
-import litellm
-from litellm.integrations.advisor_interception import AdvisorInterceptionLogger
-
-litellm.callbacks = [
-    AdvisorInterceptionLogger(default_advisor_model="openai/gpt-4o")
-]
-
-async def main():
-    response = await litellm.acompletion(
-        model="openai/gpt-4o-mini",
-        messages=[
-            {"role": "user", "content": "Design a rate limiter for a distributed API gateway."}
-        ],
-        tools=[
-            {
-                "type": "function",
-                "function": {
-                    "name": "litellm_advisor",
-                    "description": "Consult a stronger advisor model.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {"question": {"type": "string"}},
-                        "required": ["question"],
-                    },
-                },
-            }
-        ],
-        max_tokens=2048,
-    )
-    print(response.choices[0].message.content)
-
-asyncio.run(main())
+if __name__ == "__main__":
+    asyncio.run(main())
 ```
 
 You can also pass the advisor model directly in the tool definition using the native format — this overrides `default_advisor_model`:
@@ -228,7 +150,7 @@ from litellm.integrations.advisor_interception import get_litellm_advisor_tool
 
 tools=[
     get_litellm_advisor_tool(
-        model="openai/gpt-4o",  # overrides default_advisor_model for this request
+        model="anthropic/claude-opus-4-6",  # overrides default_advisor_model for this request
         max_uses=2,
     )
 ]
@@ -244,7 +166,7 @@ import litellm
 from litellm.integrations.advisor_interception import AdvisorInterceptionLogger
 
 litellm.callbacks = [
-    AdvisorInterceptionLogger(default_advisor_model="openai/gpt-4o")
+    AdvisorInterceptionLogger(default_advisor_model="openai/o3")
 ]
 
 async def main():
@@ -296,19 +218,13 @@ model_list:
   # Advisor model — can be any provider
   - model_name: my-advisor
     litellm_params:
-      model: openai/gpt-4o
+      model: openai/o3
       api_key: os.environ/OPENAI_API_KEY
-
-  # Or use an Anthropic model as advisor
-  # - model_name: my-advisor
-  #   litellm_params:
-  #     model: anthropic/claude-opus-4-6
-  #     api_key: os.environ/ANTHROPIC_API_KEY
 
   # Executor models
   - model_name: claude-sonnet
     litellm_params:
-      model: anthropic/claude-sonnet-4-6
+      model: anthropic/claude-sonnet-4-5
       api_key: os.environ/ANTHROPIC_API_KEY
 
   - model_name: gpt-4o-mini
@@ -340,9 +256,8 @@ litellm_settings:
 
 ---
 
-### Client request — native advisor format
-
-```python showLineNumbers title="Advisor via proxy (advisor_20260301 format)"
+### Client request 
+```python showLineNumbers title="Advisor via proxy"
 from openai import OpenAI
 
 client = OpenAI(
@@ -354,35 +269,6 @@ response = client.chat.completions.create(
     model="claude-sonnet",
     messages=[
         {"role": "user", "content": "Implement a distributed rate limiter in Python."}
-    ],
-    tools=[
-        {
-            "type": "advisor_20260301",
-            "name": "advisor",
-            "model": "my-advisor",      # matches model_name in config.yaml
-        }
-    ],
-    max_tokens=4096,
-)
-print(response.choices[0].message.content)
-```
-
-### Client request — OpenAI function format
-
-Use this when your client cannot send custom `type` values (e.g. plain OpenAI SDK). The proxy uses `default_advisor_model` from config.
-
-```python showLineNumbers title="Advisor via proxy (litellm_advisor function format)"
-from openai import OpenAI
-
-client = OpenAI(
-    api_key="your-litellm-proxy-key",
-    base_url="http://0.0.0.0:4000/v1",
-)
-
-response = client.chat.completions.create(
-    model="gpt-4o-mini",
-    messages=[
-        {"role": "user", "content": "Design a fault-tolerant task queue in Python."}
     ],
     tools=[
         {
@@ -398,12 +284,10 @@ response = client.chat.completions.create(
             },
         }
     ],
-    max_tokens=2048,
+    max_tokens=4096,
 )
 print(response.choices[0].message.content)
 ```
-
-The proxy intercepts the `litellm_advisor` tool call, calls `my-advisor` (from config), injects the result, and returns the final answer — your client only sees the finished response.
 
 </TabItem>
 </Tabs>
@@ -461,12 +345,11 @@ async def main():
             {
                 "type": "advisor_20260301",
                 "name": "advisor",
-                "model": "openai/gpt-4o-mini",   # advisor model — any provider works
+                "model": "openai/o3",   # advisor model — any provider works
                 "max_uses": 2,
             }
         ],
         max_tokens=1024,
-        custom_llm_provider="openai",
     )
     print(response["content"][0]["text"])
 
