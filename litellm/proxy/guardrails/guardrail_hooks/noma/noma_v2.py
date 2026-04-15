@@ -149,9 +149,12 @@ class NomaV2Guardrail(CustomGuardrail):
         # non-serializable values before the payload is sent over the wire.
         payload_request_data = safe_deep_copy(request_data)
         if logging_obj is not None:
-            payload_request_data["litellm_logging_obj"] = getattr(
-                logging_obj, "model_call_details", None
-            )
+            # Use dict spread to avoid mutating the original request_data when
+            # safe_deep_copy returns the same reference (safe_memory_mode=True).
+            payload_request_data = {
+                **payload_request_data,
+                "litellm_logging_obj": getattr(logging_obj, "model_call_details", None),
+            }
 
         payload: dict[str, Any] = {
             "inputs": inputs,
