@@ -181,6 +181,99 @@ async def test_build_agentic_loop_plan_returns_request_patch():
 
 
 @pytest.mark.asyncio
+async def test_should_run_agentic_loop_with_custom_type_tools():
+    """Test that async_should_run_agentic_loop returns True when tools contain
+    litellm_content_retrieve as a custom-typed tool (e.g. Claude Code tool list)
+    and the model response includes a matching tool_use block."""
+    logger = CompressionInterceptionLogger()
+
+    # Exact tools payload produced by Claude Code – litellm_content_retrieve is
+    # the final entry and uses type="custom" (not type="function").
+    tools = [
+        {
+            "name": "Agent",
+            "description": "Launch a new agent to handle complex, multi-step tasks.",
+            "input_schema": {
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "type": "object",
+                "properties": {
+                    "description": {"type": "string"},
+                    "prompt": {"type": "string"},
+                },
+                "required": ["description", "prompt"],
+                "additionalProperties": False,
+            },
+        },
+        {
+            "name": "AskUserQuestion",
+            "description": "Use this tool when you need to ask the user questions.",
+            "input_schema": {
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "type": "object",
+                "properties": {
+                    "questions": {"type": "array", "items": {"type": "object"}},
+                },
+                "required": ["questions"],
+                "additionalProperties": False,
+            },
+        },
+        {
+            "name": "Bash",
+            "description": "Executes a given bash command and returns its output.",
+            "input_schema": {
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "type": "object",
+                "properties": {"command": {"type": "string"}},
+                "required": ["command"],
+                "additionalProperties": False,
+            },
+        },
+        {
+            "name": "litellm_content_retrieve",
+            "description": "Retrieve the full content of a file or message that was compressed to save tokens.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "key": {
+                        "type": "string",
+                        "description": "The identifier of the content to retrieve",
+                        "enum": ["message_0", "HA_UPTIME_ROUTER_SPEC.md", "message_159", "message_160"],
+                    }
+                },
+                "required": ["key"],
+            },
+            "type": "custom",
+        },
+    ]
+
+    response = {
+        "content": [
+            {
+                "type": "tool_use",
+                "id": "toolu_abc",
+                "name": "litellm_content_retrieve",
+                "input": {"key": "message_0"},
+            }
+        ]
+    }
+
+    should_run, tools_dict = await logger.async_should_run_agentic_loop(
+        response=response,
+        model="claude-3-5-sonnet",
+        messages=[],
+        tools=tools,
+        stream=False,
+        custom_llm_provider="anthropic",
+        kwargs={},
+    )
+
+    assert should_run is True
+    assert tools_dict["tool_type"] == "compression_retrieval"
+    assert len(tools_dict["tool_calls"]) == 1
+    assert tools_dict["tool_calls"][0]["input"]["key"] == "message_0"
+
+
+@pytest.mark.asyncio
 async def test_build_agentic_loop_plan_missing_key_fallback():
     """Missing cache keys should produce deterministic fallback content."""
     logger = CompressionInterceptionLogger()

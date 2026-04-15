@@ -1978,13 +1978,33 @@ class BaseLLMHTTPHandler:
 
         initial_response: Union[AsyncIterator, AnthropicMessagesResponse]
         if stream:
+            print(
+                f"\n[llm_http_handler] stream=True for model={model}, "
+                f"wrapping in AgenticAnthropicStreamingIterator"
+            )
             completion_stream = anthropic_messages_provider_config.get_async_streaming_response_iterator(
                 model=model,
                 httpx_response=response,
                 request_body=request_body,
                 litellm_logging_obj=logging_obj,
             )
-            initial_response = completion_stream
+
+            from litellm.llms.anthropic.experimental_pass_through.messages.agentic_streaming_iterator import (
+                AgenticAnthropicStreamingIterator,
+            )
+
+            initial_response = AgenticAnthropicStreamingIterator(
+                completion_stream=completion_stream,
+                http_handler=self,
+                model=model,
+                messages=messages,
+                anthropic_messages_provider_config=anthropic_messages_provider_config,
+                anthropic_messages_optional_request_params=anthropic_messages_optional_request_params,
+                logging_obj=logging_obj,
+                custom_llm_provider=custom_llm_provider,
+                kwargs=kwargs,
+            )
+            return initial_response
         else:
             initial_response = anthropic_messages_provider_config.transform_anthropic_messages_response(
                 model=model,
@@ -1992,7 +2012,7 @@ class BaseLLMHTTPHandler:
                 logging_obj=logging_obj,
             )
 
-        # Call agentic completion hooks
+        # Call agentic completion hooks (non-streaming path only)
         final_response = await self._call_agentic_completion_hooks(
             response=initial_response,
             model=model,
@@ -2000,7 +2020,7 @@ class BaseLLMHTTPHandler:
             anthropic_messages_provider_config=anthropic_messages_provider_config,
             anthropic_messages_optional_request_params=anthropic_messages_optional_request_params,
             logging_obj=logging_obj,
-            stream=stream or False,
+            stream=False,
             custom_llm_provider=custom_llm_provider,
             kwargs=kwargs,
         )
@@ -4479,7 +4499,12 @@ class BaseLLMHTTPHandler:
         max_loops: int,
         fingerprints: List[str],
         fingerprint: str,
+        stream: bool = False,
     ) -> Any:
+        print(
+            f"\n[_execute_anthropic_agentic_plan] "
+            f"model={model}, stream={stream}, depth={depth}/{max_loops}"
+        )
         from litellm.anthropic_interface import messages as anthropic_messages
 
         patch = plan.request_patch or AgenticLoopRequestPatch()
@@ -4520,13 +4545,12 @@ class BaseLLMHTTPHandler:
         kwargs_for_followup["max_agentic_loops"] = max_loops
         kwargs_for_followup["_agentic_loop_fingerprints"] = fingerprints + [fingerprint]
 
-        print("optional_params", optional_params)
-        print("kwargs_for_followup", kwargs_for_followup)
         return await anthropic_messages.acreate(
             **{
                 "max_tokens": max_tokens,
                 "messages": patch.messages,
                 "model": patch.model or full_model_name,
+                "stream": stream,
                 **optional_params,
                 **kwargs_for_followup,
             }
@@ -4613,6 +4637,13 @@ class BaseLLMHTTPHandler:
         tools = anthropic_messages_optional_request_params.get("tools", [])
         depth, max_loops, fingerprints = self._get_agentic_loop_settings(kwargs=kwargs)
 
+        print(
+            f"\n[_call_agentic_completion_hooks] model={model}, stream={stream}, "
+            f"depth={depth}/{max_loops}, "
+            f"response_type={type(response).__name__}, "
+            f"num_callbacks={len(callbacks)}"
+        )
+
         for callback in callbacks:
             try:
                 if isinstance(callback, CustomLogger):
@@ -4628,6 +4659,12 @@ class BaseLLMHTTPHandler:
                         stream=stream,
                         custom_llm_provider=custom_llm_provider,
                         kwargs=kwargs,
+                    )
+
+                    print(
+                        f"[_call_agentic_completion_hooks] "
+                        f"callback={callback.__class__.__name__}, "
+                        f"should_run={should_run}"
                     )
 
                     if should_run:
@@ -4697,6 +4734,7 @@ class BaseLLMHTTPHandler:
                             max_loops=max_loops,
                             fingerprints=fingerprints,
                             fingerprint=fingerprint,
+                            stream=stream,
                         )
 
             except Exception as e:
