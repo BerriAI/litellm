@@ -340,6 +340,34 @@ async def update_credential(
                 "updated_by": user_api_key_dict.user_id,
             },
         )
+
+        # Sync in-memory credential_list so GET calls reflect the update
+        # immediately. Build a plaintext merged credential from the existing
+        # in-memory entry (plaintext) + the incoming patch values.
+        existing_in_memory: Optional[CredentialItem] = None
+        for cred in litellm.credential_list:
+            if cred.credential_name == credential_name:
+                existing_in_memory = cred
+                break
+
+        if existing_in_memory is not None:
+            in_memory_values = dict(existing_in_memory.credential_values or {})
+            if credential.credential_values:
+                in_memory_values.update(credential.credential_values)
+            in_memory_info = dict(existing_in_memory.credential_info or {})
+            if credential.credential_info:
+                in_memory_info.update(credential.credential_info)
+        else:
+            in_memory_values = credential.credential_values or {}
+            in_memory_info = credential.credential_info or {}
+
+        updated_in_memory = CredentialItem(
+            credential_name=credential_name,
+            credential_values=in_memory_values,
+            credential_info=in_memory_info,
+        )
+        CredentialAccessor.upsert_credentials([updated_in_memory])
+
         return {"success": True, "message": "Credential updated successfully"}
     except Exception as e:
         return handle_exception_on_proxy(e)
