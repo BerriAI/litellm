@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { Card, List, Empty, Spin, Input } from "antd";
+import { Card, List, Empty, Spin, Input, Typography } from "antd";
 import { ExperimentOutlined, SearchOutlined } from "@ant-design/icons";
 import GuardrailTestPanel from "./GuardrailTestPanel";
 import { applyGuardrail } from "../networking";
@@ -195,29 +195,31 @@ const GuardrailTestPlayground: React.FC<GuardrailTestPlaygroundProps> = ({
             </div>
 
             <div className="p-3 border-t border-gray-200 bg-gray-50">
-              <span className="text-xs text-gray-600">
+              <Typography.Text className="text-xs text-gray-600">
                 {selectedGuardrails.size} of {filteredGuardrails.length} selected
-              </span>
+              </Typography.Text>
             </div>
           </div>
 
           {/* Right Panel - Test Area */}
           <div className="w-3/4 flex flex-col bg-white">
             <div className="p-4 border-b border-gray-200 flex justify-between items-center">
-              <h2 className="text-xl font-semibold mb-0">Guardrail Testing Playground</h2>
+              <Typography.Title level={2} className="text-xl font-semibold mb-0">
+                Guardrail Testing Playground
+              </Typography.Title>
             </div>
 
             <div className="flex-1 overflow-auto p-4">
               {selectedGuardrails.size === 0 ? (
                 <div className="h-full flex flex-col items-center justify-center text-gray-400">
                   <ExperimentOutlined style={{ fontSize: "48px", marginBottom: "16px" }} />
-                  <p className="text-lg font-medium text-gray-600 mb-2">
+                  <Typography.Paragraph className="text-lg font-medium text-gray-600 mb-2">
                     Select Guardrails to Test
-                  </p>
-                  <p className="text-center text-gray-500 max-w-md">
+                  </Typography.Paragraph>
+                  <Typography.Paragraph className="text-center text-gray-500 max-w-md">
                     Choose one or more guardrails from the left sidebar to start testing and
                     comparing results.
-                  </p>
+                  </Typography.Paragraph>
                 </div>
               ) : (
                 <div className="h-full">
