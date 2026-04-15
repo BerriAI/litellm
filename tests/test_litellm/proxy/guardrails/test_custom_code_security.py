@@ -162,6 +162,25 @@ def test_typical_sync_guardrail_still_works():
     assert guardrail._compiled_function is not None
 
 
+def test_augmented_assignment_works():
+    # The transformer rewrites `n += 1` into `n = _inplacevar_("+=", n, 1)`,
+    # so the sandbox must bind `_inplacevar_`.
+    code = (
+        "def apply_guardrail(inputs, request_data, input_type):\n"
+        "    count = 0\n"
+        '    for _ in inputs["texts"]:\n'
+        "        count += 1\n"
+        '    return {"action": "allow", "n": count}\n'
+    )
+    guardrail = _compile(code)
+    fn = guardrail._compiled_function
+    assert fn is not None
+    assert fn({"texts": ["a", "b", "c"]}, {}, "request") == {
+        "action": "allow",
+        "n": 3,
+    }
+
+
 def test_missing_apply_guardrail_raises():
     with pytest.raises(CustomCodeCompilationError, match="apply_guardrail"):
         _compile("x = 1\n")
