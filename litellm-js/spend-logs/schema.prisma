@@ -26,4 +26,6 @@ model LiteLLM_SpendLogs {
   request_tags      Json     @default("[]")
   team_id           String?
   end_user          String?
+  @@index([api_key, startTime])
+  @@index([end_user, startTime])
 }
