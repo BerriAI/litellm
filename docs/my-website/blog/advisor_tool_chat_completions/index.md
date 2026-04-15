@@ -107,11 +107,9 @@ from litellm.integrations.advisor_interception import AdvisorInterceptionLogger
 
 litellm.callbacks = [
     AdvisorInterceptionLogger(
-        # Any provider LiteLLM supports. Use full model string for direct calls,
-        # or a model_name from your model_list when using the proxy router.
+
         default_advisor_model="openai/gpt-4o",
-        # Optional: limit interception to specific executor providers.
-        # Remove this line to intercept for all providers.
+
         enabled_providers=["anthropic", "openai"],
     )
 ]
