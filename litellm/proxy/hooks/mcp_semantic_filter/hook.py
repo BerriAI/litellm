@@ -8,7 +8,14 @@ Reduces context window size and improves tool selection accuracy.
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 from litellm._logging import verbose_proxy_logger
-from litellm.proxy._experimental.mcp_server.utils import is_tool_name_prefixed
+from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+    global_mcp_server_manager,
+)
+from litellm.proxy._experimental.mcp_server.utils import (
+    get_server_prefix,
+    is_tool_name_prefixed,
+    normalize_server_name,
+)
 from litellm.constants import (
     DEFAULT_MCP_SEMANTIC_FILTER_EMBEDDING_MODEL,
     DEFAULT_MCP_SEMANTIC_FILTER_SIMILARITY_THRESHOLD,
@@ -225,16 +232,29 @@ class SemanticToolFilterHook(CustomLogger):
             )
 
             # Separate MCP tools (prefixed) from non-MCP tools — only filter
-            # MCP tools, always pass non-MCP tools through untouched.
+            # MCP tools, always pass non-MCP tools through untouched. Build the
+            # known-prefix set from the live registry so hyphenated non-MCP
+            # tool names (e.g. "text-to-speech") aren't misclassified as MCP.
+            known_prefixes = {
+                normalize_server_name(get_server_prefix(s))
+                for s in global_mcp_server_manager.get_registry().values()
+                if get_server_prefix(s)
+            }
+
             def _tool_name(t):
                 return (
                     t.get("name", "") if isinstance(t, dict) else getattr(t, "name", "")
                 )
 
-            mcp_tools = [t for t in tools if is_tool_name_prefixed(_tool_name(t))]
-            non_mcp_tools = [
-                t for t in tools if not is_tool_name_prefixed(_tool_name(t))
-            ]
+            mcp_tools: List[Any] = []
+            non_mcp_tools: List[Any] = []
+            for t in tools:
+                if is_tool_name_prefixed(
+                    _tool_name(t), known_server_prefixes=known_prefixes
+                ):
+                    mcp_tools.append(t)
+                else:
+                    non_mcp_tools.append(t)
 
             if not mcp_tools:
                 return None
