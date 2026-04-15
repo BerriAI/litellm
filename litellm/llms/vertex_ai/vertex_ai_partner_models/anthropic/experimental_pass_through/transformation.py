@@ -51,17 +51,20 @@ class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, Vert
             # Authorization already in headers, but we still need project_id
             project_id = vertex_ai_project
 
-        # Always calculate api_base if not provided, regardless of Authorization header
-        if api_base is None:
-            api_base = self.get_complete_vertex_url(
-                custom_api_base=api_base,
-                vertex_location=vertex_ai_location,
-                vertex_project=vertex_ai_project,
-                project_id=project_id or "",
-                partner=VertexPartnerProvider.claude,
-                stream=optional_params.get("stream", False),
-                model=model,
-            )
+        # Always calculate api_base regardless of whether one was provided.
+        # get_complete_vertex_url handles custom api_base by appending the
+        # required endpoint suffix (:streamRawPredict / :rawPredict) via
+        # _check_custom_proxy. Without this, custom api_base values are
+        # used as-is and the Vertex AI endpoint returns 404.
+        api_base = self.get_complete_vertex_url(
+            custom_api_base=api_base,
+            vertex_location=vertex_ai_location,
+            vertex_project=vertex_ai_project,
+            project_id=project_id or "",
+            partner=VertexPartnerProvider.claude,
+            stream=optional_params.get("stream", False),
+            model=model,
+        )
 
         headers["content-type"] = "application/json"
 
