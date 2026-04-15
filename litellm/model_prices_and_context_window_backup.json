@@ -18250,6 +18250,7 @@
         "supported_endpoints": [
             "/v1/images/generations"
         ],
+        "supports_raw_image_size_dimensions": true,
         "supports_vision": true,
         "supports_pdf_input": true
     },
@@ -18265,6 +18266,7 @@
         "supported_endpoints": [
             "/v1/images/generations"
         ],
+        "supports_raw_image_size_dimensions": true,
         "supports_vision": true,
         "supports_pdf_input": true
     },
