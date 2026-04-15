@@ -363,17 +363,17 @@ def get_remaining_tokens_and_requests_from_request_data(data: Dict) -> Dict[str,
     remaining_requests_variable_name = f"litellm-key-remaining-requests-{model_group}"
     remaining_requests = _metadata.get(remaining_requests_variable_name, None)
     if remaining_requests:
-        headers[
-            f"x-litellm-key-remaining-requests-{h11_model_group_name}"
-        ] = remaining_requests
+        headers[f"x-litellm-key-remaining-requests-{h11_model_group_name}"] = (
+            remaining_requests
+        )
 
     # Remaining Tokens
     remaining_tokens_variable_name = f"litellm-key-remaining-tokens-{model_group}"
     remaining_tokens = _metadata.get(remaining_tokens_variable_name, None)
     if remaining_tokens:
-        headers[
-            f"x-litellm-key-remaining-tokens-{h11_model_group_name}"
-        ] = remaining_tokens
+        headers[f"x-litellm-key-remaining-tokens-{h11_model_group_name}"] = (
+            remaining_tokens
+        )
 
     return headers
 
@@ -473,9 +473,9 @@ def add_guardrail_response_to_standard_logging_object(
 ):
     if litellm_logging_obj is None:
         return
-    standard_logging_object: Optional[
-        StandardLoggingPayload
-    ] = litellm_logging_obj.model_call_details.get("standard_logging_object")
+    standard_logging_object: Optional[StandardLoggingPayload] = (
+        litellm_logging_obj.model_call_details.get("standard_logging_object")
+    )
     if standard_logging_object is None:
         return
     guardrail_information = standard_logging_object.get("guardrail_information", [])
@@ -525,6 +525,44 @@ def normalize_callback_names(callbacks: Iterable[Any]) -> List[Any]:
     if callbacks is None:
         return []
     return [c.lower() if isinstance(c, str) else c for c in callbacks]
+
+
+def encrypt_logging_callback_vars(metadata: Optional[Dict]) -> Optional[Dict]:
+    """
+    Encrypt credential values inside ``metadata["logging"][*]["callback_vars"]``
+    before persisting to the database.
+
+    Values that are environment-variable references (``os.environ/…``) are
+    left untouched — they are pointers, not secrets, and do not need
+    to be stored encrypted.
+
+    Returns the *same* dict (mutated in-place) so the caller can assign the
+    result back to ``metadata`` if convenient.
+    """
+    if not metadata:
+        return metadata
+
+    logging_configs = metadata.get("logging")
+    if not isinstance(logging_configs, list):
+        return metadata
+
+    from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
+
+    for entry in logging_configs:
+        if not isinstance(entry, dict):
+            continue
+        callback_vars = entry.get("callback_vars")
+        if not isinstance(callback_vars, dict):
+            continue
+        for key, value in callback_vars.items():
+            if not isinstance(value, str):
+                continue
+            # Leave env-var pointers as-is; encrypt everything else
+            if value.startswith("os.environ/"):
+                continue
+            callback_vars[key] = encrypt_value_helper(value)
+
+    return metadata
 
 
 def redact_sensitive_logging_metadata(metadata: Optional[Dict]) -> Optional[Dict]:
