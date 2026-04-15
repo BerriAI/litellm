@@ -140,3 +140,73 @@ class TestCredentialEndpointsOpenAPISchema:
         assert "credential_name" in sig.parameters, (
             "get_credential_by_name must have a credential_name parameter"
         )
+
+
+class TestOpenAPISpecDefaultValues:
+    """Test that the static openapi.json has correct default values for chat completion parameters."""
+
+    @pytest.fixture
+    def openapi_spec(self):
+        """Load the static openapi.json spec."""
+        import json
+        from pathlib import Path
+
+        spec_path = (
+            Path(__file__).parents[3] / "litellm" / "proxy" / "openapi.json"
+        )
+        with open(spec_path) as f:
+            return json.load(f)
+
+    def test_temperature_has_default(self, openapi_spec):
+        """temperature should have default value 1."""
+        props = (
+            openapi_spec["paths"]["/chat/completions"]["post"]["requestBody"]
+            ["content"]["application/json"]["schema"]["properties"]
+        )
+        assert "default" in props["temperature"]
+        assert props["temperature"]["default"] == 1
+
+    def test_top_p_has_default(self, openapi_spec):
+        """top_p should have default value 1."""
+        props = (
+            openapi_spec["paths"]["/chat/completions"]["post"]["requestBody"]
+            ["content"]["application/json"]["schema"]["properties"]
+        )
+        assert "default" in props["top_p"]
+        assert props["top_p"]["default"] == 1
+
+    def test_n_has_default(self, openapi_spec):
+        """n should have default value 1."""
+        props = (
+            openapi_spec["paths"]["/chat/completions"]["post"]["requestBody"]
+            ["content"]["application/json"]["schema"]["properties"]
+        )
+        assert "default" in props["n"]
+        assert props["n"]["default"] == 1
+
+    def test_stream_has_default(self, openapi_spec):
+        """stream should have default value false."""
+        props = (
+            openapi_spec["paths"]["/chat/completions"]["post"]["requestBody"]
+            ["content"]["application/json"]["schema"]["properties"]
+        )
+        assert "default" in props["stream"]
+        assert props["stream"]["default"] is False
+
+    def test_presence_penalty_has_default(self, openapi_spec):
+        """presence_penalty should have default value 0."""
+        props = (
+            openapi_spec["paths"]["/chat/completions"]["post"]["requestBody"]
+            ["content"]["application/json"]["schema"]["properties"]
+        )
+        assert "default" in props["presence_penalty"]
+        assert props["presence_penalty"]["default"] == 0
+
+    def test_frequency_penalty_has_default(self, openapi_spec):
+        """frequency_penalty should have default value 0."""
+        props = (
+            openapi_spec["paths"]["/chat/completions"]["post"]["requestBody"]
+            ["content"]["application/json"]["schema"]["properties"]
+        )
+        assert "default" in props["frequency_penalty"]
+        assert props["frequency_penalty"]["default"] == 0
