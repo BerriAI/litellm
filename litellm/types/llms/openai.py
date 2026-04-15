@@ -2151,6 +2151,7 @@ OpenAIChatCompletionFinishReason = Literal[
     "function_call",
     "tool_calls",
     "length",
+    "refusal",
     "guardrail_intervened",
     "eos",
     "finish_reason_unspecified",
