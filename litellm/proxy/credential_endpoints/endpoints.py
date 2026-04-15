@@ -349,7 +349,13 @@ async def update_credential(
                 existing_in_memory = cred
                 break
 
-        if existing_in_memory is not None:
+        if existing_in_memory is None:
+            verbose_proxy_logger.warning(
+                "Credential '%s' updated in DB but not found in litellm.credential_list; "
+                "GET endpoints will return stale data until the proxy reloads credentials.",
+                credential_name,
+            )
+        else:
             in_memory_values = dict(existing_in_memory.credential_values or {})
             if credential.credential_values:
                 in_memory_values.update(credential.credential_values)
@@ -361,16 +367,13 @@ async def update_credential(
                 credential_values=in_memory_values,
                 credential_info=in_memory_info,
             )
-            # Remove old entry if renamed, then append updated one
+            # Remove old entry if renamed, then use upsert_credentials to handle duplicates
             if new_name != credential_name:
                 litellm.credential_list = [
                     c for c in litellm.credential_list
                     if c.credential_name != credential_name
                 ]
-            else:
-                CredentialAccessor.upsert_credentials([updated_in_memory])
-                return {"success": True, "message": "Credential updated successfully"}
-            litellm.credential_list.append(updated_in_memory)
+            CredentialAccessor.upsert_credentials([updated_in_memory])
 
         return {"success": True, "message": "Credential updated successfully"}
     except Exception as e:
