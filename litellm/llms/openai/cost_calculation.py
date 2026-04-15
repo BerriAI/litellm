@@ -3,7 +3,7 @@ Helper util for handling openai-specific cost calculation
 - e.g.: prompt caching
 """
 
-from typing import Literal, Optional, Tuple
+from typing import Any, Literal, Mapping, Optional, Tuple
 
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
@@ -128,11 +128,55 @@ def cost_per_second(
     return prompt_cost, completion_cost
 
 
+def _video_resolution_to_cost_field_suffix(resolution: str) -> Optional[str]:
+    """
+    Map usage resolution to a safe suffix for ``output_cost_per_second_<suffix>`` keys.
+    
+    Note: Currently only ``output_cost_per_second_1080p`` is explicitly declared in
+    ModelInfo (types/utils.py). Other resolution tiers (e.g., 720p, 4k) can be added
+    to model_prices_and_context_window.json but are not exposed via get_model_info()
+    until added to the ModelInfo TypedDict.
+    """
+    r = resolution.strip().lower()
+    if not r:
+        return None
+    safe = "".join(c for c in r if c.isalnum() or c == "_")
+    if not safe or len(safe) > 24:
+        return None
+    return safe
+
+
+def _video_output_cost_per_second(
+    model_info: Mapping[str, Any],
+    video_resolution: Optional[str],
+) -> Optional[float]:
+    """
+    Per-second video output rate from model_info.
+
+    If ``video_resolution`` is set (e.g. ``1080p``, ``720p``, ``4k``), looks up
+    ``output_cost_per_second_<resolution>`` first (e.g. ``output_cost_per_second_1080p``),
+    then falls back to ``output_cost_per_second``.
+    """
+    r = (video_resolution or "").strip().lower()
+    if r:
+        suffix = _video_resolution_to_cost_field_suffix(r)
+        if suffix is not None:
+            tier_key = f"output_cost_per_second_{suffix}"
+            tier_rate = model_info.get(tier_key)
+            if tier_rate is not None:
+                return float(tier_rate)
+    out = model_info.get("output_cost_per_second")
+    if out is not None:
+        return float(out)
+    return None
+
+
 def video_generation_cost(
     model: str,
     duration_seconds: float,
     custom_llm_provider: Optional[str] = None,
     model_info: Optional[ModelInfo] = None,
+    video_resolution: Optional[str] = None,
 ) -> float:
     """
     Calculates the cost for video generation based on duration in seconds.
@@ -144,6 +188,7 @@ def video_generation_cost(
         - model_info: Optional[dict], deployment-level model info containing
             custom video pricing. When provided, skips the global
             get_model_info() lookup so that deployment-specific pricing is used.
+        - video_resolution: Optional resolution label from usage (e.g. ``720p``, ``1080p``).
 
     Returns:
         float - total_cost_in_usd
@@ -162,8 +207,7 @@ def video_generation_cost(
         )
         return video_cost_per_second * duration_seconds
 
-    # Fallback to general output cost per second
-    output_cost_per_second = model_info.get("output_cost_per_second")
+    output_cost_per_second = _video_output_cost_per_second(model_info, video_resolution)
     if output_cost_per_second is not None:
         verbose_logger.debug(
             f"For model={model} - output_cost_per_second: {output_cost_per_second}; duration: {duration_seconds}"
