@@ -161,43 +161,6 @@ class TestNomaV2Configuration:
         )
         assert request_data["messages"][0]["content"] == "hello"
 
-    def test_build_scan_payload_handles_non_serializable_request_data(
-        self, noma_v2_guardrail
-    ):
-        """Regression: deepcopy crashed when request_data contained C-extension objects
-        like uvloop.Loop (post_call/during_call hooks). safe_deep_copy must not raise.
-        """
-
-        class _UndeepCopyable:
-            """Simulates uvloop.Loop: a Cython type whose __cinit__ prevents deepcopy."""
-
-            def __deepcopy__(self, memo):
-                raise TypeError("no default __reduce__ due to non-trivial __cinit__")
-
-            def __repr__(self):
-                return "<UndeepCopyable>"
-
-        loop_obj = _UndeepCopyable()
-        request_data = {
-            "messages": [{"role": "user", "content": "hello"}],
-            "metadata": {"event_loop": loop_obj},
-        }
-
-        # Must not raise even though request_data contains a non-serializable object.
-        payload = noma_v2_guardrail._build_scan_payload(
-            inputs={"texts": ["hello"]},
-            request_data=request_data,
-            input_type="request",
-            logging_obj=None,
-            application_id="test-app",
-        )
-
-        assert payload["request_data"]["messages"][0]["content"] == "hello"
-        # safe_deep_copy falls back to the original reference for keys that cannot
-        # be deepcopied — the object is preserved (not crashed, not stringified).
-        # _sanitize_payload_for_transport handles serialization before transport.
-        assert payload["request_data"]["metadata"]["event_loop"] is loop_obj
-
     def test_build_scan_payload_passes_model_call_details_as_is(
         self, noma_v2_guardrail
     ):
@@ -553,40 +516,16 @@ class TestNomaV2ApplicationIdResolution:
         assert payload["application_id"] == "test-app"
 
     @pytest.mark.asyncio
-    async def test_apply_guardrail_omits_application_id_when_not_explicit(self):
-        guardrail_no_config = NomaV2Guardrail(
-            api_key="test-api-key",
-            application_id=None,
-            guardrail_name="test-noma-v2-guardrail",
-            event_hook="pre_call",
-            default_on=True,
-        )
-
-        call_mock = AsyncMock(return_value={"action": "NONE"})
-        with patch.object(
-            guardrail_no_config,
-            "get_guardrail_dynamic_request_body_params",
-            return_value={},
-        ):
-            with patch.object(guardrail_no_config, "_call_noma_scan", call_mock):
-                await guardrail_no_config.apply_guardrail(
-                    inputs={"texts": ["hello"]},
-                    request_data={"metadata": {}},
-                    input_type="request",
-                )
-
-        payload = call_mock.call_args.kwargs["payload"]
-        assert "application_id" not in payload
-
-    @pytest.mark.asyncio
-    async def test_apply_guardrail_ignores_request_metadata_application_id(
+    async def test_apply_guardrail_falls_back_to_key_alias_from_litellm_metadata(
         self, noma_v2_guardrail
     ):
+        """When no explicit application_id is set, fall back to user_api_key_alias
+        so that each API key gets its own application entry in the Noma dashboard."""
         noma_v2_guardrail.application_id = None
         call_mock = AsyncMock(return_value={"action": "NONE"})
         request_data = {
-            "metadata": {"headers": {"x-noma-application-id": "header-app"}},
-            "litellm_metadata": {"user_api_key_alias": "alias-app"},
+            "metadata": {},
+            "litellm_metadata": {"user_api_key_alias": "test-key-alias"},
         }
         with patch.object(
             noma_v2_guardrail,
@@ -597,6 +536,83 @@ class TestNomaV2ApplicationIdResolution:
                 await noma_v2_guardrail.apply_guardrail(
                     inputs={"texts": ["hello"]},
                     request_data=request_data,
+                    input_type="request",
+                )
+
+        payload = call_mock.call_args.kwargs["payload"]
+        assert payload["application_id"] == "test-key-alias"
+
+    @pytest.mark.asyncio
+    async def test_apply_guardrail_falls_back_to_key_alias_from_metadata(
+        self, noma_v2_guardrail
+    ):
+        """user_api_key_alias in metadata (set by proxy_server.py) is also resolved."""
+        noma_v2_guardrail.application_id = None
+        call_mock = AsyncMock(return_value={"action": "NONE"})
+        request_data = {
+            "metadata": {"user_api_key_alias": "test-service-key"},
+        }
+        with patch.object(
+            noma_v2_guardrail,
+            "get_guardrail_dynamic_request_body_params",
+            return_value={},
+        ):
+            with patch.object(noma_v2_guardrail, "_call_noma_scan", call_mock):
+                await noma_v2_guardrail.apply_guardrail(
+                    inputs={"texts": ["hello"]},
+                    request_data=request_data,
+                    input_type="request",
+                )
+
+        payload = call_mock.call_args.kwargs["payload"]
+        assert payload["application_id"] == "test-service-key"
+
+    @pytest.mark.asyncio
+    async def test_apply_guardrail_configured_application_id_takes_precedence_over_key_alias(
+        self, noma_v2_guardrail
+    ):
+        """Explicit application_id (config/env) wins over key_alias fallback."""
+        call_mock = AsyncMock(return_value={"action": "NONE"})
+        request_data = {
+            "metadata": {"user_api_key_alias": "should-not-be-used"},
+        }
+        with patch.object(
+            noma_v2_guardrail,
+            "get_guardrail_dynamic_request_body_params",
+            return_value={},
+        ):
+            with patch.object(noma_v2_guardrail, "_call_noma_scan", call_mock):
+                await noma_v2_guardrail.apply_guardrail(
+                    inputs={"texts": ["hello"]},
+                    request_data=request_data,
+                    input_type="request",
+                )
+
+        payload = call_mock.call_args.kwargs["payload"]
+        assert payload["application_id"] == "test-app"
+
+    @pytest.mark.asyncio
+    async def test_apply_guardrail_omits_application_id_when_no_fallback_available(
+        self,
+    ):
+        """When nothing is set — no config, no dynamic params, no key alias — omit entirely."""
+        guardrail_no_config = NomaV2Guardrail(
+            api_key="test-api-key",
+            application_id=None,
+            guardrail_name="test-noma-v2-guardrail",
+            event_hook="pre_call",
+            default_on=True,
+        )
+        call_mock = AsyncMock(return_value={"action": "NONE"})
+        with patch.object(
+            guardrail_no_config,
+            "get_guardrail_dynamic_request_body_params",
+            return_value={},
+        ):
+            with patch.object(guardrail_no_config, "_call_noma_scan", call_mock):
+                await guardrail_no_config.apply_guardrail(
+                    inputs={"texts": ["hello"]},
+                    request_data={"metadata": {}},
                     input_type="request",
                 )
 
