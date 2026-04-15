@@ -1246,7 +1246,6 @@ async def update_ui_settings(
     from litellm.proxy.proxy_server import (
         create_config_audit_log,
         prisma_client,
-        store_model_in_db,
     )
 
     if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
@@ -1258,12 +1257,6 @@ async def update_ui_settings(
             detail={"error": "Database not connected. Please connect a database."},
         )
 
-    if store_model_in_db is not True:
-        raise HTTPException(
-            status_code=500,
-            detail={"error": "Set `'STORE_MODEL_IN_DB='True'` in your env to enable this feature."},
-        )
-
     # Validate against the same effective class GET advertises, so
     # enterprise-registered fields are typed consistently on both sides.
     effective_cls = _get_effective_ui_settings_class()
@@ -1271,7 +1264,6 @@ async def update_ui_settings(
         settings = effective_cls.model_validate(settings_body)
     except ValidationError as e:
         raise HTTPException(status_code=422, detail=e.errors())
-
     # Only include fields the caller actually sent (not Pydantic defaults).
     settings_dict = settings.model_dump(exclude_unset=True)
 
