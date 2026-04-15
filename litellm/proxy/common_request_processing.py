@@ -26,6 +26,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.constants import (
     DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE,
+    DEFAULT_CLIENT_DISCONNECT_CHECK_TIMEOUT_SECONDS,
     DEFAULT_MAX_RECURSE_DEPTH,
     LITELLM_DETAILED_TIMING,
     MAX_PAYLOAD_SIZE_FOR_DEBUG_LOG,
@@ -484,6 +485,30 @@ def _has_attribute_error_in_chain(exc: Exception) -> bool:
                 stack.append(inner)
         depth += 1
     return False
+
+
+async def _check_request_disconnection(request: Request, llm_api_call_task):
+    """
+    Asynchronously checks if the request is disconnected at regular intervals.
+    If the request is disconnected
+    - cancel the litellm.router task
+
+    Parameters:
+    - request: Request: The request object to check for disconnection.
+    Returns:
+    - None
+    """
+
+    # only run this function for configured timeout -> if these don't get cancelled -> we don't want the server to have many while loops
+    start_time = time.time()
+    while time.time() - start_time < DEFAULT_CLIENT_DISCONNECT_CHECK_TIMEOUT_SECONDS:
+        await asyncio.sleep(1)
+        message = await request.receive()
+        if message.get("type") == "http.disconnect":
+            # cancel the LLM API Call task if any passed - this is passed from individual providers
+            # Example OpenAI, Azure, VertexAI etc
+            llm_api_call_task.cancel()
+            return
 
 
 class ProxyBaseLLMRequestProcessing:
@@ -1057,12 +1082,22 @@ class ProxyBaseLLMRequestProcessing:
         )
         tasks.append(llm_call)
 
-        # wait for call to end
         llm_responses = asyncio.gather(
             *tasks
         )  # run the moderation check in parallel to the actual llm api call
 
-        responses = await llm_responses
+        # Execute the task to detect disconnection
+        disconnect_task = asyncio.create_task(_check_request_disconnection(request, llm_responses))
+
+        try:
+            # wait for call to end
+            # Note: In the case of streaming, processing does not wait here, so disconnection detection is performed in StreamingResponse.
+            responses = await llm_responses
+            disconnect_task.cancel()
+
+        except asyncio.CancelledError:
+            verbose_proxy_logger.info("Client disconnected, cancelled upstream LLM request")
+            raise
 
         response = responses[1]
 
