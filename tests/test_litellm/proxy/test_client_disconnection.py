@@ -3,14 +3,14 @@ Test client disconnection detection functionality.
 """
 import asyncio
 import pytest
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from litellm.proxy.common_request_processing import _check_request_disconnection
 
 
 @pytest.mark.asyncio
 async def test_check_request_disconnection_with_disconnect():
-    """Test that _check_request_disconnection cancels task when client disconnects."""
+    """Test that _check_request_disconnection cancels task and sets event when client disconnects."""
     mock_request = AsyncMock()
     mock_request.receive.side_effect = [
         {"type": "http.request"},   # First call
@@ -18,23 +18,27 @@ async def test_check_request_disconnection_with_disconnect():
     ]
 
     mock_llm_task = MagicMock()  # sync mock so .cancel() doesn't return a coroutine
+    disconnect_event = asyncio.Event()
 
-    await _check_request_disconnection(mock_request, mock_llm_task)
+    with patch("litellm.proxy.common_request_processing.asyncio.sleep", new_callable=AsyncMock):
+        await _check_request_disconnection(mock_request, mock_llm_task, disconnect_event)
 
     mock_llm_task.cancel.assert_called_once()
+    assert disconnect_event.is_set()
 
 
 @pytest.mark.asyncio
 async def test_check_request_disconnection_no_disconnect():
-    """Test that _check_request_disconnection handles normal requests."""
+    """Test that _check_request_disconnection does not cancel task during normal operation."""
     mock_request = AsyncMock()
     mock_request.receive.return_value = {"type": "http.request"}
 
     mock_llm_task = MagicMock()  # sync mock so .cancel() doesn't return a coroutine
+    disconnect_event = asyncio.Event()
 
-    # This will timeout after 600 seconds, but we don't need to wait
-    # Just test that it doesn't crash immediately
-    task = asyncio.create_task(_check_request_disconnection(mock_request, mock_llm_task))
+    task = asyncio.create_task(
+        _check_request_disconnection(mock_request, mock_llm_task, disconnect_event)
+    )
     await asyncio.sleep(0.1)  # Let it run briefly
     task.cancel()
 
@@ -43,5 +47,5 @@ async def test_check_request_disconnection_no_disconnect():
     except asyncio.CancelledError:
         pass
 
-    # Task should not be cancelled during normal operation
     mock_llm_task.cancel.assert_not_called()
+    assert not disconnect_event.is_set()
