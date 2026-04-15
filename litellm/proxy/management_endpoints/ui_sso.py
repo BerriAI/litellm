@@ -712,7 +712,7 @@ async def _setup_role_mappings() -> Optional["RoleMappings"]:
     generic_role_mappings_group_claim = os.getenv(
         "GENERIC_ROLE_MAPPINGS_GROUP_CLAIM", None
     )
-    generic_role_mappoings_default_role = os.getenv(
+    generic_role_mappings_default_role = os.getenv(
         "GENERIC_ROLE_MAPPINGS_DEFAULT_ROLE", None
     )
     if generic_role_mappings is not None:
@@ -731,7 +731,7 @@ async def _setup_role_mappings() -> Optional["RoleMappings"]:
                 role_mappings_data = {
                     "provider": "generic",
                     "group_claim": generic_role_mappings_group_claim,
-                    "default_role": generic_role_mappoings_default_role,
+                    "default_role": generic_role_mappings_default_role,
                     "roles": generic_user_role_mappings_data,
                 }
 
