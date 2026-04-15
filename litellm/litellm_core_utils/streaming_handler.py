@@ -74,6 +74,77 @@ def _next_sync_or_exhausted(it: Any) -> Any:
         return _SYNC_ITER_EXHAUSTED
 
 
+class _SyncToAsyncQueueIterator:
+    """
+    Wraps a synchronous iterator for use in async code via a single producer thread
+    and an asyncio.Queue, providing smooth per-chunk delivery without per-chunk
+    thread-dispatch overhead.
+
+    Background
+    ----------
+    The previous approach (asyncio.to_thread per chunk) dispatches a new thread-pool
+    task for every call to __anext__. Each dispatch cycle has ~1 ms of scheduling
+    overhead during which the upstream TCP socket can accumulate multiple chunks.
+    When the thread wakes up, it reads only the first buffered chunk; the next call
+    to to_thread returns almost instantly because additional chunks are already
+    waiting in the buffer. The result is bursty delivery: 80%+ of chunks arrive
+    with <1 ms between them instead of the smooth ~20 ms spacing of the raw stream.
+
+    This class starts ONE background thread that iterates the sync stream
+    continuously, pushing each item into an asyncio.Queue as it arrives via
+    call_soon_threadsafe. The async consumer awaits the queue one item at a time,
+    receiving chunks as they arrive from the upstream source with no per-chunk
+    thread-dispatch overhead.
+
+    The background thread is daemon=True so it never prevents process exit.
+    """
+
+    __slots__ = ("_sync_iter", "_queue", "_thread", "_loop", "_exhausted")
+
+    def __init__(self, sync_iter: Any) -> None:
+        self._sync_iter = sync_iter
+        self._loop = asyncio.get_running_loop()
+        self._queue: asyncio.Queue = asyncio.Queue()
+        self._exhausted = False
+        self._thread = threading.Thread(target=self._producer, daemon=True)
+        self._thread.start()
+
+    def _producer(self) -> None:
+        def _put(item: Any) -> None:
+            try:
+                self._loop.call_soon_threadsafe(self._queue.put_nowait, item)
+            except RuntimeError:
+                # Event loop closed before producer finished (e.g. early cancellation).
+                # Nothing to do — the consumer is gone.
+                pass
+
+        try:
+            for item in self._sync_iter:
+                _put(item)
+        except Exception as exc:
+            _put(exc)
+        finally:
+            _put(_SYNC_ITER_EXHAUSTED)
+
+    def __aiter__(self) -> "_SyncToAsyncQueueIterator":
+        return self
+
+    async def __anext__(self) -> Any:
+        # After the sentinel has been consumed once, raise immediately on all
+        # subsequent calls. Without this guard, calls block forever on an empty
+        # queue — this matters because CustomStreamWrapper detects that the
+        # wrapper is async-iterable and may call __anext__ an extra time.
+        if self._exhausted:
+            raise StopAsyncIteration
+        item = await self._queue.get()
+        if item is _SYNC_ITER_EXHAUSTED:
+            self._exhausted = True
+            raise StopAsyncIteration
+        if isinstance(item, BaseException):
+            raise item
+        return item
+
+
 def is_async_iterable(obj: Any) -> bool:
     """
     Check if an object is an async iterable (can be used with 'async for').
@@ -2114,9 +2185,21 @@ class CustomStreamWrapper:
                     ):
                         chunk = self.completion_stream
                     else:
-                        chunk = await asyncio.to_thread(_next_sync_or_exhausted, self.completion_stream)  # type: ignore[arg-type]
-                        if chunk is _SYNC_ITER_EXHAUSTED:
-                            raise StopAsyncIteration
+                        # Lazily upgrade the sync iterator to a queue-based async wrapper
+                        # on the first chunk. This replaces per-chunk asyncio.to_thread
+                        # dispatch, which allows the socket buffer to accumulate multiple
+                        # chunks per dispatch cycle and causes bursty delivery. The queue
+                        # wrapper uses a single producer thread that pushes chunks as they
+                        # arrive, giving smooth per-chunk delivery. Non-blocking property
+                        # of the event loop is preserved — __anext__ awaits the queue.
+                        if not isinstance(
+                            self.completion_stream, _SyncToAsyncQueueIterator
+                        ):
+                            self.completion_stream = _SyncToAsyncQueueIterator(
+                                self.completion_stream
+                            )
+                        chunk = await self.completion_stream.__anext__()
+                        # StopAsyncIteration propagates naturally to the outer handler
                     if chunk is not None and chunk != b"":
                         processed_chunk = self.chunk_creator(chunk=chunk)
                         if processed_chunk is None:

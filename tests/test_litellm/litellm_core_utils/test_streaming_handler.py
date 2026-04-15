@@ -18,6 +18,7 @@ from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.streaming_handler import (
     AUDIO_ATTRIBUTE,
     CustomStreamWrapper,
+    _SyncToAsyncQueueIterator,
 )
 from litellm.types.utils import (
     CompletionTokensDetailsWrapper,
@@ -1945,4 +1946,146 @@ def test_gemini_legacy_vertex_tool_calls_finish_reason_with_stop_enum():
     assert final.choices[0].finish_reason == "tool_calls", (
         f"Expected 'tool_calls' but got {final.choices[0].finish_reason!r}. "
         "STOP enum was not normalised through map_finish_reason()."
+    )
+
+
+# ---------------------------------------------------------------------------
+# _SyncToAsyncQueueIterator tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_sync_to_async_queue_iterator_delivers_items_in_order():
+    """Items produced by the sync iterator arrive in the correct order."""
+    items = [1, 2, 3, 4, 5]
+    wrapper = _SyncToAsyncQueueIterator(iter(items))
+    received = []
+    async for item in wrapper:
+        received.append(item)
+    assert received == items
+
+
+@pytest.mark.asyncio
+async def test_sync_to_async_queue_iterator_raises_stop_async_iteration_when_exhausted():
+    """StopAsyncIteration is raised cleanly after the last item — no RuntimeError."""
+    wrapper = _SyncToAsyncQueueIterator(iter([42]))
+    assert await wrapper.__anext__() == 42
+    with pytest.raises(StopAsyncIteration):
+        await wrapper.__anext__()
+
+
+@pytest.mark.asyncio
+async def test_sync_to_async_queue_iterator_propagates_sync_iterator_exceptions():
+    """Exceptions raised inside the sync iterator are re-raised in the async consumer."""
+
+    def _exploding_iter():
+        yield 1
+        raise ValueError("upstream failure")
+
+    wrapper = _SyncToAsyncQueueIterator(_exploding_iter())
+    assert await wrapper.__anext__() == 1
+    with pytest.raises(ValueError, match="upstream failure"):
+        await wrapper.__anext__()
+
+
+@pytest.mark.asyncio
+async def test_sync_to_async_queue_iterator_does_not_block_event_loop():
+    """
+    The async consumer must not block the event loop while waiting for a slow
+    sync iterator. A concurrent coroutine must be able to run freely.
+    """
+
+    class SlowIter:
+        def __init__(self):
+            self._done = False
+
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            if self._done:
+                raise StopIteration
+            self._done = True
+            time.sleep(0.2)  # simulate blocking I/O
+            return "chunk"
+
+    wrapper = _SyncToAsyncQueueIterator(SlowIter())
+    tick_ran = asyncio.Event()
+
+    async def background_tick():
+        await asyncio.sleep(0.05)
+        tick_ran.set()
+
+    start = asyncio.get_event_loop().time()
+    item, _ = await asyncio.gather(wrapper.__anext__(), background_tick())
+    elapsed = asyncio.get_event_loop().time() - start
+
+    assert item == "chunk"
+    assert tick_ran.is_set(), "Background coroutine never ran — event loop was blocked"
+    assert elapsed < 0.4, f"Took too long ({elapsed:.2f}s), event loop likely blocked"
+
+
+@pytest.mark.asyncio
+async def test_custom_stream_wrapper_bedrock_path_uses_queue_iterator(
+    logging_obj: Logging,
+):
+    """
+    Regression: asyncio.to_thread per-chunk caused socket-buffer accumulation and
+    bursty delivery for Bedrock (sync-iterator) streams. After the fix, the sync
+    iterator is upgraded to _SyncToAsyncQueueIterator on the first chunk, and
+    completion_stream is replaced in-place so subsequent chunks read from the queue.
+    """
+
+    class FakeSyncIter:
+        def __init__(self, chunks):
+            self._it = iter(chunks)
+
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            return next(self._it)
+
+    chunk = ModelResponseStream(
+        id="chatcmpl-bedrock-test",
+        created=int(time.time()),
+        model="test-model",
+        object="chat.completion.chunk",
+        system_fingerprint=None,
+        choices=[
+            StreamingChoices(
+                finish_reason="stop",
+                index=0,
+                delta=Delta(
+                    provider_specific_fields=None,
+                    content="hello",
+                    role="assistant",
+                    function_call=None,
+                    tool_calls=None,
+                    audio=None,
+                ),
+                logprobs=None,
+            )
+        ],
+        provider_specific_fields={},
+        usage=None,
+    )
+
+    wrapper = CustomStreamWrapper(
+        completion_stream=FakeSyncIter([chunk]),
+        model="test-model",
+        logging_obj=logging_obj,
+        custom_llm_provider="cached_response",
+    )
+
+    try:
+        while True:
+            await wrapper.__anext__()
+    except StopAsyncIteration:
+        pass
+
+    # After iteration, completion_stream must have been upgraded to the queue wrapper
+    assert isinstance(wrapper.completion_stream, _SyncToAsyncQueueIterator), (
+        "completion_stream was not upgraded to _SyncToAsyncQueueIterator — "
+        "asyncio.to_thread per-chunk regression may have returned"
     )
