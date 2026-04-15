@@ -2054,3 +2054,143 @@ class TestTracingFieldsE2E:
         # No detections, so these should be None
         assert slg.get("detection_method") is None
         assert slg.get("match_details") is None
+
+
+class TestStreamingHookRespectsEventHook:
+    """
+    The streaming iterator hook must only scan response content when the
+    guardrail is configured for post_call or during_call. With pre_call
+    (request-only), the stream must pass through unchanged — otherwise a
+    request-scoped regex silently also redacts LLM output, contradicting
+    the documented contract of ``mode: pre_call``.
+    """
+
+    def _patterns(self):
+        return [
+            ContentFilterPattern(
+                pattern_type="prebuilt",
+                pattern_name="email",
+                action=ContentFilterAction.MASK,
+            ),
+        ]
+
+    async def _collect_stream(self, guardrail):
+        from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+        async def mock_stream():
+            yield ModelResponseStream(
+                id="chunk1",
+                choices=[
+                    StreamingChoices(
+                        delta=Delta(content="Contact me at test@ex"), index=0
+                    )
+                ],
+                model="gpt-4",
+            )
+            yield ModelResponseStream(
+                id="chunk2",
+                choices=[
+                    StreamingChoices(
+                        delta=Delta(content="ample.com for info"),
+                        index=0,
+                        finish_reason="stop",
+                    )
+                ],
+                model="gpt-4",
+            )
+
+        collected = ""
+        async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=MagicMock(),
+            response=mock_stream(),
+            request_data={},
+        ):
+            if chunk.choices[0].delta.content:
+                collected += chunk.choices[0].delta.content
+        return collected
+
+    @pytest.mark.asyncio
+    async def test_pre_call_does_not_mask_response(self):
+        """pre_call guards must leave streamed response text untouched."""
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="test-pre-call-no-response-scan",
+            patterns=self._patterns(),
+            event_hook=GuardrailEventHooks.pre_call,
+        )
+
+        content = await self._collect_stream(guardrail)
+
+        assert "test@example.com" in content
+        assert "[EMAIL_REDACTED]" not in content
+
+    @pytest.mark.asyncio
+    async def test_post_call_masks_response(self):
+        """post_call guards mask matches in streamed response text."""
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="test-post-call-masks",
+            patterns=self._patterns(),
+            event_hook=GuardrailEventHooks.post_call,
+        )
+
+        content = await self._collect_stream(guardrail)
+
+        assert "test@example.com" not in content
+        assert "[EMAIL_REDACTED]" in content
+
+    @pytest.mark.asyncio
+    async def test_during_call_masks_response(self):
+        """during_call guards mask matches in streamed response text (regression)."""
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="test-during-call-masks",
+            patterns=self._patterns(),
+            event_hook=GuardrailEventHooks.during_call,
+        )
+
+        content = await self._collect_stream(guardrail)
+
+        assert "test@example.com" not in content
+        assert "[EMAIL_REDACTED]" in content
+
+    @pytest.mark.asyncio
+    async def test_default_event_hook_does_not_mask_response(self):
+        """Unset event_hook defaults to pre_call — must not scan response."""
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="test-default-no-response-scan",
+            patterns=self._patterns(),
+        )
+
+        content = await self._collect_stream(guardrail)
+
+        assert "test@example.com" in content
+        assert "[EMAIL_REDACTED]" not in content
+
+    @pytest.mark.asyncio
+    async def test_list_event_hook_with_post_call_masks(self):
+        """List containing post_call opts into response scanning."""
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="test-list-post-call-masks",
+            patterns=self._patterns(),
+            event_hook=[
+                GuardrailEventHooks.pre_call,
+                GuardrailEventHooks.post_call,
+            ],
+        )
+
+        content = await self._collect_stream(guardrail)
+
+        assert "test@example.com" not in content
+        assert "[EMAIL_REDACTED]" in content
+
+    @pytest.mark.asyncio
+    async def test_list_event_hook_only_pre_call_does_not_mask(self):
+        """List containing only pre_call must not scan response."""
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="test-list-only-pre-call",
+            patterns=self._patterns(),
+            event_hook=[GuardrailEventHooks.pre_call],
+        )
+
+        content = await self._collect_stream(guardrail)
+
+        assert "test@example.com" in content
+        assert "[EMAIL_REDACTED]" not in content

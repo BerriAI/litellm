@@ -212,17 +212,17 @@ class ContentFilterGuardrail(CustomGuardrail):
         self.image_model = image_model
         # Store loaded categories
         self.loaded_categories: Dict[str, CategoryConfig] = {}
-        self.category_keywords: Dict[
-            str, Tuple[str, str, ContentFilterAction]
-        ] = {}  # keyword -> (category, severity, action)
+        self.category_keywords: Dict[str, Tuple[str, str, ContentFilterAction]] = (
+            {}
+        )  # keyword -> (category, severity, action)
         # Always-block keywords are checked after exceptions (exceptions take precedence)
         self.always_block_category_keywords: Dict[
             str, Tuple[str, str, ContentFilterAction]
         ] = {}
         # Store conditional categories (identifier_words + block_words)
-        self.conditional_categories: Dict[
-            str, Dict[str, Any]
-        ] = {}  # category_name -> {identifier_words, block_words, action, severity}
+        self.conditional_categories: Dict[str, Dict[str, Any]] = (
+            {}
+        )  # category_name -> {identifier_words, block_words, action, severity}
 
         # Competitor intent checker (optional; airline uses major_airlines.json, generic requires competitors)
         self._competitor_intent_checker: Optional[BaseCompetitorIntentChecker] = None
@@ -1855,6 +1855,25 @@ class ContentFilterGuardrail(CustomGuardrail):
                 exception_str=exception_str,
             )
 
+    def _runs_on_response(self) -> bool:
+        """
+        Whether this guardrail is configured to scan response content.
+
+        Returns True only when event_hook is post_call or during_call (including
+        when either appears in a list). For pre_call / realtime_input_transcription
+        / unset, the streaming iterator must not modify the response — otherwise
+        a pre_call regex would silently also redact output, contradicting the
+        documented mode contract.
+        """
+        response_hooks = {
+            GuardrailEventHooks.post_call,
+            GuardrailEventHooks.during_call,
+        }
+        hook = self.event_hook
+        if isinstance(hook, list):
+            return any(h in response_hooks for h in hook)
+        return hook in response_hooks
+
     async def async_post_call_streaming_iterator_hook(
         self,
         user_api_key_dict: UserAPIKeyAuth,
@@ -1866,7 +1885,16 @@ class ContentFilterGuardrail(CustomGuardrail):
 
         For BLOCK action: Raises HTTPException immediately when blocked content is detected.
         For MASK action: Content is buffered to handle patterns split across chunks.
+
+        Respects the configured ``event_hook``: if the guardrail is only meant
+        to run on the request (``pre_call``), the response stream is yielded
+        unchanged. Scanning only happens for ``post_call`` / ``during_call``.
         """
+        if not self._runs_on_response():
+            async for item in response:
+                yield item
+            return
+
         accumulated_full_text = ""
         yielded_masked_text_len = 0
         buffer_size = 50  # Increased buffer to catch patterns split across many chunks
