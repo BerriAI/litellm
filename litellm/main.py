@@ -40,6 +40,7 @@ from typing import (
     get_args,
 )
 
+from litellm._logging import _redact_string
 from litellm._uuid import uuid
 
 if TYPE_CHECKING:
@@ -7244,7 +7245,7 @@ async def ahealth_check(
                 f"Mode {mode} not supported. See modes here: https://docs.litellm.ai/docs/proxy/health"
             )
     except Exception as e:
-        stack_trace = traceback.format_exc()
+        stack_trace = _redact_string(traceback.format_exc())
         if isinstance(stack_trace, str):
             stack_trace = stack_trace[:1000]
 
