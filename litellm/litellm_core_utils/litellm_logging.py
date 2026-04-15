@@ -1387,6 +1387,8 @@ class Logging(LiteLLMLoggingBaseClass):
         margin_percent: Optional[float] = None,
         margin_fixed_amount: Optional[float] = None,
         margin_total_amount: Optional[float] = None,
+        cache_read_cost: Optional[float] = None,
+        cache_creation_cost: Optional[float] = None,
     ) -> None:
         """
         Helper method to store cost breakdown in the logging object.
@@ -1411,6 +1413,10 @@ class Logging(LiteLLMLoggingBaseClass):
             total_cost=total_cost,
             tool_usage_cost=cost_for_built_in_tools_cost_usd_dollar,
         )
+        if cache_read_cost is not None and cache_read_cost > 0:
+            self.cost_breakdown["cache_read_cost"] = cache_read_cost
+        if cache_creation_cost is not None and cache_creation_cost > 0:
+            self.cost_breakdown["cache_creation_cost"] = cache_creation_cost
 
         # Store additional costs if provided (free-form dict for extensibility)
         if (
