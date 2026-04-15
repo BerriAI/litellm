@@ -128,6 +128,45 @@ class FakeAnthropicMessagesStreamIterator:
                 f"event: content_block_delta\ndata: {json.dumps(content_block_delta)}\n\n".encode()
             )
 
+        elif block_type == "server_tool_use":
+            content_block_start = {
+                "type": "content_block_start",
+                "index": index,
+                "content_block": {
+                    "type": "server_tool_use",
+                    "id": block_dict.get("id"),
+                    "name": block_dict.get("name"),
+                },
+            }
+            chunks.append(
+                f"event: content_block_start\ndata: {json.dumps(content_block_start)}\n\n".encode()
+            )
+
+        elif block_type == "advisor_tool_result":
+            content_block_start = {
+                "type": "content_block_start",
+                "index": index,
+                "content_block": {
+                    "type": "advisor_tool_result",
+                    "tool_use_id": block_dict.get("tool_use_id"),
+                    "content": {"type": "advisor_result", "text": ""},
+                },
+            }
+            chunks.append(
+                f"event: content_block_start\ndata: {json.dumps(content_block_start)}\n\n".encode()
+            )
+            advisor_content = block_dict.get("content") or {}
+            advisor_text = advisor_content.get("text", "") if isinstance(advisor_content, dict) else ""
+            if advisor_text:
+                content_block_delta = {
+                    "type": "content_block_delta",
+                    "index": index,
+                    "delta": {"type": "advisor_result_delta", "text": advisor_text},
+                }
+                chunks.append(
+                    f"event: content_block_delta\ndata: {json.dumps(content_block_delta)}\n\n".encode()
+                )
+
         content_block_stop = {"type": "content_block_stop", "index": index}
         chunks.append(
             f"event: content_block_stop\ndata: {json.dumps(content_block_stop)}\n\n".encode()

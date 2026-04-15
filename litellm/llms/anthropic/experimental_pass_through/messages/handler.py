@@ -192,6 +192,31 @@ async def anthropic_messages(
         "_websearch_interception_converted_stream", False
     )
 
+    # Resolve custom_llm_provider early so interceptors can use it.
+    if not custom_llm_provider:
+        try:
+            _, custom_llm_provider, _, _ = litellm.get_llm_provider(model=model)
+        except Exception:
+            pass
+
+    # Run registered MessagesInterceptors (e.g. advisor orchestration loop)
+    # BEFORE pre-request hooks, because hooks like AdvisorInterceptionLogger
+    # would convert the advisor_20260301 tool into an OpenAI function tool,
+    # making it invisible to the Messages API interceptor.
+    for interceptor in get_messages_interceptors():
+        if interceptor.can_handle(tools, custom_llm_provider):
+            return await interceptor.handle(
+                model=model,
+                messages=messages,
+                tools=tools,
+                stream=original_stream,
+                max_tokens=max_tokens,
+                custom_llm_provider=custom_llm_provider,
+                api_key=api_key,
+                api_base=api_base,
+                **kwargs,
+            )
+
     # Execute pre-request hooks to allow CustomLoggers to modify request
     request_kwargs = await _execute_pre_request_hooks(
         model=model,
@@ -206,8 +231,6 @@ async def anthropic_messages(
     tools = request_kwargs.pop("tools", tools)
     stream = request_kwargs.pop("stream", stream)
     # Propagate the provider derived inside pre-request hooks, if not already set.
-    # The litellm_params dict may have been overwritten by **kwargs in
-    # _execute_pre_request_hooks, so fall back to get_llm_provider() if needed.
     if not custom_llm_provider:
         custom_llm_provider = request_kwargs.get("litellm_params", {}).get(
             "custom_llm_provider"
@@ -236,23 +259,6 @@ async def anthropic_messages(
     )
     if short_circuit_response is not None:
         return short_circuit_response
-
-    # Run registered MessagesInterceptors (e.g. advisor orchestration loop).
-    # api_key and api_base are explicit params (not in **kwargs) so pass them
-    # explicitly so interceptor sub-calls can route to the same backend.
-    for interceptor in get_messages_interceptors():
-        if interceptor.can_handle(tools, custom_llm_provider):
-            return await interceptor.handle(
-                model=model,
-                messages=messages,
-                tools=tools,
-                stream=original_stream,
-                max_tokens=max_tokens,
-                custom_llm_provider=custom_llm_provider,
-                api_key=api_key,
-                api_base=api_base,
-                **kwargs,
-            )
 
     loop = asyncio.get_event_loop()
     kwargs["is_async"] = True

@@ -198,7 +198,21 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
             ) or tool_name == "web_search":
                 result.append({"type": "web_search_preview"})
                 continue
-            func_tool: Dict[str, Any] = {"type": "function", "name": tool_name}
+            # Handle OpenAI chat completions format tools that may arrive here
+            # (e.g. {"type": "function", "function": {"name": ..., "parameters": ...}})
+            if tool_type == "function" and "function" in tool_dict:
+                func_def = tool_dict["function"]
+                func_tool: Dict[str, Any] = {
+                    "type": "function",
+                    "name": func_def.get("name", ""),
+                }
+                if "description" in func_def:
+                    func_tool["description"] = func_def["description"]
+                if "parameters" in func_def:
+                    func_tool["parameters"] = func_def["parameters"]
+                result.append(func_tool)
+                continue
+            func_tool = {"type": "function", "name": tool_name}
             if "description" in tool_dict:
                 func_tool["description"] = tool_dict["description"]
             if "input_schema" in tool_dict:
