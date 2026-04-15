@@ -163,7 +163,9 @@ class BaseResponsesAPIStreamingIterator:
                             custom_llm_provider=self.custom_llm_provider,
                             model_id=_stream_model_id,
                         )
-                elif _event_type == ResponsesAPIStreamEvents.OUTPUT_TEXT_ANNOTATION_ADDED:
+                elif (
+                    _event_type == ResponsesAPIStreamEvents.OUTPUT_TEXT_ANNOTATION_ADDED
+                ):
                     _annotation = getattr(
                         openai_responses_api_chunk, "annotation", None
                     )
@@ -237,10 +239,10 @@ class BaseResponsesAPIStreamingIterator:
                             )
                             if usage_obj is not None:
                                 try:
-                                    cost: Optional[
-                                        float
-                                    ] = self.logging_obj._response_cost_calculator(
-                                        result=response_obj
+                                    cost: Optional[float] = (
+                                        self.logging_obj._response_cost_calculator(
+                                            result=response_obj
+                                        )
                                     )
                                     if cost is not None:
                                         setattr(usage_obj, "cost", cost)

@@ -7,4 +7,4 @@ including custom SSO handlers and advanced authentication features.
 
 from .custom_sso_handler import EnterpriseCustomSSOHandler
 
-__all__ = ["EnterpriseCustomSSOHandler"] 
+__all__ = ["EnterpriseCustomSSOHandler"]

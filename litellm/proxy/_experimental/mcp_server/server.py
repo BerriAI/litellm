@@ -1021,7 +1021,9 @@ if MCP_AVAILABLE:
                     except (ValueError, TypeError):
                         pass
                 ttl = _compute_per_user_token_ttl(server, raw_expires)
-                await mcp_per_user_token_cache.set(user_id, server_id, access_token, ttl)
+                await mcp_per_user_token_cache.set(
+                    user_id, server_id, access_token, ttl
+                )
 
             return {"Authorization": f"Bearer {access_token}"}
         except Exception as e:
