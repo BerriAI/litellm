@@ -10,7 +10,7 @@ Set the following env vars before running:
     MAVVRIK_CONNECTION_ID=<connection-id>
 
 Run with:
-    poetry run pytest tests/test_litellm/integrations/mavvrik/test_e2e_mavvrik_stream_api.py -v -s
+    poetry run pytest tests/test_litellm/integrations/mavvrik/test_e2e_upload.py -v -s
 """
 
 import os
@@ -20,7 +20,7 @@ import pytest
 
 sys.path.insert(0, os.path.abspath("../../../.."))
 
-from litellm.integrations.mavvrik.mavvrik_stream_api import MavvrikStreamer
+from litellm.integrations.mavvrik.upload import MavvrikUploader
 
 # ---------------------------------------------------------------------------
 # Credentials — populated from env vars; test is skipped if any are absent.
@@ -59,7 +59,7 @@ _TEST_CSV = (
 
 @pytest.fixture(scope="module")
 def streamer():
-    return MavvrikStreamer(
+    return MavvrikUploader(
         api_key=API_KEY,
         api_endpoint=API_ENDPOINT,
         connection_id=CONNECTION_ID,

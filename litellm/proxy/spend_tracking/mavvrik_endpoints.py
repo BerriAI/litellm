@@ -1,12 +1,15 @@
 """FastAPI admin endpoints for the Mavvrik integration.
 
 Endpoints (all require PROXY_ADMIN role):
-    POST   /mavvrik/init          Store encrypted settings in LiteLLM_Config
+    POST   /mavvrik/init          Store encrypted settings + start background job
     GET    /mavvrik/settings      View current settings (API key masked)
     PUT    /mavvrik/settings      Update existing settings
     DELETE /mavvrik/delete        Remove all Mavvrik settings
     POST   /mavvrik/dry-run       Preview CSV records without uploading
     POST   /mavvrik/export        Trigger a manual upload to Mavvrik
+
+All business logic (scheduling, logger creation, setup detection) lives in
+litellm/integrations/mavvrik/ — these handlers are thin dispatchers only.
 """
 
 import os
@@ -14,17 +17,13 @@ from datetime import datetime, timedelta
 from datetime import timezone as _tz
 from typing import Optional
 
-import litellm
 from fastapi import APIRouter, Depends, HTTPException
 
 from litellm._logging import verbose_proxy_logger
-from litellm.constants import (
-    MAVVRIK_EXPORT_INTERVAL_MINUTES,
-    MAVVRIK_EXPORT_USAGE_DATA_JOB_NAME,
-)
 from litellm.integrations.mavvrik.database import LiteLLMDatabase
-from litellm.integrations.mavvrik.mavvrik import MavvrikLogger
-from litellm.integrations.mavvrik.mavvrik_stream_api import MavvrikStreamer
+from litellm.integrations.mavvrik.logger import MavvrikLogger
+from litellm.integrations.mavvrik.register import is_mavvrik_setup  # noqa: F401
+from litellm.integrations.mavvrik.upload import MavvrikUploader
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 from litellm.proxy._types import CommonProxyErrors, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -45,45 +44,24 @@ from litellm.types.proxy.mavvrik_endpoints import (
 
 router = APIRouter()
 
-# Key used in LiteLLM_Config table
-_CONFIG_KEY = "mavvrik_settings"
-
 _sensitive_masker = SensitiveDataMasker()
 
 
 # ------------------------------------------------------------------
-# Internal settings helpers
+# Helpers shared by all handlers
 # ------------------------------------------------------------------
 
 
-async def _set_mavvrik_settings(
-    api_key: str,
-    api_endpoint: str,
-    connection_id: str,
-    marker: Optional[str] = None,
-) -> None:
-    """Encrypt API key and upsert all settings into LiteLLM_Config via LiteLLMDatabase."""
-    encrypted_api_key = encrypt_value_helper(api_key)
-    settings: dict = {
-        "api_key": encrypted_api_key,
-        "api_endpoint": api_endpoint,
-        "connection_id": connection_id,
-    }
-    if marker is not None:
-        settings["marker"] = marker
-
-    try:
-        db = LiteLLMDatabase()
-        await db.set_mavvrik_settings(settings)
-    except Exception as exc:
+def _require_admin(user_api_key_dict: UserAPIKeyAuth) -> None:
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
         raise HTTPException(
-            status_code=500,
-            detail={"error": f"Failed to save Mavvrik settings: {exc}"},
-        ) from exc
+            status_code=403,
+            detail={"error": CommonProxyErrors.not_allowed_access.value},
+        )
 
 
 async def _get_mavvrik_settings() -> dict:
-    """Retrieve and decrypt Mavvrik settings from LiteLLM_Config via LiteLLMDatabase."""
+    """Retrieve and decrypt Mavvrik settings from LiteLLM_Config."""
     try:
         db = LiteLLMDatabase()
         value = await db.get_mavvrik_settings()
@@ -111,38 +89,30 @@ async def _get_mavvrik_settings() -> dict:
     return value
 
 
-async def is_mavvrik_setup() -> bool:
-    """Return True if Mavvrik settings exist in the database OR are all present as env vars."""
-    if all(
-        os.getenv(v)
-        for v in (
-            "MAVVRIK_API_KEY",
-            "MAVVRIK_API_ENDPOINT",
-            "MAVVRIK_CONNECTION_ID",
-        )
-    ):
-        return True
+async def _set_mavvrik_settings(
+    api_key: str,
+    api_endpoint: str,
+    connection_id: str,
+    marker: Optional[str] = None,
+) -> None:
+    """Encrypt API key and persist all settings via LiteLLMDatabase."""
+    encrypted_api_key = encrypt_value_helper(api_key)
+    settings: dict = {
+        "api_key": encrypted_api_key,
+        "api_endpoint": api_endpoint,
+        "connection_id": connection_id,
+    }
+    if marker is not None:
+        settings["marker"] = marker
 
     try:
-        from litellm.proxy.proxy_server import prisma_client
-
-        if prisma_client is None:
-            return False
-
-        row = await prisma_client.db.litellm_config.find_first(
-            where={"param_name": _CONFIG_KEY}
-        )
-        return row is not None and row.param_value is not None
-    except Exception:
-        return False
-
-
-def _require_admin(user_api_key_dict: UserAPIKeyAuth) -> None:
-    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+        db = LiteLLMDatabase()
+        await db.set_mavvrik_settings(settings)
+    except Exception as exc:
         raise HTTPException(
-            status_code=403,
-            detail={"error": CommonProxyErrors.not_allowed_access.value},
-        )
+            status_code=500,
+            detail={"error": f"Failed to save Mavvrik settings: {exc}"},
+        ) from exc
 
 
 # ------------------------------------------------------------------
@@ -160,26 +130,19 @@ async def init_mavvrik_settings(
     request: MavvrikInitRequest,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
-    """Initialize Mavvrik settings and store encrypted credentials in the database.
-
-    Calls the Mavvrik register endpoint to obtain the initial export marker (the
-    earliest date Mavvrik wants LiteLLM to export from). If that call fails, the
-    marker defaults to the first day of the current month.
-
-    After saving settings, the background export job is registered with the
-    APScheduler so exports begin automatically without restarting the proxy.
-    """
+    """Initialize Mavvrik settings and register the background export job."""
     _require_admin(user_api_key_dict)
 
     try:
+        # Get initial marker from Mavvrik (best-effort — fallback to first of month)
         initial_marker: Optional[str] = None
         try:
-            streamer = MavvrikStreamer(
+            uploader = MavvrikUploader(
                 api_key=request.api_key,
                 api_endpoint=request.api_endpoint,
                 connection_id=request.connection_id,
             )
-            initial_marker = await streamer.register()
+            initial_marker = await uploader.register()
             verbose_proxy_logger.info(
                 "Mavvrik register returned initial marker: %s", initial_marker
             )
@@ -200,47 +163,20 @@ async def init_mavvrik_settings(
             connection_id=request.connection_id,
             marker=initial_marker,
         )
-        verbose_proxy_logger.info(
-            "Mavvrik settings initialized, marker=%s", initial_marker
-        )
 
+        # Delegate logger creation + job scheduling to the mavvrik module
         try:
             import litellm.proxy.proxy_server as _pserver
 
-            mavvrik_logger = MavvrikLogger(
+            from litellm.integrations.mavvrik.register import register_logger_and_job
+
+            _scheduler = getattr(_pserver, "scheduler", None)
+            await register_logger_and_job(
                 api_key=request.api_key,
                 api_endpoint=request.api_endpoint,
                 connection_id=request.connection_id,
+                scheduler=_scheduler,
             )
-            litellm.logging_callback_manager.add_litellm_success_callback(
-                mavvrik_logger
-            )
-            litellm.logging_callback_manager.add_litellm_async_success_callback(
-                mavvrik_logger
-            )
-
-            if "mavvrik" in litellm.success_callback:
-                litellm.success_callback.remove("mavvrik")
-            if "mavvrik" in litellm._async_success_callback:
-                litellm._async_success_callback.remove("mavvrik")
-
-            _scheduler = getattr(_pserver, "scheduler", None)
-            if _scheduler is not None:
-                _scheduler.add_job(
-                    mavvrik_logger.initialize_mavvrik_export_job,
-                    "interval",
-                    minutes=MAVVRIK_EXPORT_INTERVAL_MINUTES,
-                    id=MAVVRIK_EXPORT_USAGE_DATA_JOB_NAME,
-                    replace_existing=True,
-                )
-                verbose_proxy_logger.info(
-                    "Mavvrik background export job scheduled every %d min",
-                    MAVVRIK_EXPORT_INTERVAL_MINUTES,
-                )
-            else:
-                verbose_proxy_logger.warning(
-                    "Mavvrik: scheduler not available, background job not registered"
-                )
         except Exception as sched_exc:
             verbose_proxy_logger.warning(
                 "Mavvrik: could not register background job after init (%s)", sched_exc
@@ -310,8 +246,8 @@ async def update_mavvrik_settings(
 ):
     """Update one or more Mavvrik settings fields. All fields are optional.
 
-    Use the `marker` field to reset the export cursor to a specific date (YYYY-MM-DD),
-    for example when Mavvrik asks you to re-export from an earlier date.
+    Use the ``marker`` field to reset the export cursor to a specific date (YYYY-MM-DD)
+    when Mavvrik asks you to re-export from an earlier date.
     """
     _require_admin(user_api_key_dict)
 
@@ -358,13 +294,11 @@ async def update_mavvrik_settings(
 async def delete_mavvrik_settings(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
-    """Remove all Mavvrik settings from the database.
-
-    Also deregisters the background export job from the scheduler if it is running.
-    """
+    """Remove all Mavvrik settings and deregister the background job."""
     _require_admin(user_api_key_dict)
 
     try:
+        from litellm.constants import MAVVRIK_EXPORT_USAGE_DATA_JOB_NAME
         from litellm.proxy.proxy_server import prisma_client
 
         if prisma_client is None:
@@ -374,7 +308,7 @@ async def delete_mavvrik_settings(
             )
 
         row = await prisma_client.db.litellm_config.find_first(
-            where={"param_name": _CONFIG_KEY}
+            where={"param_name": "mavvrik_settings"}
         )
         if row is None:
             raise HTTPException(
@@ -382,9 +316,10 @@ async def delete_mavvrik_settings(
                 detail={"error": "Mavvrik is not configured"},
             )
 
-        await prisma_client.db.litellm_config.delete(where={"param_name": _CONFIG_KEY})
+        await prisma_client.db.litellm_config.delete(
+            where={"param_name": "mavvrik_settings"}
+        )
 
-        # Deregister the scheduler job if present
         try:
             import litellm.proxy.proxy_server as _pserver
 
@@ -422,10 +357,7 @@ async def dry_run_mavvrik_export(
     request: MavvrikExportRequest,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
-    """Preview the CSV records that would be uploaded for a given date without sending data to Mavvrik.
-
-    Defaults to yesterday if `date_str` is not provided.
-    """
+    """Preview the CSV records that would be uploaded for a given date without sending data."""
     _require_admin(user_api_key_dict)
 
     try:
@@ -473,11 +405,7 @@ async def export_mavvrik_data(
     request: MavvrikExportRequest,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
-    """Manually trigger a Mavvrik export for a specific date.
-
-    Defaults to yesterday if `date_str` is not provided. Re-uploading the same date
-    overwrites the previously uploaded object — exports are idempotent.
-    """
+    """Manually trigger a Mavvrik export for a specific date."""
     _require_admin(user_api_key_dict)
 
     try:

@@ -11,17 +11,17 @@ import pytest
 
 sys.path.insert(0, os.path.abspath("../../../.."))
 
-from litellm.integrations.mavvrik.mavvrik_stream_api import MavvrikStreamer
+from litellm.integrations.mavvrik.upload import MavvrikUploader
 
 
-def _make_streamer(**kwargs) -> MavvrikStreamer:
+def _make_streamer(**kwargs) -> MavvrikUploader:
     defaults = dict(
         api_key="test-key",
         api_endpoint="https://api.mavvrik.dev/acme",
         connection_id="litellm-001",
     )
     defaults.update(kwargs)
-    return MavvrikStreamer(**defaults)
+    return MavvrikUploader(**defaults)
 
 
 def _mock_async_client(method: str, mock_resp: MagicMock):
@@ -35,9 +35,9 @@ def _mock_async_client(method: str, mock_resp: MagicMock):
     return cm, client_mock, async_method
 
 
-class TestMavvrikStreamerInit:
+class TestMavvrikUploaderInit:
     def test_init_strips_trailing_slash(self):
-        streamer = MavvrikStreamer(
+        streamer = MavvrikUploader(
             api_key="key",
             api_endpoint="https://api.mavvrik.dev/acme/",
             connection_id="litellm-001",
@@ -46,7 +46,7 @@ class TestMavvrikStreamerInit:
         assert streamer.api_endpoint == "https://api.mavvrik.dev/acme"
 
     def test_init_stores_attributes(self):
-        streamer = MavvrikStreamer(
+        streamer = MavvrikUploader(
             api_key="mvk-key",
             api_endpoint="https://api.mavvrik.dev/my-tenant",
             connection_id="inst-123",
@@ -55,7 +55,7 @@ class TestMavvrikStreamerInit:
         assert streamer.connection_id == "inst-123"
 
 
-class TestMavvrikStreamerGetSignedUrl:
+class TestMavvrikUploaderGetSignedUrl:
     @pytest.mark.asyncio
     async def test_returns_signed_url_on_200(self):
         streamer = _make_streamer()
@@ -114,7 +114,7 @@ class TestMavvrikStreamerGetSignedUrl:
 
     @pytest.mark.asyncio
     async def test_builds_correct_url_with_connection_id(self):
-        streamer = MavvrikStreamer(
+        streamer = MavvrikUploader(
             api_key="key",
             api_endpoint="https://api.example.com/my-org",
             connection_id="prod-001",
@@ -165,7 +165,7 @@ class TestMavvrikStreamerGetSignedUrl:
         assert captured_headers[0].get("x-api-key") == "test-key"
 
 
-class TestMavvrikStreamerInitiateResumable:
+class TestMavvrikUploaderInitiateResumable:
     @pytest.mark.asyncio
     async def test_returns_location_header_on_201(self):
         streamer = _make_streamer()
@@ -206,7 +206,7 @@ class TestMavvrikStreamerInitiateResumable:
                 await streamer._initiate_resumable_upload("https://signed-url")
 
 
-class TestMavvrikStreamerFinalizeUpload:
+class TestMavvrikUploaderFinalizeUpload:
     @pytest.mark.asyncio
     async def test_accepts_200(self):
         streamer = _make_streamer()
@@ -240,7 +240,7 @@ class TestMavvrikStreamerFinalizeUpload:
                 await streamer._finalize_upload("https://session-uri", b"gzip-bytes")
 
 
-class TestMavvrikStreamerUpload:
+class TestMavvrikUploaderUpload:
     @pytest.mark.asyncio
     async def test_upload_empty_payload_skips_all_steps(self):
         streamer = _make_streamer()
@@ -283,7 +283,7 @@ class TestMavvrikStreamerUpload:
         assert gzip.decompress(upload_bytes) == csv_payload.encode("utf-8")
 
 
-class TestMavvrikStreamerAdvanceMarker:
+class TestMavvrikUploaderAdvanceMarker:
     @pytest.mark.asyncio
     async def test_accepts_204(self):
         streamer = _make_streamer()
@@ -341,7 +341,7 @@ class TestMavvrikStreamerAdvanceMarker:
 
     @pytest.mark.asyncio
     async def test_patches_agent_base_path_with_connection_id(self):
-        streamer = MavvrikStreamer(
+        streamer = MavvrikUploader(
             api_key="key",
             api_endpoint="https://api.example.com/my-org",
             connection_id="prod-001",
@@ -390,7 +390,7 @@ class TestMavvrikStreamerAdvanceMarker:
         assert captured_headers[0].get("x-api-key") == "test-key"
 
 
-class TestMavvrikStreamerRegister:
+class TestMavvrikUploaderRegister:
     @pytest.mark.asyncio
     async def test_register_returns_iso_string_from_epoch(self):
         streamer = _make_streamer()
@@ -448,7 +448,7 @@ class TestMavvrikStreamerRegister:
 
     @pytest.mark.asyncio
     async def test_register_posts_to_agent_base_path(self):
-        streamer = MavvrikStreamer(
+        streamer = MavvrikUploader(
             api_key="key",
             api_endpoint="https://api.example.com/my-org",
             connection_id="prod-001",

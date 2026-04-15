@@ -3,57 +3,46 @@
 Export flow (runs every MAVVRIK_EXPORT_INTERVAL_MINUTES, default 60):
 
   1. Read the last-exported marker date from LiteLLM_Config (format: YYYY-MM-DD).
-     - First run: marker = yesterday (export yesterday as the first complete day).
+     - First run: determined by MAVVRIK_LOOKBACK_START_DATE or MIN(date) in DB.
   2. For each date from (marker + 1 day) up to yesterday (never today):
      a. Query LiteLLM_DailyUserSpend for rows where date = that day.
      b. Transform rows to CSV via MavvrikTransformer.
      c. GZIP-compress the CSV in memory.
-     d. Obtain a GCS signed URL from the Mavvrik API (x-api-key auth).
-     e. Upload via GCS resumable upload (POST initiate → PUT payload).
-        GCS object name = date string (e.g. "2026-02-18") — same name on
-        re-upload overwrites, making exports idempotent.
-     f. Advance the marker to that date in LiteLLM_Config.
+     d. Upload via MavvrikUploader (3-step signed URL upload).
+     e. Advance the marker to that date in LiteLLM_Config.
   3. Today is never exported — daily rows are still accumulating.
 
 Environment variables (fallback when DB settings are absent):
-    MAVVRIK_API_KEY          x-api-key sent to Mavvrik API
-    MAVVRIK_API_ENDPOINT     Mavvrik API base URL (includes tenant)
-    MAVVRIK_CONNECTION_ID    Connection/instance ID
+    MAVVRIK_API_KEY              x-api-key sent to Mavvrik API
+    MAVVRIK_API_ENDPOINT         Mavvrik API base URL (includes tenant)
+    MAVVRIK_CONNECTION_ID        Connection/instance ID
     MAVVRIK_LOOKBACK_START_DATE  First-run start date YYYY-MM-DD (default: all data since MIN(date))
 """
 
 import os
 from datetime import date, datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Any, List, Optional, cast
+from typing import Any, Optional
 
-import litellm
 from litellm._logging import verbose_logger
 from litellm.constants import (
-    MAVVRIK_EXPORT_INTERVAL_MINUTES,
-    MAVVRIK_EXPORT_USAGE_DATA_JOB_NAME,
     MAVVRIK_LOOKBACK_START_DATE,
     MAVVRIK_MAX_FETCHED_DATA_RECORDS,
 )
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.mavvrik.database import LiteLLMDatabase
-from litellm.integrations.mavvrik.mavvrik_stream_api import MavvrikStreamer
 from litellm.integrations.mavvrik.transform import MavvrikTransformer
-
-if TYPE_CHECKING:
-    from apscheduler.schedulers.asyncio import AsyncIOScheduler
-else:
-    AsyncIOScheduler = Any
+from litellm.integrations.mavvrik.upload import MavvrikUploader
 
 
 class MavvrikLogger(CustomLogger):
-    """Export LiteLLM spend data to Mavvrik via GCS signed URL uploads."""
+    """Export LiteLLM spend data to Mavvrik via signed URL uploads."""
 
     def __init__(
         self,
         api_key: Optional[str] = None,
         api_endpoint: Optional[str] = None,
         connection_id: Optional[str] = None,
-        **kwargs,
+        **kwargs: Any,
     ):
         super().__init__(**kwargs)
         self.api_key = api_key or os.getenv("MAVVRIK_API_KEY")
@@ -70,9 +59,10 @@ class MavvrikLogger(CustomLogger):
     # Scheduled job entry-point
     # ------------------------------------------------------------------
 
-    async def initialize_mavvrik_export_job(self):
+    async def initialize_mavvrik_export_job(self) -> None:
         """Scheduled entry-point — honours pod lock when Redis is available."""
         from litellm.proxy.proxy_server import proxy_logging_obj
+        from litellm.constants import MAVVRIK_EXPORT_USAGE_DATA_JOB_NAME
 
         pod_lock_manager = proxy_logging_obj.db_spend_update_writer.pod_lock_manager
 
@@ -89,7 +79,7 @@ class MavvrikLogger(CustomLogger):
         else:
             await self._scheduled_export()
 
-    async def _scheduled_export(self):
+    async def _scheduled_export(self) -> None:
         """Export all complete days since the last marker, one file per day."""
         db = LiteLLMDatabase()
         settings = await db.get_mavvrik_settings()
@@ -101,7 +91,6 @@ class MavvrikLogger(CustomLogger):
         # Determine start date (day after last exported date)
         if marker_str:
             try:
-                # marker is a date string "YYYY-MM-DD"
                 last_exported = date.fromisoformat(marker_str[:10])
                 start_date = last_exported + timedelta(days=1)
             except ValueError:
@@ -111,70 +100,7 @@ class MavvrikLogger(CustomLogger):
                 )
                 start_date = yesterday
         else:
-            # First run — determine the lookback window.
-            # If MAVVRIK_LOOKBACK_START_DATE is set, start from that specific date.
-            # Otherwise, start from the earliest date that has data in the DB
-            # (MIN(date) in LiteLLM_DailyUserSpend). Falls back to yesterday if
-            # the query fails or the table is empty.
-            # Resolve the effective start date:
-            #   1. Parse MAVVRIK_LOOKBACK_START_DATE if set (validated YYYY-MM-DD).
-            #   2. Clamp to MIN(date) in the DB so we skip empty days before the
-            #      first real row — avoids iterating hundreds of no-op days when
-            #      the customer sets a date earlier than actual data.
-            #   3. Fall back to yesterday if the DB is empty or the query fails.
-            requested_start: Optional[date] = None
-            if MAVVRIK_LOOKBACK_START_DATE is not None:
-                try:
-                    requested_start = date.fromisoformat(MAVVRIK_LOOKBACK_START_DATE)
-                except ValueError:
-                    verbose_logger.warning(
-                        "MavvrikLogger: invalid MAVVRIK_LOOKBACK_START_DATE '%s' "
-                        "(expected YYYY-MM-DD), falling back to earliest DB date",
-                        MAVVRIK_LOOKBACK_START_DATE,
-                    )
-
-            earliest_str = await db.get_earliest_date()
-            earliest_db: Optional[date] = None
-            if earliest_str:
-                try:
-                    earliest_db = date.fromisoformat(earliest_str)
-                except ValueError:
-                    pass
-
-            if requested_start is not None and earliest_db is not None:
-                # Clamp: don't start before the first row in the DB
-                start_date = max(requested_start, earliest_db)
-                if start_date != requested_start:
-                    verbose_logger.info(
-                        "MavvrikLogger: MAVVRIK_LOOKBACK_START_DATE=%s is before "
-                        "earliest DB date %s — starting from %s",
-                        requested_start,
-                        earliest_db,
-                        start_date,
-                    )
-                else:
-                    verbose_logger.info(
-                        "MavvrikLogger: no marker found, starting from "
-                        "MAVVRIK_LOOKBACK_START_DATE %s",
-                        start_date,
-                    )
-            elif requested_start is not None:
-                # DB empty — honour the customer's date anyway; loop will no-op
-                start_date = requested_start
-                verbose_logger.info(
-                    "MavvrikLogger: no marker found, no DB data yet, "
-                    "starting from MAVVRIK_LOOKBACK_START_DATE %s",
-                    start_date,
-                )
-            elif earliest_db is not None:
-                start_date = earliest_db
-                verbose_logger.info(
-                    "MavvrikLogger: no marker found, starting from earliest "
-                    "DB date %s",
-                    start_date,
-                )
-            else:
-                start_date = yesterday
+            start_date = await self._resolve_first_run_start_date(db, yesterday)
 
         if start_date > yesterday:
             verbose_logger.debug(
@@ -182,10 +108,9 @@ class MavvrikLogger(CustomLogger):
             )
             return
 
-        # Export each missed day individually
         export_date = start_date
         while export_date <= yesterday:
-            date_str = export_date.isoformat()  # "YYYY-MM-DD"
+            date_str = export_date.isoformat()
             verbose_logger.info("MavvrikLogger: exporting date %s", date_str)
 
             try:
@@ -201,7 +126,6 @@ class MavvrikLogger(CustomLogger):
                 )
                 return
 
-            # Advance marker one day at a time so partial failures don't lose progress
             await db.advance_marker(date_str)
 
             # Notify Mavvrik of the new marker epoch via PATCH (best-effort)
@@ -214,18 +138,81 @@ class MavvrikLogger(CustomLogger):
                         tzinfo=timezone.utc,
                     ).timestamp()
                 )
-                streamer = MavvrikStreamer(
+                uploader = MavvrikUploader(
                     api_key=self.api_key or "",
                     api_endpoint=self.api_endpoint or "",
                     connection_id=self.connection_id or "",
                 )
-                await streamer.advance_marker(export_epoch)
+                await uploader.advance_marker(export_epoch)
             except Exception as exc:
                 verbose_logger.warning(
                     "MavvrikLogger: advance_marker PATCH failed (non-fatal): %s", exc
                 )
 
             export_date += timedelta(days=1)
+
+    async def _resolve_first_run_start_date(
+        self, db: LiteLLMDatabase, yesterday: date
+    ) -> date:
+        """Determine the export start date on the very first run (no marker yet).
+
+        Priority:
+          1. MAVVRIK_LOOKBACK_START_DATE env var (clamped to MIN(date) in DB)
+          2. MIN(date) in LiteLLM_DailyUserSpend
+          3. Yesterday as fallback
+        """
+        requested_start: Optional[date] = None
+        if MAVVRIK_LOOKBACK_START_DATE is not None:
+            try:
+                requested_start = date.fromisoformat(MAVVRIK_LOOKBACK_START_DATE)
+            except ValueError:
+                verbose_logger.warning(
+                    "MavvrikLogger: invalid MAVVRIK_LOOKBACK_START_DATE '%s' "
+                    "(expected YYYY-MM-DD), falling back to earliest DB date",
+                    MAVVRIK_LOOKBACK_START_DATE,
+                )
+
+        earliest_str = await db.get_earliest_date()
+        earliest_db: Optional[date] = None
+        if earliest_str:
+            try:
+                earliest_db = date.fromisoformat(earliest_str)
+            except ValueError:
+                pass
+
+        if requested_start is not None and earliest_db is not None:
+            start_date = max(requested_start, earliest_db)
+            if start_date != requested_start:
+                verbose_logger.info(
+                    "MavvrikLogger: MAVVRIK_LOOKBACK_START_DATE=%s is before "
+                    "earliest DB date %s — starting from %s",
+                    requested_start,
+                    earliest_db,
+                    start_date,
+                )
+            else:
+                verbose_logger.info(
+                    "MavvrikLogger: no marker found, starting from "
+                    "MAVVRIK_LOOKBACK_START_DATE %s",
+                    start_date,
+                )
+        elif requested_start is not None:
+            start_date = requested_start
+            verbose_logger.info(
+                "MavvrikLogger: no marker found, no DB data yet, "
+                "starting from MAVVRIK_LOOKBACK_START_DATE %s",
+                start_date,
+            )
+        elif earliest_db is not None:
+            start_date = earliest_db
+            verbose_logger.info(
+                "MavvrikLogger: no marker found, starting from earliest DB date %s",
+                start_date,
+            )
+        else:
+            start_date = yesterday
+
+        return start_date
 
     # ------------------------------------------------------------------
     # Core export
@@ -235,12 +222,14 @@ class MavvrikLogger(CustomLogger):
         self,
         date_str: str,
         limit: Optional[int] = None,
-    ):
+    ) -> int:
         """Query → transform → upload for a single calendar date (YYYY-MM-DD).
 
-        The GCS object is named by date_str so re-uploading the same day
-        overwrites the previous file — exports are idempotent.
-        Called by the scheduler and manual /mavvrik/export.
+        Re-uploading the same date overwrites the previous upload — idempotent.
+        Called by the scheduler and the manual /mavvrik/export endpoint.
+
+        Returns:
+            Number of records exported (0 if no data).
         """
         self._validate_config()
 
@@ -270,12 +259,12 @@ class MavvrikLogger(CustomLogger):
             )
             return 0
 
-        streamer = MavvrikStreamer(
+        uploader = MavvrikUploader(
             api_key=self.api_key or "",
             api_endpoint=self.api_endpoint or "",
             connection_id=self.connection_id or "",
         )
-        await streamer.upload(csv_payload, date_str=date_str)
+        await uploader.upload(csv_payload, date_str=date_str)
 
         verbose_logger.info(
             "MavvrikLogger: uploaded %d CSV bytes for date %s",
@@ -292,13 +281,8 @@ class MavvrikLogger(CustomLogger):
         self,
         date_str: Optional[str] = None,
         limit: Optional[int] = None,
-    ):
-        """Return transformed records as dicts without uploading — for /mavvrik/dry-run.
-
-        Args:
-            date_str: Date to preview in YYYY-MM-DD format. Defaults to yesterday.
-            limit:    Max rows to fetch.
-        """
+    ) -> dict:
+        """Return transformed records as dicts without uploading — for /mavvrik/dry-run."""
         if not date_str:
             date_str = (
                 datetime.now(timezone.utc).date() - timedelta(days=1)
@@ -324,11 +308,9 @@ class MavvrikLogger(CustomLogger):
             }
 
         usage_sample = df.head(50).to_dicts()
-
         transformer = MavvrikTransformer()
         csv_payload = transformer.to_csv(df)
 
-        # Compute summary stats from the raw DataFrame
         total_cost = float(df["spend"].sum()) if "spend" in df.columns else 0.0
         total_tokens = (
             int((df["prompt_tokens"].sum() or 0) + (df["completion_tokens"].sum() or 0))
@@ -354,7 +336,7 @@ class MavvrikLogger(CustomLogger):
     # Config validation
     # ------------------------------------------------------------------
 
-    def _validate_config(self):
+    def _validate_config(self) -> None:
         missing = [
             name
             for name, val in [
@@ -368,38 +350,4 @@ class MavvrikLogger(CustomLogger):
             raise ValueError(
                 f"MavvrikLogger: missing required config fields: {missing}. "
                 "Set via /mavvrik/init or MAVVRIK_* environment variables."
-            )
-
-    # ------------------------------------------------------------------
-    # Background job registration
-    # ------------------------------------------------------------------
-
-    @staticmethod
-    async def init_mavvrik_background_job(scheduler: AsyncIOScheduler):
-        """Register the hourly export job with APScheduler.
-
-        Only registers if a MavvrikLogger instance exists in the callback manager
-        (i.e. the operator has added ``callbacks: ["mavvrik"]`` in config.yaml or
-        called ``POST /mavvrik/init``). Does not auto-create a logger from env vars
-        to avoid silently injecting callbacks without explicit opt-in.
-        """
-        loggers: List[CustomLogger] = (
-            litellm.logging_callback_manager.get_custom_loggers_for_type(
-                callback_type=MavvrikLogger
-            )
-        )
-        verbose_logger.debug("MavvrikLogger: found %d logger instance(s)", len(loggers))
-
-        if loggers:
-            mavvrik_logger = cast(MavvrikLogger, loggers[0])
-            verbose_logger.debug(
-                "MavvrikLogger: scheduling export job every %d minutes",
-                MAVVRIK_EXPORT_INTERVAL_MINUTES,
-            )
-            scheduler.add_job(
-                mavvrik_logger.initialize_mavvrik_export_job,
-                "interval",
-                minutes=MAVVRIK_EXPORT_INTERVAL_MINUTES,
-                id=MAVVRIK_EXPORT_USAGE_DATA_JOB_NAME,
-                replace_existing=True,
             )

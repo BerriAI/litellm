@@ -483,7 +483,7 @@ from litellm.proxy.spend_tracking.spend_management_endpoints import (
 )
 from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
 from litellm.proxy.spend_tracking.vantage_endpoints import router as vantage_router
-from litellm.proxy.spend_tracking.mavvrik_endpoints import router as mavvrik_router
+from litellm.proxy.spend_tracking.mavvrik_endpoints import router as mavvrik_router  # noqa: E402
 from litellm.proxy.types_utils.utils import get_instance_fn
 from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import (
     router as ui_crud_endpoints_router,
@@ -6575,11 +6575,13 @@ class ProxyStartupEvent:
         ########################################################
         # Mavvrik Background Job
         ########################################################
-        from litellm.integrations.mavvrik.mavvrik import MavvrikLogger
-        from litellm.proxy.spend_tracking.mavvrik_endpoints import is_mavvrik_setup
+        from litellm.integrations.mavvrik.register import (
+            is_mavvrik_setup,
+            register_background_job,
+        )
 
         if await is_mavvrik_setup():
-            await MavvrikLogger.init_mavvrik_background_job(scheduler=scheduler)
+            await register_background_job(scheduler=scheduler)
 
         ########################################################
         # Prometheus Background Job

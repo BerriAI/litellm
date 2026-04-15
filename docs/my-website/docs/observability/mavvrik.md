@@ -28,7 +28,7 @@ litellm_settings:
 
 ```bash
 export MAVVRIK_API_KEY="mav_xxxxxxxxxx"
-export MAVVRIK_API_ENDPOINT="https://api.mavvrik.dev/my-tenant"
+export MAVVRIK_API_ENDPOINT="https://api.mavvrik.dev/<TENANT_ID>"
 export MAVVRIK_CONNECTION_ID="litellm-prod"
 ```
 
@@ -45,7 +45,7 @@ LiteLLM will automatically register with the Mavvrik API on startup and begin sc
 | Variable | Required | Description | Example |
 |----------|----------|-------------|---------|
 | `MAVVRIK_API_KEY` | Yes | Your Mavvrik API key (`x-api-key` header) | `mav_xxxxxxxxxx` |
-| `MAVVRIK_API_ENDPOINT` | Yes | Mavvrik API base URL including your tenant path | `https://api.mavvrik.dev/my-tenant` |
+| `MAVVRIK_API_ENDPOINT` | Yes | Mavvrik API base URL including your tenant path | `https://api.mavvrik.dev/<TENANT_ID>` |
 | `MAVVRIK_CONNECTION_ID` | Yes | Connection/instance ID assigned by Mavvrik | `litellm-prod` |
 | `MAVVRIK_LOOKBACK_START_DATE` | No | First-run start date (`YYYY-MM-DD`). Default: export all data since the earliest row in `LiteLLM_DailyUserSpend` | `2024-01-01` |
 | `MAVVRIK_EXPORT_INTERVAL_MINUTES` | No | Scheduler check frequency in minutes (default: `60`) | `60` |
@@ -61,7 +61,7 @@ curl -X POST "http://localhost:4000/mavvrik/init" \
   -H "Authorization: Bearer sk-admin-key" \
   -d '{
     "api_key": "mav_xxxxxxxxxx",
-    "api_endpoint": "https://api.mavvrik.dev/my-tenant",
+    "api_endpoint": "https://api.mavvrik.dev/<TENANT_ID>",
     "connection_id": "litellm-prod"
   }' | jq
 ```
@@ -148,7 +148,7 @@ curl -X GET "http://localhost:4000/mavvrik/settings" \
 ```json
 {
   "api_key_masked": "mav_****xxxx",
-  "api_endpoint": "https://api.mavvrik.dev/my-tenant",
+  "api_endpoint": "https://api.mavvrik.dev/<TENANT_ID>",
   "connection_id": "litellm-prod",
   "marker": "2024-01-14",
   "status": "configured"
@@ -243,7 +243,7 @@ curl -X DELETE "http://localhost:4000/mavvrik/delete" \
    ```
    Mavvrik registration failed: 401 Unauthorized
    ```
-   Verify your `MAVVRIK_API_KEY` is valid and that `MAVVRIK_API_ENDPOINT` includes your tenant path (e.g. `https://api.mavvrik.dev/my-tenant`, not just `https://api.mavvrik.dev`).
+   Verify your `MAVVRIK_API_KEY` is valid and that `MAVVRIK_API_ENDPOINT` includes your tenant path (e.g. `https://api.mavvrik.dev/<TENANT_ID>`, not just `https://api.mavvrik.dev`).
 
 3. **No data appearing in Mavvrik**
    - Use the dry-run endpoint to verify data exists for the target date

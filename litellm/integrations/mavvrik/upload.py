@@ -1,6 +1,4 @@
-"""Mavvrik API streaming layer.
-
-Implements the 3-step signed URL upload pattern:
+"""Mavvrik upload layer — 3-step signed URL upload pattern.
 
   Step 1 — GET signed URL from Mavvrik API
       GET {api_endpoint}/metrics/agent/ai/{connection_id}/upload-url
@@ -19,19 +17,13 @@ Implements the 3-step signed URL upload pattern:
       Body: gzip-compressed CSV bytes
       Response 200/201: upload complete
 
-Additionally implements the registration call:
+Additionally implements registration and marker advance:
 
   Register — POST {api_endpoint}/metrics/agent/ai/{connection_id}
-      Header: x-api-key: {api_key}
       Body: { "name": instance_id, "version": <litellm version>, "arch": <system arch> }
       Response: { "id": "...", "metricsMarker": <epoch_seconds> }
 
-  The metricsMarker epoch sets the initial export window start.
-  If metricsMarker == 0 or is absent, defaults to the first day of
-  the current month.
-
   Advance marker — PATCH {api_endpoint}/metrics/agent/ai/{connection_id}
-      Header: x-api-key: {api_key}
       Body: { "metricsMarker": <epoch_seconds> }
       Response: 204 No Content
 """
@@ -55,12 +47,11 @@ _MAX_RETRIES = 3
 _RETRY_BACKOFF_BASE = 1.0  # seconds; doubles each retry
 
 
-class MavvrikStreamer:
+class MavvrikUploader:
     """Upload gzip-compressed CSV spend data to Mavvrik via a signed URL upload."""
 
     def __init__(self, api_key: str, api_endpoint: str, connection_id: str) -> None:
         self.api_key = api_key
-        # Strip trailing slash for consistent URL construction
         self.api_endpoint = api_endpoint.rstrip("/")
         self.connection_id = connection_id
 
@@ -73,16 +64,15 @@ class MavvrikStreamer:
 
         Args:
             csv_payload: CSV string (header + rows) from MavvrikTransformer.to_csv().
-            date_str:    Date string "YYYY-MM-DD" used as the upload object name.
-                         Uploading the same date again overwrites the previous file,
-                         making exports idempotent.
+            date_str:    Date string "YYYY-MM-DD". Re-uploading the same date
+                         overwrites the previous upload — idempotent.
 
         Raises:
             Exception: if any upload step fails after retries.
         """
         if not csv_payload.strip():
             verbose_proxy_logger.debug(
-                "Mavvrik streamer: empty payload, skipping upload"
+                "Mavvrik uploader: empty payload, skipping upload"
             )
             return
 
@@ -93,7 +83,7 @@ class MavvrikStreamer:
         await self._finalize_upload(session_uri, upload_data)
 
         verbose_proxy_logger.info(
-            "Mavvrik streamer: successfully uploaded %d bytes for date %s",
+            "Mavvrik uploader: successfully uploaded %d bytes for date %s",
             len(upload_data),
             date_str,
         )
@@ -103,7 +93,7 @@ class MavvrikStreamer:
     # ------------------------------------------------------------------
 
     async def register(self) -> str:
-        """POST to Mavvrik agent endpoint and return the initial marker as an ISO-8601 string.
+        """POST to Mavvrik agent endpoint and return the initial marker as ISO-8601.
 
           POST {api_endpoint}/metrics/agent/ai/{connection_id}
           Body: { "name": instance_id, "version": <litellm version>, "arch": <system arch> }
@@ -139,7 +129,6 @@ class MavvrikStreamer:
         if epoch:
             marker_dt = _dt.fromtimestamp(float(epoch), tz=_tz.utc)
         else:
-            # Default: first day of current month
             now = _dt.now(_tz.utc)
             marker_dt = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
 
@@ -179,7 +168,7 @@ class MavvrikStreamer:
             )
 
         verbose_proxy_logger.info(
-            "Mavvrik streamer: marker advanced to epoch %d", epoch
+            "Mavvrik uploader: marker advanced to epoch %d", epoch
         )
 
     # ------------------------------------------------------------------
@@ -204,7 +193,7 @@ class MavvrikStreamer:
                     signed_url = body.get("url")
                     if signed_url:
                         verbose_proxy_logger.debug(
-                            "Mavvrik streamer: got signed URL for date %s", date_str
+                            "Mavvrik uploader: got signed URL for date %s", date_str
                         )
                         return signed_url
                     raise Exception(f"Mavvrik API response missing 'url' field: {body}")
@@ -213,7 +202,6 @@ class MavvrikStreamer:
                     f"Mavvrik signed URL request failed: {resp.status_code} {resp.text}"
                 )
                 if resp.status_code < 500:
-                    # 4xx errors won't improve with retries
                     raise last_exc
 
             except httpx.RequestError as exc:
@@ -221,7 +209,7 @@ class MavvrikStreamer:
 
             wait = _RETRY_BACKOFF_BASE * (2**attempt)
             verbose_proxy_logger.warning(
-                "Mavvrik streamer: signed URL attempt %d/%d failed for date %s, "
+                "Mavvrik uploader: signed URL attempt %d/%d failed for date %s, "
                 "retrying in %.1fs: %s",
                 attempt + 1,
                 _MAX_RETRIES,
@@ -258,7 +246,7 @@ class MavvrikStreamer:
         if not session_uri:
             raise Exception("Mavvrik initiate upload response missing Location header")
 
-        verbose_proxy_logger.debug("Mavvrik streamer: resumable upload session created")
+        verbose_proxy_logger.debug("Mavvrik uploader: resumable upload session created")
         return session_uri
 
     # ------------------------------------------------------------------
@@ -281,7 +269,7 @@ class MavvrikStreamer:
             )
 
         verbose_proxy_logger.debug(
-            "Mavvrik streamer: finalize upload OK (%d)", resp.status_code
+            "Mavvrik uploader: finalize upload OK (%d)", resp.status_code
         )
 
     # ------------------------------------------------------------------

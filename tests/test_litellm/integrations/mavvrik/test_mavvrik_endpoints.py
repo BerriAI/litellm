@@ -95,7 +95,7 @@ class TestInitMavvrikSettings:
         mock_db = _mock_db()
 
         with patch(
-            "litellm.proxy.spend_tracking.mavvrik_endpoints.MavvrikStreamer",
+            "litellm.proxy.spend_tracking.mavvrik_endpoints.MavvrikUploader",
             return_value=mock_streamer,
         ), patch(
             "litellm.proxy.spend_tracking.mavvrik_endpoints.encrypt_value_helper",
@@ -128,7 +128,7 @@ class TestInitMavvrikSettings:
         mock_db = _mock_db()
 
         with patch(
-            "litellm.proxy.spend_tracking.mavvrik_endpoints.MavvrikStreamer",
+            "litellm.proxy.spend_tracking.mavvrik_endpoints.MavvrikUploader",
             return_value=mock_streamer,
         ), patch(
             "litellm.proxy.spend_tracking.mavvrik_endpoints.encrypt_value_helper",
