@@ -14,6 +14,7 @@ We subclass it to permit those specific nodes, while keeping every other
 restriction intact.
 """
 
+import operator
 from typing import Any, Dict
 
 from RestrictedPython import (
@@ -57,6 +58,34 @@ class AsyncAwareTransformer(RestrictingNodeTransformer):
         return self.node_contents_visit(node)
 
 
+_INPLACE_OPS: Dict[str, Any] = {
+    "+=": operator.iadd,
+    "-=": operator.isub,
+    "*=": operator.imul,
+    "/=": operator.itruediv,
+    "//=": operator.ifloordiv,
+    "%=": operator.imod,
+    "**=": operator.ipow,
+    "@=": operator.imatmul,
+    "&=": operator.iand,
+    "|=": operator.ior,
+    "^=": operator.ixor,
+    "<<=": operator.ilshift,
+    ">>=": operator.irshift,
+}
+
+
+def _inplacevar_(op: str, x: Any, y: Any) -> Any:
+    # RestrictedPython rewrites ``x += 1`` on a simple name into
+    # ``x = _inplacevar_("+=", x, 1)``. The package deliberately ships no
+    # default, so we dispatch through ``operator``'s in-place helpers, which
+    # honour Python's normal ``__iadd__``/``__add__`` fallback.
+    fn = _INPLACE_OPS.get(op)
+    if fn is None:
+        raise SyntaxError(f"augmented assignment {op!r} is not supported")
+    return fn(x, y)
+
+
 def _build_sandbox_builtins() -> Dict[str, Any]:
     # ``limited_builtins`` overrides ``list``/``tuple``/``range`` from
     # ``safe_builtins`` with bounds-checking variants (e.g. ``limited_range``
@@ -83,6 +112,7 @@ def build_sandbox_globals() -> Dict[str, Any]:
     sandbox["_getiter_"] = default_guarded_getiter
     sandbox["_iter_unpack_sequence_"] = guarded_iter_unpack_sequence
     sandbox["_write_"] = full_write_guard
+    sandbox["_inplacevar_"] = _inplacevar_
     return sandbox
 
 
