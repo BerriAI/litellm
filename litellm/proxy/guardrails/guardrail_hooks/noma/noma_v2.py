@@ -7,8 +7,9 @@
 import enum
 import json
 import os
-from copy import deepcopy
 from datetime import datetime
+
+from litellm.litellm_core_utils.core_helpers import safe_deep_copy
 from typing import TYPE_CHECKING, Any, Literal, Optional, Type, cast
 from urllib.parse import urlparse
 
@@ -139,7 +140,14 @@ class NomaV2Guardrail(CustomGuardrail):
         logging_obj: Optional["LiteLLMLoggingObj"],
         application_id: Optional[str],
     ) -> dict:
-        payload_request_data = deepcopy(request_data)
+        # safe_deep_copy instead of deepcopy: request_data can contain non-serializable
+        # C-extension objects (e.g. uvloop.Loop) during post_call/during_call hooks,
+        # causing deepcopy to crash with "no default __reduce__ due to non-trivial __cinit__".
+        # safe_deep_copy copies each top-level key independently, falling back to the
+        # original reference on per-key failure, so it never crashes.
+        # _sanitize_payload_for_transport() handles serialization of any remaining
+        # non-serializable values before the payload is sent over the wire.
+        payload_request_data = safe_deep_copy(request_data)
         if logging_obj is not None:
             payload_request_data["litellm_logging_obj"] = getattr(
                 logging_obj, "model_call_details", None
