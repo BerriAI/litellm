@@ -485,7 +485,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                     encrypted_content=getattr(item, "encrypted_content", None),
                     summary_raw=item.summary,
                 )
-                reasoning_content = " ".join(
+                reasoning_content = "\n\n".join(
                     s["text"]
                     for s in pending_reasoning_item["summary"]
                     if s.get("text")

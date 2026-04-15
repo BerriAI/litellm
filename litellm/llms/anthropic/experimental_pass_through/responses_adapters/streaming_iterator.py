@@ -14,13 +14,22 @@ class AnthropicResponsesStreamWrapper:
     Wraps a Responses API streaming iterator and re-emits events in Anthropic SSE format.
 
     Responses API event flow (relevant subset):
-      response.created                   -> message_start
-      response.output_item.added         -> content_block_start (if message/function_call)
-      response.output_text.delta         -> content_block_delta (text_delta)
-      response.reasoning_summary_text.delta -> content_block_delta (thinking_delta)
-      response.function_call_arguments.delta -> content_block_delta (input_json_delta)
-      response.output_item.done          -> content_block_stop
-      response.completed                 -> message_delta + message_stop
+      response.created                        -> message_start
+      response.output_item.added (message)    -> content_block_start (text)
+      response.output_item.added (fn_call)    -> content_block_start (tool_use)
+      response.output_item.added (reasoning)  -> (deferred to part.added)
+      response.reasoning_summary_part.added   -> content_block_start (thinking)
+      response.reasoning_summary_text.delta   -> content_block_delta (thinking_delta)
+      response.reasoning_summary_part.done    -> content_block_stop
+      response.output_text.delta              -> content_block_delta (text_delta)
+      response.function_call_arguments.delta  -> content_block_delta (input_json_delta)
+      response.output_item.done              -> content_block_stop (non-reasoning only)
+      response.completed                     -> message_delta + message_stop
+
+    Each reasoning summary part becomes its own thinking content block.
+    This causes clients (e.g. Claude Code) to display each summary segment
+    immediately upon its content_block_stop, rather than buffering all
+    thinking until the entire reasoning phase completes.
     """
 
     def __init__(
@@ -134,16 +143,9 @@ class AnthropicResponsesStreamWrapper:
                     }
                 )
             elif item_type == "reasoning":
-                block_idx = self._next_block_index()
-                if item_id:
-                    self._item_id_to_block_index[item_id] = block_idx
-                self._chunk_queue.append(
-                    {
-                        "type": "content_block_start",
-                        "index": block_idx,
-                        "content_block": {"type": "thinking", "thinking": ""},
-                    }
-                )
+                # Don't emit content_block_start here — each summary part
+                # will open its own thinking block via part.added.
+                pass
             return
 
         # ---- text delta ----
@@ -168,23 +170,31 @@ class AnthropicResponsesStreamWrapper:
             )
             return
 
+        # ---- reasoning summary part start -> new thinking content block ----
+        # Each summary part becomes its own thinking block so that clients
+        # display each segment immediately on content_block_stop.
+        # Event flow per summary part:
+        #   part.added (once)  ->  text.delta (many)  ->  part.done (once)
+        if event_type == "response.reasoning_summary_part.added":
+            block_idx = self._next_block_index()
+            self._chunk_queue.append(
+                {
+                    "type": "content_block_start",
+                    "index": block_idx,
+                    "content_block": {"type": "thinking", "thinking": ""},
+                }
+            )
+            return
+
         # ---- reasoning summary text delta ----
         if event_type == "response.reasoning_summary_text.delta":
-            item_id = getattr(event, "item_id", None) or (
-                event.get("item_id") if isinstance(event, dict) else None
-            )
             delta = getattr(event, "delta", "") or (
                 event.get("delta", "") if isinstance(event, dict) else ""
-            )
-            block_idx = (
-                self._item_id_to_block_index.get(item_id, self._current_block_index)
-                if item_id
-                else self._current_block_index
             )
             self._chunk_queue.append(
                 {
                     "type": "content_block_delta",
-                    "index": block_idx,
+                    "index": self._current_block_index,
                     "delta": {"type": "thinking_delta", "thinking": delta},
                 }
             )
@@ -212,11 +222,30 @@ class AnthropicResponsesStreamWrapper:
             )
             return
 
+        # ---- reasoning summary part done -> content_block_stop ----
+        if event_type == "response.reasoning_summary_part.done":
+            self._chunk_queue.append(
+                {
+                    "type": "content_block_stop",
+                    "index": self._current_block_index,
+                }
+            )
+            return
+
         # ---- output item done -> content_block_stop ----
         if event_type == "response.output_item.done":
             item = getattr(event, "item", None) or (
                 event.get("item") if isinstance(event, dict) else None
             )
+            # Reasoning items are closed by individual part.done events
+            item_type = (
+                getattr(item, "type", None)
+                or (item.get("type") if isinstance(item, dict) else None)
+                if item
+                else None
+            )
+            if item_type == "reasoning":
+                return
             item_id = (
                 getattr(item, "id", None)
                 or (item.get("id") if isinstance(item, dict) else None)
