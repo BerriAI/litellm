@@ -31,12 +31,12 @@ jobs:
           echo "PR head repo: $HEAD_REPO"
           echo "PR head branch: $HEAD_REF"
           if [ "$HEAD_REPO" != "$BASE_REPO" ]; then
-            echo "::error::PRs to main must originate from the canonical repository ($BASE_REPO), not a fork ($HEAD_REPO)."
+            echo "::error::PRs to main must originate from the canonical repository ($BASE_REPO), not a fork ($HEAD_REPO). External contributors should open PRs against the 'litellm_oss_branch' branch instead."
             exit 1
           fi
           if [ "$HEAD_REF" = "litellm_internal_staging" ] || [[ "$HEAD_REF" == litellm_hotfix_?* ]]; then
             echo "Allowed source branch."
             exit 0
           fi
-          echo "::error::PRs to main must originate from 'litellm_internal_staging' or a 'litellm_hotfix_*' branch. Got: '$HEAD_REF'."
+          echo "::error::PRs to main must originate from 'litellm_internal_staging' or a 'litellm_hotfix_*' branch. Got: '$HEAD_REF'. If this is a contribution, retarget the PR against 'litellm_oss_branch' instead."
           exit 1
