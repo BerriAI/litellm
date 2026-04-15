@@ -25,8 +25,15 @@ jobs:
       - name: Check head branch name
         env:
           HEAD_REF: ${{ github.head_ref }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          BASE_REPO: ${{ github.repository }}
         run: |
+          echo "PR head repo: $HEAD_REPO"
           echo "PR head branch: $HEAD_REF"
+          if [ "$HEAD_REPO" != "$BASE_REPO" ]; then
+            echo "::error::PRs to main must originate from the canonical repository ($BASE_REPO), not a fork ($HEAD_REPO)."
+            exit 1
+          fi
           if [ "$HEAD_REF" = "litellm_internal_staging" ] || [[ "$HEAD_REF" == litellm_hotfix_?* ]]; then
             echo "Allowed source branch."
             exit 0
