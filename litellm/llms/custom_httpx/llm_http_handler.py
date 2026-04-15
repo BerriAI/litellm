@@ -1816,6 +1816,54 @@ class BaseLLMHTTPHandler:
             logging_obj=logging_obj,
         )
 
+    def _invalidate_vertex_credentials_on_anthropic_http_error(
+        self,
+        e: Exception,
+        anthropic_messages_provider_config: BaseAnthropicMessagesConfig,
+        litellm_params: GenericLiteLLMParams,
+        custom_llm_provider: str,
+    ) -> None:
+        """
+        If Vertex AI returns 401 on Anthropic /messages, clear cached OAuth tokens
+        on the provider config so a router retry (or the next request) refreshes them.
+        """
+        if custom_llm_provider != "vertex_ai":
+            return
+        status: Optional[int] = None
+        if isinstance(e, httpx.HTTPStatusError) and e.response is not None:
+            status = e.response.status_code
+        else:
+            sc = getattr(e, "status_code", None)
+            if sc is not None:
+                try:
+                    status = int(sc)
+                except (TypeError, ValueError):
+                    status = None
+        if status != 401:
+            return
+
+        from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
+
+        if not isinstance(anthropic_messages_provider_config, VertexBase):
+            return
+
+        lp: Dict[str, Any]
+        if isinstance(litellm_params, dict):
+            lp = dict(litellm_params)
+        else:
+            model_dump = getattr(litellm_params, "model_dump", None)
+            if callable(model_dump):
+                lp = model_dump(exclude_none=False)
+            else:
+                lp = dict(litellm_params)  # type: ignore[arg-type]
+
+        creds = VertexBase.safe_get_vertex_ai_credentials(lp)
+        project = VertexBase.safe_get_vertex_ai_project(lp)
+        anthropic_messages_provider_config.invalidate_credentials(
+            credentials=creds,
+            project_id=project,
+        )
+
     async def async_anthropic_messages_handler(
         self,
         model: str,
@@ -1965,6 +2013,12 @@ class BaseLLMHTTPHandler:
             )
             response.raise_for_status()
         except Exception as e:
+            self._invalidate_vertex_credentials_on_anthropic_http_error(
+                e=e,
+                anthropic_messages_provider_config=anthropic_messages_provider_config,
+                litellm_params=litellm_params,
+                custom_llm_provider=custom_llm_provider,
+            )
             raise self._handle_error(
                 e=e, provider_config=anthropic_messages_provider_config
             )
