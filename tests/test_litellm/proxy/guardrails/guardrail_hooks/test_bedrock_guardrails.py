@@ -6,9 +6,10 @@ import os
 import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import litellm
 import pytest
 from fastapi import HTTPException
+
+import litellm
 
 sys.path.insert(0, os.path.abspath("../../../../../.."))
 
@@ -1195,17 +1196,8 @@ async def test_bedrock_guardrail_blocked_content_with_masking_enabled():
 
 
 # ---------------------------------------------------------------------------
-# L3: _extract_blocked_assessments + _get_http_exception_for_blocked_guardrail
-# Regression coverage for case 2026-04-10-internal-bedrock-guardrail-streaming-error.
+# Spend logs: guardrail_mode (pre/during/post) vs Bedrock INPUT/OUTPUT
 # ---------------------------------------------------------------------------
-
-
-def _make_guardrail() -> BedrockGuardrail:
-    return BedrockGuardrail(
-        guardrail_name="bedrock-pii-guard",
-        guardrailIdentifier="amgllac6xf3r",
-        guardrailVersion="1",
-    )
 
 
 def test_bedrock_guardrail_uses_native_during_call_hook():
@@ -1282,25 +1274,38 @@ async def test_during_call_hook_invokes_bedrock_async_moderation_hook():
         default_on=True,
     )
     mock_mod = AsyncMock(return_value=None)
-    guardrail.async_moderation_hook = mock_mod  # type: ignore[method-assign]
-
     original_callbacks = litellm.callbacks.copy() if litellm.callbacks else []
     try:
         litellm.callbacks = [guardrail]
-        await proxy_logging.during_call_hook(
-            data={
-                "model": "gpt-4",
-                "messages": [{"role": "user", "content": "test"}],
-            },
-            user_api_key_dict=UserAPIKeyAuth(
-                api_key="test_key", user_id="test_user"
-            ),
-            call_type="completion",
-        )
+        with patch.object(guardrail, "async_moderation_hook", new=mock_mod):
+            await proxy_logging.during_call_hook(
+                data={
+                    "model": "gpt-4",
+                    "messages": [{"role": "user", "content": "test"}],
+                },
+                user_api_key_dict=UserAPIKeyAuth(
+                    api_key="test_key", user_id="test_user"
+                ),
+                call_type="completion",
+            )
     finally:
         litellm.callbacks = original_callbacks
 
     mock_mod.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
+# L3: _extract_blocked_assessments + _get_http_exception_for_blocked_guardrail
+# Regression coverage for case 2026-04-10-internal-bedrock-guardrail-streaming-error.
+# ---------------------------------------------------------------------------
+
+
+def _make_guardrail() -> BedrockGuardrail:
+    return BedrockGuardrail(
+        guardrail_name="bedrock-pii-guard",
+        guardrailIdentifier="amgllac6xf3r",
+        guardrailVersion="1",
+    )
 
 
 def test_extract_blocked_assessments_pii_entity():
