@@ -1961,8 +1961,11 @@ async def test_sync_to_async_queue_iterator_delivers_items_in_order():
     items = [1, 2, 3, 4, 5]
     wrapper = _SyncToAsyncQueueIterator(iter(items))
     received = []
-    async for item in wrapper:
-        received.append(item)
+    try:
+        while True:
+            received.append(await wrapper.__anext__())
+    except StopAsyncIteration:
+        pass
     assert received == items
 
 
