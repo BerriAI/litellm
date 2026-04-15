@@ -256,6 +256,11 @@ const sidebars = {
             },
             {
               type: "doc",
+              id: "completion/prompt_compression",
+              label: "compress()",
+            },
+            {
+              type: "doc",
               id: "audio_transcription",
               label: "transcription()",
             },
@@ -1280,6 +1285,7 @@ const learnSidebar = {
           items: [
             "completion/prefix",
             "completion/predict_outputs",
+            "completion/prompt_compression",
             "completion/message_trimming",
             "completion/prompt_caching",
             "completion/prompt_formatting",

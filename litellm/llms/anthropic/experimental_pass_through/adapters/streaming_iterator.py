@@ -129,12 +129,22 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
 
                 if should_start_new_block and not self.sent_content_block_finish:
                     # Queue the sequence: content_block_stop -> content_block_start
+                    # For text blocks the trigger chunk is not emitted as a separate
+                    # delta because content_block_start carries the information.
+                    # For tool_use blocks we must also emit the trigger chunk's delta
+                    # when it carries input_json_delta data, because some providers
+                    # (e.g. xAI, Gemini) include tool arguments in the same streaming
+                    # chunk as the function name/id.
+
+                    # 1. Stop current content block
                     self.chunk_queue.append(
                         {
                             "type": "content_block_stop",
                             "index": max(self.current_content_block_index - 1, 0),
                         }
                     )
+
+                    # 2. Start new content block
                     self.chunk_queue.append(
                         {
                             "type": "content_block_start",
@@ -142,7 +152,9 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                             "content_block": self.current_content_block_start,
                         }
                     )
-                    # Also queue the processed chunk if it carries meaningful streaming chunk, so dropping it loses the arguments.
+
+                    # 3. If the trigger chunk carries tool argument data, queue it
+                    # so the input_json_delta is not silently dropped.
                     if self._has_meaningful_delta(processed_chunk):
                         self.chunk_queue.append(processed_chunk)
                     self.sent_content_block_finish = False
@@ -306,6 +318,12 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 if not self.queued_usage_chunk:
                     if should_start_new_block and not self.sent_content_block_finish:
                         # Queue the sequence: content_block_stop -> content_block_start
+                        # For text blocks the trigger chunk is not emitted as a separate
+                        # delta because content_block_start carries the information.
+                        # For tool_use blocks we must also emit the trigger chunk's delta
+                        # when it carries input_json_delta data, because some providers
+                        # (e.g. xAI, Gemini) include tool arguments in the same streaming
+                        # chunk as the function name/id.
 
                         # 1. Stop current content block
                         self.chunk_queue.append(
@@ -324,8 +342,8 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                             }
                         )
 
-                        # 3. Also queue the processed chunk if it carries meaningful delta data (e.g. tool-call arguments).
-                        # AI Providers deliver name+arguments in a single streaming chunk, so dropping it loses the arguments.
+                        # 3. If the trigger chunk carries tool argument data, queue it
+                        # so the input_json_delta is not silently dropped.
                         if self._has_meaningful_delta(processed_chunk):
                             self.chunk_queue.append(processed_chunk)
 
@@ -433,11 +451,14 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         Check if a processed chunk contains meaningful delta content that
         should be emitted alongside a content_block_start event.
 
-        AI Providers deliver complete tool calls (name + arguments) in a single streaming chunk.  Without emitting the delta, the arguments are silently dropped.
+        AI Providers deliver complete tool calls (name + arguments) in a single streaming chunk.
+        Without emitting the delta, the arguments are silently dropped.
         """
         if processed_chunk.get("type") != "content_block_delta":
             return False
-        delta = processed_chunk.get("delta", {})
+        delta = processed_chunk.get("delta")
+        if not isinstance(delta, dict):
+            return False
         if delta.get("type") == "input_json_delta":
             return bool(delta.get("partial_json"))
         return False
