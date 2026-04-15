@@ -166,6 +166,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
             "prompt_cache_key",
             "prompt_cache_retention",
             "store",
+            "user",  # standard OpenAI Chat Completions API param; passed for all OpenAI-compatible endpoints
         ]  # works across all models
 
         model_specific_params = []
@@ -178,12 +179,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         model_for_check = (
             model.split("responses/", 1)[1] if "responses/" in model else model
         )
-        if (
-            model_for_check in litellm.open_ai_chat_completion_models
-        ) or model_for_check in litellm.open_ai_text_completion_models:
-            model_specific_params.append(
-                "user"
-            )  # user is not a param supported by all openai-compatible endpoints - e.g. azure ai
+        _ = model_for_check  # retained for future model-specific logic
         return base_params + model_specific_params
 
     def _map_openai_params(
