@@ -159,7 +159,7 @@ class TestNomaV2Configuration:
 
     def test_build_scan_payload_handles_non_serializable_request_data(self, noma_v2_guardrail):
         """Regression: deepcopy crashed when request_data contained C-extension objects
-        like uvloop.Loop (post_call/during_call hooks). The JSON-safe copy must not raise."""
+        like uvloop.Loop (post_call/during_call hooks). safe_deep_copy must not raise."""
 
         class _UndeepCopyable:
             """Simulates uvloop.Loop: a Cython type whose __cinit__ prevents deepcopy."""
@@ -170,9 +170,10 @@ class TestNomaV2Configuration:
             def __repr__(self):
                 return "<UndeepCopyable>"
 
+        loop_obj = _UndeepCopyable()
         request_data = {
             "messages": [{"role": "user", "content": "hello"}],
-            "metadata": {"event_loop": _UndeepCopyable()},
+            "metadata": {"event_loop": loop_obj},
         }
 
         # Must not raise even though request_data contains a non-serializable object.
@@ -185,8 +186,10 @@ class TestNomaV2Configuration:
         )
 
         assert payload["request_data"]["messages"][0]["content"] == "hello"
-        # Non-serializable object is safely stringified rather than crashing.
-        assert isinstance(payload["request_data"]["metadata"]["event_loop"], str)
+        # safe_deep_copy falls back to the original reference for keys that cannot
+        # be deepcopied — the object is preserved (not crashed, not stringified).
+        # _sanitize_payload_for_transport handles serialization before transport.
+        assert payload["request_data"]["metadata"]["event_loop"] is loop_obj
 
     def test_build_scan_payload_passes_model_call_details_as_is(self, noma_v2_guardrail):
         class _LoggingObj:
