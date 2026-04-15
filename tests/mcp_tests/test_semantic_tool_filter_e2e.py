@@ -5,6 +5,7 @@ End-to-end test for MCP Semantic Tool Filtering
 import asyncio
 import os
 import sys
+import types
 from unittest.mock import Mock
 
 import pytest
@@ -25,17 +26,43 @@ except ImportError:
 @pytest.mark.asyncio
 @pytest.mark.skipif(
     not SEMANTIC_ROUTER_AVAILABLE,
-    reason="semantic-router not installed. Install the `litellm[semantic-router]` extra."
+    reason="semantic-router not installed. Install the `litellm[semantic-router]` extra.",
 )
 @pytest.mark.skipif(
     not os.environ.get("OPENAI_API_KEY"), reason="OPENAI_API_KEY not set in environment"
 )
-async def test_e2e_semantic_filter():
+async def test_e2e_semantic_filter(monkeypatch):
     """E2E: Load router/filter and verify hook filters tools."""
     from litellm import Router
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
     from litellm.proxy.hooks.mcp_semantic_filter import SemanticToolFilterHook
     from litellm.proxy._experimental.mcp_server.semantic_tool_filter import (
         SemanticMCPToolFilter,
+    )
+
+    # Register fake MCP servers for each hyphen-prefix used in the tool
+    # names below, so the hook's registry-based classifier treats them as
+    # MCP tools. Without this the tools fall into `non_mcp_tools` and the
+    # hook early-returns before the semantic filter runs.
+    fake_registry = {
+        prefix: types.SimpleNamespace(alias=None, server_name=prefix, server_id=prefix)
+        for prefix in (
+            "gmail",
+            "calendar",
+            "files",
+            "web",
+            "slack",
+            "docs",
+            "db",
+            "api",
+            "tasks",
+            "notes",
+        )
+    }
+    monkeypatch.setattr(
+        global_mcp_server_manager, "get_registry", lambda: fake_registry
     )
 
     # Create router and filter
