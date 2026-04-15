@@ -13,6 +13,7 @@ import pytest
 sys.path.insert(0, os.path.abspath("../../../.."))
 
 from litellm.proxy.hooks.key_management_event_hooks import KeyManagementEventHooks
+from litellm.secret_managers.base_secret_manager import BaseSecretManager
 
 
 class TestKeyManagementEventHooksIndependentOperations:
@@ -385,6 +386,94 @@ class TestRotateVirtualKeyInSecretManager:
             new_secret_value="sk-new-value",
             team_id="team-123",
         )
-        
+
         # Verify async_rotate_secret was NOT called
         mock_secret_manager.async_rotate_secret.assert_not_called()
+
+
+class _StubSecretManager(BaseSecretManager):
+    """Minimal concrete BaseSecretManager for testing — passes isinstance checks naturally."""
+
+    def __init__(self):
+        pass
+
+    async def async_read_secret(self, secret_name, optional_params=None, timeout=None):
+        raise NotImplementedError
+
+    def sync_read_secret(self, secret_name, optional_params=None):
+        raise NotImplementedError
+
+    async def async_write_secret(self, secret_name, secret_value, description=None, optional_params=None):
+        raise NotImplementedError
+
+    async def async_delete_secret(self, secret_name, optional_params=None):
+        raise NotImplementedError
+
+    async def async_rotate_secret(self, current_secret_name, new_secret_name, new_secret_value, optional_params=None):
+        raise NotImplementedError
+
+
+class TestRotateVirtualKeyErrorHandling:
+    """Tests that _rotate_virtual_key_in_secret_manager propagates error dicts as exceptions."""
+
+    @pytest.mark.asyncio
+    async def test_rotate_raises_on_error_dict(self):
+        """Test that error dict from async_rotate_secret is raised as ValueError."""
+        from litellm.types.secret_managers.main import KeyManagementSystem, KeyManagementSettings
+        import litellm
+
+        stub = _StubSecretManager()
+        stub.async_rotate_secret = AsyncMock(
+            return_value={"status": "error", "message": "New secret value mismatch. Expected: ...3lcA, Got: ...zt4w"}
+        )
+
+        litellm.secret_manager_client = stub
+        litellm._key_management_system = KeyManagementSystem.HASHICORP_VAULT
+        litellm._key_management_settings = KeyManagementSettings(
+            store_virtual_keys=True,
+            prefix_for_stored_virtual_keys="litellm/",
+        )
+
+        with patch.object(
+            KeyManagementEventHooks,
+            "_get_secret_manager_optional_params",
+            return_value=None,
+        ):
+            with pytest.raises(ValueError, match="Secret manager rotation failed"):
+                await KeyManagementEventHooks._rotate_virtual_key_in_secret_manager(
+                    current_secret_name="old-key",
+                    new_secret_name="new-key",
+                    new_secret_value="sk-new-value",
+                    team_id=None,
+                )
+
+    @pytest.mark.asyncio
+    async def test_rotate_success_dict_does_not_raise(self):
+        """Test that a success response from async_rotate_secret does not raise."""
+        from litellm.types.secret_managers.main import KeyManagementSystem, KeyManagementSettings
+        import litellm
+
+        stub = _StubSecretManager()
+        stub.async_rotate_secret = AsyncMock(
+            return_value={"request_id": "abc", "data": {}}
+        )
+
+        litellm.secret_manager_client = stub
+        litellm._key_management_system = KeyManagementSystem.HASHICORP_VAULT
+        litellm._key_management_settings = KeyManagementSettings(
+            store_virtual_keys=True,
+            prefix_for_stored_virtual_keys="litellm/",
+        )
+
+        with patch.object(
+            KeyManagementEventHooks,
+            "_get_secret_manager_optional_params",
+            return_value=None,
+        ):
+            # Should not raise
+            await KeyManagementEventHooks._rotate_virtual_key_in_secret_manager(
+                current_secret_name="old-key",
+                new_secret_name="new-key",
+                new_secret_value="sk-new-value",
+                team_id=None,
+            )
