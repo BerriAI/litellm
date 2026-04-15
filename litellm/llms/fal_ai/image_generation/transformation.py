@@ -50,6 +50,12 @@ class FalAIBaseConfig(BaseImageGenerationConfig):
         complete_url = complete_url.rstrip("/")
         if self.IMAGE_GENERATION_ENDPOINT:
             complete_url = f"{complete_url}/{self.IMAGE_GENERATION_ENDPOINT}"
+        else:
+            # Generic models need the model name in the URL path
+            # model arrives without provider prefix (e.g. "nano-banana-2/edit")
+            # Strip fal-ai/ if already present to avoid double prefix
+            model_path = model.removeprefix("fal-ai/")
+            complete_url = f"{complete_url}/fal-ai/{model_path}"
         return complete_url
 
     def validate_environment(
@@ -96,6 +102,10 @@ class FalAIBaseConfig(BaseImageGenerationConfig):
         if not model_response.data:
             model_response.data = []
 
+        # Preserve requested size on the response for cost calculation
+        if optional_params.get("size"):
+            model_response.size = optional_params["size"]
+
         # Handle fal.ai response format
         images = response_data.get("images", [])
         if isinstance(images, list):
@@ -128,7 +138,15 @@ class FalAIImageGenerationConfig(FalAIBaseConfig):
         self, model: str
     ) -> List[OpenAIImageGenerationOptionalParams]:
         """
-        Get supported OpenAI parameters for fal.ai image generation
+        Get supported OpenAI-standard parameters for fal.ai image generation.
+
+        IMPORTANT: Only list standard OpenAI params here, NOT FAL-specific params.
+        FAL-specific params (image_urls, loras, guidance_scale, etc.) must NOT be
+        listed here because LiteLLM's add_provider_specific_params_to_optional_params()
+        uses this list as an exclusion filter -- params IN this list are assumed to be
+        handled by map_openai_params via _get_non_default_params, but that function
+        only processes keys matching default_params (n, quality, size, style, user).
+        Unlisted params flow through the provider-specific safety net instead.
         """
         return [
             "n",
@@ -143,18 +161,19 @@ class FalAIImageGenerationConfig(FalAIBaseConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
-        supported_params = self.get_supported_openai_params(model)
-        for k in non_default_params.keys():
-            if k not in optional_params.keys():
-                if k in supported_params:
-                    optional_params[k] = non_default_params[k]
-                elif drop_params:
-                    pass
-                else:
-                    raise ValueError(
-                        f"Parameter {k} is not supported for model {model}. Supported parameters are {supported_params}. Set drop_params=True to drop unsupported parameters."
-                    )
+        """Pass through all params for FAL, flattening extra_body if present.
 
+        LiteLLM's image_generation() path doesn't extract extra_body from kwargs
+        (unlike image_edit), so it arrives here as a nested dict. Flatten it so
+        FAL-specific params like image_urls reach the FAL API at the top level.
+        """
+        for k, v in non_default_params.items():
+            if k == "extra_body" and isinstance(v, dict):
+                for ek, ev in v.items():
+                    if ek not in optional_params:
+                        optional_params[ek] = ev
+            elif k not in optional_params:
+                optional_params[k] = v
         return optional_params
 
     def transform_image_generation_request(
@@ -166,8 +185,21 @@ class FalAIImageGenerationConfig(FalAIBaseConfig):
         headers: dict,
     ) -> dict:
         """
-        Transform the image generation request to the fal.ai image generation request body
+        Transform the image generation request to the fal.ai image generation request body.
+
+        Flattens extra_body if present -- LiteLLM's image_generation() path does not
+        extract extra_body from kwargs (unlike image_edit), so it can arrive here as
+        a nested dict. We flatten it so FAL-specific params (image_urls, loras, etc.)
+        appear at the top level of the request body.
         """
+        if "extra_body" in optional_params and isinstance(
+            optional_params["extra_body"], dict
+        ):
+            extra = optional_params.pop("extra_body")
+            for k, v in extra.items():
+                if k not in optional_params:
+                    optional_params[k] = v
+
         fal_ai_image_generation_request_body = {
             "prompt": prompt,
             **optional_params,

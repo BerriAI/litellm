@@ -5837,6 +5837,13 @@ def _get_model_info_helper(  # noqa: PLR0915
                 output_cost_per_image_token=_model_info.get(
                     "output_cost_per_image_token", None
                 ),
+                output_cost_per_megapixel=_model_info.get(
+                    "output_cost_per_megapixel", None
+                ),
+                output_cost_per_image_by_resolution=_model_info.get(
+                    "output_cost_per_image_by_resolution", None
+                ),
+                pricing_basis=_model_info.get("pricing_basis", None),
                 output_vector_size=_model_info.get("output_vector_size", None),
                 citation_cost_per_token=_model_info.get(
                     "citation_cost_per_token", None
@@ -9033,6 +9040,10 @@ class ProviderConfigManager:
             )
 
             return BlackForestLabsImageEditConfig()
+        elif LlmProviders.FAL_AI == provider:
+            from litellm.llms.fal_ai.image_edit import get_fal_ai_image_edit_config
+
+            return get_fal_ai_image_edit_config(model)
         elif LlmProviders.AZURE_AI == provider:
             from litellm.llms.azure_ai.image_edit import get_azure_ai_image_edit_config
 

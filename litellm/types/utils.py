@@ -227,6 +227,9 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     ]  # only for vertex ai models
     output_cost_per_image: Optional[float]
     output_cost_per_image_token: Optional[float]
+    output_cost_per_megapixel: Optional[float]  # for per-megapixel image pricing
+    output_cost_per_image_by_resolution: Optional[Dict[str, float]]  # e.g. {"2K": 0.15, "4K": 0.30}
+    pricing_basis: Optional[str]  # PER_CALL, PER_MEGAPIXEL, PER_IMAGE_RESOLUTION
     output_vector_size: Optional[int]
     output_cost_per_reasoning_token: Optional[float]
     output_cost_per_video_per_second: Optional[float]  # only for vertex ai models

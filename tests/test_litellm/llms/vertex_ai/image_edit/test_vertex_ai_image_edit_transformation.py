@@ -126,6 +126,73 @@ class TestVertexAIGeminiImageEditTransformation:
             "utf-8"
         )
 
+    def test_transform_image_edit_request_with_image_size(self) -> None:
+        """Test that imageSize is included in image_config"""
+        image_bytes = b"fake_image_data"
+        image = BytesIO(image_bytes)
+        optional_params = {
+            "imageSize": "2K",
+        }
+
+        request_body_str, files = self.config.transform_image_edit_request(
+            model=self.model,
+            prompt=self.prompt,
+            image=image,
+            image_edit_optional_request_params=optional_params,
+            litellm_params=MagicMock(),
+            headers={},
+        )
+
+        request_body = json.loads(request_body_str)
+        generation_config = request_body["generationConfig"]
+        assert "image_config" in generation_config
+        assert generation_config["image_config"]["image_size"] == "2K"
+
+    def test_transform_image_edit_request_with_aspect_ratio_and_image_size(self) -> None:
+        """Test that both aspectRatio and imageSize are included in image_config"""
+        image_bytes = b"fake_image_data"
+        image = BytesIO(image_bytes)
+        optional_params = {
+            "aspectRatio": "16:9",
+            "imageSize": "2K",
+        }
+
+        request_body_str, files = self.config.transform_image_edit_request(
+            model=self.model,
+            prompt=self.prompt,
+            image=image,
+            image_edit_optional_request_params=optional_params,
+            litellm_params=MagicMock(),
+            headers={},
+        )
+
+        request_body = json.loads(request_body_str)
+        image_config = request_body["generationConfig"]["image_config"]
+        assert image_config["aspect_ratio"] == "16:9"
+        assert image_config["image_size"] == "2K"
+
+    def test_map_openai_params_size_as_resolution(self) -> None:
+        """Test that size='2K' maps to imageSize instead of aspectRatio"""
+        optional_params: Dict[str, object] = {"size": "2K"}
+        mapped = self.config.map_openai_params(
+            image_edit_optional_params=optional_params,  # type: ignore[arg-type]
+            model=self.model,
+            drop_params=False,
+        )
+        assert "imageSize" in mapped
+        assert mapped["imageSize"] == "2K"
+        assert "aspectRatio" not in mapped
+
+    def test_map_openai_params_quality_hd(self) -> None:
+        """Test that quality='hd' maps to imageSize='2K'"""
+        optional_params: Dict[str, object] = {"quality": "hd"}
+        mapped = self.config.map_openai_params(
+            image_edit_optional_params=optional_params,  # type: ignore[arg-type]
+            model=self.model,
+            drop_params=False,
+        )
+        assert mapped["imageSize"] == "2K"
+
     def test_transform_image_edit_request_without_image_raises(self) -> None:
         """Test that missing image raises ValueError"""
         optional_params = {}
