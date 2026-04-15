@@ -550,3 +550,26 @@ class TestGPT5ReasoningEffortPreservation:
 
         assert optional_params.get("temperature") == 0.5
         assert non_default_params.get("reasoning_effort") == "none"
+
+    def test_user_param_supported_for_custom_openai_compatible_models(self):
+        """Test that 'user' param is in supported params for custom OpenAI-compatible endpoints.
+
+        Regression test for: https://github.com/BerriAI/litellm/issues/25753
+        When using a custom OpenAI-compatible endpoint (e.g., model="openai/my-custom-model"),
+        the 'user' parameter must be in supported_params so it is passed through to the API.
+        Previously, 'user' was only added for models in the hardcoded open_ai_chat_completion_models
+        whitelist, causing it to be silently dropped for all custom/unknown model names.
+        """
+        # Custom OpenAI-compatible endpoint - NOT in open_ai_chat_completion_models
+        supported_params = self.config.get_supported_openai_params("my-custom-model")
+        assert "user" in supported_params, (
+            "'user' should be in supported_params for custom OpenAI-compatible endpoints"
+        )
+
+        # Another common custom model name pattern
+        supported_params = self.config.get_supported_openai_params("openclaw")
+        assert "user" in supported_params
+
+        # Also verify standard models still support 'user' (no regression)
+        supported_params = self.config.get_supported_openai_params("gpt-4o")
+        assert "user" in supported_params
