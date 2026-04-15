@@ -2,7 +2,7 @@
 Type definitions for litellm.compress().
 """
 
-from typing import Dict, List, Literal, TypedDict
+from typing import Dict, List, Literal, NotRequired, TypedDict
 
 CompressionInputType = Literal["anthropic_messages", "openai_chat_completions"]
 
@@ -14,3 +14,4 @@ class CompressedResult(TypedDict):
     compression_ratio: float  # fraction reduced, e.g. 0.6 means 60% reduction
     cache: Dict[str, str]  # key -> original content (for retrieval tool responses)
     tools: List[dict]  # [litellm_content_retrieve tool definition]
+    compression_skipped_reason: NotRequired[str]

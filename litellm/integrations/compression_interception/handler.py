@@ -113,6 +113,7 @@ class CompressionInterceptionLogger(CustomLogger):
         )
 
         cache = cast(Dict[str, str], compressed.get("cache", {}))
+        skip_reason = cast(Optional[str], compressed.get("compression_skipped_reason"))
         if cache:
             call_id = cast(Optional[str], kwargs.get("litellm_call_id"))
             if not call_id:
@@ -125,6 +126,13 @@ class CompressionInterceptionLogger(CustomLogger):
                 compressed.get("original_tokens"),
                 compressed.get("compressed_tokens"),
                 len(cache),
+            )
+        elif skip_reason is not None:
+            verbose_logger.debug(
+                "CompressionInterception: compression skipped [reason=%s original=%d compressed=%d]",
+                skip_reason,
+                compressed.get("original_tokens"),
+                compressed.get("compressed_tokens"),
             )
 
         return kwargs

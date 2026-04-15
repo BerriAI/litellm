@@ -3,6 +3,7 @@ Unit tests for litellm.compress().
 """
 
 import os
+import importlib
 
 import pytest
 
@@ -482,3 +483,180 @@ def test_simple_compression(final_user_message, expected_content):
         assert "Unrelated cooking recipes " not in result["messages"][1]["content"]
     else:
         raise ValueError(f"Unexpected expected_content: {expected_content}")
+
+
+def test_compress_anthropic_drops_irrelevant_tool_exchange_span(monkeypatch):
+    compress_module = importlib.import_module("litellm.compression.compress")
+
+    def fake_bm25_score_messages(query, messages):
+        assert "final query" in query
+        assert len(messages) == 5
+        # Prefer idx=0 and de-prioritize the tool exchange span (idx=1,2)
+        return [0.95, 0.01, 0.02, 0.8, 1.0]
+
+    def fake_token_counter(model, messages=None, text=None):
+        if messages is not None:
+            return 1000
+        if text is None:
+            return 0
+        if "final query" in text:
+            return 50
+        if "assistant_tail" in text:
+            return 20
+        if "other_blob" in text:
+            return 220
+        if "tool_payload_relevant" in text:
+            return 200
+        if text == "":
+            return 1
+        return 10
+
+    monkeypatch.setattr(compress_module, "bm25_score_messages", fake_bm25_score_messages)
+    monkeypatch.setattr(compress_module, "token_counter", fake_token_counter)
+
+    messages = [
+        {"role": "user", "content": "other_blob " * 300},
+        {
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "tool_use",
+                    "id": "toolu_drop",
+                    "name": "litellm_content_retrieve",
+                    "input": {"key": "message_1"},
+                }
+            ],
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_drop",
+                    "content": [{"type": "text", "text": "tool_payload_relevant"}],
+                }
+            ],
+        },
+        {"role": "assistant", "content": "assistant_tail"},
+        {"role": "user", "content": "final query"},
+    ]
+
+    result = litellm.compress(
+        messages=messages,
+        model="claude-sonnet-4-20250514",
+        input_type=ANTHROPIC_INPUT_TYPE,
+        compression_trigger=100,
+        compression_target=280,
+    )
+
+    # idx=1,2 should be dropped atomically (no orphan tool blocks left behind)
+    assert len(result["messages"]) == 3
+    assert result["messages"][0]["role"] == "user"
+    assert "other_blob" in result["messages"][0]["content"]
+    assert result["messages"][1]["content"] == "assistant_tail"
+    assert result["messages"][2]["content"] == "final query"
+    assert result["cache"] == {}
+
+
+def test_compress_anthropic_keeps_relevant_tool_exchange_span(monkeypatch):
+    compress_module = importlib.import_module("litellm.compression.compress")
+
+    def fake_bm25_score_messages(query, messages):
+        assert "final query" in query
+        assert len(messages) == 5
+        # Prefer the tool exchange span over idx=0
+        return [0.05, 0.01, 0.92, 0.8, 1.0]
+
+    def fake_token_counter(model, messages=None, text=None):
+        if messages is not None:
+            return 1000
+        if text is None:
+            return 0
+        if "final query" in text:
+            return 50
+        if "assistant_tail" in text:
+            return 20
+        if "other_blob" in text:
+            return 220
+        if "tool_payload_relevant" in text:
+            return 200
+        if text == "":
+            return 1
+        return 10
+
+    monkeypatch.setattr(compress_module, "bm25_score_messages", fake_bm25_score_messages)
+    monkeypatch.setattr(compress_module, "token_counter", fake_token_counter)
+
+    messages = [
+        {"role": "user", "content": "other_blob " * 300},
+        {
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "tool_use",
+                    "id": "toolu_keep",
+                    "name": "litellm_content_retrieve",
+                    "input": {"key": "message_1"},
+                }
+            ],
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_keep",
+                    "content": [{"type": "text", "text": "tool_payload_relevant"}],
+                }
+            ],
+        },
+        {"role": "assistant", "content": "assistant_tail"},
+        {"role": "user", "content": "final query"},
+    ]
+
+    result = litellm.compress(
+        messages=messages,
+        model="claude-sonnet-4-20250514",
+        input_type=ANTHROPIC_INPUT_TYPE,
+        compression_trigger=100,
+        compression_target=280,
+    )
+
+    assert len(result["messages"]) == 5
+    assert result["messages"][1]["role"] == "assistant"
+    assert result["messages"][2]["role"] == "user"
+    # idx=0 should be compressed instead
+    assert "litellm_content_retrieve" in result["messages"][0]["content"]
+    assert len(result["cache"]) == 1
+
+
+def test_compress_anthropic_malformed_tool_sequence_passes_through():
+    messages = [
+        {"role": "user", "content": "other_blob " * 300},
+        {
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "tool_use",
+                    "id": "toolu_broken",
+                    "name": "litellm_content_retrieve",
+                    "input": {"key": "message_1"},
+                }
+            ],
+        },
+        {"role": "user", "content": [{"type": "text", "text": "missing tool_result"}]},
+        {"role": "user", "content": "final query"},
+    ]
+
+    result = litellm.compress(
+        messages=messages,
+        model="claude-sonnet-4-20250514",
+        input_type=ANTHROPIC_INPUT_TYPE,
+        compression_trigger=100,
+        compression_target=280,
+    )
+
+    assert result["messages"] == messages
+    assert result["cache"] == {}
+    assert result["tools"] == []
+    assert result["compression_skipped_reason"] == "invalid_anthropic_tool_sequence"
