@@ -903,8 +903,22 @@ def log_guardrail_information(func):
     async def async_wrapper(*args, **kwargs):
         start_time = datetime.now()  # Move start_time inside the wrapper
         self: CustomGuardrail = args[0]
-        request_data: dict = kwargs.get("data") or kwargs.get("request_data") or {}
+        # apply_guardrail signature: (self, inputs, request_data, input_type, ...)
+        # Support both keyword and positional callers for request_data (args[2])
+        request_data: dict = (
+            kwargs.get("data")
+            or kwargs.get("request_data")
+            or (args[2] if len(args) > 2 and isinstance(args[2], dict) else {})
+        )
         event_type = _infer_event_type_from_function_name(func.__name__)
+
+        # For apply_guardrail, infer event type from input_type (kwarg or positional arg[3])
+        if event_type is None and func.__name__ == "apply_guardrail":
+            _input_type = kwargs.get("input_type") or (args[3] if len(args) > 3 else None)
+            if _input_type == "request":
+                event_type = GuardrailEventHooks.pre_call
+            elif _input_type == "response":
+                event_type = GuardrailEventHooks.post_call
 
         # Store original inputs for comparison (for apply_guardrail functions)
         original_inputs = None
@@ -936,8 +950,22 @@ def log_guardrail_information(func):
     def sync_wrapper(*args, **kwargs):
         start_time = datetime.now()  # Move start_time inside the wrapper
         self: CustomGuardrail = args[0]
-        request_data: dict = kwargs.get("data") or kwargs.get("request_data") or {}
+        # apply_guardrail signature: (self, inputs, request_data, input_type, ...)
+        # Support both keyword and positional callers for request_data (args[2])
+        request_data: dict = (
+            kwargs.get("data")
+            or kwargs.get("request_data")
+            or (args[2] if len(args) > 2 and isinstance(args[2], dict) else {})
+        )
         event_type = _infer_event_type_from_function_name(func.__name__)
+
+        # For apply_guardrail, infer event type from input_type (kwarg or positional arg[3])
+        if event_type is None and func.__name__ == "apply_guardrail":
+            _input_type = kwargs.get("input_type") or (args[3] if len(args) > 3 else None)
+            if _input_type == "request":
+                event_type = GuardrailEventHooks.pre_call
+            elif _input_type == "response":
+                event_type = GuardrailEventHooks.post_call
 
         # Store original inputs for comparison (for apply_guardrail functions)
         original_inputs = None
