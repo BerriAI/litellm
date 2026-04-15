@@ -348,6 +348,28 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             if hasattr(response, "model") and response.model:
                 inputs["model"] = response.model
 
+            # Build structured_messages: original request messages + assistant
+            # response turn(s) appended, so post-call guardrails see full context.
+            original_messages = cast(
+                List[AllMessageValues],
+                request_data.get("messages", []) if request_data else [],
+            )
+            structured_messages: List[AllMessageValues] = list(original_messages)
+            for choice in response.choices:
+                msg = choice.message
+                if msg.tool_calls or msg.content is not None:
+                    assistant_turn: dict = {"role": "assistant"}
+                    if msg.content is not None:
+                        assistant_turn["content"] = msg.content
+                    if msg.tool_calls:
+                        assistant_turn["tool_calls"] = [
+                            tc.model_dump() if hasattr(tc, "model_dump") else tc
+                            for tc in msg.tool_calls
+                        ]
+                    structured_messages.append(cast(AllMessageValues, assistant_turn))
+            if structured_messages:
+                inputs["structured_messages"] = structured_messages
+
             guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
                 inputs=inputs,
                 request_data=request_data,
