@@ -1050,6 +1050,85 @@ class TestVertexBase:
             mock_creds.with_scopes.assert_called_once_with(scopes)
             assert result == "scoped_creds"
 
+    def test_credentials_from_pluggable_implementation(self):
+        """Test _credentials_from_pluggable dispatches to pluggable.Credentials"""
+        vertex_base = VertexBase()
+        json_obj = {
+            "type": "external_account",
+            "credential_source": {
+                "executable": {"command": "/path/to/executable", "timeout_millis": 5000}
+            },
+        }
+        scopes = ["https://www.googleapis.com/auth/cloud-platform"]
+
+        mock_creds = MagicMock()
+        mock_creds.requires_scopes = True
+        mock_creds.with_scopes.return_value = "scoped_creds"
+
+        with patch("google.auth.pluggable.Credentials") as MockCredentials:
+            MockCredentials.from_info.return_value = mock_creds
+
+            result = vertex_base._credentials_from_pluggable(json_obj, scopes)
+
+            MockCredentials.from_info.assert_called_once_with(json_obj)
+            mock_creds.with_scopes.assert_called_once_with(scopes)
+            assert result == "scoped_creds"
+
+    def test_credentials_from_pluggable_no_scopes_needed(self):
+        """Test _credentials_from_pluggable when scopes are not needed"""
+        vertex_base = VertexBase()
+        json_obj = {
+            "type": "external_account",
+            "credential_source": {
+                "executable": {"command": "/path/to/executable"}
+            },
+        }
+        scopes = ["https://www.googleapis.com/auth/cloud-platform"]
+
+        mock_creds = MagicMock()
+        mock_creds.requires_scopes = False
+
+        with patch("google.auth.pluggable.Credentials") as MockCredentials:
+            MockCredentials.from_info.return_value = mock_creds
+
+            result = vertex_base._credentials_from_pluggable(json_obj, scopes)
+
+            MockCredentials.from_info.assert_called_once_with(json_obj)
+            mock_creds.with_scopes.assert_not_called()
+            assert result == mock_creds
+
+    def test_load_auth_dispatches_to_pluggable_for_executable(self):
+        """Test that load_auth routes executable credential_source to _credentials_from_pluggable"""
+        vertex_base = VertexBase()
+        json_obj = {
+            "type": "external_account",
+            "credential_source": {
+                "executable": {"command": "/path/to/executable", "timeout_millis": 5000}
+            },
+        }
+
+        mock_creds = MagicMock()
+        mock_creds.project_id = "test-project"
+
+        with patch.object(
+            vertex_base, "_credentials_from_pluggable", return_value=mock_creds
+        ) as mock_pluggable, patch.object(
+            vertex_base, "_credentials_from_identity_pool"
+        ) as mock_identity_pool, patch.object(
+            vertex_base, "refresh_auth"
+        ):
+            creds, project_id = vertex_base.load_auth(
+                credentials=json.dumps(json_obj), project_id=None
+            )
+
+            mock_pluggable.assert_called_once_with(
+                json_obj,
+                scopes=["https://www.googleapis.com/auth/cloud-platform"],
+            )
+            mock_identity_pool.assert_not_called()
+            assert creds == mock_creds
+            assert project_id == "test-project"
+
     def test_extract_aws_params(self):
         """Test _extract_aws_params: extraction, empty case, and unrecognized keys."""
         # Case 1: Extracts recognized aws_* keys, ignores GCP-standard fields

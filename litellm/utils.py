@@ -243,8 +243,6 @@ from typing import (
     get_args,
 )
 
-from openai import OpenAIError as OriginalError
-
 # These are lazy loaded via __getattr__
 from litellm.llms.base_llm.base_utils import (
     BaseLLMModelInfo,
@@ -1495,10 +1493,6 @@ def client(original_function):  # noqa: PLR0915
             )
             logging_obj._llm_caching_handler = _llm_caching_handler
 
-            # CHECK FOR 'os.environ/' in kwargs
-            for k, v in kwargs.items():
-                if v is not None and isinstance(v, str) and v.startswith("os.environ/"):
-                    kwargs[k] = litellm.get_secret(v)
             # [OPTIONAL] CHECK BUDGET
             if litellm.max_budget:
                 if litellm._current_cost > litellm.max_budget:
@@ -1798,6 +1792,7 @@ def client(original_function):  # noqa: PLR0915
 
         model: Optional[str] = args[0] if len(args) > 0 else kwargs.get("model", None)
         is_completion_with_fallbacks = kwargs.get("fallbacks") is not None
+        _is_litellm_internal_call = kwargs.pop("_is_litellm_internal_call", False)
 
         try:
             if logging_obj is None:
@@ -1813,6 +1808,11 @@ def client(original_function):  # noqa: PLR0915
             modified_kwargs = await async_pre_call_deployment_hook(kwargs, call_type)
             if modified_kwargs is not None:
                 kwargs = modified_kwargs
+
+            # Sync logging_obj.stream after deployment hooks (they may convert it).
+            _hook_stream = kwargs.get("stream")
+            if _hook_stream is not None and logging_obj.stream != _hook_stream:
+                logging_obj.stream = _hook_stream
 
             kwargs["litellm_logging_obj"] = logging_obj
             ## LOAD CREDENTIALS
@@ -1944,15 +1944,36 @@ def client(original_function):  # noqa: PLR0915
             )
 
             # LOG SUCCESS - handle streaming success logging in the _next_ object
-            asyncio.create_task(
-                _client_async_logging_helper(
-                    logging_obj=logging_obj,
-                    result=result,
-                    start_time=start_time,
-                    end_time=end_time,
-                    is_completion_with_fallbacks=is_completion_with_fallbacks,
-                )
-            )
+            # Internal sub-calls (e.g. emulated file-search steps) share the
+            # parent's logging obj; skip async logging here so only the outer call bills once.
+            # NOTE: streaming requests return early (before this point) via
+            # CustomStreamWrapper, so this block is non-streaming only.
+            if not _is_litellm_internal_call:
+                if getattr(logging_obj, "_defer_async_logging", False):
+
+                    def _enqueue_deferred_logging() -> None:
+                        asyncio.create_task(
+                            _client_async_logging_helper(
+                                logging_obj=logging_obj,
+                                result=result,
+                                start_time=start_time,
+                                end_time=end_time,
+                                is_completion_with_fallbacks=is_completion_with_fallbacks,
+                            )
+                        )
+
+                    logging_obj._enqueue_deferred_logging = _enqueue_deferred_logging  # type: ignore
+                else:
+                    asyncio.create_task(
+                        _client_async_logging_helper(
+                            logging_obj=logging_obj,
+                            result=result,
+                            start_time=start_time,
+                            end_time=end_time,
+                            is_completion_with_fallbacks=is_completion_with_fallbacks,
+                        )
+                    )
+
             logging_obj.handle_sync_success_callbacks_for_async_calls(
                 result=result,
                 start_time=start_time,
@@ -1985,7 +2006,7 @@ def client(original_function):  # noqa: PLR0915
         except Exception as e:
             traceback_exception = traceback.format_exc()
             end_time = datetime.datetime.now()
-            if logging_obj:
+            if logging_obj and not _is_litellm_internal_call:
                 try:
                     logging_obj.failure_handler(
                         e, traceback_exception, start_time, end_time
@@ -2576,6 +2597,47 @@ def _supports_factory(model: str, custom_llm_provider: Optional[str], key: str) 
         return False
 
 
+def _is_explicitly_disabled_factory(
+    model: str, custom_llm_provider: Optional[str], key: str
+) -> bool:
+    """Return True only when the model map explicitly sets *key* to ``False``.
+
+    This is the opt-out mirror of :func:`_supports_factory`.  Where
+    ``_supports_factory`` requires an explicit ``True`` to return ``True``,
+    this function requires an explicit ``False``.  A missing key (``None``)
+    is treated as *not* disabled so that unknown or newly-added models are
+    allowed through without any model-map entry.
+
+    Uses the same ``get_llm_provider`` → ``_get_model_info_helper`` chain as
+    ``_supports_factory`` so caching, fallback, and normalisation improvements
+    apply here automatically.
+    """
+    try:
+        model, custom_llm_provider, _, _ = litellm.get_llm_provider(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
+        model_info = _get_model_info_helper(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
+        val = model_info.get(key)
+        if val is False:
+            return True
+        if val is None:
+            bare_model_key = _get_model_cost_key(model)
+            if bare_model_key is not None:
+                bare_entry = litellm.model_cost.get(bare_model_key) or {}
+                if bare_entry.get(key) is False:
+                    return True
+        return False
+    except Exception as e:
+        verbose_logger.debug(
+            f"Model not found or error in checking {key} disabled state. "
+            f"You passed model={model}, custom_llm_provider={custom_llm_provider}. "
+            f"Error: {str(e)}"
+        )
+        return False
+
+
 def supports_audio_input(model: str, custom_llm_provider: Optional[str] = None) -> bool:
     """Check if a given model supports audio input in a chat completion call"""
     return _supports_factory(
@@ -2669,6 +2731,19 @@ def supports_reasoning(model: str, custom_llm_provider: Optional[str] = None) ->
     """
     return _supports_factory(
         model=model, custom_llm_provider=custom_llm_provider, key="supports_reasoning"
+    )
+
+
+def supports_native_structured_output(
+    model: str, custom_llm_provider: Optional[str] = None
+) -> bool:
+    """
+    Check if the given model supports native structured outputs and return a boolean value.
+    """
+    return _supports_factory(
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        key="supports_native_structured_output",
     )
 
 
@@ -4803,21 +4878,47 @@ def calculate_max_parallel_requests(
     return None
 
 
-def _get_order_filtered_deployments(healthy_deployments: List[Dict]) -> List:
-    min_order = min(
-        (
-            deployment["litellm_params"]["order"]
-            for deployment in healthy_deployments
-            if "order" in deployment["litellm_params"]
-        ),
-        default=None,
-    )
+def _get_deployment_order(deployment: Union[Dict, Any]) -> Optional[int]:
+    """
+    Returns the routing order for a deployment.
+
+    Checks litellm_params first (static config), then model_info (dynamic/team
+    models added via API where order lives in model_info, not litellm_params).
+    """
+    order = deployment.get("litellm_params", {}).get("order")
+    if order is None:
+        order = deployment.get("model_info", {}).get("order")
+    return order
+
+
+def _get_order_filtered_deployments(
+    healthy_deployments: List[Dict], target_order: Optional[int] = None
+) -> List:
+    if target_order is not None:
+        filtered = [
+            d
+            for d in healthy_deployments
+            if _get_deployment_order(d) == target_order
+        ]
+        if filtered:
+            return filtered
+        # target_order doesn't match any deployment (e.g., external fallback model) — return all
+        return healthy_deployments
+
+    # Default: pick min order group
+    _valid_orders: List[int] = [
+        o
+        for deployment in healthy_deployments
+        for o in [_get_deployment_order(deployment)]
+        if o is not None
+    ]
+    min_order: Optional[int] = min(_valid_orders) if _valid_orders else None
 
     if min_order is not None:
         filtered_deployments = [
             deployment
             for deployment in healthy_deployments
-            if deployment["litellm_params"].get("order") == min_order
+            if _get_deployment_order(deployment) == min_order
         ]
 
         return filtered_deployments
@@ -5726,6 +5827,9 @@ def _get_model_info_helper(  # noqa: PLR0915
                     "output_cost_per_token_above_272k_tokens", None
                 ),
                 output_cost_per_second=_model_info.get("output_cost_per_second", None),
+                output_cost_per_second_1080p=_model_info.get(
+                    "output_cost_per_second_1080p", None
+                ),
                 output_cost_per_video_per_second=_model_info.get(
                     "output_cost_per_video_per_second", None
                 ),
@@ -5768,9 +5872,14 @@ def _get_model_info_helper(  # noqa: PLR0915
                 supports_native_streaming=_model_info.get(
                     "supports_native_streaming", None
                 ),
+                supports_native_structured_output=_model_info.get(
+                    "supports_native_structured_output", None
+                ),
                 supports_web_search=_model_info.get("supports_web_search", None),
                 supports_url_context=_model_info.get("supports_url_context", None),
                 supports_reasoning=_model_info.get("supports_reasoning", None),
+                supports_none_reasoning_effort=_model_info.get("supports_none_reasoning_effort", None),
+                supports_xhigh_reasoning_effort=_model_info.get("supports_xhigh_reasoning_effort", None),
                 supports_computer_use=_model_info.get("supports_computer_use", None),
                 search_context_cost_per_query=_model_info.get(
                     "search_context_cost_per_query", None
@@ -6160,7 +6269,10 @@ def validate_environment(  # noqa: PLR0915
                     ["AZURE_API_BASE", "AZURE_API_VERSION", "AZURE_API_KEY"]
                 )
         elif custom_llm_provider == "anthropic":
-            if "ANTHROPIC_API_KEY" in os.environ:
+            if (
+                "ANTHROPIC_API_KEY" in os.environ
+                or "ANTHROPIC_AUTH_TOKEN" in os.environ
+            ):
                 keys_in_environment = True
             else:
                 missing_keys.append("ANTHROPIC_API_KEY")
@@ -6399,7 +6511,10 @@ def validate_environment(  # noqa: PLR0915
                 missing_keys.append("OPENAI_API_KEY")
         ## anthropic
         elif model in litellm.anthropic_models:
-            if "ANTHROPIC_API_KEY" in os.environ:
+            if (
+                "ANTHROPIC_API_KEY" in os.environ
+                or "ANTHROPIC_AUTH_TOKEN" in os.environ
+            ):
                 keys_in_environment = True
             else:
                 missing_keys.append("ANTHROPIC_API_KEY")
@@ -8219,6 +8334,10 @@ class ProviderConfigManager:
             return SagemakerEmbeddingConfig.get_model_config(model)
         elif litellm.LlmProviders.PERPLEXITY == provider:
             return litellm.PerplexityEmbeddingConfig()
+        elif litellm.LlmProviders.OCI == provider:
+            from litellm.llms.oci.embed.transformation import OCIEmbeddingConfig
+
+            return OCIEmbeddingConfig()
         return None
 
     @staticmethod
@@ -8593,9 +8712,7 @@ class ProviderConfigManager:
 
             return ManusFilesConfig()
         elif LlmProviders.ANTHROPIC == provider:
-            from litellm.llms.anthropic.files.transformation import (
-                AnthropicFilesConfig,
-            )
+            from litellm.llms.anthropic.files.transformation import AnthropicFilesConfig
 
             return AnthropicFilesConfig()
         return None
@@ -8846,6 +8963,12 @@ class ProviderConfigManager:
             )
 
             return OpenAIContainerConfig()
+        if provider in (LlmProviders.AZURE, LlmProviders.AZURE_TEXT):
+            from litellm.llms.azure.containers.transformation import (
+                AzureContainerConfig,
+            )
+
+            return AzureContainerConfig()
         return None
 
     @staticmethod
@@ -8937,11 +9060,11 @@ class ProviderConfigManager:
 
             return get_stability_image_edit_config(model)
         elif LlmProviders.BEDROCK == provider:
-            from litellm.llms.bedrock.image_edit.stability_transformation import (
-                BedrockStabilityImageEditConfig,
+            from litellm.llms.bedrock.image_edit.amazon_nova_canvas_image_edit_transformation import (
+                get_bedrock_image_edit_config_for_model,
             )
 
-            return BedrockStabilityImageEditConfig()
+            return get_bedrock_image_edit_config_for_model(model)
         elif LlmProviders.OPENROUTER == provider:
             from litellm.llms.openrouter.image_edit import (
                 get_openrouter_image_edit_config,

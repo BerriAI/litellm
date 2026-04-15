@@ -60,13 +60,20 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         # Create a deep copy of messages to avoid modifying the original list
         processed_messages = copy.deepcopy(messages)
 
-        # Process message-level cache controls
+        # Separate message-level and non-message-level injection points
+        remaining_points = []
         for point in injection_points:
             if point.get("location") == "message":
                 point = cast(CacheControlMessageInjectionPoint, point)
                 processed_messages = self._process_message_injection(
                     point=point, messages=processed_messages
                 )
+            else:
+                remaining_points.append(point)
+
+        # Pass through non-message injection points for provider-specific handling
+        if remaining_points:
+            non_default_params["cache_control_injection_points"] = remaining_points
 
         return model, processed_messages, non_default_params
 

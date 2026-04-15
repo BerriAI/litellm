@@ -15,7 +15,7 @@ You can reach out to us anytime by [email](mailto:hello@lunary.ai) or directly [
 ### Pre-Requisites
 
 ```shell
-pip install litellm lunary
+uv add litellm lunary
 ```
 
 ### Quick Start
@@ -124,7 +124,7 @@ my_chain("Chain input")
 ### Step1: Install dependencies and set your environment variables 
 Install the dependencies
 ```shell
-pip install litellm lunary
+uv add litellm lunary
 ```
 
 Get you Lunary public key from from https://app.lunary.ai/settings 
@@ -176,5 +176,4 @@ You can find more details about the different ways of making requests to the Lit
 
 - [Schedule Demo 👋](https://calendly.com/d/4mp-gd3-k5k/berriai-1-1-onboarding-litellm-hosted-version)
 - [Community Discord 💭](https://discord.gg/wuPM9dRgDw)
-- Our numbers 📞 +1 (770) 8783-106 / ‭+1 (412) 618-6238‬
 - Our emails ✉️ ishaan@berri.ai / krrish@berri.ai

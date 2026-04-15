@@ -83,6 +83,7 @@ const sidebars = {
           "proxy/guardrails/openai_moderation",
           "proxy/guardrails/pangea",
           "proxy/guardrails/pillar_security",
+          "proxy/guardrails/promptguard",
           "proxy/guardrails/pii_masking_v2",
           "proxy/guardrails/panw_prisma_airs",
           "proxy/guardrails/secret_detection",
@@ -255,6 +256,11 @@ const sidebars = {
             },
             {
               type: "doc",
+              id: "completion/prompt_compression",
+              label: "compress()",
+            },
+            {
+              type: "doc",
               id: "audio_transcription",
               label: "transcription()",
             },
@@ -325,6 +331,7 @@ const sidebars = {
                 "mcp_control",
                 "mcp_cost",
                 "mcp_guardrail",
+                "mcp_toolsets",
                 {
                   type: "link",
                   label: "MCP Troubleshooting Guide",
@@ -348,6 +355,7 @@ const sidebars = {
             "proxy/debugging",
             "proxy/error_diagnosis",
             "proxy/deploy",
+            "proxy/docker_image_security",
             "proxy/health",
             "proxy/master_key_rotations",
             "proxy/model_management",
@@ -430,6 +438,7 @@ const sidebars = {
             "proxy/architecture",
             "proxy/multi_tenant_architecture",
             "proxy/control_plane_and_data_plane",
+            "proxy/high_availability_control_plane",
             "proxy/db_deadlocks",
             "proxy/db_info",
             "proxy/image_handling",
@@ -451,6 +460,7 @@ const sidebars = {
           items: [
             "proxy/virtual_keys",
             "proxy/token_auth",
+            "proxy/jwt_key_mapping",
             "proxy/service_accounts",
             "proxy/access_control",
             "proxy/cli_sso",
@@ -560,7 +570,8 @@ const sidebars = {
             "proxy/model_access",
             "proxy/model_access_groups",
             "proxy/access_groups",
-            "proxy/team_model_add"
+            "proxy/team_model_add",
+            "proxy/credential_routing"
           ]
         },
         {
@@ -584,6 +595,7 @@ const sidebars = {
           label: "Spend Tracking",
           items: [
             "proxy/cost_tracking",
+            "tutorials/vertex_ai_pay_go",
             "proxy/request_tags",
             "proxy/custom_pricing",
             "proxy/pricing_calculator",
@@ -737,6 +749,7 @@ const sidebars = {
         "proxy/realtime_webrtc",
         "rerank",
         "response_api",
+        "prompt_management",
         "response_api_compact",
         {
           type: "category",
@@ -847,12 +860,14 @@ const sidebars = {
           items: [
             "providers/gemini",
             "providers/gemini/videos",
+            "providers/gemini/music",
             "providers/google_ai_studio/files",
             "providers/google_ai_studio/image_gen",
             "providers/google_ai_studio/realtime",
           ]
         },
         "providers/anthropic",
+        "providers/anthropic_tool_search",
         "providers/aws_sagemaker",
         {
           type: "category",
@@ -1046,19 +1061,11 @@ const sidebars = {
         "proxy/fallback_management",
         "proxy/tag_routing",
         "proxy/timeout",
-        "wildcard_routing"
+        "wildcard_routing",
+        "proxy/health_check_routing"
       ],
     },
-    {
-      type: "category",
-      label: "Load Testing",
-      items: [
-        "benchmarks",
-        "load_test_advanced",
-        "load_test_sdk",
-        "load_test_rpm",
-      ]
-    },
+    "benchmarks",
     {
       type: "category",
       label: "Contributing",
@@ -1087,6 +1094,9 @@ const sidebars = {
         "data_retention",
         "proxy/security_encryption_faq",
         "migration_policy",
+        "load_test_advanced",
+        "load_test_sdk",
+        "load_test_rpm",
         {
           type: "category",
           label: "❤️ 🚅 Projects built on LiteLLM",
@@ -1223,6 +1233,7 @@ const learnSidebar = {
             "completion/web_fetch",
             "completion/computer_use",
             "guides/code_interpreter",
+            "completion/anthropic_advisor_tool",
             "completion/message_sanitization",
           ],
         },
@@ -1274,6 +1285,7 @@ const learnSidebar = {
           items: [
             "completion/prefix",
             "completion/predict_outputs",
+            "completion/prompt_compression",
             "completion/message_trimming",
             "completion/prompt_caching",
             "completion/prompt_formatting",
@@ -1433,6 +1445,7 @@ const learnSidebar = {
           },
           items: [
             "tutorials/prompt_caching",
+            "tutorials/file_search_responses_api",
             "tutorials/anthropic_file_usage",
             "tutorials/gemini_realtime_with_audio",
             "tutorials/litellm_proxy_aporia",

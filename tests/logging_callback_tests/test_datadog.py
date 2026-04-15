@@ -593,7 +593,7 @@ def test_datadog_static_methods():
     # Test tags format with default values
     assert (
         "env:unknown,service:litellm-server,version:unknown,HOSTNAME:"
-        in get_datadog_tags()
+        in ",".join(get_datadog_tags())
     )
 
     # Test with custom environment variables
@@ -631,7 +631,7 @@ def test_datadog_static_methods():
         # Test tags format with custom values
         expected_custom_tags = "env:production,service:custom-service,version:1.0.0,HOSTNAME:test-host,POD_NAME:pod-123"
         print("DataDogLogger._get_datadog_tags()", get_datadog_tags())
-        assert get_datadog_tags() == expected_custom_tags
+        assert ",".join(get_datadog_tags()) == expected_custom_tags
 
 
 @pytest.mark.asyncio
@@ -672,11 +672,11 @@ def test_get_datadog_tags():
     """Test the _get_datadog_tags static method with various inputs"""
     # Test with no standard_logging_object and default env vars
     base_tags = get_datadog_tags()
-    assert "env:" in base_tags
-    assert "service:" in base_tags
-    assert "version:" in base_tags
-    assert "POD_NAME:" in base_tags
-    assert "HOSTNAME:" in base_tags
+    assert any("env:" in t for t in base_tags)
+    assert any("service:" in t for t in base_tags)
+    assert any("version:" in t for t in base_tags)
+    assert any("POD_NAME:" in t for t in base_tags)
+    assert any("HOSTNAME:" in t for t in base_tags)
 
     # Test with custom env vars
     test_env = {
@@ -705,12 +705,12 @@ def test_get_datadog_tags():
     # Test with empty request_tags
     standard_logging_obj["request_tags"] = []
     tags_empty_request = get_datadog_tags(standard_logging_obj)
-    assert "request_tag:" not in tags_empty_request
+    assert not any(t.startswith("request_tag:") for t in tags_empty_request)
 
     # Test with None request_tags
     standard_logging_obj["request_tags"] = None
     tags_none_request = get_datadog_tags(standard_logging_obj)
-    assert "request_tag:" not in tags_none_request
+    assert not any(t.startswith("request_tag:") for t in tags_none_request)
 
 
 @pytest.mark.asyncio

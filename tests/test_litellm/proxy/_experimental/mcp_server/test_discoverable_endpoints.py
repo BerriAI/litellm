@@ -1666,3 +1666,141 @@ async def test_oauth_authorize_prefers_request_scope_over_server_config():
         redirect_url = response.headers["location"]
         assert "scope=custom_scope1+custom_scope2" in redirect_url or "scope=custom_scope1%20custom_scope2" in redirect_url
         assert "default_scope" not in redirect_url
+
+
+@pytest.mark.asyncio
+async def test_token_endpoint_refresh_token_grant():
+    """Test that token endpoint supports refresh_token grant type."""
+    try:
+        from fastapi import Request
+
+        from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+            token_endpoint,
+        )
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+        from litellm.proxy._types import MCPTransport
+        from litellm.types.mcp import MCPAuth
+        from litellm.types.mcp_server.mcp_server_manager import MCPServer
+    except ImportError:
+        pytest.skip("MCP discoverable endpoints not available")
+
+    # Clear registry
+    global_mcp_server_manager.registry.clear()
+
+    # Create mock OAuth2 server
+    oauth2_server = MCPServer(
+        server_id="google_mcp",
+        name="google_mcp",
+        server_name="google_mcp",
+        alias="google_mcp",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        client_id="test_client_id",
+        client_secret="test_secret",
+        authorization_url="https://accounts.google.com/o/oauth2/v2/auth",
+        token_url="https://oauth2.googleapis.com/token",
+        scopes=["openid", "email"],
+    )
+    global_mcp_server_manager.registry[oauth2_server.server_id] = oauth2_server
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "https://proxy.litellm.example/"
+    mock_request.headers = {}
+
+    # Mock httpx client response with new tokens
+    mock_response = MagicMock()
+    mock_response.json.return_value = {
+        "access_token": "new_access_token",
+        "token_type": "Bearer",
+        "expires_in": 3599,
+        "refresh_token": "new_refresh_token",
+    }
+    mock_response.raise_for_status = MagicMock()
+
+    mock_async_client = MagicMock()
+    mock_async_client.post = AsyncMock(return_value=mock_response)
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.discoverable_endpoints.get_async_httpx_client"
+    ) as mock_get_client:
+        mock_get_client.return_value = mock_async_client
+
+        response = await token_endpoint(
+            request=mock_request,
+            grant_type="refresh_token",
+            code=None,
+            redirect_uri=None,
+            client_id="test_client_id",
+            mcp_server_name="google_mcp",
+            client_secret="test_secret",
+            refresh_token="rt-test",
+            scope="openid email",
+        )
+
+    # Verify the POST was called with refresh_token grant data
+    mock_async_client.post.assert_called_once()
+    call_args = mock_async_client.post.call_args
+
+    assert call_args[1]["data"]["grant_type"] == "refresh_token"
+    assert call_args[1]["data"]["refresh_token"] == "rt-test"
+    assert call_args[1]["data"]["client_id"] == "test_client_id"
+    assert call_args[1]["data"]["client_secret"] == "test_secret"
+    assert call_args[1]["data"]["scope"] == "openid email"
+
+    # Verify response contains the new tokens
+    import json
+
+    token_data = json.loads(response.body)
+    assert token_data["access_token"] == "new_access_token"
+    assert token_data["refresh_token"] == "new_refresh_token"
+
+
+@pytest.mark.asyncio
+async def test_token_endpoint_authorization_code_missing_code():
+    """Test that authorization_code grant rejects missing code param."""
+    try:
+        from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+            exchange_token_with_server,
+        )
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+        from litellm.proxy._types import MCPTransport
+        from litellm.types.mcp import MCPAuth
+        from litellm.types.mcp_server.mcp_server_manager import MCPServer
+    except ImportError:
+        pytest.skip("MCP discoverable endpoints not available")
+
+    global_mcp_server_manager.registry.clear()
+
+    server = MCPServer(
+        server_id="test_server",
+        name="test_server",
+        server_name="test_server",
+        alias="test_server",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        client_id="cid",
+        token_url="https://example.com/token",
+    )
+    global_mcp_server_manager.registry[server.server_id] = server
+
+    mock_request = MagicMock()
+    mock_request.base_url = "https://proxy.example/"
+    mock_request.headers = {}
+
+    with pytest.raises(HTTPException) as exc_info:
+        await exchange_token_with_server(
+            request=mock_request,
+            mcp_server=server,
+            grant_type="authorization_code",
+            code=None,
+            redirect_uri="https://example.com/cb",
+            client_id="cid",
+            client_secret=None,
+            code_verifier=None,
+        )
+    assert exc_info.value.status_code == 400
+    assert "code is required" in str(exc_info.value.detail)

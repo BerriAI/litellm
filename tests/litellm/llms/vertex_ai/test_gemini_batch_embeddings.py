@@ -22,6 +22,8 @@ from litellm.llms.vertex_ai.gemini_embeddings.batch_embed_content_transformation
     _is_multimodal_input,
     _parse_data_url,
     process_embed_content_response,
+    process_response,
+    transform_openai_input_gemini_content,
     transform_openai_input_gemini_embed_content,
 )
 from litellm.types.utils import EmbeddingResponse
@@ -396,6 +398,44 @@ def test_transform_with_optional_params():
     assert result["taskType"] == "SEMANTIC_SIMILARITY"
 
 
+def test_task_type_mapped_to_camel_case_batch():
+    """Test that snake_case task_type is converted to camelCase taskType for batchEmbedContents."""
+    result = transform_openai_input_gemini_content(
+        input="test text",
+        model="text-embedding-004",
+        optional_params={"task_type": "RETRIEVAL_DOCUMENT"},
+    )
+    for request in result["requests"]:
+        assert "taskType" in request
+        assert request["taskType"] == "RETRIEVAL_DOCUMENT"
+        assert "task_type" not in request
+
+
+def test_task_type_mapped_to_camel_case_embed_content():
+    """Test that snake_case task_type is converted to camelCase taskType for embedContent."""
+    result = transform_openai_input_gemini_embed_content(
+        input=["test text"],
+        model="gemini-embedding-2-preview",
+        optional_params={"task_type": "RETRIEVAL_DOCUMENT"},
+        resolved_files=None,
+    )
+    assert "taskType" in result
+    assert result["taskType"] == "RETRIEVAL_DOCUMENT"
+    assert "task_type" not in result
+
+
+def test_task_type_camel_case_passthrough():
+    """Test that camelCase taskType passed directly is preserved."""
+    result = transform_openai_input_gemini_embed_content(
+        input=["test text"],
+        model="gemini-embedding-2-preview",
+        optional_params={"taskType": "SEMANTIC_SIMILARITY"},
+        resolved_files=None,
+    )
+    assert result["taskType"] == "SEMANTIC_SIMILARITY"
+    assert "task_type" not in result
+
+
 def test_dimensions_mapped_to_output_dimensionality():
     """Test that OpenAI 'dimensions' param is mapped to Gemini 'outputDimensionality'."""
     input_data = ["test text"]
@@ -523,4 +563,33 @@ def test_vertex_ai_text_only_embedding_uses_embed_content():
         assert len(data["content"]["parts"]) == 1
         assert data["content"]["parts"][0]["text"] == "Hello, world!"
         assert len(response.data) == 1
+
+
+def test_batch_embeddings_response_has_correct_indices_and_order():
+    """Test that process_response assigns sequential indices and preserves order."""
+    response_json = {
+        "embeddings": [
+            {"values": [0.1, 0.2, 0.3]},
+            {"values": [0.4, 0.5, 0.6]},
+            {"values": [0.7, 0.8, 0.9]},
+        ]
+    }
+    expected_values = [[0.1, 0.2, 0.3], [0.4, 0.5, 0.6], [0.7, 0.8, 0.9]]
+
+    model_response = EmbeddingResponse()
+    result = process_response(
+        input=["first", "second", "third"],
+        model_response=model_response,
+        model="text-embedding-004",
+        _predictions=response_json,
+    )
+
+    assert len(result.data) == 3
+    for i, embedding in enumerate(result.data):
+        assert (
+            embedding.index == i
+        ), f"embedding {i} has index={embedding.index}, expected {i}"
+        assert (
+            embedding.embedding == expected_values[i]
+        ), f"embedding {i} has wrong values: {embedding.embedding}"
 

@@ -64,6 +64,7 @@ _FINISH_REASON_MAP: dict[str, OpenAIChatCompletionFinishReason] = {
     "end_turn": "stop",
     "max_tokens": "length",
     "tool_use": "tool_calls",
+    "refusal": "content_filter",
     "compaction": "length",
     # Cohere
     "COMPLETE": "stop",

@@ -25,11 +25,11 @@ class TestAzureResponsesAPITest(BaseResponsesAPITest):
         return {
             "model": "azure/gpt-4.1-mini",
             "truncation": "auto",
-            "api_base": os.getenv("AZURE_API_BASE"),
-            "api_key": os.getenv("AZURE_API_KEY"),
+            "api_base": os.getenv("AZURE_AI_API_BASE"),
+            "api_key": os.getenv("AZURE_AI_API_KEY"),
             "api_version": "2025-03-01-preview",
         }
-    
+
     def get_advanced_model_for_shell_tool(self) -> Optional[str]:
         """If specified, overrides the model used by test_responses_api_shell_tool_streaming_sees_shell_output (e.g. openai/gpt-5.2 for shell support)."""
         return "azure/gpt-5-mini"
@@ -45,8 +45,8 @@ async def test_azure_responses_api_preview_api_version():
         model="azure/gpt-5-mini",
         truncation="auto",
         api_version="preview",
-        api_base=os.getenv("AZURE_API_BASE"),
-        api_key=os.getenv("AZURE_API_KEY"),
+        api_base=os.getenv("AZURE_AI_API_BASE"),
+        api_key=os.getenv("AZURE_AI_API_KEY"),
         input="Hello, can you tell me a short joke?",
     )
 
@@ -108,7 +108,9 @@ async def test_azure_responses_api_status_error():
                 "role": "assistant",
                 "type": "message",
                 "status": "completed",
-                "content": [{"type": "output_text", "text": "Here's an interesting fact."}],
+                "content": [
+                    {"type": "output_text", "text": "Here's an interesting fact."}
+                ],
             }
         ],
     }
@@ -124,7 +126,7 @@ async def test_azure_responses_api_status_error():
             captured_request_body = json.loads(kwargs["data"])
 
         import httpx
-        
+
         # Create a proper httpx Response object
         response_content = json.dumps(mock_response_data).encode("utf-8")
         response = httpx.Response(
@@ -149,18 +151,17 @@ async def test_azure_responses_api_status_error():
         )
 
     # Verify that 'status' field is not present in any of the input messages
-    print("Final request body:", json.dumps(captured_request_body, indent=4, default=str))
+    print(
+        "Final request body:", json.dumps(captured_request_body, indent=4, default=str)
+    )
     assert "input" in captured_request_body, "Request body should contain 'input' field"
-    
+
     expected_input = [
-        {
-            "content": "tell me an interesting fact",
-            "role": "user"
-        },
+        {"content": "tell me an interesting fact", "role": "user"},
         {
             "id": "rs_0ab687487834d9df0068e462a1b2d88197aabbc832c9ba5316",
             "summary": [],
-            "type": "reasoning"
+            "type": "reasoning",
         },
         {
             "id": "msg_0ab687487834d9df0068e462a1df188197b74b1eef05102c18",
@@ -169,18 +170,15 @@ async def test_azure_responses_api_status_error():
                     "annotations": [],
                     "text": "very good morning",
                     "type": "output_text",
-                    "logprobs": []
+                    "logprobs": [],
                 }
             ],
             "role": "assistant",
-            "type": "message"
+            "type": "message",
         },
-        {
-            "role": "user",
-            "content": "tell me another"
-        }
+        {"role": "user", "content": "tell me another"},
     ]
-    
+
     assert captured_request_body["input"] == expected_input, (
         f"Request body input should match expected format without 'status' field.\n"
         f"Expected: {json.dumps(expected_input, indent=2)}\n"
@@ -193,9 +191,9 @@ async def test_azure_responses_api_headers_with_llm_provider_prefix():
     """
     Test that Azure-specific headers like 'x-request-id' and 'apim-request-id'
     are properly forwarded with 'llm_provider-' prefix in response._hidden_params["headers"].
-    
+
     Issue: https://github.com/BerriAI/litellm/issues/16538
-    
+
     The fix ensures that processed headers (with llm_provider- prefix) are stored
     in response._hidden_params["headers"] instead of additional_headers, making them
     accessible via completion.headers in the same way as the completion API.
@@ -253,12 +251,12 @@ async def test_azure_responses_api_headers_with_llm_provider_prefix():
 
     # Check that the response has the expected headers structure
     assert hasattr(response, "_hidden_params"), "Response should have _hidden_params"
-    assert "additional_headers" in response._hidden_params, (
-        "Response _hidden_params should contain 'additional_headers' with the LLM provider headers"
-    )
+    assert (
+        "additional_headers" in response._hidden_params
+    ), "Response _hidden_params should contain 'additional_headers' with the LLM provider headers"
 
     headers = response._hidden_params["additional_headers"]
-    
+
     # Verify that Azure-specific headers are present with llm_provider- prefix
     assert "llm_provider-x-request-id" in headers, (
         f"Response should contain 'llm_provider-x-request-id' header. "
@@ -268,12 +266,17 @@ async def test_azure_responses_api_headers_with_llm_provider_prefix():
         f"Response should contain 'llm_provider-apim-request-id' header. "
         f"Headers: {list(headers.keys())}"
     )
-    
+
     # Verify the header values match
-    assert headers["llm_provider-x-request-id"] == "12086715-aca3-4006-a29f-2f1e1d552043"
-    assert headers["llm_provider-apim-request-id"] == "25664b0d-cf4b-4e10-8d27-c7272e7efd49"
+    assert (
+        headers["llm_provider-x-request-id"] == "12086715-aca3-4006-a29f-2f1e1d552043"
+    )
+    assert (
+        headers["llm_provider-apim-request-id"]
+        == "25664b0d-cf4b-4e10-8d27-c7272e7efd49"
+    )
     assert headers["llm_provider-x-ms-region"] == "Sweden Central"
-    
+
     # Also verify openai-compatible headers are included
     assert "x-ratelimit-limit-tokens" in headers
     assert "x-ratelimit-remaining-tokens" in headers

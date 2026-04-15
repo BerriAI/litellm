@@ -12,7 +12,7 @@ See the raw request/response sent by LiteLLM in your logging provider (OTEL/Lang
 <TabItem value="sdk" label="SDK">
 
 ```python
-# pip install langfuse 
+# uv add langfuse 
 import litellm
 import os
 

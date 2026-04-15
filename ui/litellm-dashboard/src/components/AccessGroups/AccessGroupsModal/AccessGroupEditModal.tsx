@@ -1,5 +1,6 @@
 import React, { useEffect } from "react";
-import { Modal, Form, message } from "antd";
+import { Modal, Form } from "antd";
+import MessageManager from "@/components/molecules/message_manager";
 import {
   AccessGroupBaseForm,
   AccessGroupFormValues,
@@ -55,7 +56,7 @@ export function AccessGroupEditModal({
           { accessGroupId: accessGroup.access_group_id, params },
           {
             onSuccess: () => {
-              message.success("Access group updated successfully");
+              MessageManager.success("Access group updated successfully");
               onSuccess?.();
               onCancel();
             },
