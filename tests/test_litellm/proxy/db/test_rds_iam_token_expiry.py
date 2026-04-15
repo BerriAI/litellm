@@ -10,7 +10,7 @@ The fix implements:
 4. Fixed __getattr__ fallback that now waits for reconnection
 
 Run these tests:
-    poetry run pytest tests/test_litellm/proxy/db/test_rds_iam_token_expiry.py -v -s
+    uv run pytest tests/test_litellm/proxy/db/test_rds_iam_token_expiry.py -v -s
 """
 
 import asyncio

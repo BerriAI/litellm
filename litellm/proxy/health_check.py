@@ -21,6 +21,8 @@ ILLEGAL_DISPLAY_PARAMS = [
     "vertex_credentials",
     "aws_access_key_id",
     "aws_secret_access_key",
+    "exception",  # internal; not JSON-serializable, never for display
+    "litellm_metadata",  # internal tracking metadata with auth objects; not for display
 ]
 
 MINIMAL_DISPLAY_PARAMS = ["model", "mode_error"]
@@ -95,7 +97,12 @@ async def run_with_timeout(task, timeout):
     except asyncio.TimeoutError:
         # `asyncio.wait_for()` already cancels only the awaited task on timeout.
         # Do not cancel unrelated sibling health check tasks.
-        return {"error": "Timeout exceeded"}
+        timeout_exception = litellm.Timeout(
+            message="Health check timeout exceeded",
+            model="",
+            llm_provider="",
+        )
+        return {"error": "Timeout exceeded", "exception": timeout_exception}
 
 
 async def _run_model_health_check(model: dict):
@@ -204,6 +211,10 @@ async def _perform_health_check(
 
     healthy_endpoints = []
     unhealthy_endpoints = []
+    # Exceptions keyed by model_id; returned separately so callers can use
+    # them for cooldown integration without risking JSON-serialization errors
+    # in the /health response.
+    exceptions_by_model_id: dict = {}
 
     for is_healthy, model in zip(results, model_list):
         litellm_params = model["litellm_params"]
@@ -218,14 +229,23 @@ async def _perform_health_check(
             cleaned = _clean_endpoint_data({**litellm_params, **is_healthy}, details)
             if _model_id:
                 cleaned["model_id"] = _model_id
+                if "exception" in is_healthy:
+                    exc = is_healthy["exception"]
+                    exceptions_by_model_id[_model_id] = exc
+                    # Store integer status code so shared-cache readers can
+                    # reconstruct the transient-error filter without the exception object.
+                    cleaned["exception_status"] = getattr(exc, "status_code", 500)
             unhealthy_endpoints.append(cleaned)
         else:
             cleaned = _clean_endpoint_data(litellm_params, details)
             if _model_id:
                 cleaned["model_id"] = _model_id
+                if isinstance(is_healthy, Exception):
+                    exceptions_by_model_id[_model_id] = is_healthy
+                    cleaned["exception_status"] = getattr(is_healthy, "status_code", 500)
             unhealthy_endpoints.append(cleaned)
 
-    return healthy_endpoints, unhealthy_endpoints
+    return healthy_endpoints, unhealthy_endpoints, exceptions_by_model_id
 
 
 def build_deployment_health_states(
@@ -366,7 +386,7 @@ async def perform_health_check(
                     source,
                     cycle_id,
                 )
-            return [], []
+            return [], [], {}
 
     cycle_start_time = time.monotonic()
     requested_model_count = len(model_list)
@@ -406,7 +426,11 @@ async def perform_health_check(
         )
 
     try:
-        healthy_endpoints, unhealthy_endpoints = await _perform_health_check(
+        (
+            healthy_endpoints,
+            unhealthy_endpoints,
+            exceptions_by_model_id,
+        ) = await _perform_health_check(
             model_list,
             details,
             max_concurrency=max_concurrency,
@@ -438,4 +462,4 @@ async def perform_health_check(
             _rss_mb_for_log(),
         )
 
-    return healthy_endpoints, unhealthy_endpoints
+    return healthy_endpoints, unhealthy_endpoints, exceptions_by_model_id

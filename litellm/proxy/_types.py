@@ -1,5 +1,6 @@
 import enum
 import json
+import os
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Literal, Optional, Union
 
@@ -15,6 +16,7 @@ from pydantic import (
 from typing_extensions import Required, TypedDict
 
 from litellm._uuid import uuid
+from litellm.constants import MCP_STDIO_ALLOWED_COMMANDS
 from litellm.types.integrations.slack_alerting import AlertType
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -245,6 +247,9 @@ class KeyManagementRoutes(str, enum.Enum):
     # team usage routes
     TEAM_DAILY_ACTIVITY = "/team/daily/activity"
 
+    # team spend-log viewing
+    SPEND_LOGS = "/spend/logs"
+
 
 class LiteLLMRoutes(enum.Enum):
     openai_route_names = [
@@ -432,6 +437,7 @@ class LiteLLMRoutes(enum.Enum):
         "/mcp-rest/tools/list",
         "/mcp-rest/tools/call",
         "/v1/mcp/server",
+        "/v1/mcp/server/{path:path}",
     ]
 
     agent_routes = [
@@ -491,10 +497,12 @@ class LiteLLMRoutes(enum.Enum):
         "/v2/key/info",
         "/model_group/info",
         "/health",
+        "/health/services",
         "/key/list",
         "/user/filter/ui",
         "/models",
         "/v1/models",
+        "/sso/get/ui_settings",
     ]
 
     # NOTE: ROUTES ONLY FOR MASTER KEY - only the Master Key should be able to Reset Spend
@@ -517,6 +525,7 @@ class LiteLLMRoutes(enum.Enum):
         KeyManagementRoutes.KEY_UNBLOCK.value,
         KeyManagementRoutes.KEY_BULK_UPDATE.value,
         KeyManagementRoutes.TEAM_DAILY_ACTIVITY.value,
+        KeyManagementRoutes.SPEND_LOGS.value,
         KeyManagementRoutes.KEY_RESET_SPEND.value,
         KeyManagementRoutes.KEY_ALIASES.value,
     ]
@@ -563,6 +572,8 @@ class LiteLLMRoutes(enum.Enum):
         "/spend/tags",
         "/spend/calculate",
         "/spend/logs",
+        "/spend/logs/ui",
+        "/spend/logs/session/ui",
         "/cost/estimate",
     ]
 
@@ -578,6 +589,7 @@ class LiteLLMRoutes(enum.Enum):
         "/global/spend/report",
         "/global/spend/provider",
         "/global/spend/tags",
+        "/global/spend/all_tag_names",
     ]
 
     public_routes = set(
@@ -599,6 +611,9 @@ class LiteLLMRoutes(enum.Enum):
         ]
     )
 
+    # Retained for backwards compatibility with JWT auth configs that reference
+    # "ui_routes" in admin_allowed_routes. Not used by the proxy's own route
+    # authorization — UI tokens now go through the same RBAC path as API tokens.
     ui_routes = [
         "/sso",
         "/sso/get/ui_settings",
@@ -624,19 +639,16 @@ class LiteLLMRoutes(enum.Enum):
 
     internal_user_routes = (
         [
-            "/global/spend/tags",
-            "/global/spend/keys",
-            "/global/spend/models",
-            "/global/spend/provider",
-            "/global/spend/end_users",
             "/global/activity",
             "/global/activity/model",
+            "/global/activity/cache_hits",
             "/v1/models/{model_id}",
             "/models/{model_id}",
             "/guardrails/list",
             "/v2/guardrails/list",
         ]
         + spend_tracking_routes
+        + global_spend_tracking_routes
         + key_management_routes
     )
 
@@ -665,6 +677,9 @@ class LiteLLMRoutes(enum.Enum):
         "/invitation/delete",
         # Team guardrail submission - requires team-scoped key; endpoint enforces team_id
         "/guardrails/register",
+        # Team guardrail submissions - endpoint scopes results to caller's teams (non-admin)
+        "/guardrails/submissions",
+        "/guardrails/submissions/{guardrail_id}",
     ]  # routes that manage their own allowed/disallowed logic
 
     ## Org Admin Routes ##
@@ -688,6 +703,9 @@ class LiteLLMRoutes(enum.Enum):
         "/tag/list",
         "/audit",
         "/audit/{id}",
+        "/global/activity",
+        "/global/activity/model",
+        "/global/activity/cache_hits",
     ] + info_routes
 
     # All routes accesible by an Org Admin
@@ -856,6 +874,8 @@ class LiteLLM_ObjectPermissionBase(LiteLLMPydanticObjectBase):
     mcp_servers: Optional[List[str]] = None
     mcp_access_groups: Optional[List[str]] = None
     mcp_tool_permissions: Optional[Dict[str, List[str]]] = None
+    mcp_toolsets: Optional[List[str]] = None
+    blocked_tools: Optional[List[str]] = None
     vector_stores: Optional[List[str]] = None
     agents: Optional[List[str]] = None
     agent_access_groups: Optional[List[str]] = None
@@ -1156,6 +1176,13 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
                     raise ValueError("command is required for stdio transport")
                 if not values.get("args"):
                     raise ValueError("args is required for stdio transport")
+                # Validate command against allowlist to prevent arbitrary execution
+                base_command = os.path.basename(values["command"])
+                if base_command not in MCP_STDIO_ALLOWED_COMMANDS:
+                    raise ValueError(
+                        f"Command '{values['command']}' is not in the allowed commands list "
+                        f"for stdio transport. Allowed commands: {sorted(MCP_STDIO_ALLOWED_COMMANDS)}"
+                    )
             elif transport in [MCPTransport.http, MCPTransport.sse]:
                 if not values.get("url") and not values.get("spec_path"):
                     raise ValueError(
@@ -1216,6 +1243,13 @@ class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
                     raise ValueError("command is required for stdio transport")
                 if not values.get("args"):
                     raise ValueError("args is required for stdio transport")
+                # Validate command against allowlist to prevent arbitrary execution
+                base_command = os.path.basename(values["command"])
+                if base_command not in MCP_STDIO_ALLOWED_COMMANDS:
+                    raise ValueError(
+                        f"Command '{values['command']}' is not in the allowed commands list "
+                        f"for stdio transport. Allowed commands: {sorted(MCP_STDIO_ALLOWED_COMMANDS)}"
+                    )
             elif transport in [MCPTransport.http, MCPTransport.sse]:
                 if not values.get("url") and not values.get("spec_path"):
                     raise ValueError(
@@ -1847,6 +1881,8 @@ class LiteLLM_ObjectPermissionTable(LiteLLMPydanticObjectBase):
     vector_stores: Optional[List[str]] = []
     agents: Optional[List[str]] = []
     agent_access_groups: Optional[List[str]] = []
+    mcp_toolsets: Optional[List[str]] = None
+    blocked_tools: Optional[List[str]] = []
 
 
 class LiteLLM_TeamTable(TeamBase):
@@ -2411,6 +2447,7 @@ class LiteLLM_VerificationTokenView(LiteLLM_VerificationToken):
     end_user_model_max_budget: Optional[dict] = None
 
     # Organization Params
+    organization_alias: Optional[str] = None
     organization_max_budget: Optional[float] = None
     organization_tpm_limit: Optional[int] = None
     organization_rpm_limit: Optional[int] = None
@@ -2753,6 +2790,8 @@ class NewProjectRequest(LiteLLM_BudgetTable):
     budget_id: Optional[str] = None
     metadata: Optional[dict] = None
     tags: Optional[List[str]] = None
+    guardrails: Optional[List[str]] = None
+    policies: Optional[List[str]] = None
     models: List[str] = []
     model_rpm_limit: Optional[dict] = None
     model_tpm_limit: Optional[dict] = None
@@ -2785,6 +2824,8 @@ class UpdateProjectRequest(LiteLLM_BudgetTable):
     team_id: Optional[str] = None
     metadata: Optional[dict] = None
     tags: Optional[List[str]] = None
+    guardrails: Optional[List[str]] = None
+    policies: Optional[List[str]] = None
     models: Optional[List[str]] = None
     model_rpm_limit: Optional[dict] = None
     model_tpm_limit: Optional[dict] = None
@@ -3805,6 +3846,10 @@ class OrganizationMemberUpdateResponse(MemberUpdateResponse):
 
 class TeamInfoResponseObjectTeamTable(LiteLLM_TeamTable):
     team_member_budget_table: Optional[LiteLLM_BudgetTable] = None
+    # Resources inherited from access groups (separate from direct assignments)
+    access_group_models: Optional[List[str]] = None
+    access_group_mcp_server_ids: Optional[List[str]] = None
+    access_group_agent_ids: Optional[List[str]] = None
 
 
 class TeamInfoResponseObject(TypedDict):
@@ -4098,6 +4143,24 @@ class ScopeMapping(OIDCPermissions):
     }
 
 
+class JWTRoutingOverride(BaseModel):
+    """
+    Override default auth routing for JWT-shaped bearer tokens.
+
+    A rule matches when all provided selectors match token claims.
+    If matched, request is routed to the configured auth path.
+    """
+
+    iss: Union[str, List[str]]
+    client_id: Optional[Union[str, List[str]]] = None
+    aud: Optional[Union[str, List[str]]] = None
+    path: Literal["oauth2"] = "oauth2"
+
+    model_config = {
+        "extra": "forbid",
+    }
+
+
 class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
     """
     A class to define the roles and permissions for a LiteLLM Proxy w/ JWT Auth.
@@ -4197,6 +4260,10 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
     virtual_key_mapping_cache_ttl: float = Field(
         default=300,
         description="TTL (seconds) for caching JWT-to-virtual-key mapping lookups.",
+    )
+    routing_overrides: Optional[List[JWTRoutingOverride]] = Field(
+        default=None,
+        description="Optional claim-based routing overrides for JWT-shaped tokens. Matching rules route requests to oauth2 before default JWT flow.",
     )
     #########################################################
 
