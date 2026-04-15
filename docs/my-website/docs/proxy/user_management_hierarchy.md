@@ -3,7 +3,7 @@ import Image from '@theme/IdealImage';
 
 # User Management Hierarchy
 
-<Image img={require('../../img/litellm_user_heirarchy.png')} style={{ width: '100%', maxWidth: '4000px' }} />
+<Image img={require('../../img/litellm_user_hierarchy.png')} style={{ width: '100%', maxWidth: '4000px' }} />
 
 LiteLLM supports a hierarchy of users, teams, organizations, and budgets.
 

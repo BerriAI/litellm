@@ -34,7 +34,7 @@ On LiteLLM, you can create Organizations, Teams, Users and Virtual Keys. For thi
 - `User` - A User is an individual user (employee, developer, eg. `krrish@litellm.ai`)
 - `Virtual Key` - A Virtual Key is an API Key that allows you to authenticate to LiteLLM Proxy. A Virtual Key is associated with a User or Team.
 
-Once the Team is created, you can invite Users to the Team. You can read more about LiteLLM's User Management [here](https://docs.litellm.ai/docs/proxy/user_management_heirarchy).
+Once the Team is created, you can invite Users to the Team. You can read more about LiteLLM's User Management [here](https://docs.litellm.ai/docs/proxy/user_management_hierarchy).
 
 ### 2.2 Create a Team on LiteLLM
 

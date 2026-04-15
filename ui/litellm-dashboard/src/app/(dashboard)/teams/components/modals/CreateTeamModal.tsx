@@ -323,7 +323,7 @@ const CreateTeamModal = ({
                     <span>
                       Organizations can have multiple teams. Learn more about{" "}
                       <a
-                        href="https://docs.litellm.ai/docs/proxy/user_management_heirarchy"
+                        href="https://docs.litellm.ai/docs/proxy/user_management_hierarchy"
                         target="_blank"
                         rel="noopener noreferrer"
                         style={{

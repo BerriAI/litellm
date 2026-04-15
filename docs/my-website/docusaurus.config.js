@@ -66,6 +66,17 @@ const config = {
   },
   plugins: [
     [
+      '@docusaurus/plugin-client-redirects',
+      {
+        redirects: [
+          {
+            from: '/docs/proxy/user_management_heirarchy',
+            to: '/docs/proxy/user_management_hierarchy',
+          },
+        ],
+      },
+    ],
+    [
       '@inkeep/cxkit-docusaurus',
       {
         SearchBar: {

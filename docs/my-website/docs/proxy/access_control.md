@@ -4,7 +4,7 @@ import Image from '@theme/IdealImage';
 
 Role-based access control (RBAC) is based on Organizations, Teams and Internal User Roles
 
-<Image img={require('../../img/litellm_user_heirarchy.png')} style={{ width: '100%', maxWidth: '4000px' }} />
+<Image img={require('../../img/litellm_user_hierarchy.png')} style={{ width: '100%', maxWidth: '4000px' }} />
 
 
 - `Organizations` are the top-level entities that contain Teams.

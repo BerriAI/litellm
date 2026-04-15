@@ -31,7 +31,7 @@ Organizations with multi-tenant architectures face several challenges when deplo
 
 ## How LiteLLM Solves Multi-Tenancy
 
-<Image img={require('../../img/litellm_user_heirarchy.png')} style={{ width: '100%', maxWidth: '4000px' }} />
+<Image img={require('../../img/litellm_user_hierarchy.png')} style={{ width: '100%', maxWidth: '4000px' }} />
 
 LiteLLM implements a hierarchical multi-tenant architecture with four levels:
 
@@ -666,7 +666,7 @@ A: You can gradually create organizations and teams, then move existing users/ke
 
 ## Related Documentation
 
-- [User Management Hierarchy](./user_management_heirarchy) - Visual hierarchy overview
+- [User Management Hierarchy](./user_management_hierarchy) - Visual hierarchy overview
 - [Access Control (RBAC)](./access_control) - Detailed role permissions
 - [Team Budgets](./team_budgets) - Budget management guide
 - [Virtual Keys](./virtual_keys) - API key management

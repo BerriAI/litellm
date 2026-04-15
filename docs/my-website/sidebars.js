@@ -444,7 +444,7 @@ const sidebars = {
             "proxy/image_handling",
             "proxy/jwt_auth_arch",
             "proxy/spend_logs_deletion",
-            "proxy/user_management_heirarchy",
+            "proxy/user_management_hierarchy",
             "router_architecture"
           ],
         },
