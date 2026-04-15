@@ -26,13 +26,13 @@ import Image from '@theme/IdealImage';
 ## Installation
 
 ```shell
-pip install litellm
+uv add litellm
 ```
 
 To run the full Proxy Server (LLM Gateway):
 
 ```shell
-pip install 'litellm[proxy]'
+uv tool install 'litellm[proxy]'
 ```
 
 ---
@@ -103,7 +103,7 @@ os.environ["AWS_SECRET_ACCESS_KEY"] = "your-secret"
 os.environ["AWS_REGION_NAME"] = "us-east-1"
 
 response = completion(
-  model="bedrock/anthropic.claude-3-5-sonnet-20241022-v2:0",
+  model="bedrock/anthropic.claude-haiku-4-5-20251001:0",
   messages=[{"role": "user", "content": "Hello, how are you?"}]
 )
 print(response.choices[0].message.content)
@@ -336,7 +336,7 @@ The proxy is a self-hosted OpenAI-compatible gateway. Any client that works with
 #### Step 1 — Start the proxy
 
 <Tabs>
-<TabItem value="pip" label="pip">
+<TabItem value="cli" label="LiteLLM CLI">
 
 ```shell
 litellm --model huggingface/bigcode/starcoder

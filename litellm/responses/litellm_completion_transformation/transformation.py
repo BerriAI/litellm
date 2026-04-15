@@ -1203,21 +1203,31 @@ class LiteLLMCompletionResponsesConfig:
         return [chat_completion_response_message]
 
     @staticmethod
+    def _resolve_file_id(item: Dict[str, Any]) -> Optional[str]:
+        """
+        Return the effective file_id for a Responses API input_file item.
+        Explicit file_id takes precedence; file_url is used as fallback so
+        downstream providers (Anthropic, Gemini) can handle the URL natively.
+        """
+        return item.get("file_id") or item.get("file_url") or None
+
+    @staticmethod
     def _transform_input_file_item_to_file_item(item: Dict[str, Any]) -> Dict[str, Any]:
         """
         Transform a Responses API input_file item to a Chat Completion file item
 
         Args:
-            item: Dictionary containing input_file type with file_id and/or file_data
+            item: Dictionary containing input_file type with file_id, file_data, and/or file_url
 
         Returns:
             Dictionary with transformed file structure for Chat Completion
         """
         file_dict: Dict[str, Any] = {}
-        keys = ["file_id", "file_data"]
-        for key in keys:
-            if item.get(key):
-                file_dict[key] = item.get(key)
+        file_id = LiteLLMCompletionResponsesConfig._resolve_file_id(item)
+        if file_id:
+            file_dict["file_id"] = file_id
+        if item.get("file_data"):
+            file_dict["file_data"] = item["file_data"]
 
         new_item: Dict[str, Any] = {"type": "file", "file": file_dict}
         return new_item
@@ -1509,7 +1519,7 @@ class LiteLLMCompletionResponsesConfig:
         """
         Map chat completion finish_reason to responses API status.
 
-        Chat completion finish_reason values include: "stop", "length", "tool_calls", "content_filter", "function_call"
+        Chat completion finish_reason values include: "stop", "length", "tool_calls", "content_filter", "function_call", "refusal"
         Responses API status values are: "completed", "failed", "in_progress", "cancelled", "queued", "incomplete"
 
         Args:
@@ -1524,7 +1534,7 @@ class LiteLLMCompletionResponsesConfig:
         # Map finish reasons to status
         if finish_reason in ["stop", "tool_calls", "function_call"]:
             return "completed"
-        elif finish_reason in ["length", "content_filter"]:
+        elif finish_reason in ["length", "content_filter", "refusal"]:
             return "incomplete"
         else:
             # Default to completed for unknown finish reasons

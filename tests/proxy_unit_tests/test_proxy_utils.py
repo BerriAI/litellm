@@ -2044,6 +2044,58 @@ def test_update_model_if_team_alias_exists(data, user_api_key_dict, expected_mod
     assert test_data.get("model") == expected_model
 
 
+def test_team_alias_stale_bypass_disabled_by_default(monkeypatch):
+    monkeypatch.delenv("LITELLM_ENABLE_TEAM_STALE_ALIAS_BYPASS", raising=False)
+    import litellm.proxy.litellm_pre_call_utils as pre_call_utils
+    from litellm.proxy.litellm_pre_call_utils import _update_model_if_team_alias_exists
+    
+    # Reset module-level cache to ensure test isolation
+    pre_call_utils._ENABLE_TEAM_STALE_ALIAS_BYPASS = None
+
+    class _MockRouter:
+        team_model_to_deployment_indices = {("team-1", "gpt-4o"): [0]}
+
+    test_data = {"model": "gpt-4o"}
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test_key",
+        team_id="team-1",
+        team_model_aliases={"gpt-4o": "model_name_team-1_legacy-uuid"},
+    )
+
+    with patch("litellm.proxy.proxy_server.llm_router", _MockRouter()):
+        _update_model_if_team_alias_exists(
+            data=test_data, user_api_key_dict=user_api_key_dict
+        )
+
+    assert test_data.get("model") == "model_name_team-1_legacy-uuid"
+
+
+def test_team_alias_stale_bypass_enabled_by_flag(monkeypatch):
+    import litellm.proxy.litellm_pre_call_utils as pre_call_utils
+    from litellm.proxy.litellm_pre_call_utils import _update_model_if_team_alias_exists
+    
+    # Reset module-level cache to ensure test isolation
+    pre_call_utils._ENABLE_TEAM_STALE_ALIAS_BYPASS = None
+
+    class _MockRouter:
+        team_model_to_deployment_indices = {("team-1", "gpt-4o"): [0]}
+
+    test_data = {"model": "gpt-4o"}
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test_key",
+        team_id="team-1",
+        team_model_aliases={"gpt-4o": "model_name_team-1_legacy-uuid"},
+    )
+    monkeypatch.setenv("LITELLM_ENABLE_TEAM_STALE_ALIAS_BYPASS", "true")
+
+    with patch("litellm.proxy.proxy_server.llm_router", _MockRouter()):
+        _update_model_if_team_alias_exists(
+            data=test_data, user_api_key_dict=user_api_key_dict
+        )
+
+    assert test_data.get("model") == "gpt-4o"
+
+
 @pytest.fixture
 def mock_prisma_client():
     client = MagicMock()
@@ -2585,3 +2637,50 @@ async def test_handle_logging_proxy_only_error_skips_handlers_for_pass_through()
     mock_async.assert_not_called()
     mock_sync.assert_not_called()
     assert logging_obj.call_type == CallTypes.pass_through.value
+
+
+def test_handle_exception_on_proxy_preserves_status_code():
+    """
+    OpenAI batch creation returns 429 for rate limits. LiteLLM wraps this as a
+    RateLimitError with status_code=429. handle_exception_on_proxy must pass
+    that status code through instead of hardcoding 500.
+    """
+    from litellm.proxy.utils import handle_exception_on_proxy
+
+    rate_limit_error = litellm.RateLimitError(
+        message="Rate limit exceeded: batch creation limit of 2000/hour hit",
+        llm_provider="openai",
+        model="gpt-4o",
+    )
+
+    result = handle_exception_on_proxy(rate_limit_error)
+
+    assert int(result.code) == 429, f"Expected 429, got {result.code}"
+
+
+def test_handle_exception_on_proxy_defaults_to_500_for_unknown_exceptions():
+    """
+    Generic exceptions with no status_code should still return 500.
+    """
+    from litellm.proxy.utils import handle_exception_on_proxy
+
+    result = handle_exception_on_proxy(Exception("something went wrong"))
+
+    assert int(result.code) == 500, f"Expected 500, got {result.code}"
+
+
+def test_handle_exception_on_proxy_preserves_auth_error_status_code():
+    """
+    AuthenticationError (401) should also pass through correctly.
+    """
+    from litellm.proxy.utils import handle_exception_on_proxy
+
+    auth_error = litellm.AuthenticationError(
+        message="Invalid API key",
+        llm_provider="openai",
+        model="gpt-4o",
+    )
+
+    result = handle_exception_on_proxy(auth_error)
+
+    assert int(result.code) == 401, f"Expected 401, got {result.code}"

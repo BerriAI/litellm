@@ -23,7 +23,7 @@ cd litellm/cookbook/benchmark
 
 ### Install Dependencies
 ```
-pip install litellm click tqdm tabulate termcolor
+uv add litellm click tqdm tabulate termcolor
 ```
 
 ### Configuration - Set LLM API Keys + LLMs in benchmark.py
@@ -82,13 +82,13 @@ Benchmark Results for 'When will BerriAI IPO?':
 +-----------------+----------------------------------------------------------------------------------+---------------------------+------------+
 ```
 ## Support
-**🤝 Schedule a 1-on-1 Session:** Book a [1-on-1 session](https://calendly.com/d/cx9p-5yf-2nm/litellm-introductions) with Krrish and Ishaan, the founders, to discuss any issues, provide feedback, or explore how we can improve LiteLLM for you.
+**🤝 Schedule a 1-on-1 Session:** Book a [1-on-1 session](https://enterprise.litellm.ai/demo) with Krrish and Ishaan, the founders, to discuss any issues, provide feedback, or explore how we can improve LiteLLM for you.
 
 
 <!-- 
 ## Pre-requisites:
 ``` python
-!pip install litellm
+!uv add litellm
 ```
 
 ## Example Use Case 1 - Code Generator
@@ -102,7 +102,7 @@ litellm is a light package to simplify calling OpenAI, Azure, Cohere, Anthropic,
 --
 Sample Usage:
 ```
-pip install litellm
+uv add litellm
 from litellm import completion
 ## set ENV variables
 os.environ["OPENAI_API_KEY"] = "openai key"

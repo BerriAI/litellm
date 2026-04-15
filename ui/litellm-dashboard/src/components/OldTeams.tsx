@@ -579,14 +579,12 @@ const Teams: React.FC<TeamProps> = ({
           }
         }
 
-        const response: any = await teamCreateCall(accessToken, formValues);
-        if (teams !== null) {
-          setTeams([...teams, response]);
-        } else {
-          setTeams([response]);
-        }
-        console.log(`response for team create call: ${response}`);
+        await teamCreateCall(accessToken, formValues);
         NotificationsManager.success("Team created");
+        await fetchTeamsV2({
+          page: currentPage,
+          size: pageSize,
+        });
         form.resetFields();
         setLoggingSettings([]);
         setModelAliases({});
@@ -697,6 +695,7 @@ const Teams: React.FC<TeamProps> = ({
             className="text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs cursor-pointer"
             style={{ fontSize: 14, padding: "1px 8px" }}
             onClick={() => setSelectedTeamId(record.team_id)}
+            data-testid="team-id-cell"
           >
             {id}
           </Text>
@@ -900,6 +899,7 @@ const Teams: React.FC<TeamProps> = ({
                   icon={<PlusOutlined />}
                   onClick={() => setIsTeamModalVisible(true)}
                   style={{ marginTop: 16 }}
+                  data-testid="create-team-button"
                 >
                   Create Team
                 </Button>
@@ -1043,7 +1043,7 @@ const Teams: React.FC<TeamProps> = ({
               </Text>
             </Space>
             {canCreateOrManageTeams(userRole, userID, organizations) && (
-              <Button type="primary" icon={<PlusOutlined />} onClick={() => setIsTeamModalVisible(true)}>
+              <Button type="primary" icon={<PlusOutlined />} onClick={() => setIsTeamModalVisible(true)} data-testid="create-team-button">
                 Create Team
               </Button>
             )}
@@ -1080,7 +1080,7 @@ const Teams: React.FC<TeamProps> = ({
                       },
                     ]}
                   >
-                    <TextInput placeholder="" />
+                    <TextInput placeholder="" data-testid="team-name-input" />
                   </Form.Item>
                   {(() => {
                     const adminOrgs = getAdminOrganizations(userRole, userID, organizations);
@@ -1569,7 +1569,7 @@ const Teams: React.FC<TeamProps> = ({
                   </Accordion>
                 </>
                 <div style={{ textAlign: "right", marginTop: "10px" }}>
-                  <Button htmlType="submit">Create Team</Button>
+                  <Button htmlType="submit" data-testid="create-team-submit">Create Team</Button>
                 </div>
               </Form>
             </Modal>

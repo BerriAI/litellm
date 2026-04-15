@@ -58,9 +58,10 @@ from litellm.llms.lemonade.cost_calculator import (
     cost_per_token as lemonade_cost_per_token,
 )
 from litellm.llms.openai.cost_calculation import (
+    _video_output_cost_per_second,
     cost_per_second as openai_cost_per_second,
+    cost_per_token as openai_cost_per_token,
 )
-from litellm.llms.openai.cost_calculation import cost_per_token as openai_cost_per_token
 from litellm.llms.perplexity.cost_calculator import (
     cost_per_token as perplexity_cost_per_token,
 )
@@ -545,8 +546,8 @@ def cost_per_token(  # noqa: PLR0915
         )
 
         if (
-            model_info.get("input_cost_per_token", 0) > 0
-            or model_info.get("output_cost_per_token", 0) > 0
+            (model_info.get("input_cost_per_token") or 0.0) > 0
+            or (model_info.get("output_cost_per_token") or 0.0) > 0
         ):
             return generic_cost_per_token(
                 model=model,
@@ -1144,15 +1145,16 @@ def completion_cost(  # noqa: PLR0915
                     if isinstance(usage_obj, BaseModel) and not _is_known_usage_objects(
                         usage_obj=usage_obj
                     ):
+                        _usage_for_dump = cast(BaseModel, usage_obj)
                         setattr(
                             completion_response,
                             "usage",
-                            litellm.Usage(**usage_obj.model_dump()),
+                            litellm.Usage(**_usage_for_dump.model_dump()),
                         )
                     if usage_obj is None:
                         _usage = {}
                     elif isinstance(usage_obj, BaseModel):
-                        _usage = usage_obj.model_dump()
+                        _usage = cast(BaseModel, usage_obj).model_dump()
                     else:
                         _usage = usage_obj
 
@@ -1279,14 +1281,20 @@ def completion_cost(  # noqa: PLR0915
                             _video_model_info = _metadata.get("model_info", None)
 
                     usage_obj = getattr(completion_response, "usage", None)
+                    duration_seconds: Optional[float] = None
+                    video_resolution: Optional[str] = None
                     if completion_response is not None and usage_obj:
                         # Handle both dict and Pydantic Usage object
                         if isinstance(usage_obj, dict):
                             duration_seconds = usage_obj.get("duration_seconds", None)
+                            _vr = usage_obj.get("video_resolution", None)
                         else:
                             duration_seconds = getattr(
                                 usage_obj, "duration_seconds", None
                             )
+                            _vr = getattr(usage_obj, "video_resolution", None)
+                        if _vr is not None:
+                            video_resolution = str(_vr).strip().lower()
 
                         if duration_seconds is not None:
                             # Calculate cost based on video duration using video-specific cost calculation
@@ -1299,6 +1307,7 @@ def completion_cost(  # noqa: PLR0915
                                 duration_seconds=duration_seconds,
                                 custom_llm_provider=custom_llm_provider,
                                 model_info=_video_model_info,
+                                video_resolution=video_resolution,
                             )
                     # Fallback to default video cost calculation if no duration available
                     return default_video_cost_calculator(
@@ -1306,6 +1315,7 @@ def completion_cost(  # noqa: PLR0915
                         duration_seconds=0.0,  # Default to 0 if no duration available
                         custom_llm_provider=custom_llm_provider,
                         model_info=_video_model_info,
+                        video_resolution=video_resolution,
                     )
                 elif call_type in _SPEECH_CALL_TYPES:
                     prompt_characters = litellm.utils._count_characters(text=prompt)
@@ -1626,7 +1636,7 @@ def get_response_cost_from_hidden_params(
     hidden_params: Union[dict, BaseModel],
 ) -> Optional[float]:
     if isinstance(hidden_params, BaseModel):
-        _hidden_params_dict = hidden_params.model_dump()
+        _hidden_params_dict = cast(BaseModel, hidden_params).model_dump()
     else:
         _hidden_params_dict = hidden_params
 
@@ -1963,6 +1973,7 @@ def default_video_cost_calculator(
     duration_seconds: float,
     custom_llm_provider: Optional[str] = None,
     model_info: Optional[ModelInfo] = None,
+    video_resolution: Optional[str] = None,
 ) -> float:
     """
     Default video cost calculator for video generation
@@ -1974,6 +1985,7 @@ def default_video_cost_calculator(
         model_info (Optional[ModelInfo]): Deployment-level model info containing
             custom video pricing. When provided, used before falling back to
             the global litellm.model_cost lookup.
+        video_resolution (Optional[str]): From usage (e.g. ``720p``, ``1080p``) for tiered per-second pricing.
 
     Returns:
         float: Cost in USD for the video generation
@@ -2027,8 +2039,7 @@ def default_video_cost_calculator(
     if video_cost_per_second is not None:
         return video_cost_per_second * duration_seconds
 
-    # Fallback to general output cost per second
-    output_cost_per_second = cost_info.get("output_cost_per_second")
+    output_cost_per_second = _video_output_cost_per_second(cost_info, video_resolution)
     if output_cost_per_second is not None:
         return output_cost_per_second * duration_seconds
 

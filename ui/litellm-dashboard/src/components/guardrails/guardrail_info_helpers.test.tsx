@@ -10,6 +10,8 @@ import {
   DynamicGuardrailProviders,
   guardrail_provider_map,
   GuardrailProviders,
+  skipSystemMessageToChoice,
+  choiceToSkipSystemForCreate,
 } from "./guardrail_info_helpers";
 
 describe("guardrail_info_helpers", () => {
@@ -197,6 +199,20 @@ describe("guardrail_info_helpers", () => {
 
       expect(result.displayName).toBe("Noma Security");
       expect(result.logo).toContain("noma_security.png");
+    });
+  });
+
+  describe("skipSystemMessageToChoice / choiceToSkipSystemForCreate", () => {
+    it("maps API values to form choices and back for create", () => {
+      expect(skipSystemMessageToChoice(undefined)).toBe("inherit");
+      expect(skipSystemMessageToChoice(null)).toBe("inherit");
+      expect(skipSystemMessageToChoice(true)).toBe("yes");
+      expect(skipSystemMessageToChoice(false)).toBe("no");
+
+      expect(choiceToSkipSystemForCreate("inherit")).toBeUndefined();
+      expect(choiceToSkipSystemForCreate(undefined)).toBeUndefined();
+      expect(choiceToSkipSystemForCreate("yes")).toBe(true);
+      expect(choiceToSkipSystemForCreate("no")).toBe(false);
     });
   });
 });

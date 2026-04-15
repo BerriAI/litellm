@@ -12,6 +12,7 @@ from typing import (
 
 import httpx
 
+from litellm.anthropic_beta_headers_manager import filter_and_transform_beta_headers
 from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
     AnthropicMessagesConfig,
@@ -24,8 +25,10 @@ from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation
     AmazonInvokeConfig,
 )
 from litellm.llms.bedrock.common_utils import (
+    ensure_bedrock_anthropic_messages_tool_names,
     get_anthropic_beta_from_headers,
     is_claude_4_5_on_bedrock,
+    normalize_tool_input_schema_types_for_bedrock_invoke,
     remove_custom_field_from_tools,
 )
 from litellm.types.llms.anthropic import ANTHROPIC_TOOL_SEARCH_BETA_HEADER
@@ -53,9 +56,6 @@ class AmazonAnthropicClaudeMessagesConfig(
     """
 
     DEFAULT_BEDROCK_ANTHROPIC_API_VERSION = "bedrock-2023-05-31"
-
-    # Beta header patterns that are not supported by Bedrock Invoke API
-    # These will be filtered out to prevent 400 "invalid beta flag" errors
 
     def __init__(self, **kwargs):
         BaseAnthropicMessagesConfig.__init__(self, **kwargs)
@@ -428,6 +428,8 @@ class AmazonAnthropicClaudeMessagesConfig(
         # which causes Bedrock to reject the request with "Extra inputs are not permitted"
         # Ref: https://github.com/BerriAI/litellm/issues/22847
         remove_custom_field_from_tools(anthropic_messages_request)
+        normalize_tool_input_schema_types_for_bedrock_invoke(anthropic_messages_request)
+        ensure_bedrock_anthropic_messages_tool_names(anthropic_messages_request)
 
         # 6. AUTO-INJECT beta headers based on features used
         anthropic_model_info = AnthropicModelInfo()
@@ -439,7 +441,8 @@ class AmazonAnthropicClaudeMessagesConfig(
         )
         input_examples_used = anthropic_model_info.is_input_examples_used(tools)
 
-        beta_set = set(get_anthropic_beta_from_headers(headers))
+        user_beta_set = set(get_anthropic_beta_from_headers(headers))
+        beta_set = set(user_beta_set)
         auto_betas = anthropic_model_info.get_anthropic_beta_list(
             model=model,
             optional_params=anthropic_messages_optional_request_params,
@@ -463,8 +466,13 @@ class AmazonAnthropicClaudeMessagesConfig(
         if "tool-search-tool-2025-10-19" in beta_set:
             beta_set.add("tool-examples-2025-10-29")
 
-        if beta_set:
-            anthropic_messages_request["anthropic_beta"] = list(beta_set)
+        filtered_auto_betas = filter_and_transform_beta_headers(
+            beta_headers=list(beta_set - user_beta_set),
+            provider="bedrock",
+        )
+        filtered_betas = sorted(user_beta_set.union(set(filtered_auto_betas)))
+        if filtered_betas:
+            anthropic_messages_request["anthropic_beta"] = filtered_betas
 
         return anthropic_messages_request
 
@@ -498,6 +506,12 @@ class AmazonAnthropicClaudeMessagesConfig(
     ):
         """
         Bedrock invoke does not return SSE formatted data. This function is a wrapper to ensure litellm chunks are SSE formatted.
+
+        Bedrock's Anthropic-compatible streaming puts cache usage fields
+        (cache_creation_input_tokens, cache_read_input_tokens) only on
+        message_stop, not on message_start or message_delta. Claude Code's
+        SDK only merges usage from message_delta, so we promote those fields
+        from message_stop onto message_delta before yielding.
         """
         from litellm.llms.anthropic.experimental_pass_through.messages.streaming_iterator import (
             BaseAnthropicMessagesStreamingIterator,
@@ -508,8 +522,75 @@ class AmazonAnthropicClaudeMessagesConfig(
             request_body=request_body,
         )
 
-        async for chunk in handler.async_sse_wrapper(completion_stream):
+        patched_stream = self._promote_message_stop_usage(completion_stream)
+
+        async for chunk in handler.async_sse_wrapper(patched_stream):
             yield chunk
+
+    @staticmethod
+    async def _promote_message_stop_usage(
+        completion_stream: AsyncIterator[
+            Union[bytes, GenericStreamingChunk, ModelResponseStream, dict]
+        ],
+    ) -> AsyncIterator[Union[bytes, GenericStreamingChunk, ModelResponseStream, dict]]:
+        """
+        Promote cache usage fields from message_stop onto message_delta.
+
+        Bedrock reports input_tokens (uncached only) on message_start, and
+        the full breakdown (input_tokens, cache_creation_input_tokens,
+        cache_read_input_tokens) only on message_stop. Claude Code's SDK
+        merges usage from message_start and message_delta but ignores
+        message_stop. This method buffers message_delta and, when
+        message_stop arrives with cache usage, merges those fields into the
+        message_delta usage. input_tokens is kept as the uncached-only
+        count; downstream calculate_usage adds cache tokens to
+        prompt_tokens.
+        """
+        _CACHE_FIELDS = ("cache_creation_input_tokens", "cache_read_input_tokens")
+        pending_delta = None
+
+        async for chunk in completion_stream:
+            if not isinstance(chunk, dict):
+                if pending_delta is not None:
+                    yield pending_delta
+                    pending_delta = None
+                yield chunk
+                continue
+
+            chunk_type = chunk.get("type")
+
+            if chunk_type == "message_delta":
+                pending_delta = chunk
+                continue
+
+            if chunk_type == "message_stop" and pending_delta is not None:
+                stop_usage = dict(chunk.get("usage") or {})
+                delta_usage = dict(pending_delta.get("usage") or {})
+
+                for field in _CACHE_FIELDS:
+                    if field in stop_usage:
+                        delta_usage[field] = stop_usage[field]
+
+                raw_input = stop_usage.get("input_tokens")
+                if raw_input is not None:
+                    delta_usage["input_tokens"] = raw_input if isinstance(raw_input, int) else 0
+
+                if delta_usage:
+                    pending_delta["usage"] = delta_usage  # type: ignore[arg-type]
+
+                yield pending_delta
+                pending_delta = None
+                yield chunk
+                continue
+
+            if pending_delta is not None:
+                yield pending_delta
+                pending_delta = None
+
+            yield chunk
+
+        if pending_delta is not None:
+            yield pending_delta
 
 
 class AmazonAnthropicClaudeMessagesStreamDecoder(AWSEventStreamDecoder):
