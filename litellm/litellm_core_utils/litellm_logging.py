@@ -287,6 +287,28 @@ def _get_cached_prometheus_logger():
     return _PrometheusLogger
 
 
+def _normalize_mcp_tool_response_for_post_hook(response_obj: Any) -> List[Any]:
+    """
+    Coerce MCP tool execution results into content blocks for MCPPostCallResponseObject.
+
+    ``CallToolResult`` exposes ``content`` as a list of MCP content blocks; callers or
+    tests may pass a plain dict or other JSON-serializable value instead.
+    """
+    if response_obj is None:
+        return []
+    if hasattr(response_obj, "content"):
+        content = getattr(response_obj, "content")
+        if isinstance(content, list):
+            return list(content)
+    if isinstance(response_obj, list):
+        return list(response_obj)
+    try:
+        text = json.dumps(response_obj, default=str)
+    except Exception:
+        text = str(response_obj)
+    return [{"type": "text", "text": text}]
+
+
 class Logging(LiteLLMLoggingBaseClass):
     global supabaseClient, promptLayerLogger, weightsBiasesLogger, logfireLogger, capture_exception, add_breadcrumb, lunaryLogger, logfireLogger, prometheusLogger, slack_app
     custom_pricing: bool = False
@@ -1322,9 +1344,11 @@ class Logging(LiteLLMLoggingBaseClass):
             dynamic_success_callbacks=self.dynamic_success_callbacks,
             global_callbacks=litellm.success_callback,
         )
+        normalized_mcp_content = _normalize_mcp_tool_response_for_post_hook(response_obj)
         post_mcp_tool_call_response_obj: MCPPostCallResponseObject = (
             MCPPostCallResponseObject(
-                mcp_tool_call_response=response_obj, hidden_params=HiddenParams()
+                mcp_tool_call_response=normalized_mcp_content,
+                hidden_params=HiddenParams(),
             )
         )
         for callback in callbacks:

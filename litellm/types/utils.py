@@ -2560,6 +2560,12 @@ class StandardLoggingMCPToolCall(TypedDict, total=False):
     Cost per query for the MCP server tool call
     """
 
+    custom_headers: Optional[Dict[str, str]]
+    """
+    Custom (x-*) headers sent by the client in the MCP tool call request.
+    Filtered to include only x-* prefixed headers, excluding sensitive auth headers.
+    """
+
 
 class StandardLoggingVectorStoreRequest(TypedDict, total=False):
     """
