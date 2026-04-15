@@ -1,7 +1,7 @@
 import asyncio
 import json
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import List, Literal, Optional, Union
 
 from litellm._logging import verbose_proxy_logger
@@ -652,24 +652,13 @@ class ResetBudgetJob:
     ) -> LiteLLM_BudgetTableFull:
         try:
             if budget.budget_duration is not None:
-                from litellm.litellm_core_utils.duration_parser import (
-                    duration_in_seconds,
+                from litellm.proxy.common_utils.timezone_utils import (
+                    get_budget_reset_time,
                 )
 
-                duration_s = duration_in_seconds(duration=budget.budget_duration)
-
-                # Fallback for existing budgets that do not have a budget_reset_at date set, ensuring the duration is taken into account
-                if (
-                    budget.budget_reset_at is None
-                    and budget.created_at + timedelta(seconds=duration_s) > current_time
-                ):
-                    budget.budget_reset_at = budget.created_at + timedelta(
-                        seconds=duration_s
-                    )
-                else:
-                    budget.budget_reset_at = current_time + timedelta(
-                        seconds=duration_s
-                    )
+                budget.budget_reset_at = get_budget_reset_time(
+                    budget_duration=budget.budget_duration
+                )
         except Exception as e:
             verbose_proxy_logger.exception(
                 "Error resetting budget_reset_at for budget: %s. Item: %s", e, budget
