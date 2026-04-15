@@ -6,16 +6,20 @@ import os
 import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import litellm
 import pytest
 from fastapi import HTTPException
 
 sys.path.insert(0, os.path.abspath("../../../../../.."))
 
+from litellm.caching.caching import DualCache
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails import (
     BedrockGuardrail,
     _redact_pii_matches,
 )
+from litellm.proxy.utils import ProxyLogging
+from litellm.types.guardrails import GuardrailEventHooks
 
 
 @pytest.mark.asyncio
@@ -1207,6 +1211,96 @@ def _make_guardrail() -> BedrockGuardrail:
 def test_bedrock_guardrail_uses_native_during_call_hook():
     """during_call must use async_moderation_hook, not unified apply_guardrail(input=request)."""
     assert BedrockGuardrail.use_native_during_call_hook is True
+
+
+@pytest.mark.asyncio
+async def test_make_bedrock_api_request_logging_event_type_for_spend_logs():
+    """
+    Spend/UI use event_type from the proxy hook, not Bedrock's INPUT/OUTPUT alone.
+    When logging_event_type is set, it must be forwarded to standard guardrail logging.
+    When omitted, INPUT maps to pre_call (legacy).
+    """
+    guardrail = BedrockGuardrail(
+        guardrailIdentifier="test-guardrail", guardrailVersion="DRAFT"
+    )
+    mock_credentials = MagicMock()
+    mock_credentials.access_key = "test-access-key"
+    mock_credentials.secret_key = "test-secret-key"
+    mock_credentials.token = None
+
+    mock_bedrock_response = MagicMock()
+    mock_bedrock_response.status_code = 200
+    mock_bedrock_response.json.return_value = {"action": "NONE", "assessments": []}
+
+    request_data = {
+        "model": "gpt-4o",
+        "messages": [{"role": "user", "content": "hi"}],
+    }
+
+    with patch.object(
+        guardrail.async_handler, "post", new_callable=AsyncMock
+    ) as mock_post, patch.object(
+        guardrail, "_load_credentials", return_value=(mock_credentials, "us-east-1")
+    ), patch.object(guardrail, "_prepare_request", return_value=MagicMock()), patch.object(
+        guardrail,
+        "add_standard_logging_guardrail_information_to_request_data",
+    ) as mock_log:
+        mock_post.return_value = mock_bedrock_response
+
+        await guardrail.make_bedrock_api_request(
+            source="INPUT",
+            messages=request_data["messages"],
+            request_data=request_data,
+            logging_event_type=GuardrailEventHooks.during_call,
+        )
+        assert mock_log.call_args.kwargs["event_type"] == GuardrailEventHooks.during_call
+
+        mock_log.reset_mock()
+
+        await guardrail.make_bedrock_api_request(
+            source="INPUT",
+            messages=request_data["messages"],
+            request_data=request_data,
+        )
+        assert mock_log.call_args.kwargs["event_type"] == GuardrailEventHooks.pre_call
+
+
+@pytest.mark.asyncio
+async def test_during_call_hook_invokes_bedrock_async_moderation_hook():
+    """
+    Bedrock sets use_native_during_call_hook so ProxyLogging runs the real
+    async_moderation_hook (unified apply_guardrail would log INPUT as pre_call).
+    """
+    cache = DualCache()
+    proxy_logging = ProxyLogging(user_api_key_cache=cache)
+
+    guardrail = BedrockGuardrail(
+        guardrail_name="bedrock-during-test",
+        guardrailIdentifier="gid",
+        guardrailVersion="1",
+        event_hook=GuardrailEventHooks.during_call,
+        default_on=True,
+    )
+    mock_mod = AsyncMock(return_value=None)
+    guardrail.async_moderation_hook = mock_mod  # type: ignore[method-assign]
+
+    original_callbacks = litellm.callbacks.copy() if litellm.callbacks else []
+    try:
+        litellm.callbacks = [guardrail]
+        await proxy_logging.during_call_hook(
+            data={
+                "model": "gpt-4",
+                "messages": [{"role": "user", "content": "test"}],
+            },
+            user_api_key_dict=UserAPIKeyAuth(
+                api_key="test_key", user_id="test_user"
+            ),
+            call_type="completion",
+        )
+    finally:
+        litellm.callbacks = original_callbacks
+
+    mock_mod.assert_awaited_once()
 
 
 def test_extract_blocked_assessments_pii_entity():
