@@ -251,10 +251,10 @@ def test_azure_assistant_features_integrated_cost_tracking():
     
     # Should calculate costs for:
     # - Vector store: 1.0 * 10 * 0.1 = $1.00
-    # - Computer use: (1000/1000 * 3.0) + (500/1000 * 12.0) = $9.00  
+    # - Computer use: (1000/1000 * 0.003) + (500/1000 * 0.012) = $0.009  
     # - Code interpreter: 2 * 0.03 = $0.06
-    # Total: $10.06
-    expected_cost = 1.0 + 9.0 + 0.06
+    # Total: $1.069
+    expected_cost = 1.0 + 0.009 + 0.06
     assert abs(cost - expected_cost) < 0.01, f"Expected ~{expected_cost}, got {cost}"
 
 
