@@ -75,7 +75,7 @@ The Skills Marketplace gives teams a self-hosted catalog for discovering, instal
 
 Guardrail pipelines now support an optional `on_error` behavior. When a guardrail check fails or errors out, you can configure the pipeline to fall back gracefully — logging the failure and continuing the request — instead of returning a hard 500 to the caller. This is especially useful for non-critical guardrails where availability matters more than enforcement.
 
-[Get Started](../../docs/proxy/guardrails/policy_flow_builder)
+[Get Started](../../docs/proxy/guardrails/policy_flow_builder#configure-guardrail-fallbacks-in-the-ui-walkthrough)
 
 ### Team Bring Your Own Guardrails
 
