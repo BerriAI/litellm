@@ -1,7 +1,5 @@
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.experimental_pass_through.transformation import (
     VertexAIPartnerModelsAnthropicMessagesConfig,
 )
@@ -331,6 +329,31 @@ def test_validate_environment_appends_raw_predict_with_custom_api_base():
     spy_get_url.assert_called_once()
     assert api_base is not None
     assert api_base.endswith(":rawPredict")
+
+
+def test_validate_environment_with_custom_api_base_appends_streaming_suffix():
+    """Ensure custom Vertex Anthropic api_base values still get the streaming endpoint suffix."""
+    config = VertexAIPartnerModelsAnthropicMessagesConfig()
+    headers = {"Authorization": "Bearer existing-token"}
+    custom_api_base = (
+        "https://aiplatform.us.rep.googleapis.com/v1/projects/test-project/"
+        "locations/us/publishers/anthropic/models/claude-sonnet-4-5@20250929"
+    )
+
+    updated_headers, api_base = config.validate_anthropic_messages_environment(
+        headers=headers,
+        model="claude-sonnet-4-5@20250929",
+        messages=[],
+        optional_params={"stream": True},
+        litellm_params={
+            "vertex_ai_project": "test-project",
+            "vertex_ai_location": "us",
+        },
+        api_base=custom_api_base,
+    )
+
+    assert api_base == f"{custom_api_base}:streamRawPredict?alt=sse"
+    assert updated_headers["Authorization"] == "Bearer existing-token"
 
 
 def test_transform_anthropic_messages_request_removes_scope_from_cache_control():

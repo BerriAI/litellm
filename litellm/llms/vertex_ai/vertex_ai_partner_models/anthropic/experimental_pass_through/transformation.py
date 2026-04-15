@@ -49,6 +49,9 @@ class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, Vert
         )
         headers["Authorization"] = f"Bearer {access_token}"
 
+        # Always normalize the Vertex URL, even when a custom api_base is supplied.
+        # get_complete_vertex_url() appends the required :rawPredict/:streamRawPredict
+        # suffix for partner-model passthrough requests.
         api_base = self.get_complete_vertex_url(
             custom_api_base=api_base,
             vertex_location=vertex_ai_location,
