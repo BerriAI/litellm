@@ -225,15 +225,21 @@ export const CreateUserButton: React.FC<CreateuserProps> = ({
           <Input.TextArea rows={4} placeholder="Enter metadata as JSON" />
         </Form.Item>
 
-        <Form.Item
-          name="send_invite_email"
-          valuePropName="checked"
-          wrapperCol={{ offset: 8, span: 16 }}
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            marginTop: "10px",
+          }}
         >
-          <Checkbox>Send invitation email</Checkbox>
-        </Form.Item>
-
-        <div style={{ textAlign: "right", marginTop: "10px" }}>
+          <Form.Item
+            name="send_invite_email"
+            valuePropName="checked"
+            style={{ marginBottom: 0 }}
+          >
+            <Checkbox>Send invitation email</Checkbox>
+          </Form.Item>
           <Button htmlType="submit">Create User</Button>
         </div>
       </Form>
@@ -370,15 +376,21 @@ export const CreateUserButton: React.FC<CreateuserProps> = ({
             </AccordionBody>
           </Accordion>
 
-          <Form.Item
-            name="send_invite_email"
-            valuePropName="checked"
-            wrapperCol={{ offset: 8, span: 16 }}
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+              marginTop: "10px",
+            }}
           >
-            <Checkbox>Send invitation email</Checkbox>
-          </Form.Item>
-
-          <div style={{ textAlign: "right", marginTop: "10px" }}>
+            <Form.Item
+              name="send_invite_email"
+              valuePropName="checked"
+              style={{ marginBottom: 0 }}
+            >
+              <Checkbox>Send invitation email</Checkbox>
+            </Form.Item>
             <Button type="primary" icon={<UserAddOutlined />} htmlType="submit">
               Invite User
             </Button>
