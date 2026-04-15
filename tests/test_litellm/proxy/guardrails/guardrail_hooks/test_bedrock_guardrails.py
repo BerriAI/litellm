@@ -1204,6 +1204,11 @@ def _make_guardrail() -> BedrockGuardrail:
     )
 
 
+def test_bedrock_guardrail_uses_native_during_call_hook():
+    """during_call must use async_moderation_hook, not unified apply_guardrail(input=request)."""
+    assert BedrockGuardrail.use_native_during_call_hook is True
+
+
 def test_extract_blocked_assessments_pii_entity():
     """L3: PII entity match (BLOCKED) is surfaced with category, type, and matched term."""
     g = _make_guardrail()

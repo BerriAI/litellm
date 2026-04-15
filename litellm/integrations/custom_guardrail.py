@@ -2,6 +2,7 @@ from datetime import datetime
 from typing import (
     TYPE_CHECKING,
     Any,
+    ClassVar,
     Dict,
     List,
     Literal,
@@ -81,6 +82,9 @@ class ModifyResponseException(Exception):
 
 
 class CustomGuardrail(CustomLogger):
+    # If True, during_call runs async_moderation_hook instead of the unified apply_guardrail path.
+    use_native_during_call_hook: ClassVar[bool] = False
+
     def __init__(
         self,
         guardrail_name: Optional[str] = None,
