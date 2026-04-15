@@ -5358,9 +5358,11 @@ class Router:
         _request_team_id: Optional[str] = (
             kwargs.get("metadata", {}) or {}
         ).get("user_api_key_team_id")
-        all_deployments = self._get_all_deployments(
+        # Use wildcard-aware lookup so order-based fallback also works for model
+        # groups resolved via pattern routing (e.g. `openai/*` -> `openai/gpt-4.1-mini`).
+        all_deployments = self.get_model_list(
             model_name=original_model_group, team_id=_request_team_id
-        )
+        ) or []
         _order_set: set = {
             litellm.utils._get_deployment_order(d)
             for d in all_deployments
