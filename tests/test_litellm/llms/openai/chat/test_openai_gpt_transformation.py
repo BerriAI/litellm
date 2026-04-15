@@ -281,6 +281,45 @@ class TestOpenAIChatCompletionStreamingHandler:
         # Verify that reasoning_content is not set (it should be deleted by Delta.__init__)
         assert not hasattr(parsed_chunk.choices[0].delta, "reasoning_content")
 
+    def test_chunk_parser_without_id_field(self):
+        """
+        Test that chunk_parser works when chunk is missing the 'id' field.
+
+        Some OpenAI-compatible providers (e.g., MiniMax) return streaming chunks
+        without an 'id' field in certain cases. This should not raise KeyError.
+
+        Regression test for: KeyError: 'id' when using MiniMax m2.5 model
+        """
+        handler = OpenAIChatCompletionStreamingHandler(
+            streaming_response=None, sync_stream=True
+        )
+
+        # Simulate a chunk without 'id' field (as returned by MiniMax)
+        chunk = {
+            "object": "chat.completion.chunk",
+            "created": 1769511767,
+            "model": "minimax/m2.5",
+            "choices": [
+                {
+                    "delta": {
+                        "content": "Hello",
+                        "role": "assistant",
+                    },
+                    "finish_reason": None,
+                    "index": 0,
+                }
+            ],
+        }
+
+        # Parse the chunk - should not raise KeyError
+        parsed_chunk = handler.chunk_parser(chunk)
+
+        # Verify that content is present and id was auto-generated
+        assert parsed_chunk.choices[0].delta.content == "Hello"
+        assert parsed_chunk.choices[0].delta.role == "assistant"
+        # ModelResponseStream auto-generates an id when None is passed
+        assert parsed_chunk.id is not None
+
 
 class TestPromptCacheKeyIntegration:
     """Tests for prompt_cache_key support"""

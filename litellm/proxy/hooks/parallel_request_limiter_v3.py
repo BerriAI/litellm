@@ -687,8 +687,12 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         if not requested_model:
             return
 
-        _tpm_limit_for_key_model = get_key_model_tpm_limit(user_api_key_dict)
-        _rpm_limit_for_key_model = get_key_model_rpm_limit(user_api_key_dict)
+        _tpm_limit_for_key_model = get_key_model_tpm_limit(
+            user_api_key_dict, model_name=requested_model
+        )
+        _rpm_limit_for_key_model = get_key_model_rpm_limit(
+            user_api_key_dict, model_name=requested_model
+        )
 
         if _tpm_limit_for_key_model is None and _rpm_limit_for_key_model is None:
             return

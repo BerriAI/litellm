@@ -47,8 +47,8 @@ async def test_delete_deployment():
 
     litellm_params = LiteLLM_Params(
         model="azure/gpt-4.1-mini",
-        api_key=os.getenv("AZURE_API_KEY"),
-        api_base=os.getenv("AZURE_API_BASE"),
+        api_key=os.getenv("AZURE_AI_API_KEY"),
+        api_base=os.getenv("AZURE_AI_API_BASE"),
         api_version=os.getenv("AZURE_API_VERSION"),
     )
     encrypted_litellm_params = litellm_params.dict(exclude_none=True)
@@ -131,8 +131,8 @@ async def test_add_existing_deployment():
 
     litellm_params = LiteLLM_Params(
         model="gpt-3.5-turbo",
-        api_key=os.getenv("AZURE_API_KEY"),
-        api_base=os.getenv("AZURE_API_BASE"),
+        api_key=os.getenv("AZURE_AI_API_KEY"),
+        api_base=os.getenv("AZURE_AI_API_BASE"),
         api_version=os.getenv("AZURE_API_VERSION"),
     )
     deployment = Deployment(model_name="gpt-3.5-turbo", litellm_params=litellm_params)
@@ -186,8 +186,8 @@ async def test_db_error_new_model_check():
 
     litellm_params = LiteLLM_Params(
         model="gpt-3.5-turbo",
-        api_key=os.getenv("AZURE_API_KEY"),
-        api_base=os.getenv("AZURE_API_BASE"),
+        api_key=os.getenv("AZURE_AI_API_KEY"),
+        api_base=os.getenv("AZURE_AI_API_BASE"),
         api_version=os.getenv("AZURE_API_VERSION"),
     )
     deployment = Deployment(model_name="gpt-3.5-turbo", litellm_params=litellm_params)
@@ -233,8 +233,8 @@ async def test_db_error_new_model_check():
 
 litellm_params = LiteLLM_Params(
     model="azure/gpt-4.1-mini",
-    api_key=os.getenv("AZURE_API_KEY"),
-    api_base=os.getenv("AZURE_API_BASE"),
+    api_key=os.getenv("AZURE_AI_API_KEY"),
+    api_base=os.getenv("AZURE_AI_API_BASE"),
     api_version=os.getenv("AZURE_API_VERSION"),
 )
 
@@ -251,8 +251,8 @@ def _create_model_list(flag_value: Literal[0, 1], master_key: str):
 
     new_litellm_params = LiteLLM_Params(
         model="azure/gpt-4.1-mini-3",
-        api_key=os.getenv("AZURE_API_KEY"),
-        api_base=os.getenv("AZURE_API_BASE"),
+        api_key=os.getenv("AZURE_AI_API_KEY"),
+        api_base=os.getenv("AZURE_AI_API_BASE"),
         api_version=os.getenv("AZURE_API_VERSION"),
     )
 
@@ -421,4 +421,3 @@ def test_litellm_proxy_responses_api_config():
     assert (
         config.custom_llm_provider == LlmProviders.LITELLM_PROXY
     ), "custom_llm_provider should be LITELLM_PROXY"
-

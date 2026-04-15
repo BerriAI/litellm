@@ -312,7 +312,7 @@ const CreateTeamModal = ({
               },
             ]}
           >
-            <TextInput placeholder="" />
+            <TextInput placeholder="" data-testid="team-name-input" />
           </Form.Item>
           <Form.Item
             label={
@@ -379,7 +379,7 @@ const CreateTeamModal = ({
             }
             name="models"
           >
-            <Select2 mode="multiple" placeholder="Select models" style={{ width: "100%" }}>
+            <Select2 mode="multiple" placeholder="Select models" style={{ width: "100%" }} data-testid="team-models-select">
               <Select2.Option key="all-proxy-models" value="all-proxy-models">
                 All Proxy Models
               </Select2.Option>
@@ -716,7 +716,7 @@ const CreateTeamModal = ({
           </Accordion>
         </>
         <div style={{ textAlign: "right", marginTop: "10px" }}>
-          <Button2 htmlType="submit">Create Team</Button2>
+          <Button2 htmlType="submit" data-testid="create-team-submit">Create Team</Button2>
         </div>
       </Form>
     </Modal>

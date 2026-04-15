@@ -23,12 +23,14 @@ Example environment variables:
 See: https://learn.microsoft.com/en-us/azure/ai-foundry/agents/quickstart
 """
 
+import json
 import os
 import sys
 
 sys.path.insert(0, os.path.abspath("../.."))
 
 import pytest
+from unittest.mock import MagicMock
 
 import litellm
 
@@ -343,13 +345,286 @@ def test_azure_ai_agents_extract_content_from_messages():
         ]
     }
 
-    content = handler._extract_content_from_messages(messages_data)
+    content, annotations = handler._extract_content_from_messages(messages_data)
     assert content == "The answer is 100."
+    assert annotations is None
 
     # Test empty response
     empty_data = {"data": []}
-    content = handler._extract_content_from_messages(empty_data)
+    content, annotations = handler._extract_content_from_messages(empty_data)
     assert content == ""
+    assert annotations is None
+
+
+def test_azure_ai_agents_extract_content_with_annotations():
+    """
+    Test that annotations (e.g., Bing Search citations) are extracted from
+    Azure Agents message responses and transformed to OpenAI-compatible format.
+
+    Ref: https://github.com/BerriAI/litellm/issues/19126
+    """
+    from litellm.llms.azure_ai.agents.handler import AzureAIAgentsHandler
+
+    handler = AzureAIAgentsHandler()
+
+    messages_data = {
+        "data": [
+            {
+                "id": "msg_abc",
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": {
+                            "value": "According to sources [1], the answer is yes.",
+                            "annotations": [
+                                {
+                                    "type": "url_citation",
+                                    "text": "[1]",
+                                    "start_index": 22,
+                                    "end_index": 25,
+                                    "url_citation": {
+                                        "url": "https://example.com/source",
+                                        "title": "Example Source"
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                ]
+            }
+        ]
+    }
+
+    content, annotations = handler._extract_content_from_messages(messages_data)
+    assert content == "According to sources [1], the answer is yes."
+    assert annotations is not None
+    assert len(annotations) == 1
+    assert annotations[0]["type"] == "url_citation"
+    assert annotations[0]["url_citation"]["url"] == "https://example.com/source"
+    assert annotations[0]["url_citation"]["title"] == "Example Source"
+    # start/end_index should be moved into url_citation for OpenAI compatibility
+    assert annotations[0]["url_citation"]["start_index"] == 22
+    assert annotations[0]["url_citation"]["end_index"] == 25
+
+
+def test_azure_ai_agents_build_model_response_with_annotations():
+    """
+    Test that _build_model_response includes annotations in the Message object.
+    """
+    from litellm.llms.azure_ai.agents.handler import AzureAIAgentsHandler
+    from litellm.types.utils import ModelResponse
+
+    handler = AzureAIAgentsHandler()
+    model_response = ModelResponse()
+
+    annotations = [
+        {
+            "type": "url_citation",
+            "url_citation": {
+                "url": "https://example.com",
+                "title": "Example",
+                "start_index": 0,
+                "end_index": 5,
+            },
+        }
+    ]
+
+    result = handler._build_model_response(
+        model="azure_ai/agents/asst_123",
+        content="Hello [1]",
+        model_response=model_response,
+        thread_id="thread_abc",
+        messages=[{"role": "user", "content": "test"}],
+        annotations=annotations,
+    )
+
+    assert result.choices[0].message.content == "Hello [1]"
+    assert result.choices[0].message.annotations is not None
+    assert len(result.choices[0].message.annotations) == 1
+    assert result.choices[0].message.annotations[0]["type"] == "url_citation"
+
+
+def test_azure_ai_agents_build_model_response_without_annotations():
+    """
+    Test that _build_model_response works correctly without annotations.
+    """
+    from litellm.llms.azure_ai.agents.handler import AzureAIAgentsHandler
+    from litellm.types.utils import ModelResponse
+
+    handler = AzureAIAgentsHandler()
+    model_response = ModelResponse()
+
+    result = handler._build_model_response(
+        model="azure_ai/agents/asst_123",
+        content="Hello",
+        model_response=model_response,
+        thread_id="thread_abc",
+        messages=[{"role": "user", "content": "test"}],
+    )
+
+    assert result.choices[0].message.content == "Hello"
+    assert getattr(result.choices[0].message, "annotations", None) is None
+
+
+@pytest.mark.asyncio
+async def test_azure_ai_agents_streaming_annotations_from_completed_message():
+    """
+    Test that annotations from thread.message.completed SSE events are collected
+    and attached to the final chunk's delta.
+
+    Ref: https://github.com/BerriAI/litellm/issues/19126
+    """
+    from litellm.llms.azure_ai.agents.handler import AzureAIAgentsHandler
+
+    handler = AzureAIAgentsHandler()
+
+    # SSE lines simulating a stream with annotations in thread.message.completed
+    completed_data = {
+        "content": [
+            {
+                "type": "text",
+                "text": {
+                    "value": "According to [1], the answer is 42.",
+                    "annotations": [
+                        {
+                            "type": "url_citation",
+                            "text": "[1]",
+                            "start_index": 12,
+                            "end_index": 15,
+                            "url_citation": {
+                                "url": "https://example.com/citation",
+                                "title": "Citation Source",
+                            },
+                        }
+                    ],
+                },
+            }
+        ]
+    }
+
+    sse_lines = [
+        "event: thread.created",
+        "",
+        'data: {"id": "thread_stream_123"}',
+        "",
+        "event: thread.message.delta",
+        "",
+        'data: {"delta": {"content": [{"type": "text", "text": {"value": "According to [1], the answer is 42."}}]}}',
+        "",
+        "event: thread.message.completed",
+        "",
+        f"data: {json.dumps(completed_data)}",
+        "",
+        "data: [DONE]",
+    ]
+
+    async def mock_aiter_lines():
+        for line in sse_lines:
+            yield line
+
+    mock_response = MagicMock()
+    mock_response.aiter_lines = MagicMock(return_value=mock_aiter_lines())
+
+    chunks = []
+    async for chunk in handler._process_sse_stream(mock_response, "azure_ai/agents/asst_123"):
+        chunks.append(chunk)
+
+    # Should have content chunks + final [DONE] chunk
+    assert len(chunks) >= 1
+    final_chunk = chunks[-1]
+    assert final_chunk.choices[0].finish_reason == "stop"
+    assert final_chunk.choices[0].delta.annotations is not None
+    assert len(final_chunk.choices[0].delta.annotations) == 1
+    ann = final_chunk.choices[0].delta.annotations[0]
+    assert ann["type"] == "url_citation"
+    assert ann["url_citation"]["url"] == "https://example.com/citation"
+    assert ann["url_citation"]["title"] == "Citation Source"
+
+
+@pytest.mark.asyncio
+async def test_azure_ai_agents_streaming_accumulates_annotations_from_multiple_text_items():
+    """
+    Test that annotations from multiple text content items in thread.message.completed
+    are accumulated (not overwritten).
+
+    Ref: Greptile review on PR #23849
+    """
+    from litellm.llms.azure_ai.agents.handler import AzureAIAgentsHandler
+
+    handler = AzureAIAgentsHandler()
+
+    # Two text blocks, each with distinct citations
+    completed_data = {
+        "content": [
+            {
+                "type": "text",
+                "text": {
+                    "value": "First source [1].",
+                    "annotations": [
+                        {
+                            "type": "url_citation",
+                            "text": "[1]",
+                            "start_index": 12,
+                            "end_index": 15,
+                            "url_citation": {
+                                "url": "https://example.com/first",
+                                "title": "First",
+                            },
+                        }
+                    ],
+                },
+            },
+            {
+                "type": "text",
+                "text": {
+                    "value": "Second source [2].",
+                    "annotations": [
+                        {
+                            "type": "url_citation",
+                            "text": "[2]",
+                            "start_index": 13,
+                            "end_index": 16,
+                            "url_citation": {
+                                "url": "https://example.com/second",
+                                "title": "Second",
+                            },
+                        }
+                    ],
+                },
+            },
+        ]
+    }
+
+    sse_lines = [
+        "event: thread.created",
+        "",
+        'data: {"id": "thread_multi"}',
+        "",
+        "event: thread.message.completed",
+        "",
+        f"data: {json.dumps(completed_data)}",
+        "",
+        "data: [DONE]",
+    ]
+
+    async def mock_aiter_lines():
+        for line in sse_lines:
+            yield line
+
+    mock_response = MagicMock()
+    mock_response.aiter_lines = MagicMock(return_value=mock_aiter_lines())
+
+    chunks = []
+    async for chunk in handler._process_sse_stream(mock_response, "azure_ai/agents/asst_123"):
+        chunks.append(chunk)
+
+    final_chunk = chunks[-1]
+    assert final_chunk.choices[0].delta.annotations is not None
+    assert len(final_chunk.choices[0].delta.annotations) == 2
+    urls = [a["url_citation"]["url"] for a in final_chunk.choices[0].delta.annotations]
+    assert "https://example.com/first" in urls
+    assert "https://example.com/second" in urls
 
 
 @pytest.mark.asyncio

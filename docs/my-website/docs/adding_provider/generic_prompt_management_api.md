@@ -378,7 +378,7 @@ if __name__ == "__main__":
 
 1. Install dependencies:
 ```bash
-pip install fastapi uvicorn
+uv add fastapi uvicorn
 ```
 
 2. Save the code above to `prompt_server.py`

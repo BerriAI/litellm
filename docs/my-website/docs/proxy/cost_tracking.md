@@ -163,7 +163,7 @@ Use this when you want non-proxy admins to access `/spend` endpoints
 
 :::info
 
-Schedule a [meeting with us to get your Enterprise License](https://calendly.com/d/cx9p-5yf-2nm/litellm-introductions)
+Schedule a [meeting with us to get your Enterprise License](https://enterprise.litellm.ai/demo)
 
 :::
 

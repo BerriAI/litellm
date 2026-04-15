@@ -113,7 +113,7 @@ class TestVertexImageGeneration(BaseImageGenTest):
         litellm.in_memory_llm_clients_cache = InMemoryCache()
         return {
             "model": "vertex_ai/imagen-3.0-fast-generate-001",
-            "vertex_ai_project": "pathrise-convert-1606954137718",
+            "vertex_ai_project": "litellm-ci-cd",
             "vertex_ai_location": "us-central1",
             "n": 1,
         }
@@ -121,6 +121,7 @@ class TestVertexImageGeneration(BaseImageGenTest):
 
 class TestVertexAIGeminiImageGeneration(BaseImageGenTest):
     """Test Gemini image generation models (Nano Banana)"""
+
     def get_base_image_generation_call_args(self) -> dict:
         # comment this when running locally
         load_vertex_ai_credentials()
@@ -128,7 +129,7 @@ class TestVertexAIGeminiImageGeneration(BaseImageGenTest):
         litellm.in_memory_llm_clients_cache = InMemoryCache()
         return {
             "model": "vertex_ai/gemini-2.5-flash-image",
-            "vertex_ai_project": "pathrise-convert-1606954137718",
+            "vertex_ai_project": "litellm-ci-cd",
             "vertex_ai_location": "us-central1",
             "n": 1,
             "size": "1024x1024",
@@ -212,7 +213,9 @@ class TestAimlImageGeneration(BaseImageGenTest):
                 custom_logger = TestCustomLogger()
                 litellm.logging_callback_manager._reset_all_callbacks()
                 litellm.callbacks = [custom_logger]
-                base_image_generation_call_args = self.get_base_image_generation_call_args()
+                base_image_generation_call_args = (
+                    self.get_base_image_generation_call_args()
+                )
                 litellm.set_verbose = True
                 # Pass dummy api_key so validate_environment passes; HTTP is mocked
                 response = await litellm.aimage_generation(
@@ -229,7 +232,9 @@ class TestAimlImageGeneration(BaseImageGenTest):
                 # print("response_cost", response._hidden_params["response_cost"])
 
                 logged_standard_logging_payload = custom_logger.standard_logging_payload
-                print("logged_standard_logging_payload", logged_standard_logging_payload)
+                print(
+                    "logged_standard_logging_payload", logged_standard_logging_payload
+                )
                 assert logged_standard_logging_payload is not None
                 assert logged_standard_logging_payload["response_cost"] is not None
                 assert logged_standard_logging_payload["response_cost"] > 0
@@ -244,7 +249,9 @@ class TestAimlImageGeneration(BaseImageGenTest):
                     response_dict["usage"] = dict(response_dict["usage"])
                 print("response usage=", response_dict.get("usage"))
 
-                assert response.data is not None  # type guard for iteration (base fails here if None)
+                assert (
+                    response.data is not None
+                )  # type guard for iteration (base fails here if None)
                 for d in response.data:
                     assert isinstance(d, Image)
                     print("data in response.data", d)
@@ -266,25 +273,27 @@ class TestGoogleImageGen(BaseImageGenTest):
     def get_base_image_generation_call_args(self) -> dict:
         return {"model": "gemini/imagen-4.0-generate-001"}
 
+
 @pytest.mark.skip(reason="Runwayml image generation API only tested locally")
 class TestRunwaymlImageGeneration(BaseImageGenTest):
     def get_base_image_generation_call_args(self) -> dict:
         return {"model": "runwayml/gen4_image"}
 
 
-class TestAzureOpenAIDalle3(BaseImageGenTest):
-    def get_base_image_generation_call_args(self) -> dict:
-        return {
-            "model": "azure/dall-e-3",
-            "api_version": "2024-02-01",
-            "api_base": os.getenv("AZURE_API_BASE"),
-            "api_key": os.getenv("AZURE_API_KEY"),
-            "metadata": {
-                "model_info": {
-                    "base_model": "azure/dall-e-3",
-                }
-            },
-        }
+## AZURE AI DALL-E 3 is deprecated and new deployments cannot be made
+# class TestAzureOpenAIDalle3(BaseImageGenTest):
+#     def get_base_image_generation_call_args(self) -> dict:
+#         return {
+#             "model": "azure/dall-e-3",
+#             "api_version": "2024-02-01",
+#             "api_base": os.getenv("AZURE_AI_API_BASE"),
+#             "api_key": os.getenv("AZURE_AI_API_KEY"),
+#             "metadata": {
+#                 "model_info": {
+#                     "base_model": "azure/dall-e-3",
+#                 }
+#             },
+#         }
 
 
 @pytest.mark.skip(reason="model EOL")

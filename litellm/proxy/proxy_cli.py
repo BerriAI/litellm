@@ -12,6 +12,7 @@ import click
 import httpx
 from dotenv import load_dotenv
 
+import litellm
 from litellm.constants import DEFAULT_NUM_WORKERS_LITELLM_PROXY
 from litellm.secret_managers.main import get_secret_bool
 
@@ -387,7 +388,7 @@ class ProxyInitializationHelpers:
 @click.option("--api_base", default=None, help="API base URL.")
 @click.option(
     "--api_version",
-    default="2024-07-01-preview",
+    default=litellm.AZURE_DEFAULT_API_VERSION,
     help="For azure - pass in the api version.",
 )
 @click.option(

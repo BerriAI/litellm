@@ -9,7 +9,7 @@ They verify end-to-end that:
   3. A clean text message passes through and triggers a real OpenAI response.
 
 Run with:
-    poetry run pytest tests/llm_translation/realtime/test_realtime_guardrails_openai.py -v -s
+    uv run pytest tests/llm_translation/realtime/test_realtime_guardrails_openai.py -v -s
 """
 
 import asyncio

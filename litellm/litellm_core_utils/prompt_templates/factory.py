@@ -1498,17 +1498,49 @@ def convert_to_gemini_tool_call_result(  # noqa: PLR0915
     from litellm.types.llms.vertex_ai import BlobType
 
     content_str: str = ""
-    inline_data: Optional[BlobType] = None
+    inline_data_list: List[BlobType] = []
 
     if "content" in message:
         if isinstance(message["content"], str):
             content_str = message["content"]
+            # Detect data-URL images (e.g. from Anthropic tool_result with a single image block
+            # that was serialised as a plain string by translate_anthropic_messages_to_openai)
+            # and promote them to inline_data so Gemini receives actual image bytes.
+            if content_str[:5].lower() == "data:" and ";base64," in content_str:
+                try:
+                    mime_rest = content_str[5:].split(";base64,", 1)
+                    if len(mime_rest) == 2 and mime_rest[0].startswith("image/"):
+                        # Strip any extra parameters (e.g. ";charset=UTF-8") from the MIME segment
+                        clean_mime = mime_rest[0].split(";")[0].strip()
+                        inline_data_list.append(
+                            BlobType(data=mime_rest[1], mime_type=clean_mime)
+                        )
+                        content_str = ""
+                except Exception as e:
+                    verbose_logger.warning(
+                        f"Failed to parse data URL in tool response: {e}"
+                    )
         elif isinstance(message["content"], List):
             content_list = message["content"]
             for content in content_list:
                 content_type = content.get("type", "")
                 if content_type == "text":
                     content_str += content.get("text", "")
+                elif content_type == "image":
+                    # Anthropic-native image block: {"type": "image", "source": {"type": "base64", ...}}
+                    source = content.get("source", {})
+                    if isinstance(source, dict) and source.get("type") == "base64":
+                        try:
+                            inline_data_list.append(
+                                BlobType(
+                                    data=source.get("data", ""),
+                                    mime_type=source.get("media_type", "image/jpeg"),
+                                )
+                            )
+                        except Exception as e:
+                            verbose_logger.warning(
+                                f"Failed to process Anthropic image block in tool response: {e}"
+                            )
                 elif content_type in ("input_image", "image_url"):
                     # Extract image for inline_data (for Computer Use screenshots and tool results)
                     image_url_data = content.get("image_url", "")
@@ -1524,9 +1556,11 @@ def convert_to_gemini_tool_call_result(  # noqa: PLR0915
                             image_obj = convert_to_anthropic_image_obj(
                                 image_url, format=None
                             )
-                            inline_data = BlobType(
-                                data=image_obj["data"],
-                                mime_type=image_obj["media_type"],
+                            inline_data_list.append(
+                                BlobType(
+                                    data=image_obj["data"],
+                                    mime_type=image_obj["media_type"],
+                                )
                             )
                         except Exception as e:
                             verbose_logger.warning(
@@ -1551,9 +1585,11 @@ def convert_to_gemini_tool_call_result(  # noqa: PLR0915
                             file_obj = convert_to_anthropic_image_obj(
                                 file_data, format=None
                             )
-                            inline_data = BlobType(
-                                data=file_obj["data"],
-                                mime_type=file_obj["media_type"],
+                            inline_data_list.append(
+                                BlobType(
+                                    data=file_obj["data"],
+                                    mime_type=file_obj["media_type"],
+                                )
                             )
                         except Exception as e:
                             verbose_logger.warning(
@@ -1607,13 +1643,12 @@ def convert_to_gemini_tool_call_result(  # noqa: PLR0915
     # Create part with function_response, and optionally inline_data for images (Computer Use)
     _part: VertexPartType = {"function_response": _function_response}
 
-    # For Computer Use, if we have an image, we need separate parts:
+    # For Computer Use, if we have images/files, we need separate parts:
     # - One part with function_response
-    # - One part with inline_data
+    # - One part per inline_data item
     # Gemini's PartType is a oneof, so we can't have both in the same part
-    if inline_data:
-        image_part: VertexPartType = {"inline_data": inline_data}
-        return [_part, image_part]
+    if inline_data_list:
+        return [_part] + [{"inline_data": d} for d in inline_data_list]
 
     return _part
 
@@ -4336,17 +4371,19 @@ class BedrockConverseMessagesProcessor:
 
         # if initial message is assistant message
         if messages[0].get("role") is not None and messages[0]["role"] == "assistant":
-            if user_continue_message is not None:
-                messages.insert(0, user_continue_message)
-            elif litellm.modify_params:
-                messages.insert(0, DEFAULT_USER_CONTINUE_MESSAGE)
+            if not messages[0].get("prefix"):
+                if user_continue_message is not None:
+                    messages.insert(0, user_continue_message)
+                elif litellm.modify_params:
+                    messages.insert(0, DEFAULT_USER_CONTINUE_MESSAGE)
 
         # if final message is assistant message
         if messages[-1].get("role") is not None and messages[-1]["role"] == "assistant":
-            if user_continue_message is not None:
-                messages.append(user_continue_message)
-            elif litellm.modify_params:
-                messages.append(DEFAULT_USER_CONTINUE_MESSAGE)
+            if not messages[-1].get("prefix"):
+                if user_continue_message is not None:
+                    messages.append(user_continue_message)
+                elif litellm.modify_params:
+                    messages.append(DEFAULT_USER_CONTINUE_MESSAGE)
         return messages
 
     @staticmethod
@@ -5107,26 +5144,44 @@ def _bedrock_tools_pt(tools: List) -> List[BedrockToolBlock]:
         }
     ]
     """
+    from litellm.llms.bedrock.common_utils import (
+        normalize_json_schema_custom_types_to_object,
+    )
     from litellm.litellm_core_utils.prompt_templates.common_utils import unpack_defs
 
+    _valid_json_schema_root_types = frozenset(
+        ("array", "boolean", "integer", "null", "number", "object", "string")
+    )
     tool_block_list: List[BedrockToolBlock] = []
-    for tool in tools:
+    for tool_idx, tool in enumerate(tools):
         # Check if tool is already a BedrockToolBlock (e.g., systemTool for Nova grounding)
         if _is_bedrock_tool_block(tool):
             # Already a BedrockToolBlock, pass it through
             tool_block_list.append(tool)  # type: ignore
             continue
 
-        # Handle regular OpenAI-style function tools
-        parameters = tool.get("function", {}).get(
-            "parameters", {"type": "object", "properties": {}}
-        )
-        name = tool.get("function", {}).get("name", "")
+        # OpenAI function tools, or Anthropic Messages / Claude Code ({name, input_schema, type, ...})
+        if isinstance(tool, dict) and "input_schema" in tool and "function" not in tool:
+            parameters = copy.deepcopy(
+                tool.get("input_schema") or {"type": "object", "properties": {}}
+            )
+            raw_name = tool.get("name", "") or ""
+            _tool_description = tool.get("description", None)
+        else:
+            parameters = copy.deepcopy(
+                tool.get("function", {}).get(
+                    "parameters", {"type": "object", "properties": {}}
+                )
+            )
+            raw_name = tool.get("function", {}).get("name", "") or ""
+            _tool_description = tool.get("function", {}).get("description", None)
+
+        if not (raw_name and str(raw_name).strip()):
+            raw_name = f"litellm_unnamed_tool_{tool_idx}"
 
         # related issue: https://github.com/BerriAI/litellm/issues/5007
         # Bedrock tool names must satisfy regular expression pattern: [a-zA-Z][a-zA-Z0-9_]* ensure this is true
-        name = make_valid_bedrock_tool_name(input_tool_name=name)
-        _tool_description = tool.get("function", {}).get("description", None)
+        name = make_valid_bedrock_tool_name(input_tool_name=raw_name)
         if _tool_description:  # bedrock doesn't accept empty "" or None descriptions
             description = _tool_description
         else:
@@ -5139,9 +5194,12 @@ def _bedrock_tools_pt(tools: List) -> List[BedrockToolBlock]:
         # with circular references (see issue #19098). unpack_defs handles nested
         # refs recursively and correctly detects/skips circular references.
         unpack_defs(parameters, defs_copy)
+        normalize_json_schema_custom_types_to_object(parameters)
+        if parameters.get("type") not in _valid_json_schema_root_types:
+            parameters["type"] = "object"
         tool_input_schema = BedrockToolInputSchemaBlock(
             json=BedrockToolJsonSchemaBlock(
-                type=parameters.get("type", ""),
+                type=parameters["type"],
                 properties=parameters.get("properties", {}),
                 required=parameters.get("required", []),
             )

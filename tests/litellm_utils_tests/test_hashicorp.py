@@ -27,6 +27,19 @@ from litellm.secret_managers.hashicorp_secret_manager import HashicorpSecretMana
 @pytest.fixture
 def hashicorp_secret_manager():
     """Provide a fresh HashicorpSecretManager per test to avoid shared state."""
+    has_token = bool(os.getenv("HCP_VAULT_TOKEN"))
+    has_approle = bool(
+        os.getenv("HCP_VAULT_APPROLE_ROLE_ID")
+        and os.getenv("HCP_VAULT_APPROLE_SECRET_ID")
+    )
+    has_tls_cert = bool(
+        os.getenv("HCP_VAULT_CLIENT_CERT") and os.getenv("HCP_VAULT_CLIENT_KEY")
+    )
+    if not (has_token or has_approle or has_tls_cert):
+        pytest.skip(
+            "Skipping Hashicorp tests: set HCP_VAULT_TOKEN, AppRole vars, or TLS cert vars."
+        )
+
     manager = HashicorpSecretManager()
     manager.vault_addr = "https://test-cluster-public-vault-0f98180c.e98296b2.z1.hashicorp.cloud:8200"
     manager.vault_namespace = "admin"
@@ -253,7 +266,7 @@ async def test_hashicorp_secret_manager_delete_secret_with_team_overrides(
         assert called_url == expected_url
 
 
-def test_hashicorp_secret_manager_tls_cert_auth(monkeypatch, hashicorp_secret_manager):
+def test_hashicorp_secret_manager_tls_cert_auth(monkeypatch):
     monkeypatch.setenv("HCP_VAULT_TOKEN", "test-client-token-12345")
     print("HCP_VAULT_TOKEN=", os.getenv("HCP_VAULT_TOKEN"))
     # Mock both httpx.post and httpx.Client
@@ -301,7 +314,7 @@ def test_hashicorp_secret_manager_tls_cert_auth(monkeypatch, hashicorp_secret_ma
         assert test_manager.cache.get_cache("hcp_vault_token") == "test-client-token-12345"
 
 
-def test_hashicorp_secret_manager_approle_auth(monkeypatch, hashicorp_secret_manager):
+def test_hashicorp_secret_manager_approle_auth(monkeypatch):
     """
     Test AppRole authentication makes the expected POST request to the correct URL.
     """

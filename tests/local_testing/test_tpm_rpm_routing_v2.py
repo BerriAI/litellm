@@ -39,9 +39,7 @@ from create_mock_standard_logging_payload import create_standard_logging_payload
 
 def test_tpm_rpm_updated():
     test_cache = DualCache()
-    lowest_tpm_logger = LowestTPMLoggingHandler(
-        router_cache=test_cache
-    )
+    lowest_tpm_logger = LowestTPMLoggingHandler(router_cache=test_cache)
     model_group = "gpt-3.5-turbo"
     deployment_id = "1234"
     deployment = "azure/gpt-4.1-mini"
@@ -108,9 +106,7 @@ def test_get_available_deployments():
             "model_info": {"id": "5678"},
         },
     ]
-    lowest_tpm_logger = LowestTPMLoggingHandler(
-        router_cache=test_cache
-    )
+    lowest_tpm_logger = LowestTPMLoggingHandler(router_cache=test_cache)
     model_group = "gpt-3.5-turbo"
     ## DEPLOYMENT 1 ##
     total_tokens = 50
@@ -669,9 +665,7 @@ def test_return_potential_deployments():
     """
 
     test_cache = DualCache()
-    lowest_tpm_logger = LowestTPMLoggingHandler(
-        router_cache=test_cache
-    )
+    lowest_tpm_logger = LowestTPMLoggingHandler(router_cache=test_cache)
 
     args: Dict = {
         "healthy_deployments": [
@@ -731,8 +725,8 @@ async def test_tpm_rpm_routing_model_name_checks():
         "model_name": "gpt-3.5-turbo",
         "litellm_params": {
             "model": "azure/gpt-4.1-mini",
-            "api_key": os.getenv("AZURE_API_KEY"),
-            "api_base": os.getenv("AZURE_API_BASE"),
+            "api_key": os.getenv("AZURE_AI_API_KEY"),
+            "api_base": os.getenv("AZURE_AI_API_BASE"),
             "mock_response": "Hey, how's it going?",
         },
     }

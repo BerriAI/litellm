@@ -10,6 +10,7 @@ sys.path.insert(
     0, os.path.abspath("../../../../..")
 )  # Adds the parent directory to the system path
 
+import litellm
 from litellm.llms.gemini.realtime.transformation import GeminiRealtimeConfig
 from litellm.types.llms.openai import OpenAIRealtimeStreamSessionEvents
 
@@ -227,3 +228,17 @@ def test_gemini_realtime_transformation_generation_complete():
             contains_audio_delta = True
             break
     assert contains_audio_delta, "Expected audio delta event"
+
+
+def test_gemini_3_1_flash_live_preview_model_cost_map_entry():
+    for key in (
+        "gemini-3.1-flash-live-preview",
+        "gemini/gemini-3.1-flash-live-preview",
+    ):
+        assert key in litellm.model_cost
+        info = litellm.model_cost[key]
+        assert "/v1/realtime" in info.get("supported_endpoints", [])
+        assert info.get("max_input_tokens") == 131072
+        assert info.get("max_output_tokens") == 65536
+        assert "video" in info.get("supported_modalities", [])
+        assert info.get("supports_function_calling") is True

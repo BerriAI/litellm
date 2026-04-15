@@ -44,7 +44,7 @@ class TestDatadogTagsRegression:
         assert "env:test-env" in tags_legacy
         assert "service:test-service" in tags_legacy
         # Verify NO team tag (should not invent one)
-        assert "team:" not in tags_legacy
+        assert not any(t.startswith("team:") for t in tags_legacy)
 
         # Case 2: New feature (team info provided)
         payload_with_team = StandardLoggingPayload(

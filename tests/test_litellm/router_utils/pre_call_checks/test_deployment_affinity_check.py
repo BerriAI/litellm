@@ -657,3 +657,284 @@ def test_cache_key_does_not_double_hash_user_api_key_hash():
         user_key=user_api_key_hash,
     )
     assert key.endswith(user_api_key_hash)
+
+
+def test_get_effective_flags_returns_per_group_config():
+    """
+    _get_effective_flags should return per-group flags when the model group has an entry
+    in model_group_affinity_config, and global flags otherwise.
+    """
+    callback = DeploymentAffinityCheck(
+        cache=AsyncMock(),
+        ttl_seconds=60,
+        enable_user_key_affinity=True,
+        enable_responses_api_affinity=True,
+        enable_session_id_affinity=False,
+        model_group_affinity_config={
+            "gpt-4": ["deployment_affinity"],
+            "claude-3": ["session_affinity", "responses_api_deployment_check"],
+        },
+    )
+
+    # gpt-4: only deployment_affinity
+    user_key, responses_api, session_id = callback._get_effective_flags("gpt-4")
+    assert user_key is True
+    assert responses_api is False
+    assert session_id is False
+
+    # claude-3: session_affinity + responses_api_deployment_check
+    user_key, responses_api, session_id = callback._get_effective_flags("claude-3")
+    assert user_key is False
+    assert responses_api is True
+    assert session_id is True
+
+    # unconfigured-model: falls back to global flags
+    user_key, responses_api, session_id = callback._get_effective_flags(
+        "unconfigured-model"
+    )
+    assert user_key is True
+    assert responses_api is True
+    assert session_id is False
+
+
+@pytest.mark.asyncio
+async def test_model_group_affinity_config_only_applies_to_configured_group():
+    """
+    When model_group_affinity_config is set without global optional_pre_call_checks,
+    only configured model groups should get affinity behavior.
+    """
+    mock_response_data = {
+        "id": "resp_mock-resp-per-group",
+        "object": "response",
+        "created_at": 1741476542,
+        "status": "completed",
+        "model": "openai/gpt-4",
+        "output": [
+            {
+                "type": "message",
+                "id": "msg_pg",
+                "status": "completed",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "Per-group response"}],
+            }
+        ],
+        "parallel_tool_calls": True,
+        "usage": {"input_tokens": 5, "output_tokens": 5, "total_tokens": 10},
+        "text": {"format": {"type": "text"}},
+        "error": None,
+        "previous_response_id": None,
+    }
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {
+                    "model": "azure/gpt-4-deploy-1",
+                    "api_key": "mock-key-1",
+                    "api_base": "https://mock-gpt4-1.openai.azure.com",
+                    "api_version": "2024-02-01",
+                },
+                "model_info": {"base_model": "gpt-4"},
+            },
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {
+                    "model": "azure/gpt-4-deploy-2",
+                    "api_key": "mock-key-2",
+                    "api_base": "https://mock-gpt4-2.openai.azure.com",
+                    "api_version": "2024-02-01",
+                },
+                "model_info": {"base_model": "gpt-4"},
+            },
+            {
+                "model_name": "claude-3",
+                "litellm_params": {
+                    "model": "azure/claude-3-deploy-1",
+                    "api_key": "mock-key-3",
+                    "api_base": "https://mock-claude-1.openai.azure.com",
+                    "api_version": "2024-02-01",
+                },
+                "model_info": {"base_model": "claude-3"},
+            },
+            {
+                "model_name": "claude-3",
+                "litellm_params": {
+                    "model": "azure/claude-3-deploy-2",
+                    "api_key": "mock-key-4",
+                    "api_base": "https://mock-claude-2.openai.azure.com",
+                    "api_version": "2024-02-01",
+                },
+                "model_info": {"base_model": "claude-3"},
+            },
+        ],
+        # No global optional_pre_call_checks — only per-group
+        model_group_affinity_config={
+            "gpt-4": ["deployment_affinity"],
+        },
+    )
+
+    user_api_key_hash = "test-per-group-key"
+    choice_calls = {"count": 0}
+
+    def deterministic_choice(seq):
+        choice_calls["count"] += 1
+        if choice_calls["count"] == 1:
+            return seq[0]
+        return seq[1] if len(seq) > 1 else seq[0]
+
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        new_callable=AsyncMock,
+    ) as mock_post, patch(
+        "litellm.router_strategy.simple_shuffle.random.choice",
+        side_effect=deterministic_choice,
+    ):
+        mock_post.return_value = MockResponse(mock_response_data, 200)
+
+        # gpt-4: affinity should work — second request pinned to same deployment
+        first = await router.aresponses(
+            model="gpt-4",
+            input="Hello",
+            truncation="auto",
+            litellm_metadata={"user_api_key_hash": user_api_key_hash},
+        )
+        first_model_id = first._hidden_params["model_id"]
+
+        second = await router.aresponses(
+            model="gpt-4",
+            input="Follow-up",
+            truncation="auto",
+            litellm_metadata={"user_api_key_hash": user_api_key_hash},
+        )
+        assert second._hidden_params["model_id"] == first_model_id
+
+        # claude-3: no affinity configured — should NOT be pinned
+        choice_calls["count"] = 0
+        first_claude = await router.aresponses(
+            model="claude-3",
+            input="Hello",
+            truncation="auto",
+            litellm_metadata={"user_api_key_hash": user_api_key_hash},
+        )
+        first_claude_id = first_claude._hidden_params["model_id"]
+
+        second_claude = await router.aresponses(
+            model="claude-3",
+            input="Follow-up",
+            truncation="auto",
+            litellm_metadata={"user_api_key_hash": user_api_key_hash},
+        )
+        # With deterministic choice and len>1, second call picks seq[1]
+        assert second_claude._hidden_params["model_id"] != first_claude_id
+
+
+@pytest.mark.asyncio
+async def test_model_group_affinity_config_falls_back_to_global():
+    """
+    When both global optional_pre_call_checks and model_group_affinity_config are set,
+    unconfigured model groups should use the global settings.
+    """
+    callback = DeploymentAffinityCheck(
+        cache=DualCache(),
+        ttl_seconds=60,
+        enable_user_key_affinity=True,
+        enable_responses_api_affinity=False,
+        enable_session_id_affinity=False,
+        model_group_affinity_config={
+            "claude-3": ["session_affinity"],
+        },
+    )
+
+    stable_model_map_key = "gpt-4"
+    user_key = "test-fallback-key"
+
+    healthy_deployments = [
+        {
+            "model_name": stable_model_map_key,
+            "litellm_params": {"model": "openai/gpt-4"},
+            "model_info": {"id": "deployment-1"},
+        },
+        {
+            "model_name": stable_model_map_key,
+            "litellm_params": {"model": "openai/gpt-4"},
+            "model_info": {"id": "deployment-2"},
+        },
+    ]
+
+    # Set up affinity cache for gpt-4 (should work since global has deployment_affinity)
+    await callback.async_pre_call_deployment_hook(
+        kwargs={
+            "model_info": {"id": "deployment-1"},
+            "metadata": {
+                "user_api_key_hash": user_key,
+                "deployment_model_name": stable_model_map_key,
+            },
+        },
+        call_type=None,
+    )
+
+    # gpt-4 not in model_group_affinity_config, so global flags apply (user_key affinity ON)
+    filtered = await callback.async_filter_deployments(
+        model="gpt-4",
+        healthy_deployments=healthy_deployments,
+        messages=None,
+        request_kwargs={"metadata": {"user_api_key_hash": user_key}},
+        parent_otel_span=None,
+    )
+    assert len(filtered) == 1
+    assert filtered[0]["model_info"]["id"] == "deployment-1"
+
+
+@pytest.mark.asyncio
+async def test_model_group_affinity_config_overrides_global():
+    """
+    When model_group_affinity_config specifies session_affinity for a model group,
+    user-key affinity (from global config) should NOT apply to that group.
+    """
+    callback = DeploymentAffinityCheck(
+        cache=DualCache(),
+        ttl_seconds=60,
+        enable_user_key_affinity=True,
+        enable_responses_api_affinity=False,
+        enable_session_id_affinity=False,
+        model_group_affinity_config={
+            "claude-3": ["session_affinity"],
+        },
+    )
+
+    stable_model_map_key = "claude-3"
+    user_key = "test-override-key"
+
+    healthy_deployments = [
+        {
+            "model_name": stable_model_map_key,
+            "litellm_params": {"model": "anthropic/claude-3-opus"},
+            "model_info": {"id": "deployment-1"},
+        },
+        {
+            "model_name": stable_model_map_key,
+            "litellm_params": {"model": "anthropic/claude-3-opus"},
+            "model_info": {"id": "deployment-2"},
+        },
+    ]
+
+    # Set up user-key affinity cache for claude-3
+    cache_key = DeploymentAffinityCheck.get_affinity_cache_key(
+        model_group=stable_model_map_key, user_key=user_key
+    )
+    await callback.cache.async_set_cache(
+        cache_key, {"model_id": "deployment-1"}, ttl=60
+    )
+
+    # claude-3 has per-group config (session_affinity only), so user-key affinity
+    # should NOT apply even though it's globally enabled
+    filtered = await callback.async_filter_deployments(
+        model="claude-3",
+        healthy_deployments=healthy_deployments,
+        messages=None,
+        request_kwargs={"metadata": {"user_api_key_hash": user_key}},
+        parent_otel_span=None,
+    )
+    # All deployments returned (user-key affinity disabled for this group)
+    assert len(filtered) == 2

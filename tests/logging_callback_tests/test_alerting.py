@@ -641,7 +641,7 @@ async def test_outage_alerting_called(
                 "model_name": model,
                 "litellm_params": {
                     "model": model,
-                    "api_key": os.getenv("AZURE_API_KEY"),
+                    "api_key": os.getenv("AZURE_AI_API_KEY"),
                     "api_base": api_base,
                     "vertex_location": vertex_location,
                     "vertex_project": vertex_project,
@@ -749,7 +749,7 @@ async def test_region_outage_alerting_called(
                 "model_name": model,
                 "litellm_params": {
                     "model": model,
-                    "api_key": os.getenv("AZURE_API_KEY"),
+                    "api_key": os.getenv("AZURE_AI_API_KEY"),
                     "api_base": api_base,
                     "vertex_location": vertex_location,
                     "vertex_project": vertex_project,
@@ -760,7 +760,7 @@ async def test_region_outage_alerting_called(
                 "model_name": model,
                 "litellm_params": {
                     "model": model,
-                    "api_key": os.getenv("AZURE_API_KEY"),
+                    "api_key": os.getenv("AZURE_AI_API_KEY"),
                     "api_base": api_base,
                     "vertex_location": vertex_location,
                     "vertex_project": "vertex_project-2",
@@ -786,40 +786,6 @@ async def test_region_outage_alerting_called(
             mock_send_alert.assert_called_once()
         else:
             mock_send_alert.assert_not_called()
-
-
-@pytest.mark.asyncio
-@pytest.mark.skip(reason="test only needs to run locally ")
-async def test_alerting():
-    router = litellm.Router(
-        model_list=[
-            {
-                "model_name": "gpt-3.5-turbo",
-                "litellm_params": {
-                    "model": "gpt-3.5-turbo",
-                    "api_key": "bad_key",
-                },
-            }
-        ],
-        debug_level="DEBUG",
-        set_verbose=True,
-        alerting_config=AlertingConfig(
-            alerting_threshold=10,  # threshold for slow / hanging llm responses (in seconds). Defaults to 300 seconds
-            webhook_url=os.getenv(
-                "SLACK_WEBHOOK_URL"
-            ),  # webhook you want to send alerts to
-        ),
-    )
-    try:
-        await router.acompletion(
-            model="gpt-3.5-turbo",
-            messages=[{"role": "user", "content": "Hey, how's it going?"}],
-        )
-
-    except Exception:
-        pass
-    finally:
-        await asyncio.sleep(3)
 
 
 @pytest.mark.asyncio
@@ -868,7 +834,9 @@ async def test_langfuse_trace_id():
 
     returned_trace_id = trace_url.split("/")[-1]
 
-    assert returned_trace_id == litellm_logging_obj._get_trace_id(service_name="langfuse")
+    assert returned_trace_id == litellm_logging_obj._get_trace_id(
+        service_name="langfuse"
+    )
 
 
 @pytest.mark.asyncio
@@ -1007,7 +975,7 @@ async def test_soft_budget_alerts():
 
         # Verify alert message contains correct percentage
         alert_message = mock_send_alert.call_args[1]["message"]
-        
+
         print("GOT MESSAGE\n\n", alert_message)
 
         expected_message = (
@@ -1077,10 +1045,10 @@ key_no_max_budget_info = CallInfo(
 async def test_soft_budget_alerts_webhook(entity_info):
     """
     Tests that soft budget alerts are triggered for different entity types.
-    
+
     Tests:
     - Key with max budget
-    - Team 
+    - Team
     - User
     - Key without max budget
     """
@@ -1097,7 +1065,7 @@ async def test_soft_budget_alerts_webhook(entity_info):
         # Verify the webhook event
         call_args = mock_send_alert.call_args[1]
         logged_webhook_event: WebhookEvent = call_args["user_info"]
-        
+
         # Validate the webhook event has all expected fields
         assert logged_webhook_event.spend == entity_info.spend
         assert logged_webhook_event.soft_budget == entity_info.soft_budget
@@ -1106,10 +1074,3 @@ async def test_soft_budget_alerts_webhook(entity_info):
         assert logged_webhook_event.user_email == entity_info.user_email
         assert logged_webhook_event.key_alias == entity_info.key_alias
         assert logged_webhook_event.event_group == entity_info.event_group
-        
-        
-        
-        
-        
-        
-        

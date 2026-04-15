@@ -26,6 +26,10 @@ const PERMISSION_OPTIONS = [
   "/key/unblock",
   "/key/bulk_update",
   "/key/{key_id}/reset_spend",
+  "/key/info",
+  "/key/list",
+  "/key/aliases",
+  "/team/daily/activity",
 ];
 
 interface SettingRowProps {

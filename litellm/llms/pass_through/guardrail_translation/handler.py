@@ -139,6 +139,7 @@ class PassThroughEndpointHandler(BaseTranslation):
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: Optional["LiteLLMLoggingObj"] = None,
         user_api_key_dict: Optional[Any] = None,
+        request_data: Optional[dict] = None,
     ) -> Any:
         """
         Process output response by applying guardrails to targeted fields.
@@ -171,17 +172,27 @@ class PassThroughEndpointHandler(BaseTranslation):
         if not text_to_check:
             return response
 
-        # Create a request_data dict with response info and user API key metadata
-        request_data: dict = (
-            {"response": response}
-            if not isinstance(response, dict)
-            else response.copy()
-        )
+        # Use the real request_data if provided (proxy path), otherwise
+        # create a standalone dict (SDK / direct-call path).
+        if request_data is None:
+            request_data = (
+                {"response": response}
+                if not isinstance(response, dict)
+                else response.copy()
+            )
+        else:
+            if "response" not in request_data:
+                request_data["response"] = (
+                    response if not isinstance(response, dict) else response.copy()
+                )
 
         # Add user API key metadata with prefixed keys
-        user_metadata = self.transform_user_api_key_dict_to_metadata(user_api_key_dict)
-        if user_metadata:
-            request_data["litellm_metadata"] = user_metadata
+        if "litellm_metadata" not in request_data:
+            user_metadata = self.transform_user_api_key_dict_to_metadata(
+                user_api_key_dict
+            )
+            if user_metadata:
+                request_data["litellm_metadata"] = user_metadata
 
         # Apply guardrail (pass-through doesn't modify the text, just checks it)
         inputs = GenericGuardrailAPIInputs(texts=[text_to_check])

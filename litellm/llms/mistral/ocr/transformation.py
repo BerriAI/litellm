@@ -36,6 +36,8 @@ class MistralOCRConfig(BaseOCRConfig):
         - image_min_size: Minimum size of images to include
         - bbox_annotation_format: Format for bounding box annotations
         - document_annotation_format: Format for document annotations
+        - extract_header: Whether to extract document header
+        - extract_footer: Whether to extract document footer
         """
         return [
             "pages",
@@ -44,6 +46,8 @@ class MistralOCRConfig(BaseOCRConfig):
             "image_min_size",
             "bbox_annotation_format",
             "document_annotation_format",
+            "extract_header",
+            "extract_footer",
         ]
 
     def map_ocr_params(

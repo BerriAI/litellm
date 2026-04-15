@@ -110,6 +110,35 @@ def test_get_supported_openai_params_reasoning_effort():
     assert "reasoning_effort" not in unsupported_params
 
 
+def test_add_transform_inline_image_block_skips_data_urls():
+    """
+    data: URLs must not have #transform=inline appended — doing so corrupts the
+    base64 payload and raises binascii.Error: Incorrect padding on the Fireworks side.
+    Regression test for https://github.com/BerriAI/litellm/issues/23583
+    """
+    config = FireworksAIConfig()
+    data_url = "data:image/jpeg;base64,/9j/4AAQSkZJRgAB"
+
+    # str branch
+    str_content = {"type": "image_url", "image_url": data_url}
+    result = config._add_transform_inline_image_block(
+        str_content, model="gpt-4", disable_add_transform_inline_image_block=False
+    )
+    assert result["image_url"] == data_url, "data URL must not be modified (str branch)"
+
+    # dict branch
+    dict_content = {"type": "image_url", "image_url": {"url": data_url}}
+    result = config._add_transform_inline_image_block(
+        dict_content, model="gpt-4", disable_add_transform_inline_image_block=False
+    )
+    assert result["image_url"]["url"] == data_url, "data URL must not be modified (dict branch)"
+
+    # regular https URL should still get the suffix
+    https_content = {"type": "image_url", "image_url": "https://example.com/image.jpg"}
+    result = config._add_transform_inline_image_block(
+        https_content, model="gpt-4", disable_add_transform_inline_image_block=False
+    )
+    assert result["image_url"].endswith("#transform=inline"), "https URL should get #transform=inline"
 @pytest.mark.parametrize(
     "api_base, expected_url_prefix",
     [

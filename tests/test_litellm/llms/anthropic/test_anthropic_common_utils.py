@@ -1,20 +1,27 @@
 """
-Tests for Anthropic OAuth token handling in common_utils.
+Tests for Anthropic authentication and environment variable handling in common_utils.
 
-Verifies that OAuth tokens (sk-ant-oat*) are sent via Authorization: Bearer
-instead of x-api-key, per Anthropic's OAuth specification.
+Verifies that:
+- OAuth tokens (sk-ant-oat*) produce Authorization: Bearer headers with OAuth beta flags.
+- Regular API keys produce x-api-key headers.
+- ANTHROPIC_AUTH_TOKEN produces Authorization: Bearer headers,
+  matching the official Anthropic SDK behavior.
+- ANTHROPIC_BASE_URL is used as a fallback for base URL resolution.
+- ANTHROPIC_API_KEY / ANTHROPIC_API_BASE take precedence over their aliases.
 """
 
 import os
 import sys
+from unittest.mock import patch
 
 sys.path.insert(
     0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../.."))
 )
 
-# Fake OAuth token for testing (not a real secret)
+# Fake tokens for testing (not real secrets)
 FAKE_OAUTH_TOKEN = "sk-ant-oat01-fake-token-for-testing-123456789abcdef"
 FAKE_REGULAR_KEY = "sk-ant-api03-regular-key-for-testing-123456789"
+FAKE_AUTH_TOKEN = "sk-ant-aut01-fake-auth-token-for-testing-123456789"
 
 
 class TestOptionallyHandleAnthropicOAuth:
@@ -697,3 +704,430 @@ class TestProxyOAuthHeaderForwarding:
         assert cleaned["authorization"] == oauth_token
         # Proxy key must be stripped
         assert "x-litellm-api-key" not in cleaned
+
+
+class TestGetAnthropicHeadersWithAuthToken:
+    """Tests for get_anthropic_headers with auth_token parameter."""
+
+    def test_auth_token_uses_bearer_header(self):
+        """auth_token should produce Authorization: Bearer header."""
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        config = AnthropicModelInfo()
+        headers = config.get_anthropic_headers(
+            api_key=None,
+            auth_token=FAKE_AUTH_TOKEN,
+            computer_tool_used=False,
+            prompt_caching_set=False,
+            pdf_used=False,
+            is_vertex_request=False,
+        )
+
+        assert headers["authorization"] == f"Bearer {FAKE_AUTH_TOKEN}"
+        assert "x-api-key" not in headers
+        # auth_token should NOT set OAuth-specific flags
+        assert "anthropic-dangerous-direct-browser-access" not in headers
+
+    def test_auth_token_includes_standard_headers(self):
+        """auth_token path should include standard Anthropic headers."""
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        config = AnthropicModelInfo()
+        headers = config.get_anthropic_headers(
+            api_key=None,
+            auth_token=FAKE_AUTH_TOKEN,
+            computer_tool_used=False,
+            prompt_caching_set=False,
+            pdf_used=False,
+            is_vertex_request=False,
+        )
+
+        assert headers["anthropic-version"] == "2023-06-01"
+        assert headers["accept"] == "application/json"
+        assert headers["content-type"] == "application/json"
+
+    def test_api_key_takes_precedence_over_auth_token(self):
+        """When both api_key and auth_token are provided, api_key wins."""
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        config = AnthropicModelInfo()
+        headers = config.get_anthropic_headers(
+            api_key=FAKE_REGULAR_KEY,
+            auth_token=FAKE_AUTH_TOKEN,
+            computer_tool_used=False,
+            prompt_caching_set=False,
+            pdf_used=False,
+            is_vertex_request=False,
+        )
+
+        assert headers["x-api-key"] == FAKE_REGULAR_KEY
+        assert "authorization" not in headers
+
+
+class TestValidateEnvironmentAuthToken:
+    """Tests for validate_environment with auth_token resolution."""
+
+    def test_auth_token_env_var_produces_bearer_header(self):
+        """validate_environment should use Bearer auth when only ANTHROPIC_AUTH_TOKEN is set."""
+        from unittest.mock import patch as mock_patch
+
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        config = AnthropicModelInfo()
+        with mock_patch.dict(
+            "os.environ",
+            {"ANTHROPIC_AUTH_TOKEN": FAKE_AUTH_TOKEN},
+            clear=True,
+        ):
+            headers = config.validate_environment(
+                headers={},
+                model="claude-sonnet-4-5-20250929",
+                messages=[{"role": "user", "content": "Hello"}],
+                optional_params={},
+                litellm_params={},
+                api_key=None,
+                api_base=None,
+            )
+
+        assert headers["authorization"] == f"Bearer {FAKE_AUTH_TOKEN}"
+        assert "x-api-key" not in headers
+        assert "anthropic-dangerous-direct-browser-access" not in headers
+
+    def test_api_key_param_takes_precedence_over_auth_token_env_var(self):
+        """validate_environment should prefer explicit api_key over ANTHROPIC_AUTH_TOKEN."""
+        from unittest.mock import patch as mock_patch
+
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        config = AnthropicModelInfo()
+        with mock_patch.dict(
+            "os.environ",
+            {"ANTHROPIC_AUTH_TOKEN": FAKE_AUTH_TOKEN},
+            clear=True,
+        ):
+            headers = config.validate_environment(
+                headers={},
+                model="claude-sonnet-4-5-20250929",
+                messages=[{"role": "user", "content": "Hello"}],
+                optional_params={},
+                litellm_params={},
+                api_key=FAKE_REGULAR_KEY,
+                api_base=None,
+            )
+
+        assert headers["x-api-key"] == FAKE_REGULAR_KEY
+        assert "authorization" not in headers
+
+    def test_raises_when_no_credentials(self):
+        """validate_environment should raise when neither API key nor auth token is available."""
+        from unittest.mock import patch as mock_patch
+
+        import pytest
+
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        config = AnthropicModelInfo()
+        with mock_patch.dict("os.environ", {}, clear=True):
+            with pytest.raises(
+                Exception, match="ANTHROPIC_API_KEY.*ANTHROPIC_AUTH_TOKEN"
+            ):
+                config.validate_environment(
+                    headers={},
+                    model="claude-sonnet-4-5-20250929",
+                    messages=[{"role": "user", "content": "Hello"}],
+                    optional_params={},
+                    litellm_params={},
+                    api_key=None,
+                    api_base=None,
+                )
+
+    def test_resolves_api_key_from_env_when_param_is_none(self):
+        """validate_environment should resolve ANTHROPIC_API_KEY from env when api_key param is None."""
+        from unittest.mock import patch as mock_patch
+
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        config = AnthropicModelInfo()
+        with mock_patch.dict(
+            "os.environ",
+            {"ANTHROPIC_API_KEY": FAKE_REGULAR_KEY},
+            clear=True,
+        ):
+            headers = config.validate_environment(
+                headers={},
+                model="claude-sonnet-4-5-20250929",
+                messages=[{"role": "user", "content": "Hello"}],
+                optional_params={},
+                litellm_params={},
+                api_key=None,
+                api_base=None,
+            )
+
+        assert headers["x-api-key"] == FAKE_REGULAR_KEY
+        assert "authorization" not in headers
+
+
+
+
+class TestGetAuthToken:
+    """Tests for AnthropicModelInfo.get_auth_token() static method."""
+
+    def test_returns_env_var_value(self):
+        """get_auth_token returns the ANTHROPIC_AUTH_TOKEN env var value."""
+        from unittest.mock import patch as mock_patch
+
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        with mock_patch.dict(
+            "os.environ", {"ANTHROPIC_AUTH_TOKEN": FAKE_AUTH_TOKEN}, clear=True
+        ):
+            assert AnthropicModelInfo.get_auth_token() == FAKE_AUTH_TOKEN
+
+    def test_returns_none_when_not_set(self):
+        """get_auth_token returns None when ANTHROPIC_AUTH_TOKEN is not set."""
+        from unittest.mock import patch as mock_patch
+
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        with mock_patch.dict("os.environ", {}, clear=True):
+            assert AnthropicModelInfo.get_auth_token() is None
+
+    def test_explicit_param_takes_precedence(self):
+        """Explicit auth_token param takes precedence over env var."""
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        explicit_token = "sk-ant-aut01-explicit-token-override-123456789"
+        assert AnthropicModelInfo.get_auth_token(explicit_token) == explicit_token
+
+
+class TestGetAuthHeader:
+    """Tests for AnthropicModelInfo.get_auth_header() centralized helper."""
+
+    def test_returns_x_api_key_when_api_key_provided(self):
+        """Explicit api_key param should return x-api-key header."""
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        result = AnthropicModelInfo.get_auth_header(api_key=FAKE_REGULAR_KEY)
+        assert result == {"x-api-key": FAKE_REGULAR_KEY}
+
+    def test_returns_x_api_key_from_env(self):
+        """ANTHROPIC_API_KEY env var should return x-api-key header."""
+        from unittest.mock import patch as mock_patch
+
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        with mock_patch.dict(
+            "os.environ",
+            {"ANTHROPIC_API_KEY": FAKE_REGULAR_KEY},
+            clear=True,
+        ):
+            result = AnthropicModelInfo.get_auth_header()
+            assert result == {"x-api-key": FAKE_REGULAR_KEY}
+
+    def test_returns_bearer_from_auth_token_env(self):
+        """ANTHROPIC_AUTH_TOKEN env var should return Authorization: Bearer header."""
+        from unittest.mock import patch as mock_patch
+
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        with mock_patch.dict(
+            "os.environ",
+            {"ANTHROPIC_AUTH_TOKEN": FAKE_AUTH_TOKEN},
+            clear=True,
+        ):
+            result = AnthropicModelInfo.get_auth_header()
+            assert result == {"authorization": f"Bearer {FAKE_AUTH_TOKEN}"}
+
+    def test_api_key_takes_precedence_over_auth_token(self):
+        """ANTHROPIC_API_KEY should take precedence over ANTHROPIC_AUTH_TOKEN."""
+        from unittest.mock import patch as mock_patch
+
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        with mock_patch.dict(
+            "os.environ",
+            {
+                "ANTHROPIC_API_KEY": FAKE_REGULAR_KEY,
+                "ANTHROPIC_AUTH_TOKEN": FAKE_AUTH_TOKEN,
+            },
+            clear=True,
+        ):
+            result = AnthropicModelInfo.get_auth_header()
+            assert result == {"x-api-key": FAKE_REGULAR_KEY}
+
+    def test_explicit_api_key_overrides_env_auth_token(self):
+        """Explicit api_key param should override ANTHROPIC_AUTH_TOKEN env var."""
+        from unittest.mock import patch as mock_patch
+
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        with mock_patch.dict(
+            "os.environ",
+            {"ANTHROPIC_AUTH_TOKEN": FAKE_AUTH_TOKEN},
+            clear=True,
+        ):
+            result = AnthropicModelInfo.get_auth_header(api_key=FAKE_REGULAR_KEY)
+            assert result == {"x-api-key": FAKE_REGULAR_KEY}
+
+    def test_returns_none_when_no_credentials(self):
+        """Should return None when neither api_key nor auth_token is available."""
+        from unittest.mock import patch as mock_patch
+
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        with mock_patch.dict("os.environ", {}, clear=True):
+            result = AnthropicModelInfo.get_auth_header()
+            assert result is None
+
+    def test_oauth_token_uses_bearer_not_x_api_key(self):
+        """OAuth token (sk-ant-oat*) should return Authorization: Bearer, not x-api-key."""
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        result = AnthropicModelInfo.get_auth_header(api_key=FAKE_OAUTH_TOKEN)
+        assert result == {"authorization": f"Bearer {FAKE_OAUTH_TOKEN}"}
+
+    def test_oauth_token_from_env_uses_bearer(self):
+        """OAuth token in ANTHROPIC_API_KEY env var should return Authorization: Bearer."""
+        from unittest.mock import patch as mock_patch
+
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        with mock_patch.dict(
+            "os.environ",
+            {"ANTHROPIC_API_KEY": FAKE_OAUTH_TOKEN},
+            clear=True,
+        ):
+            result = AnthropicModelInfo.get_auth_header()
+            assert result == {"authorization": f"Bearer {FAKE_OAUTH_TOKEN}"}
+
+
+class TestGetApiBaseFallbackChain:
+    """Tests for AnthropicModelInfo.get_api_base() fallback to ANTHROPIC_BASE_URL."""
+
+    def test_explicit_param_takes_precedence(self):
+        """Explicit api_base param takes precedence over all env vars."""
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        assert (
+            AnthropicModelInfo.get_api_base("https://explicit.example.com")
+            == "https://explicit.example.com"
+        )
+
+    def test_defaults_to_anthropic_api(self):
+        """get_api_base returns the default Anthropic API base when no env vars are set."""
+        from unittest.mock import patch as mock_patch
+
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        with mock_patch.dict("os.environ", {}, clear=True):
+            assert AnthropicModelInfo.get_api_base() == "https://api.anthropic.com"
+
+    def test_api_base_env_preferred_over_base_url_env(self):
+        """ANTHROPIC_API_BASE takes precedence over ANTHROPIC_BASE_URL."""
+        from unittest.mock import patch as mock_patch
+
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        with mock_patch.dict(
+            "os.environ",
+            {
+                "ANTHROPIC_API_BASE": "https://api-base.example.com",
+                "ANTHROPIC_BASE_URL": "https://base-url.example.com",
+            },
+            clear=True,
+        ):
+            assert AnthropicModelInfo.get_api_base() == "https://api-base.example.com"
+
+    def test_falls_back_to_base_url_env(self):
+        """get_api_base falls back to ANTHROPIC_BASE_URL when ANTHROPIC_API_BASE is not set."""
+        from unittest.mock import patch as mock_patch
+
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        with mock_patch.dict(
+            "os.environ",
+            {"ANTHROPIC_BASE_URL": "https://base-url.example.com"},
+            clear=True,
+        ):
+            assert AnthropicModelInfo.get_api_base() == "https://base-url.example.com"
+
+
+class TestPassthroughAuthToken:
+    """Tests for passthrough messages endpoint with ANTHROPIC_AUTH_TOKEN."""
+
+    def test_passthrough_auth_token_uses_bearer_header(self):
+        """Passthrough endpoint should use Bearer auth when only ANTHROPIC_AUTH_TOKEN is set."""
+        from unittest.mock import patch as mock_patch
+
+        from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
+            AnthropicMessagesConfig,
+        )
+
+        config = AnthropicMessagesConfig()
+        with mock_patch.dict(
+            "os.environ", {"ANTHROPIC_AUTH_TOKEN": FAKE_AUTH_TOKEN}, clear=True
+        ):
+            updated_headers, _ = config.validate_anthropic_messages_environment(
+                headers={},
+                model="claude-sonnet-4-5-20250929",
+                messages=[{"role": "user", "content": "Hello"}],
+                optional_params={},
+                litellm_params={},
+                api_key=None,
+                api_base=None,
+            )
+
+        assert updated_headers["authorization"] == f"Bearer {FAKE_AUTH_TOKEN}"
+        assert "x-api-key" not in updated_headers
+        assert "anthropic-dangerous-direct-browser-access" not in updated_headers
+
+    def test_passthrough_api_key_takes_precedence(self):
+        """Passthrough endpoint should prefer ANTHROPIC_API_KEY over ANTHROPIC_AUTH_TOKEN."""
+        from unittest.mock import patch as mock_patch
+
+        from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
+            AnthropicMessagesConfig,
+        )
+
+        config = AnthropicMessagesConfig()
+        with mock_patch.dict(
+            "os.environ",
+            {"ANTHROPIC_API_KEY": FAKE_REGULAR_KEY, "ANTHROPIC_AUTH_TOKEN": FAKE_AUTH_TOKEN},
+            clear=True,
+        ):
+            updated_headers, _ = config.validate_anthropic_messages_environment(
+                headers={},
+                model="claude-sonnet-4-5-20250929",
+                messages=[{"role": "user", "content": "Hello"}],
+                optional_params={},
+                litellm_params={},
+                api_key=None,
+                api_base=None,
+            )
+
+        assert updated_headers["x-api-key"] == FAKE_REGULAR_KEY
+        assert "authorization" not in updated_headers
+
+    def test_passthrough_get_complete_url_honours_base_url_env(self):
+        """get_complete_url should use ANTHROPIC_BASE_URL when api_base is None."""
+        from unittest.mock import patch as mock_patch
+
+        from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
+            AnthropicMessagesConfig,
+        )
+
+        config = AnthropicMessagesConfig()
+        with mock_patch.dict(
+            "os.environ",
+            {"ANTHROPIC_BASE_URL": "https://custom.example.com"},
+            clear=True,
+        ):
+            url = config.get_complete_url(
+                api_base=None,
+                api_key=FAKE_REGULAR_KEY,
+                model="claude-sonnet-4-5-20250929",
+                optional_params={},
+                litellm_params={},
+            )
+
+        assert url == "https://custom.example.com/v1/messages"

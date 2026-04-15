@@ -32,6 +32,8 @@ class HiddenlayerGuardrailConfigModel(GuardrailConfigModel):
         description="The Hiddenlayer Secret Key for the Hiddenlayer API.. If not provided, the `HIDDENLAYER_CLIENT_SECRET` environment variable is checked.",
     )
 
+    version: Optional[int] = Field(default=2, description="Hiddenlayer guardrail version to use.")
+
     @staticmethod
     def ui_friendly_name() -> str:
         return "Hiddenlayer Guardrail"

@@ -39,7 +39,8 @@ class RegisterPluginRequest(BaseModel):
         description=(
             "Git source reference. Supported formats:\n"
             "- GitHub: {'source': 'github', 'repo': 'org/repo'}\n"
-            "- Git URL: {'source': 'url', 'url': 'https://github.com/org/repo.git'}"
+            "- Git URL: {'source': 'url', 'url': 'https://github.com/org/repo.git'}\n"
+            "- Git Subdir: {'source': 'git-subdir', 'url': 'https://github.com/org/repo.git', 'path': 'plugins/plugin-name'}"
         ),
     )
     version: Optional[str] = Field("1.0.0", description="Semantic version")

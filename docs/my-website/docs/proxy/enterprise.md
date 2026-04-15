@@ -5,7 +5,7 @@ import TabItem from '@theme/TabItem';
 # ✨ Enterprise Features
 :::tip
 
-To get a license, get in touch with us [here](https://calendly.com/d/cx9p-5yf-2nm/litellm-introductions)
+To get a license, get in touch with us [here](https://enterprise.litellm.ai/demo)
 
 :::
 

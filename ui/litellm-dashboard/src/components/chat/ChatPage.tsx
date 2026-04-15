@@ -1,7 +1,8 @@
 "use client";
 
 import React, { useCallback, useEffect, useRef, useState, useLayoutEffect } from "react";
-import { Tooltip, Skeleton, Popover, message } from "antd";
+import { Tooltip, Skeleton, Popover } from "antd";
+import MessageManager from "@/components/molecules/message_manager";
 import {
   SettingOutlined,
   PlusOutlined,
@@ -212,7 +213,7 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
           localStorage.setItem(LOCALSTORAGE_MODEL_KEY, JSON.stringify([names[0]]));
         }
       })
-      .catch(() => message.error("Could not load models"))
+      .catch(() => MessageManager.error("Could not load models"))
       .finally(() => setIsLoadingModels(false));
   }, [accessToken]);
 

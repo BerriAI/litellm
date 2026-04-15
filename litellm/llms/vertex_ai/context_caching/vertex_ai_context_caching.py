@@ -51,6 +51,7 @@ class ContextCachingEndpoints(VertexBase):
         vertex_project: Optional[str],
         vertex_location: Optional[str],
         vertex_auth_header: Optional[str],
+        model: Optional[str] = None,
     ) -> Tuple[Optional[str], str]:
         """
         Internal function. Returns the token and url for the call.
@@ -89,7 +90,7 @@ class ContextCachingEndpoints(VertexBase):
             stream=None,
             auth_header=auth_header,
             url=url,
-            model=None,
+            model=model,
             vertex_project=vertex_project,
             vertex_location=vertex_location,
             vertex_api_version="v1beta1"
@@ -109,6 +110,7 @@ class ContextCachingEndpoints(VertexBase):
         vertex_project: Optional[str],
         vertex_location: Optional[str],
         vertex_auth_header: Optional[str],
+        model: Optional[str] = None,
     ) -> Optional[str]:
         """
         Checks if content already cached.
@@ -128,6 +130,7 @@ class ContextCachingEndpoints(VertexBase):
             vertex_project=vertex_project,
             vertex_location=vertex_location,
             vertex_auth_header=vertex_auth_header,
+            model=model,
         )
 
         page_token: Optional[str] = None
@@ -201,6 +204,7 @@ class ContextCachingEndpoints(VertexBase):
         vertex_project: Optional[str],
         vertex_location: Optional[str],
         vertex_auth_header: Optional[str],
+        model: Optional[str] = None,
     ) -> Optional[str]:
         """
         Checks if content already cached.
@@ -220,6 +224,7 @@ class ContextCachingEndpoints(VertexBase):
             vertex_project=vertex_project,
             vertex_location=vertex_location,
             vertex_auth_header=vertex_auth_header,
+            model=model,
         )
 
         page_token: Optional[str] = None
@@ -342,6 +347,7 @@ class ContextCachingEndpoints(VertexBase):
             vertex_project=vertex_project,
             vertex_location=vertex_location,
             vertex_auth_header=vertex_auth_header,
+            model=model,
         )
 
         headers = {
@@ -377,6 +383,7 @@ class ContextCachingEndpoints(VertexBase):
             vertex_project=vertex_project,
             vertex_location=vertex_location,
             vertex_auth_header=vertex_auth_header,
+            model=model,
         )
         if google_cache_name:
             return non_cached_messages, optional_params, google_cache_name
@@ -488,6 +495,7 @@ class ContextCachingEndpoints(VertexBase):
             vertex_project=vertex_project,
             vertex_location=vertex_location,
             vertex_auth_header=vertex_auth_header,
+            model=model,
         )
 
         headers = {
@@ -520,6 +528,7 @@ class ContextCachingEndpoints(VertexBase):
             vertex_project=vertex_project,
             vertex_location=vertex_location,
             vertex_auth_header=vertex_auth_header,
+            model=model,
         )
 
         if google_cache_name:

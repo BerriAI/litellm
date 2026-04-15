@@ -73,6 +73,7 @@ class BaseTranslation(ABC):
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: Optional["LiteLLMLoggingObj"] = None,
         user_api_key_dict: Optional["UserAPIKeyAuth"] = None,
+        request_data: Optional[dict] = None,
     ) -> Any:
         """
         Process output response with guardrails.
@@ -91,6 +92,7 @@ class BaseTranslation(ABC):
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: Optional["LiteLLMLoggingObj"] = None,
         user_api_key_dict: Optional["UserAPIKeyAuth"] = None,
+        request_data: Optional[dict] = None,
     ) -> Any:
         """
         Process output streaming response with guardrails.

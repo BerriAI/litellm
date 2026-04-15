@@ -536,7 +536,7 @@ audio_file = open("path/to/your/audio/file.mp3", "rb")
 # Make the transcription request
 response = client.audio.transcriptions.create(
 	model="${modelNameForCode}",
-	file=audio_file${inputMessage ? `,\n	prompt="${inputMessage.replace(/"/g, '\\"')}"` : ""}
+	file=audio_file${inputMessage ? `,\n	prompt="${inputMessage.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"` : ""}
 )
 
 print(response.text)

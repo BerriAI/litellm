@@ -118,6 +118,28 @@ class TestRouterIndexManagement:
         assert router.model_id_to_deployment_index_map["id-2"] == 1
         assert router.model_id_to_deployment_index_map["id-3"] == 2
 
+    def test_update_team_model_index(self, router):
+        """Test _update_team_model_index updates team_model_to_deployment_indices."""
+        model = {
+            "model_name": "team-alias",
+            "model_info": {
+                "id": "dep-1",
+                "team_id": "team-abc",
+                "team_public_model_name": "gpt-4o",
+            },
+        }
+        router._update_team_model_index(model, 0)
+        assert router.team_model_to_deployment_indices[("team-abc", "gpt-4o")] == [0]
+        router._update_team_model_index(model, 2)
+        assert router.team_model_to_deployment_indices[("team-abc", "gpt-4o")] == [0, 2]
+
+        router._update_team_model_index(
+            {"model_name": "x", "model_info": {"id": "dep-2"}}, 5
+        )
+        assert router.team_model_to_deployment_indices == {
+            ("team-abc", "gpt-4o"): [0, 2],
+        }
+
     def test_has_model_id(self, router):
         """Test has_model_id function for O(1) membership check"""
         # Setup: Add models to router

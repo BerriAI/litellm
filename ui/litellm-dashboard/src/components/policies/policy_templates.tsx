@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo } from "react";
-import { Card, Button, Spin, message, Checkbox } from "antd";
+import { Card, Button, Spin, Checkbox } from "antd";
+import MessageManager from "@/components/molecules/message_manager";
 import {
   ShieldCheckIcon,
   ShieldExclamationIcon,
@@ -184,7 +185,7 @@ const PolicyTemplates: React.FC<PolicyTemplatesProps> = ({ onUseTemplate, onOpen
         onTemplatesLoaded?.(data);
       } catch (error) {
         console.error("Error fetching policy templates:", error);
-        message.error("Failed to fetch policy templates");
+        MessageManager.error("Failed to fetch policy templates");
       } finally {
         setIsLoading(false);
       }

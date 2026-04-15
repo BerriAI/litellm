@@ -10,6 +10,7 @@ import asyncio
 import datetime
 import hashlib
 import json
+import os
 import re
 from typing import Any, Callable, Dict, List, Literal, Optional, Set, Tuple, Union, cast
 from urllib.parse import urlparse
@@ -35,6 +36,8 @@ from litellm.constants import (
     MCP_CLIENT_TIMEOUT,
     MCP_HEALTH_CHECK_TIMEOUT,
     MCP_METADATA_TIMEOUT,
+    MCP_NPM_CACHE_DIR,
+    MCP_STDIO_ALLOWED_COMMANDS,
     MCP_TOOL_LISTING_TIMEOUT,
 )
 from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
@@ -346,6 +349,8 @@ class MCPServerManager:
                 aws_session_token=server_config.get("aws_session_token", None),
                 aws_region_name=server_config.get("aws_region_name", None),
                 aws_service_name=server_config.get("aws_service_name", None),
+                aws_role_name=server_config.get("aws_role_name", None),
+                aws_session_name=server_config.get("aws_session_name", None),
             )
             self.config_mcp_servers[server_id] = new_server
 
@@ -501,12 +506,12 @@ class MCPServerManager:
                     )
 
                     # Update tool name to server name mapping (for both prefixed and base names)
-                    self.tool_name_to_mcp_server_name_mapping[
-                        base_tool_name
-                    ] = server_prefix
-                    self.tool_name_to_mcp_server_name_mapping[
-                        prefixed_tool_name
-                    ] = server_prefix
+                    self.tool_name_to_mcp_server_name_mapping[base_tool_name] = (
+                        server_prefix
+                    )
+                    self.tool_name_to_mcp_server_name_mapping[prefixed_tool_name] = (
+                        server_prefix
+                    )
 
                     registered_count += 1
                     verbose_logger.debug(
@@ -686,6 +691,8 @@ class MCPServerManager:
             aws_session_token=aws_creds.get("aws_session_token"),
             aws_region_name=aws_creds.get("aws_region_name"),
             aws_service_name=aws_creds.get("aws_service_name"),
+            aws_role_name=aws_creds.get("aws_role_name"),
+            aws_session_name=aws_creds.get("aws_session_name"),
         )
         return new_server
 
@@ -786,7 +793,18 @@ class MCPServerManager:
                 f"Allowed MCP Servers for user api key auth: {allowed_mcp_servers}"
             )
             combined_servers = set(allowed_mcp_servers)
-            combined_servers.update(allow_all_server_ids)
+            # Only skip allow_all_keys servers when the request is inside a toolset
+            # scope.  toolset_mcp_route / dynamic_mcp_route set _mcp_active_toolset_id
+            # before calling the handler — that ContextVar is the reliable signal.
+            # Using op.mcp_toolsets==[] would false-positive on DB-default rows where
+            # Postgres initialises the column to ARRAY[]::TEXT[].
+            from litellm.proxy._experimental.mcp_server.mcp_context import (  # noqa: PLC0415
+                _mcp_active_toolset_id,
+            )
+
+            in_toolset_scope = _mcp_active_toolset_id.get() is not None
+            if not in_toolset_scope:
+                combined_servers.update(allow_all_server_ids)
 
             if len(combined_servers) == 0:
                 verbose_logger.debug(
@@ -796,6 +814,132 @@ class MCPServerManager:
         except Exception as e:
             verbose_logger.warning(f"Failed to get allowed MCP servers: {str(e)}.")
             return allow_all_server_ids
+
+    async def resolve_toolset_tool_permissions(
+        self,
+        toolset_ids: List[str],
+    ) -> Dict[str, List[str]]:
+        """
+        Resolve a list of toolset IDs into a mcp_tool_permissions dict.
+
+        Returns: {server_id: [tool_name, ...]} — the union of all tools across
+        the given toolsets.  Results are cached via ``user_api_key_cache`` (a
+        Redis-backed ``DualCache`` in production) so that cache entries are
+        shared across workers and cold-cache DB hits are minimised.
+        """
+        from litellm.constants import DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL
+        from litellm.proxy._experimental.mcp_server.toolset_db import list_mcp_toolsets
+        from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
+
+        if not toolset_ids or prisma_client is None:
+            return {}
+
+        cache_key = "toolset_perms:" + ",".join(sorted(toolset_ids))
+        cached = await user_api_key_cache.async_get_cache(key=cache_key)
+        if cached is not None:
+            return cached
+
+        try:
+            toolsets = await list_mcp_toolsets(prisma_client, toolset_ids=toolset_ids)
+            tool_permissions: Dict[str, List[str]] = {}
+            for toolset in toolsets:
+                for tool in toolset.tools:
+                    raw_name = tool["tool_name"]
+                    unprefixed, _ = split_server_prefix_from_name(raw_name)
+                    tool_permissions.setdefault(tool["server_id"], [])
+                    if unprefixed not in tool_permissions[tool["server_id"]]:
+                        tool_permissions[tool["server_id"]].append(unprefixed)
+            await user_api_key_cache.async_set_cache(
+                key=cache_key,
+                value=tool_permissions,
+                ttl=DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL,
+            )
+            return tool_permissions
+        except Exception as e:
+            verbose_logger.warning(f"Failed to resolve toolset permissions: {str(e)}")
+            return {}
+
+    def invalidate_toolset_cache(self, toolset_id: Optional[str] = None) -> None:
+        """Evict cached toolset permission entries.
+
+        Called after create/update/delete of a toolset so stale data is not served.
+        The in-memory layer of ``user_api_key_cache`` is cleared immediately;
+        Redis entries expire naturally after the configured TTL.
+        Pass toolset_id to evict only entries containing that ID, or None to clear all.
+        """
+        # Clear the in-memory layer of the shared DualCache for affected keys.
+        # We can't enumerate Redis keys by pattern, so Redis entries expire via TTL.
+        try:
+            from litellm.proxy.proxy_server import user_api_key_cache
+
+            in_mem = getattr(user_api_key_cache, "in_memory_cache", None)
+            if in_mem is None:
+                return
+            cache_dict = getattr(in_mem, "cache_dict", {})
+            if toolset_id is None:
+                keys_to_remove = [k for k in cache_dict if k.startswith("toolset_")]
+            else:
+                # Evict permission-cache entries that reference this toolset ID.
+                # Also evict ALL name-cache entries (toolset_name:*): we can't map
+                # toolset_id → toolset_name without a DB call, and the name may have
+                # changed in an update anyway.
+                keys_to_remove = [
+                    k
+                    for k in cache_dict
+                    if (k.startswith("toolset_perms:") and toolset_id in k)
+                    or k.startswith("toolset_name:")
+                ]
+            for k in keys_to_remove:
+                cache_dict.pop(k, None)
+        except Exception as e:
+            verbose_logger.warning(
+                f"invalidate_toolset_cache: failed to evict in-memory entries: {e}"
+            )
+
+    async def get_toolset_by_name_cached(
+        self,
+        prisma_client: Any,
+        toolset_name: str,
+    ) -> Optional[Any]:
+        """Return a toolset by name, cached in ``user_api_key_cache`` (Redis-backed
+        ``DualCache`` in production) to avoid a DB hit on every routed request.
+
+        Serialisation note: the cache value is stored as a plain JSON-safe dict via
+        ``model_dump(mode="json")`` so that Redis round-trips correctly in multi-worker
+        deployments.  On a cache hit we reconstruct the ``MCPToolset`` Pydantic object
+        so callers can always use attribute access (e.g. ``toolset.toolset_id``).
+        """
+        from litellm.constants import DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL
+        from litellm.proxy.proxy_server import user_api_key_cache
+        from litellm.types.mcp_server.mcp_toolset import MCPToolset
+
+        cache_key = f"toolset_name:{toolset_name}"
+        cached = await user_api_key_cache.async_get_cache(key=cache_key)
+        if cached is not None:
+            # Sentinel value used to cache "not found" so we don't re-query for
+            # names that don't exist.
+            if cached == "__not_found__":
+                return None
+            # Redis deserialises JSON back as a plain dict — reconstruct the model.
+            if isinstance(cached, dict):
+                return MCPToolset(**cached)
+            return cached
+
+        from litellm.proxy._experimental.mcp_server.toolset_db import (
+            get_mcp_toolset_by_name,
+        )
+
+        toolset = await get_mcp_toolset_by_name(prisma_client, toolset_name)
+        await user_api_key_cache.async_set_cache(
+            key=cache_key,
+            value=(
+                toolset.model_dump(mode="json")
+                if toolset is not None
+                else "__not_found__"
+            ),
+            ttl=DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL,
+        )
+        return toolset
 
     def filter_server_ids_by_ip(
         self, server_ids: List[str], client_ip: Optional[str]
@@ -978,9 +1122,19 @@ class MCPServerManager:
             # In containers the default (~/.npm or /app/.npm) may not exist
             # or be read-only, causing npx to fail with ENOENT.
             if "NPM_CONFIG_CACHE" not in resolved_env:
-                from litellm.constants import MCP_NPM_CACHE_DIR
-
                 resolved_env["NPM_CONFIG_CACHE"] = MCP_NPM_CACHE_DIR
+            # Defense-in-depth: block commands not in the allowlist.
+            # The Pydantic validator blocks new servers; this catches legacy
+            # config/DB records predating the allowlist.
+            if server.command:
+                base_command = os.path.basename(server.command)
+                if base_command not in MCP_STDIO_ALLOWED_COMMANDS:
+                    raise HTTPException(
+                        status_code=403,
+                        detail=f"MCP stdio command '{server.command}' is not in the allowlist ({sorted(MCP_STDIO_ALLOWED_COMMANDS)}). "
+                        f"Add it to LITELLM_MCP_STDIO_EXTRA_COMMANDS to allow this command.",
+                    )
+
             stdio_config: Optional[MCPStdioConfig] = None
             if server.command and server.args is not None:
                 stdio_config = MCPStdioConfig(
@@ -1011,6 +1165,8 @@ class MCPServerManager:
                     aws_session_token=server.aws_session_token,
                     aws_region_name=server.aws_region_name,
                     aws_service_name=server.aws_service_name,
+                    aws_role_name=server.aws_role_name,
+                    aws_session_name=server.aws_session_name,
                 )
 
             return MCPClient(
@@ -1071,6 +1227,24 @@ class MCPServerManager:
                 tools = global_mcp_tool_registry.convert_tools_to_mcp_sdk_tool_type(
                     _tools
                 )
+                # OpenAPI tools are stored in the registry with their prefix already
+                # applied (e.g. "test_petstore-getinventory").  Do NOT pass them
+                # through _create_prefixed_tools — that would add the prefix a second
+                # time producing "test_petstore-test_petstore-getinventory".
+                if not add_prefix:
+                    prefix = get_server_prefix(server)
+                    sep = MCP_TOOL_PREFIX_SEPARATOR
+                    tools = [
+                        (
+                            t.model_copy(
+                                update={"name": t.name[len(prefix) + len(sep) :]}
+                            )
+                            if t.name.startswith(f"{prefix}{sep}")
+                            else t
+                        )
+                        for t in tools
+                    ]
+                return tools
             else:
                 tools = await self._fetch_tools_with_timeout(client, server.name)
 
@@ -1571,6 +1745,8 @@ class MCPServerManager:
             ),
             "aws_region_name": credentials_dict.get("aws_region_name"),
             "aws_service_name": credentials_dict.get("aws_service_name"),
+            "aws_role_name": credentials_dict.get("aws_role_name"),
+            "aws_session_name": credentials_dict.get("aws_session_name"),
         }
 
     def _extract_scopes(self, scopes_value: Any) -> Optional[List[str]]:
@@ -2279,6 +2455,37 @@ class MCPServerManager:
             )
             tasks.append(during_hook_task)
 
+        # For per-user OAuth servers: if the client didn't supply a token in
+        # oauth2_headers, look up the stored token from Redis / DB.  This is the
+        # call_tool equivalent of _get_user_oauth_extra_headers_from_db used in
+        # list_tools.
+        if (
+            mcp_server.needs_user_oauth_token
+            and not oauth2_headers
+            and user_api_key_auth is not None
+        ):
+            user_id = getattr(user_api_key_auth, "user_id", None)
+            if user_id:
+                try:
+                    from litellm.proxy._experimental.mcp_server.server import (  # noqa: PLC0415
+                        _get_user_oauth_extra_headers_from_db,
+                    )
+
+                    stored_headers = await _get_user_oauth_extra_headers_from_db(
+                        server=mcp_server,
+                        user_api_key_auth=user_api_key_auth,
+                    )
+                    if stored_headers:
+                        oauth2_headers = stored_headers
+                except Exception as _lookup_exc:
+                    verbose_logger.debug(
+                        "call_tool: per-user token lookup failed for "
+                        "user=%s server=%s: %s",
+                        user_id,
+                        mcp_server.server_id,
+                        _lookup_exc,
+                    )
+
         # For OpenAPI servers, call the tool handler directly instead of via MCP client
         if mcp_server.spec_path:
             verbose_logger.debug(
@@ -2389,7 +2596,12 @@ class MCPServerManager:
                     return server
 
         # If not found and tool name is prefixed, try extracting server name from prefix
-        if is_tool_name_prefixed(tool_name):
+        known_prefixes = {
+            normalize_server_name(get_server_prefix(s))
+            for s in self.get_registry().values()
+            if get_server_prefix(s)
+        }
+        if is_tool_name_prefixed(tool_name, known_server_prefixes=known_prefixes):
             (
                 original_tool_name,
                 server_name_from_prefix,
@@ -2410,7 +2622,6 @@ class MCPServerManager:
 
     async def reload_servers_from_database(self):
         """Re-synchronize the in-memory MCP server registry with the database."""
-        from litellm.proxy._experimental.mcp_server.db import get_all_mcp_servers
         from litellm.proxy.management_endpoints.mcp_management_endpoints import (
             get_prisma_client_or_throw,
         )
@@ -2421,9 +2632,19 @@ class MCPServerManager:
         prisma_client = get_prisma_client_or_throw(
             "Database not connected. Connect a database to your proxy"
         )
-        db_mcp_servers = await get_all_mcp_servers(
-            prisma_client, approval_status="active"
+        # Load only "active", legacy "approved", and NULL (no approval workflow) rows.
+        # Pending/rejected servers are excluded at the DB level so we never load them.
+        from litellm.proxy._experimental.mcp_server.db import LiteLLM_MCPServerTable
+
+        raw_rows = await prisma_client.db.litellm_mcpservertable.find_many(
+            where={
+                "OR": [
+                    {"approval_status": None},
+                    {"approval_status": {"in": ["active", "approved"]}},
+                ]
+            }
         )
+        db_mcp_servers = [LiteLLM_MCPServerTable(**r.model_dump()) for r in raw_rows]
         verbose_logger.info(f"Found {len(db_mcp_servers)} MCP servers in database")
 
         previous_registry = self.registry

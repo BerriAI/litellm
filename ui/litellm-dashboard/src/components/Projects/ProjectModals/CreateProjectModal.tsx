@@ -1,5 +1,6 @@
-import { Modal, Form, Button, Typography, message } from "antd";
+import { Modal, Form, Button, Typography } from "antd";
 import { FolderAddOutlined } from "@ant-design/icons";
+import MessageManager from "@/components/molecules/message_manager";
 import {
   useCreateProject,
   ProjectCreateParams,
@@ -32,12 +33,12 @@ export function CreateProjectModal({
 
       createMutation.mutate(params, {
         onSuccess: () => {
-          message.success("Project created successfully");
+          MessageManager.success("Project created successfully");
           form.resetFields();
           onClose();
         },
         onError: (error) => {
-          message.error(error.message || "Failed to create project");
+          MessageManager.error(error.message || "Failed to create project");
         },
       });
     } catch (error) {

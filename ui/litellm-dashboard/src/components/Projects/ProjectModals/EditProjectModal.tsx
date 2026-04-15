@@ -1,6 +1,7 @@
 import { useEffect } from "react";
-import { Modal, Form, Button, Typography, message } from "antd";
+import { Modal, Form, Button, Typography } from "antd";
 import { SaveOutlined } from "@ant-design/icons";
+import MessageManager from "@/components/molecules/message_manager";
 import { ProjectResponse } from "@/app/(dashboard)/hooks/projects/useProjects";
 import {
   useUpdateProject,
@@ -32,6 +33,9 @@ export function EditProjectModal({
       const metadataObj = (project.metadata ?? {}) as Record<string, unknown>;
       const rpmLimits = (metadataObj.model_rpm_limit ?? {}) as Record<string, number>;
       const tpmLimits = (metadataObj.model_tpm_limit ?? {}) as Record<string, number>;
+      const guardrails = (Array.isArray(metadataObj.guardrails)
+        ? metadataObj.guardrails
+        : []) as string[];
 
       const modelLimits: ProjectFormValues["modelLimits"] = [];
       const allLimitModels = new Set([
@@ -47,7 +51,7 @@ export function EditProjectModal({
       }
 
       // Filter out internal keys from user-facing metadata
-      const internalKeys = new Set(["model_rpm_limit", "model_tpm_limit"]);
+      const internalKeys = new Set(["model_rpm_limit", "model_tpm_limit", "guardrails"]);
       const metadata: ProjectFormValues["metadata"] = [];
       for (const [key, value] of Object.entries(metadataObj)) {
         if (!internalKeys.has(key)) {
@@ -62,6 +66,7 @@ export function EditProjectModal({
         models: project.models ?? [],
         max_budget: project.litellm_budget_table?.max_budget ?? undefined,
         isBlocked: project.blocked,
+        guardrails: guardrails.length > 0 ? guardrails : undefined,
         modelLimits: modelLimits.length > 0 ? modelLimits : undefined,
         metadata: metadata.length > 0 ? metadata : undefined,
       });
@@ -80,12 +85,12 @@ export function EditProjectModal({
         { projectId: project.project_id, params },
         {
           onSuccess: () => {
-            message.success("Project updated successfully");
+            MessageManager.success("Project updated successfully");
             onSuccess?.();
             onClose();
           },
           onError: (error) => {
-            message.error(error.message || "Failed to update project");
+            MessageManager.error(error.message || "Failed to update project");
           },
         },
       );
