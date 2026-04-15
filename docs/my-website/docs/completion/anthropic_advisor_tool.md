@@ -3,25 +3,74 @@ import TabItem from '@theme/TabItem';
 
 # Advisor Tool
 
-LiteLLM now supports the Anthropic advisor tool across `chat/completions` and `messages` APIs (SDK + proxy).
+LiteLLM supports the Anthropic advisor tool across `chat/completions` and `messages` APIs (SDK + proxy).
 
 Use the advisor tool to let an executor model call a stronger advisor model during generation. For non-Anthropic providers, LiteLLM runs the advisor orchestration loop automatically.
 
 :::info Beta
 
-The advisor tool is in beta. Include `anthropic-beta: advisor-tool-2026-03-01` in your requests — LiteLLM adds this automatically when it detects the advisor tool in your `tools` array.
+The advisor tool is in beta. LiteLLM adds the required `anthropic-beta: advisor-tool-2026-03-01` header automatically when it detects the advisor tool in your `tools` array.
 
 :::
 
-## Supported Providers
+## Two tool formats
 
-| Provider | Chat Completions API | Messages API | Notes |
-|----------|---------------------|--------------|-------|
-| **Anthropic API** | ✅ | ✅ | Native — runs server-side |
+There are two ways to specify the advisor tool. Which one to use depends on your executor provider and setup.
+
+### 1. Anthropic native format (`advisor_20260301`)
+
+```json
+{
+  "type": "advisor_20260301",
+  "name": "advisor",
+  "model": "claude-opus-4-6"
+}
+```
+
+The `model` field is **required** and specifies the advisor. Use this format when:
+
+- Your executor is an Anthropic model and the advisor is `claude-opus-4-6` — Anthropic handles the advisor call natively, server-side.
+- Your executor is any non-Anthropic model (OpenAI, Gemini, etc.) via the **Messages API** — LiteLLM's built-in interception converts this automatically.
+
+### 2. OpenAI function format (`litellm_advisor`)
+
+```json
+{
+  "type": "function",
+  "function": {
+    "name": "litellm_advisor",
+    "description": "Consult a stronger advisor model.",
+    "parameters": {
+      "type": "object",
+      "properties": { "question": { "type": "string" } },
+      "required": ["question"]
+    }
+  }
+}
+```
+
+This format does **not** carry a `model` field. The advisor model comes from your `AdvisorInterceptionLogger` setup or proxy config — see below. Use this format when calling through the **Chat Completions API** and you cannot send custom tool types (e.g. using a plain OpenAI client against the proxy).
+
+:::warning You must configure the advisor model
+
+Sending `litellm_advisor` as a bare function tool without setting up `AdvisorInterceptionLogger` (or the proxy `advisor_interception_params`) does nothing useful — the provider treats it as a regular custom tool and returns a `tool_use` response your code has to handle manually. Always pair it with the setup below.
+
+:::
+
+## Supported providers
+
+| Provider | Chat Completions API | Messages API | Mode |
+|----------|---------------------|--------------|------|
+| **Anthropic** (executor + advisor = Opus 4.6) | ✅ | ✅ | Native server-side |
+| **Anthropic** (executor) + **any other advisor** | ✅ | ✅ | LiteLLM orchestration loop |
 | **OpenAI / Azure OpenAI** | ✅ | ✅ | LiteLLM orchestration loop |
 | **Amazon Bedrock** | ✅ | ✅ | LiteLLM orchestration loop |
-| **Google Vertex AI** | ✅ | ✅ | LiteLLM orchestration loop |
+| **Google Vertex AI / Gemini** | ✅ | ✅ | LiteLLM orchestration loop |
 | **Groq / Mistral / others** | ✅ | ✅ | LiteLLM orchestration loop |
+
+**Native path:** Executor is Anthropic and advisor is `claude-opus-4-6` → Anthropic runs the advisor inference server-side. No LiteLLM orchestration involved.
+
+**Orchestration path:** Everything else → LiteLLM intercepts the executor's tool call, runs the advisor as a sub-call using the credentials you configured, injects the advice, and continues. The advisor can be any provider.
 
 For non-Anthropic providers, LiteLLM implements the advisor loop itself.
 
@@ -40,11 +89,11 @@ When a request arrives with an `advisor_20260301` tool and a non-Anthropic provi
 - Wraps the final response in an SSE stream if you requested `stream=True`
 - Enforces `max_uses` as a hard cap — `AdvisorMaxIterationsError` is raised if exceeded; `max_uses=0` disables the advisor entirely
 
-## Model Compatibility
+## Model compatibility
 
-The advisor model is fully configurable. You can use any model deployed in your proxy as the advisor — it does not need to be Anthropic.
+The advisor model is fully configurable for orchestrated (non-native) paths — use any model deployed in your proxy.
 
-For **Anthropic-native** requests (where Anthropic runs the advisor server-side), the executor and advisor must form a valid Anthropic pair:
+For **Anthropic-native** requests (Anthropic runs the advisor server-side), the executor and advisor must form a valid Anthropic pair:
 
 | Executor | Advisor |
 |----------|---------|
@@ -52,7 +101,7 @@ For **Anthropic-native** requests (where Anthropic runs the advisor server-side)
 | `claude-sonnet-4-6` | `claude-opus-4-6` |
 | `claude-opus-4-6` | `claude-opus-4-6` |
 
-For **non-Anthropic** executors (where LiteLLM orchestrates the advisor loop), you can use any model as the advisor — including OpenAI, Vertex AI, Bedrock, etc.
+For **non-Anthropic** executors (LiteLLM orchestrates the advisor loop), you can use any model as the advisor — OpenAI, Vertex AI, Bedrock, etc.
 
 ---
 
@@ -61,74 +110,118 @@ For **non-Anthropic** executors (where LiteLLM orchestrates the advisor loop), y
 <Tabs>
 <TabItem value="chat-completions-sdk" label="SDK">
 
-#### Basic Example (Anthropic-native executor)
+### Configuring the advisor model (SDK)
 
-```python showLineNumbers title="Advisor Tool — litellm.completion()"
-import litellm
+Register `AdvisorInterceptionLogger` in `litellm.callbacks` and set `default_advisor_model`. This is what routes advisor sub-calls to the right model and credentials.
 
-response = litellm.completion(
-    model="anthropic/claude-sonnet-4-6",
-    messages=[
-        {"role": "user", "content": "Build a concurrent worker pool in Go with graceful shutdown."}
-    ],
-    tools=[
-        {
-            "type": "function",
-            "function": {
-                "name": "litellm_advisor",
-                "description": "Consult a stronger advisor model.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "question": {"type": "string"}
-                    },
-                    "required": ["question"],
-                },
-            },
-        }
-    ],
-    max_tokens=4096,
-)
+`default_advisor_model` is used when the tool definition has no `model` field (i.e. the `litellm_advisor` function format). If you pass the `advisor_20260301` native format with an explicit `model` field, that takes precedence.
 
-print(response.choices[0].message.content)
-```
-
-#### Non-Anthropic Executor (Chat Completions interception)
-
-```python showLineNumbers title="Advisor Tool with OpenAI executor via chat-completions"
+```python showLineNumbers title="SDK setup — register AdvisorInterceptionLogger"
 import asyncio
 import litellm
-from litellm.integrations.advisor_interception import (
-    AdvisorInterceptionLogger,
-    get_litellm_advisor_tool,
-)
+from litellm.integrations.advisor_interception import AdvisorInterceptionLogger
 
-litellm.callbacks = [AdvisorInterceptionLogger(enabled_providers=["openai"])]
+litellm.callbacks = [
+    AdvisorInterceptionLogger(
+        default_advisor_model="openai/o3",
+        enabled_providers=["anthropic", "openai"],
+    )
+]
 
 async def main():
     response = await litellm.acompletion(
-        model="gpt-5.4-mini",
+        model="openai/gpt-4o",
         messages=[
             {"role": "user", "content": "Build a concurrent worker pool in Go with graceful shutdown."}
         ],
-        # You can still use Anthropic-native advisor tool format.
-        tools=[get_litellm_advisor_tool(model="claude-opus-4-6")],
+        tools=[
+            {
+                "type": "function",
+                "function": {
+                    "name": "litellm_advisor",
+                    "description": "Consult a stronger advisor model.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"question": {"type": "string"}},
+                        "required": ["question"],
+                    },
+                },
+            }
+        ],
         max_tokens=4096,
     )
     print(response.choices[0].message.content)
 
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+You can also pass the advisor model directly in the tool definition using the native format — this overrides `default_advisor_model`:
+
+```python showLineNumbers title="Advisor model set per-request in tool definition"
+from litellm.integrations.advisor_interception import get_litellm_advisor_tool
+
+tools=[
+    get_litellm_advisor_tool(
+        model="anthropic/claude-opus-4-6",  # overrides default_advisor_model for this request
+        max_uses=2,
+    )
+]
+```
+
+---
+
+### Streaming
+
+```python showLineNumbers title="Streaming with Advisor Tool"
+import asyncio
+import litellm
+from litellm.integrations.advisor_interception import AdvisorInterceptionLogger
+
+litellm.callbacks = [
+    AdvisorInterceptionLogger(default_advisor_model="openai/o3")
+]
+
+async def main():
+    response = await litellm.acompletion(
+        model="openai/gpt-4o-mini",
+        messages=[
+            {"role": "user", "content": "Implement a distributed rate limiter."}
+        ],
+        tools=[
+            {
+                "type": "function",
+                "function": {
+                    "name": "litellm_advisor",
+                    "description": "Consult a stronger advisor model.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"question": {"type": "string"}},
+                        "required": ["question"],
+                    },
+                },
+            }
+        ],
+        max_tokens=4096,
+        stream=True,
+    )
+
+    async for chunk in response:
+        if chunk.choices[0].delta.content:
+            print(chunk.choices[0].delta.content, end="")
+
 asyncio.run(main())
 ```
 
-::::note
+:::note Streaming behavior
 
-`AdvisorInterceptionLogger` converts advisor tool definitions to provider-compatible function tools for non-Anthropic chat-completions providers and runs the advisor sub-call loop server-side.
+The advisor sub-inference does not stream. When the executor calls the advisor tool, the stream pauses, the advisor runs to completion, and its output is injected before the executor resumes streaming.
 
-::::
+:::
 
-#### With Optional Parameters
+#### Anthropic-native executor (`advisor_20260301`)
 
-```python showLineNumbers title="Advisor Tool with max_uses and caching"
+```python showLineNumbers title="Advisor Tool — litellm.completion() with native tool type"
 import litellm
 
 response = litellm.completion(
@@ -141,49 +234,18 @@ response = litellm.completion(
             "type": "advisor_20260301",
             "name": "advisor",
             "model": "claude-opus-4-6",
-            "max_uses": 3,                             # cap advisor calls per request
-            "caching": {"type": "ephemeral", "ttl": "5m"},  # enable for 3+ calls per conversation
+            "max_uses": 3,
+            "caching": {"type": "ephemeral", "ttl": "5m"},
         }
     ],
     max_tokens=4096,
 )
+print(response.choices[0].message.content)
 ```
 
-#### Streaming
+#### Multi-turn conversation
 
-```python showLineNumbers title="Streaming with Advisor Tool"
-import litellm
-
-response = litellm.completion(
-    model="anthropic/claude-sonnet-4-6",
-    messages=[
-        {"role": "user", "content": "Implement a distributed rate limiter."}
-    ],
-    tools=[
-        {
-            "type": "advisor_20260301",
-            "name": "advisor",
-            "model": "claude-opus-4-6",
-        }
-    ],
-    max_tokens=4096,
-    stream=True,
-)
-
-for chunk in response:
-    if chunk.choices[0].delta.content:
-        print(chunk.choices[0].delta.content, end="")
-```
-
-:::note Streaming behavior
-
-The advisor sub-inference does not stream. The executor's stream pauses while the advisor runs, then the full advisor result arrives in a single event. Executor output resumes streaming afterward.
-
-:::
-
-#### Multi-Turn Conversation
-
-```python showLineNumbers title="Multi-Turn with Advisor Tool"
+```python showLineNumbers title="Multi-turn with advisor tool"
 import litellm
 
 tools = [
@@ -205,10 +267,7 @@ response = litellm.completion(
     max_tokens=4096,
 )
 
-# Append the full response (includes server_tool_use + advisor_tool_result blocks)
 messages.append({"role": "assistant", "content": response.choices[0].message.content})
-
-# Continue the conversation — keep the same tools array
 messages.append({"role": "user", "content": "Now add a max-in-flight limit of 10."})
 
 response2 = litellm.completion(
@@ -228,23 +287,34 @@ LiteLLM automatically strips `advisor_tool_result` blocks from message history w
 </TabItem>
 <TabItem value="chat-completions-proxy" label="Proxy">
 
-#### Proxy Configuration
+### Configuring the advisor model (Proxy)
 
-Configure the advisor model as a deployment in your `model_list` and reference it in `advisor_interception_params`. This ensures the advisor sub-calls use the correct credentials and go through the proxy's deployment routing.
+Add the advisor as a named deployment in `model_list` and reference it in `advisor_interception_params`. The proxy router resolves the correct credentials automatically.
 
 ```yaml showLineNumbers title="config.yaml"
 model_list:
-  # The advisor model
-  - model_name: advisor-model
+  # Advisor — use a stronger model than your executor (example: o3 as advisor)
+  - model_name: my-advisor
     litellm_params:
-      model: anthropic/claude-sonnet-4-20250514
-      api_key: os.environ/ANTHROPIC_API_KEY
+      model: openai/o3
+      api_key: os.environ/OPENAI_API_KEY
+
+  # Or use Anthropic Opus as advisor
+  # - model_name: my-advisor
+  #   litellm_params:
+  #     model: anthropic/claude-opus-4-6
+  #     api_key: os.environ/ANTHROPIC_API_KEY
 
   # Executor models
   - model_name: claude-sonnet
     litellm_params:
-      model: anthropic/claude-sonnet-4-6
+      model: anthropic/claude-sonnet-4-5
       api_key: os.environ/ANTHROPIC_API_KEY
+
+  - model_name: gpt-4o-mini
+    litellm_params:
+      model: openai/gpt-4o-mini
+      api_key: os.environ/OPENAI_API_KEY
 
   - model_name: gemini-flash
     litellm_params:
@@ -253,28 +323,63 @@ model_list:
       vertex_location: us-central1
 
 litellm_settings:
-  callbacks: ["advisor_interception"]
+  callbacks: ["advisor_interception"]   # use callbacks, not success_callback
   advisor_interception_params:
-    # Must match a model_name from model_list — the router resolves
-    # the correct deployment and credentials automatically.
-    default_advisor_model: "advisor-model"
+    # Must be a model_name from model_list above.
+    # The router uses this to pick the right deployment + credentials.
+    default_advisor_model: "my-advisor"
 ```
 
-:::info Important
+:::info
 
-- Use `callbacks`, not `success_callback`. The advisor interception hooks run through `litellm.callbacks`.
-- The `default_advisor_model` value must be a `model_name` from your `model_list`. The proxy router resolves it to the correct deployment with the correct API key. This means you can use any provider as your advisor model — not just Anthropic.
+- Use `callbacks`, not `success_callback`. The advisor hooks run through `litellm.callbacks`.
+- `default_advisor_model` must match a `model_name` from `model_list`. This is how the proxy resolves the correct API key and deployment for the advisor sub-call.
+- You can still override it per-request by passing `model` in an `advisor_20260301` tool definition.
 
 :::
 
-#### Client Request via Proxy
+### Client request (`litellm_advisor`)
 
-```python showLineNumbers title="Advisor Tool via AI Gateway"
+```python showLineNumbers title="Advisor via proxy (OpenAI-compatible client)"
 from openai import OpenAI
 
 client = OpenAI(
     api_key="your-litellm-proxy-key",
-    base_url="http://0.0.0.0:4000/v1"
+    base_url="http://0.0.0.0:4000/v1",
+)
+
+response = client.chat.completions.create(
+    model="claude-sonnet",
+    messages=[
+        {"role": "user", "content": "Implement a distributed rate limiter in Python."}
+    ],
+    tools=[
+        {
+            "type": "function",
+            "function": {
+                "name": "litellm_advisor",
+                "description": "Consult a stronger advisor model.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"question": {"type": "string"}},
+                    "required": ["question"],
+                },
+            },
+        }
+    ],
+    max_tokens=4096,
+)
+print(response.choices[0].message.content)
+```
+
+### Client request (`advisor_20260301`)
+
+```python showLineNumbers title="Proxy chat completions with native advisor tool type"
+from openai import OpenAI
+
+client = OpenAI(
+    api_key="your-litellm-proxy-key",
+    base_url="http://0.0.0.0:4000/v1",
 )
 
 response = client.chat.completions.create(
@@ -286,18 +391,19 @@ response = client.chat.completions.create(
         {
             "type": "advisor_20260301",
             "name": "advisor",
-            "model": "advisor-model",
+            "model": "my-advisor",
         }
     ],
     max_tokens=4096,
 )
+print(response.choices[0].message.content)
 ```
 
-#### Client Request via Proxy (OpenAI-compatible function tool)
+### Client request (non-Anthropic executor)
 
-Use this format when your chat-completions client sends OpenAI-style tools. The proxy uses the `default_advisor_model` from your config.
+Use OpenAI-style `litellm_advisor` when the executor is not Anthropic. The advisor comes from `default_advisor_model`.
 
-```python showLineNumbers title="Proxy Chat Completions with litellm_advisor"
+```python showLineNumbers title="Proxy with Gemini executor + configured advisor"
 from openai import OpenAI
 
 client = OpenAI(
@@ -318,9 +424,7 @@ response = client.chat.completions.create(
                 "description": "Consult a stronger advisor model.",
                 "parameters": {
                     "type": "object",
-                    "properties": {
-                        "question": {"type": "string"}
-                    },
+                    "properties": {"question": {"type": "string"}},
                     "required": ["question"],
                 },
             },
@@ -330,14 +434,6 @@ response = client.chat.completions.create(
 )
 print(response.choices[0].message.content)
 ```
-
-::::note
-
-For non-Anthropic chat-completions providers behind proxy, this OpenAI-compatible
-`litellm_advisor` function tool is the recommended request shape.
-The advisor model is determined by the `default_advisor_model` in your `advisor_interception_params` config.
-
-::::
 
 </TabItem>
 </Tabs>
@@ -349,9 +445,11 @@ The advisor model is determined by the `default_advisor_model` in your `advisor_
 <Tabs>
 <TabItem value="messages-sdk" label="SDK">
 
-#### Basic Example
+The Messages API (`litellm.anthropic.messages`) has built-in interception — no callback registration needed. Pass the `advisor_20260301` tool with the `model` field and LiteLLM handles the rest.
 
-```python showLineNumbers title="Advisor Tool — litellm.anthropic.messages"
+#### Anthropic executor — native path
+
+```python showLineNumbers title="Advisor Tool — Messages API, Anthropic native"
 import asyncio
 import litellm
 
@@ -365,7 +463,7 @@ async def main():
             {
                 "type": "advisor_20260301",
                 "name": "advisor",
-                "model": "claude-opus-4-6",
+                "model": "claude-opus-4-6",   # Anthropic runs this natively
             }
         ],
         max_tokens=4096,
@@ -375,9 +473,38 @@ async def main():
 asyncio.run(main())
 ```
 
+#### Non-Anthropic executor — LiteLLM orchestration loop
+
+When the executor is not Anthropic, or when the advisor model is not Claude Opus 4.6, LiteLLM runs the loop itself. The `model` field in the tool definition is the advisor — it can be any provider.
+
+```python showLineNumbers title="Advisor Tool — Messages API, OpenAI executor"
+import asyncio
+import litellm
+
+async def main():
+    response = await litellm.anthropic.messages.acreate(
+        model="openai/gpt-4o",
+        messages=[
+            {"role": "user", "content": "Implement a Python LRU cache with O(1) get and put."}
+        ],
+        tools=[
+            {
+                "type": "advisor_20260301",
+                "name": "advisor",
+                "model": "openai/o3",   # advisor model — any provider works
+                "max_uses": 2,
+            }
+        ],
+        max_tokens=1024,
+    )
+    print(response["content"][0]["text"])
+
+asyncio.run(main())
+```
+
 #### Streaming
 
-```python showLineNumbers title="Messages API Streaming with Advisor Tool"
+```python showLineNumbers title="Messages API streaming with advisor tool"
 import asyncio
 import json
 import litellm
@@ -411,67 +538,13 @@ async def main():
 asyncio.run(main())
 ```
 
-</TabItem>
-<TabItem value="messages-proxy" label="Proxy">
+#### Non-Anthropic provider (explicit)
 
-#### Proxy Configuration
-
-Use the same config shown in the Chat Completions proxy tab. The `advisor_interception_params` config applies to both APIs.
-
-```yaml showLineNumbers title="config.yaml"
-model_list:
-  - model_name: advisor-model
-    litellm_params:
-      model: anthropic/claude-sonnet-4-20250514
-      api_key: os.environ/ANTHROPIC_API_KEY
-  - model_name: claude-sonnet
-    litellm_params:
-      model: anthropic/claude-sonnet-4-6
-      api_key: os.environ/ANTHROPIC_API_KEY
-
-litellm_settings:
-  callbacks: ["advisor_interception"]
-  advisor_interception_params:
-    default_advisor_model: "advisor-model"
-```
-
-#### Client Request via Proxy (Anthropic SDK)
-
-```python showLineNumbers title="Advisor Tool via AI Gateway (Anthropic SDK)"
-import anthropic
-
-client = anthropic.Anthropic(
-    api_key="your-litellm-proxy-key",
-    base_url="http://0.0.0.0:4000"
-)
-
-response = client.beta.messages.create(
-    model="claude-sonnet",
-    max_tokens=4096,
-    betas=["advisor-tool-2026-03-01"],
-    messages=[
-        {"role": "user", "content": "Build a concurrent worker pool in Go with graceful shutdown."}
-    ],
-    tools=[
-        {
-            "type": "advisor_20260301",
-            "name": "advisor",
-            "model": "advisor-model",
-        }
-    ],
-)
-print(response)
-```
-
-#### Non-Anthropic Provider (LiteLLM orchestration loop)
-
-```python showLineNumbers title="Advisor Tool with OpenAI executor"
+```python showLineNumbers title="Advisor Tool with OpenAI executor (custom_llm_provider)"
 import asyncio
 import litellm
 
 async def main():
-    # executor: openai/gpt-4.1-mini  |  advisor: claude-opus-4-6
-    # LiteLLM runs the orchestration loop automatically
     response = await litellm.anthropic.messages.acreate(
         model="openai/gpt-4.1-mini",
         messages=[
@@ -488,10 +561,42 @@ async def main():
         max_tokens=1024,
         custom_llm_provider="openai",
     )
-    # Final response is clean — no advisor tool_use blocks
     print(response["content"][0]["text"])
 
 asyncio.run(main())
+```
+
+</TabItem>
+<TabItem value="messages-proxy" label="Proxy">
+
+Use the same `config.yaml` shown in the Chat Completions proxy tab. The `advisor_interception_params` config applies to both APIs.
+
+#### Client request — Anthropic SDK
+
+```python showLineNumbers title="Advisor Tool via AI Gateway (Anthropic SDK)"
+import anthropic
+
+client = anthropic.Anthropic(
+    api_key="your-litellm-proxy-key",
+    base_url="http://0.0.0.0:4000",
+)
+
+response = client.beta.messages.create(
+    model="claude-sonnet",
+    max_tokens=4096,
+    betas=["advisor-tool-2026-03-01"],
+    messages=[
+        {"role": "user", "content": "Build a concurrent worker pool in Go with graceful shutdown."}
+    ],
+    tools=[
+        {
+            "type": "advisor_20260301",
+            "name": "advisor",
+            "model": "my-advisor",   # model_name from config.yaml
+        }
+    ],
+)
+print(response)
 ```
 
 </TabItem>
@@ -499,49 +604,87 @@ asyncio.run(main())
 
 ---
 
-## Response Structure
+## Response structure
 
-A successful advisor call returns `server_tool_use` and `advisor_tool_result` blocks in the assistant content:
+### Messages API
 
-```json title="Response with advisor blocks"
+Both native and orchestration paths return `server_tool_use` and `advisor_tool_result` blocks in the assistant content:
+
+```json title="Messages API response"
 {
   "role": "assistant",
   "content": [
     {
       "type": "text",
-      "text": "Let me consult the advisor on this."
+      "text": "Here is the implementation:"
     },
     {
       "type": "server_tool_use",
       "id": "srvtoolu_abc123",
-      "name": "advisor",
-      "input": {}
+      "name": "advisor"
     },
     {
       "type": "advisor_tool_result",
       "tool_use_id": "srvtoolu_abc123",
       "content": {
         "type": "advisor_result",
-        "text": "Use a channel-based coordination pattern. The tricky part is draining in-flight work during shutdown: close the input channel first, then wait on a WaitGroup..."
+        "text": "Use a channel-based coordination pattern..."
       }
     },
     {
       "type": "text",
-      "text": "Here's the implementation using a channel-based coordination pattern..."
+      "text": "Here's the full implementation..."
     }
   ]
 }
 ```
 
-Pass the full assistant content, including advisor blocks, back on subsequent turns. LiteLLM handles this automatically through `provider_specific_fields`.
+Pass the full assistant content, including advisor blocks, back on subsequent turns. LiteLLM handles stripping and `provider_specific_fields` where applicable.
+
+### Chat Completions API
+
+For chat completions, the advisor blocks are in `provider_specific_fields` on the response message:
+
+```python title="Accessing advisor results from chat completions"
+response = await litellm.acompletion(...)
+
+message = response.choices[0].message
+print(message.content)  # final answer
+
+# Advisor trace — available when the advisor was called
+psf = message.provider_specific_fields or {}
+for block in psf.get("advisor_tool_results", []):
+    if block["type"] == "advisor_tool_result":
+        print("Advisor said:", block["content"]["text"])
+```
+
+```json title="provider_specific_fields structure"
+{
+  "advisor_tool_results": [
+    {
+      "type": "server_tool_use",
+      "id": "call_abc123",
+      "name": "advisor"
+    },
+    {
+      "type": "advisor_tool_result",
+      "tool_use_id": "call_abc123",
+      "content": {
+        "type": "advisor_result",
+        "text": "Use a channel-based coordination pattern..."
+      }
+    }
+  ]
+}
+```
 
 ---
 
-## Cost Control
+## Cost control
 
-Advisor calls run as a separate sub-inference billed at the advisor model's rates. Usage is reported in `usage.iterations[]`:
+Advisor calls run as separate sub-inferences billed at the advisor model's rates. Usage is reported in `usage.iterations[]` (Messages API) or accumulated in `usage` (Chat Completions):
 
-```json title="Usage with advisor sub-inference"
+```json title="Messages API usage with advisor sub-inference"
 {
   "usage": {
     "input_tokens": 412,
@@ -568,9 +711,24 @@ Advisor calls run as a separate sub-inference billed at the advisor model's rate
 }
 ```
 
-Top-level `usage` reflects executor tokens only. Advisor tokens appear in `iterations` entries with `type: "advisor_message"` and are billed at Opus rates.
+Top-level `usage` reflects executor tokens; advisor tokens appear in `iterations` with `type: "advisor_message"`.
 
-## Additional Resources
+Use `max_uses` in the tool definition to cap how many times the advisor can be called per request:
+
+```python
+tools=[
+    {
+        "type": "advisor_20260301",
+        "name": "advisor",
+        "model": "my-advisor",
+        "max_uses": 2,   # raise AdvisorMaxIterationsError after 2 advisor calls
+    }
+]
+```
+
+---
+
+## Additional resources
 
 - [Anthropic Advisor Tool Documentation](https://platform.claude.com/docs/en/agents-and-tools/tool-use/advisor-tool)
 - [LiteLLM Tool Calling Guide](https://docs.litellm.ai/docs/completion/function_call)
