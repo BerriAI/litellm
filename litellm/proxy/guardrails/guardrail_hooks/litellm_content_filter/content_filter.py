@@ -1859,20 +1859,36 @@ class ContentFilterGuardrail(CustomGuardrail):
         """
         Whether this guardrail is configured to scan response content.
 
-        Returns True only when event_hook is post_call or during_call (including
-        when either appears in a list). For pre_call / realtime_input_transcription
-        / unset, the streaming iterator must not modify the response — otherwise
-        a pre_call regex would silently also redact output, contradicting the
-        documented mode contract.
+        Returns True when ``event_hook`` selects a response-side hook
+        (``post_call`` or ``during_call``). For ``pre_call`` /
+        ``realtime_input_transcription`` / unset, the streaming iterator must
+        not modify the response — otherwise a pre_call regex would silently
+        also redact output, contradicting the documented mode contract.
+
+        Supports all three accepted ``event_hook`` shapes:
+        - single ``GuardrailEventHooks`` value
+        - ``list`` of ``GuardrailEventHooks`` (opt-in if any member matches)
+        - ``Mode`` (tag-routed): opt-in if any tag value or the default
+          resolves to a response hook, since the configured routing could
+          send matching requests to a response-side mode
         """
-        response_hooks = {
-            GuardrailEventHooks.post_call,
-            GuardrailEventHooks.during_call,
+        response_hook_values = {
+            GuardrailEventHooks.post_call.value,
+            GuardrailEventHooks.during_call.value,
         }
         hook = self.event_hook
         if isinstance(hook, list):
-            return any(h in response_hooks for h in hook)
-        return hook in response_hooks
+            return any(getattr(h, "value", h) in response_hook_values for h in hook)
+        if isinstance(hook, Mode):
+            candidates: List[Union[str, List[str]]] = list(hook.tags.values())
+            if hook.default is not None:
+                candidates.append(hook.default)
+            for value in candidates:
+                items = value if isinstance(value, list) else [value]
+                if any(v in response_hook_values for v in items):
+                    return True
+            return False
+        return getattr(hook, "value", hook) in response_hook_values
 
     async def async_post_call_streaming_iterator_hook(
         self,

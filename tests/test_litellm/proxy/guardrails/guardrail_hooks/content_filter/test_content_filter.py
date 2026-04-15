@@ -22,6 +22,7 @@ from litellm.types.guardrails import (
     ContentFilterAction,
     ContentFilterPattern,
     GuardrailEventHooks,
+    Mode,
 )
 from litellm.types.proxy.guardrails.guardrail_hooks.litellm_content_filter import (
     ContentFilterCategoryConfig,
@@ -2194,3 +2195,54 @@ class TestStreamingHookRespectsEventHook:
 
         assert "test@example.com" in content
         assert "[EMAIL_REDACTED]" not in content
+
+    @pytest.mark.asyncio
+    async def test_mode_tag_routing_with_post_call_masks(self):
+        """Mode tag routing: any tag resolving to post_call opts into response scanning."""
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="test-mode-tag-post-call",
+            patterns=self._patterns(),
+            event_hook=Mode(
+                tags={"sensitive": "post_call", "internal": "pre_call"},
+                default="pre_call",
+            ),
+        )
+
+        content = await self._collect_stream(guardrail)
+
+        assert "test@example.com" not in content
+        assert "[EMAIL_REDACTED]" in content
+
+    @pytest.mark.asyncio
+    async def test_mode_tag_routing_all_pre_call_does_not_mask(self):
+        """Mode tag routing: all tags pre_call and default pre_call must not scan response."""
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="test-mode-tag-all-pre-call",
+            patterns=self._patterns(),
+            event_hook=Mode(
+                tags={"a": "pre_call", "b": "pre_call"},
+                default="pre_call",
+            ),
+        )
+
+        content = await self._collect_stream(guardrail)
+
+        assert "test@example.com" in content
+        assert "[EMAIL_REDACTED]" not in content
+
+    @pytest.mark.asyncio
+    async def test_mode_default_post_call_masks(self):
+        """Mode with default=post_call opts into response scanning."""
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="test-mode-default-post-call",
+            patterns=self._patterns(),
+            event_hook=Mode(
+                tags={"a": "pre_call"},
+                default="post_call",
+            ),
+        )
+
+        content = await self._collect_stream(guardrail)
+
+        assert "test@example.com" not in content
+        assert "[EMAIL_REDACTED]" in content
