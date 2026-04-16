@@ -172,3 +172,120 @@ def test_remove_key_removes_plain_values():
 
     assert "str-key" not in cache.cache_dict
     assert "dict-key" not in cache.cache_dict
+
+
+class _ClosableClient:
+    """Mock httpx-like client that exposes ``is_closed``."""
+
+    def __init__(self, closed: bool = False):
+        self.is_closed = closed
+
+
+class _WrappedClient:
+    """Mock SDK wrapper (AsyncAzureOpenAI-style) whose httpx is on ``_client``."""
+
+    def __init__(self, inner):
+        self._client = inner
+
+
+def test_get_cache_returns_value_when_client_is_open():
+    """Baseline: an open cached client comes back unchanged."""
+    cache = LLMClientCache(max_size_in_memory=2)
+    inner = _ClosableClient(closed=False)
+    cache.set_cache("k", _WrappedClient(inner))
+
+    assert cache.get_cache("k") is not None
+    assert "k-" + str(id(None)) not in cache.cache_dict  # sanity: no loop id yet
+    # Key lives under the resolved (no-loop) key because this test is sync.
+    assert "k" in cache.cache_dict
+
+
+def test_get_cache_drops_wrapped_closed_client():
+    """If the inner httpx on ``_client`` reports is_closed=True, the cached
+    wrapper is evicted and None is returned so the caller builds a fresh one.
+    """
+    cache = LLMClientCache(max_size_in_memory=2)
+    inner = _ClosableClient(closed=True)
+    wrapped = _WrappedClient(inner)
+    cache.set_cache("k", wrapped)
+    # Pre-condition: the entry is there.
+    assert "k" in cache.cache_dict
+
+    result = cache.get_cache("k")
+
+    assert result is None
+    assert "k" not in cache.cache_dict  # evicted
+
+
+def test_get_cache_drops_handler_closed_client():
+    """AsyncHTTPHandler-style wrapper stores httpx on ``.client`` (no underscore).
+    That shape should also be detected.
+    """
+    cache = LLMClientCache(max_size_in_memory=2)
+
+    class _Handler:
+        def __init__(self, inner):
+            self.client = inner
+
+    inner = _ClosableClient(closed=True)
+    cache.set_cache("k", _Handler(inner))
+
+    assert cache.get_cache("k") is None
+    assert "k" not in cache.cache_dict
+
+
+def test_get_cache_drops_bare_closed_httpx_client():
+    """A bare ``httpx.AsyncClient`` with ``is_closed=True`` is also evicted."""
+    cache = LLMClientCache(max_size_in_memory=2)
+    cache.set_cache("k", _ClosableClient(closed=True))
+
+    assert cache.get_cache("k") is None
+    assert "k" not in cache.cache_dict
+
+
+def test_get_cache_leaves_value_without_is_closed_attr_alone():
+    """Non-httpx values (e.g. aiohttp handlers) don't expose is_closed — we
+    must not false-positive on them and evict otherwise-fine entries.
+    """
+    cache = LLMClientCache(max_size_in_memory=2)
+
+    class _AiohttpLike:
+        """Deliberately no is_closed attribute."""
+
+        pass
+
+    value = _AiohttpLike()
+    cache.set_cache("k", value)
+
+    assert cache.get_cache("k") is value
+    assert "k" in cache.cache_dict
+
+
+@pytest.mark.asyncio
+async def test_async_get_cache_drops_closed_client():
+    """Same eviction-on-closed behaviour from the async read path."""
+    cache = LLMClientCache(max_size_in_memory=2)
+    wrapped = _WrappedClient(_ClosableClient(closed=True))
+    await cache.async_set_cache("k", wrapped)
+
+    assert await cache.async_get_cache("k") is None
+    # Under a running loop the resolved key includes the loop id; check that
+    # no stale "k..." key remains in the underlying dict.
+    assert not any(str(key).startswith("k-") for key in cache.cache_dict)
+
+
+def test_get_cache_survives_weird_is_closed_raising():
+    """A cached object whose is_closed access raises should be treated as open,
+    not crash the cache read.
+    """
+    cache = LLMClientCache(max_size_in_memory=2)
+
+    class _Hostile:
+        @property
+        def is_closed(self):
+            raise RuntimeError("boom")
+
+    value = _Hostile()
+    cache.set_cache("k", value)
+    # Should not raise, and should return the value.
+    assert cache.get_cache("k") is value
