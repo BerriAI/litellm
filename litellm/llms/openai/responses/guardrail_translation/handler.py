@@ -71,9 +71,7 @@ class OpenAIResponsesHandler(BaseTranslation):
     Methods can be overridden to customize behavior for different message formats.
     """
 
-    def get_structured_messages(
-        self, data: dict
-    ) -> Optional[List[AllMessageValues]]:
+    def get_structured_messages(self, data: dict) -> Optional[List[AllMessageValues]]:
         """
         Convert Responses API request data to OpenAI-spec structured messages.
 
@@ -83,9 +81,11 @@ class OpenAIResponsesHandler(BaseTranslation):
         input_data = data.get("input")
         if input_data is None:
             return None
-        messages = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
-            input=input_data,
-            responses_api_request=data,
+        messages = (
+            LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+                input=input_data,
+                responses_api_request=data,
+            )
         )
         return cast(List[AllMessageValues], messages) if messages else None
 

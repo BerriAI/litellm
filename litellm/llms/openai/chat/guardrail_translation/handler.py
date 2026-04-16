@@ -48,9 +48,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
     Methods can be overridden to customize behavior for different message formats.
     """
 
-    def get_structured_messages(
-        self, data: dict
-    ) -> Optional[List[AllMessageValues]]:
+    def get_structured_messages(self, data: dict) -> Optional[List[AllMessageValues]]:
         """
         Convert chat completions request data to OpenAI-spec structured messages.
 

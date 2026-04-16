@@ -356,10 +356,8 @@ class ComplexityRouter(CustomLogger):
         call_type: Optional[CallTypes] = None
 
         # 1. Try route-based inference from proxy metadata
-        route = (
-            request_kwargs.get("litellm_metadata", {}).get(
-                "user_api_key_request_route"
-            )
+        route = request_kwargs.get("litellm_metadata", {}).get(
+            "user_api_key_request_route"
         )
         if route:
             call_types_list = get_call_types_for_route(route)

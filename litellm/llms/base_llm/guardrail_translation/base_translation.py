@@ -102,9 +102,7 @@ class BaseTranslation(ABC):
         """
         return responses_so_far
 
-    def get_structured_messages(
-        self, data: dict
-    ) -> Optional[List["AllMessageValues"]]:
+    def get_structured_messages(self, data: dict) -> Optional[List["AllMessageValues"]]:
         """
         Convert request data to OpenAI-spec structured messages.
 

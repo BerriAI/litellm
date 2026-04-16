@@ -78,9 +78,7 @@ class AnthropicMessagesHandler(BaseTranslation):
         )
         return chat_completion_compatible_request
 
-    def get_structured_messages(
-        self, data: dict
-    ) -> Optional[List[AllMessageValues]]:
+    def get_structured_messages(self, data: dict) -> Optional[List[AllMessageValues]]:
         """
         Convert Anthropic messages request data to OpenAI-spec structured messages.
 
@@ -122,9 +120,9 @@ class AnthropicMessagesHandler(BaseTranslation):
 
         texts_to_check: List[str] = []
         images_to_check: List[str] = []
-        tools_to_check: List[
-            ChatCompletionToolParam
-        ] = chat_completion_compatible_request.get("tools", [])
+        tools_to_check: List[ChatCompletionToolParam] = (
+            chat_completion_compatible_request.get("tools", [])
+        )
         task_mappings: List[Tuple[int, Optional[int]]] = []
 
         # Step 1: Extract all text content and images

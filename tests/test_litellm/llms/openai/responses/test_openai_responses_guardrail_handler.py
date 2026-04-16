@@ -1038,8 +1038,7 @@ class TestGetStructuredMessages:
         result = handler.get_structured_messages(data)
         assert result is not None
         has_system = any(
-            isinstance(msg, dict) and msg.get("role") == "system"
-            for msg in result
+            isinstance(msg, dict) and msg.get("role") == "system" for msg in result
         )
         assert has_system, f"Expected system message from instructions, got: {result}"
 
