@@ -34,33 +34,56 @@ import io
 import platform
 from datetime import datetime as _dt
 from datetime import timezone as _tz
-from typing import Optional
+from typing import Dict, Optional
 
 import httpx
 import litellm as _litellm
 
 from litellm._logging import verbose_proxy_logger
 
-AGENT_BASE_PATH = "/metrics/agent/ai/{connection_id}"
-UPLOAD_URL_PATH = "/metrics/agent/ai/{connection_id}/upload-url"
-
-
-def _utc_now() -> _dt:
-    """Return current UTC datetime. Extracted for easy test patching."""
-    return _dt.now(_tz.utc)
-
-
 _MAX_RETRIES = 3
 _RETRY_BACKOFF_BASE = 1.0  # seconds; doubles each retry
 
 
-class MavvrikUploader:
+class MavvrikClient:
     """Upload gzip-compressed CSV spend data to Mavvrik via a signed URL upload."""
 
     def __init__(self, api_key: str, api_endpoint: str, connection_id: str) -> None:
-        self.api_key = api_key
-        self.api_endpoint = api_endpoint.rstrip("/")
-        self.connection_id = connection_id
+        self._api_key = api_key
+        self._api_endpoint = api_endpoint.rstrip("/")
+        self._connection_id = connection_id
+
+    # ------------------------------------------------------------------
+    # Read-only public accessors (for backward compatibility)
+    # ------------------------------------------------------------------
+
+    @property
+    def api_key(self) -> str:
+        return self._api_key
+
+    @property
+    def api_endpoint(self) -> str:
+        return self._api_endpoint
+
+    @property
+    def connection_id(self) -> str:
+        return self._connection_id
+
+    # ------------------------------------------------------------------
+    # URL properties
+    # ------------------------------------------------------------------
+
+    @property
+    def agent_url(self) -> str:
+        return f"{self._api_endpoint}/metrics/agent/ai/{self._connection_id}"
+
+    @property
+    def upload_url(self) -> str:
+        return f"{self._api_endpoint}/metrics/agent/ai/{self._connection_id}/upload-url"
+
+    @property
+    def _auth_headers(self) -> Dict[str, str]:
+        return {"Content-Type": "application/json", "x-api-key": self._api_key}
 
     # ------------------------------------------------------------------
     # Public interface
@@ -75,7 +98,7 @@ class MavvrikUploader:
                          overwrites the previous upload — idempotent.
 
         Raises:
-            Exception: if any upload step fails after retries.
+            RuntimeError: if any upload step fails after retries.
         """
         if not csv_payload.strip():
             verbose_proxy_logger.debug(
@@ -117,23 +140,21 @@ class MavvrikUploader:
             ISO-8601 UTC string for the initial export window start.
 
         Raises:
-            Exception: if the registration call fails.
+            RuntimeError: if the registration call fails.
         """
-        path = AGENT_BASE_PATH.format(connection_id=self.connection_id)
-        url = f"{self.api_endpoint}{path}"
-        headers = {"Content-Type": "application/json", "x-api-key": self.api_key}
+        headers = self._auth_headers
         body: dict = {
-            "name": self.connection_id,
+            "name": self._connection_id,
             "version": getattr(_litellm, "__version__", "0.0.0"),
             "arch": platform.machine(),
         }
 
         async with httpx.AsyncClient(timeout=30.0) as client:
-            resp = await client.post(url, headers=headers, json=body)
+            resp = await client.post(self.agent_url, headers=headers, json=body)
 
         if resp.status_code != 200:
-            raise Exception(
-                f"Mavvrik registration failed: {resp.status_code} {resp.text}"
+            raise RuntimeError(
+                f"Mavvrik registration failed: {resp.status_code} {resp.text[:200]}"
             )
 
         response_body = resp.json()
@@ -142,7 +163,7 @@ class MavvrikUploader:
         if epoch:
             marker_dt = _dt.fromtimestamp(float(epoch), tz=_tz.utc)
         else:
-            marker_dt = _utc_now().replace(
+            marker_dt = self._utc_now().replace(
                 day=1, hour=0, minute=0, second=0, microsecond=0
             )
 
@@ -166,19 +187,17 @@ class MavvrikUploader:
           Response: 204 No Content
 
         Raises:
-            Exception: if the PATCH fails.
+            RuntimeError: if the PATCH fails.
         """
-        path = AGENT_BASE_PATH.format(connection_id=self.connection_id)
-        url = f"{self.api_endpoint}{path}"
-        headers = {"Content-Type": "application/json", "x-api-key": self.api_key}
+        headers = self._auth_headers
         body = {"metricsMarker": epoch}
 
         async with httpx.AsyncClient(timeout=30.0) as client:
-            resp = await client.patch(url, headers=headers, json=body)
+            resp = await client.patch(self.agent_url, headers=headers, json=body)
 
         if resp.status_code not in (200, 204):
-            raise Exception(
-                f"Mavvrik advance_marker failed: {resp.status_code} {resp.text}"
+            raise RuntimeError(
+                f"Mavvrik advance_marker failed: {resp.status_code} {resp.text[:200]}"
             )
 
         verbose_proxy_logger.info(
@@ -192,22 +211,22 @@ class MavvrikUploader:
     async def _get_signed_url(
         self, date_str: str, client: Optional[httpx.AsyncClient] = None
     ) -> str:
-        path = UPLOAD_URL_PATH.format(connection_id=self.connection_id)
-        url = f"{self.api_endpoint}{path}"
         params = {"name": date_str, "type": "metrics"}
-        headers = {"Content-Type": "application/json", "x-api-key": self.api_key}
+        headers = {"Content-Type": "application/json", "x-api-key": self._api_key}
 
-        last_exc: Exception = Exception("unknown error")
+        last_exc: Exception = RuntimeError("unknown error")
 
         for attempt in range(_MAX_RETRIES):
             try:
                 if client is not None:
                     resp = await client.get(
-                        url, headers=headers, params=params, timeout=30.0
+                        self.upload_url, headers=headers, params=params, timeout=30.0
                     )
                 else:
                     async with httpx.AsyncClient(timeout=30.0) as _client:
-                        resp = await _client.get(url, headers=headers, params=params)
+                        resp = await _client.get(
+                            self.upload_url, headers=headers, params=params
+                        )
 
                 if resp.status_code == 200:
                     body = resp.json()
@@ -217,10 +236,12 @@ class MavvrikUploader:
                             "Mavvrik uploader: got signed URL for date %s", date_str
                         )
                         return signed_url
-                    raise Exception(f"Mavvrik API response missing 'url' field: {body}")
+                    raise RuntimeError(
+                        f"Mavvrik API response missing 'url' field: {body}"
+                    )
 
-                last_exc = Exception(
-                    f"Mavvrik signed URL request failed: {resp.status_code} {resp.text}"
+                last_exc = RuntimeError(
+                    f"Mavvrik signed URL request failed: {resp.status_code} {resp.text[:200]}"
                 )
                 if resp.status_code < 500:
                     raise last_exc
@@ -240,7 +261,7 @@ class MavvrikUploader:
             )
             await asyncio.sleep(wait)
 
-        raise Exception(
+        raise RuntimeError(
             f"Mavvrik signed URL failed after {_MAX_RETRIES} attempts: {last_exc}"
         )
 
@@ -257,7 +278,7 @@ class MavvrikUploader:
         }
         metadata = b'{"contentEncoding":"gzip","contentDisposition":"attachment"}'
 
-        last_exc: Exception = Exception("unknown error")
+        last_exc: Exception = RuntimeError("unknown error")
         for attempt in range(_MAX_RETRIES):
             try:
                 if client is not None:
@@ -273,7 +294,7 @@ class MavvrikUploader:
                 if resp.status_code == 201:
                     session_uri = resp.headers.get("Location")
                     if not session_uri:
-                        raise Exception(
+                        raise RuntimeError(
                             "Mavvrik initiate upload response missing Location header"
                         )
                     verbose_proxy_logger.debug(
@@ -281,8 +302,8 @@ class MavvrikUploader:
                     )
                     return session_uri
 
-                last_exc = Exception(
-                    f"Mavvrik initiate upload failed: {resp.status_code} {resp.text}"
+                last_exc = RuntimeError(
+                    f"Mavvrik initiate upload failed: {resp.status_code} {resp.text[:200]}"
                 )
                 if resp.status_code < 500:
                     raise last_exc
@@ -300,7 +321,7 @@ class MavvrikUploader:
             )
             await asyncio.sleep(wait)
 
-        raise Exception(
+        raise RuntimeError(
             f"Mavvrik initiate upload failed after {_MAX_RETRIES} attempts: {last_exc}"
         )
 
@@ -320,7 +341,7 @@ class MavvrikUploader:
             "x-goog-resumable": "stop",
         }
 
-        last_exc: Exception = Exception("unknown error")
+        last_exc: Exception = RuntimeError("unknown error")
         for attempt in range(_MAX_RETRIES):
             try:
                 if client is not None:
@@ -339,8 +360,8 @@ class MavvrikUploader:
                     )
                     return
 
-                last_exc = Exception(
-                    f"Mavvrik finalize upload failed: {resp.status_code} {resp.text}"
+                last_exc = RuntimeError(
+                    f"Mavvrik finalize upload failed: {resp.status_code} {resp.text[:200]}"
                 )
                 if resp.status_code < 500:
                     raise last_exc
@@ -358,13 +379,18 @@ class MavvrikUploader:
             )
             await asyncio.sleep(wait)
 
-        raise Exception(
+        raise RuntimeError(
             f"Mavvrik finalize upload failed after {_MAX_RETRIES} attempts: {last_exc}"
         )
 
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _utc_now() -> _dt:
+        """Return current UTC datetime. Extracted for easy test patching."""
+        return _dt.now(_tz.utc)
 
     @staticmethod
     def _compress(text: str) -> bytes:
