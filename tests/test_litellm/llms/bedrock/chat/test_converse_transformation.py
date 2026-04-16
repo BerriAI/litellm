@@ -3783,8 +3783,9 @@ async def test_orphaned_tool_use_multiple_parallel_order_preserved():
 @pytest.mark.asyncio
 async def test_orphaned_tool_result_removed():
     """
-    When a user message contains a toolResult whose toolUseId has no matching
-    toolUse in any assistant message, the orphaned toolResult must be removed.
+    When a role='tool' message exists but the corresponding assistant toolUse
+    was compacted away, the resulting Bedrock toolResult block must be removed
+    by Pass 2 of the sanitizer (no matching toolUse in any assistant message).
     """
     from litellm.litellm_core_utils.prompt_templates.factory import (
         BedrockConverseMessagesProcessor,
@@ -3792,18 +3793,12 @@ async def test_orphaned_tool_result_removed():
     )
 
     messages = [
-        # No assistant toolUse — the toolUse was compacted away
-        {
-            "role": "user",
-            "content": [
-                {
-                    "type": "tool_result",
-                    "tool_use_id": "call_gone",
-                    "content": "some result",
-                }
-            ],
-        },
-        {"role": "assistant", "content": "hello"},
+        {"role": "user", "content": "hello"},
+        # Assistant message with no tool_calls — the toolUse was compacted away
+        {"role": "assistant", "content": "ok"},
+        # The tool result references a toolUseId that no longer exists in history
+        {"role": "tool", "tool_call_id": "call_gone", "content": "some result"},
+        {"role": "assistant", "content": "done"},
     ]
 
     original_modify = litellm.modify_params
