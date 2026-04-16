@@ -1859,36 +1859,31 @@ class ContentFilterGuardrail(CustomGuardrail):
         """
         Whether this guardrail is configured to scan response content.
 
-        Returns True when ``event_hook`` selects a response-side hook
-        (``post_call`` or ``during_call``). For ``pre_call`` /
-        ``realtime_input_transcription`` / unset, the streaming iterator must
-        not modify the response — otherwise a pre_call regex would silently
-        also redact output, contradicting the documented mode contract.
+        Only ``post_call`` is a response-side hook.  ``during_call`` is
+        dispatched by the framework as ``async_moderation_hook`` (runs in
+        parallel to the LLM call on the *input* side) and never reaches
+        ``async_post_call_streaming_iterator_hook``.  ``pre_call`` /
+        ``realtime_input_transcription`` / unset are input-only as well.
 
         Supports all three accepted ``event_hook`` shapes:
         - single ``GuardrailEventHooks`` value
-        - ``list`` of ``GuardrailEventHooks`` (opt-in if any member matches)
-        - ``Mode`` (tag-routed): opt-in if any tag value or the default
-          resolves to a response hook, since the configured routing could
-          send matching requests to a response-side mode
+        - ``list`` of ``GuardrailEventHooks``
+        - ``Mode`` (tag-routed)
         """
-        response_hook_values = {
-            GuardrailEventHooks.post_call.value,
-            GuardrailEventHooks.during_call.value,
-        }
+        post_call_value = GuardrailEventHooks.post_call.value
         hook = self.event_hook
         if isinstance(hook, list):
-            return any(getattr(h, "value", h) in response_hook_values for h in hook)
+            return any(getattr(h, "value", h) == post_call_value for h in hook)
         if isinstance(hook, Mode):
             candidates: List[Union[str, List[str]]] = list(hook.tags.values())
             if hook.default is not None:
                 candidates.append(hook.default)
             for value in candidates:
                 items = value if isinstance(value, list) else [value]
-                if any(v in response_hook_values for v in items):
+                if any(v == post_call_value for v in items):
                     return True
             return False
-        return getattr(hook, "value", hook) in response_hook_values
+        return getattr(hook, "value", hook) == post_call_value
 
     async def async_post_call_streaming_iterator_hook(
         self,
