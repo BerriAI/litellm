@@ -440,14 +440,18 @@ class TestProxyOAuthHeaderForwarding:
                 (b"content-type", b"application/json"),
             ]
         )
-        
+
         # Should preserve OAuth even with flag=False
-        cleaned_without_flag = clean_headers(raw_headers, forward_llm_provider_auth_headers=False)
+        cleaned_without_flag = clean_headers(
+            raw_headers, forward_llm_provider_auth_headers=False
+        )
         assert "authorization" in cleaned_without_flag
         assert cleaned_without_flag["authorization"] == f"Bearer {FAKE_OAUTH_TOKEN}"
-        
+
         # Should also preserve OAuth with flag=True
-        cleaned_with_flag = clean_headers(raw_headers, forward_llm_provider_auth_headers=True)
+        cleaned_with_flag = clean_headers(
+            raw_headers, forward_llm_provider_auth_headers=True
+        )
         assert "authorization" in cleaned_with_flag
         assert cleaned_with_flag["authorization"] == f"Bearer {FAKE_OAUTH_TOKEN}"
 
@@ -867,8 +871,6 @@ class TestValidateEnvironmentAuthToken:
         assert "authorization" not in headers
 
 
-
-
 class TestGetAuthToken:
     """Tests for AnthropicModelInfo.get_auth_token() static method."""
 
@@ -1092,7 +1094,10 @@ class TestPassthroughAuthToken:
         config = AnthropicMessagesConfig()
         with mock_patch.dict(
             "os.environ",
-            {"ANTHROPIC_API_KEY": FAKE_REGULAR_KEY, "ANTHROPIC_AUTH_TOKEN": FAKE_AUTH_TOKEN},
+            {
+                "ANTHROPIC_API_KEY": FAKE_REGULAR_KEY,
+                "ANTHROPIC_AUTH_TOKEN": FAKE_AUTH_TOKEN,
+            },
             clear=True,
         ):
             updated_headers, _ = config.validate_anthropic_messages_environment(
@@ -1246,11 +1251,15 @@ class TestAnthropicThinkingSignatureSelfHeal:
 
         resp_bad = httpx.Response(400, request=req, text="rate limit exceeded")
         err_bad = httpx.HTTPStatusError("bad", request=req, response=resp_bad)
-        assert config.should_retry_anthropic_messages_on_http_error(err_bad, {}) is False
+        assert (
+            config.should_retry_anthropic_messages_on_http_error(err_bad, {}) is False
+        )
 
         resp_500 = httpx.Response(500, request=req, text=err_text)
         err_500 = httpx.HTTPStatusError("bad", request=req, response=resp_500)
-        assert config.should_retry_anthropic_messages_on_http_error(err_500, {}) is False
+        assert (
+            config.should_retry_anthropic_messages_on_http_error(err_500, {}) is False
+        )
 
         data = {
             "model": "claude-sonnet-4-20250514",
