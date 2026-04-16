@@ -205,7 +205,7 @@ sequenceDiagram
 Use [BerriAI/mock-oauth2-mcp-server](https://github.com/BerriAI/mock-oauth2-mcp-server) to test locally:
 
 ```bash title="Terminal 1 - Start mock server" showLineNumbers
-pip install fastapi uvicorn
+uv add fastapi uvicorn
 python mock_oauth2_mcp_server.py  # starts on :8765
 ```
 
