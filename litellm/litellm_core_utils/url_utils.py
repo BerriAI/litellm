@@ -9,7 +9,6 @@ URL to connect to the validated IP directly — no TOCTOU gap, no DNS
 rebinding. Redirects are followed manually with validation at each hop.
 """
 
-import asyncio
 import socket
 from ipaddress import ip_address, ip_network
 from typing import Any, Tuple
