@@ -1280,6 +1280,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                 output_task = self.make_bedrock_api_request(
                     source="OUTPUT",
                     response=assembled_model_response,
+                    request_data=request_data,
                     logging_event_type=GuardrailEventHooks.post_call,
                 )  # Only response
 
@@ -1296,6 +1297,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                     output_guardrail_response = await self.make_bedrock_api_request(
                         source="OUTPUT",
                         response=assembled_model_response,
+                        request_data=request_data,
                         logging_event_type=GuardrailEventHooks.post_call,
                     )
                 except GuardrailInterventionNormalStringError as e:

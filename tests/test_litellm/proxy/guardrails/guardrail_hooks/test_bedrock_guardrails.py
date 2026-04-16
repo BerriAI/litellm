@@ -1470,3 +1470,135 @@ def test_get_http_exception_no_blocked_assessments_omits_field():
     assert "assessments" not in exc.detail
     assert exc.detail["guardrailIdentifier"] == "amgllac6xf3r"
 
+
+@pytest.mark.asyncio
+async def test_streaming_post_call_parallel_output_passes_request_data_to_make_bedrock():
+    """
+    async_post_call_streaming_iterator_hook must pass request_data into OUTPUT
+    make_bedrock_api_request so spend/standard_logging attaches to the real request
+    (Greptile: previously OUTPUT used request_data=None / ephemeral {}).
+    """
+    request_data = {
+        "model": "gpt-4o-mini",
+        "messages": [{"role": "user", "content": "hi"}],
+        "metadata": {"stream_guardrail_logging": True},
+    }
+    guardrail = BedrockGuardrail(
+        guardrail_name="bedrock-stream-reqdata",
+        guardrailIdentifier="test-id",
+        guardrailVersion="DRAFT",
+        event_hook=GuardrailEventHooks.post_call,
+        default_on=True,
+    )
+    mock_chunks = [
+        litellm.ModelResponseStream(
+            id="tid",
+            choices=[
+                litellm.types.utils.StreamingChoices(
+                    delta=litellm.types.utils.Delta(content="Hi", role="assistant"),
+                    finish_reason=None,
+                    index=0,
+                )
+            ],
+            created=1,
+            model="gpt-4o-mini",
+            object="chat.completion.chunk",
+        ),
+        litellm.ModelResponseStream(
+            id="tid",
+            choices=[
+                litellm.types.utils.StreamingChoices(
+                    delta=litellm.types.utils.Delta(content="!", role="assistant"),
+                    finish_reason="stop",
+                    index=0,
+                )
+            ],
+            created=1,
+            model="gpt-4o-mini",
+            object="chat.completion.chunk",
+        ),
+    ]
+
+    async def mock_stream():
+        for c in mock_chunks:
+            yield c
+
+    minimal = {"action": "NONE", "assessments": [], "outputs": []}
+    with patch.object(
+        guardrail, "make_bedrock_api_request", AsyncMock(return_value=minimal)
+    ) as mock_make:
+        out = []
+        async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=UserAPIKeyAuth(),
+            response=mock_stream(),
+            request_data=request_data,
+        ):
+            out.append(chunk)
+
+    assert len(out) >= 1
+    output_calls = [
+        c for c in mock_make.call_args_list if c.kwargs.get("source") == "OUTPUT"
+    ]
+    assert len(output_calls) == 1
+    assert output_calls[0].kwargs.get("request_data") is request_data
+    assert (
+        output_calls[0].kwargs.get("logging_event_type")
+        == GuardrailEventHooks.post_call
+    )
+    input_calls = [
+        c for c in mock_make.call_args_list if c.kwargs.get("source") == "INPUT"
+    ]
+    assert len(input_calls) == 1
+    assert input_calls[0].kwargs.get("request_data") is request_data
+
+
+@pytest.mark.asyncio
+async def test_streaming_post_call_output_only_path_passes_request_data_to_make_bedrock():
+    """When INPUT validation is skipped (pre/during already ran), OUTPUT still gets request_data."""
+    request_data = {
+        "model": "gpt-4o-mini",
+        "messages": [{"role": "user", "content": "hi"}],
+    }
+    guardrail = BedrockGuardrail(
+        guardrail_name="bedrock-stream-out-only",
+        guardrailIdentifier="test-id",
+        guardrailVersion="DRAFT",
+        event_hook=GuardrailEventHooks.during_call,
+        default_on=True,
+    )
+    mock_chunks = [
+        litellm.ModelResponseStream(
+            id="tid",
+            choices=[
+                litellm.types.utils.StreamingChoices(
+                    delta=litellm.types.utils.Delta(content="x", role="assistant"),
+                    finish_reason="stop",
+                    index=0,
+                )
+            ],
+            created=1,
+            model="gpt-4o-mini",
+            object="chat.completion.chunk",
+        ),
+    ]
+
+    async def mock_stream():
+        for c in mock_chunks:
+            yield c
+
+    minimal = {"action": "NONE", "assessments": [], "outputs": []}
+    with patch.object(
+        guardrail, "make_bedrock_api_request", AsyncMock(return_value=minimal)
+    ) as mock_make:
+        async for _ in guardrail.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=UserAPIKeyAuth(),
+            response=mock_stream(),
+            request_data=request_data,
+        ):
+            pass
+
+    assert mock_make.call_count == 1
+    c = mock_make.call_args
+    assert c.kwargs.get("source") == "OUTPUT"
+    assert c.kwargs.get("request_data") is request_data
+
