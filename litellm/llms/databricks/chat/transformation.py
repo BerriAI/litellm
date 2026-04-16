@@ -615,7 +615,9 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
                 headers=response_headers,
             )
 
-        model_response.model = completion_response["model"]
+        _custom_llm_provider = litellm_params.get("custom_llm_provider") or "databricks"
+        _response_model = completion_response.get("model") or ""
+        model_response.model = f"{_custom_llm_provider}/{_response_model}"
         model_response.id = completion_response["id"]
         model_response.created = completion_response["created"]
         setattr(model_response, "usage", Usage(**completion_response["usage"]))

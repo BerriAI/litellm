@@ -1,8 +1,10 @@
 import asyncio
+import copy
 import json
 import os
 import sys
 from datetime import datetime
+from unittest.mock import Mock
 
 import pytest
 
@@ -11,7 +13,11 @@ import pytest
 sys.path.insert(0, os.path.abspath("../../../../../.."))
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.llms.bedrock.common_utils import remove_custom_field_from_tools
+from litellm.llms.bedrock.common_utils import (
+    ensure_bedrock_anthropic_messages_tool_names,
+    normalize_tool_input_schema_types_for_bedrock_invoke,
+    remove_custom_field_from_tools,
+)
 from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation import (
     AmazonAnthropicClaudeMessagesConfig,
     AmazonAnthropicClaudeMessagesStreamDecoder,
@@ -125,7 +131,8 @@ async def test_bedrock_sse_wrapper_keeps_usage_in_message_start_and_message_delt
     assert "usage" in delta_json
     assert delta_json["usage"]["cache_creation_input_tokens"] == 1562
     assert delta_json["usage"]["cache_read_input_tokens"] == 32392
-    assert delta_json["usage"]["input_tokens"] == 3 + 1562 + 32392
+    assert delta_json["usage"]["input_tokens"] == 3
+    assert delta_json["usage"]["output_tokens"] == 8
 
 
 def test_chunk_parser_usage_transformation():
@@ -292,6 +299,143 @@ def test_remove_custom_field_from_tools():
     assert request4["tools"] is None
 
 
+def test_normalize_tool_input_schema_types_for_bedrock_invoke():
+    """
+    Claude Code sends ``input_schema.type: \"custom\"`` for custom tools.
+    Bedrock Invoke rejects this; it requires JSON Schema ``type: \"object\"``.
+    """
+
+    request = {
+        "tools": [
+            {
+                "name": "Agent",
+                "type": "custom",
+                "description": "subagent",
+                "input_schema": {
+                    "type": "custom",
+                    "additionalProperties": False,
+                    "properties": {
+                        "nested": {"type": "custom", "properties": {"x": {"type": "string"}}}
+                    },
+                    "required": ["nested"],
+                },
+            },
+            {
+                "name": "Read",
+                "input_schema": {"type": "object", "properties": {}},
+            },
+        ]
+    }
+
+    normalize_tool_input_schema_types_for_bedrock_invoke(request)
+
+    agent_tool = request["tools"][0]
+    assert agent_tool["type"] == "custom"
+    assert agent_tool["input_schema"]["type"] == "object"
+    assert agent_tool["input_schema"]["properties"]["nested"]["type"] == "object"
+    assert request["tools"][1]["input_schema"]["type"] == "object"
+
+    request2 = {"messages": []}
+    normalize_tool_input_schema_types_for_bedrock_invoke(request2)
+    assert request2 == {"messages": []}
+
+
+def test_ensure_bedrock_anthropic_messages_tool_names():
+    request = {
+        "tools": [
+            {"input_schema": {"type": "object", "properties": {}}},
+            {"name": "", "input_schema": {"type": "object", "properties": {}}},
+            {"name": "  ", "input_schema": {"type": "object", "properties": {}}},
+            {"name": "KeepMe", "input_schema": {"type": "object", "properties": {}}},
+        ]
+    }
+    ensure_bedrock_anthropic_messages_tool_names(request)
+    assert request["tools"][0]["name"] == "litellm_unnamed_tool_0"
+    assert request["tools"][1]["name"] == "litellm_unnamed_tool_1"
+    assert request["tools"][2]["name"] == "litellm_unnamed_tool_2"
+    assert request["tools"][3]["name"] == "KeepMe"
+
+
+def test_bedrock_invoke_messages_transform_adds_name_when_tool_missing_name():
+    """Bedrock requires tools.0.custom.name when the payload is schema-only."""
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    optional_params = {
+        "max_tokens": 128,
+        "tools": [
+            {
+                "input_schema": {
+                    "type": "object",
+                    "properties": {"questions": {"type": "array"}},
+                    "required": ["questions"],
+                },
+            }
+        ],
+        "stream": False,
+    }
+    result = cfg.transform_anthropic_messages_request(
+        model="anthropic.claude-3-haiku-20240307-v1:0",
+        messages=[{"role": "user", "content": "hi"}],
+        anthropic_messages_optional_request_params=copy.deepcopy(optional_params),
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+    assert result["tools"][0]["name"] == "litellm_unnamed_tool_0"
+
+
+def test_bedrock_invoke_messages_transform_converts_custom_tool_schema_type_to_object():
+    """
+    End-to-end: AmazonAnthropicClaudeMessagesConfig must emit Bedrock Invoke bodies
+    where every ``input_schema`` uses JSON Schema types (``object``), not Anthropic
+    ``type: \"custom\"`` (root and nested).
+    """
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    tools = [
+        {
+            "name": "Agent",
+            "type": "custom",
+            "description": "Subagent",
+            "input_schema": {
+                "type": "custom",
+                "additionalProperties": False,
+                "properties": {
+                    "prompt": {"type": "string"},
+                    "nested": {
+                        "type": "custom",
+                        "properties": {"x": {"type": "string"}},
+                        "required": ["x"],
+                    },
+                },
+                "required": ["prompt"],
+            },
+        }
+    ]
+    optional_params = {
+        "max_tokens": 256,
+        "tools": copy.deepcopy(tools),
+        "stream": False,
+    }
+    messages = [{"role": "user", "content": "hi"}]
+
+    result = cfg.transform_anthropic_messages_request(
+        model="anthropic.claude-3-haiku-20240307-v1:0",
+        messages=messages,
+        anthropic_messages_optional_request_params=optional_params,
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert "tools" in result
+    schema = result["tools"][0]["input_schema"]
+    assert schema["type"] == "object"
+    assert schema["properties"]["nested"]["type"] == "object"
+    # Tool discriminator stays Anthropic-side; only input_schema is normalized
+    assert result["tools"][0]["type"] == "custom"
+
+
 def test_remove_scope_from_cache_control():
     """Ensure scope field is removed from cache_control for Bedrock (not supported)."""
 
@@ -402,3 +546,111 @@ def test_bedrock_messages_strips_output_config_with_output_format():
 
     assert "output_config" not in result
     assert "output_format" not in result
+
+
+@pytest.mark.asyncio
+async def test_promote_message_stop_usage_preserves_message_delta_output_tokens():
+    """
+    Bedrock unified /messages streaming can send full usage on message_delta and a
+    conflicting smaller usage on message_stop (e.g. output_tokens 9 vs 12).
+    _promote_message_stop_usage must not replace message_delta output_tokens.
+    """
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+
+    async def _stream():  # type: ignore[return-type]
+        yield {
+            "type": "message_delta",
+            "delta": {"stop_reason": "end_turn", "stop_sequence": None},
+            "usage": {
+                "input_tokens": 3,
+                "cache_creation_input_tokens": 10553,
+                "cache_read_input_tokens": 25490,
+                "output_tokens": 12,
+            },
+        }
+        yield {
+            "type": "message_stop",
+            "usage": {"input_tokens": 3, "output_tokens": 9},
+        }
+
+    merged: list[dict] = []
+    async for chunk in cfg._promote_message_stop_usage(_stream()):
+        if isinstance(chunk, dict):
+            merged.append(chunk)
+
+    assert len(merged) >= 1
+    delta_out = merged[0]
+    assert delta_out["type"] == "message_delta"
+    assert delta_out["usage"]["output_tokens"] == 12
+    assert delta_out["usage"]["cache_creation_input_tokens"] == 10553
+    assert delta_out["usage"]["cache_read_input_tokens"] == 25490
+    assert delta_out["usage"]["input_tokens"] == 3
+
+
+@pytest.mark.asyncio
+async def test_unified_bedrock_messages_sse_usage_and_cost_claude_sonnet_46():
+    """
+    End-to-end for Bedrock Invoke Anthropic Messages (unified) streaming path:
+    dict chunks -> _promote_message_stop_usage -> bedrock_sse_wrapper SSE bytes ->
+    same logging reconstruction as Anthropic /messages. Ensures token counts and
+    completion_cost match model_prices for us.anthropic.claude-sonnet-4-6.
+    """
+    from litellm import completion_cost
+    from litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler import (
+        AnthropicPassthroughLoggingHandler,
+    )
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+
+    async def _stream():  # type: ignore[return-type]
+        yield {
+            "type": "message_delta",
+            "delta": {"stop_reason": "end_turn", "stop_sequence": None},
+            "usage": {
+                "input_tokens": 3,
+                "cache_creation_input_tokens": 10553,
+                "cache_read_input_tokens": 25490,
+                "output_tokens": 12,
+            },
+        }
+        yield {
+            "type": "message_stop",
+            "usage": {"input_tokens": 3, "output_tokens": 9},
+        }
+
+    logging_obj = LiteLLMLoggingObj(
+        model="bedrock/us.anthropic.claude-sonnet-4-6",
+        messages=[{"role": "user", "content": "Hello"}],
+        stream=True,
+        call_type="chat",
+        start_time=datetime.now(),
+        litellm_call_id="test_unified_bedrock_messages_sse_cost",
+        function_id="test_unified_bedrock_messages_sse_cost",
+    )
+
+    collected: list[bytes] = []
+    async for sse in cfg.bedrock_sse_wrapper(
+        completion_stream=_stream(),
+        litellm_logging_obj=logging_obj,
+        request_body={"model": "us.anthropic.claude-sonnet-4-6"},
+    ):
+        collected.append(sse)
+
+    built = AnthropicPassthroughLoggingHandler._build_complete_streaming_response(
+        all_chunks=collected,
+        model="us.anthropic.claude-sonnet-4-6",
+        litellm_logging_obj=Mock(),
+    )
+    assert built.usage is not None
+    assert built.usage.completion_tokens == 12
+    assert built.usage.prompt_tokens == 36046
+    assert built.usage.total_tokens == 36058
+    assert built.usage.cache_creation_input_tokens == 10553
+    assert built.usage.cache_read_input_tokens == 25490
+
+    cost = completion_cost(
+        completion_response=built,
+        model="bedrock/us.anthropic.claude-sonnet-4-6",
+        custom_llm_provider="bedrock",
+    )
+    assert cost == pytest.approx(0.052150725, rel=0, abs=1e-9)

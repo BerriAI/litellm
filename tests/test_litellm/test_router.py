@@ -238,6 +238,79 @@ async def test_async_router_acreate_file_with_jsonl():
 
 
 @pytest.mark.asyncio
+async def test_async_router_acreate_file_uses_deployment_custom_llm_provider():
+    """
+    Ensure file routing preserves deployment custom_llm_provider instead of
+    inferring provider from model string alone.
+    """
+    from unittest.mock import MagicMock, patch
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "team-azure-batch",
+                "litellm_params": {
+                    "model": "gpt-4.1-mini",
+                    "custom_llm_provider": "azure",
+                    "api_base": "https://example-resource.openai.azure.com",
+                },
+            },
+        ],
+    )
+
+    with patch("litellm.acreate_file", return_value=MagicMock()) as mock_acreate_file:
+        await router.acreate_file(
+            model="team-azure-batch",
+            purpose="batch",
+            file=MagicMock(),
+        )
+
+        assert mock_acreate_file.call_count == 1
+        assert mock_acreate_file.call_args.kwargs["custom_llm_provider"] == "azure"
+
+
+@pytest.mark.asyncio
+async def test_async_router_afile_content_uses_deployment_custom_llm_provider():
+    """
+    Regression test: Ensure afile_content preserves deployment custom_llm_provider
+    when model name lacks provider prefix (e.g., "gpt-4.1-mini" instead of "azure/gpt-4.1-mini").
+    
+    This prevents "None is not a valid LlmProviders" errors when calling file content operations.
+    """
+    from unittest.mock import AsyncMock, MagicMock, patch
+    from litellm.types.llms.openai import HttpxBinaryResponseContent
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "team-azure-batch",
+                "litellm_params": {
+                    "model": "gpt-4.1-mini",  # No provider prefix
+                    "custom_llm_provider": "azure",
+                    "api_base": "https://example-resource.openai.azure.com",
+                    "api_key": "test-key",
+                },
+            },
+        ],
+    )
+
+    # Mock the Azure file handler's afile_content method
+    mock_response = MagicMock(spec=HttpxBinaryResponseContent)
+    mock_response.response = MagicMock()
+    
+    with patch("litellm.llms.azure.files.handler.AzureOpenAIFilesAPI.afile_content", 
+               return_value=mock_response) as mock_afile_content:
+        result = await router.afile_content(
+            model="team-azure-batch",
+            file_id="file-123",
+        )
+
+        # Verify the call was made (proves custom_llm_provider was correctly passed)
+        assert mock_afile_content.call_count == 1
+        assert result == mock_response
+
+
+@pytest.mark.asyncio
 async def test_arouter_async_get_healthy_deployments():
     """
     Test that afile_content returns the correct file content
