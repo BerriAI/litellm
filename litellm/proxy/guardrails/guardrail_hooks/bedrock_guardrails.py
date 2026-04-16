@@ -5,7 +5,6 @@
 # +-------------------------------------------------------------+
 #  Thank you users! We ❤️ you! - Krrish & Ishaan
 
-import copy
 import os
 import sys
 
@@ -34,6 +33,7 @@ from fastapi import HTTPException
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.litellm_core_utils.core_helpers import redact_nested_match_and_regex_keys
 from litellm.caching import DualCache
 from litellm.exceptions import GuardrailInterventionNormalStringError
 from litellm.integrations.custom_guardrail import CustomGuardrail
@@ -79,48 +79,31 @@ class GuardrailMessageFilterResult(NamedTuple):
 
 
 def _redact_pii_matches(response_json: dict) -> dict:
+    """
+    Redact match-like fields from a Bedrock ApplyGuardrail JSON payload.
+
+    Delegates to :func:`redact_nested_match_and_regex_keys` (same rules as spend
+    logging). Kept as a Bedrock-module entry point for existing unit tests.
+    """
     try:
-        # Create a deep copy to avoid modifying the original response
-        redacted_response = copy.deepcopy(response_json)
-
-        # Get assessments from the response
-        assessments = redacted_response.get("assessments", [])
-        if not assessments:
-            return redacted_response
-
-        for assessment in assessments:
-            # Redact PII entities in sensitive information policy
-            sensitive_info_policy = assessment.get("sensitiveInformationPolicy")
-            if sensitive_info_policy:
-                pii_entities = sensitive_info_policy.get("piiEntities", [])
-                for pii_entity in pii_entities:
-                    if "match" in pii_entity:
-                        pii_entity["match"] = "[REDACTED]"
-
-                # Redact regex matches
-                regexes = sensitive_info_policy.get("regexes", [])
-                for regex_match in regexes:
-                    if "match" in regex_match:
-                        regex_match["match"] = "[REDACTED]"
-
-            # Redact custom word matches in word policy
-            word_policy = assessment.get("wordPolicy")
-            if word_policy:
-                custom_words = word_policy.get("customWords", [])
-                for custom_word in custom_words:
-                    if "match" in custom_word:
-                        custom_word["match"] = "[REDACTED]"
-
-                managed_words = word_policy.get("managedWordLists", [])
-                for managed_word in managed_words:
-                    if "match" in managed_word:
-                        managed_word["match"] = "[REDACTED]"
-
-        return redacted_response
+        redacted = redact_nested_match_and_regex_keys(response_json)
+        return redacted if isinstance(redacted, dict) else response_json
     except Exception as e:
         # We do not want to fail in any case so this is just a warning
         verbose_proxy_logger.warning("Guardrail log redaction failed: %s", str(e))
         return response_json
+
+
+def _redact_assessment_match_fields(assessments: List[dict]) -> List[dict]:
+    """
+    Redact sensitive match-like fields from blocked assessment summaries.
+
+    This is used for customer-visible error payloads (HTTPException.detail) where
+    we want to preserve policy/type/action metadata without echoing raw matched
+    content.
+    """
+    redacted = redact_nested_match_and_regex_keys(assessments)
+    return redacted if isinstance(redacted, list) else assessments
 
 
 class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
@@ -521,9 +504,12 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         #########################################################
         # Add guardrail information to request trace
         #########################################################
+        _json_response = httpx_response.json()
+        # Raw Bedrock JSON is passed here; match/regex redaction runs once inside
+        # CustomGuardrail.add_standard_logging_guardrail_information_to_request_data.
         self.add_standard_logging_guardrail_information_to_request_data(
             guardrail_provider=self.guardrail_provider,
-            guardrail_json_response=httpx_response.json(),
+            guardrail_json_response=_json_response,
             request_data=request_data or {},
             guardrail_status=self._get_bedrock_guardrail_response_status(
                 response=httpx_response
@@ -536,9 +522,10 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         #########################################################
         if httpx_response.status_code == 200:
             # check if the response was flagged
-            _json_response = httpx_response.json()
-            redacted_response = _redact_pii_matches(_json_response)
-            verbose_proxy_logger.debug("Bedrock AI response : %s", redacted_response)
+            verbose_proxy_logger.debug(
+                "Bedrock AI response : %s",
+                redact_nested_match_and_regex_keys(_json_response),
+            )
             bedrock_guardrail_response = BedrockGuardrailResponse(**_json_response)
             if self._should_raise_guardrail_blocked_exception(
                 bedrock_guardrail_response
@@ -815,7 +802,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
 
         assessments = self._extract_blocked_assessments(response)
         if assessments:
-            detail["assessments"] = assessments
+            detail["assessments"] = _redact_assessment_match_fields(assessments)
 
         return HTTPException(status_code=400, detail=detail)
 

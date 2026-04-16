@@ -190,7 +190,7 @@ async def test__redact_pii_matches_multiple_assessments():
 
 @pytest.mark.asyncio
 async def test_bedrock_guardrail_logging_uses_redacted_response():
-    """Test that the Bedrock guardrail uses redacted response for logging"""
+    """Debug logs and standard_logging payloads must not include raw match values."""
 
     # Create proper mock objects
     mock_user_api_key_dict = UserAPIKeyAuth()
@@ -290,6 +290,14 @@ async def test_bedrock_guardrail_logging_uses_redacted_response():
                 "piiEntities"
             ][0]["type"]
             == "PHONE"
+        )
+
+        slg_list = request_data["metadata"]["standard_logging_guardrail_information"]
+        assert (
+            slg_list[0]["guardrail_response"]["assessments"][0][
+                "sensitiveInformationPolicy"
+            ]["piiEntities"][0]["match"]
+            == "[REDACTED]"
         )
 
         print("Bedrock guardrail logging redaction test passed")
@@ -1221,7 +1229,18 @@ async def test_make_bedrock_api_request_logging_event_type_for_spend_logs():
 
     mock_bedrock_response = MagicMock()
     mock_bedrock_response.status_code = 200
-    mock_bedrock_response.json.return_value = {"action": "NONE", "assessments": []}
+    mock_bedrock_response.json.return_value = {
+        "action": "NONE",
+        "assessments": [
+            {
+                "sensitiveInformationPolicy": {
+                    "piiEntities": [
+                        {"type": "NAME", "match": "GG", "action": "BLOCKED"}
+                    ]
+                }
+            }
+        ],
+    }
 
     request_data = {
         "model": "gpt-4o",
@@ -1245,6 +1264,14 @@ async def test_make_bedrock_api_request_logging_event_type_for_spend_logs():
             logging_event_type=GuardrailEventHooks.during_call,
         )
         assert mock_log.call_args.kwargs["event_type"] == GuardrailEventHooks.during_call
+        # Raw Bedrock JSON is forwarded; redaction runs once in
+        # CustomGuardrail.add_standard_logging_guardrail_information_to_request_data.
+        assert (
+            mock_log.call_args.kwargs["guardrail_json_response"]["assessments"][0][
+                "sensitiveInformationPolicy"
+            ]["piiEntities"][0]["match"]
+            == "GG"
+        )
 
         mock_log.reset_mock()
 
@@ -1308,7 +1335,7 @@ def _make_guardrail() -> BedrockGuardrail:
 
 
 def test_extract_blocked_assessments_pii_entity():
-    """L3: PII entity match (BLOCKED) is surfaced with category, type, and matched term."""
+    """L3: PII entity match (BLOCKED) is surfaced with category, type, and match."""
     g = _make_guardrail()
     response = {
         "action": "GUARDRAIL_INTERVENED",
@@ -1419,6 +1446,7 @@ def test_get_http_exception_includes_assessments_and_identifier():
     assert exc.detail["guardrailVersion"] == "1"
     assert exc.detail["assessments"][0]["policy"] == "sensitiveInformationPolicy"
     assert exc.detail["assessments"][0]["matches"][0]["type"] == "NAME"
+    assert exc.detail["assessments"][0]["matches"][0]["match"] == "[REDACTED]"
 
 
 def test_get_http_exception_no_blocked_assessments_omits_field():
