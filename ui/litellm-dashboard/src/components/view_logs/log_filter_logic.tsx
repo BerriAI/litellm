@@ -2,14 +2,14 @@ import moment from "moment";
 import { useCallback, useEffect, useState, useRef, useMemo } from "react";
 import { uiSpendLogsCall } from "../networking";
 import { Team } from "../key_team_helpers/key_list";
-import { useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { fetchAllTeams } from "../../components/key_team_helpers/filter_helpers";
 import { debounce } from "lodash";
 import { defaultPageSize } from "../constants";
 import { PaginatedResponse } from ".";
 import type { LogsSortField } from "./columns";
 
-const FILTER_KEYS = {
+export const FILTER_KEYS = {
   TEAM_ID: "Team ID",
   KEY_HASH: "Key Hash",
   REQUEST_ID: "Request ID",
@@ -25,50 +25,56 @@ const FILTER_KEYS = {
 export type FilterKey = keyof typeof FILTER_KEYS;
 export type LogFilterState = Record<(typeof FILTER_KEYS)[FilterKey], string>;
 
+export const defaultFilters: LogFilterState = {
+  [FILTER_KEYS.TEAM_ID]: "",
+  [FILTER_KEYS.KEY_HASH]: "",
+  [FILTER_KEYS.REQUEST_ID]: "",
+  [FILTER_KEYS.MODEL]: "",
+  [FILTER_KEYS.USER_ID]: "",
+  [FILTER_KEYS.END_USER]: "",
+  [FILTER_KEYS.STATUS]: "",
+  [FILTER_KEYS.KEY_ALIAS]: "",
+  [FILTER_KEYS.ERROR_CODE]: "",
+  [FILTER_KEYS.ERROR_MESSAGE]: "",
+};
+
 export function useLogFilterLogic({
-  logs,
   accessToken,
-  startTime, // Receive from SpendLogsTable
-  endTime, // Receive from SpendLogsTable
+  token,
+  userRole,
+  userID,
+  filters,
+  setFilters,
+  filterByCurrentUser,
+  activeTab,
+  isLiveTail,
+  startTime,
+  endTime,
   pageSize = defaultPageSize,
   isCustomDate,
   setCurrentPage,
-  userID,
-  userRole,
   sortBy = "startTime",
   sortOrder = "desc",
   currentPage = 1,
 }: {
-  logs: PaginatedResponse;
   accessToken: string | null;
+  token: string | null;
+  userRole: string | null;
+  userID: string | null;
+  filters: LogFilterState;
+  setFilters: React.Dispatch<React.SetStateAction<LogFilterState>>;
+  filterByCurrentUser: boolean | null;
+  activeTab: string;
+  isLiveTail: boolean;
   startTime: string;
   endTime: string;
   pageSize?: number;
   isCustomDate: boolean;
   setCurrentPage: (page: number) => void;
-  userID: string | null;
-  userRole: string | null;
   sortBy?: LogsSortField;
   sortOrder?: "asc" | "desc";
   currentPage?: number;
 }) {
-  const defaultFilters = useMemo<LogFilterState>(
-    () => ({
-      [FILTER_KEYS.TEAM_ID]: "",
-      [FILTER_KEYS.KEY_HASH]: "",
-      [FILTER_KEYS.REQUEST_ID]: "",
-      [FILTER_KEYS.MODEL]: "",
-      [FILTER_KEYS.USER_ID]: "",
-      [FILTER_KEYS.END_USER]: "",
-      [FILTER_KEYS.STATUS]: "",
-      [FILTER_KEYS.KEY_ALIAS]: "",
-      [FILTER_KEYS.ERROR_CODE]: "",
-      [FILTER_KEYS.ERROR_MESSAGE]: "",
-    }),
-    [],
-  );
-
-  const [filters, setFilters] = useState<LogFilterState>(defaultFilters);
   const [backendFilteredLogs, setBackendFilteredLogs] = useState<PaginatedResponse | null>(null);
   const lastSearchTimestamp = useRef(0);
   const performSearch = useCallback(
@@ -152,6 +158,64 @@ export function useLogFilterLogic({
     [filters],
   );
 
+  const logsQuery = useQuery<PaginatedResponse>({
+    queryKey: [
+      "logs",
+      "table",
+      currentPage,
+      pageSize,
+      startTime,
+      endTime,
+      filters[FILTER_KEYS.TEAM_ID],
+      filters[FILTER_KEYS.KEY_HASH],
+      filterByCurrentUser ? userID : null,
+      filters[FILTER_KEYS.STATUS],
+      filters[FILTER_KEYS.MODEL],
+      sortBy,
+      sortOrder,
+    ],
+    queryFn: async () => {
+      if (!accessToken || !token || !userRole || !userID) {
+        return {
+          data: [],
+          total: 0,
+          page: 1,
+          page_size: pageSize,
+          total_pages: 0,
+        };
+      }
+
+      const formattedStartTime = moment(startTime).utc().format("YYYY-MM-DD HH:mm:ss");
+      const formattedEndTime = isCustomDate
+        ? moment(endTime).utc().format("YYYY-MM-DD HH:mm:ss")
+        : moment().utc().format("YYYY-MM-DD HH:mm:ss");
+
+      const response = await uiSpendLogsCall({
+        accessToken,
+        start_date: formattedStartTime,
+        end_date: formattedEndTime,
+        page: currentPage,
+        page_size: pageSize,
+        params: {
+          api_key: filters[FILTER_KEYS.KEY_HASH] || undefined,
+          team_id: filters[FILTER_KEYS.TEAM_ID] || undefined,
+          user_id: filterByCurrentUser ? userID ?? undefined : undefined,
+          end_user: filters[FILTER_KEYS.END_USER] || undefined,
+          status_filter: filters[FILTER_KEYS.STATUS] || undefined,
+          model_id: filters[FILTER_KEYS.MODEL] || undefined,
+          sort_by: sortBy,
+          sort_order: sortOrder,
+        },
+      });
+
+      return response;
+    },
+    enabled: !!accessToken && !!token && !!userRole && !!userID && activeTab === "request logs" && !hasBackendFilters,
+    refetchInterval: isLiveTail && currentPage === 1 ? 15000 : false,
+    placeholderData: keepPreviousData,
+    refetchIntervalInBackground: true,
+  });
+
   // Refetch when sort, page, or time range changes (backend filters use their own fetch, not the main query)
   useEffect(() => {
     if (hasBackendFilters && accessToken) {
@@ -167,9 +231,10 @@ export function useLogFilterLogic({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sortBy, sortOrder, currentPage, startTime, endTime, isCustomDate]);
 
-  // Compute client-side filtered logs directly from incoming logs and filters
+  // Compute client-side filtered logs directly from query data and filters
+  const spendLogsData = logsQuery.data;
   const clientDerivedFilteredLogs: PaginatedResponse = useMemo(() => {
-    if (!logs || !logs.data) {
+    if (!spendLogsData) {
       return {
         data: [],
         total: 0,
@@ -181,10 +246,10 @@ export function useLogFilterLogic({
 
     // If backend filters are on, don't perform client-side filtering here
     if (hasBackendFilters) {
-      return logs;
+      return spendLogsData;
     }
 
-    let filteredData = [...logs.data];
+    let filteredData = [...spendLogsData.data];
 
     if (filters[FILTER_KEYS.TEAM_ID]) {
       filteredData = filteredData.filter((log) => log.team_id === filters[FILTER_KEYS.TEAM_ID]);
@@ -221,12 +286,12 @@ export function useLogFilterLogic({
 
     return {
       data: filteredData,
-      total: logs.total,
-      page: logs.page,
-      page_size: logs.page_size,
-      total_pages: logs.total_pages,
+      total: spendLogsData.total,
+      page: spendLogsData.page,
+      page_size: spendLogsData.page_size,
+      total_pages: spendLogsData.total_pages,
     };
-  }, [logs, filters, hasBackendFilters]);
+  }, [spendLogsData, filters, hasBackendFilters]);
 
   // Choose which filtered logs to expose: backend result when active, otherwise client-derived
   const filteredLogs: PaginatedResponse = useMemo(() => {
@@ -300,7 +365,7 @@ export function useLogFilterLogic({
   };
 
   return {
-    filters,
+    logsQuery,
     filteredLogs,
     hasBackendFilters,
     allTeams,
