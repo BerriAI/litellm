@@ -7,7 +7,6 @@ to prevent directory traversal attacks.
 """
 
 import os
-from pathlib import Path
 
 
 def safe_join(base_dir: str, *parts: str) -> str:
