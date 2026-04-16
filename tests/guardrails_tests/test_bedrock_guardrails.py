@@ -5,7 +5,10 @@ import pytest
 
 sys.path.insert(0, os.path.abspath("../.."))
 import litellm
-from litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails import BedrockGuardrail
+from litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails import (
+    BedrockGuardrail,
+    _redact_pii_matches,
+)
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.caching import DualCache
 from unittest.mock import MagicMock, AsyncMock, patch
@@ -1601,3 +1604,128 @@ async def test_bedrock_guardrail_post_call_success_hook_no_output_text():
     # If no error is raised and result is None, then the test passes
     assert result is None
     print("✅ No output text in response test passed")
+
+
+@pytest.mark.asyncio
+async def test__redact_pii_matches_null_list_fields():
+    """Test that explicit null values from Bedrock API are handled correctly.
+
+    The Bedrock API can return explicit JSON null for list fields like
+    piiEntities, regexes, customWords, managedWordLists. This would cause
+    TypeError: 'NoneType' object is not iterable if not handled.
+    """
+    # Test 1: null piiEntities and regexes
+    response_with_null_pii = {
+        "action": "GUARDRAIL_INTERVENED",
+        "assessments": [
+            {
+                "sensitiveInformationPolicy": {
+                    "piiEntities": None,
+                    "regexes": None,
+                }
+            }
+        ],
+    }
+    redacted = _redact_pii_matches(response_with_null_pii)
+    assert redacted is not None
+    assert redacted["assessments"][0]["sensitiveInformationPolicy"]["piiEntities"] is None
+    assert redacted["assessments"][0]["sensitiveInformationPolicy"]["regexes"] is None
+
+    # Test 2: null customWords and managedWordLists
+    response_with_null_words = {
+        "action": "GUARDRAIL_INTERVENED",
+        "assessments": [
+            {
+                "wordPolicy": {
+                    "customWords": None,
+                    "managedWordLists": None,
+                }
+            }
+        ],
+    }
+    redacted = _redact_pii_matches(response_with_null_words)
+    assert redacted is not None
+    assert redacted["assessments"][0]["wordPolicy"]["customWords"] is None
+    assert redacted["assessments"][0]["wordPolicy"]["managedWordLists"] is None
+
+    # Test 3: null assessments at top level
+    response_with_null_assessments = {
+        "action": "GUARDRAIL_INTERVENED",
+        "assessments": None,
+    }
+    redacted = _redact_pii_matches(response_with_null_assessments)
+    assert redacted is not None
+
+
+@pytest.mark.asyncio
+async def test__redact_pii_matches_malformed_response():
+    """Test _redact_pii_matches with malformed response (should not crash)"""
+
+    # Test with completely malformed response
+    malformed_response = {
+        "action": "GUARDRAIL_INTERVENED",
+        "assessments": "not_a_list",
+    }
+    redacted_response = _redact_pii_matches(malformed_response)
+    assert redacted_response == malformed_response
+
+    # Test with missing keys
+    missing_keys_response = {
+        "action": "GUARDRAIL_INTERVENED",
+    }
+    redacted_response = _redact_pii_matches(missing_keys_response)
+    assert redacted_response == missing_keys_response
+
+
+@pytest.mark.asyncio
+async def test_should_raise_guardrail_blocked_exception_null_fields():
+    """Test that _should_raise_guardrail_blocked_exception handles null list fields.
+
+    Validates the or [] null-safety pattern works for all policy fields
+    in _should_raise_guardrail_blocked_exception.
+    """
+    guardrail = BedrockGuardrail(
+        guardrailIdentifier="test-guardrail", guardrailVersion="DRAFT"
+    )
+
+    # Test with null assessments
+    response_null_assessments = {
+        "action": "GUARDRAIL_INTERVENED",
+        "assessments": None,
+    }
+    assert guardrail._should_raise_guardrail_blocked_exception(response_null_assessments) is False
+
+    # Test with null topics in topicPolicy
+    response_null_topics = {
+        "action": "GUARDRAIL_INTERVENED",
+        "assessments": [{"topicPolicy": {"topics": None}}],
+    }
+    assert guardrail._should_raise_guardrail_blocked_exception(response_null_topics) is False
+
+    # Test with null filters in contentPolicy
+    response_null_filters = {
+        "action": "GUARDRAIL_INTERVENED",
+        "assessments": [{"contentPolicy": {"filters": None}}],
+    }
+    assert guardrail._should_raise_guardrail_blocked_exception(response_null_filters) is False
+
+    # Test with null customWords and managedWordLists in wordPolicy
+    response_null_words = {
+        "action": "GUARDRAIL_INTERVENED",
+        "assessments": [{"wordPolicy": {"customWords": None, "managedWordLists": None}}],
+    }
+    assert guardrail._should_raise_guardrail_blocked_exception(response_null_words) is False
+
+    # Test with null piiEntities and regexes in sensitiveInformationPolicy
+    response_null_pii = {
+        "action": "GUARDRAIL_INTERVENED",
+        "assessments": [{"sensitiveInformationPolicy": {"piiEntities": None, "regexes": None}}],
+    }
+    assert guardrail._should_raise_guardrail_blocked_exception(response_null_pii) is False
+
+    # Test with null filters in contextualGroundingPolicy
+    response_null_grounding = {
+        "action": "GUARDRAIL_INTERVENED",
+        "assessments": [{"contextualGroundingPolicy": {"filters": None}}],
+    }
+    assert guardrail._should_raise_guardrail_blocked_exception(response_null_grounding) is False
