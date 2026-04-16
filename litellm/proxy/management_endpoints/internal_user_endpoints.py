@@ -2209,6 +2209,8 @@ async def delete_user(
     Parameters:
     - user_ids: List[str] - The list of user id's to be deleted.
     """
+    import os
+
     from litellm.proxy.management_endpoints.team_endpoints import (
         _cleanup_members_with_roles,
     )
@@ -2223,6 +2225,18 @@ async def delete_user(
 
     if data.user_ids is None:
         raise HTTPException(status_code=400, detail={"error": "No user id passed in"})
+
+    # Access control: allow proxy admins or users listed in USER_DELETE_ALLOWED_USER_IDS
+    _is_admin = user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
+    _env_val = os.environ.get("USER_DELETE_ALLOWED_USER_IDS", "")
+    _allowed_user_ids = [uid.strip() for uid in _env_val.split(",") if uid.strip()]
+    if not _is_admin and user_api_key_dict.user_id not in _allowed_user_ids:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": "Not authorized to delete users. Must be a proxy admin or listed in USER_DELETE_ALLOWED_USER_IDS."
+            },
+        )
 
     # check that all teams passed exist
     for user_id in data.user_ids:
