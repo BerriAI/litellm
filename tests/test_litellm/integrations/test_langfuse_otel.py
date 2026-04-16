@@ -499,6 +499,14 @@ class TestLangfuseOtelResponsesAPI:
                 ],
                 "tool_choice": "auto",
                 "reasoning": {"effort": "low"},
+                "previous_response_id": "resp_prev_123",
+                "prompt": {
+                    "id": "pmpt_123",
+                    "variables": {"tenant": "acme"},
+                },
+                "max_tool_calls": 3,
+                "functions": [{"name": "legacy_chat_only"}],
+                "metadata": {"request_id": "req_123"},
                 "stream": False,
             },
             "litellm_params": {"custom_llm_provider": "openai", "metadata": {}},
@@ -510,6 +518,12 @@ class TestLangfuseOtelResponsesAPI:
                     "tools": [{"type": "function", "name": "list_applications"}],
                     "tool_choice": "auto",
                     "reasoning": {"effort": "low"},
+                    "previous_response_id": "resp_prev_123",
+                    "prompt": {
+                        "id": "pmpt_123",
+                        "variables": {"tenant": "acme"},
+                    },
+                    "max_tool_calls": 3,
                     "stream": False,
                 },
             },
@@ -544,6 +558,15 @@ class TestLangfuseOtelResponsesAPI:
         assert observation_input["tool_choice"] == "auto"
         assert observation_input["reasoning"] == {"effort": "low"}
         assert observation_input["tools"][0]["name"] == "list_applications"
+        assert observation_input["previous_response_id"] == "resp_prev_123"
+        assert observation_input["prompt"] == {
+            "id": "pmpt_123",
+            "variables": {"tenant": "acme"},
+        }
+        assert observation_input["max_tool_calls"] == 3
+        assert "functions" not in observation_input
+        assert "metadata" not in observation_input
+        assert "stream" not in observation_input
         assert (
             "show me connected applications with high risk"
             in actual_attributes["langfuse.observation.input"]

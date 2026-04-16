@@ -15,7 +15,10 @@ from litellm.integrations.opentelemetry_utils.base_otel_llm_obs_attributes impor
     safe_set_attribute,
 )
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
-from litellm.types.llms.openai import HttpxBinaryResponseContent, ResponsesAPIResponse
+from litellm.types.llms.openai import (
+    HttpxBinaryResponseContent,
+    ResponsesAPIResponse,
+)
 from litellm.types.utils import (
     EmbeddingResponse,
     ImageResponse,
@@ -102,18 +105,22 @@ def get_langfuse_observation_input_by_type(
     response_input = kwargs.get("input")
     if response_input is not None:
         prompt: dict[str, Any] = {"input": response_input}
+        # Keep the Responses observation focused on request fields that affect
+        # model context, tool behavior, or response shape.
         for key in (
             "instructions",
-            "functions",
             "tools",
             "tool_choice",
             "reasoning",
             "max_output_tokens",
+            "max_tool_calls",
             "text",
             "parallel_tool_calls",
             "truncation",
             "temperature",
             "top_p",
+            "previous_response_id",
+            "prompt",
         ):
             value = optional_params.get(key)
             if value is not None:
