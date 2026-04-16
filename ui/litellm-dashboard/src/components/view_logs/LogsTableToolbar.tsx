@@ -1,8 +1,7 @@
 import moment from "moment";
 import { useEffect, useRef, useState } from "react";
 import { SyncOutlined } from "@ant-design/icons";
-import { Switch } from "@tremor/react";
-import { Button } from "antd";
+import { Button, Switch } from "antd";
 import { QUICK_SELECT_OPTIONS } from "./constants";
 import { getTimeRangeDisplay } from "./logs_utils";
 import type { PaginatedResponse } from ".";
@@ -152,7 +151,7 @@ export function LogsTableToolbar({
 
               <div className="flex items-center gap-2">
                 <span className="text-sm font-medium text-gray-900">Live Tail</span>
-                <Switch color="green" checked={isLiveTail} defaultChecked={true} onChange={onIsLiveTailChange} />
+                <Switch checked={isLiveTail} defaultChecked={true} onChange={onIsLiveTailChange} />
               </div>
 
               <Button

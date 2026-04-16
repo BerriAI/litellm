@@ -218,7 +218,7 @@ export default function SpendLogsTable({
       }) || [];
 
   const handleRowClick = (log: LogEntry) => {
-    // Multi-call session row: open in the same right-side drawer (session mode)can
+    // Multi-call session row: open in the same right-side drawer (session mode)
     if (log.session_id && (log.session_total_count || 1) > 1) {
       setSelectedSessionId(log.session_id);
       setSelectedLog(log);
