@@ -977,49 +977,6 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
             "Setting client-provided x-api-key as api_key parameter (will override deployment key)"
         )
 
-    # Strip internal pipeline state and admin-injection slots from user input.
-    # The proxy writes user_api_key_metadata / user_api_key_team_metadata
-    # into data[_metadata_variable_name] below; if a caller pre-populates
-    # either key on the OTHER metadata field, _get_admin_metadata lookups
-    # would treat the caller's payload as admin-configured.
-    for _meta_key in ("metadata", "litellm_metadata"):
-        _user_meta = data.get(_meta_key)
-        if isinstance(_user_meta, dict):
-            _user_meta.pop("_pipeline_managed_guardrails", None)
-            _user_meta.pop("user_api_key_metadata", None)
-            _user_meta.pop("user_api_key_team_metadata", None)
-
-    # Strip caller-supplied routing/budget tags unless the admin has opted
-    # this key or team in via metadata.allow_client_tags=True. Tags drive
-    # tag-based routing and tag budget attribution — accepting them from
-    # untrusted callers lets an attacker reach restricted deployments or
-    # misattribute spend to a victim team's tag.
-    _admin_allow_client_tags = False
-    for _admin_meta in (
-        user_api_key_dict.metadata,
-        user_api_key_dict.team_metadata,
-    ):
-        if (
-            isinstance(_admin_meta, dict)
-            and _admin_meta.get("allow_client_tags") is True
-        ):
-            _admin_allow_client_tags = True
-            break
-    if not _admin_allow_client_tags:
-        _stripped_from: List[str] = []
-        for _meta_key in ("metadata", "litellm_metadata"):
-            _user_meta = data.get(_meta_key)
-            if isinstance(_user_meta, dict) and "tags" in _user_meta:
-                _user_meta.pop("tags", None)
-                _stripped_from.append(_meta_key)
-        if _stripped_from:
-            verbose_proxy_logger.warning(
-                "Stripped caller-supplied tags from %s: this key/team does "
-                "not have `allow_client_tags: true` in its metadata. Set it "
-                "to opt into client-supplied routing/budget tags.",
-                ", ".join(_stripped_from),
-            )
-
     ##########################################################
     # Init - Proxy Server Request
     # we do this as soon as entering so we track the original request
@@ -1126,11 +1083,61 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
                 )
             else:
                 data["litellm_metadata"] = parsed_litellm_metadata
-        # Merge litellm_metadata into the metadata variable (preserving existing values)
-        if isinstance(data["litellm_metadata"], dict):
-            for key, value in data["litellm_metadata"].items():
-                if key not in data[_metadata_variable_name]:
-                    data[_metadata_variable_name][key] = value
+
+    # Strip internal pipeline state and admin-injection slots from user input.
+    # Runs AFTER the string-to-dict parse above so JSON-string metadata (sent
+    # via multipart/form-data or extra_body) cannot smuggle `user_api_key_metadata`
+    # past the isinstance(dict) guard.
+    #
+    # The proxy writes user_api_key_metadata / user_api_key_team_metadata into
+    # data[_metadata_variable_name] below; if a caller pre-populates either
+    # key on the OTHER metadata field, _get_admin_metadata lookups would treat
+    # the caller's payload as admin-configured.
+    for _meta_key in ("metadata", "litellm_metadata"):
+        _user_meta = data.get(_meta_key)
+        if isinstance(_user_meta, dict):
+            _user_meta.pop("_pipeline_managed_guardrails", None)
+            _user_meta.pop("user_api_key_metadata", None)
+            _user_meta.pop("user_api_key_team_metadata", None)
+
+    # Strip caller-supplied routing/budget tags unless the admin has opted
+    # this key or team in via metadata.allow_client_tags=True. Tags drive
+    # tag-based routing and tag budget attribution — accepting them from
+    # untrusted callers lets an attacker reach restricted deployments or
+    # misattribute spend to a victim team's tag.
+    _admin_allow_client_tags = False
+    for _admin_meta in (
+        user_api_key_dict.metadata,
+        user_api_key_dict.team_metadata,
+    ):
+        if (
+            isinstance(_admin_meta, dict)
+            and _admin_meta.get("allow_client_tags") is True
+        ):
+            _admin_allow_client_tags = True
+            break
+    if not _admin_allow_client_tags:
+        _stripped_from: List[str] = []
+        for _meta_key in ("metadata", "litellm_metadata"):
+            _user_meta = data.get(_meta_key)
+            if isinstance(_user_meta, dict) and "tags" in _user_meta:
+                _user_meta.pop("tags", None)
+                _stripped_from.append(_meta_key)
+        if _stripped_from:
+            verbose_proxy_logger.warning(
+                "Stripped caller-supplied tags from %s: this key/team does "
+                "not have `allow_client_tags: true` in its metadata. Set it "
+                "to opt into client-supplied routing/budget tags.",
+                ", ".join(_stripped_from),
+            )
+
+    # Now merge litellm_metadata into the metadata variable (preserving existing
+    # values) — runs AFTER the strip so attacker injections in litellm_metadata
+    # cannot cross-contaminate the admin-authoritative metadata dict.
+    if "litellm_metadata" in data and isinstance(data["litellm_metadata"], dict):
+        for key, value in data["litellm_metadata"].items():
+            if key not in data[_metadata_variable_name]:
+                data[_metadata_variable_name][key] = value
 
     data = LiteLLMProxyRequestSetup.add_user_api_key_auth_to_request_metadata(
         data=data,
