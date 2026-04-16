@@ -35,6 +35,29 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
     def supports_native_file_search(self) -> bool:
         return True
 
+    @staticmethod
+    def _is_gpt_5_model(model: str) -> bool:
+        """Return True only for actual OpenAI GPT-5 models.
+
+        Excludes pass-through models from other providers that happen to
+        reference gpt-5 in their name (e.g. perplexity/openai/gpt-5.2).
+        """
+        parts = model.split("/")
+        if len(parts) > 1 and parts[0] not in ("openai",):
+            return False
+        return "gpt-5" in model and "gpt-5-chat" not in model
+
+    @staticmethod
+    def _supports_reasoning_effort_none(model: str) -> bool:
+        """Return True if the model supports reasoning.effort='none'."""
+        from litellm.utils import _supports_factory
+
+        return _supports_factory(
+            model=model,
+            custom_llm_provider=None,
+            key="supports_none_reasoning_effort",
+        )
+
     def get_supported_openai_params(self, model: str) -> list:
         """
         All OpenAI Responses API params are supported
@@ -66,18 +89,14 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         is accepted unless reasoning_effort='none' on models that support it).
         Apply the same validation used by the chat completions path.
         """
-        from litellm.llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config
-
         params = dict(response_api_optional_params)
 
-        if OpenAIGPT5Config.is_model_gpt_5_model(model=model):
+        if self._is_gpt_5_model(model=model):
             temperature = params.get("temperature")
             if temperature is not None and temperature != 1:
                 reasoning = params.get("reasoning") or {}
                 effort = reasoning.get("effort") if isinstance(reasoning, dict) else None
-                supports_none = OpenAIGPT5Config._supports_reasoning_effort_level(
-                    model=model, level="none"
-                )
+                supports_none = self._supports_reasoning_effort_none(model=model)
                 if supports_none and (effort == "none" or effort is None):
                     pass  # flexible temperature allowed
                 elif drop_params or litellm.drop_params:
