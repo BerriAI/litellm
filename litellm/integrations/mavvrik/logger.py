@@ -119,16 +119,29 @@ class MavvrikLogger(CustomLogger):
                     limit=MAVVRIK_MAX_FETCHED_DATA_RECORDS,
                 )
             except ValueError as exc:
+                # Config error (missing credentials) — stop the entire loop,
+                # no point trying remaining dates.
                 verbose_logger.error(
-                    "MavvrikLogger: export skipped for %s — config error: %s",
+                    "MavvrikLogger: export stopped for %s — config error: %s",
                     date_str,
                     exc,
                 )
                 return
+            except Exception as exc:
+                # Transient errors (network, upload failure) — log and skip
+                # this date so remaining days still get exported.
+                verbose_logger.warning(
+                    "MavvrikLogger: export failed for %s (skipping, will retry next run): %s",
+                    date_str,
+                    exc,
+                )
+                export_date += timedelta(days=1)
+                continue
 
-            await db.advance_marker(date_str)
-
-            # Notify Mavvrik of the new marker epoch via PATCH (best-effort)
+            # Advance the remote Mavvrik marker first (best-effort), then local.
+            # Local marker is the source of truth; even if the remote PATCH fails
+            # the next run will re-send it. Advancing local last ensures we don't
+            # skip a date if the remote call raises.
             try:
                 export_epoch = int(
                     datetime(
@@ -148,6 +161,8 @@ class MavvrikLogger(CustomLogger):
                 verbose_logger.warning(
                     "MavvrikLogger: advance_marker PATCH failed (non-fatal): %s", exc
                 )
+
+            await db.advance_marker(date_str)
 
             export_date += timedelta(days=1)
 

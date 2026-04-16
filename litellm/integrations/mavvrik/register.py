@@ -92,6 +92,20 @@ async def register_logger_and_job(
     """
     from litellm.integrations.mavvrik.logger import MavvrikLogger
 
+    # Remove any existing MavvrikLogger instances to avoid accumulating duplicates
+    # on repeated /mavvrik/init calls.
+    existing = litellm.logging_callback_manager.get_custom_loggers_for_type(
+        callback_type=MavvrikLogger
+    )
+    for existing_logger in existing:
+        try:
+            litellm.logging_callback_manager.remove_litellm_callback_by_type(
+                callback_type=MavvrikLogger
+            )
+        except Exception:
+            pass
+        break  # remove_by_type removes all instances; one call is enough
+
     mavvrik_logger = MavvrikLogger(
         api_key=api_key,
         api_endpoint=api_endpoint,

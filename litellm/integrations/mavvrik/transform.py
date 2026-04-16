@@ -8,6 +8,7 @@ All rows are exported for visualization and analytics purposes.
 """
 
 import io
+from typing import Optional
 
 import polars as pl
 
@@ -17,7 +18,7 @@ from litellm._logging import verbose_proxy_logger
 class MavvrikTransformer:
     """Transform LiteLLM spend data into a CSV string for upload."""
 
-    def to_csv(self, df: pl.DataFrame, connection_id: str | None = None) -> str:
+    def to_csv(self, df: pl.DataFrame, connection_id: Optional[str] = None) -> str:
         """Return the DataFrame as a CSV string with connection_id added.
 
         Rows where successful_requests == 0 are excluded — they represent

@@ -10,7 +10,9 @@ from pydantic import BaseModel, Field, field_validator
 class MavvrikInitRequest(BaseModel):
     """Request body for POST /mavvrik/init — stores encrypted settings in LiteLLM_Config."""
 
-    api_key: str = Field(..., description="Mavvrik API key (x-api-key header value)")
+    api_key: str = Field(
+        ..., description="Mavvrik API key (x-api-key header value)", repr=False
+    )
     api_endpoint: str = Field(
         ...,
         description="Mavvrik API base URL including tenant (e.g. https://api.mavvrik.dev/my-tenant)",
@@ -54,6 +56,19 @@ class MavvrikExportRequest(BaseModel):
         None,
         description="Max spend rows to fetch (default: MAVVRIK_MAX_FETCHED_DATA_RECORDS)",
     )
+
+    @field_validator("date_str")
+    @classmethod
+    def must_be_valid_date_if_set(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return v
+        try:
+            from datetime import date
+
+            date.fromisoformat(v)
+        except ValueError:
+            raise ValueError("date_str must be a valid date in YYYY-MM-DD format")
+        return v
 
 
 class MavvrikExportResponse(BaseModel):

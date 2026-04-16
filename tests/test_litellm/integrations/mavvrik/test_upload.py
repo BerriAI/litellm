@@ -275,10 +275,13 @@ class TestMavvrikUploaderUpload:
         ) as mock_fin:
             await streamer.upload(csv_payload, date_str="2025-01-15")
 
-        mock_url.assert_called_once_with("2025-01-15")
-        mock_init.assert_called_once_with("https://signed")
+        # Methods now receive client= kwarg — check positional args only
+        mock_url.assert_called_once()
+        assert mock_url.call_args.args[0] == "2025-01-15"
+        mock_init.assert_called_once()
+        assert mock_init.call_args.args[0] == "https://signed"
         mock_fin.assert_called_once()
-        upload_bytes = mock_fin.call_args[0][1]
+        upload_bytes = mock_fin.call_args.args[1]
         assert isinstance(upload_bytes, bytes)
         assert gzip.decompress(upload_bytes) == csv_payload.encode("utf-8")
 

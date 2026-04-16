@@ -12,6 +12,8 @@ from typing import Any, List, Optional
 
 import polars as pl
 
+from litellm._logging import verbose_logger
+
 
 class LiteLLMDatabase:
     """Handle LiteLLM database queries for the Mavvrik integration."""
@@ -92,8 +94,10 @@ class LiteLLMDatabase:
             )
             if row is not None and row.date is not None:
                 return str(row.date)[:10]  # trim to YYYY-MM-DD
-        except Exception:
-            pass
+        except Exception as exc:
+            verbose_logger.warning(
+                "MavvrikLogger: get_earliest_date failed (non-fatal): %s", exc
+            )
         return None
 
     # ------------------------------------------------------------------

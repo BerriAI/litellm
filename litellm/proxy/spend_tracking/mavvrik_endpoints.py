@@ -22,7 +22,10 @@ from fastapi import APIRouter, Depends, HTTPException
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.mavvrik.database import LiteLLMDatabase
 from litellm.integrations.mavvrik.logger import MavvrikLogger
-from litellm.integrations.mavvrik.register import is_mavvrik_setup  # noqa: F401
+from litellm.integrations.mavvrik.register import (
+    _CONFIG_KEY,
+    is_mavvrik_setup,  # noqa: F401
+)
 from litellm.integrations.mavvrik.upload import MavvrikUploader
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 from litellm.proxy._types import CommonProxyErrors, LitellmUserRoles, UserAPIKeyAuth
@@ -45,6 +48,11 @@ from litellm.types.proxy.mavvrik_endpoints import (
 router = APIRouter()
 
 _sensitive_masker = SensitiveDataMasker()
+
+
+def _yesterday() -> str:
+    """Return yesterday's date as YYYY-MM-DD (UTC)."""
+    return (datetime.now(_tz.utc).date() - timedelta(days=1)).isoformat()
 
 
 # ------------------------------------------------------------------
@@ -308,7 +316,7 @@ async def delete_mavvrik_settings(
             )
 
         row = await prisma_client.db.litellm_config.find_first(
-            where={"param_name": "mavvrik_settings"}
+            where={"param_name": _CONFIG_KEY}
         )
         if row is None:
             raise HTTPException(
@@ -316,9 +324,7 @@ async def delete_mavvrik_settings(
                 detail={"error": "Mavvrik is not configured"},
             )
 
-        await prisma_client.db.litellm_config.delete(
-            where={"param_name": "mavvrik_settings"}
-        )
+        await prisma_client.db.litellm_config.delete(where={"param_name": _CONFIG_KEY})
 
         try:
             import litellm.proxy.proxy_server as _pserver
@@ -327,10 +333,14 @@ async def delete_mavvrik_settings(
             if _scheduler is not None:
                 try:
                     _scheduler.remove_job(MAVVRIK_EXPORT_USAGE_DATA_JOB_NAME)
-                except Exception:
-                    pass
-        except Exception:
-            pass
+                except Exception as exc:
+                    verbose_proxy_logger.debug(
+                        "Mavvrik: scheduler job already removed or not found: %s", exc
+                    )
+        except Exception as exc:
+            verbose_proxy_logger.debug(
+                "Mavvrik: could not access scheduler during delete: %s", exc
+            )
 
         verbose_proxy_logger.info("Mavvrik settings deleted")
         return MavvrikDeleteResponse(
@@ -362,10 +372,7 @@ async def dry_run_mavvrik_export(
 
     try:
         settings = await _get_mavvrik_settings()
-        date_str = (
-            request.date_str
-            or (datetime.now(_tz.utc).date() - timedelta(days=1)).isoformat()
-        )
+        date_str = request.date_str or _yesterday()
 
         logger = MavvrikLogger(
             api_key=settings.get("api_key"),
@@ -418,10 +425,7 @@ async def export_mavvrik_data(
                 },
             )
 
-        date_str = (
-            request.date_str
-            or (datetime.now(_tz.utc).date() - timedelta(days=1)).isoformat()
-        )
+        date_str = request.date_str or _yesterday()
 
         logger = MavvrikLogger(
             api_key=settings.get("api_key"),

@@ -34,6 +34,7 @@ import io
 import platform
 from datetime import datetime as _dt
 from datetime import timezone as _tz
+from typing import Optional
 
 import httpx
 import litellm as _litellm
@@ -78,9 +79,13 @@ class MavvrikUploader:
 
         upload_data = self._compress(csv_payload)
 
-        signed_url = await self._get_signed_url(date_str)
-        session_uri = await self._initiate_resumable_upload(signed_url)
-        await self._finalize_upload(session_uri, upload_data)
+        # Share one client across all three steps to reuse the TCP connection.
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            signed_url = await self._get_signed_url(date_str, client=client)
+            session_uri = await self._initiate_resumable_upload(
+                signed_url, client=client
+            )
+            await self._finalize_upload(session_uri, upload_data, client=client)
 
         verbose_proxy_logger.info(
             "Mavvrik uploader: successfully uploaded %d bytes for date %s",
@@ -175,7 +180,9 @@ class MavvrikUploader:
     # Step 1: Get signed URL from Mavvrik API
     # ------------------------------------------------------------------
 
-    async def _get_signed_url(self, date_str: str) -> str:
+    async def _get_signed_url(
+        self, date_str: str, client: Optional[httpx.AsyncClient] = None
+    ) -> str:
         path = UPLOAD_URL_PATH.format(connection_id=self.connection_id)
         url = f"{self.api_endpoint}{path}"
         params = {"name": date_str, "type": "metrics"}
@@ -185,8 +192,11 @@ class MavvrikUploader:
 
         for attempt in range(_MAX_RETRIES):
             try:
-                async with httpx.AsyncClient(timeout=30.0) as client:
+                if client is not None:
                     resp = await client.get(url, headers=headers, params=params)
+                else:
+                    async with httpx.AsyncClient(timeout=30.0) as _client:
+                        resp = await _client.get(url, headers=headers, params=params)
 
                 if resp.status_code == 200:
                     body = resp.json()
@@ -227,49 +237,118 @@ class MavvrikUploader:
     # Step 2: Initiate resumable upload
     # ------------------------------------------------------------------
 
-    async def _initiate_resumable_upload(self, signed_url: str) -> str:
+    async def _initiate_resumable_upload(
+        self, signed_url: str, client: Optional[httpx.AsyncClient] = None
+    ) -> str:
         headers = {
             "Content-Type": "application/gzip",
             "x-goog-resumable": "start",
         }
         metadata = b'{"contentEncoding":"gzip","contentDisposition":"attachment"}'
 
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            resp = await client.post(signed_url, headers=headers, content=metadata)
+        last_exc: Exception = Exception("unknown error")
+        for attempt in range(_MAX_RETRIES):
+            try:
+                if client is not None:
+                    resp = await client.post(
+                        signed_url, headers=headers, content=metadata
+                    )
+                else:
+                    async with httpx.AsyncClient(timeout=30.0) as _client:
+                        resp = await _client.post(
+                            signed_url, headers=headers, content=metadata
+                        )
 
-        if resp.status_code != 201:
-            raise Exception(
-                f"Mavvrik initiate upload failed: {resp.status_code} {resp.text}"
+                if resp.status_code == 201:
+                    session_uri = resp.headers.get("Location")
+                    if not session_uri:
+                        raise Exception(
+                            "Mavvrik initiate upload response missing Location header"
+                        )
+                    verbose_proxy_logger.debug(
+                        "Mavvrik uploader: resumable upload session created"
+                    )
+                    return session_uri
+
+                last_exc = Exception(
+                    f"Mavvrik initiate upload failed: {resp.status_code} {resp.text}"
+                )
+                if resp.status_code < 500:
+                    raise last_exc
+
+            except httpx.RequestError as exc:
+                last_exc = exc
+
+            wait = _RETRY_BACKOFF_BASE * (2**attempt)
+            verbose_proxy_logger.warning(
+                "Mavvrik uploader: initiate attempt %d/%d failed, retrying in %.1fs: %s",
+                attempt + 1,
+                _MAX_RETRIES,
+                wait,
+                last_exc,
             )
+            await asyncio.sleep(wait)
 
-        session_uri = resp.headers.get("Location")
-        if not session_uri:
-            raise Exception("Mavvrik initiate upload response missing Location header")
-
-        verbose_proxy_logger.debug("Mavvrik uploader: resumable upload session created")
-        return session_uri
+        raise Exception(
+            f"Mavvrik initiate upload failed after {_MAX_RETRIES} attempts: {last_exc}"
+        )
 
     # ------------------------------------------------------------------
     # Step 3: Finalize upload — PUT gzip bytes to session URI
     # ------------------------------------------------------------------
 
-    async def _finalize_upload(self, session_uri: str, csv_data: bytes) -> None:
+    async def _finalize_upload(
+        self,
+        session_uri: str,
+        csv_data: bytes,
+        client: Optional[httpx.AsyncClient] = None,
+    ) -> None:
         headers = {
             "Content-Type": "application/gzip",
             "Content-Encoding": "gzip",
             "x-goog-resumable": "stop",
         }
 
-        async with httpx.AsyncClient(timeout=120.0) as client:
-            resp = await client.put(session_uri, headers=headers, content=csv_data)
+        last_exc: Exception = Exception("unknown error")
+        for attempt in range(_MAX_RETRIES):
+            try:
+                if client is not None:
+                    resp = await client.put(
+                        session_uri, headers=headers, content=csv_data
+                    )
+                else:
+                    async with httpx.AsyncClient(timeout=120.0) as _client:
+                        resp = await _client.put(
+                            session_uri, headers=headers, content=csv_data
+                        )
 
-        if resp.status_code not in (200, 201):
-            raise Exception(
-                f"Mavvrik finalize upload failed: {resp.status_code} {resp.text}"
+                if resp.status_code in (200, 201):
+                    verbose_proxy_logger.debug(
+                        "Mavvrik uploader: finalize upload OK (%d)", resp.status_code
+                    )
+                    return
+
+                last_exc = Exception(
+                    f"Mavvrik finalize upload failed: {resp.status_code} {resp.text}"
+                )
+                if resp.status_code < 500:
+                    raise last_exc
+
+            except httpx.RequestError as exc:
+                last_exc = exc
+
+            wait = _RETRY_BACKOFF_BASE * (2**attempt)
+            verbose_proxy_logger.warning(
+                "Mavvrik uploader: finalize attempt %d/%d failed, retrying in %.1fs: %s",
+                attempt + 1,
+                _MAX_RETRIES,
+                wait,
+                last_exc,
             )
+            await asyncio.sleep(wait)
 
-        verbose_proxy_logger.debug(
-            "Mavvrik uploader: finalize upload OK (%d)", resp.status_code
+        raise Exception(
+            f"Mavvrik finalize upload failed after {_MAX_RETRIES} attempts: {last_exc}"
         )
 
     # ------------------------------------------------------------------
