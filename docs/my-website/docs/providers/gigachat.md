@@ -201,7 +201,7 @@ model_list:
       ssl_verify: false
   - model_name: gigachat-lite
     litellm_params:
-      model: gigachat/GigaChat-2-Lite
+      model: gigachat/GigaChat-2
       api_key: "os.environ/GIGACHAT_CREDENTIALS"
       ssl_verify: false
   - model_name: gigachat-embeddings
@@ -260,7 +260,7 @@ print(response)
 
 | Model Name | Context Window | Vision | Description |
 |------------|----------------|--------|-------------|
-| gigachat/GigaChat-2-Lite | 128K | No | Fast, lightweight model |
+| gigachat/GigaChat-2 | 128K | No | Fast, lightweight model |
 | gigachat/GigaChat-2-Pro | 128K | Yes | Professional model with vision |
 | gigachat/GigaChat-2-Max | 128K | Yes | Maximum capability model |
 
