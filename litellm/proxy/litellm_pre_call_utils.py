@@ -989,6 +989,28 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
             _user_meta.pop("user_api_key_metadata", None)
             _user_meta.pop("user_api_key_team_metadata", None)
 
+    # Strip caller-supplied routing/budget tags unless the admin has opted
+    # this key or team in via metadata.allow_client_tags=True. Tags drive
+    # tag-based routing and tag budget attribution — accepting them from
+    # untrusted callers lets an attacker reach restricted deployments or
+    # misattribute spend to a victim team's tag.
+    _admin_allow_client_tags = False
+    for _admin_meta in (
+        user_api_key_dict.metadata,
+        user_api_key_dict.team_metadata,
+    ):
+        if (
+            isinstance(_admin_meta, dict)
+            and _admin_meta.get("allow_client_tags") is True
+        ):
+            _admin_allow_client_tags = True
+            break
+    if not _admin_allow_client_tags:
+        for _meta_key in ("metadata", "litellm_metadata"):
+            _user_meta = data.get(_meta_key)
+            if isinstance(_user_meta, dict):
+                _user_meta.pop("tags", None)
+
     ##########################################################
     # Init - Proxy Server Request
     # we do this as soon as entering so we track the original request
