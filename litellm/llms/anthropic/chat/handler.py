@@ -554,6 +554,11 @@ class ModelResponseIterator:
         # See: https://github.com/BerriAI/litellm/issues/17737
         self.web_search_results: List[Dict[str, Any]] = []
 
+        # Accumulate citations from citations_delta events. stream_chunk_builder
+        # uses "last value wins" for list-valued provider_specific_fields keys,
+        # so each emission must carry every citation seen so far.
+        self.citations: List[Dict[str, Any]] = []
+
         # Accumulate compaction blocks for multi-turn reconstruction
         self.compaction_blocks: List[Dict[str, Any]] = []
 
@@ -631,7 +636,8 @@ class ModelResponseIterator:
                     },
                 )
         elif "citation" in content_block["delta"]:
-            provider_specific_fields["citation"] = content_block["delta"]["citation"]
+            self.citations.append(content_block["delta"]["citation"])
+            provider_specific_fields["citations"] = self.citations
         elif (
             "thinking" in content_block["delta"]
             or "signature" in content_block["delta"]

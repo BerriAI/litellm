@@ -1778,6 +1778,12 @@ class Logging(LiteLLMLoggingBaseClass):
             status="success",
             standard_built_in_tools_params=self.standard_built_in_tools_params,
         )
+        # Native /v1/messages stashes the raw Anthropic JSON here so spend
+        # logs / UI show the authentic shape instead of the chat.completion
+        # reconstruction produced by transform_response / stream_chunk_builder.
+        anthropic_raw = self.model_call_details.get("anthropic_raw_response")
+        if anthropic_raw is not None and payload is not None:
+            payload["response"] = anthropic_raw
         self.callback_duration_ms += (time.time() - _start) * 1000
         return payload
 
@@ -2606,7 +2612,10 @@ class Logging(LiteLLMLoggingBaseClass):
                 )
             ) is not None:
                 emit_standard_logging_payload(standard_logging_payload)
-        elif self.call_type == "pass_through_endpoint":
+        elif self.call_type in (
+            "pass_through_endpoint",
+            CallTypes.anthropic_messages.value,
+        ):
             print_verbose(
                 "Async success callbacks: Got a pass-through endpoint response"
             )
@@ -3431,6 +3440,16 @@ class Logging(LiteLLMLoggingBaseClass):
 
         httpx_response = self.model_call_details.get("httpx_response", None)
         if httpx_response and isinstance(httpx_response, httpx.Response):
+            # Capture the raw Anthropic JSON before transform_response rewrites
+            # it into a chat.completion-shaped ModelResponse, so SLP["response"]
+            # can preserve the native /v1/messages shape in spend logs.
+            try:
+                raw_anthropic_json = httpx_response.json()
+            except Exception:
+                raw_anthropic_json = None
+            if isinstance(raw_anthropic_json, dict):
+                self.model_call_details["anthropic_raw_response"] = raw_anthropic_json
+
             result = litellm.AnthropicConfig().transform_response(
                 raw_response=httpx_response,
                 model_response=litellm.ModelResponse(),
@@ -3444,6 +3463,12 @@ class Logging(LiteLLMLoggingBaseClass):
                 json_mode=False,
                 litellm_params={},
             )
+            # Preserve the original Anthropic response ID (e.g. msg_*)
+            # which transform_response does not carry over.
+            if isinstance(raw_anthropic_json, dict):
+                original_id = raw_anthropic_json.get("id")
+                if original_id:
+                    result.id = original_id
         else:
             from litellm.types.llms.anthropic import AnthropicResponse
 
