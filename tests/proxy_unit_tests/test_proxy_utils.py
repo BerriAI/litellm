@@ -842,12 +842,13 @@ async def test_add_litellm_data_to_request_duplicate_tags(
     mock_request.headers = {}
     mock_request.state = State()
 
-    # Setup key with tags in metadata
+    # Setup key with tags in metadata. Opt into client-supplied tags so the
+    # request_tags are preserved for the merge under test.
     user_api_key_dict = UserAPIKeyAuth(
         api_key="test_api_key",
         user_id="test_user_id",
         org_id="test_org_id",
-        metadata={"tags": key_tags},
+        metadata={"tags": key_tags, "allow_client_tags": True},
     )
 
     # Setup request data with tags
