@@ -281,6 +281,70 @@ async def test_add_litellm_data_to_request_strips_admin_injection_slots():
 
 
 @pytest.mark.asyncio
+async def test_add_litellm_data_to_request_strips_string_encoded_admin_injection():
+    """Regression: metadata arriving as a JSON string (multipart/form-data or
+    extra_body) must not bypass the admin-injection strip. The parse happens
+    AFTER receipt, so the strip has to run after the parse, not before.
+    """
+    from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+
+    request_mock = MagicMock(spec=Request)
+    request_mock.url.path = "/v1/chat/completions"
+    request_mock.url = MagicMock()
+    request_mock.url.__str__.return_value = "http://localhost/v1/chat/completions"
+    request_mock.method = "POST"
+    request_mock.query_params = {}
+    request_mock.headers = {"Content-Type": "multipart/form-data"}
+    request_mock.client = MagicMock()
+    request_mock.client.host = "127.0.0.1"
+
+    # Attacker encodes an admin-injection payload inside a JSON string.
+    attacker_payload = {
+        "user_api_key_metadata": {"disable_global_guardrails": True},
+        "user_api_key_team_metadata": {"disable_global_guardrails": True},
+        "_pipeline_managed_guardrails": ["evaded"],
+    }
+    data = {
+        "model": "gpt-3.5-turbo",
+        "metadata": json.dumps(attacker_payload),
+        "litellm_metadata": json.dumps(attacker_payload),
+    }
+
+    real_admin_metadata = {"admin_flag": "from_proxy"}
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="hashed-key",
+        metadata=real_admin_metadata,
+        team_metadata=real_admin_metadata,
+        spend=0.0,
+        max_budget=100.0,
+        model_max_budget={},
+        team_spend=0.0,
+        team_max_budget=200.0,
+    )
+
+    updated = await add_litellm_data_to_request(
+        data=data,
+        request=request_mock,
+        user_api_key_dict=user_api_key_dict,
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    populated = updated["metadata"]
+    # The real admin payload from user_api_key_dict wins.
+    assert populated["user_api_key_metadata"] == real_admin_metadata
+    assert populated["user_api_key_team_metadata"] == real_admin_metadata
+    assert populated.get("_pipeline_managed_guardrails") != ["evaded"]
+
+    other = updated.get("litellm_metadata") or {}
+    # After the strip, litellm_metadata has no admin-injection slots.
+    assert "user_api_key_metadata" not in other
+    assert "user_api_key_team_metadata" not in other
+    assert "_pipeline_managed_guardrails" not in other
+
+
+@pytest.mark.asyncio
 async def test_add_litellm_data_to_request_strips_user_tags_without_permission():
     """Caller-supplied metadata.tags must be stripped when the key/team
     metadata does not opt in via allow_client_tags=True. Otherwise an
@@ -486,9 +550,11 @@ async def test_add_litellm_data_to_request_audio_transcription_multipart():
         "file": b"Fake audio bytes",
     }
 
+    # Opt the key in to client-supplied tags so the parsed tags from the
+    # JSON-string multipart body aren't stripped by the admin-injection strip.
     user_api_key_dict = UserAPIKeyAuth(
         api_key="hashed-key",
-        metadata={},
+        metadata={"allow_client_tags": True},
         team_metadata={},
         spend=0.0,
         max_budget=100.0,
