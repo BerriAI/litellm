@@ -349,7 +349,8 @@ class OllamaChatConfig(BaseConfig):
         response_json = raw_response.json()
 
         ## RESPONSE OBJECT
-        model_response.choices[0].finish_reason = "stop"
+        _done_reason = response_json.get("done_reason") or "stop"
+        model_response.choices[0].finish_reason = _done_reason
         response_json_message = response_json.get("message")
         if response_json_message is not None:
             if "thinking" in response_json_message:
@@ -535,7 +536,7 @@ class OllamaChatCompletionResponseIterator(BaseModelResponseIterator):
             )
 
             if chunk["done"] is True:
-                finish_reason = chunk.get("done_reason", "stop")
+                finish_reason = chunk.get("done_reason") or "stop"
                 # Override finish_reason when tool_calls are present
                 # Fixes: https://github.com/BerriAI/litellm/issues/18922
                 if tool_calls is not None:
