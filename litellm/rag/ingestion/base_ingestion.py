@@ -24,7 +24,7 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
-from litellm.proxy.common_utils.url_utils import validate_url
+from litellm.proxy.common_utils.url_utils import async_safe_get
 from litellm.rag.ingestion.file_parsers import extract_text_from_pdf
 from litellm.rag.text_splitters import RecursiveCharacterTextSplitter
 from litellm.types.rag import RAGIngestOptions, RAGIngestResponse
@@ -112,13 +112,8 @@ class BaseRAGIngestion(ABC):
             return filename, file_content, content_type, None
 
         if file_url:
-            validated_url, original_host = validate_url(file_url)
             http_client = get_async_httpx_client(llm_provider=httpxSpecialProvider.RAG)
-            response = await http_client.get(
-                validated_url,
-                headers={"Host": original_host},
-                follow_redirects=False,
-            )
+            response = await async_safe_get(http_client, file_url)
             response.raise_for_status()
             file_content = response.content
             filename = file_url.split("/")[-1] or "document"

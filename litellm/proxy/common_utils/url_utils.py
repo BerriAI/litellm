@@ -4,16 +4,15 @@ URL validation for user-controlled URLs.
 Use validate_url() before fetching any URL that originates from user
 input (image_url, file_url, spec_path, etc.) to prevent SSRF attacks.
 
-The function resolves DNS once, validates all IPs, and rewrites the URL
-to connect to the validated IP directly — no TOCTOU gap, no DNS rebinding.
-Callers should also set follow_redirects=False to prevent redirect-based
-SSRF bypasses.
+validate_url() resolves DNS once, validates all IPs, and rewrites the
+URL to connect to the validated IP directly — no TOCTOU gap, no DNS
+rebinding. Redirects are followed manually with validation at each hop.
 """
 
 import ipaddress
 import socket
 from ipaddress import ip_address, ip_network
-from typing import Optional, Tuple
+from typing import Any, Optional, Tuple, Union
 from urllib.parse import urlparse, urlunparse
 
 _BLOCKED_NETWORKS = [
@@ -105,12 +104,18 @@ def validate_url(url: str) -> Tuple[str, str]:
                 "provider configuration instead of a user-supplied URL."
             )
 
-    # Rewrite URL to connect to the first validated IP
+    # For HTTPS, TLS certificate validation binds the connection to the
+    # hostname — DNS rebinding can't redirect to a different server because
+    # the cert wouldn't match. Return the original URL.
+    if parsed.scheme == "https":
+        return url, hostname
+
+    # For HTTP, rewrite URL to connect to the validated IP directly
+    # to prevent DNS rebinding (no TLS to bind the connection).
     validated_ip = addrinfo[0][4][0]
     is_ipv6 = addrinfo[0][0] == socket.AF_INET6
     ip_host = f"[{validated_ip}]" if is_ipv6 else validated_ip
 
-    # Reconstruct netloc with IP instead of hostname
     if port:
         new_netloc = f"{ip_host}:{port}"
     else:
@@ -121,3 +126,54 @@ def validate_url(url: str) -> Tuple[str, str]:
     )
 
     return rewritten, hostname
+
+
+_MAX_REDIRECTS = 10
+
+
+def safe_get(client: Any, url: str, **kwargs: Any) -> Any:
+    """
+    Fetch a user-supplied URL with SSRF protection on every redirect hop.
+
+    Validates the initial URL and each redirect target before making the
+    request. No DNS rebinding (resolve-and-rewrite). No redirect bypass
+    (each hop validated). No breaking change for legitimate CDN redirects.
+
+    Args:
+        client: An httpx.Client or httpx.AsyncClient (sync version).
+        url: The user-supplied URL.
+        **kwargs: Additional kwargs passed to client.get().
+
+    Returns:
+        The final httpx.Response.
+    """
+    kwargs.pop("follow_redirects", None)
+    for _ in range(_MAX_REDIRECTS):
+        validated_url, original_host = validate_url(url)
+        response = client.get(
+            validated_url,
+            headers={**kwargs.pop("headers", {}), "Host": original_host},
+            follow_redirects=False,
+            **kwargs,
+        )
+        if not response.is_redirect or response.next_request is None:
+            return response
+        url = str(response.next_request.url)
+    raise SSRFError("Too many redirects")
+
+
+async def async_safe_get(client: Any, url: str, **kwargs: Any) -> Any:
+    """Async version of safe_get."""
+    kwargs.pop("follow_redirects", None)
+    for _ in range(_MAX_REDIRECTS):
+        validated_url, original_host = validate_url(url)
+        response = await client.get(
+            validated_url,
+            headers={**kwargs.pop("headers", {}), "Host": original_host},
+            follow_redirects=False,
+            **kwargs,
+        )
+        if not response.is_redirect or response.next_request is None:
+            return response
+        url = str(response.next_request.url)
+    raise SSRFError("Too many redirects")
