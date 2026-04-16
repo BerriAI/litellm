@@ -257,24 +257,24 @@ class CustomGuardrail(CustomLogger):
 
     def get_disable_global_guardrail(self, data: dict) -> Optional[bool]:
         """
-        Returns True if the global guardrail should be disabled
+        Returns True if the global guardrail should be disabled.
+
+        Reads from admin-configured key/team metadata only, not from
+        the request body, to prevent callers from disabling guardrails.
         """
-        if "disable_global_guardrails" in data:
-            return data["disable_global_guardrails"]
         metadata = data.get("litellm_metadata") or data.get("metadata", {})
-        if "disable_global_guardrails" in metadata:
-            return metadata["disable_global_guardrails"]
-        return False
+        admin_metadata = metadata.get("user_api_key_metadata") or {}
+        return admin_metadata.get("disable_global_guardrails", False)
 
     def get_opted_out_global_guardrails_from_metadata(self, data: dict) -> List[str]:
         """
         Returns the list of global guardrail names the team/key has opted out of.
+
+        Reads from admin-configured key/team metadata only.
         """
-        if "opted_out_global_guardrails" in data:
-            value = data["opted_out_global_guardrails"]
-            return value if isinstance(value, list) else []
         metadata = data.get("litellm_metadata") or data.get("metadata", {})
-        value = metadata.get("opted_out_global_guardrails")
+        admin_metadata = metadata.get("user_api_key_metadata") or {}
+        value = admin_metadata.get("opted_out_global_guardrails")
         return value if isinstance(value, list) else []
 
     def _is_valid_response_type(self, result: Any) -> bool:
@@ -417,7 +417,9 @@ class CustomGuardrail(CustomLogger):
         """
         requested_guardrails = self.get_guardrail_from_metadata(data)
         disable_global_guardrail = self.get_disable_global_guardrail(data)
-        opted_out_global_guardrails = self.get_opted_out_global_guardrails_from_metadata(data)
+        opted_out_global_guardrails = (
+            self.get_opted_out_global_guardrails_from_metadata(data)
+        )
         verbose_logger.debug(
             "inside should_run_guardrail for guardrail=%s event_type= %s guardrail_supported_event_hooks= %s requested_guardrails= %s self.default_on= %s",
             self.guardrail_name,
@@ -426,7 +428,10 @@ class CustomGuardrail(CustomLogger):
             requested_guardrails,
             self.default_on,
         )
-        if self.default_on is True and self.guardrail_name in opted_out_global_guardrails:
+        if (
+            self.default_on is True
+            and self.guardrail_name in opted_out_global_guardrails
+        ):
             return False
 
         if self.default_on is True and disable_global_guardrail is not True:
