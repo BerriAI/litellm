@@ -15,7 +15,7 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
-from litellm.proxy.common_utils.url_utils import validate_url
+from litellm.proxy.common_utils.url_utils import async_safe_get
 from litellm.proxy._experimental.mcp_server.tool_registry import (
     global_mcp_tool_registry,
 )
@@ -75,13 +75,8 @@ def load_openapi_spec(filepath: str) -> Dict[str, Any]:
 
 async def load_openapi_spec_async(filepath: str) -> Dict[str, Any]:
     if filepath.startswith("http://") or filepath.startswith("https://"):
-        validated_url, original_host = validate_url(filepath)
         client = get_async_httpx_client(llm_provider=httpxSpecialProvider.MCP)
-        r = await client.get(
-            validated_url,
-            headers={"Host": original_host},
-            follow_redirects=False,
-        )
+        r = await async_safe_get(client, filepath)
         r.raise_for_status()
         return r.json()
 
