@@ -10,6 +10,8 @@ from typing import Any, Dict, List, Optional, Type, TypeVar, Union, cast
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException
+
+from litellm.proxy.common_utils.path_utils import safe_join
 from pydantic import BaseModel
 
 from litellm._logging import verbose_proxy_logger
@@ -1357,8 +1359,6 @@ async def get_category_yaml(category_name: str):
         "litellm_content_filter",
         "categories",
     )
-
-    from litellm.proxy.common_utils.path_utils import safe_join
 
     # Try to find the file with either .yaml or .json extension
     try:

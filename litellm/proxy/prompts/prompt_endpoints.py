@@ -6,6 +6,8 @@ import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional, cast
 
+from litellm.proxy.common_utils.path_utils import safe_filename
+
 from fastapi import (
     APIRouter,
     Depends,
@@ -1355,8 +1357,6 @@ async def convert_prompt_file_to_json(
     try:
         # Read file content
         file_content = await file.read()
-
-        from litellm.proxy.common_utils.path_utils import safe_filename
 
         # Create temporary file — use safe_filename to prevent path traversal
         temp_file_path = Path(tempfile.mkdtemp()) / safe_filename(file.filename)
