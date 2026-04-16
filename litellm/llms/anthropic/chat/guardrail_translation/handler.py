@@ -21,6 +21,10 @@ from litellm.llms.anthropic.experimental_pass_through.adapters.transformation im
     LiteLLMAnthropicMessagesAdapter,
 )
 from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
+from litellm.llms.base_llm.guardrail_translation.utils import (
+    effective_skip_system_message_for_guardrail,
+    openai_messages_without_system,
+)
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler import (
     AnthropicPassthroughLoggingHandler,
 )
@@ -29,6 +33,7 @@ from litellm.types.llms.anthropic import (
     AnthropicMessagesRequest,
 )
 from litellm.types.llms.openai import (
+    AllMessageValues,
     ChatCompletionToolCallChunk,
     ChatCompletionToolParam,
 )
@@ -75,6 +80,8 @@ class AnthropicMessagesHandler(BaseTranslation):
         if messages is None:
             return data
 
+        skip_system = effective_skip_system_message_for_guardrail(guardrail_to_apply)
+
         (
             chat_completion_compatible_request,
             _tool_name_mapping,
@@ -83,7 +90,12 @@ class AnthropicMessagesHandler(BaseTranslation):
             anthropic_message_request=cast(AnthropicMessagesRequest, data.copy())
         )
 
-        structured_messages = chat_completion_compatible_request.get("messages", [])
+        structured_messages = cast(
+            List[AllMessageValues],
+            chat_completion_compatible_request.get("messages", []),
+        )
+        if skip_system:
+            structured_messages = openai_messages_without_system(structured_messages)
 
         texts_to_check: List[str] = []
         images_to_check: List[str] = []
@@ -102,6 +114,7 @@ class AnthropicMessagesHandler(BaseTranslation):
                 texts_to_check=texts_to_check,
                 images_to_check=images_to_check,
                 task_mappings=task_mappings,
+                skip_system_message=skip_system,
             )
 
         # Step 2: Apply guardrail to all texts in batch
@@ -165,12 +178,16 @@ class AnthropicMessagesHandler(BaseTranslation):
         texts_to_check: List[str],
         images_to_check: List[str],
         task_mappings: List[Tuple[int, Optional[int]]],
+        skip_system_message: bool = False,
     ) -> None:
         """
         Extract text content and images from a message.
 
         Override this method to customize text/image extraction logic.
         """
+        if skip_system_message and str(message.get("role") or "").lower() == "system":
+            return
+
         content = message.get("content", None)
         tools = message.get("tools", None)
         if content is None and tools is None:

@@ -104,3 +104,39 @@ def test_update_gauge():
         # Verify correct methods were called
         mock_labels.assert_called_once_with("test_label")
         mock_gauge.set.assert_called_once_with(42.5)
+
+
+def test_services_logger_default_latency_buckets():
+    """PrometheusServicesLogger uses the new reduced default latency buckets."""
+    from litellm.types.integrations.prometheus import LATENCY_BUCKETS
+
+    pl = PrometheusServicesLogger()
+    assert pl.latency_buckets == LATENCY_BUCKETS
+    assert 420.0 in pl.latency_buckets
+    assert 600.0 in pl.latency_buckets
+    assert 1.5 not in pl.latency_buckets
+
+
+def test_services_logger_custom_latency_buckets():
+    """prometheus_latency_buckets setting is respected by PrometheusServicesLogger."""
+    import litellm
+    from prometheus_client import REGISTRY
+
+    custom_buckets = [0.1, 0.5, 1.0, 5.0, 10.0]
+    original = litellm.prometheus_latency_buckets
+    for collector in list(REGISTRY._collector_to_names.keys()):
+        try:
+            REGISTRY.unregister(collector)
+        except Exception:
+            pass
+    try:
+        litellm.prometheus_latency_buckets = custom_buckets
+        pl = PrometheusServicesLogger()
+        assert pl.latency_buckets == tuple(custom_buckets)
+    finally:
+        litellm.prometheus_latency_buckets = original
+        for collector in list(REGISTRY._collector_to_names.keys()):
+            try:
+                REGISTRY.unregister(collector)
+            except Exception:
+                pass

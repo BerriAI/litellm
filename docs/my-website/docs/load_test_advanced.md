@@ -70,7 +70,7 @@ litellm_settings:
   callbacks: ["prometheus"] # Enterprise LiteLLM Only - use prometheus to get metrics on your load test
 ```
 
-2. `pip install locust`
+2. `uv add locust`
 
 3. Create a file called `locustfile.py` on your local machine. Copy the contents from the litellm load test located [here](https://github.com/BerriAI/litellm/blob/main/.github/workflows/locustfile.py)
 
@@ -138,7 +138,7 @@ litellm_settings:
   callbacks: ["prometheus"] # Enterprise LiteLLM Only - use prometheus to get metrics on your load test
 ```
 
-2. `pip install locust`
+2. `uv add locust`
 
 3. Create a file called `locustfile.py` on your local machine. Copy the contents from the litellm load test located [here](https://github.com/BerriAI/litellm/blob/main/.github/workflows/locustfile.py)
 

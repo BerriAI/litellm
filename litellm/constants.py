@@ -135,6 +135,15 @@ MCP_OAUTH2_TOKEN_CACHE_DEFAULT_TTL = int(
 MCP_NPM_CACHE_DIR = os.getenv("MCP_NPM_CACHE_DIR", "/tmp/.npm_mcp_cache")
 MCP_OAUTH2_TOKEN_CACHE_MIN_TTL = int(os.getenv("MCP_OAUTH2_TOKEN_CACHE_MIN_TTL", "10"))
 
+# Per-user OAuth token Redis cache (for server-side token storage)
+MCP_PER_USER_TOKEN_REDIS_KEY_PREFIX = "mcp:per_user_token"
+MCP_PER_USER_TOKEN_DEFAULT_TTL = int(
+    os.getenv("MCP_PER_USER_TOKEN_DEFAULT_TTL", "43200")  # 12 hours
+)
+MCP_PER_USER_TOKEN_EXPIRY_BUFFER_SECONDS = int(
+    os.getenv("MCP_PER_USER_TOKEN_EXPIRY_BUFFER_SECONDS", "60")
+)
+
 # MCP timeout defaults (seconds). Override via env vars for slow/custom MCP servers.
 MCP_CLIENT_TIMEOUT = float(os.getenv("LITELLM_MCP_CLIENT_TIMEOUT", "60.0"))
 MCP_TOOL_LISTING_TIMEOUT = float(os.getenv("LITELLM_MCP_TOOL_LISTING_TIMEOUT", "30.0"))
@@ -1051,6 +1060,9 @@ WANDB_MODELS: set = set(
         "Qwen/Qwen3-235B-A22B-Thinking-2507",
         # moonshotai
         "moonshotai/Kimi-K2-Instruct",
+        "moonshotai/Kimi-K2.5",
+        # MiniMaxAI
+        "MiniMaxAI/MiniMax-M2.5",
         # meta models
         "meta-llama/Llama-3.1-8B-Instruct",
         "meta-llama/Llama-3.3-70B-Instruct",
@@ -1412,7 +1424,7 @@ APSCHEDULER_REPLACE_EXISTING = os.getenv(
     "1",
 ]  # always replace existing jobs
 
-# The number of tag entries are higher than number of user, team entries. This leads to a higher QPS. 
+# The number of tag entries are higher than number of user, team entries. This leads to a higher QPS.
 # This will run tag spcific tasks at a later time to smooth QPS
 DAILY_TAG_SPEND_BATCH_MULTIPLIER = 2.3
 
@@ -1572,3 +1584,16 @@ MAX_PAYLOAD_SIZE_FOR_DEBUG_LOG = int(
 MAX_COMPETITOR_NAMES = int(os.getenv("MAX_COMPETITOR_NAMES", 100))
 COMPETITOR_LLM_TEMPERATURE = float(os.getenv("COMPETITOR_LLM_TEMPERATURE", 0.3))
 DEFAULT_COMPETITOR_DISCOVERY_MODEL = "gpt-4o-mini"
+
+# Advisor tool orchestration
+# Providers that support advisor_20260301 natively (no LiteLLM orchestration needed).
+# Add vertex_ai here once verified.
+ADVISOR_NATIVE_PROVIDERS: frozenset = frozenset({"anthropic"})
+# Hard cap on advisor iterations per request to prevent runaway loops.
+ADVISOR_MAX_USES: int = 5
+# Description injected into the synthetic advisor tool definition sent to non-native providers.
+ADVISOR_TOOL_DESCRIPTION: str = (
+    "Consult a highly intelligent advisor model when you need expert guidance, "
+    "want to verify your reasoning, or face a complex decision. "
+    "Describe your question or challenge clearly in the 'question' field."
+)

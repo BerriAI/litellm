@@ -1,10 +1,11 @@
 import json
-from typing import Optional
+from typing import Any, Dict, Optional
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 from fastapi import APIRouter, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
+from litellm._logging import verbose_logger
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
@@ -147,6 +148,160 @@ def _resolve_oauth2_server_for_root_endpoints(
     return None
 
 
+def _validate_token_response(
+    token_response: Dict[str, Any],
+    validation_rules: Dict[str, Any],
+    server_id: str,
+) -> None:
+    """Raise HTTPException 403 if any validation rule doesn't match the token response.
+
+    Supports dot-notation for nested fields (e.g. ``"team.enterprise_id"`` checks
+    ``token_response["team"]["enterprise_id"]``).  Top-level keys are tried first,
+    then dot-split traversal.  All comparisons are string-coerced so that numeric
+    values in the response (e.g. ``"org_id": 12345``) match string rules
+    (``"org_id": "12345"``).
+    """
+    for key, expected in validation_rules.items():
+        actual: Any = token_response.get(key)
+        # Try dot-notation traversal when top-level lookup returns None
+        if actual is None and "." in key:
+            obj: Any = token_response
+            for part in key.split("."):
+                if isinstance(obj, dict):
+                    obj = obj.get(part)
+                else:
+                    obj = None
+                    break
+            actual = obj
+        # Treat absent fields as a distinct failure from a mismatched value
+        if actual is None:
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "error": "token_validation_failed",
+                    "server_id": server_id,
+                    "field": key,
+                    "message": (
+                        f"OAuth token rejected: required field '{key}' is absent"
+                    ),
+                },
+            )
+        if str(actual) != str(expected):
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "error": "token_validation_failed",
+                    "server_id": server_id,
+                    "field": key,
+                    "message": (
+                        f"OAuth token rejected: '{key}' = '{actual}', "
+                        f"expected '{expected}'"
+                    ),
+                },
+            )
+
+
+async def _extract_user_id_from_request(request: Request) -> Optional[str]:
+    """Best-effort extraction of LiteLLM user_id from the request's Authorization header.
+
+    Called at the OAuth token endpoint so that per-user tokens can be stored
+    server-side.  Uses a read-only cache lookup to avoid re-running the full
+    auth pipeline (which has side effects such as rate-limit increments and
+    spend logging).  Returns ``None`` if no cached credential is found.
+    """
+    auth_header = request.headers.get("Authorization") or request.headers.get(
+        "authorization"
+    )
+    if not auth_header:
+        return None
+    lower = auth_header.lower()
+    if not lower.startswith("bearer "):
+        return None
+    token = auth_header[7:].strip()
+    try:
+        from litellm.proxy._types import hash_token  # noqa: PLC0415
+        from litellm.proxy.proxy_server import user_api_key_cache  # noqa: PLC0415
+
+        cached = await user_api_key_cache.async_get_cache(hash_token(token))
+        return getattr(cached, "user_id", None)
+    except Exception:
+        return None
+
+
+async def _store_per_user_token_server_side(
+    server: MCPServer,
+    user_id: str,
+    token_response: Dict[str, Any],
+) -> None:
+    """Persist the OAuth token server-side and warm the Redis cache.
+
+    Called from the token endpoint after a successful code exchange or refresh.
+    Errors are logged but NOT re-raised — the token is always returned to the
+    client even when server-side storage fails.
+    """
+    from litellm.proxy._experimental.mcp_server.oauth2_token_cache import (  # noqa: PLC0415
+        _compute_per_user_token_ttl,
+        mcp_per_user_token_cache,
+    )
+    from litellm.proxy.utils import get_prisma_client_or_throw  # noqa: PLC0415
+
+    access_token: Optional[str] = token_response.get("access_token")
+    if not access_token:
+        return
+
+    raw_expires = token_response.get("expires_in")
+    try:
+        expires_in: Optional[int] = int(raw_expires) if raw_expires is not None else None
+    except (TypeError, ValueError):
+        expires_in = None
+
+    refresh_token: Optional[str] = token_response.get("refresh_token") or None
+    raw_scope = token_response.get("scope")
+    scopes: Optional[list] = (
+        raw_scope.split() if isinstance(raw_scope, str) and raw_scope else None
+    )
+
+    try:
+        prisma_client = get_prisma_client_or_throw(
+            "Database not connected. Cannot store per-user OAuth token."
+        )
+        from litellm.proxy._experimental.mcp_server.db import (  # noqa: PLC0415
+            store_user_oauth_credential,
+        )
+
+        await store_user_oauth_credential(
+            prisma_client=prisma_client,
+            user_id=user_id,
+            server_id=server.server_id,
+            access_token=access_token,
+            refresh_token=refresh_token,
+            expires_in=expires_in,
+            scopes=scopes,
+        )
+        verbose_logger.info(
+            "_store_per_user_token_server_side: stored token for user=%s server=%s",
+            user_id,
+            server.server_id,
+        )
+    except Exception as exc:
+        verbose_logger.warning(
+            "_store_per_user_token_server_side: DB storage failed for user=%s server=%s: %s",
+            user_id,
+            server.server_id,
+            exc,
+        )
+        return  # Don't warm Redis if DB write failed
+
+    # Warm the Redis cache so the first subsequent MCP call is a cache hit
+    ttl = _compute_per_user_token_ttl(server, expires_in)
+    await mcp_per_user_token_cache.set(
+        user_id=user_id,
+        server_id=server.server_id,
+        access_token=access_token,
+        ttl=ttl,
+    )
+
+
 async def authorize_with_server(
     request: Request,
     mcp_server: MCPServer,
@@ -265,6 +420,44 @@ async def exchange_token_with_server(
     response.raise_for_status()
     token_response = response.json()
     access_token = token_response["access_token"]
+
+    # Validate token response against server-configured rules before any storage.
+    # This rejects tokens from wrong Slack workspaces, Atlassian orgs, etc.
+    if mcp_server.token_validation and isinstance(mcp_server.token_validation, dict):
+        _validate_token_response(
+            token_response=token_response,
+            validation_rules=mcp_server.token_validation,
+            server_id=mcp_server.server_id,
+        )
+
+    # Store server-side when the server is configured for per-user OAuth and
+    # the calling client has provided a valid LiteLLM identity.
+    # Errors are non-fatal: the token is still returned to the client.
+    if mcp_server.needs_user_oauth_token:
+        user_id = await _extract_user_id_from_request(request)
+        if user_id:
+            try:
+                await _store_per_user_token_server_side(
+                    server=mcp_server,
+                    user_id=user_id,
+                    token_response=token_response,
+                )
+            except Exception as exc:
+                verbose_logger.warning(
+                    "exchange_token_with_server: server-side storage failed "
+                    "for user=%s server=%s: %s",
+                    user_id,
+                    mcp_server.server_id,
+                    exc,
+                )
+        else:
+            verbose_logger.debug(
+                "exchange_token_with_server: no LiteLLM user_id found in request; "
+                "per-user token for server=%s will not be stored server-side. "
+                "The client should call POST /mcp/server/{id}/oauth-user-credential "
+                "to store it manually.",
+                mcp_server.server_id,
+            )
 
     result = {
         "access_token": access_token,

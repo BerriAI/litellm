@@ -25,8 +25,10 @@ from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation
     AmazonInvokeConfig,
 )
 from litellm.llms.bedrock.common_utils import (
+    ensure_bedrock_anthropic_messages_tool_names,
     get_anthropic_beta_from_headers,
     is_claude_4_5_on_bedrock,
+    normalize_tool_input_schema_types_for_bedrock_invoke,
     remove_custom_field_from_tools,
 )
 from litellm.types.llms.anthropic import ANTHROPIC_TOOL_SEARCH_BETA_HEADER
@@ -426,6 +428,8 @@ class AmazonAnthropicClaudeMessagesConfig(
         # which causes Bedrock to reject the request with "Extra inputs are not permitted"
         # Ref: https://github.com/BerriAI/litellm/issues/22847
         remove_custom_field_from_tools(anthropic_messages_request)
+        normalize_tool_input_schema_types_for_bedrock_invoke(anthropic_messages_request)
+        ensure_bedrock_anthropic_messages_tool_names(anthropic_messages_request)
 
         # 6. AUTO-INJECT beta headers based on features used
         anthropic_model_info = AnthropicModelInfo()
@@ -538,9 +542,9 @@ class AmazonAnthropicClaudeMessagesConfig(
         merges usage from message_start and message_delta but ignores
         message_stop. This method buffers message_delta and, when
         message_stop arrives with cache usage, merges those fields into the
-        message_delta usage and also updates the input_tokens on
-        message_delta to include the full count (uncached + cache_creation +
-        cache_read).
+        message_delta usage. input_tokens is kept as the uncached-only
+        count; downstream calculate_usage adds cache tokens to
+        prompt_tokens.
         """
         _CACHE_FIELDS = ("cache_creation_input_tokens", "cache_read_input_tokens")
         pending_delta = None
@@ -569,12 +573,7 @@ class AmazonAnthropicClaudeMessagesConfig(
 
                 raw_input = stop_usage.get("input_tokens")
                 if raw_input is not None:
-                    uncached = raw_input if isinstance(raw_input, int) else 0
-                    raw_cc = delta_usage.get("cache_creation_input_tokens", 0)
-                    cache_creation = raw_cc if isinstance(raw_cc, int) else 0
-                    raw_cr = delta_usage.get("cache_read_input_tokens", 0)
-                    cache_read = raw_cr if isinstance(raw_cr, int) else 0
-                    delta_usage["input_tokens"] = uncached + cache_creation + cache_read
+                    delta_usage["input_tokens"] = raw_input if isinstance(raw_input, int) else 0
 
                 if delta_usage:
                     pending_delta["usage"] = delta_usage  # type: ignore[arg-type]

@@ -21,7 +21,9 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     decrypt_value_helper,
     encrypt_value_helper,
 )
+from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.proxy.utils import PrismaClient
+from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.mcp import MCPCredentials
 
 
@@ -576,6 +578,7 @@ async def store_user_oauth_credential(
     refresh_token: Optional[str] = None,
     expires_in: Optional[int] = None,
     scopes: Optional[List[str]] = None,
+    skip_byok_guard: bool = False,
 ) -> None:
     """Persist an OAuth2 access token for a user+server pair.
 
@@ -604,21 +607,26 @@ async def store_user_oauth_credential(
 
     # Guard against silently overwriting a BYOK credential with an OAuth token.
     # BYOK credentials lack a "type" field (or use a non-"oauth2" type).
-    existing = await prisma_client.db.litellm_mcpusercredentials.find_unique(
-        where={"user_id_server_id": {"user_id": user_id, "server_id": server_id}}
-    )
-    if existing is not None:
-        _byok_error = ValueError(
-            f"A non-OAuth2 credential already exists for user {user_id} "
-            f"and server {server_id}. Refusing to overwrite."
+    # Skip the guard when the caller knows the row is already an OAuth2 credential
+    # (e.g. during token refresh), saving an extra DB round-trip.
+    if not skip_byok_guard:
+        existing = await prisma_client.db.litellm_mcpusercredentials.find_unique(
+            where={"user_id_server_id": {"user_id": user_id, "server_id": server_id}}
         )
-        try:
-            raw = json.loads(base64.urlsafe_b64decode(existing.credential_b64).decode())
-        except Exception:
-            # Credential is not base64+JSON — it's a plain-text BYOK key.
-            raise _byok_error
-        if raw.get("type") != "oauth2":
-            raise _byok_error
+        if existing is not None:
+            _byok_error = ValueError(
+                f"A non-OAuth2 credential already exists for user {user_id} "
+                f"and server {server_id}. Refusing to overwrite."
+            )
+            try:
+                raw = json.loads(
+                    base64.urlsafe_b64decode(existing.credential_b64).decode()
+                )
+            except Exception:
+                # Credential is not base64+JSON — it's a plain-text BYOK key.
+                raise _byok_error
+            if raw.get("type") != "oauth2":
+                raise _byok_error
 
     encoded = base64.urlsafe_b64encode(json.dumps(payload).encode()).decode()
     await prisma_client.db.litellm_mcpusercredentials.upsert(
@@ -695,6 +703,115 @@ async def list_user_oauth_credentials(
         except Exception:
             pass  # Skip non-OAuth rows (BYOK plain strings)
     return results
+
+
+async def refresh_user_oauth_token(
+    prisma_client: PrismaClient,
+    user_id: str,
+    server: Any,
+    cred: Dict[str, Any],
+) -> Optional[Dict[str, Any]]:
+    """Attempt to refresh a per-user OAuth2 token using its stored refresh_token.
+
+    POSTs to ``server.token_url`` with ``grant_type=refresh_token``.
+
+    On success: persists the new credential via ``store_user_oauth_credential``
+    and returns the updated payload dict.
+    On failure (network error, invalid_grant, missing refresh_token, …): logs a
+    warning and returns ``None`` — the caller is responsible for clearing the
+    stale credential and triggering re-authentication.
+    """
+    refresh_token: Optional[str] = cred.get("refresh_token")
+    token_url: Optional[str] = getattr(server, "token_url", None)
+    server_id: str = getattr(server, "server_id", "")
+    client_id: Optional[str] = getattr(server, "client_id", None)
+    client_secret: Optional[str] = getattr(server, "client_secret", None)
+
+    if not refresh_token:
+        verbose_proxy_logger.debug(
+            "refresh_user_oauth_token: no refresh_token stored for user=%s server=%s",
+            user_id,
+            server_id,
+        )
+        return None
+    if not token_url:
+        verbose_proxy_logger.debug(
+            "refresh_user_oauth_token: server=%s has no token_url configured",
+            server_id,
+        )
+        return None
+
+    token_data: Dict[str, str] = {
+        "grant_type": "refresh_token",
+        "refresh_token": refresh_token,
+    }
+    if client_id:
+        token_data["client_id"] = client_id
+    if client_secret:
+        token_data["client_secret"] = client_secret
+
+    try:
+        async_client = get_async_httpx_client(
+            llm_provider=httpxSpecialProvider.Oauth2Check
+        )
+        response = await async_client.post(
+            token_url,
+            headers={"Accept": "application/json"},
+            data=token_data,
+        )
+        response.raise_for_status()
+        body: Dict[str, Any] = response.json()
+    except Exception as exc:
+        verbose_proxy_logger.warning(
+            "refresh_user_oauth_token: refresh request failed for user=%s server=%s: %s",
+            user_id,
+            server_id,
+            exc,
+        )
+        return None
+
+    access_token: Optional[str] = body.get("access_token")
+    if not access_token:
+        verbose_proxy_logger.warning(
+            "refresh_user_oauth_token: token response missing access_token for "
+            "user=%s server=%s",
+            user_id,
+            server_id,
+        )
+        return None
+
+    expires_in: Optional[int] = None
+    raw_expires = body.get("expires_in")
+    try:
+        expires_in = int(raw_expires) if raw_expires is not None else None
+    except (TypeError, ValueError):
+        pass
+
+    # Rotate refresh token when the provider returns a new one
+    new_refresh_token: Optional[str] = body.get("refresh_token") or refresh_token
+
+    raw_scope = body.get("scope")
+    scopes: Optional[List[str]] = (
+        raw_scope.split() if isinstance(raw_scope, str) and raw_scope else None
+    ) or cred.get("scopes")
+
+    await store_user_oauth_credential(
+        prisma_client=prisma_client,
+        user_id=user_id,
+        server_id=server_id,
+        access_token=access_token,
+        refresh_token=new_refresh_token,
+        expires_in=expires_in,
+        scopes=scopes,
+        skip_byok_guard=True,  # Row is already OAuth2; skip the extra find_unique check
+    )
+
+    verbose_proxy_logger.info(
+        "refresh_user_oauth_token: refreshed token for user=%s server=%s",
+        user_id,
+        server_id,
+    )
+    return await get_user_oauth_credential(prisma_client, user_id, server_id)
 
 
 async def approve_mcp_server(
