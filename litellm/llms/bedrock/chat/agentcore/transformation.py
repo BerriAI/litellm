@@ -19,6 +19,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+from litellm.llms.a2a.common_utils import extract_text_from_a2a_response
 from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.types.llms.bedrock_agentcore import (
     AgentCoreMessage,
@@ -343,6 +344,7 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
         Parse direct JSON response (non-streaming).
 
         Supports multiple agent response schemas:
+        0. {"jsonrpc": "2.0", "result": {"message": {"parts": [...]}}} - A2A JSON-RPC
         1. {"result": {"role": "assistant", "content": [{"text": "..."}]}} - standard AgentCore
         2. {"response": [{"text": "..."}]} - Strands agent format
         3. {"result": "plain text"} or {"response": "plain text"} - simple string
@@ -360,6 +362,18 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
                 usage=None,
                 final_message=None,
             )
+
+        # Strategy 0: A2A JSON-RPC format
+        # {"jsonrpc": "2.0", "result": {"message": {"parts": [{"kind": "text", "text": "..."}]}}}
+        if "jsonrpc" in response_json:
+            content = extract_text_from_a2a_response(response_json)
+            if content:
+                return AgentCoreParsedResponse(
+                    content=content,
+                    usage=None,
+                    final_message=None,
+                )
+            # Fall through to other strategies if A2A extraction returned empty
 
         # Strategy 1: {"result": {"content": [{"text": "..."}]}} - standard AgentCore format
         if "result" in response_json and isinstance(response_json["result"], dict):

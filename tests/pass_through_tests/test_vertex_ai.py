@@ -98,7 +98,7 @@ async def test_basic_vertex_ai_pass_through_with_spendlog():
     load_vertex_ai_credentials()
 
     vertexai.init(
-        project="pathrise-convert-1606954137718",
+        project="litellm-ci-cd",
         location="us-central1",
         api_endpoint=f"{LITE_LLM_ENDPOINT}/vertex_ai",
         api_transport="rest",
@@ -138,7 +138,7 @@ async def test_basic_vertex_ai_pass_through_streaming_with_spendlog():
     load_vertex_ai_credentials()
 
     vertexai.init(
-        project="pathrise-convert-1606954137718",
+        project="litellm-ci-cd",
         location="us-central1",
         api_endpoint=f"{LITE_LLM_ENDPOINT}/vertex_ai",
         api_transport="rest",
@@ -177,7 +177,7 @@ async def test_vertex_ai_pass_through_endpoint_context_caching():
     # load_vertex_ai_credentials()
 
     vertexai.init(
-        project="pathrise-convert-1606954137718",
+        project="litellm-ci-cd",
         location="us-central1",
         api_endpoint=f"{LITE_LLM_ENDPOINT}/vertex_ai",
         api_transport="rest",

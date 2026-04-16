@@ -1331,6 +1331,9 @@ def test_jwt_handler_is_jwt_static_method():
     # Test with empty string
     assert JWTHandler.is_jwt("") == False
 
+    # Test with None (missing Authorization header)
+    assert JWTHandler.is_jwt(None) == False
+
 
 @pytest.mark.parametrize(
     "requested_model, should_work",

@@ -488,3 +488,330 @@ async def test_openai_moderation_guardrail_streaming_harmful_content():
 
             assert exc_info.value.status_code == 400
             assert "Violated OpenAI moderation policy" in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_openai_moderation_guardrail_logs_full_response_safe_content():
+    """Test that safe content logs the full moderation response (categories, scores)
+    in StandardLoggingGuardrailInformation, not just 'allow'."""
+    from litellm.types.utils import GenericGuardrailAPIInputs
+
+    with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}):
+        guardrail = OpenAIModerationGuardrail(
+            guardrail_name="test-openai-moderation",
+        )
+
+        mock_response = OpenAIModerationResponse(
+            id="modr-123",
+            model="omni-moderation-latest",
+            results=[
+                OpenAIModerationResult(
+                    flagged=False,
+                    categories={
+                        "sexual": False,
+                        "hate": False,
+                        "harassment": False,
+                        "self-harm": False,
+                        "violence": False,
+                    },
+                    category_scores={
+                        "sexual": 0.001,
+                        "hate": 0.002,
+                        "harassment": 0.001,
+                        "self-harm": 0.001,
+                        "violence": 0.003,
+                    },
+                    category_applied_input_types={
+                        "sexual": [],
+                        "hate": [],
+                        "harassment": [],
+                        "self-harm": [],
+                        "violence": [],
+                    },
+                )
+            ],
+        )
+
+        with patch.object(guardrail, "async_make_request", return_value=mock_response):
+            inputs = GenericGuardrailAPIInputs(
+                structured_messages=[
+                    {"role": "user", "content": "Hello, how are you?"}
+                ]
+            )
+            request_data = {"metadata": {}}
+
+            await guardrail.apply_guardrail(
+                inputs=inputs,
+                request_data=request_data,
+                input_type="request",
+            )
+
+            guardrail_info_list = request_data["metadata"][
+                "standard_logging_guardrail_information"
+            ]
+            assert len(guardrail_info_list) == 1
+
+            info = guardrail_info_list[0]
+            assert info["guardrail_name"] == "test-openai-moderation"
+            assert info["guardrail_status"] == "success"
+
+            # Full moderation response, NOT "allow"
+            guardrail_resp = info["guardrail_response"]
+            assert isinstance(guardrail_resp, dict)
+            assert guardrail_resp["results"][0]["flagged"] is False
+            assert "category_scores" in guardrail_resp["results"][0]
+
+            # Internal key cleaned up (.pop())
+            assert "_openai_moderation_response" not in request_data["metadata"]
+
+
+@pytest.mark.asyncio
+async def test_openai_moderation_guardrail_logs_full_response_harmful_content():
+    """Test that harmful content logs guardrail_intervened status with the full
+    moderation response, not just the exception string."""
+    from litellm.types.utils import GenericGuardrailAPIInputs
+
+    with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}):
+        guardrail = OpenAIModerationGuardrail(
+            guardrail_name="test-openai-moderation",
+        )
+
+        mock_response = OpenAIModerationResponse(
+            id="modr-456",
+            model="omni-moderation-latest",
+            results=[
+                OpenAIModerationResult(
+                    flagged=True,
+                    categories={
+                        "sexual": False,
+                        "hate": True,
+                        "harassment": False,
+                        "self-harm": False,
+                        "violence": False,
+                    },
+                    category_scores={
+                        "sexual": 0.001,
+                        "hate": 0.95,
+                        "harassment": 0.001,
+                        "self-harm": 0.001,
+                        "violence": 0.001,
+                    },
+                    category_applied_input_types={
+                        "sexual": [],
+                        "hate": ["text"],
+                        "harassment": [],
+                        "self-harm": [],
+                        "violence": [],
+                    },
+                )
+            ],
+        )
+
+        with patch.object(guardrail, "async_make_request", return_value=mock_response):
+            inputs = GenericGuardrailAPIInputs(
+                structured_messages=[
+                    {"role": "user", "content": "Hateful content"}
+                ]
+            )
+            request_data = {"metadata": {}}
+
+            from fastapi import HTTPException
+
+            with pytest.raises(HTTPException):
+                await guardrail.apply_guardrail(
+                    inputs=inputs,
+                    request_data=request_data,
+                    input_type="request",
+                )
+
+            guardrail_info_list = request_data["metadata"][
+                "standard_logging_guardrail_information"
+            ]
+            info = guardrail_info_list[0]
+            assert info["guardrail_status"] == "guardrail_intervened"
+
+            # Full moderation response, NOT stringified exception
+            guardrail_resp = info["guardrail_response"]
+            assert isinstance(guardrail_resp, dict)
+            assert guardrail_resp["results"][0]["flagged"] is True
+            assert guardrail_resp["results"][0]["category_scores"]["hate"] == 0.95
+
+            # Internal key cleaned up by _process_error (.pop())
+            assert "_openai_moderation_response" not in request_data["metadata"]
+
+
+@pytest.mark.asyncio
+async def test_openai_moderation_post_call_request_data_passthrough():
+    """Test that post-call guardrail info flows through to the real request_data
+    via the unified guardrail dispatcher (Bug 1 fix)."""
+    from unittest.mock import AsyncMock
+
+    from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import (
+        UnifiedLLMGuardrails,
+    )
+    from litellm.types.utils import ModelResponse
+
+    import litellm
+
+    with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}):
+        guardrail = OpenAIModerationGuardrail(
+            guardrail_name="test-openai-moderation",
+            event_hook="post_call",
+        )
+        unified_guardrail = UnifiedLLMGuardrails()
+
+        mock_mod_response = OpenAIModerationResponse(
+            id="modr-789",
+            model="omni-moderation-latest",
+            results=[
+                OpenAIModerationResult(
+                    flagged=False,
+                    categories={
+                        "sexual": False,
+                        "hate": False,
+                        "harassment": False,
+                        "self-harm": False,
+                        "violence": False,
+                    },
+                    category_scores={
+                        "sexual": 0.001,
+                        "hate": 0.002,
+                        "harassment": 0.001,
+                        "self-harm": 0.001,
+                        "violence": 0.001,
+                    },
+                    category_applied_input_types={
+                        "sexual": [],
+                        "hate": [],
+                        "harassment": [],
+                        "self-harm": [],
+                        "violence": [],
+                    },
+                )
+            ],
+        )
+
+        llm_response = ModelResponse(
+            id="chatcmpl-test",
+            model="gpt-4",
+            choices=[
+                litellm.Choices(
+                    index=0,
+                    message=litellm.Message(
+                        role="assistant", content="Hello world"
+                    ),
+                    finish_reason="stop",
+                )
+            ],
+        )
+
+        request_data = {
+            "messages": [{"role": "user", "content": "Hello"}],
+            "guardrail_to_apply": guardrail,
+            "metadata": {"guardrails": ["test-openai-moderation"]},
+        }
+
+        mock_make_request = AsyncMock(return_value=mock_mod_response)
+        with patch.object(guardrail, "async_make_request", mock_make_request):
+            await unified_guardrail.async_post_call_success_hook(
+                data=request_data,
+                user_api_key_dict=UserAPIKeyAuth(
+                    api_key="test", request_route="/chat/completions"
+                ),
+                response=llm_response,
+            )
+
+        mock_make_request.assert_called_once()
+
+        # Guardrail info in the REAL request_data (not a throwaway)
+        guardrail_info_list = request_data["metadata"].get(
+            "standard_logging_guardrail_information"
+        )
+        assert guardrail_info_list is not None
+        assert isinstance(guardrail_info_list[0]["guardrail_response"], dict)
+        assert "results" in guardrail_info_list[0]["guardrail_response"]
+
+
+def test_openai_moderation_process_response_metadata_none_edge_case():
+    """
+    Test that _process_response anchors the metadata dict back into
+    request_data when metadata is None, so pop() doesn't operate on a
+    temporary and the moderation response is correctly logged.
+    """
+    with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}):
+        guardrail = OpenAIModerationGuardrail(
+            guardrail_name="test-openai-moderation",
+            event_hook="post_call",
+        )
+
+        mod_dict = {"id": "modr-test", "model": "omni-moderation-latest", "results": []}
+
+        # Simulate apply_guardrail having stashed the response but metadata
+        # was None initially — apply_guardrail anchors it, so metadata is a
+        # real dict with the stashed key by the time _process_response runs.
+        request_data = {"metadata": {"_openai_moderation_response": mod_dict}}
+
+        guardrail._process_response(
+            response={"inputs": {}},
+            request_data=request_data,
+        )
+
+        # Full moderation dict should be logged, not "allow"
+        info_list = request_data["metadata"].get(
+            "standard_logging_guardrail_information"
+        )
+        assert info_list is not None
+        assert info_list[0]["guardrail_response"] == mod_dict
+
+        # Internal key should have been cleaned up by pop()
+        assert "_openai_moderation_response" not in request_data["metadata"]
+
+
+def test_openai_moderation_process_error_metadata_none_edge_case():
+    """
+    Test that _process_error anchors the metadata dict back into
+    request_data when metadata starts as None (or {}), so pop() doesn't
+    operate on a temporary.
+    """
+    from fastapi import HTTPException
+
+    with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}):
+        guardrail = OpenAIModerationGuardrail(
+            guardrail_name="test-openai-moderation",
+            event_hook="post_call",
+        )
+
+        mod_dict = {
+            "id": "modr-test",
+            "model": "omni-moderation-latest",
+            "results": [{"flagged": True, "categories": {"hate": True}}],
+        }
+
+        # metadata is None — exercises the or {} anchor
+        request_data: dict = {"metadata": None}
+
+        # Simulate stashing the response then calling _process_error
+        # (normally apply_guardrail stashes, then the decorator calls
+        # _process_error on HTTPException)
+        # First anchor metadata like apply_guardrail does:
+        metadata = request_data.get("metadata") or {}
+        request_data["metadata"] = metadata
+        metadata["_openai_moderation_response"] = mod_dict
+
+        exc = HTTPException(status_code=400, detail="Violated policy")
+        with pytest.raises(HTTPException):
+            guardrail._process_error(
+                e=exc,
+                request_data=request_data,
+            )
+
+        # Full moderation dict should be logged, not the exception
+        info_list = request_data["metadata"].get(
+            "standard_logging_guardrail_information"
+        )
+        assert info_list is not None
+        assert info_list[0]["guardrail_response"] == mod_dict
+        assert info_list[0]["guardrail_status"] == "guardrail_intervened"
+
+        # Internal key cleaned up
+        assert "_openai_moderation_response" not in request_data["metadata"]

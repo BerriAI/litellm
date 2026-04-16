@@ -167,43 +167,6 @@ async def test_get_response():
         pytest.fail(f"An error occurred - {str(e)}")
 
 
-@pytest.mark.skip(
-    reason="Local test. Vertex AI Quota is low. Leads to rate limit errors on ci/cd."
-)
-@pytest.mark.flaky(retries=3, delay=1)
-def test_vertex_ai_anthropic_streaming():
-    try:
-        load_vertex_ai_credentials()
-
-        # litellm.set_verbose = True
-
-        model = "claude-3-5-sonnet@20240620"
-
-        vertex_ai_project = "pathrise-convert-1606954137718"
-        vertex_ai_location = "asia-southeast1"
-        json_obj = get_vertex_ai_creds_json()
-        vertex_credentials = json.dumps(json_obj)
-
-        response = completion(
-            model="vertex_ai/" + model,
-            messages=[{"role": "user", "content": "hi"}],
-            temperature=0.7,
-            vertex_ai_project=vertex_ai_project,
-            vertex_ai_location=vertex_ai_location,
-            stream=True,
-        )
-        # print("\nModel Response", response)
-        for idx, chunk in enumerate(response):
-            print(f"chunk: {chunk}")
-            streaming_format_tests(idx=idx, chunk=chunk)
-
-    # raise Exception("it worked!")
-    except litellm.RateLimitError as e:
-        pass
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-
 # test_vertex_ai_anthropic_streaming()
 
 
@@ -394,10 +357,7 @@ async def test_async_vertexai_response_basic():
         user_message = "Hello, how are you?"
         messages = [{"content": user_message, "role": "user"}]
         response = await acompletion(
-            model="gemini-2.5-flash",
-            messages=messages, 
-            temperature=0.7, 
-            timeout=5
+            model="gemini-2.5-flash", messages=messages, temperature=0.7, timeout=5
         )
         print(f"response: {response}")
     except litellm.NotFoundError as e:
@@ -412,8 +372,6 @@ async def test_async_vertexai_response_basic():
         pass
     except Exception as e:
         pytest.fail(f"An exception occurred: {e}")
-
-
 
 
 @pytest.mark.flaky(retries=3, delay=1)
@@ -739,7 +697,9 @@ def test_gemini_pro_grounding(value_in_dict):
 
 
 # @pytest.mark.skip(reason="exhausted vertex quota. need to refactor to mock the call")
-@pytest.mark.parametrize("model", ["vertex_ai_beta/gemini-2.5-flash-lite"])  # "vertex_ai",
+@pytest.mark.parametrize(
+    "model", ["vertex_ai_beta/gemini-2.5-flash-lite"]
+)  # "vertex_ai",
 @pytest.mark.parametrize("sync_mode", [True])  # "vertex_ai",
 @pytest.mark.asyncio
 @pytest.mark.flaky(retries=6, delay=2)
@@ -808,7 +768,17 @@ async def test_gemini_pro_function_calling_httpx(model, sync_mode):
     except Exception as e:
         error_msg = str(e)
         # Skip test for known transient API issues
-        if any(x in error_msg for x in ["429 Quota exceeded", "503", "Service unavailable", "timeout", "Timeout", "UNAVAILABLE"]):
+        if any(
+            x in error_msg
+            for x in [
+                "429 Quota exceeded",
+                "503",
+                "Service unavailable",
+                "timeout",
+                "Timeout",
+                "UNAVAILABLE",
+            ]
+        ):
             pytest.skip(f"Transient API error: {error_msg}")
         else:
             pytest.fail(f"An unexpected exception occurred - {error_msg}")
@@ -1396,12 +1366,14 @@ async def test_gemini_pro_json_schema_args_sent_httpx(
                 # Gemini 2.x+ uses response_json_schema, Gemini 1.x uses response_schema
                 gen_config = mock_call.call_args.kwargs["json"]["generationConfig"]
                 assert (
-                    "response_schema" in gen_config or "response_json_schema" in gen_config
+                    "response_schema" in gen_config
+                    or "response_json_schema" in gen_config
                 ), f"Expected response_schema or response_json_schema in {gen_config}"
             else:
                 gen_config = mock_call.call_args.kwargs["json"]["generationConfig"]
                 assert (
-                    "response_schema" not in gen_config and "response_json_schema" not in gen_config
+                    "response_schema" not in gen_config
+                    and "response_json_schema" not in gen_config
                 )
                 assert (
                     "Use this JSON schema:"
@@ -1577,7 +1549,8 @@ async def test_gemini_pro_json_schema_args_sent_httpx_openai_schema(
                 # Gemini 2.x+ uses response_json_schema, Gemini 1.x uses response_schema
                 gen_config = mock_call.call_args.kwargs["json"]["generationConfig"]
                 assert (
-                    "response_schema" in gen_config or "response_json_schema" in gen_config
+                    "response_schema" in gen_config
+                    or "response_json_schema" in gen_config
                 ), f"Expected response_schema or response_json_schema in {gen_config}"
                 assert (
                     "response_mime_type"
@@ -1592,7 +1565,8 @@ async def test_gemini_pro_json_schema_args_sent_httpx_openai_schema(
             else:
                 gen_config = mock_call.call_args.kwargs["json"]["generationConfig"]
                 assert (
-                    "response_schema" not in gen_config and "response_json_schema" not in gen_config
+                    "response_schema" not in gen_config
+                    and "response_json_schema" not in gen_config
                 )
                 assert (
                     "Use this JSON schema:"
@@ -2313,8 +2287,6 @@ def test_prompt_factory_nested():
         ), "'text' value not a string."
 
 
-
-
 @pytest.mark.asyncio
 async def test_completion_fine_tuned_model():
     load_vertex_ai_credentials()
@@ -2380,7 +2352,7 @@ async def test_completion_fine_tuned_model():
         # this is the fine-tuned model endpoint
         assert (
             url[0]
-            == "https://us-central1-aiplatform.googleapis.com/v1/projects/pathrise-convert-1606954137718/locations/us-central1/endpoints/4965075652664360960:generateContent"
+            == "https://us-central1-aiplatform.googleapis.com/v1/projects/litellm-ci-cd/locations/us-central1/endpoints/4965075652664360960:generateContent"
         )
 
         print("call args = ", kwargs)
@@ -2579,20 +2551,20 @@ async def test_gemini_context_caching_anthropic_format(sync_mode):
 async def test_gemini_context_caching_disabled_flag(sync_mode):
     """
     Test that disable_anthropic_gemini_context_caching_transform flag properly disables context caching.
-    
+
     When the flag is set to True, messages with cache_control should not trigger caching API calls.
     """
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 
     litellm.set_verbose = True
-    
+
     # Store original value to restore later
     original_flag_value = litellm.disable_anthropic_gemini_context_caching_transform
-    
+
     try:
         # Enable the disable flag
         litellm.disable_anthropic_gemini_context_caching_transform = True
-        
+
         gemini_context_caching_messages = [
             # System Message with cache_control
             {
@@ -2633,13 +2605,15 @@ async def test_gemini_context_caching_disabled_flag(sync_mode):
                 ],
             },
         ]
-        
+
         if sync_mode:
             client = HTTPHandler(concurrent_limit=1)
         else:
             client = AsyncHTTPHandler(concurrent_limit=1)
-            
-        with patch.object(client, "post", side_effect=mock_gemini_request) as mock_client:
+
+        with patch.object(
+            client, "post", side_effect=mock_gemini_request
+        ) as mock_client:
             try:
                 if sync_mode:
                     response = litellm.completion(
@@ -2662,22 +2636,30 @@ async def test_gemini_context_caching_disabled_flag(sync_mode):
                 print(e)
 
             # When caching is disabled, should only make 1 call (no separate cache creation call)
-            assert mock_client.call_count == 1, f"Expected 1 call when caching is disabled, got {mock_client.call_count}"
+            assert (
+                mock_client.call_count == 1
+            ), f"Expected 1 call when caching is disabled, got {mock_client.call_count}"
 
             first_call_args = mock_client.call_args_list[0].kwargs
             first_call_positional_args = mock_client.call_args_list[0].args
 
             print(f"first_call_args with caching disabled: {first_call_args}")
-            print(f"first_call_positional_args with caching disabled: {first_call_positional_args}")
+            print(
+                f"first_call_positional_args with caching disabled: {first_call_positional_args}"
+            )
 
             # Assert that cachedContents is NOT in the URL when caching is disabled
-            url = first_call_args.get("url", first_call_positional_args[0] if first_call_positional_args else "")
-            assert "cachedContents" not in url, "cachedContents should not be in URL when caching is disabled"
-            
+            url = first_call_args.get(
+                "url",
+                first_call_positional_args[0] if first_call_positional_args else "",
+            )
+            assert (
+                "cachedContents" not in url
+            ), "cachedContents should not be in URL when caching is disabled"
+
     finally:
         # Restore original flag value
         litellm.disable_anthropic_gemini_context_caching_transform = original_flag_value
-
 
 
 @pytest.mark.asyncio
@@ -2776,7 +2758,7 @@ async def test_partner_models_httpx_ai21():
 
         assert (
             url[0]
-            == "https://us-central1-aiplatform.googleapis.com/v1beta1/projects/pathrise-convert-1606954137718/locations/us-central1/publishers/ai21/models/jamba-1.5-mini@001:rawPredict"
+            == "https://us-central1-aiplatform.googleapis.com/v1beta1/projects/litellm-ci-cd/locations/us-central1/publishers/ai21/models/jamba-1.5-mini@001:rawPredict"
         )
 
         # json loads kwargs
@@ -2920,7 +2902,9 @@ def test_gemini_function_call_parameter_in_messages():
                 "contents": [
                     {
                         "role": "user",
-                        "parts": [{"text": "search for weather in boston (use `search`)"}],
+                        "parts": [
+                            {"text": "search for weather in boston (use `search`)"}
+                        ],
                     },
                     {
                         "role": "model",
@@ -2947,7 +2931,9 @@ def test_gemini_function_call_parameter_in_messages():
                         ],
                     },
                 ],
-                "system_instruction": {"parts": [{"text": "Use search for most queries."}]},
+                "system_instruction": {
+                    "parts": [{"text": "Use search for most queries."}]
+                },
                 "tools": [
                     {
                         "function_declarations": [
@@ -3578,8 +3564,9 @@ def test_gemini_tool_calling_working_demo():
                 },
             }
         ],
+        "vertex_location": "global",
     }
-    response = completion(model="vertex_ai/gemini-2.0-flash", **args)
+    response = completion(model="vertex_ai/gemini-3-flash-preview", **args)
     print(response)
 
 
@@ -3650,8 +3637,9 @@ def test_gemini_tool_calling_not_working():
                 },
             }
         ],
+        "vertex_location": "global",
     }
-    response = completion(model="vertex_ai/gemini-2.0-flash", **args)
+    response = completion(model="vertex_ai/gemini-3-flash-preview", **args)
     print(response)
 
 
@@ -3746,8 +3734,8 @@ def test_gemini_nullable_object_tool_schema_httpx():
     load_vertex_ai_credentials()
     litellm._turn_on_debug()
 
-
-    tools = [{
+    tools = [
+        {
             "type": "function",
             "strict": True,
             "function": {
@@ -3760,7 +3748,7 @@ def test_gemini_nullable_object_tool_schema_httpx():
                     "properties": {
                         "ticket_id": {
                             "type": "string",
-                            "description": "Unique identifier for the support ticket"
+                            "description": "Unique identifier for the support ticket",
                         },
                         "customer_context": {
                             "type": ["object", "null"],
@@ -3770,18 +3758,19 @@ def test_gemini_nullable_object_tool_schema_httpx():
                             "properties": {
                                 "user_id": {
                                     "type": "string",
-                                    "description": "Internal user identifier"
+                                    "description": "Internal user identifier",
                                 },
                                 "plan": {
                                     "type": "string",
-                                    "description": "Subscription plan name (e.g. pro, enterprise)"
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }]
+                                    "description": "Subscription plan name (e.g. pro, enterprise)",
+                                },
+                            },
+                        },
+                    },
+                },
+            },
+        }
+    ]
 
     response = litellm.completion(
         model="vertex_ai/gemini-2.5-flash",
@@ -3986,17 +3975,23 @@ def test_vertex_ai_gemini_audio_ogg():
         for part in content["parts"]
         if "file_data" in part
     ]
-    assert len(file_data_parts) == 1, f"Expected 1 file_data part, got: {file_data_parts}"
+    assert (
+        len(file_data_parts) == 1
+    ), f"Expected 1 file_data part, got: {file_data_parts}"
     file_data = file_data_parts[0]["file_data"]
-    assert file_data["mime_type"] == "audio/ogg", f"Expected audio/ogg, got: {file_data['mime_type']}"
-    assert "En-us-public.ogg" in file_data["file_uri"], f"Unexpected file_uri: {file_data['file_uri']}"
+    assert (
+        file_data["mime_type"] == "audio/ogg"
+    ), f"Expected audio/ogg, got: {file_data['mime_type']}"
+    assert (
+        "En-us-public.ogg" in file_data["file_uri"]
+    ), f"Unexpected file_uri: {file_data['file_uri']}"
     print(response)
 
 
 @pytest.mark.asyncio
 async def test_vertex_ai_deepseek():
     """Test that deepseek models use the correct v1 API endpoint instead of v1beta1."""
-    # load_vertex_ai_credentials()
+    load_vertex_ai_credentials()
     litellm._turn_on_debug()
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 
@@ -4041,7 +4036,7 @@ def test_gemini_grounding_on_streaming():
     load_vertex_ai_credentials()
     # litellm._turn_on_debug()
     args = {
-        "model": "vertex_ai/gemini-2.0-flash",
+        "model": "vertex_ai/gemini-3-flash-preview",
         "messages": [
             {
                 "role": "user",
@@ -4053,6 +4048,7 @@ def test_gemini_grounding_on_streaming():
                 ],
             }
         ],
+        "vertex_location": "global",
         "stream": True,
         "tools": [{"googleSearch": {}}],
         "fallbacks": [],
@@ -4075,11 +4071,20 @@ def test_gemini_google_maps_tool_simple():
     litellm._turn_on_debug()
 
     tools = [{"googleMaps": {"enableWidget": True}}]
-    tools_with_location = [{"googleMaps": {"enableWidget": True, "latitude": 37.7749, "longitude": -122.4194, "languageCode": "en_US"}}]
+    tools_with_location = [
+        {
+            "googleMaps": {
+                "enableWidget": True,
+                "latitude": 37.7749,
+                "longitude": -122.4194,
+                "languageCode": "en_US",
+            }
+        }
+    ]
     try:
         for tools in [tools, tools_with_location]:
             response = completion(
-                model="vertex_ai/gemini-2.0-flash",
+                model="vertex_ai/gemini-3-flash-preview",
                 messages=[
                     {
                         "role": "user",
@@ -4087,6 +4092,7 @@ def test_gemini_google_maps_tool_simple():
                     }
                 ],
                 tools=tools,
+                vertex_location="global",
             )
         print(f"Response: {response.model_dump_json(indent=4)}")
         assert response.choices[0].message.content is not None
@@ -4094,4 +4100,3 @@ def test_gemini_google_maps_tool_simple():
         pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-

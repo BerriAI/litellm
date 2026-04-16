@@ -135,7 +135,7 @@ async def test_e2e_bedrock_knowledgebase_retrieval_with_llm_api_call(setup_vecto
     litellm._turn_on_debug()
     async_client = AsyncHTTPHandler()
     response = await litellm.acompletion(
-        model="bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0",
+        model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
         messages=[{"role": "user", "content": "what is litellm?"}],
         vector_store_ids = [
             "T37J8R4WTM"

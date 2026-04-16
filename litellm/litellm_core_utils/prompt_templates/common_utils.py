@@ -337,24 +337,35 @@ def _insert_assistant_continue_message(
     """
     Add assistant continuation messages between consecutive user messages.
 
-    Only checks directly adjacent messages to preserve backward compatibility.
+    Skips tool messages and assistant messages with tool calls in the
+    alternation check, matching strict templates like llama.cpp.
     """
     if not ensure_alternating_roles or len(messages) <= 1:
         return messages
 
     continue_message = assistant_continue_message or DEFAULT_ASSISTANT_CONTINUE_MESSAGE
 
+    # Find indexes where assistant_continue should be inserted (before that index)
+    insert_before_indexes: set = set()
+
+    for i in range(len(messages)):
+        curr = messages[i]
+        if _counts_for_alternation(curr) and curr["role"] == "user":
+            # Look backwards for the previous counted message
+            j = i - 1
+            while j >= 0:
+                if _counts_for_alternation(messages[j]):
+                    if messages[j]["role"] == "user":
+                        insert_before_indexes.add(i)
+                    break
+                j -= 1
+
+    # Build the result with assistant_continue inserted at the right positions
     modified_messages: List[AllMessageValues] = []
     for i, message in enumerate(messages):
-        if (
-            i < len(messages) - 1
-            and message.get("role") == "user"
-            and messages[i + 1].get("role") == "user"
-        ):
-            modified_messages.append(message)
+        if i in insert_before_indexes:
             modified_messages.append(continue_message)
-        else:
-            modified_messages.append(message)
+        modified_messages.append(message)
 
     return modified_messages
 

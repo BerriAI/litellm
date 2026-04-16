@@ -254,7 +254,7 @@ See `CLAUDE.md` and the `Makefile` for standard commands. Key notes:
 - `openapi-core` must be installed (`poetry run pip install openapi-core`) for the OpenAPI compliance tests in `tests/test_litellm/interactions/`.
 - The `--timeout` pytest flag is NOT available; don't pass it.
 - Unit tests: `poetry run pytest tests/test_litellm/ -x -vv -n 4`
-- Black `--check` may report pre-existing formatting issues; this does not block test runs.
+- **Before committing, always run `poetry run black .` to format your code.** Black formatting is enforced in CI.
 - If `poetry install` fails with "pyproject.toml changed significantly since poetry.lock was last generated", run `poetry lock` first to regenerate the lock file.
 
 ### Lint

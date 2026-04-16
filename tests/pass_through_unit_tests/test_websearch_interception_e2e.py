@@ -64,13 +64,13 @@ async def test_websearch_interception_non_streaming():
     try:
         # Make request with WebSearch tool (non-streaming)
         print("\n📞 Making litellm.messages.acreate() call...")
-        print(f"   Model: bedrock/us.anthropic.claude-3-5-sonnet-20241022-v2:0")
+        print(f"   Model: bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0")
         print(f"   Query: 'What is LiteLLM?'")
         print(f"   Tools: WebSearch")
         print(f"   Stream: False")
 
         response = await messages.acreate(
-            model="bedrock/us.anthropic.claude-3-5-sonnet-20241022-v2:0",
+            model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
             messages=[{"role": "user", "content": "What is LiteLLM? Give me a brief overview."}],
             tools=[
                 {
@@ -193,13 +193,13 @@ async def test_websearch_interception_streaming():
     try:
         # Make request with WebSearch tool AND stream=True
         print("\n📞 Making litellm.messages.acreate() call with stream=True...")
-        print(f"   Model: bedrock/us.anthropic.claude-3-5-sonnet-20241022-v2:0")
+        print(f"   Model: bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0")
         print(f"   Query: 'What is LiteLLM?'")
         print(f"   Tools: WebSearch")
         print(f"   Stream: True (will be converted to False)")
 
         response = await messages.acreate(
-            model="bedrock/us.anthropic.claude-3-5-sonnet-20241022-v2:0",
+            model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
             messages=[{"role": "user", "content": "What is LiteLLM? Give me a brief overview."}],
             tools=[
                 {
@@ -347,13 +347,13 @@ async def test_websearch_interception_no_tool_call_streaming():
         # Make request with WebSearch tool AND stream=True
         # Use a query that the LLM will answer directly without using the tool
         print("\n📞 Making litellm.messages.acreate() call with stream=True...")
-        print(f"   Model: bedrock/us.anthropic.claude-3-5-sonnet-20241022-v2:0")
+        print(f"   Model: bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0")
         print(f"   Query: 'What is 2+2?'")
         print(f"   Tools: WebSearch")
         print(f"   Stream: True")
 
         response = await messages.acreate(
-            model="bedrock/us.anthropic.claude-3-5-sonnet-20241022-v2:0",
+            model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
             messages=[{"role": "user", "content": "What is 2+2? Just give me the answer, no need to search."}],
             tools=[
                 {

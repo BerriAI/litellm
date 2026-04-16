@@ -11,10 +11,16 @@ Use JWT's to auth admins / users / projects into the proxy.
 
 [Enterprise Pricing](https://www.litellm.ai/#pricing)
 
-[Contact us here to get a free trial](https://calendly.com/d/cx9p-5yf-2nm/litellm-introductions)
+[Contact us here to get a free trial](https://enterprise.litellm.ai/demo)
 
 :::
 
+
+:::tip JWT → Virtual Key Mapping
+
+Want per-user model restrictions, spend limits, and rate limits without distributing API keys? See **[JWT → Virtual Key Mapping](./jwt_key_mapping.md)** — enterprise-grade granular access control for JWT-authenticated users (e.g. Claude Code + SSO).
+
+:::
 
 ## Usage
 
@@ -782,6 +788,49 @@ litellm_jwtauth:
   oidc_userinfo_endpoint: "https://keycloak.example.com/realms/your-realm/protocol/openid-connect/userinfo"
   user_id_jwt_field: "sub"
   user_roles_jwt_field: "resource_access.your-client.roles"
+```
+
+## Route JWT-Shaped Machine Tokens to OAuth2
+
+Use this when:
+- `enable_jwt_auth: true` for standard JWT validation
+- machine tokens are JWT-shaped and should be routed to OAuth2 based on claims
+
+`routing_overrides` supports two operating modes:
+- **Selective mode**: set `enable_oauth2_auth: false` to send only matching JWTs to OAuth2 on LLM + info routes
+- **Global mode**: set `enable_oauth2_auth: true` to also enable OAuth2 on LLM + info routes
+
+```yaml title="config.yaml"
+general_settings:
+  enable_jwt_auth: true
+  enable_oauth2_auth: false
+  litellm_jwtauth:
+    user_id_jwt_field: "sub"
+    routing_overrides:
+      - iss: "machine-issuer.example.com"
+        client_id: "MID_LITELLM"
+        path: "oauth2"
+```
+
+### Matching behavior
+
+- A rule matches when all configured selectors match token claims
+- Supported selectors: `iss` (required), `client_id` (optional), `aud` (optional)
+- Selector values support both string and list forms
+- If no rule matches, LiteLLM continues with standard JWT validation
+
+### List-based override example
+
+```yaml title="config.yaml"
+general_settings:
+  enable_jwt_auth: true
+  enable_oauth2_auth: false
+  litellm_jwtauth:
+    routing_overrides:
+      - iss: ["machine-issuer.example.com", "backup-issuer.example.com"]
+        client_id: ["MID_LITELLM", "MID_BACKUP"]
+        aud: ["api://litellm", "api://fallback"]
+        path: "oauth2"
 ```
 
 ## [BETA] Control Access with OIDC Roles

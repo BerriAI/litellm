@@ -545,8 +545,8 @@ def cost_per_token(  # noqa: PLR0915
         )
 
         if (
-            model_info.get("input_cost_per_token", 0) > 0
-            or model_info.get("output_cost_per_token", 0) > 0
+            (model_info.get("input_cost_per_token") or 0.0) > 0
+            or (model_info.get("output_cost_per_token") or 0.0) > 0
         ):
             return generic_cost_per_token(
                 model=model,

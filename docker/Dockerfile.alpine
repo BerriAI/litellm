@@ -1,8 +1,8 @@
 # Base image for building
-ARG LITELLM_BUILD_IMAGE=python:3.11-alpine
+ARG LITELLM_BUILD_IMAGE=python:3.11-alpine@sha256:f07e2ace46f560f09a6eeec7b4913b80ee99546e749ef82342a419a326620856
 
 # Runtime image
-ARG LITELLM_RUNTIME_IMAGE=python:3.11-alpine
+ARG LITELLM_RUNTIME_IMAGE=python:3.11-alpine@sha256:f07e2ace46f560f09a6eeec7b4913b80ee99546e749ef82342a419a326620856
 
 # Builder stage
 FROM $LITELLM_BUILD_IMAGE AS builder
@@ -13,8 +13,8 @@ WORKDIR /app
 # Install build dependencies
 RUN apk add --no-cache gcc python3-dev musl-dev
 
-RUN pip install --upgrade pip && \
-    pip install build
+RUN pip install --upgrade pip==26.0.1 && \
+    pip install build==1.4.2
 
 # Copy the current directory contents into the container at /app
 COPY . .
@@ -44,7 +44,7 @@ COPY --from=builder /app/dist/*.whl .
 COPY --from=builder /wheels/ /wheels/
 
 # Install the built wheel using pip; again using a wildcard if it's the only file
-RUN pip install *.whl /wheels/* --no-index --find-links=/wheels/ && rm -f *.whl && rm -rf /wheels
+RUN pip install *.whl /wheels/* --no-index --find-links=/wheels/ --no-deps && rm -f *.whl && rm -rf /wheels
 
 # Convert Windows line endings to Unix for entrypoint scripts
 RUN sed -i 's/\r$//' docker/entrypoint.sh && chmod +x docker/entrypoint.sh

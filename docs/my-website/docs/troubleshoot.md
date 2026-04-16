@@ -50,7 +50,6 @@ Full error logs, stack traces, and any images from service metrics (CPU, memory,
 [Community Discord 💭](https://discord.gg/wuPM9dRgDw)
 [Community Slack 💭](https://www.litellm.ai/support)
 
-Our numbers 📞 +1 (770) 8783-106 / +1 (412) 618-6238
 
 Our emails ✉️ ishaan@berri.ai / krrish@berri.ai
 

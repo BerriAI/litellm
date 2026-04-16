@@ -1,8 +1,8 @@
 # Base image for building
-ARG LITELLM_BUILD_IMAGE=cgr.dev/chainguard/wolfi-base
+ARG LITELLM_BUILD_IMAGE=cgr.dev/chainguard/wolfi-base@sha256:a5a619c1793039dcf92f02178f37c94bb3d6001403716da59d6092dfe8d9b502
 
 # Runtime image
-ARG LITELLM_RUNTIME_IMAGE=cgr.dev/chainguard/wolfi-base
+ARG LITELLM_RUNTIME_IMAGE=cgr.dev/chainguard/wolfi-base@sha256:a5a619c1793039dcf92f02178f37c94bb3d6001403716da59d6092dfe8d9b502
 # Builder stage
 FROM $LITELLM_BUILD_IMAGE AS builder
 
@@ -21,7 +21,7 @@ RUN apk add --no-cache \
     openssl \
     openssl-dev
 
-RUN python -m pip install build
+RUN python -m pip install build==1.4.2
 
 # Copy the current directory contents into the container at /app
 COPY . .
@@ -50,7 +50,7 @@ USER root
 
 # Install runtime dependencies
 RUN apk add --no-cache bash openssl tzdata nodejs npm python3 py3-pip libsndfile && \
-    npm install -g npm@latest tar@7.5.11 glob@11.1.0 @isaacs/brace-expansion@5.0.1 minimatch@10.2.4 diff@8.0.3 && \
+    npm install -g npm@11.12.1 tar@7.5.11 glob@11.1.0 @isaacs/brace-expansion@5.0.1 minimatch@10.2.4 diff@8.0.3 && \
     GLOBAL="$(npm root -g)" && \
     find "$GLOBAL/npm" -type d -name "tar" -path "*/node_modules/tar" | while read d; do \
         rm -rf "$d" && cp -rL "$GLOBAL/tar" "$d"; \
@@ -82,7 +82,7 @@ COPY --from=builder /app/dist/*.whl .
 COPY --from=builder /wheels/ /wheels/
 
 # Install the built wheel using pip; again using a wildcard if it's the only file
-RUN pip install *.whl /wheels/* --no-index --find-links=/wheels/ && rm -f *.whl && rm -rf /wheels
+RUN pip install *.whl /wheels/* --no-index --find-links=/wheels/ --no-deps && rm -f *.whl && rm -rf /wheels
 
 # SECURITY FIX: nodejs-wheel-binaries (pip package used by Prisma) bundles a complete
 # npm with old vulnerable deps at /usr/lib/python3.*/site-packages/nodejs_wheel/.

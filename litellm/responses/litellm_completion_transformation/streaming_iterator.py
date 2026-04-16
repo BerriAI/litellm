@@ -845,6 +845,15 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         )
         event.__dict__["sequence_number"] = self._sequence_number
         self._pending_response_events.append(event)
+
+        # Emit content_part.added immediately after output_item.added for message
+        # items. The OpenAI Responses spec requires this event before any
+        # output_text.delta events so downstream parsers can initialize the
+        # text part structure.
+        if not self.sent_content_part_added_event:
+            self.sent_content_part_added_event = True
+            content_part_event = self.create_content_part_added_event()
+            self._pending_response_events.append(content_part_event)
         return
 
     async def __anext__(
