@@ -2,7 +2,7 @@ import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
 :::note Security Update
-The Trivy supply-chain compromise has been contained :tada:. All affected packages have been deleted and current releases are safe to use. Please refer to our [Security Townhall](/blog/security-townhall-updates) for a deeper understanding of the problem, and [CI/CD v2](/blog/ci-cd-v2-improvements) for how we're improving moving forward.
+The Trivy supply-chain compromise has been contained :tada: . All affected packages have been deleted and current releases are free of the compromised code/component. Please refer to our [Security Townhall](/blog/security-townhall-updates) for a deeper understanding of the problem, and [CI/CD v2](/blog/ci-cd-v2-improvements) for how we're improving moving forward.
 :::
 
 # LiteLLM - Getting Started
