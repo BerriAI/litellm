@@ -227,6 +227,20 @@ class TestCustomGuardrailShouldRunGuardrail:
         )
         assert result is False, "Admin-configured disable should be respected"
 
+        # Test 5: Admin config in metadata isn't shadowed by user-supplied litellm_metadata
+        data_cross_key = {
+            "model": "gpt-3.5-turbo",
+            "messages": [{"role": "user", "content": "test"}],
+            "metadata": {"user_api_key_metadata": {"disable_global_guardrails": True}},
+            "litellm_metadata": {"request_tags": ["user-supplied"]},
+        }
+        result = custom_guardrail.should_run_guardrail(
+            data=data_cross_key, event_type=GuardrailEventHooks.pre_call
+        )
+        assert (
+            result is False
+        ), "Admin config in metadata must not be shadowed by user-supplied litellm_metadata"
+
     def test_should_run_guardrail_with_opted_out_global_guardrails(self):
         """Test that per-guardrail opt-out only works from admin metadata"""
         from litellm.types.guardrails import GuardrailEventHooks

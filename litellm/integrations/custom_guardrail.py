@@ -257,11 +257,20 @@ class CustomGuardrail(CustomLogger):
 
     @staticmethod
     def _get_admin_metadata(data: dict) -> dict:
-        """Return merged admin-configured key and team metadata from the request data."""
-        metadata = data.get("litellm_metadata") or data.get("metadata", {})
-        team_meta = metadata.get("user_api_key_team_metadata") or {}
-        key_meta = metadata.get("user_api_key_metadata") or {}
-        # Key-level settings override team-level
+        """Return merged admin-configured key and team metadata from the request data.
+
+        The proxy may inject admin metadata (user_api_key_metadata,
+        user_api_key_team_metadata) into either ``metadata`` or
+        ``litellm_metadata`` depending on endpoint. Check both so a caller
+        cannot shadow admin config by pre-populating the other key.
+        Key-level settings override team-level.
+        """
+        team_meta: dict = {}
+        key_meta: dict = {}
+        for key in ("metadata", "litellm_metadata"):
+            meta = data.get(key) or {}
+            team_meta = meta.get("user_api_key_team_metadata") or team_meta
+            key_meta = meta.get("user_api_key_metadata") or key_meta
         return {**team_meta, **key_meta}
 
     def get_disable_global_guardrail(self, data: dict) -> Optional[bool]:
