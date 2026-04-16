@@ -912,9 +912,9 @@ class AsyncHTTPHandler:
         if AIOHTTP_CONNECTOR_LIMIT > 0:
             transport_connector_kwargs["limit"] = AIOHTTP_CONNECTOR_LIMIT
         if AIOHTTP_CONNECTOR_LIMIT_PER_HOST > 0:
-            transport_connector_kwargs[
-                "limit_per_host"
-            ] = AIOHTTP_CONNECTOR_LIMIT_PER_HOST
+            transport_connector_kwargs["limit_per_host"] = (
+                AIOHTTP_CONNECTOR_LIMIT_PER_HOST
+            )
 
         return LiteLLMAiohttpTransport(
             client=lambda: ClientSession(
@@ -999,6 +999,7 @@ class HTTPHandler:
             url,
             params=params,
             headers=headers,
+            follow_redirects=_follow_redirects,
         )
 
         return response

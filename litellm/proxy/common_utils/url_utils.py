@@ -87,6 +87,11 @@ def validate_url(url: str) -> Tuple[str, str]:
     port = parsed.port
     default_port = 443 if parsed.scheme == "https" else 80
 
+    # Build the Host header value — include port when non-default
+    host_header = (
+        hostname if (port is None or port == default_port) else f"{hostname}:{port}"
+    )
+
     # Resolve hostname and validate ALL addresses
     try:
         addrinfo = socket.getaddrinfo(
@@ -113,7 +118,7 @@ def validate_url(url: str) -> Tuple[str, str]:
     # we rewrite to the validated IP like HTTP.
     ssl_verify = getattr(litellm, "ssl_verify", True)
     if parsed.scheme == "https" and ssl_verify is not False:
-        return url, hostname
+        return url, host_header
 
     # For HTTP, rewrite URL to connect to the validated IP directly
     # to prevent DNS rebinding (no TLS to bind the connection).
@@ -130,7 +135,7 @@ def validate_url(url: str) -> Tuple[str, str]:
         (parsed.scheme, new_netloc, parsed.path, parsed.params, parsed.query, "")
     )
 
-    return rewritten, hostname
+    return rewritten, host_header
 
 
 _MAX_REDIRECTS = 10
