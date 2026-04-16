@@ -401,7 +401,7 @@ response = litellm.completion(
 
 3. Ensure you're using a recent version of LiteLLM:
    ```bash
-   uv add --upgrade-package litellm litellm
+   pip install --upgrade litellm
    ```
 
 ### Unexpected Dummy Tool Results

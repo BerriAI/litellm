@@ -4,7 +4,6 @@ import NotificationsManager from "../molecules/notifications_manager";
 import { createGuardrailCall, getGuardrailProviderSpecificParams, getGuardrailUISettings } from "../networking";
 import ContentFilterConfiguration from "./content_filter/ContentFilterConfiguration";
 import {
-  choiceToSkipSystemForCreate,
   getGuardrailProviders,
   guardrail_provider_map,
   guardrailLogoMap,
@@ -180,7 +179,6 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
       guardrail_name: preset.guardrailNameSuggestion,
       mode: preset.mode,
       default_on: preset.defaultOn,
-      skip_system_message_choice: "inherit",
     };
     if (preset.provider === "BlockCodeExecution") {
       baseValues.confidence_threshold = 0.5;
@@ -415,11 +413,6 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
         },
         guardrail_info: {},
       };
-
-      const skipForCreate = choiceToSkipSystemForCreate(values.skip_system_message_choice);
-      if (skipForCreate !== undefined) {
-        guardrailData.litellm_params.skip_system_message_in_guardrail = skipForCreate;
-      }
 
       // For Presidio PII, add the entity and action configurations
       if (values.provider === "PresidioPII" && selectedEntities.length > 0) {
@@ -753,18 +746,6 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
           <Select>
             <Select.Option value={true}>Yes</Select.Option>
             <Select.Option value={false}>No</Select.Option>
-          </Select>
-        </Form.Item>
-
-        <Form.Item
-          name="skip_system_message_choice"
-          label="Skip system messages in guardrail"
-          tooltip="Unified guardrails only: omit role: system from guardrail evaluation input (OpenAI chat + Anthropic messages). The model still receives full messages. Use global default follows litellm_settings.skip_system_message_in_guardrail."
-        >
-          <Select>
-            <Select.Option value="inherit">Use global default</Select.Option>
-            <Select.Option value="yes">Yes — exclude from guardrail scan</Select.Option>
-            <Select.Option value="no">No — always include in scan</Select.Option>
           </Select>
         </Form.Item>
 
@@ -1115,7 +1096,6 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
             initialValues={{
               mode: "pre_call",
               default_on: false,
-              skip_system_message_choice: "inherit",
             }}
           >
             {stepConfigs.map((step, index) => {

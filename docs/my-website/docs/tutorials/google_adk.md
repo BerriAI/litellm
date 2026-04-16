@@ -35,7 +35,7 @@ ADK (Agent Development Kit) allows you to build intelligent agents powered by LL
 ## Installation
 
 ```bash showLineNumbers title="Install dependencies"
-uv add google-adk litellm
+pip install google-adk litellm
 ```
 
 ## 1. Setting Up Environment

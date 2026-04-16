@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import SpendLogsTable, { RequestViewer } from "./index";
 import type { LogEntry } from "./columns";
 import type { Row } from "@tanstack/react-table";
+import type { Team } from "../key_team_helpers/key_list";
 import { renderWithProviders } from "../../../tests/test-utils";
 
 const mockHandleFilterResetFromHook = vi.fn();
@@ -177,6 +178,7 @@ describe("SpendLogsTable", () => {
     token: "test-token",
     userRole: "Admin",
     userID: "user-1",
+    allTeams: [] as Team[],
     premiumUser: false,
   };
 

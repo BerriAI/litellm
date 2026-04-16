@@ -431,13 +431,7 @@ class PrismaManager:
                 else:
                     # Use prisma db push with increased timeout
                     subprocess.run(
-                        [
-                            "prisma",
-                            "db",
-                            "push",
-                            "--accept-data-loss",
-                            "--skip-generate",
-                        ],
+                        ["prisma", "db", "push", "--accept-data-loss"],
                         timeout=60,
                         check=True,
                     )

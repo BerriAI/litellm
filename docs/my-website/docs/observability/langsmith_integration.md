@@ -18,7 +18,7 @@ join our [discord](https://discord.gg/wuPM9dRgDw)
 
 ## Pre-Requisites
 ```shell
-uv add litellm
+pip install litellm
 ```
 
 ## Quick Start

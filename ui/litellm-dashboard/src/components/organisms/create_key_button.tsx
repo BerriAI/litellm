@@ -666,7 +666,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
   return (
     <div>
       {userRole && rolesWithWriteAccess.includes(userRole) && (
-        <Button className="mx-auto" onClick={() => setIsModalVisible(true)} data-testid="create-key-button">
+        <Button className="mx-auto" onClick={() => setIsModalVisible(true)}>
           + Create New Key
         </Button>
       )}

@@ -485,31 +485,18 @@ async def _get_team_deployments(
     Centralizes team deployment queries to ensure consistent filtering and error handling.
     This is the established helper pattern for team deployment DB access in this module.
 
-    Note: prisma-client-py 0.11.0 does not support JSON path filtering, so we filter
-    by the model_name prefix (team models use "model_name_{team_id}_*") and confirm
-    team_id in model_info with Python-side filtering.
+    Note: Direct Prisma call is intentional here as this IS the helper function that
+    encapsulates the DB access pattern for team deployments.
     """
-    prefix = f"model_name_{team_id}_"
     response = await prisma_client.db.litellm_proxymodeltable.find_many(
         where={
-            "model_name": {"startswith": prefix},
+            "model_info": {
+                "path": ["team_id"],
+                "equals": team_id,
+            }
         }
     )
-    if not response:
-        return []
-
-    # Confirm team_id in model_info (defensive check)
-    result = []
-    for row in response:
-        model_info = row.model_info
-        if isinstance(model_info, str):
-            try:
-                model_info = json.loads(model_info)
-            except (TypeError, ValueError):
-                continue
-        if isinstance(model_info, dict) and model_info.get("team_id") == team_id:
-            result.append(row)
-    return result
+    return response if response else []
 
 
 async def _update_existing_team_model_assignment(

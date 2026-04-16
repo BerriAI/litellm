@@ -183,14 +183,13 @@ def test_oidc_env_variable():
     del os.environ[env_var_name]
 
 
-def test_oidc_file(monkeypatch):
-    # Create a temporary file inside a directory added to the allowlist.
-    with tempfile.TemporaryDirectory() as temp_dir:
-        monkeypatch.setenv("LITELLM_OIDC_ALLOWED_CREDENTIAL_DIRS", temp_dir)
-        temp_file_path = os.path.join(temp_dir, "token.txt")
+def test_oidc_file():
+    # Create a temporary file
+    with tempfile.NamedTemporaryFile(mode="w+") as temp_file:
         secret_value = "secret-" + uuid4().hex
-        with open(temp_file_path, "w") as temp_file:
-            temp_file.write(secret_value)
+        temp_file.write(secret_value)
+        temp_file.flush()
+        temp_file_path = temp_file.name
 
         secret_val = get_secret(f"oidc/file/{temp_file_path}")
 

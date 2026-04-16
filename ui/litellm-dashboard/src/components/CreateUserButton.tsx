@@ -175,14 +175,7 @@ export const CreateUserButton: React.FC<CreateuserProps> = ({
   // Modify the return statement to handle embedded mode
   if (isEmbedded) {
     return (
-      <Form
-        form={form}
-        onFinish={handleCreate}
-        labelCol={{ span: 8 }}
-        wrapperCol={{ span: 16 }}
-        labelAlign="left"
-        initialValues={{ user_role: "internal_user_viewer" }}
-      >
+      <Form form={form} onFinish={handleCreate} labelCol={{ span: 8 }} wrapperCol={{ span: 16 }} labelAlign="left">
         <Alert
           message="Email invitations"
           description={
@@ -264,14 +257,7 @@ export const CreateUserButton: React.FC<CreateuserProps> = ({
             className="mb-4"
           />
         </Space>
-        <Form
-          form={form}
-          onFinish={handleCreate}
-          labelCol={{ span: 8 }}
-          wrapperCol={{ span: 16 }}
-          labelAlign="left"
-          initialValues={{ user_role: "internal_user_viewer" }}
-        >
+        <Form form={form} onFinish={handleCreate} labelCol={{ span: 8 }} wrapperCol={{ span: 16 }} labelAlign="left">
           <Form.Item label="User Email" name="user_email">
             <Input />
           </Form.Item>

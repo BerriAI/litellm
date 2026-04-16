@@ -11,7 +11,6 @@ import {
   serverRootPath,
 } from "@/components/networking";
 import { extractErrorMessage } from "@/utils/errorUtils";
-import { getSecureItem, setSecureItem } from "@/utils/secureStorage";
 
 export type McpOAuthStatus = "idle" | "authorizing" | "exchanging" | "success" | "error";
 
@@ -80,13 +79,22 @@ export const useMcpOAuthFlow = ({
 
   const setStorageItem = (key: string, value: string) => {
     if (typeof window === "undefined") return;
-    setSecureItem(key, value);
+    try {
+      // Use sessionStorage only — the flow state may contain client credentials;
+      // writing them to localStorage would persist across browser sessions and
+      // make them readable by any injected script (XSS).
+      // codeql[js/clear-text-storage-of-sensitive-data]
+      window.sessionStorage.setItem(key, value);
+    } catch (err) {
+      console.warn(`Failed to set storage item ${key}`, err);
+    }
   };
 
   const getStorageItem = (key: string): string | null => {
     if (typeof window === "undefined") return null;
     try {
-      return getSecureItem(key);
+      // Try sessionStorage first, fall back to localStorage
+      return window.sessionStorage.getItem(key) || window.localStorage.getItem(key);
     } catch (err) {
       console.warn(`Failed to get storage item ${key}`, err);
       return null;

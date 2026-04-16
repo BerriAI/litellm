@@ -11,7 +11,7 @@ from litellm.proxy._types import (
     LitellmUserRoles,
     ProxyException,
 )
-from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
+from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 from litellm.proxy.management_endpoints.customer_endpoints import router
 
 app = FastAPI()
@@ -42,14 +42,11 @@ def mock_prisma_client():
 
 @pytest.fixture
 def mock_user_api_key_auth():
-    original_overrides = app.dependency_overrides.copy()
-    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
-        user_id="test-user", user_role=LitellmUserRoles.PROXY_ADMIN
-    )
-    try:
-        yield
-    finally:
-        app.dependency_overrides = original_overrides
+    with patch("litellm.proxy.proxy_server.user_api_key_auth") as mock:
+        mock.return_value = UserAPIKeyAuth(
+            user_id="test-user", user_role=LitellmUserRoles.PROXY_ADMIN
+        )
+        yield mock
 
 
 def test_update_customer_success(mock_prisma_client, mock_user_api_key_auth):

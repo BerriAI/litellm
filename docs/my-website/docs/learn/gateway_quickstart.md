@@ -13,7 +13,7 @@ If you need a Docker or database-first setup, use the [Docker + Database tutoria
 ## 1. Install The Gateway
 
 ```bash
-uv tool install 'litellm[proxy]'
+pip install 'litellm[proxy]'
 ```
 
 ## 2. Set One Provider Key

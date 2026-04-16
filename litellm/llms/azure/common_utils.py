@@ -101,14 +101,16 @@ def get_azure_ad_token_from_entra_id(
         _client_secret = client_secret
 
     verbose_logger.debug(
-        "tenant_id=%s, client_id=%s, client_secret=[set=%s]",
+        "tenant_id %s, client_id %s, client_secret %s",
         _tenant_id,
         _client_id,
-        _client_secret is not None,
+        _client_secret,
     )
     if _tenant_id is None or _client_id is None or _client_secret is None:
         raise ValueError("tenant_id, client_id, and client_secret must be provided")
     credential = ClientSecretCredential(_tenant_id, _client_id, _client_secret)
+
+    verbose_logger.debug("credential %s", credential)
 
     token_provider = get_bearer_token_provider(credential, scope)
 
@@ -138,16 +140,18 @@ def get_azure_ad_token_from_username_password(
     from azure.identity import UsernamePasswordCredential, get_bearer_token_provider
 
     verbose_logger.debug(
-        "client_id=%s, azure_username=[set=%s], azure_password=[set=%s]",
+        "client_id %s, azure_username %s, azure_password %s",
         client_id,
-        azure_username is not None,
-        azure_password is not None,
+        azure_username,
+        azure_password,
     )
     credential = UsernamePasswordCredential(
         client_id=client_id,
         username=azure_username,
         password=azure_password,
     )
+
+    verbose_logger.debug("credential %s", credential)
 
     token_provider = get_bearer_token_provider(credential, scope)
 

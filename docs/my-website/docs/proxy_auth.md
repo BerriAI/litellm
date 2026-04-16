@@ -72,7 +72,7 @@ response = litellm.completion(
 </TabItem>
 </Tabs>
 
-**Required package:** `uv add azure-identity`
+**Required package:** `pip install azure-identity`
 
 ### Generic OAuth2 (Okta, Auth0, Keycloak, etc.)
 

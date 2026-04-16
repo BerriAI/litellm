@@ -51,9 +51,7 @@ LiteLLM is a unified interface for 100+ LLMs that:
 
 ### MAKING CODE CHANGES FOR THE UI (IGNORE FOR BACKEND)
 
-1. **Always use `antd` for new UI components — Tremor is DEPRECATED**
-   - We are migrating off of `@tremor/react`. Do not introduce new `Badge`, `Text`, `Card`, `Grid`, `Title`, or other imports from `@tremor/react` in any new or modified file.
-   - Use `antd` equivalents: `Tag` for labels, plain `<span>`/`<div>` with Tailwind classes (or `Typography.Text`) for text, `Card` from `antd`, etc. Note that `antd` has no `"yellow"` Tag color — use `"gold"` for amber/yellow.
+1. **Tremor is DEPRECATED, do not use Tremor components in new features/changes**
    - The only exception is the Tremor Table component and its required Tremor Table sub components.
 
 2. **Use Common Components as much as possible**:
@@ -123,7 +121,7 @@ LiteLLM supports MCP for agent workflows:
 
 ## RUNNING SCRIPTS
 
-Use `uv run python script.py` to run Python scripts in the project environment (for non-test files).
+Use `poetry run python script.py` to run Python scripts in the project environment (for non-test files).
 
 ## GITHUB TEMPLATES
 
@@ -234,16 +232,16 @@ When opening issues or pull requests, follow these templates:
 
 ### Environment
 
-- uv is installed in `~/.local/bin`; the update script ensures it is on `PATH`.
+- Poetry is installed in `~/.local/bin`; the update script ensures it is on `PATH`.
 - Python 3.12, Node 22 are pre-installed.
-- The project virtual environment lives under `.venv/`.
+- The virtual environment lives under `~/.cache/pypoetry/virtualenvs/`.
 
 ### Running the proxy server
 
 Start the proxy with a config file:
 
 ```bash
-uv run litellm --config dev_config.yaml --port 4000
+poetry run litellm --config dev_config.yaml --port 4000
 ```
 
 The proxy takes ~15-20 seconds to fully start (it runs Prisma migrations on boot). Wait for `/health` to return before sending requests. Without a PostgreSQL `DATABASE_URL`, the proxy connects to a default Neon dev database embedded in the `litellm-proxy-extras` package.
@@ -252,16 +250,17 @@ The proxy takes ~15-20 seconds to fully start (it runs Prisma migrations on boot
 
 See `CLAUDE.md` and the `Makefile` for standard commands. Key notes:
 
-- `uv sync --group proxy-dev --extra proxy` installs the Prisma and proxy-side test dependencies used by the standard local workflow.
+- `psycopg-binary` must be installed (`poetry run pip install psycopg-binary`) because the pytest-postgresql plugin requires it and the lock file only includes `psycopg` (no binary).
+- `openapi-core` must be installed (`poetry run pip install openapi-core`) for the OpenAPI compliance tests in `tests/test_litellm/interactions/`.
 - The `--timeout` pytest flag is NOT available; don't pass it.
-- Unit tests: `uv run pytest tests/test_litellm/ -x -vv -n 4`
-- **Before committing, always run `uv run black .` to format your code.** Black formatting is enforced in CI.
-- If `uv sync` fails because the lockfile is outdated, run `uv lock` and retry.
+- Unit tests: `poetry run pytest tests/test_litellm/ -x -vv -n 4`
+- Black `--check` may report pre-existing formatting issues; this does not block test runs.
+- If `poetry install` fails with "pyproject.toml changed significantly since poetry.lock was last generated", run `poetry lock` first to regenerate the lock file.
 
 ### Lint
 
 ```bash
-cd litellm && uv run ruff check .
+cd litellm && poetry run ruff check .
 ```
 
 Ruff is the primary fast linter. For the full lint suite (including mypy, black, circular imports), run `make lint` per `CLAUDE.md`.

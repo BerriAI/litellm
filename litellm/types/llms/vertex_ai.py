@@ -325,7 +325,6 @@ class RequestBody(TypedDict, total=False):
     generationConfig: GenerationConfig
     cachedContent: str
     labels: Dict[str, str]
-    serviceTier: str
 
 
 class CachedContentRequestBody(TypedDict, total=False):

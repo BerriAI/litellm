@@ -126,7 +126,7 @@ If you wish to use custom formatting, please let us know via either [help@bytez.
 See all litellm.completion supported params [here](https://docs.litellm.ai/docs/completion/input)
 
 ```py
-# !uv add litellm
+# !pip install litellm
 from litellm import completion
 import os
 ## set ENV variables
@@ -160,7 +160,7 @@ Any kwarg supported by huggingface we also support! (Provided the model supports
 Example `repetition_penalty`
 
 ```py
-# !uv add litellm
+# !pip install litellm
 from litellm import completion
 import os
 ## set ENV variables

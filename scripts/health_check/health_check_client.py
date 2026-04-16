@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-
 """
 LiteLLM Health Check Client
 

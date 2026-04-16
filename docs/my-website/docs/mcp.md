@@ -278,8 +278,7 @@ mcp_servers:
     url: "https://bedrock-agentcore.us-east-1.amazonaws.com/runtimes/<url-encoded-ARN>/invocations"
     transport: "http"
     auth_type: "aws_sigv4"
-    aws_role_name: os.environ/AWS_ROLE_ARN          # optional — IAM role to assume
-    aws_access_key_id: os.environ/AWS_ACCESS_KEY_ID  # optional — falls back to IAM role
+    aws_access_key_id: os.environ/AWS_ACCESS_KEY_ID
     aws_secret_access_key: os.environ/AWS_SECRET_ACCESS_KEY
     aws_region_name: us-east-1
     aws_service_name: bedrock-agentcore

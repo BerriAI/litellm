@@ -96,7 +96,6 @@ const TeamDropdown: React.FC<TeamDropdownProps> = ({
       onPopupScroll={handlePopupScroll}
       loading={isLoading}
       notFoundContent={isLoading ? <LoadingOutlined spin /> : "No teams found"}
-      data-testid="team-dropdown"
       popupRender={(menu) => (
         <>
           {menu}

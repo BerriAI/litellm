@@ -15,7 +15,7 @@ You can reach out to us anytime by [email](mailto:hello@lunary.ai) or directly [
 ### Pre-Requisites
 
 ```shell
-uv add litellm lunary
+pip install litellm lunary
 ```
 
 ### Quick Start
@@ -124,7 +124,7 @@ my_chain("Chain input")
 ### Step1: Install dependencies and set your environment variables 
 Install the dependencies
 ```shell
-uv add litellm lunary
+pip install litellm lunary
 ```
 
 Get you Lunary public key from from https://app.lunary.ai/settings 

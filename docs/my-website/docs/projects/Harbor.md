@@ -5,7 +5,7 @@
 
 ```bash
 # Install
-uv add harbor
+pip install harbor
 
 # Run a benchmark with any LiteLLM-supported model
 harbor run --dataset terminal-bench@2.0 \

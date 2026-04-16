@@ -22,7 +22,7 @@ LiteLLM automatically translates between different provider formats, allowing yo
 First, install LiteLLM with proxy support:
 
 ```bash
-uv tool install 'litellm[proxy]'
+pip install 'litellm[proxy]'
 ```
 
 ## Configuration

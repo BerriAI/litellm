@@ -12,7 +12,7 @@ The Claude Agent SDK provides a high-level interface for building AI agents. By 
 ### 1. Install Dependencies
 
 ```bash
-uv add claude-agent-sdk
+pip install claude-agent-sdk
 ```
 
 ### 2. Start LiteLLM Proxy
@@ -104,7 +104,7 @@ See our [cookbook example](https://github.com/BerriAI/litellm/tree/main/cookbook
 # Clone and run the example
 git clone https://github.com/BerriAI/litellm.git
 cd litellm/cookbook/anthropic_agent_sdk
-uv add -r requirements.txt
+pip install -r requirements.txt
 python main.py
 ```
 

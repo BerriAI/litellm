@@ -126,7 +126,6 @@ const LiteLLMModelNameField: React.FC<LiteLLMModelNameFieldProps> = ({
             </>
           ) : providerModels.length > 0 ? (
             <AntSelect
-              data-testid="model-name-select"
               mode="multiple"
               allowClear
               showSearch

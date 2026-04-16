@@ -28,7 +28,7 @@ litellm.callbacks = ["openmeter"] # logs cost + usage of successful calls to ope
 <TabItem value="sdk" label="SDK">
 
 ```python
-# uv add openmeter 
+# pip install openmeter 
 import litellm
 import os
 

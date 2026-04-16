@@ -50,7 +50,6 @@ class TestFilterHealthCheckUnhealthyDeployments:
             def __init__(self):
                 self.enable_health_check_routing = enable
                 self.health_state_cache = health_cache
-                self.allowed_fails_policy = None
 
         # Import the actual method and bind it
         from litellm.router import Router
@@ -126,7 +125,6 @@ class TestAsyncFilterHealthCheckUnhealthyDeployments:
             def __init__(self):
                 self.enable_health_check_routing = enable
                 self.health_state_cache = health_cache
-                self.allowed_fails_policy = None
 
         fake = FakeRouter()
         fake._async_filter_health_check_unhealthy_deployments = (

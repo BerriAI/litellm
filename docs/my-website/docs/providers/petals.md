@@ -8,7 +8,7 @@ Petals: https://github.com/bigscience-workshop/petals
 ## Pre-Requisites
 Ensure you have `petals` installed
 ```shell
-uv add git+https://github.com/bigscience-workshop/petals
+pip install git+https://github.com/bigscience-workshop/petals
 ```
 
 ## Usage

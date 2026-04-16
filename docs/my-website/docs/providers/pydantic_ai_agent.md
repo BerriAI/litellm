@@ -23,7 +23,7 @@ LiteLLM requires Pydantic AI agents to follow the [A2A (Agent-to-Agent) protocol
 #### Install Dependencies
 
 ```bash
-uv add pydantic-ai fasta2a uvicorn
+pip install pydantic-ai fasta2a uvicorn
 ```
 
 #### Create Agent

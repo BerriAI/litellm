@@ -174,15 +174,10 @@ def load_private_key_from_file(file_path: str):
 def get_vendor_from_model(model: str) -> OCIVendors:
     """
     Extracts the vendor from the model name.
-
-    OCI GenAI API uses two apiFormat values:
-    - "COHERE" for Cohere models (command-r, command-a, etc.)
-    - "GENERIC" for all other models (Meta Llama, xAI Grok, Google Gemini, etc.)
-
     Args:
-        model (str): The model name (e.g., "cohere.command-a-03-2025", "meta.llama-3.3-70b-instruct").
+        model (str): The model name.
     Returns:
-        OCIVendors: The vendor enum value.
+        str: The vendor name.
     """
     vendor = model.split(".")[0].lower()
     if vendor == "cohere":

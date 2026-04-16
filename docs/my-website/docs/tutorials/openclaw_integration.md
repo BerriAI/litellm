@@ -23,7 +23,7 @@ Chat apps → OpenClaw Gateway → LiteLLM Proxy → LLM Providers (OpenAI, Anth
 ## Step 1 — Install LiteLLM Proxy
 
 ```bash
-uv tool install 'litellm[proxy]'
+pip install 'litellm[proxy]'
 ```
 
 ## Step 2 — Create a LiteLLM config file

@@ -319,7 +319,7 @@ Complete working examples are available in the LiteLLM repository:
 ## Requirements
 
 ```bash
-uv add litellm websockets pyaudio
+pip install litellm websockets pyaudio
 ```
 
 ## AWS Configuration

@@ -5,7 +5,7 @@ A Python client library for interacting with the LiteLLM proxy server. This clie
 ## Installation
 
 ```bash
-uv add litellm
+pip install litellm
 ```
 
 ## Quick Start

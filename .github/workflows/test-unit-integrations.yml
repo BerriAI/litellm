@@ -6,8 +6,6 @@ on:
 
 permissions:
   contents: read
-  id-token: write
-  pull-requests: write
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -20,4 +18,3 @@ jobs:
       test-path: "tests/test_litellm/integrations"
       workers: 2
       reruns: 3
-      artifact-name: integrations

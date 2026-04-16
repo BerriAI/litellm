@@ -20,7 +20,6 @@ export interface PromptType {
   tools: Tool[];
   developerMessage: string;
   messages: Message[];
-  environment: string;
 }
 
 export interface PromptEditorViewProps {

@@ -33,15 +33,15 @@ diff schema.prisma litellm-proxy-extras/litellm_proxy_extras/schema.prisma && ec
 ## Step 1: Quick Start — Generate Migration
 
 ```bash
-# Install deps for this command
-uv sync --frozen --all-groups --all-extras
+# Install deps (one time)
+pip install testing.postgresql
 brew install postgresql@14  # macOS
 
 # Add to PATH
 export PATH="/opt/homebrew/opt/postgresql@14/bin:$PATH"
 
 # Run migration
-uv run --with testing.postgresql python ci_cd/run_migration.py "your_migration_name"
+python ci_cd/run_migration.py "your_migration_name"
 ```
 
 ## What It Does
@@ -55,7 +55,7 @@ uv run --with testing.postgresql python ci_cd/run_migration.py "your_migration_n
 
 **Missing testing module:**
 ```bash
-uv run --with testing.postgresql python ci_cd/run_migration.py "your_migration_name"
+pip install testing.postgresql
 ```
 
 **initdb not found:**

@@ -24,7 +24,7 @@ The Langfuse OpenTelemetry integration allows you to send LiteLLM traces and obs
 2. **API Keys**: Get your public and secret keys from your Langfuse project settings
 3. **Dependencies**: Install required packages:
    ```bash
-   uv add litellm opentelemetry-api opentelemetry-sdk opentelemetry-exporter-otlp
+   pip install litellm opentelemetry-api opentelemetry-sdk opentelemetry-exporter-otlp
    ```
 
 ## Configuration

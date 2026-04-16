@@ -15,8 +15,6 @@ from email.mime.text import MIMEText
 from typing import (
     TYPE_CHECKING,
     Any,
-    AsyncGenerator,
-    Awaitable,
     Dict,
     List,
     Literal,
@@ -300,30 +298,6 @@ def _accepts_litellm_call_info(cb: CustomLogger) -> bool:
         sig = inspect.signature(cb.async_post_call_response_headers_hook)
         _CALLBACK_ACCEPTS_CALL_INFO[key] = "litellm_call_info" in sig.parameters
     return _CALLBACK_ACCEPTS_CALL_INFO[key]
-
-
-def _enrich_http_exception_with_guardrail_context(
-    exc: BaseException, callback: Any
-) -> None:
-    """
-    If `exc` is an HTTPException with a dict `detail`, mutate it in place to
-    add `guardrail_name` and `guardrail_mode` taken from the callback instance.
-
-    Uses setdefault so guardrails that already populate these fields explicitly
-    win over the inferred defaults. No-op for non-HTTPException, non-dict-detail,
-    or callbacks without `guardrail_name`. Never raises.
-    """
-    if not isinstance(exc, HTTPException):
-        return
-    detail = getattr(exc, "detail", None)
-    if not isinstance(detail, dict):
-        return
-    guardrail_name = getattr(callback, "guardrail_name", None)
-    if guardrail_name:
-        detail.setdefault("guardrail_name", guardrail_name)
-    event_hook = getattr(callback, "event_hook", None)
-    if event_hook:
-        detail.setdefault("guardrail_mode", event_hook)
 
 
 class ProxyLogging:
@@ -1089,7 +1063,6 @@ class ProxyLogging:
         except Exception as e:
             status = "error"
             error_type = type(e).__name__
-            _enrich_http_exception_with_guardrail_context(e, callback)
             # Re-raise the exception to maintain existing behavior
             raise
         finally:
@@ -1458,40 +1431,6 @@ class ProxyLogging:
         except Exception as e:
             raise e
 
-    @staticmethod
-    async def _run_guardrail_task_with_enrichment(
-        callback: Any, coro: Awaitable[Any]
-    ) -> Any:
-        """
-        Await `coro`; if it raises an HTTPException with dict detail,
-        enrich the detail with the originating callback's `guardrail_name`
-        and `guardrail_mode` before re-raising.
-        """
-        try:
-            return await coro
-        except Exception as e:
-            _enrich_http_exception_with_guardrail_context(e, callback)
-            raise
-
-    @staticmethod
-    async def _wrap_streaming_iterator_with_enrichment(
-        callback: Any, gen: AsyncGenerator[Any, None]
-    ) -> AsyncGenerator[Any, None]:
-        """
-        Yield from `gen`; if iteration raises an HTTPException with dict detail,
-        enrich the detail with the originating callback's `guardrail_name` and
-        `guardrail_mode` before re-raising. Used to wrap each layer of the
-        async_post_call_streaming_iterator_hook chain so the enrichment is
-        attributed to the callback that produced the chunk pipeline at that
-        point in the chain.
-        """
-        try:
-            async for chunk in gen:
-                yield chunk
-        except Exception as e:
-            _enrich_http_exception_with_guardrail_context(e, callback)
-            raise
-
     async def during_call_hook(
         self,
         data: dict,
@@ -1542,22 +1481,16 @@ class ProxyLogging:
                     and user_api_key_dict is not None
                 ):
                     data["guardrail_to_apply"] = callback
-                    guardrail_task = self._run_guardrail_task_with_enrichment(
-                        callback,
-                        unified_guardrail.async_moderation_hook(
-                            user_api_key_dict=user_api_key_dict,
-                            data=data,
-                            call_type=call_type,
-                        ),
+                    guardrail_task = unified_guardrail.async_moderation_hook(
+                        user_api_key_dict=user_api_key_dict,
+                        data=data,
+                        call_type=call_type,
                     )
                 else:
-                    guardrail_task = self._run_guardrail_task_with_enrichment(
-                        callback,
-                        callback.async_moderation_hook(
-                            data=data,
-                            user_api_key_dict=user_api_key_auth_dict,  # type: ignore
-                            call_type=call_type,  # type: ignore
-                        ),
+                    guardrail_task = callback.async_moderation_hook(
+                        data=data,
+                        user_api_key_dict=user_api_key_auth_dict,  # type: ignore
+                        call_type=call_type,  # type: ignore
                     )
                 guardrail_tasks.append(guardrail_task)
 
@@ -2052,27 +1985,19 @@ class ProxyLogging:
 
                 if "apply_guardrail" in type(callback).__dict__:
                     data["guardrail_to_apply"] = callback
-                    try:
-                        guardrail_response = (
-                            await unified_guardrail.async_post_call_success_hook(
-                                user_api_key_dict=user_api_key_dict,
-                                data=data,
-                                response=response,
-                            )
-                        )
-                    except Exception as e:
-                        _enrich_http_exception_with_guardrail_context(e, callback)
-                        raise
-                else:
-                    try:
-                        guardrail_response = await callback.async_post_call_success_hook(
+                    guardrail_response = (
+                        await unified_guardrail.async_post_call_success_hook(
                             user_api_key_dict=user_api_key_dict,
                             data=data,
                             response=response,
                         )
-                    except Exception as e:
-                        _enrich_http_exception_with_guardrail_context(e, callback)
-                        raise
+                    )
+                else:
+                    guardrail_response = await callback.async_post_call_success_hook(
+                        user_api_key_dict=user_api_key_dict,
+                        data=data,
+                        response=response,
+                    )
 
                 if guardrail_response is not None:
                     response = guardrail_response
@@ -2281,32 +2206,29 @@ class ProxyLogging:
                         "async_post_call_streaming_iterator_hook"
                         in type(callback).__dict__
                     ):
-                        current_response = self._wrap_streaming_iterator_with_enrichment(
-                            _callback,
+                        current_response = (
                             _callback.async_post_call_streaming_iterator_hook(
                                 user_api_key_dict=user_api_key_dict,
                                 response=current_response,
                                 request_data=request_data,
-                            ),
+                            )
                         )
                     elif "apply_guardrail" in type(callback).__dict__:
                         request_data["guardrail_to_apply"] = callback
-                        current_response = self._wrap_streaming_iterator_with_enrichment(
-                            _callback,
+                        current_response = (
                             unified_guardrail.async_post_call_streaming_iterator_hook(
                                 user_api_key_dict=user_api_key_dict,
                                 request_data=request_data,
                                 response=current_response,
-                            ),
+                            )
                         )
                     else:
-                        current_response = self._wrap_streaming_iterator_with_enrichment(
-                            _callback,
+                        current_response = (
                             _callback.async_post_call_streaming_iterator_hook(
                                 user_api_key_dict=user_api_key_dict,
                                 response=current_response,
                                 request_data=request_data,
-                            ),
+                            )
                         )
 
         # Actually iterate through the chained async generator and yield chunks
@@ -2723,7 +2645,7 @@ class PrismaClient:
             raise e
 
     async def _query_first_with_cached_plan_fallback(
-        self, sql_query: str, *args
+        self, sql_query: str
     ) -> Optional[dict]:
         """
         Execute a query with automatic fallback for PostgreSQL cached plan errors.
@@ -2742,7 +2664,7 @@ class PrismaClient:
             Original exception if not a cached plan error
         """
         try:
-            return await self.db.query_first(sql_query, *args)
+            return await self.db.query_first(query=sql_query)
         except Exception as e:
             error_str = str(e)
             if "cached plan must not change result type" in error_str:
@@ -2757,7 +2679,7 @@ class PrismaClient:
                     "retrying with fresh plan. This may occur during rolling deployments "
                     "when schema changes are applied."
                 )
-                return await self.db.query_first(sql_query_retry, *args)
+                return await self.db.query_first(query=sql_query_retry)
             else:
                 raise
 
@@ -3056,7 +2978,7 @@ class PrismaClient:
                             detail={"error": f"No token passed in. Token={token}"},
                         )
 
-                    sql_query = """
+                    sql_query = f"""
                         SELECT 
                             v.*,
                             t.spend AS team_spend, 
@@ -3084,7 +3006,6 @@ class PrismaClient:
                             b.model_max_budget as litellm_budget_table_model_max_budget,
                             b.soft_budget as litellm_budget_table_soft_budget,
                             o.metadata as organization_metadata,
-                            o.organization_alias as organization_alias,
                             b2.max_budget as organization_max_budget,
                             b2.tpm_limit as organization_tpm_limit,
                             b2.rpm_limit as organization_rpm_limit
@@ -3097,11 +3018,11 @@ class PrismaClient:
                         LEFT JOIN "LiteLLM_ProjectTable" AS p ON v.project_id = p.project_id
                         LEFT JOIN "LiteLLM_OrganizationTable" AS o ON v.organization_id = o.organization_id
                         LEFT JOIN "LiteLLM_BudgetTable" AS b2 ON o.budget_id = b2.budget_id
-                        WHERE v.token = $1
+                        WHERE v.token = '{token}'
                     """
 
                     response = await self._query_first_with_cached_plan_fallback(
-                        sql_query, hashed_token
+                        sql_query
                     )
 
                     # If not found in main table, check deprecated keys (grace period)
@@ -3375,7 +3296,7 @@ class PrismaClient:
             if update_key_values is not None:
                 update_key_values = self.jsonify_object(data=update_key_values)
             if token is not None:
-                print_verbose(f"token: [set={token is not None}]")
+                print_verbose(f"token: {token}")
                 # check if plain text or hash
                 token = _hash_token_if_needed(token=token)
                 db_data["token"] = token
@@ -4909,9 +4830,6 @@ async def update_spend(  # noqa: PLR0915
 
     Triggered every minute.
 
-    NOTE: This job now skips tag spend updates, which are handled by a separate
-    scheduler job (update_daily_tag_spend) at a longer interval to reduce contention.
-
     Requires:
     user_id_list: dict,
     keys_list: list,
@@ -4942,46 +4860,6 @@ async def update_spend(  # noqa: PLR0915
             db_writer_client=db_writer_client,
             proxy_logging_obj=proxy_logging_obj,
         )
-
-
-async def update_daily_tag_spend(
-    prisma_client: PrismaClient,
-    proxy_logging_obj: ProxyLogging,
-):
-    """
-    Separate scheduler job to commit daily tag spend updates.
-    
-    Runs at a longer interval (2.3x default) than the main update_spend job
-    to reduce query contention for DailyTagSpend table.
-    
-    This is called by a dedicated scheduler job and does NOT process:
-    - Regular spend updates (user, key, team, org)
-    - End-user spend
-    - Agent spend
-    - Spend logs
-    
-    Only processes tag spend transactions from the daily_tag_spend_update_queue.
-    
-    Args:
-        prisma_client: PrismaClient instance
-        proxy_logging_obj: ProxyLogging instance for error handling
-    """
-    n_retry_times = 3
-    try:
-        if proxy_logging_obj.db_spend_update_writer.redis_update_buffer._should_commit_spend_updates_to_redis():
-            await proxy_logging_obj.db_spend_update_writer._commit_daily_tag_spend_to_db_with_redis(
-                prisma_client=prisma_client,
-                n_retry_times=n_retry_times,
-                proxy_logging_obj=proxy_logging_obj,
-            )
-        else:
-            await proxy_logging_obj.db_spend_update_writer._commit_daily_tag_spend_to_db(
-                prisma_client=prisma_client,
-                n_retry_times=n_retry_times,
-                proxy_logging_obj=proxy_logging_obj,
-            )
-    except Exception as e:
-        verbose_proxy_logger.error(f"Error updating daily tag spend: {e}")
 
 
 async def update_spend_logs_job(
@@ -5324,19 +5202,6 @@ def get_error_message_str(e: Exception) -> str:
     return error_message
 
 
-def _get_openapi_url() -> Optional[str]:
-    """
-    Get the OpenAPI schema URL from the environment variables.
-
-    - If NO_OPENAPI is True, return None.
-    - Otherwise, default to "/openapi.json".
-    """
-    if str_to_bool(os.getenv("NO_OPENAPI")) is True:
-        return None
-
-    return "/openapi.json"
-
-
 def _get_redoc_url() -> Optional[str]:
     """
     Get the Redoc URL from the environment variables.
@@ -5388,12 +5253,11 @@ def handle_exception_on_proxy(e: Exception) -> ProxyException:
         )
     elif isinstance(e, ProxyException):
         return e
-    _status_code = getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR)
     return ProxyException(
-        message=str(e),
+        message="Internal Server Error, " + str(e),
         type=ProxyErrorTypes.internal_server_error,
         param=getattr(e, "param", "None"),
-        code=_status_code,
+        code=status.HTTP_500_INTERNAL_SERVER_ERROR,
     )
 
 

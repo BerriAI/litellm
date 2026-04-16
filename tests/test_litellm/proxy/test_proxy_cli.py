@@ -348,10 +348,7 @@ class TestProxyInitializationHelpers:
             },
         ), patch(
             "litellm.proxy.proxy_cli.ProxyInitializationHelpers._get_default_unvicorn_init_args"
-        ) as mock_get_args, patch(
-            "litellm.proxy.proxy_cli.ProxyInitializationHelpers._is_port_in_use",
-            return_value=False,
-        ):
+        ) as mock_get_args:
             mock_get_args.return_value = {
                 "app": "litellm.proxy.proxy_server:app",
                 "host": "localhost",

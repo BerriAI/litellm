@@ -23,7 +23,7 @@ import TabItem from '@theme/TabItem';
 
 Install redis
 ```shell
-uv add redis
+pip install redis
 ```
 
 For the hosted version you can setup your own Redis DB here: https://redis.io/try-free/
@@ -55,7 +55,7 @@ response2 = completion(
 For GCP Memorystore Redis with IAM authentication:
 
 ```shell
-uv add google-cloud-iam
+pip install google-cloud-iam
 ```
 
 ```python
@@ -150,7 +150,7 @@ response2 = completion(
 
 Install boto3
 ```shell
-uv add boto3
+pip install boto3
 ```
 
 Set AWS environment variables
@@ -187,7 +187,7 @@ response2 = completion(
 
 Install azure-storage-blob and azure-identity
 ```shell
-uv add azure-storage-blob azure-identity
+pip install azure-storage-blob azure-identity
 ```
 
 ```python
@@ -219,7 +219,7 @@ response2 = completion(
 
 Install redisvl client
 ```shell
-uv add redisvl==0.4.1
+pip install redisvl==0.4.1
 ```
 
 For the hosted version you can setup your own Redis DB here: https://redis.io/try-free/
@@ -366,7 +366,7 @@ response2 = completion(
 Install the disk caching extra:
 
 ```shell
-uv add "litellm[caching]"
+pip install "litellm[caching]"
 ```
 
 Then you can use the disk cache as follows.

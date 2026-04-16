@@ -14,7 +14,7 @@ Anthropic, OpenAI, Qwen, xAI, Gemini and most of Open soured LLMs are Supported 
 ## Pre-Requisites
 
 ```bash
-uv add litellm
+pip install litellm
 ```
 
 ## Required Environment Variables
