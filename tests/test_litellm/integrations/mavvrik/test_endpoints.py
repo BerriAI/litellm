@@ -564,10 +564,11 @@ class TestRegisterModule:
             )
 
         mock_scheduler.add_job.assert_called_once()
-        call_kwargs = mock_scheduler.add_job.call_args[1]
-        assert (
-            call_kwargs["trigger"] == "interval" or mock_scheduler.add_job.call_args[0]
-        )
+        # APScheduler add_job is called with positional + keyword args;
+        # verify "interval" appears somewhere in the call
+        call_args = mock_scheduler.add_job.call_args
+        all_args = list(call_args.args) + list(call_args.kwargs.values())
+        assert "interval" in all_args
 
     @pytest.mark.asyncio
     async def test_register_background_job_skips_when_no_loggers(self):
