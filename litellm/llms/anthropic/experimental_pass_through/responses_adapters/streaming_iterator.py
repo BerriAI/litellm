@@ -86,8 +86,9 @@ class AnthropicResponsesStreamWrapper:
 
         # ---- message_start ----
         if event_type == "response.created":
-            self._sent_message_start = True
-            self._chunk_queue.append(self._make_message_start())
+            if not self._sent_message_start:
+                self._sent_message_start = True
+                self._chunk_queue.append(self._make_message_start())
             return
 
         # ---- content_block_start for a new output message item ----
