@@ -1571,6 +1571,50 @@ class TestVLLMProxyRoute:
     @pytest.mark.asyncio
     @patch(
         "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.get_request_body",
+        return_value={},
+    )
+    @patch("litellm.proxy.proxy_server.llm_router")
+    async def test_vllm_proxy_route_uses_query_param_model_for_get_passthrough(
+        self, mock_llm_router, mock_get_body
+    ):
+        mock_request = MagicMock(spec=Request)
+        mock_request.method = "GET"
+        mock_request.headers = {}
+        mock_request.query_params = {"model": "router-model"}
+        mock_fastapi_response = MagicMock(spec=Response)
+        mock_user_api_key_dict = MagicMock()
+        mock_llm_router.get_model_names.return_value = ["router-model"]
+        mock_llm_router.allm_passthrough_route = AsyncMock(
+            return_value=httpx.Response(200, json={"response": "success"})
+        )
+
+        result = await vllm_proxy_route(
+            endpoint="/models",
+            request=mock_request,
+            fastapi_response=mock_fastapi_response,
+            user_api_key_dict=mock_user_api_key_dict,
+        )
+
+        assert result.status_code == 200
+        mock_llm_router.allm_passthrough_route.assert_awaited_once_with(
+            model="router-model",
+            method="GET",
+            endpoint="/models",
+            request_query_params=mock_request.query_params,
+            request_headers=mock_request.headers,
+            stream=False,
+            content=None,
+            data=None,
+            files=None,
+            json=None,
+            params=None,
+            headers=None,
+            cookies=None,
+        )
+
+    @pytest.mark.asyncio
+    @patch(
+        "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.get_request_body",
         return_value={"model": "other-model"},
     )
     @patch(
