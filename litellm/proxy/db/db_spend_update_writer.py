@@ -1134,7 +1134,10 @@ class DBSpendUpdateWriter:
                             ) in user_list_transactions.items():
                                 batcher.litellm_usertable.update_many(
                                     where={"user_id": user_id},
-                                    data={"spend": {"increment": response_cost}},
+                                    data={
+                                        "spend": {"increment": response_cost},
+                                        "total_spend": {"increment": response_cost},
+                                    },
                                 )
                     break
                 except DB_CONNECTION_ERROR_TYPES as e:
@@ -1191,6 +1194,7 @@ class DBSpendUpdateWriter:
                                     where={"token": token},
                                     data={
                                         "spend": {"increment": response_cost},
+                                        "total_spend": {"increment": response_cost},
                                         "last_active": datetime.now(timezone.utc),
                                     },
                                 )
@@ -1238,7 +1242,10 @@ class DBSpendUpdateWriter:
                                 )
                                 batcher.litellm_teamtable.update_many(  # 'update_many' prevents error from being raised if no row exists
                                     where={"team_id": team_id},
-                                    data={"spend": {"increment": response_cost}},
+                                    data={
+                                        "spend": {"increment": response_cost},
+                                        "total_spend": {"increment": response_cost},
+                                    },
                                 )
                     break
                 except DB_CONNECTION_ERROR_TYPES as e:
@@ -1295,7 +1302,10 @@ class DBSpendUpdateWriter:
 
                                 batcher.litellm_teammembership.update_many(  # 'update_many' prevents error from being raised if no row exists
                                     where={"team_id": team_id, "user_id": user_id},
-                                    data={"spend": {"increment": response_cost}},
+                                    data={
+                                        "spend": {"increment": response_cost},
+                                        "total_spend": {"increment": response_cost},
+                                    },
                                 )
                     # Transaction succeeded, break out of retry loop
                     break
@@ -1348,7 +1358,10 @@ class DBSpendUpdateWriter:
                             ) in org_list_transactions.items():
                                 batcher.litellm_organizationtable.update_many(  # 'update_many' prevents error from being raised if no row exists
                                     where={"organization_id": org_id},
-                                    data={"spend": {"increment": response_cost}},
+                                    data={
+                                        "spend": {"increment": response_cost},
+                                        "total_spend": {"increment": response_cost},
+                                    },
                                 )
                     break
                 except DB_CONNECTION_ERROR_TYPES as e:
@@ -1439,7 +1452,10 @@ class DBSpendUpdateWriter:
                                 )
                                 getattr(batcher, table_accessor).update_many(
                                     where={where_field: entity_id},
-                                    data={"spend": {"increment": response_cost}},
+                                    data={
+                                        "spend": {"increment": response_cost},
+                                        "total_spend": {"increment": response_cost},
+                                    },
                                 )
                     break
                 except DB_CONNECTION_ERROR_TYPES as e:

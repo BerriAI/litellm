@@ -4764,9 +4764,13 @@ class ProxyUpdateSpend:
                                     "create": {
                                         "user_id": end_user_id,
                                         "spend": response_cost,
+                                        "total_spend": response_cost,
                                         "blocked": False,
                                     },
-                                    "update": {"spend": {"increment": response_cost}},
+                                    "update": {
+                                        "spend": {"increment": response_cost},
+                                        "total_spend": {"increment": response_cost},
+                                    },
                                 },
                             )
 
