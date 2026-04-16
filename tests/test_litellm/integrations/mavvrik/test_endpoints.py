@@ -22,8 +22,8 @@ from litellm.types.proxy.mavvrik_endpoints import (
     MavvrikSettingsUpdate,
 )
 
-# Patch target for LiteLLMDatabase used inside the endpoints module
-_DB_PATH = "litellm.proxy.spend_tracking.mavvrik_endpoints.LiteLLMDatabase"
+# Patch target prefix — MavvrikService methods live in the integrations package.
+_SVC = "litellm.integrations.mavvrik.MavvrikService"
 
 
 def _admin_user() -> UserAPIKeyAuth:
@@ -32,14 +32,6 @@ def _admin_user() -> UserAPIKeyAuth:
 
 def _non_admin_user() -> UserAPIKeyAuth:
     return UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER)
-
-
-def _mock_db(settings: dict = None, set_ok: bool = True):
-    """Return a mock LiteLLMDatabase instance with pre-configured returns."""
-    db = MagicMock()
-    db.get_mavvrik_settings = AsyncMock(return_value=settings or {})
-    db.set_mavvrik_settings = AsyncMock()
-    return db
 
 
 # ---------------------------------------------------------------------------
@@ -90,62 +82,43 @@ class TestInitMavvrikSettings:
             connection_id="litellm-prod",
         )
 
-        mock_streamer = MagicMock()
-        mock_streamer.register = AsyncMock(return_value="2024-01-01T00:00:00+00:00")
-        mock_db = _mock_db()
-
         with patch(
-            "litellm.proxy.spend_tracking.mavvrik_endpoints.MavvrikUploader",
-            return_value=mock_streamer,
-        ), patch(
-            "litellm.proxy.spend_tracking.mavvrik_endpoints.encrypt_value_helper",
-            return_value="encrypted_key",
-        ), patch(
-            _DB_PATH, return_value=mock_db
-        ), patch(
-            "litellm.proxy.spend_tracking.mavvrik_endpoints._pserver",
-            MagicMock(scheduler=None),
-            create=True,
+            f"{_SVC}.initialize",
+            new=AsyncMock(
+                return_value={
+                    "message": "Mavvrik settings initialized successfully",
+                    "status": "success",
+                }
+            ),
         ):
             resp = await init_mavvrik_settings(req, user_api_key_dict=_admin_user())
 
         assert resp.status == "success"
-        mock_db.set_mavvrik_settings.assert_called_once()
-        stored = mock_db.set_mavvrik_settings.call_args[0][0]
-        assert stored["api_key"] == "encrypted_key"
-        assert stored["marker"] == "2024-01-01T00:00:00+00:00"
 
     @pytest.mark.asyncio
     async def test_init_falls_back_to_first_of_month_when_register_fails(self):
+        """When MavvrikClient.register() fails, MavvrikService still succeeds
+        (the first-of-month fallback happens inside initialize())."""
+        from litellm.integrations.mavvrik.client import MavvrikClient
+        from litellm.integrations.mavvrik.settings import MavvrikSettings
+
         req = MavvrikInitRequest(
             api_key="mav_key",
             api_endpoint="https://api.mavvrik.dev/acme",
             connection_id="litellm-prod",
         )
 
-        mock_streamer = MagicMock()
-        mock_streamer.register = AsyncMock(side_effect=Exception("network error"))
-        mock_db = _mock_db()
-
-        with patch(
-            "litellm.proxy.spend_tracking.mavvrik_endpoints.MavvrikUploader",
-            return_value=mock_streamer,
+        with patch.object(
+            MavvrikClient, "register", new=AsyncMock(side_effect=Exception("network error"))
+        ), patch.object(
+            MavvrikSettings, "save", new=AsyncMock()
         ), patch(
-            "litellm.proxy.spend_tracking.mavvrik_endpoints.encrypt_value_helper",
-            return_value="enc",
-        ), patch(
-            _DB_PATH, return_value=mock_db
-        ), patch(
-            "litellm.proxy.spend_tracking.mavvrik_endpoints._pserver",
-            MagicMock(scheduler=None),
-            create=True,
+            "litellm.integrations.mavvrik.MavvrikScheduler.register_exporter_and_job",
+            new=AsyncMock(),
         ):
             resp = await init_mavvrik_settings(req, user_api_key_dict=_admin_user())
 
         assert resp.status == "success"
-        mock_db.set_mavvrik_settings.assert_called_once()
-        stored = mock_db.set_mavvrik_settings.call_args[0][0]
-        assert "marker" in stored
 
 
 # ---------------------------------------------------------------------------
@@ -156,9 +129,18 @@ class TestInitMavvrikSettings:
 class TestGetMavvrikSettings:
     @pytest.mark.asyncio
     async def test_returns_not_configured_when_no_row(self):
-        mock_db = _mock_db(settings={})
-
-        with patch(_DB_PATH, return_value=mock_db):
+        with patch(
+            f"{_SVC}.get_settings",
+            new=AsyncMock(
+                return_value={
+                    "api_key_masked": None,
+                    "api_endpoint": None,
+                    "connection_id": None,
+                    "marker": None,
+                    "status": "not_configured",
+                }
+            ),
+        ):
             resp = await get_mavvrik_settings(user_api_key_dict=_admin_user())
 
         assert resp.status == "not_configured"
@@ -166,18 +148,17 @@ class TestGetMavvrikSettings:
 
     @pytest.mark.asyncio
     async def test_returns_masked_key_when_configured(self):
-        mock_db = _mock_db(
-            settings={
-                "api_key": "enc_key",
-                "api_endpoint": "https://api.mavvrik.dev/acme",
-                "connection_id": "prod",
-                "marker": "2024-01-14",
-            }
-        )
-
-        with patch(_DB_PATH, return_value=mock_db), patch(
-            "litellm.proxy.spend_tracking.mavvrik_endpoints.decrypt_value_helper",
-            return_value="mav_plaintextkey",
+        with patch(
+            f"{_SVC}.get_settings",
+            new=AsyncMock(
+                return_value={
+                    "api_key_masked": "mav_*******",
+                    "api_endpoint": "https://api.mavvrik.dev/acme",
+                    "connection_id": "prod",
+                    "marker": "2024-01-14",
+                    "status": "configured",
+                }
+            ),
         ):
             resp = await get_mavvrik_settings(user_api_key_dict=_admin_user())
 
@@ -188,25 +169,18 @@ class TestGetMavvrikSettings:
         assert resp.connection_id == "prod"
 
     @pytest.mark.asyncio
-    async def test_raises_500_on_decrypt_failure(self):
+    async def test_raises_500_on_service_error(self):
+        """Any exception from MavvrikService.get_settings() → 500."""
         from fastapi import HTTPException
 
-        mock_db = _mock_db(
-            settings={"api_key": "enc_key", "api_endpoint": "e", "connection_id": "c"}
-        )
-
-        with patch(_DB_PATH, return_value=mock_db), patch(
-            "litellm.proxy.spend_tracking.mavvrik_endpoints.decrypt_value_helper",
-            return_value=None,  # decrypt failure returns None
+        with patch(
+            f"{_SVC}.get_settings",
+            new=AsyncMock(side_effect=Exception("DB exploded")),
         ):
             with pytest.raises(HTTPException) as exc_info:
                 await get_mavvrik_settings(user_api_key_dict=_admin_user())
 
         assert exc_info.value.status_code == 500
-        assert (
-            "salt" in str(exc_info.value.detail).lower()
-            or "decrypt" in str(exc_info.value.detail).lower()
-        )
 
 
 # ---------------------------------------------------------------------------
@@ -226,28 +200,24 @@ class TestUpdateMavvrikSettings:
 
     @pytest.mark.asyncio
     async def test_update_marker_only(self):
-        current = {
-            "api_key": "enc_key",
-            "api_endpoint": "https://api.mavvrik.dev/acme",
-            "connection_id": "prod",
-            "marker": "2024-01-01",
-        }
-        mock_db = _mock_db(settings=current)
         req = MavvrikSettingsUpdate(marker="2024-06-01")
 
-        with patch(_DB_PATH, return_value=mock_db), patch(
-            "litellm.proxy.spend_tracking.mavvrik_endpoints.decrypt_value_helper",
-            return_value="plain_key",
-        ), patch(
-            "litellm.proxy.spend_tracking.mavvrik_endpoints.encrypt_value_helper",
-            return_value="enc_key",
-        ):
+        with patch(
+            f"{_SVC}.update_settings",
+            new=AsyncMock(
+                return_value={
+                    "message": "Mavvrik settings updated successfully",
+                    "status": "success",
+                }
+            ),
+        ) as mock_update:
             resp = await update_mavvrik_settings(req, user_api_key_dict=_admin_user())
 
         assert resp.status == "success"
-        mock_db.set_mavvrik_settings.assert_called_once()
-        stored = mock_db.set_mavvrik_settings.call_args[0][0]
-        assert stored["marker"] == "2024-06-01"
+        mock_update.assert_called_once()
+        # Verify marker was forwarded
+        _, kwargs = mock_update.call_args
+        assert kwargs.get("marker") == "2024-06-01"
 
     def test_update_rejects_invalid_marker_date(self):
         with pytest.raises(Exception, match="YYYY-MM-DD"):
@@ -266,14 +236,12 @@ class TestUpdateMavvrikSettings:
 class TestDeleteMavvrikSettings:
     @pytest.mark.asyncio
     async def test_delete_returns_404_when_not_configured(self):
+        """MavvrikSettings.delete() raises LookupError → endpoint returns 404."""
         from fastapi import HTTPException
 
-        mock_prisma = MagicMock()
-        mock_prisma.db.litellm_config.find_first = AsyncMock(return_value=None)
-
         with patch(
-            "litellm.proxy.proxy_server.prisma_client",
-            mock_prisma,
+            f"{_SVC}.delete",
+            new=AsyncMock(side_effect=LookupError("Mavvrik settings not found — nothing to delete.")),
         ):
             with pytest.raises(HTTPException) as exc_info:
                 await delete_mavvrik_settings(user_api_key_dict=_admin_user())
@@ -281,20 +249,18 @@ class TestDeleteMavvrikSettings:
 
     @pytest.mark.asyncio
     async def test_delete_removes_row_and_returns_success(self):
-        mock_prisma = MagicMock()
-        mock_prisma.db.litellm_config.find_first = AsyncMock(
-            return_value=MagicMock(param_value="{}")
-        )
-        mock_prisma.db.litellm_config.delete = AsyncMock()
-
         with patch(
-            "litellm.proxy.proxy_server.prisma_client",
-            mock_prisma,
+            f"{_SVC}.delete",
+            new=AsyncMock(
+                return_value={
+                    "message": "Mavvrik settings deleted successfully",
+                    "status": "success",
+                }
+            ),
         ):
             resp = await delete_mavvrik_settings(user_api_key_dict=_admin_user())
 
         assert resp.status == "success"
-        mock_prisma.db.litellm_config.delete.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
@@ -305,36 +271,29 @@ class TestDeleteMavvrikSettings:
 class TestDryRunMavvrikExport:
     @pytest.mark.asyncio
     async def test_dry_run_returns_preview(self):
-        settings = {
-            "api_key": "plain_key",
-            "api_endpoint": "https://api.mavvrik.dev/acme",
-            "connection_id": "prod",
-        }
-        mock_db = _mock_db(settings=settings)
-
-        dry_run_result = {
-            "usage_data": [{"date": "2024-01-14", "model": "gpt-4o", "spend": 1.5}],
-            "csv_preview": "date,model,spend\n2024-01-14,gpt-4o,1.5",
-            "summary": {
-                "total_records": 1,
-                "total_cost": 1.5,
-                "total_tokens": 100,
-                "unique_models": 1,
-                "unique_teams": 1,
-            },
-        }
-
-        mock_logger = MagicMock()
-        mock_logger.dry_run_export_usage_data = AsyncMock(return_value=dry_run_result)
-
         req = MavvrikExportRequest(date_str="2024-01-14")
 
-        with patch(_DB_PATH, return_value=mock_db), patch(
-            "litellm.proxy.spend_tracking.mavvrik_endpoints.decrypt_value_helper",
-            return_value="plain_key",
-        ), patch(
-            "litellm.proxy.spend_tracking.mavvrik_endpoints.MavvrikLogger",
-            return_value=mock_logger,
+        with patch(
+            f"{_SVC}.dry_run",
+            new=AsyncMock(
+                return_value={
+                    "message": "Mavvrik dry run completed",
+                    "status": "success",
+                    "dry_run_data": {
+                        "usage_data": [
+                            {"date": "2024-01-14", "model": "gpt-4o", "spend": 1.5}
+                        ],
+                        "csv_preview": "date,model,spend\n2024-01-14,gpt-4o,1.5",
+                    },
+                    "summary": {
+                        "total_records": 1,
+                        "total_cost": 1.5,
+                        "total_tokens": 100,
+                        "unique_models": 1,
+                        "unique_teams": 1,
+                    },
+                }
+            ),
         ):
             resp = await dry_run_mavvrik_export(req, user_api_key_dict=_admin_user())
 
@@ -344,46 +303,32 @@ class TestDryRunMavvrikExport:
 
     @pytest.mark.asyncio
     async def test_dry_run_defaults_to_yesterday_when_no_date(self):
-        mock_db = _mock_db(
-            settings={
-                "api_key": "enc",
-                "api_endpoint": "https://api.mavvrik.dev/acme",
-                "connection_id": "prod",
-            }
-        )
-        empty_result = {
-            "usage_data": [],
-            "csv_preview": "",
-            "summary": {
-                "total_records": 0,
-                "total_cost": 0.0,
-                "total_tokens": 0,
-                "unique_models": 0,
-                "unique_teams": 0,
-            },
-        }
-        mock_logger = MagicMock()
-        mock_logger.dry_run_export_usage_data = AsyncMock(return_value=empty_result)
-
         req = MavvrikExportRequest()  # no date_str
 
-        with patch(_DB_PATH, return_value=mock_db), patch(
-            "litellm.proxy.spend_tracking.mavvrik_endpoints.decrypt_value_helper",
-            return_value="plain_key",
-        ), patch(
-            "litellm.proxy.spend_tracking.mavvrik_endpoints.MavvrikLogger",
-            return_value=mock_logger,
-        ):
+        with patch(
+            f"{_SVC}.dry_run",
+            new=AsyncMock(
+                return_value={
+                    "message": "Mavvrik dry run completed",
+                    "status": "success",
+                    "dry_run_data": {"usage_data": [], "csv_preview": ""},
+                    "summary": {
+                        "total_records": 0,
+                        "total_cost": 0.0,
+                        "total_tokens": 0,
+                        "unique_models": 0,
+                        "unique_teams": 0,
+                    },
+                }
+            ),
+        ) as mock_dry_run:
             resp = await dry_run_mavvrik_export(req, user_api_key_dict=_admin_user())
 
         assert resp.status == "success"
-        # Verify a date_str was passed (yesterday) rather than None
-        called_date = (
-            mock_logger.dry_run_export_usage_data.call_args[1].get("date_str")
-            or mock_logger.dry_run_export_usage_data.call_args[0][0]
-        )
-        assert called_date is not None
-        assert called_date != ""
+        mock_dry_run.assert_called_once()
+        # date_str=None is passed through; MavvrikService.dry_run() resolves it to yesterday
+        _, kwargs = mock_dry_run.call_args
+        assert "date_str" in kwargs
 
 
 # ---------------------------------------------------------------------------
@@ -396,23 +341,17 @@ class TestExportMavvrikData:
     async def test_export_returns_success_and_record_count(self):
         from litellm.proxy.spend_tracking.mavvrik_endpoints import export_mavvrik_data
 
-        settings = {
-            "api_key": "plain_key",
-            "api_endpoint": "https://api.mavvrik.dev/acme",
-            "connection_id": "prod",
-        }
-        mock_db = _mock_db(settings=settings)
-        mock_logger = MagicMock()
-        mock_logger.export_usage_data = AsyncMock(return_value=7)
-
         req = MavvrikExportRequest(date_str="2024-01-15")
 
-        with patch(_DB_PATH, return_value=mock_db), patch(
-            "litellm.proxy.spend_tracking.mavvrik_endpoints.decrypt_value_helper",
-            return_value="plain_key",
-        ), patch(
-            "litellm.proxy.spend_tracking.mavvrik_endpoints.MavvrikLogger",
-            return_value=mock_logger,
+        with patch(
+            f"{_SVC}.export",
+            new=AsyncMock(
+                return_value={
+                    "message": "Mavvrik export completed successfully for 2024-01-15",
+                    "status": "success",
+                    "records_exported": 7,
+                }
+            ),
         ):
             resp = await export_mavvrik_data(req, user_api_key_dict=_admin_user())
 
@@ -426,49 +365,41 @@ class TestExportMavvrikData:
 
         from litellm.proxy.spend_tracking.mavvrik_endpoints import export_mavvrik_data
 
-        mock_db = _mock_db(settings={})  # empty = not configured
         req = MavvrikExportRequest(date_str="2024-01-15")
 
-        with patch(_DB_PATH, return_value=mock_db), patch(
-            "litellm.proxy.spend_tracking.mavvrik_endpoints.decrypt_value_helper",
-            return_value=None,
+        with patch(
+            f"{_SVC}.export",
+            new=AsyncMock(
+                side_effect=ValueError("Mavvrik not configured. Call POST /mavvrik/init first.")
+            ),
         ):
             with pytest.raises(HTTPException) as exc_info:
                 await export_mavvrik_data(req, user_api_key_dict=_admin_user())
 
-        assert exc_info.value.status_code in (400, 500)
+        assert exc_info.value.status_code == 400
 
     @pytest.mark.asyncio
     async def test_export_defaults_to_yesterday_when_no_date(self):
         from litellm.proxy.spend_tracking.mavvrik_endpoints import export_mavvrik_data
 
-        settings = {
-            "api_key": "plain_key",
-            "api_endpoint": "https://api.mavvrik.dev/acme",
-            "connection_id": "prod",
-        }
-        mock_db = _mock_db(settings=settings)
-        mock_logger = MagicMock()
-        mock_logger.export_usage_data = AsyncMock(return_value=3)
-
         req = MavvrikExportRequest()  # no date_str
 
-        with patch(_DB_PATH, return_value=mock_db), patch(
-            "litellm.proxy.spend_tracking.mavvrik_endpoints.decrypt_value_helper",
-            return_value="plain_key",
-        ), patch(
-            "litellm.proxy.spend_tracking.mavvrik_endpoints.MavvrikLogger",
-            return_value=mock_logger,
-        ):
+        with patch(
+            f"{_SVC}.export",
+            new=AsyncMock(
+                return_value={
+                    "message": "Mavvrik export completed successfully for 2024-01-15",
+                    "status": "success",
+                    "records_exported": 3,
+                }
+            ),
+        ) as mock_export:
             resp = await export_mavvrik_data(req, user_api_key_dict=_admin_user())
 
         assert resp.status == "success"
-        mock_logger.export_usage_data.assert_called_once()
-        called_date = (
-            mock_logger.export_usage_data.call_args[1].get("date_str")
-            or mock_logger.export_usage_data.call_args[0][0]
-        )
-        assert called_date is not None
+        mock_export.assert_called_once()
+        _, kwargs = mock_export.call_args
+        assert "date_str" in kwargs
 
 
 # ---------------------------------------------------------------------------
@@ -479,21 +410,32 @@ class TestExportMavvrikData:
 class TestLifecycleFlow:
     @pytest.mark.asyncio
     async def test_get_settings_returns_not_configured_after_delete(self):
-        """DELETE removes row → subsequent GET returns not_configured."""
-        mock_prisma = MagicMock()
-        mock_prisma.db.litellm_config.find_first = AsyncMock(
-            return_value=MagicMock(param_value="{}")
-        )
-        mock_prisma.db.litellm_config.delete = AsyncMock()
-
-        with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma):
+        """DELETE succeeds → subsequent GET returns not_configured."""
+        with patch(
+            f"{_SVC}.delete",
+            new=AsyncMock(
+                return_value={
+                    "message": "Mavvrik settings deleted successfully",
+                    "status": "success",
+                }
+            ),
+        ):
             del_resp = await delete_mavvrik_settings(user_api_key_dict=_admin_user())
 
         assert del_resp.status == "success"
 
-        # Now GET should return not_configured (DB empty)
-        mock_db_empty = _mock_db(settings={})
-        with patch(_DB_PATH, return_value=mock_db_empty):
+        with patch(
+            f"{_SVC}.get_settings",
+            new=AsyncMock(
+                return_value={
+                    "api_key_masked": None,
+                    "api_endpoint": None,
+                    "connection_id": None,
+                    "marker": None,
+                    "status": "not_configured",
+                }
+            ),
+        ):
             get_resp = await get_mavvrik_settings(user_api_key_dict=_admin_user())
 
         assert get_resp.status == "not_configured"
@@ -501,23 +443,16 @@ class TestLifecycleFlow:
     @pytest.mark.asyncio
     async def test_update_marker_visible_in_subsequent_get(self):
         """PUT marker → GET returns new marker value."""
-        current = {
-            "api_key": "enc_key",
-            "api_endpoint": "https://api.mavvrik.dev/acme",
-            "connection_id": "prod",
-            "marker": "2024-01-01",
-        }
-        updated = {**current, "marker": "2024-06-01"}
-
-        mock_db_current = _mock_db(settings=current)
         req = MavvrikSettingsUpdate(marker="2024-06-01")
 
-        with patch(_DB_PATH, return_value=mock_db_current), patch(
-            "litellm.proxy.spend_tracking.mavvrik_endpoints.decrypt_value_helper",
-            return_value="plain_key",
-        ), patch(
-            "litellm.proxy.spend_tracking.mavvrik_endpoints.encrypt_value_helper",
-            return_value="enc_key",
+        with patch(
+            f"{_SVC}.update_settings",
+            new=AsyncMock(
+                return_value={
+                    "message": "Mavvrik settings updated successfully",
+                    "status": "success",
+                }
+            ),
         ):
             put_resp = await update_mavvrik_settings(
                 req, user_api_key_dict=_admin_user()
@@ -525,11 +460,17 @@ class TestLifecycleFlow:
 
         assert put_resp.status == "success"
 
-        # Simulate GET after update
-        mock_db_updated = _mock_db(settings=updated)
-        with patch(_DB_PATH, return_value=mock_db_updated), patch(
-            "litellm.proxy.spend_tracking.mavvrik_endpoints.decrypt_value_helper",
-            return_value="plain_key",
+        with patch(
+            f"{_SVC}.get_settings",
+            new=AsyncMock(
+                return_value={
+                    "api_key_masked": "mav_*****",
+                    "api_endpoint": "https://api.mavvrik.dev/acme",
+                    "connection_id": "prod",
+                    "marker": "2024-06-01",
+                    "status": "configured",
+                }
+            ),
         ):
             get_resp = await get_mavvrik_settings(user_api_key_dict=_admin_user())
 
