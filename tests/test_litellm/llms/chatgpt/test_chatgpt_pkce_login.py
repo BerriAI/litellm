@@ -91,8 +91,9 @@ class _FakeHandler:
 
 def _invoke_handler(handler_cls, path):
     fake = _FakeHandler(handler_cls, path)
-    # Bind both methods to the fake; they only read self.path / self.wfile / etc.
+    # Bind helper methods to the fake; they only read self.path / self.wfile / etc.
     fake._respond_html = handler_cls._respond_html.__get__(fake, type(fake))
+    fake._respond_error = handler_cls._respond_error.__get__(fake, type(fake))
     handler_cls.do_GET(fake)
     return fake
 
@@ -137,6 +138,30 @@ class TestPkceCallbackHandler:
         assert fake.response_status == 404
         assert result == {}
         assert not event.is_set()
+
+    def test_escapes_error_description_to_prevent_xss(self):
+        """
+        ``error_description`` comes from query params. The callback response
+        HTML must escape it so a malicious OAuth redirect cannot inject
+        script into the loopback server's response body.
+        """
+        result = {}
+        event = threading.Event()
+        handler_cls = _make_handler(result, event, expected_state="abc")
+        # urlencoded "<script>alert(1)</script>" in error_description
+        payload = "%3Cscript%3Ealert%281%29%3C%2Fscript%3E"
+        fake = _invoke_handler(
+            handler_cls,
+            f"{REDIRECT_PATH}?error=access_denied&error_description={payload}&state=abc",
+        )
+        body = fake.wfile.written.decode("utf-8")
+        assert fake.response_status == 400
+        # Raw tag must not appear in the response; escaped form must.
+        assert "<script>alert(1)</script>" not in body
+        assert "&lt;script&gt;alert(1)&lt;/script&gt;" in body
+        # The unescaped form is still what we store in `result["error"]` — the
+        # in-process dict is not rendered as HTML, only the response body is.
+        assert result["error"] == "<script>alert(1)</script>"
 
 
 class TestPkceTokenExchange:

@@ -8,6 +8,7 @@ merge conflicts when syncing from BerriAI/litellm.
 
 import base64
 import hashlib
+import html
 import http.server
 import secrets
 import threading
@@ -220,24 +221,29 @@ def _make_handler(
             error = params.get("error", [None])[0]
             if error:
                 result["error"] = params.get("error_description", [error])[0]
-                self._respond_html(400, _ERROR_HTML.format(message=__import__('html').escape(result["error"])))
+                self._respond_error(result["error"])
                 completed.set()
                 return
             state = params.get("state", [None])[0]
             code = params.get("code", [None])[0]
             if state != expected_state:
                 result["error"] = "state mismatch"
-                self._respond_html(400, _ERROR_HTML.format(message="state mismatch"))
+                self._respond_error("state mismatch")
                 completed.set()
                 return
             if not code:
                 result["error"] = "missing code"
-                self._respond_html(400, _ERROR_HTML.format(message="missing code"))
+                self._respond_error("missing code")
                 completed.set()
                 return
             result["code"] = code
             self._respond_html(200, _SUCCESS_HTML)
             completed.set()
+
+        def _respond_error(self, message: str) -> None:
+            # ``message`` can originate from the IdP's ``error_description``
+            # query param, so escape before interpolating into HTML.
+            self._respond_html(400, _ERROR_HTML.format(message=html.escape(message)))
 
         def _respond_html(self, status: int, body: str) -> None:
             payload = body.encode("utf-8")
