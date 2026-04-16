@@ -1069,9 +1069,10 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
                 verbose_proxy_logger.warning(
                     f"Failed to parse 'metadata' as JSON dict. Received value: {data['metadata']}"
                 )
-        data[_metadata_variable_name]["requester_metadata"] = copy.deepcopy(
-            data["metadata"]
-        )
+        # requester_metadata is snapshotted AFTER the strip below so
+        # downstream consumers (e.g. PANW guardrail reading user_ip /
+        # profile_id) don't see attacker-injected admin slots preserved in
+        # the deepcopy.
 
     # Parse litellm_metadata if it's a string (e.g., from multipart/form-data or extra_body)
     if "litellm_metadata" in data and data["litellm_metadata"] is not None:
@@ -1130,6 +1131,16 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
                 "to opt into client-supplied routing/budget tags.",
                 ", ".join(_stripped_from),
             )
+
+    # Snapshot the (now-cleaned) requester-supplied metadata for downstream
+    # consumers. Taking the deepcopy AFTER the strip prevents attacker-
+    # injected admin slots (user_api_key_metadata, tags without opt-in,
+    # _pipeline_managed_guardrails) from surviving in requester_metadata
+    # where guardrails and audit paths may read from it.
+    if "metadata" in data and isinstance(data["metadata"], dict):
+        data[_metadata_variable_name]["requester_metadata"] = copy.deepcopy(
+            data["metadata"]
+        )
 
     # Now merge litellm_metadata into the metadata variable (preserving existing
     # values) — runs AFTER the strip so attacker injections in litellm_metadata
@@ -1300,15 +1311,24 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
         user_agent = request.headers["user-agent"]
     data[_metadata_variable_name]["user_agent"] = user_agent
 
-    # Check if using tag based routing
+    # Check if using tag based routing. The helper reads caller-controlled
+    # sources (x-litellm-tags header, data["tags"] root-level), so its result
+    # is still gated by the same allow_client_tags flag that gated the
+    # body-metadata tag strip above. Otherwise the strip is trivially
+    # bypassed by sending tags via header or at the root of the body.
     tags = LiteLLMProxyRequestSetup.add_request_tag_to_metadata(
         llm_router=llm_router,
         headers=_headers,
         data=data,
     )
 
-    if tags is not None:
+    if tags is not None and _admin_allow_client_tags:
         data[_metadata_variable_name]["tags"] = tags
+    elif tags is not None:
+        verbose_proxy_logger.warning(
+            "Ignored caller-supplied tags from header/root body: this "
+            "key/team does not have `allow_client_tags: true` in its metadata."
+        )
 
     # Team Callbacks controls
     callback_settings_obj = _get_dynamic_logging_metadata(
