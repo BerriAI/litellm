@@ -162,9 +162,13 @@ async def test_add_key_or_team_level_spend_logs_metadata_to_request(
 
     print(f"team_sl_metadata: {team_sl_metadata}")
     mock_request.url.path = "/chat/completions"
+    # Opt the key into client-supplied tags so request_tags are preserved
+    # and merged with admin-configured key/team tags. Without this flag,
+    # request_tags would be stripped by add_litellm_data_to_request.
     key_metadata = {
         "tags": key_tags,
         "spend_logs_metadata": key_sl_metadata,
+        "allow_client_tags": True,
     }
     team_metadata = {
         "tags": team_tags,
