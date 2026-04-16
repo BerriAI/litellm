@@ -15,6 +15,12 @@ from litellm.llms.ollama.chat.transformation import OllamaChatConfig, OllamaChat
 from litellm.types.llms.openai import AllMessageValues
 from litellm.utils import get_optional_params
 
+import json
+from unittest.mock import MagicMock
+
+import litellm
+from litellm.types.utils import Choices, Message, ModelResponse
+
 
 class TestEvent(BaseModel):
     name: str
@@ -427,12 +433,6 @@ class TestOllamaToolCalling:
 
     def test_finish_reason_stop_when_no_tool_calls(self):
         """Test that finish_reason remains 'stop' when no tool_calls present."""
-        import json
-        from unittest.mock import MagicMock
-
-        import litellm
-        from litellm.types.utils import Choices, Message, ModelResponse
-
         config = OllamaChatConfig()
 
         # Simulated Ollama response without tool_calls
@@ -486,11 +486,6 @@ class TestOllamaFinishReasonLength:
 
     def test_finish_reason_length_non_streaming(self):
         """Non-streaming: done_reason='length' must propagate as finish_reason='length'."""
-        import json
-        from unittest.mock import MagicMock
-
-        from litellm.types.utils import Choices, Message, ModelResponse
-
         config = OllamaChatConfig()
 
         ollama_response = {
@@ -535,11 +530,6 @@ class TestOllamaFinishReasonLength:
 
     def test_finish_reason_stop_non_streaming(self):
         """Non-streaming: done_reason='stop' (natural finish) must stay 'stop'."""
-        import json
-        from unittest.mock import MagicMock
-
-        from litellm.types.utils import Choices, Message, ModelResponse
-
         config = OllamaChatConfig()
 
         ollama_response = {
