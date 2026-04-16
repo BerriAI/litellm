@@ -1622,6 +1622,7 @@ class ProxyBaseLLMRequestProcessing:
         """Raises ProxyException (OpenAI API compatible) if an exception is raised"""
         if isinstance(e, HTTPException) and e.status_code == 499:
             verbose_proxy_logger.info("Client disconnected the request (499)")
+            raise e
         else:
             verbose_proxy_logger.exception(
                 f"litellm.proxy.proxy_server._handle_llm_api_exception(): Exception occured - {str(e)}"
