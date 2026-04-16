@@ -192,6 +192,13 @@ export GITHUB_COPILOT_ACCESS_TOKEN_FILE="access-token"
 
 # Optional: Custom API key file name
 export GITHUB_COPILOT_API_KEY_FILE="api-key.json"
+
+# Optional: Custom Copilot endpoints for authentication and usage
+# (needed when using GitHub Enterprise subscriptions with custom endpoints or self-hosted GitHub servers
+export GITHUB_COPILOT_API_BASE="https://copilot-api.my-company.ghe.com"
+export GITHUB_COPILOT_DEVICE_CODE_URL="https://my-company.ghe.com/login/device/code"
+export GITHUB_COPILOT_ACCESS_TOKEN_URL="https://my-company.ghe.com/login/oauth/access_token"
+export GITHUB_COPILOT_API_KEY_URL="https://my-company.ghe.com/api/v3/copilot_internal/v2/token"
 ```
 
 ### Headers
