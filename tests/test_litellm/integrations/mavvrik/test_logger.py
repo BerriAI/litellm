@@ -224,12 +224,9 @@ class TestScheduledExport:
         ), patch.object(
             logger, "export_usage_data", side_effect=fake_export
         ), patch(
-            "litellm.integrations.mavvrik.logger.datetime"
-        ) as mock_dt:
-            mock_dt.now.return_value = datetime(
-                2026, 4, 11, 0, 0, 0, tzinfo=timezone.utc
-            )
-            mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
+            "litellm.integrations.mavvrik.logger._utc_now",
+            return_value=datetime(2026, 4, 11, 0, 0, 0, tzinfo=timezone.utc),
+        ):
             await logger._scheduled_export()
 
         assert exported_dates == ["2026-04-09", "2026-04-10"]
@@ -266,12 +263,9 @@ class TestScheduledExport:
         ), patch.object(
             logger, "export_usage_data", side_effect=fake_export
         ), patch(
-            "litellm.integrations.mavvrik.logger.datetime"
-        ) as mock_dt:
-            mock_dt.now.return_value = datetime(
-                2026, 4, 11, 0, 0, 0, tzinfo=timezone.utc
-            )
-            mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
+            "litellm.integrations.mavvrik.logger._utc_now",
+            return_value=datetime(2026, 4, 11, 0, 0, 0, tzinfo=timezone.utc),
+        ):
             await logger._scheduled_export()
 
         # 2026-04-08: transient error → skipped (advance_marker NOT called)
@@ -294,12 +288,9 @@ class TestScheduledExport:
         with patch(
             "litellm.integrations.mavvrik.logger.LiteLLMDatabase", return_value=mock_db
         ), patch.object(logger, "export_usage_data") as mock_export, patch(
-            "litellm.integrations.mavvrik.logger.datetime"
-        ) as mock_dt:
-            mock_dt.now.return_value = datetime(
-                2026, 4, 11, 0, 0, 0, tzinfo=timezone.utc
-            )
-            mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
+            "litellm.integrations.mavvrik.logger._utc_now",
+            return_value=datetime(2026, 4, 11, 0, 0, 0, tzinfo=timezone.utc),
+        ):
             await logger._scheduled_export()
 
         mock_export.assert_not_called()
@@ -334,12 +325,9 @@ class TestScheduledExport:
         ), patch(
             "litellm.integrations.mavvrik.logger.MAVVRIK_LOOKBACK_START_DATE", None
         ), patch(
-            "litellm.integrations.mavvrik.logger.datetime"
-        ) as mock_dt:
-            mock_dt.now.return_value = datetime(
-                2026, 4, 11, 0, 0, 0, tzinfo=timezone.utc
-            )
-            mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
+            "litellm.integrations.mavvrik.logger._utc_now",
+            return_value=datetime(2026, 4, 11, 0, 0, 0, tzinfo=timezone.utc),
+        ):
             await logger._scheduled_export()
 
         assert exported_dates == ["2026-04-09", "2026-04-10"]

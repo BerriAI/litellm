@@ -625,3 +625,47 @@ class TestRegisterModule:
                 result = await is_mavvrik_setup()
 
         assert result is False
+
+    @pytest.mark.asyncio
+    async def test_register_logger_and_job_deduplicates_on_repeated_init(self):
+        """Calling register_logger_and_job twice must not accumulate two loggers."""
+        from litellm.integrations.mavvrik.logger import MavvrikLogger
+        from litellm.integrations.mavvrik.register import register_logger_and_job
+
+        mock_scheduler = MagicMock()
+        mock_scheduler.add_job = MagicMock()
+
+        # Simulate an existing logger already registered from a previous /mavvrik/init
+        existing_logger = MagicMock(spec=MavvrikLogger)
+        success_cbs = [existing_logger]
+        async_success_cbs = [existing_logger]
+
+        mock_litellm = MagicMock()
+        mock_litellm.logging_callback_manager.success_callbacks = success_cbs
+        mock_litellm.logging_callback_manager.failure_callbacks = []
+        mock_litellm.logging_callback_manager.async_success_callbacks = (
+            async_success_cbs
+        )
+        mock_litellm.success_callback = []
+        mock_litellm._async_success_callback = []
+
+        with patch("litellm.integrations.mavvrik.register.litellm", mock_litellm):
+            await register_logger_and_job(
+                api_key="new_key",
+                api_endpoint="https://api.mavvrik.dev/acme",
+                connection_id="prod",
+                scheduler=mock_scheduler,
+            )
+
+        # The existing MavvrikLogger instance should have been removed
+        assert (
+            existing_logger
+            not in mock_litellm.logging_callback_manager.success_callbacks
+        )
+        assert (
+            existing_logger
+            not in mock_litellm.logging_callback_manager.async_success_callbacks
+        )
+        # A new logger was added (the MavvrikLogger instance added by register_logger_and_job)
+        mock_litellm.logging_callback_manager.add_litellm_success_callback.assert_called_once()
+        mock_scheduler.add_job.assert_called_once()

@@ -79,8 +79,10 @@ class MavvrikUploader:
 
         upload_data = self._compress(csv_payload)
 
-        # Share one client across all three steps to reuse the TCP connection.
-        async with httpx.AsyncClient(timeout=120.0) as client:
+        # Share one client across all three steps to reuse the TCP connection pool.
+        # Use a generous overall timeout; each step applies its own timeout via the
+        # per-request `timeout` arg so slow steps don't block unrelated ones.
+        async with httpx.AsyncClient() as client:
             signed_url = await self._get_signed_url(date_str, client=client)
             session_uri = await self._initiate_resumable_upload(
                 signed_url, client=client
@@ -193,7 +195,9 @@ class MavvrikUploader:
         for attempt in range(_MAX_RETRIES):
             try:
                 if client is not None:
-                    resp = await client.get(url, headers=headers, params=params)
+                    resp = await client.get(
+                        url, headers=headers, params=params, timeout=30.0
+                    )
                 else:
                     async with httpx.AsyncClient(timeout=30.0) as _client:
                         resp = await _client.get(url, headers=headers, params=params)
@@ -251,7 +255,7 @@ class MavvrikUploader:
             try:
                 if client is not None:
                     resp = await client.post(
-                        signed_url, headers=headers, content=metadata
+                        signed_url, headers=headers, content=metadata, timeout=30.0
                     )
                 else:
                     async with httpx.AsyncClient(timeout=30.0) as _client:
@@ -314,7 +318,7 @@ class MavvrikUploader:
             try:
                 if client is not None:
                     resp = await client.put(
-                        session_uri, headers=headers, content=csv_data
+                        session_uri, headers=headers, content=csv_data, timeout=120.0
                     )
                 else:
                     async with httpx.AsyncClient(timeout=120.0) as _client:

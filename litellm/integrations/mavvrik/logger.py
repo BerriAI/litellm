@@ -34,6 +34,11 @@ from litellm.integrations.mavvrik.transform import MavvrikTransformer
 from litellm.integrations.mavvrik.upload import MavvrikUploader
 
 
+def _utc_now() -> datetime:
+    """Return current UTC datetime. Extracted for easy test patching."""
+    return datetime.now(timezone.utc)
+
+
 class MavvrikLogger(CustomLogger):
     """Export LiteLLM spend data to Mavvrik via signed URL uploads."""
 
@@ -85,7 +90,7 @@ class MavvrikLogger(CustomLogger):
         settings = await db.get_mavvrik_settings()
         marker_str: Optional[str] = settings.get("marker")
 
-        today = datetime.now(timezone.utc).date()
+        today = _utc_now().date()
         yesterday = today - timedelta(days=1)
 
         # Determine start date (day after last exported date)
@@ -299,9 +304,7 @@ class MavvrikLogger(CustomLogger):
     ) -> dict:
         """Return transformed records as dicts without uploading — for /mavvrik/dry-run."""
         if not date_str:
-            date_str = (
-                datetime.now(timezone.utc).date() - timedelta(days=1)
-            ).isoformat()
+            date_str = (_utc_now().date() - timedelta(days=1)).isoformat()
 
         db = LiteLLMDatabase()
         df = await db.get_usage_data(

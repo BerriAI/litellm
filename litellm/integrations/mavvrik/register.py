@@ -93,18 +93,21 @@ async def register_logger_and_job(
     from litellm.integrations.mavvrik.logger import MavvrikLogger
 
     # Remove any existing MavvrikLogger instances to avoid accumulating duplicates
-    # on repeated /mavvrik/init calls.
-    existing = litellm.logging_callback_manager.get_custom_loggers_for_type(
-        callback_type=MavvrikLogger
-    )
-    for existing_logger in existing:
-        try:
-            litellm.logging_callback_manager.remove_litellm_callback_by_type(
-                callback_type=MavvrikLogger
+    # on repeated /mavvrik/init calls. We mutate the internal callback lists directly
+    # rather than relying on remove_litellm_callback_by_type() which may not exist
+    # in all LiteLLM versions.
+    for cb_attr in (
+        "success_callbacks",
+        "failure_callbacks",
+        "async_success_callbacks",
+    ):
+        cb_list = getattr(litellm.logging_callback_manager, cb_attr, None)
+        if cb_list is not None:
+            setattr(
+                litellm.logging_callback_manager,
+                cb_attr,
+                [cb for cb in cb_list if not isinstance(cb, MavvrikLogger)],
             )
-        except Exception:
-            pass
-        break  # remove_by_type removes all instances; one call is enough
 
     mavvrik_logger = MavvrikLogger(
         api_key=api_key,

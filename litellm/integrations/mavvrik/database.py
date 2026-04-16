@@ -88,12 +88,14 @@ class LiteLLMDatabase:
         """Return the earliest date string (YYYY-MM-DD) in LiteLLM_DailyUserSpend, or None."""
         client = self._ensure_prisma_client()
         try:
-            row = await client.db.litellm_dailyuserspend.find_first(
-                order={"date": "asc"},
-                where={"date": {"not": None}},
+            # Use SQL MIN() rather than Prisma find_first(order={"date": "asc"}) because
+            # date is stored as a STRING column (YYYY-MM-DD). String-sort is equivalent
+            # for well-formed dates but MIN() in SQL is authoritative and handles NULLs.
+            rows = await client.db.query_raw(
+                'SELECT MIN(date) AS earliest FROM "LiteLLM_DailyUserSpend"'
             )
-            if row is not None and row.date is not None:
-                return str(row.date)[:10]  # trim to YYYY-MM-DD
+            if rows and rows[0].get("earliest") is not None:
+                return str(rows[0]["earliest"])[:10]
         except Exception as exc:
             verbose_logger.warning(
                 "MavvrikLogger: get_earliest_date failed (non-fatal): %s", exc
