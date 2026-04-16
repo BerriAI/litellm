@@ -257,9 +257,12 @@ class CustomGuardrail(CustomLogger):
 
     @staticmethod
     def _get_admin_metadata(data: dict) -> dict:
-        """Return the admin-configured key/team metadata from the request data."""
+        """Return merged admin-configured key and team metadata from the request data."""
         metadata = data.get("litellm_metadata") or data.get("metadata", {})
-        return metadata.get("user_api_key_metadata") or {}
+        team_meta = metadata.get("user_api_key_team_metadata") or {}
+        key_meta = metadata.get("user_api_key_metadata") or {}
+        # Key-level settings override team-level
+        return {**team_meta, **key_meta}
 
     def get_disable_global_guardrail(self, data: dict) -> Optional[bool]:
         """
