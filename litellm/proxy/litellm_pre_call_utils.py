@@ -977,6 +977,12 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
             "Setting client-provided x-api-key as api_key parameter (will override deployment key)"
         )
 
+    # Strip internal pipeline state from user input
+    for _meta_key in ("metadata", "litellm_metadata"):
+        _user_meta = data.get(_meta_key)
+        if isinstance(_user_meta, dict):
+            _user_meta.pop("_pipeline_managed_guardrails", None)
+
     ##########################################################
     # Init - Proxy Server Request
     # we do this as soon as entering so we track the original request
