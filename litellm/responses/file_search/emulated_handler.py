@@ -16,6 +16,7 @@ import time
 import uuid
 from typing import Any, Dict, Iterable, List, Optional, Tuple, Union, cast
 
+from litellm._internal_context import is_internal_call
 from litellm._logging import verbose_logger
 from litellm.types.llms.openai import ResponseOutputItem, ResponsesAPIResponse
 from litellm.types.vector_stores import VectorStoreSearchResult
@@ -449,15 +450,20 @@ async def aresponses_with_emulated_file_search(
     # 2. First provider call — provider will call the file_search function.
     # Mark as an internal sub-call so wrapper_async skips billing callbacks;
     # the parent litellm_logging_obj (propagated via kwargs) fires once at the end.
-    first_response: ResponsesAPIResponse = cast(
-        ResponsesAPIResponse,
-        await _call_aresponses(
-            input=input,
-            model=model,
-            tools=transformed_tools or None,
-            **{**kwargs, "_is_litellm_internal_call": True},
-        ),
-    )
+    _prev_internal = is_internal_call.get()
+    is_internal_call.set(True)
+    try:
+        first_response: ResponsesAPIResponse = cast(
+            ResponsesAPIResponse,
+            await _call_aresponses(
+                input=input,
+                model=model,
+                tools=transformed_tools or None,
+                **kwargs,
+            ),
+        )
+    finally:
+        is_internal_call.set(_prev_internal)
 
     # 3. Look for a file_search function_call in the output
     file_search_calls = [
@@ -566,15 +572,19 @@ async def aresponses_with_emulated_file_search(
 
     # 6. Follow-up call — provider writes the final answer given search results.
     # Also an internal sub-call; billing is suppressed so the outer call fires once.
-    final_response: ResponsesAPIResponse = cast(
-        ResponsesAPIResponse,
-        await _call_aresponses(
-            input=follow_up_input,
-            model=model,
-            tools=None,  # no tools needed for the answer step
-            **{**kwargs, "_is_litellm_internal_call": True},
-        ),
-    )
+    is_internal_call.set(True)
+    try:
+        final_response: ResponsesAPIResponse = cast(
+            ResponsesAPIResponse,
+            await _call_aresponses(
+                input=follow_up_input,
+                model=model,
+                tools=None,  # no tools needed for the answer step
+                **kwargs,
+            ),
+        )
+    finally:
+        is_internal_call.set(_prev_internal)
 
     # 7. Synthesize OpenAI-format output
     response_text = _extract_text_from_responses_output(final_response)
