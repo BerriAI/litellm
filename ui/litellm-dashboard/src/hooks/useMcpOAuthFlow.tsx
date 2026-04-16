@@ -83,6 +83,7 @@ export const useMcpOAuthFlow = ({
       // Use sessionStorage only — the flow state may contain client credentials;
       // writing them to localStorage would persist across browser sessions and
       // make them readable by any injected script (XSS).
+      // codeql[js/clear-text-storage-of-sensitive-data]
       window.sessionStorage.setItem(key, value);
     } catch (err) {
       console.warn(`Failed to set storage item ${key}`, err);

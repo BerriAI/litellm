@@ -347,6 +347,7 @@ class OpenAIResponsesHandler(BaseTranslation):
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: Optional[Any] = None,
         user_api_key_dict: Optional[Any] = None,
+        request_data: Optional[dict] = None,
     ) -> Any:
         """
         Process output response by applying guardrails to text content and tool calls.
@@ -402,15 +403,21 @@ class OpenAIResponsesHandler(BaseTranslation):
 
         # Step 2: Apply guardrail to all texts in batch
         if texts_to_check or tool_calls_to_check:
-            # Create a request_data dict with response info and user API key metadata
-            request_data: dict = {"response": response}
+            # Use the real request_data if provided (proxy path), otherwise
+            # create a standalone dict (SDK / direct-call path).
+            if request_data is None:
+                request_data = {"response": response}
+            else:
+                if "response" not in request_data:
+                    request_data["response"] = response
 
             # Add user API key metadata with prefixed keys
-            user_metadata = self.transform_user_api_key_dict_to_metadata(
-                user_api_key_dict
-            )
-            if user_metadata:
-                request_data["litellm_metadata"] = user_metadata
+            if "litellm_metadata" not in request_data:
+                user_metadata = self.transform_user_api_key_dict_to_metadata(
+                    user_api_key_dict
+                )
+                if user_metadata:
+                    request_data["litellm_metadata"] = user_metadata
 
             inputs = GenericGuardrailAPIInputs(texts=texts_to_check)
             if images_to_check:
@@ -454,6 +461,7 @@ class OpenAIResponsesHandler(BaseTranslation):
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: Optional[Any] = None,
         user_api_key_dict: Optional[Any] = None,
+        request_data: Optional[dict] = None,
     ) -> List[Any]:
         """
         Process output streaming response by applying guardrails to text content.
@@ -481,7 +489,7 @@ class OpenAIResponsesHandler(BaseTranslation):
                     inputs["model"] = model_response_stream.model
                 _guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
                     inputs=inputs,
-                    request_data={},
+                    request_data=request_data if request_data is not None else {},
                     input_type="response",
                     logging_obj=litellm_logging_obj,
                 )
@@ -512,7 +520,7 @@ class OpenAIResponsesHandler(BaseTranslation):
                 if tool_calls or text:
                     _guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
                         inputs=guardrail_inputs,
-                        request_data={},
+                        request_data=request_data if request_data is not None else {},
                         input_type="response",
                         logging_obj=litellm_logging_obj,
                     )
@@ -537,7 +545,7 @@ class OpenAIResponsesHandler(BaseTranslation):
                 inputs["model"] = response_model
         _guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
             inputs=inputs,
-            request_data={},
+            request_data=request_data if request_data is not None else {},
             input_type="response",
             logging_obj=litellm_logging_obj,
         )

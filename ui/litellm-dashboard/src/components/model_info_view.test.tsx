@@ -552,6 +552,33 @@ describe("ModelInfoView", () => {
     expect(updatePayload.litellm_params.litellm_credential_name).not.toBe("from-json");
   });
 
+  it("should not include vector_store_ids in update payload when model has none", async () => {
+    // Regression: editing a model without vector stores used to inject
+    // vector_store_ids: [] into litellm_params, which then propagated to
+    // inference requests and broke Anthropic calls.
+    const user = userEvent.setup();
+    render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /edit settings/i })).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByRole("button", { name: /edit settings/i }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /save changes/i })).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => {
+      expect(mockModelPatchUpdateCall).toHaveBeenCalled();
+    });
+
+    const updatePayload = mockModelPatchUpdateCall.mock.calls[0][1];
+    expect(updatePayload.litellm_params).not.toHaveProperty("vector_store_ids");
+  });
+
   it("should display health check model field for wildcard models", async () => {
     const wildcardModelData = {
       ...defaultModelData,

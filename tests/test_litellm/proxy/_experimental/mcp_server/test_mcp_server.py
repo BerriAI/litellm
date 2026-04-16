@@ -1,12 +1,11 @@
 import asyncio
 from datetime import datetime, timedelta
-from typing import Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
 from mcp import ReadResourceResult, Resource
-from mcp.types import Prompt, ResourceTemplate, TextResourceContents
+from mcp.types import BlobResourceContents, Prompt, ResourceTemplate, TextResourceContents
 
 from litellm.proxy._types import (
     LiteLLM_MCPServerTable,
@@ -413,6 +412,111 @@ async def test_mcp_read_resource_success():
     assert result is read_result
 
 
+def test_normalize_resource_contents_passes_metadata():
+    """Test that _normalize_resource_contents preserves meta from ResourceContents (MCP 1.26.0+)."""
+    try:
+        from litellm.proxy._experimental.mcp_server.server import (
+            _normalize_resource_contents,
+        )
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    meta = {"version": "1.0", "source": "test"}
+    contents = [
+        TextResourceContents(
+            uri="https://example.com/resource",
+            text="hello world",
+            mimeType="text/plain",
+            meta=meta,
+        )
+    ]
+
+    result = _normalize_resource_contents(contents)
+
+    assert len(result) == 1
+    assert result[0].content == "hello world"
+    assert result[0].mime_type == "text/plain"
+    assert result[0].meta == meta
+
+
+def test_normalize_resource_contents_blob_with_metadata():
+    """Test that _normalize_resource_contents preserves meta for BlobResourceContents."""
+    try:
+        from litellm.proxy._experimental.mcp_server.server import (
+            _normalize_resource_contents,
+        )
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    meta = {"encoding": "base64"}
+    contents = [
+        BlobResourceContents(
+            uri="https://example.com/image.png",
+            blob="aGVsbG8=",
+            mimeType="image/png",
+            meta=meta,
+        )
+    ]
+
+    result = _normalize_resource_contents(contents)
+
+    assert len(result) == 1
+    assert result[0].content == "aGVsbG8="
+    assert result[0].mime_type == "image/png"
+    assert result[0].meta == meta
+
+
+def test_normalize_resource_contents_preserves_empty_metadata():
+    """Test that empty dict meta is preserved (truthiness bug fix)."""
+    try:
+        from litellm.proxy._experimental.mcp_server.server import (
+            _normalize_resource_contents,
+        )
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    empty_meta: dict = {}
+    contents = [
+        TextResourceContents(
+            uri="https://example.com/resource",
+            text="hi",
+            mimeType="text/plain",
+            meta=empty_meta,
+        )
+    ]
+
+    result = _normalize_resource_contents(contents)
+
+    assert len(result) == 1
+    assert result[0].meta == empty_meta
+    assert result[0].meta is not None
+    assert result[0].meta == {}
+
+
+def test_normalize_resource_contents_without_metadata():
+    """Test that _normalize_resource_contents works when meta is absent (backward compat)."""
+    try:
+        from litellm.proxy._experimental.mcp_server.server import (
+            _normalize_resource_contents,
+        )
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    contents = [
+        TextResourceContents(
+            uri="https://example.com/resource",
+            text="hello",
+            mimeType="text/plain",
+        )
+    ]
+
+    result = _normalize_resource_contents(contents)
+
+    assert len(result) == 1
+    assert result[0].content == "hello"
+    assert result[0].meta is None
+
+
 @pytest.mark.asyncio
 async def test_mcp_read_resource_multiple_servers_error():
     try:
@@ -707,8 +811,6 @@ async def test_concurrent_initialize_session_managers():
     """Test that concurrent calls to initialize_session_managers don't cause race conditions."""
     try:
         from litellm.proxy._experimental.mcp_server.server import (
-            _INITIALIZATION_LOCK,
-            _SESSION_MANAGERS_INITIALIZED,
             initialize_session_managers,
         )
     except ImportError:
@@ -1426,7 +1528,6 @@ async def test_list_tools_with_team_tool_permissions_inheritance():
         )
         from litellm.proxy._types import (
             LiteLLM_ObjectPermissionTable,
-            LiteLLM_TeamTable,
             UserAPIKeyAuth,
         )
     except ImportError:
@@ -1897,18 +1998,18 @@ class TestMCPServerManagerReload:
 
         db_row = _make_db_mcp_server("server-1", timestamp)
 
+        mock_prisma = MagicMock()
+        mock_prisma.db.litellm_mcpservertable.find_many = AsyncMock(
+            return_value=[db_row]
+        )
         with patch(
-            "litellm.proxy._experimental.mcp_server.db.get_all_mcp_servers",
-            new=AsyncMock(return_value=[db_row]),
-        ) as mock_get_all, patch(
             "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
-            return_value=object(),
+            return_value=mock_prisma,
         ), patch.object(
             manager, "build_mcp_server_from_table", AsyncMock()
         ) as mock_build:
             await manager.reload_servers_from_database()
 
-        mock_get_all.assert_awaited_once()
         mock_build.assert_not_awaited()
         assert manager.registry["server-1"] is existing_server
 
@@ -1940,12 +2041,13 @@ class TestMCPServerManagerReload:
             updated_at=new_timestamp,
         )
 
+        mock_prisma = MagicMock()
+        mock_prisma.db.litellm_mcpservertable.find_many = AsyncMock(
+            return_value=[db_row]
+        )
         with patch(
-            "litellm.proxy._experimental.mcp_server.db.get_all_mcp_servers",
-            new=AsyncMock(return_value=[db_row]),
-        ) as mock_get_all, patch(
             "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
-            return_value=object(),
+            return_value=mock_prisma,
         ), patch.object(
             manager,
             "build_mcp_server_from_table",
@@ -1953,7 +2055,6 @@ class TestMCPServerManagerReload:
         ) as mock_build:
             await manager.reload_servers_from_database()
 
-        mock_get_all.assert_awaited_once()
         mock_build.assert_awaited_once_with(db_row)
         assert manager.registry["server-1"] is rebuilt_server
 
