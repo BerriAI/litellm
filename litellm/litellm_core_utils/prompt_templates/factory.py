@@ -4076,6 +4076,10 @@ def _sort_bedrock_assistant_content_blocks(
             return 0
         if "toolUse" in block:
             return 2
+        if "cachePoint" in block:
+            # cachePoint blocks are paired with their preceding toolUse block.
+            # Same key as toolUse so Python's stable sort keeps them together.
+            return 2
         return 1
 
     return sorted(blocks, key=_sort_key)
