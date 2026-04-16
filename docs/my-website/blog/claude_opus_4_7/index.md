@@ -21,7 +21,7 @@ LiteLLM now supports [Claude Opus 4.7](https://www.anthropic.com/news/claude-opu
 ## Docker Image
 
 ```bash
-docker pull ghcr.io/berriai/litellm:litellm_stable_release_branch-v1.82.0-stable.opus-4-7
+docker pull ghcr.io/berriai/litellm:litellm_stable_release_branch-v1.83.3-stable.opus-4.7
 ```
 
 ## Usage - Anthropic
@@ -46,7 +46,7 @@ docker run -d \
   -p 4000:4000 \
   -e ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY \
   -v $(pwd)/config.yaml:/app/config.yaml \
-  ghcr.io/berriai/litellm:litellm_stable_release_branch-v1.82.0-stable.opus-4-7 \
+  ghcr.io/berriai/litellm:litellm_stable_release_branch-v1.83.3-stable.opus-4.7 \
   --config /app/config.yaml
 ```
 
@@ -94,7 +94,7 @@ docker run -d \
   -e AZURE_AI_API_KEY=$AZURE_AI_API_KEY \
   -e AZURE_AI_API_BASE=$AZURE_AI_API_BASE \
   -v $(pwd)/config.yaml:/app/config.yaml \
-  ghcr.io/berriai/litellm:litellm_stable_release_branch-v1.82.0-stable.opus-4-7 \
+  ghcr.io/berriai/litellm:litellm_stable_release_branch-v1.83.3-stable.opus-4.7 \
   --config /app/config.yaml
 ```
 
@@ -143,7 +143,7 @@ docker run -d \
   -e GOOGLE_APPLICATION_CREDENTIALS=/app/credentials.json \
   -v $(pwd)/config.yaml:/app/config.yaml \
   -v $(pwd)/credentials.json:/app/credentials.json \
-  ghcr.io/berriai/litellm:litellm_stable_release_branch-v1.82.0-stable.opus-4-7 \
+  ghcr.io/berriai/litellm:litellm_stable_release_branch-v1.83.3-stable.opus-4.7 \
   --config /app/config.yaml
 ```
 
@@ -192,7 +192,7 @@ docker run -d \
   -e AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID \
   -e AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY \
   -v $(pwd)/config.yaml:/app/config.yaml \
-  ghcr.io/berriai/litellm:litellm_stable_release_branch-v1.82.0-stable.opus-4-7 \
+  ghcr.io/berriai/litellm:litellm_stable_release_branch-v1.83.3-stable.opus-4.7 \
   --config /app/config.yaml
 ```
 
