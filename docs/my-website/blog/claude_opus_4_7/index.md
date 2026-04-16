@@ -221,7 +221,7 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 ### Adaptive Thinking
 
 :::note
-When using `reasoning_effort` with Claude Opus 4.7, all values (`low`, `medium`, `high`, `xhigh`, `max`) are mapped to `thinking: {type: "adaptive"}`. To use explicit thinking budgets with `type: "enabled"`, pass the native `thinking` parameter directly.
+When using `reasoning_effort` with Claude Opus 4.7, all values (`low`, `medium`, `high`, `xhigh`) are mapped to `thinking: {type: "adaptive"}`. To use explicit thinking budgets with `type: "enabled"`, pass the native `thinking` parameter directly.
 :::
 
 <Tabs>
@@ -274,9 +274,9 @@ curl --location 'http://0.0.0.0:4000/v1/messages' \
 
 ### Effort Levels
 
-Claude Opus 4.7 supports five effort levels: `low`, `medium`, `high` (default), `xhigh`, and `max`. These give you finer-grained control over how much reasoning the model applies to a task. Pass the effort level via the `output_config` parameter.
+Claude Opus 4.7 supports four effort levels: `low`, `medium`, `high` (default), and `xhigh`. These give you finer-grained control over how much reasoning the model applies to a task. Pass the effort level via the `output_config` parameter.
 
-`xhigh` is a new effort level introduced with Opus 4.7 that sits between `high` and `max`. `max` is available on Claude Opus 4.6 and 4.7 only.
+`xhigh` is a new effort level introduced with Opus 4.7 that sits above `high`. The `max` effort level is Claude Opus 4.6 only and is not available on 4.7.
 
 <Tabs>
 <TabItem value="completions" label="/chat/completions">
@@ -294,7 +294,7 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
     }
   ],
   "output_config": {
-    "effort": "max"
+    "effort": "xhigh"
   }
 }'
 ```
@@ -312,7 +312,7 @@ client = openai.OpenAI(
 response = client.chat.completions.create(
     model="claude-opus-4-7",
     messages=[{"role": "user", "content": "Explain quantum computing"}],
-    extra_body={"output_config": {"effort": "max"}}
+    extra_body={"output_config": {"effort": "xhigh"}}
 )
 ```
 
@@ -324,7 +324,7 @@ from litellm import completion
 response = completion(
     model="anthropic/claude-opus-4-7",
     messages=[{"role": "user", "content": "Explain quantum computing"}],
-    output_config={"effort": "max"},
+    output_config={"effort": "xhigh"},
 )
 ```
 
@@ -347,7 +347,7 @@ curl --location 'http://0.0.0.0:4000/v1/messages' \
         }
     ],
     "output_config": {
-        "effort": "max"
+        "effort": "xhigh"
     }
 }'
 ```
@@ -362,6 +362,5 @@ curl --location 'http://0.0.0.0:4000/v1/messages' \
 | `low` | Short, fast responses — simple lookups, formatting, classification |
 | `medium` | Balanced tradeoff for everyday Q&A and light reasoning |
 | `high` (default) | Complex reasoning, code generation, analysis |
-| `xhigh` | Harder reasoning than `high` when `max` is overkill — tough debugging, non-trivial planning |
-| `max` | Hardest problems — multi-step math, deep research, agentic planning (Opus 4.6 and 4.7 only) |
+| `xhigh` | Hardest problems — multi-step math, deep research, agentic planning |
 
