@@ -28,10 +28,13 @@ def safe_join(base_dir: str, *parts: str) -> str:
     Raises:
         ValueError: If the resolved path escapes base_dir.
     """
+    for part in parts:
+        if "\x00" in part:
+            raise ValueError("Path contains null byte")
     base = os.path.realpath(base_dir)
     resolved = os.path.realpath(os.path.join(base, *parts))
     if not (resolved.startswith(base + os.sep) or resolved == base):
-        raise ValueError(f"Path escapes base directory")
+        raise ValueError(f"Path {resolved!r} escapes base directory {base!r}")
     return resolved
 
 
@@ -39,8 +42,9 @@ def safe_filename(filename: str) -> str:
     """
     Extract a safe filename from a user-supplied path.
 
-    Strips all directory components, returning only the final name.
-    Use this for uploaded file names before writing to disk.
+    Strips all directory components (both Unix and Windows separators),
+    returning only the final name. Use this for uploaded file names
+    before writing to disk.
 
     Args:
         filename: User-supplied filename (may contain path separators).
@@ -49,9 +53,12 @@ def safe_filename(filename: str) -> str:
         The basename only, with no directory components.
 
     Raises:
-        ValueError: If the resulting filename is empty.
+        ValueError: If the resulting filename is empty or contains null bytes.
     """
-    name = Path(filename).name
-    if not name:
-        raise ValueError("Empty filename")
+    if "\x00" in filename:
+        raise ValueError("Filename contains null byte")
+    # Normalize backslash separators for cross-platform safety
+    name = filename.replace("\\", "/").rsplit("/", 1)[-1]
+    if not name or name in (".", ".."):
+        raise ValueError("Empty or unsafe filename")
     return name
