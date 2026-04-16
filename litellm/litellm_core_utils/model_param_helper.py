@@ -11,6 +11,10 @@ from openai.types.completion_create_params import (
     CompletionCreateParamsStreaming as TextCompletionCreateParamsStreaming,
 )
 from openai.types.embedding_create_params import EmbeddingCreateParams
+from openai.types.responses.response_create_params import (
+    ResponseCreateParamsNonStreaming,
+    ResponseCreateParamsStreaming,
+)
 
 from litellm._logging import verbose_logger
 from litellm.types.rerank import RerankRequest
@@ -65,6 +69,9 @@ class ModelParamHelper:
             ModelParamHelper._get_litellm_supported_transcription_kwargs()
         )
         rerank_kwargs = ModelParamHelper._get_litellm_supported_rerank_kwargs()
+        responses_api_kwargs = (
+            ModelParamHelper._get_litellm_supported_responses_api_kwargs()
+        )
         exclude_kwargs = ModelParamHelper._get_exclude_kwargs()
 
         combined_kwargs = chat_completion_kwargs.union(
@@ -72,6 +79,7 @@ class ModelParamHelper:
             embedding_kwargs,
             transcription_kwargs,
             rerank_kwargs,
+            responses_api_kwargs,
         )
         combined_kwargs = combined_kwargs.difference(exclude_kwargs)
         return combined_kwargs
@@ -93,9 +101,9 @@ class ModelParamHelper:
         streaming_params: Set[str] = set(
             getattr(CompletionCreateParamsStreaming, "__annotations__", {}).keys()
         )
-        litellm_provider_specific_params: Set[
-            str
-        ] = ModelParamHelper.get_litellm_provider_specific_params_for_chat_params()
+        litellm_provider_specific_params: Set[str] = (
+            ModelParamHelper.get_litellm_provider_specific_params_for_chat_params()
+        )
         all_chat_completion_kwargs: Set[str] = non_streaming_params.union(
             streaming_params
         ).union(litellm_provider_specific_params)
@@ -166,6 +174,21 @@ class ModelParamHelper:
         except Exception as e:
             verbose_logger.debug("Error getting transcription kwargs %s", str(e))
             return set()
+
+    @staticmethod
+    def _get_litellm_supported_responses_api_kwargs() -> Set[str]:
+        """
+        Get the litellm supported responses API kwargs
+
+        This follows the OpenAI API Spec
+        """
+        non_streaming_params: Set[str] = set(
+            getattr(ResponseCreateParamsNonStreaming, "__annotations__", {}).keys()
+        )
+        streaming_params: Set[str] = set(
+            getattr(ResponseCreateParamsStreaming, "__annotations__", {}).keys()
+        )
+        return non_streaming_params.union(streaming_params)
 
     @staticmethod
     def _get_exclude_kwargs() -> Set[str]:
