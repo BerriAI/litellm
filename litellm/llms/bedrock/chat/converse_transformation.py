@@ -1515,6 +1515,36 @@ class AmazonConverseConfig(BaseConfig):
             )
         )
 
+        # Ensure toolConfig is present if bedrock_messages contain toolUse/toolResult blocks.
+        # This can happen when our tool-pairing sanitizer injects dummy toolResult blocks
+        # into messages that originally had no tool blocks (due to Codex context compaction),
+        # meaning _transform_request_helper never injected toolConfig.
+        if "toolConfig" not in _data and litellm.modify_params:
+            for _msg in bedrock_messages:
+                for _block in _msg.get("content", []):
+                    if "toolUse" in _block or "toolResult" in _block:
+                        verbose_logger.warning(
+                            "Adding dummy toolConfig because bedrock_messages contain "
+                            "toolUse/toolResult blocks but toolConfig was not set."
+                        )
+                        _data["toolConfig"] = ToolConfigBlock(
+                            tools=[
+                                ToolBlock(
+                                    toolSpec=ToolSpecBlock(
+                                        name="dummy_tool",
+                                        description="Dummy tool to satisfy Bedrock toolConfig requirement.",
+                                        inputSchema=ToolInputSchemaBlock(
+                                            json={"type": "object", "properties": {}}
+                                        ),
+                                    )
+                                )
+                            ],
+                            toolChoice=ToolChoiceValuesBlock(auto={}),
+                        )
+                        break
+                if "toolConfig" in _data:
+                    break
+
         data: RequestObject = {"messages": bedrock_messages, **_data}
 
         return data
@@ -1570,6 +1600,36 @@ class AmazonConverseConfig(BaseConfig):
             llm_provider="bedrock_converse",
             user_continue_message=litellm_params.pop("user_continue_message", None),
         )
+
+        # Ensure toolConfig is present if bedrock_messages contain toolUse/toolResult blocks.
+        # This can happen when our tool-pairing sanitizer injects dummy toolResult blocks
+        # into messages that originally had no tool blocks (due to Codex context compaction),
+        # meaning _transform_request_helper never injected toolConfig.
+        if "toolConfig" not in _data and litellm.modify_params:
+            for _msg in bedrock_messages:
+                for _block in _msg.get("content", []):
+                    if "toolUse" in _block or "toolResult" in _block:
+                        verbose_logger.warning(
+                            "Adding dummy toolConfig because bedrock_messages contain "
+                            "toolUse/toolResult blocks but toolConfig was not set."
+                        )
+                        _data["toolConfig"] = ToolConfigBlock(
+                            tools=[
+                                ToolBlock(
+                                    toolSpec=ToolSpecBlock(
+                                        name="dummy_tool",
+                                        description="Dummy tool to satisfy Bedrock toolConfig requirement.",
+                                        inputSchema=ToolInputSchemaBlock(
+                                            json={"type": "object", "properties": {}}
+                                        ),
+                                    )
+                                )
+                            ],
+                            toolChoice=ToolChoiceValuesBlock(auto={}),
+                        )
+                        break
+                if "toolConfig" in _data:
+                    break
 
         data: RequestObject = {"messages": bedrock_messages, **_data}
 

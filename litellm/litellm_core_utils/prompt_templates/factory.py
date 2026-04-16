@@ -4645,6 +4645,20 @@ class BedrockConverseMessagesProcessor:
                 assistant_content, "toolUse"
             )
 
+            # Sort assistant content blocks: reasoningContent -> text -> toolUse
+            # Bedrock requires text blocks before toolUse blocks in assistant messages.
+            if assistant_content:
+                def _sort_key(block: BedrockContentBlock) -> int:
+                    if "reasoningContent" in block:
+                        return 0
+                    if "text" in block:
+                        return 1
+                    if "toolUse" in block:
+                        return 2
+                    return 1  # default: treat like text
+
+                assistant_content = sorted(assistant_content, key=_sort_key)
+
             if assistant_content:
                 contents.append(
                     BedrockMessageBlock(role="assistant", content=assistant_content)
@@ -4656,6 +4670,84 @@ class BedrockConverseMessagesProcessor:
                     model=model,
                     llm_provider=llm_provider,
                 )
+
+        # Sanitize tool pairing issues caused by conversation compaction.
+        # Bedrock requires every toolUse to be immediately followed by a toolResult,
+        # and every toolResult to have a matching toolUse.
+        if litellm.modify_params:
+            # Build index: toolUseId -> index of the user message that contains its toolResult
+            tool_result_ids: set = set()
+            for msg in contents:
+                if msg.get("role") == "user":
+                    for block in msg.get("content", []):
+                        if "toolResult" in block:
+                            tool_result_ids.add(block["toolResult"].get("toolUseId"))
+
+            # Pass 1: For each assistant message with orphaned toolUse blocks (no matching
+            # toolResult), collect all orphaned IDs in order, then inject them as a batch
+            # into the next user message (or a new user message). Batching preserves the
+            # toolUse order, which Bedrock requires toolResults to match.
+            for i, msg in enumerate(contents):
+                if msg.get("role") != "assistant":
+                    continue
+                orphaned_ids = [
+                    block["toolUse"].get("toolUseId")
+                    for block in msg.get("content", [])
+                    if "toolUse" in block
+                    and block["toolUse"].get("toolUseId") not in tool_result_ids
+                ]
+                if not orphaned_ids:
+                    continue
+                verbose_logger.warning(
+                    "Injecting dummy toolResult(s) for %d orphaned toolUse id(s): %s",
+                    len(orphaned_ids),
+                    orphaned_ids,
+                )
+                dummy_results = [
+                    BedrockContentBlock(
+                        toolResult={
+                            "toolUseId": tool_use_id,
+                            "content": [{"text": "[tool result missing due to context compaction]"}],
+                        }
+                    )
+                    for tool_use_id in orphaned_ids
+                ]
+                injected = False
+                for j in range(i + 1, len(contents)):
+                    if contents[j].get("role") == "user":
+                        contents[j]["content"] = dummy_results + list(contents[j].get("content", []))
+                        injected = True
+                        break
+                if not injected:
+                    contents.insert(
+                        i + 1,
+                        BedrockMessageBlock(role="user", content=dummy_results),
+                    )
+                tool_result_ids.update(orphaned_ids)
+
+            # Pass 2: Remove toolResult blocks that have no matching toolUse anywhere.
+            all_tool_use_ids: set = set()
+            for msg in contents:
+                if msg.get("role") == "assistant":
+                    for block in msg.get("content", []):
+                        if "toolUse" in block:
+                            all_tool_use_ids.add(block["toolUse"].get("toolUseId"))
+
+            for msg in contents:
+                if msg.get("role") == "user":
+                    original_content = msg.get("content", [])
+                    filtered = [
+                        block
+                        for block in original_content
+                        if "toolResult" not in block
+                        or block["toolResult"].get("toolUseId") in all_tool_use_ids
+                    ]
+                    if len(filtered) < len(original_content):
+                        verbose_logger.warning(
+                            "Removed %d orphaned toolResult block(s) with no matching toolUse.",
+                            len(original_content) - len(filtered),
+                        )
+                        msg["content"] = filtered if filtered else [BedrockContentBlock(text=" ")]
 
         return contents
 
@@ -5010,6 +5102,22 @@ def _bedrock_converse_messages_pt(  # noqa: PLR0915
             assistant_content, "toolUse"
         )
 
+        # Sort assistant content blocks: reasoningContent -> text -> toolUse
+        # Bedrock requires text blocks before toolUse blocks in assistant messages.
+        # If toolUse appears before text, Bedrock interprets the text as breaking
+        # the toolUse -> toolResult pairing and rejects the request.
+        if assistant_content:
+            def _sort_key(block: BedrockContentBlock) -> int:
+                if "reasoningContent" in block:
+                    return 0
+                if "text" in block:
+                    return 1
+                if "toolUse" in block:
+                    return 2
+                return 1  # default: treat like text
+
+            assistant_content = sorted(assistant_content, key=_sort_key)
+
         if assistant_content:
             contents.append(
                 BedrockMessageBlock(role="assistant", content=assistant_content)
@@ -5021,6 +5129,84 @@ def _bedrock_converse_messages_pt(  # noqa: PLR0915
                 model=model,
                 llm_provider=llm_provider,
             )
+
+    # Sanitize tool pairing issues caused by conversation compaction.
+    # Bedrock requires every toolUse to be immediately followed by a toolResult,
+    # and every toolResult to have a matching toolUse.
+    if litellm.modify_params:
+        # Build index: toolUseId -> index of the user message that contains its toolResult
+        tool_result_ids: set = set()
+        for msg in contents:
+            if msg.get("role") == "user":
+                for block in msg.get("content", []):
+                    if "toolResult" in block:
+                        tool_result_ids.add(block["toolResult"].get("toolUseId"))
+
+        # Pass 1: For each assistant message with orphaned toolUse blocks (no matching
+        # toolResult), collect all orphaned IDs in order, then inject them as a batch
+        # into the next user message (or a new user message). Batching preserves the
+        # toolUse order, which Bedrock requires toolResults to match.
+        for i, msg in enumerate(contents):
+            if msg.get("role") != "assistant":
+                continue
+            orphaned_ids = [
+                block["toolUse"].get("toolUseId")
+                for block in msg.get("content", [])
+                if "toolUse" in block
+                and block["toolUse"].get("toolUseId") not in tool_result_ids
+            ]
+            if not orphaned_ids:
+                continue
+            verbose_logger.warning(
+                "Injecting dummy toolResult(s) for %d orphaned toolUse id(s): %s",
+                len(orphaned_ids),
+                orphaned_ids,
+            )
+            dummy_results = [
+                BedrockContentBlock(
+                    toolResult={
+                        "toolUseId": tool_use_id,
+                        "content": [{"text": "[tool result missing due to context compaction]"}],
+                    }
+                )
+                for tool_use_id in orphaned_ids
+            ]
+            injected = False
+            for j in range(i + 1, len(contents)):
+                if contents[j].get("role") == "user":
+                    contents[j]["content"] = dummy_results + list(contents[j].get("content", []))
+                    injected = True
+                    break
+            if not injected:
+                contents.insert(
+                    i + 1,
+                    BedrockMessageBlock(role="user", content=dummy_results),
+                )
+            tool_result_ids.update(orphaned_ids)
+
+        # Pass 2: Remove toolResult blocks that have no matching toolUse anywhere.
+        all_tool_use_ids: set = set()
+        for msg in contents:
+            if msg.get("role") == "assistant":
+                for block in msg.get("content", []):
+                    if "toolUse" in block:
+                        all_tool_use_ids.add(block["toolUse"].get("toolUseId"))
+
+        for msg in contents:
+            if msg.get("role") == "user":
+                original_content = msg.get("content", [])
+                filtered = [
+                    block
+                    for block in original_content
+                    if "toolResult" not in block
+                    or block["toolResult"].get("toolUseId") in all_tool_use_ids
+                ]
+                if len(filtered) < len(original_content):
+                    verbose_logger.warning(
+                        "Removed %d orphaned toolResult block(s) with no matching toolUse.",
+                        len(original_content) - len(filtered),
+                    )
+                    msg["content"] = filtered if filtered else [BedrockContentBlock(text=" ")]
 
     return contents
 

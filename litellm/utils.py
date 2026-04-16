@@ -7705,10 +7705,25 @@ def has_tool_call_blocks(messages: List[AllMessageValues]) -> bool:
     Returns true, if messages has tool call blocks.
 
     Used for anthropic/bedrock message validation.
+
+    Checks for:
+    - OpenAI format: assistant messages with tool_calls array
+    - Tool role messages (role="tool") indicating tool results exist
+    - Anthropic format: content blocks with type="tool_use" or type="tool_result"
     """
     for message in messages:
         if message.get("tool_calls") is not None:
             return True
+        if message.get("role") in ("tool", "function"):
+            return True
+        content = message.get("content")
+        if isinstance(content, list):
+            for block in content:
+                if isinstance(block, dict) and block.get("type") in (
+                    "tool_use",
+                    "tool_result",
+                ):
+                    return True
     return False
 
 
