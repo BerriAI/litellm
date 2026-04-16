@@ -1358,9 +1358,14 @@ async def get_category_yaml(category_name: str):
         "categories",
     )
 
+    from litellm.proxy.common_utils.path_utils import safe_join
+
     # Try to find the file with either .yaml or .json extension
-    yaml_path = os.path.join(categories_dir, f"{category_name}.yaml")
-    json_path = os.path.join(categories_dir, f"{category_name}.json")
+    try:
+        yaml_path = safe_join(categories_dir, f"{category_name}.yaml")
+        json_path = safe_join(categories_dir, f"{category_name}.json")
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid category name")
 
     category_file_path = None
     file_type = None

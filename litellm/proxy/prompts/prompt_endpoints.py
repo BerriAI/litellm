@@ -1356,8 +1356,10 @@ async def convert_prompt_file_to_json(
         # Read file content
         file_content = await file.read()
 
-        # Create temporary file
-        temp_file_path = Path(tempfile.mkdtemp()) / file.filename
+        from litellm.proxy.common_utils.path_utils import safe_filename
+
+        # Create temporary file — use safe_filename to prevent path traversal
+        temp_file_path = Path(tempfile.mkdtemp()) / safe_filename(file.filename)
         temp_file_path.write_bytes(file_content)
 
         # Create a PromptManager instance just for conversion
