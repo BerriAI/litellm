@@ -629,7 +629,7 @@ class TestRegisterModule:
     @pytest.mark.asyncio
     async def test_register_logger_and_job_deduplicates_on_repeated_init(self):
         """Calling register_logger_and_job twice must not accumulate two loggers."""
-        from litellm.integrations.mavvrik.logger import MavvrikLogger
+        from litellm.integrations.mavvrik.exporter import MavvrikExporter as MavvrikLogger
         from litellm.integrations.mavvrik.register import register_logger_and_job
 
         mock_scheduler = MagicMock()

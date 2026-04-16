@@ -51,21 +51,21 @@ async def is_mavvrik_setup() -> bool:
 async def register_background_job(scheduler: AsyncIOScheduler) -> None:
     """Register the Mavvrik hourly export job with APScheduler.
 
-    Called from proxy_server.py at startup. Only registers if a MavvrikLogger
+    Called from proxy_server.py at startup. Only registers if a MavvrikExporter
     instance already exists in the callback manager (i.e. the operator has
     added ``callbacks: ["mavvrik"]`` in config.yaml).
     """
-    from litellm.integrations.mavvrik.logger import MavvrikLogger
+    from litellm.integrations.mavvrik.exporter import MavvrikExporter
 
     loggers: List[CustomLogger] = (
         litellm.logging_callback_manager.get_custom_loggers_for_type(
-            callback_type=MavvrikLogger
+            callback_type=MavvrikExporter
         )
     )
-    verbose_logger.debug("MavvrikLogger: found %d logger instance(s)", len(loggers))
+    verbose_logger.debug("MavvrikExporter: found %d exporter instance(s)", len(loggers))
 
     if loggers:
-        mavvrik_logger = cast(MavvrikLogger, loggers[0])
+        mavvrik_logger = cast(MavvrikExporter, loggers[0])
         verbose_logger.debug(
             "MavvrikLogger: scheduling export job every %d minutes",
             MAVVRIK_EXPORT_INTERVAL_MINUTES,
@@ -85,14 +85,14 @@ async def register_logger_and_job(
     connection_id: str,
     scheduler: Optional[AsyncIOScheduler],
 ) -> None:
-    """Create a MavvrikLogger, register it in the callback manager, and schedule the job.
+    """Create a MavvrikExporter, register it in the callback manager, and schedule the job.
 
     Called from POST /mavvrik/init so that exports begin immediately without
     a proxy restart. All scheduling logic lives here, not in the endpoint handler.
     """
-    from litellm.integrations.mavvrik.logger import MavvrikLogger
+    from litellm.integrations.mavvrik.exporter import MavvrikExporter
 
-    # Remove any existing MavvrikLogger instances to avoid accumulating duplicates
+    # Remove any existing MavvrikExporter instances to avoid accumulating duplicates
     # on repeated /mavvrik/init calls. We mutate the internal callback lists directly
     # rather than relying on remove_litellm_callback_by_type() which may not exist
     # in all LiteLLM versions.
@@ -106,10 +106,10 @@ async def register_logger_and_job(
             setattr(
                 litellm.logging_callback_manager,
                 cb_attr,
-                [cb for cb in cb_list if not isinstance(cb, MavvrikLogger)],
+                [cb for cb in cb_list if not isinstance(cb, MavvrikExporter)],
             )
 
-    mavvrik_logger = MavvrikLogger(
+    mavvrik_logger = MavvrikExporter(
         api_key=api_key,
         api_endpoint=api_endpoint,
         connection_id=connection_id,

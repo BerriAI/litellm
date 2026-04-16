@@ -21,7 +21,7 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.mavvrik.database import LiteLLMDatabase
-from litellm.integrations.mavvrik.logger import MavvrikLogger
+from litellm.integrations.mavvrik.exporter import MavvrikExporter as MavvrikLogger  # MavvrikLogger renamed to MavvrikExporter — alias kept for local references until Task 7 refactor
 from litellm.integrations.mavvrik.register import (
     _CONFIG_KEY,
     is_mavvrik_setup,  # noqa: F401
