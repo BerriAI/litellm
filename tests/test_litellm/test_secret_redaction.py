@@ -7,6 +7,7 @@ import pytest
 
 from litellm._logging import (
     JsonFormatter,
+    _redact_string,
     _secret_filter,
     verbose_logger,
     verbose_proxy_logger,
