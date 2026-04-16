@@ -412,7 +412,7 @@ class VertexBase:
                 url = "{}/models/{}:{}".format(api_base, model, endpoint)
                 if gemini_api_key is None:
                     raise ValueError(
-                        "Missing gemini_api_key, please set `GEMINI_API_KEY`"
+                        "Missing Gemini API key. Set the GEMINI_API_KEY or GOOGLE_API_KEY environment variable."
                     )
                 if gemini_api_key is not None:
                     auth_header = {"x-goog-api-key": gemini_api_key}  # type: ignore[assignment]
@@ -469,13 +469,16 @@ class VertexBase:
         """
         version: Optional[Literal["v1beta1", "v1"]] = None
         if custom_llm_provider == "gemini":
+            if not gemini_api_key:
+                raise ValueError(
+                    "Missing Gemini API key. Set the GEMINI_API_KEY or GOOGLE_API_KEY environment variable."
+                )
             url, endpoint = _get_gemini_url(
                 mode=mode,
                 model=model,
                 stream=stream,
-                gemini_api_key=gemini_api_key,
             )
-            auth_header = None  # this field is not used for gemin
+            auth_header = {"x-goog-api-key": gemini_api_key}  # type: ignore[assignment]
         else:
             vertex_location = self.get_vertex_region(
                 vertex_region=vertex_location,

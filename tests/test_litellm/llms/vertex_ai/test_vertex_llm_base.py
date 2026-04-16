@@ -810,7 +810,7 @@ class TestVertexBase:
 
         if custom_llm_provider == "gemini" and api_base and gemini_api_key is None:
             # Test case 5: Should raise ValueError for Gemini without API key
-            with pytest.raises(ValueError, match="Missing gemini_api_key"):
+            with pytest.raises(ValueError, match="Missing Gemini API key"):
                 vertex_base._check_custom_proxy(
                     api_base=api_base,
                     custom_llm_provider=custom_llm_provider,
