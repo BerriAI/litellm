@@ -228,6 +228,46 @@ class TestPkceTokenExchange:
             assert excinfo.value.status_code == 400
 
 
+class TestCliExceptionHandling:
+    def test_broad_exception_produces_clean_message(self, capsys, monkeypatch):
+        """
+        Non-ChatGPTAuthError exceptions (filesystem, network, etc.) should
+        surface a one-line error and exit 1 — never a raw traceback.
+        """
+        from litellm.llms.chatgpt import cli
+
+        monkeypatch.setattr("sys.argv", ["litellm-chatgpt-login", "--method", "device"])
+
+        def _boom(self):
+            raise RuntimeError("disk full")
+
+        monkeypatch.setattr(
+            "litellm.llms.chatgpt.authenticator.Authenticator._login_device_code",
+            _boom,
+        )
+        exit_code = cli.cli()
+        assert exit_code == 1
+        captured = capsys.readouterr()
+        assert "disk full" in captured.err
+        assert "Traceback" not in captured.err
+
+    def test_keyboard_interrupt_returns_130(self, capsys, monkeypatch):
+        from litellm.llms.chatgpt import cli
+
+        monkeypatch.setattr("sys.argv", ["litellm-chatgpt-login", "--method", "device"])
+
+        def _interrupt(self):
+            raise KeyboardInterrupt()
+
+        monkeypatch.setattr(
+            "litellm.llms.chatgpt.authenticator.Authenticator._login_device_code",
+            _interrupt,
+        )
+        exit_code = cli.cli()
+        assert exit_code == 130
+        assert "cancelled" in capsys.readouterr().err.lower()
+
+
 class TestLoginPkcePortInUse:
     @pytest.fixture
     def authenticator(self):

@@ -48,6 +48,14 @@ def cli() -> int:
     except ChatGPTAuthError as exc:
         print(f"Login failed: {exc.message}", file=sys.stderr)  # noqa: T201
         return 1
+    except KeyboardInterrupt:
+        print("\nLogin cancelled.", file=sys.stderr)  # noqa: T201
+        return 130
+    except Exception as exc:  # noqa: BLE001
+        # Any other failure mode (network, filesystem, etc.) — surface a
+        # clean message instead of a traceback.
+        print(f"Login failed: {exc}", file=sys.stderr)  # noqa: T201
+        return 1
 
     print(f"Saved credentials to {auth.auth_file}")  # noqa: T201
     return 0

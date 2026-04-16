@@ -20,7 +20,7 @@ import time
 import uuid
 from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 from litellm._logging import verbose_proxy_logger
@@ -66,14 +66,13 @@ class RefreshResponse(BaseModel):
 
 
 def _require_admin(user_api_key_dict: UserAPIKeyAuth) -> None:
+    # These endpoints write to LiteLLM_CredentialsTable (start → insert,
+    # refresh → rotate). PROXY_ADMIN_VIEW_ONLY must not reach them.
     role = getattr(user_api_key_dict, "user_role", None)
-    if role not in (
-        LitellmUserRoles.PROXY_ADMIN,
-        LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
-    ):
+    if role != LitellmUserRoles.PROXY_ADMIN:
         raise HTTPException(
             status_code=403,
-            detail="Only proxy admins may initiate Copilot OAuth flows.",
+            detail="Only PROXY_ADMIN may initiate Copilot OAuth flows.",
         )
 
 
@@ -111,31 +110,39 @@ async def start_oauth(
     _require_admin(user_api_key_dict)
     _purge_expired_sessions()
 
+    # Atomically reserve a slot so concurrent callers cannot all pass the
+    # capacity check and blow past SESSIONS_MAX_SIZE.
+    session_id = uuid.uuid4().hex
+    now = time.time()
     with _sessions_lock:
         if len(_sessions) >= SESSIONS_MAX_SIZE:
             raise HTTPException(
                 status_code=429,
                 detail="Too many in-flight OAuth sessions. Retry shortly.",
             )
+        _sessions[session_id] = {
+            "status": "starting",
+            "credential_name": body.credential_name,
+            "started_by": user_api_key_dict.user_id,
+            "started_at": now,
+            "expires_at": now + SESSION_TTL_SECONDS,
+            "cancelled": False,
+        }
 
     authenticator = Authenticator()
     try:
         device_code_info = authenticator._get_device_code()
     except GithubCopilotError as exc:
+        with _sessions_lock:
+            _sessions.pop(session_id, None)
         raise HTTPException(status_code=502, detail=exc.message)
 
-    session_id = uuid.uuid4().hex
-    session = {
-        "status": "pending",
-        "credential_name": body.credential_name,
-        "started_by": user_api_key_dict.user_id,
-        "started_at": time.time(),
-        "expires_at": time.time() + SESSION_TTL_SECONDS,
-        "device_code_info": device_code_info,
-        "cancelled": False,
-    }
     with _sessions_lock:
-        _sessions[session_id] = session
+        entry = _sessions.get(session_id)
+        if entry is None:
+            raise HTTPException(status_code=410, detail="Session was cancelled")
+        entry["status"] = "pending"
+        entry["device_code_info"] = device_code_info
 
     thread = threading.Thread(
         target=_run_device_code_flow,
@@ -159,7 +166,9 @@ async def start_oauth(
     dependencies=[Depends(user_api_key_auth)],
 )
 async def oauth_status(
-    session_id: str,
+    session_id: str = Query(
+        ..., description="Session ID returned by /copilot/oauth/start"
+    ),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ) -> StatusResponse:
     _require_admin(user_api_key_dict)
@@ -178,7 +187,9 @@ async def oauth_status(
     dependencies=[Depends(user_api_key_auth)],
 )
 async def oauth_cancel(
-    session_id: str,
+    session_id: str = Query(
+        ..., description="Session ID returned by /copilot/oauth/start"
+    ),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ) -> Dict[str, bool]:
     _require_admin(user_api_key_dict)
