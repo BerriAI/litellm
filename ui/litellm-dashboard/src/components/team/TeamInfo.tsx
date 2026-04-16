@@ -1,5 +1,6 @@
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
-import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
+import { organizationKeys, useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
+import { useQueryClient } from "@tanstack/react-query";
 import UserSearchModal from "@/components/common_components/user_search_modal";
 import {
   getPoliciesList,
@@ -195,6 +196,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   const [organization, setOrganization] = useState<Organization | null>(null);
   const { userRole, userId } = useAuthorized();
   const { data: userOrganizations = [] } = useOrganizations();
+  const queryClient = useQueryClient();
 
   // Check if user is org admin for this team's organization
   const isOrgAdminForTeam = useMemo(() => {
@@ -611,6 +613,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       }
 
       const response = await teamUpdateCall(accessToken, updateData);
+      queryClient.invalidateQueries({ queryKey: organizationKeys.all });
 
       NotificationsManager.success("Team settings updated successfully");
       setIsEditing(false);
