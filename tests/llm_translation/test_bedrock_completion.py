@@ -1066,6 +1066,72 @@ def test_bedrock_tools_pt_invalid_names():
     assert result[1]["toolSpec"]["name"] == "another_invalid_name"
 
 
+def test_bedrock_converse_tools_pt_converts_custom_schema_type_to_object():
+    """
+    Bedrock Converse ``toolSpec.inputSchema.json`` must use standard JSON Schema
+    types. Anthropic / Claude Code use ``type: \"custom\"`` in ``input_schema`` (or
+    OpenAI ``parameters``); ``_bedrock_tools_pt`` must convert ``custom`` → ``object``
+    at the root and inside nested ``properties``.
+    """
+    tools = [
+        {
+            "name": "Agent",
+            "description": "Subagent tool",
+            "type": "custom",
+            "input_schema": {
+                "type": "custom",
+                "additionalProperties": False,
+                "properties": {
+                    "prompt": {"type": "string"},
+                    "nested": {
+                        "type": "custom",
+                        "properties": {"x": {"type": "string"}},
+                        "required": ["x"],
+                    },
+                },
+                "required": ["prompt"],
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "other",
+                "description": "x",
+                "parameters": {
+                    "type": "custom",
+                    "properties": {
+                        "a": {"type": "integer"},
+                        "nested_obj": {
+                            "type": "custom",
+                            "properties": {"b": {"type": "string"}},
+                        },
+                    },
+                    "required": ["a"],
+                },
+            },
+        },
+        {
+            "input_schema": {
+                "type": "object",
+                "properties": {"q": {"type": "string"}},
+            },
+        },
+    ]
+
+    result = _bedrock_tools_pt(tools)
+
+    assert result[0]["toolSpec"]["name"] == "Agent"
+    j0 = result[0]["toolSpec"]["inputSchema"]["json"]
+    assert j0["type"] == "object"
+    assert j0["properties"]["nested"]["type"] == "object"
+
+    j1 = result[1]["toolSpec"]["inputSchema"]["json"]
+    assert j1["type"] == "object"
+    assert j1["properties"]["nested_obj"]["type"] == "object"
+
+    assert result[2]["toolSpec"]["name"] == "litellm_unnamed_tool_2"
+
+
 def test_bedrock_tools_transformation_valid_params():
     from litellm.types.llms.bedrock import ToolJsonSchemaBlock
 

@@ -16222,6 +16222,21 @@
             "video"
         ]
     },
+    "gemini/veo-3.1-lite-generate-preview": {
+        "litellm_provider": "gemini",
+        "max_input_tokens": 1024,
+        "max_tokens": 1024,
+        "mode": "video_generation",
+        "output_cost_per_second": 0.05,
+        "output_cost_per_second_1080p": 0.08,
+        "source": "https://ai.google.dev/gemini-api/docs/video",
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
     "gemini/veo-3.1-fast-generate-001": {
         "litellm_provider": "gemini",
         "max_input_tokens": 1024,
@@ -32013,7 +32028,8 @@
         "output_cost_per_token": 1e-06,
         "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing",
         "supported_regions": [
-            "global"
+            "global",
+            "us-south1"
         ],
         "supports_function_calling": true,
         "supports_tool_choice": true
@@ -32383,6 +32399,34 @@
         "output_cost_per_token": 2.5e-06,
         "litellm_provider": "wandb",
         "mode": "chat"
+    },
+    "wandb/moonshotai/Kimi-K2.5": {
+        "max_tokens": 262144,
+        "max_input_tokens": 262144,
+        "max_output_tokens": 262144,
+        "cache_read_input_token_cost": 1e-07,
+        "input_cost_per_token": 6e-07,
+        "output_cost_per_token": 3e-06,
+        "litellm_provider": "wandb",
+        "mode": "chat",
+        "source": "https://wandb.ai/inference/coreweave/cw_moonshotai_Kimi-K2.5",
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_vision": true
+    },
+    "wandb/MiniMaxAI/MiniMax-M2.5": {
+        "max_tokens": 197000,
+        "max_input_tokens": 197000,
+        "max_output_tokens": 197000,
+        "input_cost_per_token": 3e-07,
+        "output_cost_per_token": 1.2e-06,
+        "litellm_provider": "wandb",
+        "mode": "chat",
+        "source": "https://wandb.ai/inference/coreweave/cw_MiniMaxAI_MiniMax-M2.5",
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true
     },
     "wandb/meta-llama/Llama-3.1-8B-Instruct": {
         "max_tokens": 128000,
