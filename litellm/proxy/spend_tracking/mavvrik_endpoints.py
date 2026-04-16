@@ -12,6 +12,9 @@ All business logic (scheduling, logger creation, setup detection) lives in
 litellm/integrations/mavvrik/ — these handlers are thin dispatchers only.
 """
 
+from contextlib import asynccontextmanager
+from typing import AsyncIterator
+
 from fastapi import APIRouter, Depends, HTTPException
 
 from litellm.integrations.mavvrik import MavvrikService
@@ -30,6 +33,10 @@ from litellm.types.proxy.mavvrik_endpoints import (
 
 router = APIRouter()
 
+# ---------------------------------------------------------------------------
+# Shared helpers
+# ---------------------------------------------------------------------------
+
 
 def _require_admin(user_api_key_dict: UserAPIKeyAuth) -> None:
     if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
@@ -39,9 +46,33 @@ def _require_admin(user_api_key_dict: UserAPIKeyAuth) -> None:
         )
 
 
-# ------------------------------------------------------------------
+@asynccontextmanager
+async def _mavvrik_errors() -> AsyncIterator[None]:
+    """Centralised exception → HTTPException mapping for all Mavvrik endpoints.
+
+    MavvrikService raises typed exceptions that map directly to HTTP status codes:
+        LookupError   → 404  (resource not found, e.g. settings not configured)
+        ValueError    → 400  (bad input, e.g. missing required field)
+        RuntimeError  → 500  (upstream / integration failure)
+        Exception     → 500  (unexpected catch-all)
+
+    HTTPException is re-raised as-is (e.g. 403 from _require_admin).
+    """
+    try:
+        yield
+    except HTTPException:
+        raise
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail={"error": str(exc)}) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail={"error": str(exc)}) from exc
+    except (RuntimeError, Exception) as exc:
+        raise HTTPException(status_code=500, detail={"error": str(exc)}) from exc
+
+
+# ---------------------------------------------------------------------------
 # POST /mavvrik/init
-# ------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 
 
 @router.post(
@@ -56,23 +87,18 @@ async def init_mavvrik_settings(
 ):
     """Initialize Mavvrik settings and register the background export job."""
     _require_admin(user_api_key_dict)
-
-    try:
+    async with _mavvrik_errors():
         result = await MavvrikService().initialize(
             api_key=request.api_key,
             api_endpoint=request.api_endpoint,
             connection_id=request.connection_id,
         )
         return MavvrikInitResponse(**result)
-    except HTTPException:
-        raise
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail={"error": str(exc)}) from exc
 
 
-# ------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 # GET /mavvrik/settings
-# ------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 
 
 @router.get(
@@ -86,19 +112,14 @@ async def get_mavvrik_settings(
 ):
     """View current Mavvrik settings. The API key is masked in the response."""
     _require_admin(user_api_key_dict)
-
-    try:
+    async with _mavvrik_errors():
         result = await MavvrikService().get_settings()
         return MavvrikSettingsView(**result)
-    except HTTPException:
-        raise
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail={"error": str(exc)}) from exc
 
 
-# ------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 # PUT /mavvrik/settings
-# ------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 
 
 @router.put(
@@ -124,7 +145,7 @@ async def update_mavvrik_settings(
             detail={"error": "At least one field must be provided for update"},
         )
 
-    try:
+    async with _mavvrik_errors():
         result = await MavvrikService().update_settings(
             api_key=request.api_key,
             api_endpoint=request.api_endpoint,
@@ -132,15 +153,11 @@ async def update_mavvrik_settings(
             marker=request.marker,
         )
         return MavvrikInitResponse(**result)
-    except HTTPException:
-        raise
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail={"error": str(exc)}) from exc
 
 
-# ------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 # DELETE /mavvrik/delete
-# ------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 
 
 @router.delete(
@@ -154,21 +171,14 @@ async def delete_mavvrik_settings(
 ):
     """Remove all Mavvrik settings and deregister the background job."""
     _require_admin(user_api_key_dict)
-
-    try:
+    async with _mavvrik_errors():
         result = await MavvrikService().delete()
         return MavvrikDeleteResponse(**result)
-    except LookupError as exc:
-        raise HTTPException(status_code=404, detail={"error": str(exc)}) from exc
-    except HTTPException:
-        raise
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail={"error": str(exc)}) from exc
 
 
-# ------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 # POST /mavvrik/dry-run
-# ------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 
 
 @router.post(
@@ -183,22 +193,17 @@ async def dry_run_mavvrik_export(
 ):
     """Preview the CSV records that would be uploaded for a given date without sending data."""
     _require_admin(user_api_key_dict)
-
-    try:
+    async with _mavvrik_errors():
         result = await MavvrikService().dry_run(
             date_str=request.date_str,
             limit=request.limit,
         )
         return MavvrikDryRunResponse(**result)
-    except HTTPException:
-        raise
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail={"error": str(exc)}) from exc
 
 
-# ------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 # POST /mavvrik/export
-# ------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 
 
 @router.post(
@@ -213,20 +218,9 @@ async def export_mavvrik_data(
 ):
     """Manually trigger a Mavvrik export for a specific date."""
     _require_admin(user_api_key_dict)
-
-    try:
+    async with _mavvrik_errors():
         result = await MavvrikService().export(
             date_str=request.date_str,
             limit=request.limit,
         )
         return MavvrikExportResponse(**result)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail={"error": str(exc)}) from exc
-    except LookupError as exc:
-        raise HTTPException(status_code=404, detail={"error": str(exc)}) from exc
-    except RuntimeError as exc:
-        raise HTTPException(status_code=500, detail={"error": str(exc)}) from exc
-    except HTTPException:
-        raise
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail={"error": str(exc)}) from exc
