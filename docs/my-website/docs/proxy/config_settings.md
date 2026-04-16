@@ -285,6 +285,7 @@ router_settings:
 | always_include_stream_usage | boolean | If true, includes usage metrics in every streaming response chunk |
 | auto_redirect_ui_login_to_sso | boolean | If true, automatically redirects UI login page to SSO provider |
 | control_plane_url | string | URL of the control plane for cross-instance state sharing |
+| enable_post_custom_auth_checks | boolean | If true, runs LiteLLM post-custom-auth checks (for example expiry, end-user budget, and model budget checks) on `UserAPIKeyAuth` objects returned by custom auth handlers. Default is false for performance. |
 | custom_auth_run_common_checks | boolean | If true, runs standard auth validation checks alongside custom auth handlers |
 | custom_ui_sso_sign_in_handler | string | Custom handler for SSO sign-in logic in the UI |
 | database_connection_pool_timeout | integer | Database connection pool timeout in seconds |
