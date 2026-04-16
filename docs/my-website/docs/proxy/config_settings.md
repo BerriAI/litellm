@@ -928,6 +928,7 @@ router_settings:
 | OPENAI_CHATGPT_API_BASE | Alternative to CHATGPT_API_BASE. Base URL for ChatGPT API
 | OPENAI_FILE_SEARCH_COST_PER_1K_CALLS | Cost per 1000 calls for OpenAI file search. Default is 0.0025
 | OPENAI_ORGANIZATION | Organization identifier for OpenAI
+| OPENAPI_URL | The path to the OpenAPI JSON endpoint. **By default this is "/openapi.json"**
 | OPENID_BASE_URL | Base URL for OpenID Connect services
 | OPENID_CLIENT_ID | Client ID for OpenID Connect authentication
 | OPENID_CLIENT_SECRET | Client secret for OpenID Connect authentication
