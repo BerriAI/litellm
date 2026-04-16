@@ -1,7 +1,7 @@
 import asyncio
 import base64
 import os
-from typing import TYPE_CHECKING, Any, List, Literal, Optional, Tuple, Type, Union
+from typing import TYPE_CHECKING, Any, List, Literal, Optional, Tuple, Type, Union, overload
 
 from fastapi import HTTPException
 
@@ -57,11 +57,23 @@ class PromptSecurityGuardrail(CustomGuardrail):
         else:
             self.check_tool_results = check_tool_results
 
+        # Optional compatibility control:
+        # - True (default): remap during_call -> pre_call + post_call for enforced modify behavior
+        # - False: preserve configured event_hook exactly
+        expand_during_call_hooks = kwargs.pop("expand_during_call_hooks", True)
+        if isinstance(expand_during_call_hooks, str):
+            expand_during_call_hooks = expand_during_call_hooks.lower() in (
+                "true",
+                "1",
+                "yes",
+            )
+
         # Prompt Security supports request and response checks for "during_call" mode.
         # In LiteLLM, during_call hooks execute in parallel and cannot safely apply modify actions.
         # Translate during_call to pre_call + post_call so modifications are actually enforced.
         event_hook = kwargs.get("event_hook")
-        kwargs["event_hook"] = self._expand_event_hooks_for_prompt_security(event_hook)
+        if expand_during_call_hooks:
+            kwargs["event_hook"] = self._expand_event_hooks_for_prompt_security(event_hook)
 
         if not self.api_key or not self.api_base:
             msg = (
@@ -714,6 +726,16 @@ class PromptSecurityGuardrail(CustomGuardrail):
             processed_messages.append(processed_message)
 
         return processed_messages
+
+    @overload
+    def filter_messages_by_role(
+        self, messages: list, include_original_indices: Literal[True]
+    ) -> Tuple[list, List[int]]: ...
+
+    @overload
+    def filter_messages_by_role(
+        self, messages: list, include_original_indices: Literal[False] = False
+    ) -> list: ...
 
     def filter_messages_by_role(
         self, messages: list, include_original_indices: bool = False

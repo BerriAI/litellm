@@ -156,6 +156,51 @@ def test_prompt_security_event_hook_list_without_during_call_is_preserved():
     del os.environ["PROMPT_SECURITY_API_BASE"]
 
 
+def test_prompt_security_during_call_not_expanded_when_flag_disabled():
+    """Test compatibility flag can keep during_call behavior unchanged."""
+    os.environ["PROMPT_SECURITY_API_KEY"] = "test-key"
+    os.environ["PROMPT_SECURITY_API_BASE"] = "https://test.prompt.security"
+
+    guardrail = PromptSecurityGuardrail(
+        guardrail_name="test-guard",
+        event_hook="during_call",
+        default_on=True,
+        expand_during_call_hooks=False,
+    )
+
+    assert guardrail.event_hook == "during_call"
+    assert (
+        guardrail.should_run_guardrail({}, GuardrailEventHooks.during_call) is True
+    )
+    assert (
+        guardrail.should_run_guardrail({}, GuardrailEventHooks.pre_call) is False
+    )
+    assert (
+        guardrail.should_run_guardrail({}, GuardrailEventHooks.post_call) is False
+    )
+
+    del os.environ["PROMPT_SECURITY_API_KEY"]
+    del os.environ["PROMPT_SECURITY_API_BASE"]
+
+
+def test_prompt_security_during_call_not_expanded_when_flag_disabled_string_value():
+    """Test string config values for compatibility flag are respected."""
+    os.environ["PROMPT_SECURITY_API_KEY"] = "test-key"
+    os.environ["PROMPT_SECURITY_API_BASE"] = "https://test.prompt.security"
+
+    guardrail = PromptSecurityGuardrail(
+        guardrail_name="test-guard",
+        event_hook="during_call",
+        default_on=True,
+        expand_during_call_hooks="false",
+    )
+
+    assert guardrail.event_hook == "during_call"
+
+    del os.environ["PROMPT_SECURITY_API_KEY"]
+    del os.environ["PROMPT_SECURITY_API_BASE"]
+
+
 @pytest.mark.asyncio
 async def test_apply_guardrail_block_request():
     """Test that apply_guardrail blocks malicious prompts"""
