@@ -946,7 +946,7 @@ def responses(
         if metadata is not None:
             existing = kwargs.get("litellm_metadata")
             if existing is None:
-                kwargs["litellm_metadata"] = metadata
+                kwargs["litellm_metadata"] = dict(metadata)
             elif isinstance(existing, dict):
                 for k, v in metadata.items():
                     existing.setdefault(k, v)
