@@ -293,12 +293,15 @@ class Authenticator:
 
         for attempt in range(max_attempts):
             try:
-                access_token_url = os.getenv(
-                    "GITHUB_COPILOT_ACCESS_TOKEN_URL", DEFAULT_GITHUB_ACCESS_TOKEN_URL
-                )
-                client_id = os.getenv(
-                    "GITHUB_COPILOT_CLIENT_ID", DEFAULT_GITHUB_CLIENT_ID
-                )
+        access_token_url = os.getenv(
+            "GITHUB_COPILOT_ACCESS_TOKEN_URL", DEFAULT_GITHUB_ACCESS_TOKEN_URL
+        )
+        client_id = os.getenv(
+            "GITHUB_COPILOT_CLIENT_ID", DEFAULT_GITHUB_CLIENT_ID
+        )
+
+        for attempt in range(max_attempts):
+            try:
                 resp = sync_client.post(
                     access_token_url,
                     headers=self._get_github_headers(),
