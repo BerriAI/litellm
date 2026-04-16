@@ -222,7 +222,8 @@ def _process_gemini_media(
             if format:
                 file_data = FileDataType(mime_type=format, file_uri=image_url)
             else:
-                file_data = FileDataType(file_uri=image_url)
+                # Gemini Files API references can be passed through as URI-only.
+                file_data = cast(FileDataType, {"file_uri": image_url})
             part = {"file_data": file_data}
             return _apply_gemini_3_metadata(
                 part, model, media_resolution_enum, video_metadata
