@@ -3655,3 +3655,268 @@ def test_cache_control_injection_tool_config_not_added_without_injection_point()
     tools = result["toolConfig"]["tools"]
     # No cachePoint should be appended
     assert all("cachePoint" not in tool for tool in tools)
+
+
+# ── Tests for compaction tool-pairing sanitization (modify_params=True) ──────
+
+
+@pytest.mark.asyncio
+async def test_orphaned_tool_use_gets_dummy_result():
+    """
+    When an assistant toolUse has no matching toolResult (e.g. after context
+    compaction), a dummy toolResult must be injected into the following user
+    message so Bedrock doesn't reject the request.
+    """
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        BedrockConverseMessagesProcessor,
+        _bedrock_converse_messages_pt,
+    )
+
+    messages = [
+        # Compacted history: toolUse present, but the tool result was dropped
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_orphan",
+                    "type": "function",
+                    "function": {"name": "search", "arguments": "{}"},
+                }
+            ],
+        },
+        {"role": "user", "content": "continue"},
+    ]
+
+    original_modify = litellm.modify_params
+    try:
+        litellm.modify_params = True
+        result = _bedrock_converse_messages_pt(
+            messages=messages,
+            model="bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+            llm_provider="bedrock_converse",
+        )
+        async_result = await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+            messages=messages,
+            model="bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+            llm_provider="bedrock_converse",
+        )
+    finally:
+        litellm.modify_params = original_modify
+
+    assert result == async_result
+
+    # Find any user message containing a toolResult for the orphaned toolUse
+    all_tool_result_ids = [
+        b["toolResult"]["toolUseId"]
+        for m in result
+        if m["role"] == "user"
+        for b in m.get("content", [])
+        if "toolResult" in b
+    ]
+    assert "call_orphan" in all_tool_result_ids, "Expected dummy toolResult for orphaned toolUse 'call_orphan'"
+
+
+@pytest.mark.asyncio
+async def test_orphaned_tool_use_multiple_parallel_order_preserved():
+    """
+    When an assistant message has multiple orphaned toolUse blocks, the
+    injected dummy toolResults must appear in the same order as the toolUse
+    blocks (Bedrock requires this ordering).
+    """
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        BedrockConverseMessagesProcessor,
+        _bedrock_converse_messages_pt,
+    )
+
+    messages = [
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_A",
+                    "type": "function",
+                    "function": {"name": "tool_a", "arguments": "{}"},
+                },
+                {
+                    "id": "call_B",
+                    "type": "function",
+                    "function": {"name": "tool_b", "arguments": "{}"},
+                },
+            ],
+        },
+        {"role": "user", "content": "ok"},
+    ]
+
+    original_modify = litellm.modify_params
+    try:
+        litellm.modify_params = True
+        result = _bedrock_converse_messages_pt(
+            messages=messages,
+            model="bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+            llm_provider="bedrock_converse",
+        )
+        async_result = await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+            messages=messages,
+            model="bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+            llm_provider="bedrock_converse",
+        )
+    finally:
+        litellm.modify_params = original_modify
+
+    assert result == async_result
+
+    # Collect all toolResult IDs across all user messages in order
+    result_ids = [
+        b["toolResult"]["toolUseId"]
+        for m in result
+        if m["role"] == "user"
+        for b in m.get("content", [])
+        if "toolResult" in b
+    ]
+    # A must come before B, matching the toolUse order
+    assert "call_A" in result_ids and "call_B" in result_ids
+    assert result_ids.index("call_A") < result_ids.index("call_B"), "toolResult order must match toolUse order"
+
+
+@pytest.mark.asyncio
+async def test_orphaned_tool_result_removed():
+    """
+    When a user message contains a toolResult whose toolUseId has no matching
+    toolUse in any assistant message, the orphaned toolResult must be removed.
+    """
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        BedrockConverseMessagesProcessor,
+        _bedrock_converse_messages_pt,
+    )
+
+    messages = [
+        # No assistant toolUse — the toolUse was compacted away
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "call_gone",
+                    "content": "some result",
+                }
+            ],
+        },
+        {"role": "assistant", "content": "hello"},
+    ]
+
+    original_modify = litellm.modify_params
+    try:
+        litellm.modify_params = True
+        result = _bedrock_converse_messages_pt(
+            messages=messages,
+            model="bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+            llm_provider="bedrock_converse",
+        )
+        async_result = await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+            messages=messages,
+            model="bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+            llm_provider="bedrock_converse",
+        )
+    finally:
+        litellm.modify_params = original_modify
+
+    assert result == async_result
+
+    for msg in result:
+        for block in msg.get("content", []):
+            assert "toolResult" not in block, "Orphaned toolResult with no matching toolUse should be removed"
+
+
+@pytest.mark.asyncio
+async def test_text_before_tool_use_in_assistant_message():
+    """
+    Text blocks in an assistant message must appear before toolUse blocks.
+    Bedrock rejects requests where text follows toolUse.
+    """
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        BedrockConverseMessagesProcessor,
+        _bedrock_converse_messages_pt,
+    )
+
+    # Simulate an assistant message where text comes after tool_calls
+    messages = [
+        {"role": "user", "content": "Do something"},
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "text", "text": "Let me help"},
+            ],
+            "tool_calls": [
+                {
+                    "id": "call_t",
+                    "type": "function",
+                    "function": {"name": "do_thing", "arguments": "{}"},
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "call_t",
+            "content": "done",
+        },
+    ]
+
+    result = _bedrock_converse_messages_pt(
+        messages=messages,
+        model="bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        llm_provider="bedrock_converse",
+    )
+    async_result = await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+        messages=messages,
+        model="bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        llm_provider="bedrock_converse",
+    )
+
+    assert result == async_result
+
+    assistant_msg = next(m for m in result if m["role"] == "assistant")
+    content = assistant_msg["content"]
+
+    # Find positions of text and toolUse blocks
+    text_positions = [i for i, b in enumerate(content) if "text" in b]
+    tool_use_positions = [i for i, b in enumerate(content) if "toolUse" in b]
+
+    assert text_positions, "Expected at least one text block"
+    assert tool_use_positions, "Expected at least one toolUse block"
+    assert max(text_positions) < min(tool_use_positions), "All text blocks must appear before all toolUse blocks"
+
+
+def test_has_tool_call_blocks_detects_anthropic_format():
+    """
+    has_tool_call_blocks() must detect tool blocks in Anthropic content-list
+    format, not just OpenAI tool_calls arrays.
+    """
+    from litellm.utils import has_tool_call_blocks
+
+    # OpenAI format
+    assert has_tool_call_blocks(
+        [
+            {
+                "role": "assistant",
+                "tool_calls": [{"id": "x", "type": "function", "function": {"name": "f", "arguments": "{}"}}],
+            }
+        ]
+    )
+
+    # role="tool"
+    assert has_tool_call_blocks([{"role": "tool", "tool_call_id": "x", "content": "result"}])
+
+    # Anthropic type="tool_use"
+    assert has_tool_call_blocks(
+        [{"role": "assistant", "content": [{"type": "tool_use", "id": "x", "name": "f", "input": {}}]}]
+    )
+
+    # Anthropic type="tool_result"
+    assert has_tool_call_blocks(
+        [{"role": "user", "content": [{"type": "tool_result", "tool_use_id": "x", "content": "done"}]}]
+    )
+
+    # No tool blocks
+    assert not has_tool_call_blocks([{"role": "user", "content": "hello"}, {"role": "assistant", "content": "hi"}])
