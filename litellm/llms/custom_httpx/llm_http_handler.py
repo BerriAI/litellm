@@ -1830,7 +1830,9 @@ class BaseLLMHTTPHandler:
         api_key: Optional[str],
         model: str,
     ) -> httpx.Response:
-        max_attempts = max(provider_config.max_retry_on_anthropic_messages_http_error, 1)
+        max_attempts = max(
+            provider_config.max_retry_on_anthropic_messages_http_error, 1
+        )
         litellm_params_dict = dict(litellm_params)
         optional_params_dict = dict(litellm_params)
         for attempt_idx in range(max_attempts):
@@ -1846,8 +1848,10 @@ class BaseLLMHTTPHandler:
                 return response
             except httpx.HTTPStatusError as e:
                 hit_max_attempt = attempt_idx + 1 == max_attempts
-                should_retry = provider_config.should_retry_anthropic_messages_on_http_error(
-                    e=e, litellm_params=litellm_params_dict
+                should_retry = (
+                    provider_config.should_retry_anthropic_messages_on_http_error(
+                        e=e, litellm_params=litellm_params_dict
+                    )
                 )
                 if should_retry and not hit_max_attempt:
                     verbose_logger.debug(
@@ -4559,9 +4563,9 @@ class BaseLLMHTTPHandler:
                         # Second: Execute agentic loop
                         # Add custom_llm_provider to kwargs so the agentic loop can reconstruct the full model name
                         kwargs_with_provider = kwargs.copy() if kwargs else {}
-                        kwargs_with_provider[
-                            "custom_llm_provider"
-                        ] = custom_llm_provider
+                        kwargs_with_provider["custom_llm_provider"] = (
+                            custom_llm_provider
+                        )
                         agentic_response = await callback.async_run_agentic_loop(
                             tools=tool_calls,
                             model=model,
@@ -4677,9 +4681,9 @@ class BaseLLMHTTPHandler:
                         # Second: Execute agentic loop
                         # Add custom_llm_provider to kwargs so the agentic loop can reconstruct the full model name
                         kwargs_with_provider = kwargs.copy() if kwargs else {}
-                        kwargs_with_provider[
-                            "custom_llm_provider"
-                        ] = custom_llm_provider
+                        kwargs_with_provider["custom_llm_provider"] = (
+                            custom_llm_provider
+                        )
                         agentic_response = (
                             await callback.async_run_chat_completion_agentic_loop(
                                 tools=tool_calls,
@@ -5173,7 +5177,10 @@ class BaseLLMHTTPHandler:
         _is_async: bool = False,
         fake_stream: bool = False,
         litellm_metadata: Optional[Dict[str, Any]] = None,
-    ) -> Union[ImageResponse, Coroutine[Any, Any, ImageResponse],]:
+    ) -> Union[
+        ImageResponse,
+        Coroutine[Any, Any, ImageResponse],
+    ]:
         """
 
         Handles image edit requests.
@@ -5385,7 +5392,10 @@ class BaseLLMHTTPHandler:
         fake_stream: bool = False,
         litellm_metadata: Optional[Dict[str, Any]] = None,
         api_key: Optional[str] = None,
-    ) -> Union[ImageResponse, Coroutine[Any, Any, ImageResponse],]:
+    ) -> Union[
+        ImageResponse,
+        Coroutine[Any, Any, ImageResponse],
+    ]:
         """
         Handles image generation requests.
         When _is_async=True, returns a coroutine instead of making the call directly.
@@ -5625,7 +5635,10 @@ class BaseLLMHTTPHandler:
         fake_stream: bool = False,
         litellm_metadata: Optional[Dict[str, Any]] = None,
         api_key: Optional[str] = None,
-    ) -> Union[VideoObject, Coroutine[Any, Any, VideoObject],]:
+    ) -> Union[
+        VideoObject,
+        Coroutine[Any, Any, VideoObject],
+    ]:
         """
         Handles video generation requests.
         When _is_async=True, returns a coroutine instead of making the call directly.
