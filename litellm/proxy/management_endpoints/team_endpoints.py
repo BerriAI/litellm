@@ -2538,6 +2538,25 @@ async def team_member_update(
             identified_budget_id = tm.budget_id
             break
 
+    ### resolve effective budget_duration
+    # - Explicit value (including null) takes precedence
+    # - If omitted, inherit the team's configured team_member_budget_duration
+    if "budget_duration" in data.model_fields_set:
+        effective_budget_duration = data.budget_duration
+    else:
+        team_member_budget_id = (team_table.metadata or {}).get(
+            "team_member_budget_id"
+        )
+        if team_member_budget_id:
+            _team_budget_row = await prisma_client.db.litellm_budgettable.find_unique(
+                where={"budget_id": team_member_budget_id}
+            )
+            effective_budget_duration = (
+                _team_budget_row.budget_duration if _team_budget_row else None
+            )
+        else:
+            effective_budget_duration = None
+
     ### upsert new budget
     async with prisma_client.db.tx() as tx:
         await _upsert_budget_and_membership(
@@ -2549,6 +2568,7 @@ async def team_member_update(
             user_api_key_dict=user_api_key_dict,
             tpm_limit=data.tpm_limit,
             rpm_limit=data.rpm_limit,
+            budget_duration=effective_budget_duration,
         )
 
     ### update team member role
@@ -2581,6 +2601,7 @@ async def team_member_update(
         max_budget_in_team=data.max_budget_in_team,
         tpm_limit=data.tpm_limit,
         rpm_limit=data.rpm_limit,
+        budget_duration=effective_budget_duration,
     )
 
 
