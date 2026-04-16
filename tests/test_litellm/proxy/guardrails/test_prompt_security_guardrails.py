@@ -103,6 +103,59 @@ def test_prompt_security_during_call_expands_to_pre_and_post_hooks():
     del os.environ["PROMPT_SECURITY_API_BASE"]
 
 
+def test_prompt_security_during_call_expands_to_pre_and_post_hooks_for_enum_input():
+    """Test enum input expands during_call to pre_call + post_call."""
+    os.environ["PROMPT_SECURITY_API_KEY"] = "test-key"
+    os.environ["PROMPT_SECURITY_API_BASE"] = "https://test.prompt.security"
+
+    guardrail = PromptSecurityGuardrail(
+        guardrail_name="test-guard",
+        event_hook=GuardrailEventHooks.during_call,
+        default_on=True,
+    )
+
+    assert isinstance(guardrail.event_hook, list)
+    assert set(guardrail.event_hook) == {"pre_call", "post_call"}
+
+    del os.environ["PROMPT_SECURITY_API_KEY"]
+    del os.environ["PROMPT_SECURITY_API_BASE"]
+
+
+def test_prompt_security_during_call_expands_to_pre_and_post_hooks_for_list_input():
+    """Test list input with during_call expands to include pre_call + post_call."""
+    os.environ["PROMPT_SECURITY_API_KEY"] = "test-key"
+    os.environ["PROMPT_SECURITY_API_BASE"] = "https://test.prompt.security"
+
+    guardrail = PromptSecurityGuardrail(
+        guardrail_name="test-guard",
+        event_hook=[GuardrailEventHooks.pre_call, GuardrailEventHooks.during_call],
+        default_on=True,
+    )
+
+    assert isinstance(guardrail.event_hook, list)
+    assert set(guardrail.event_hook) == {"pre_call", "post_call"}
+
+    del os.environ["PROMPT_SECURITY_API_KEY"]
+    del os.environ["PROMPT_SECURITY_API_BASE"]
+
+
+def test_prompt_security_event_hook_list_without_during_call_is_preserved():
+    """Test list input without during_call remains unchanged."""
+    os.environ["PROMPT_SECURITY_API_KEY"] = "test-key"
+    os.environ["PROMPT_SECURITY_API_BASE"] = "https://test.prompt.security"
+
+    guardrail = PromptSecurityGuardrail(
+        guardrail_name="test-guard",
+        event_hook=[GuardrailEventHooks.pre_call, GuardrailEventHooks.post_call],
+        default_on=True,
+    )
+
+    assert guardrail.event_hook == ["pre_call", "post_call"]
+
+    del os.environ["PROMPT_SECURITY_API_KEY"]
+    del os.environ["PROMPT_SECURITY_API_BASE"]
+
+
 @pytest.mark.asyncio
 async def test_apply_guardrail_block_request():
     """Test that apply_guardrail blocks malicious prompts"""
@@ -624,6 +677,121 @@ async def test_apply_guardrail_modify_request_preserves_filtered_message_alignme
         "tool output should remain",
         "Acknowledged",
     ]
+    assert result["structured_messages"][0]["content"] == "System context"
+    assert result["structured_messages"][1]["content"] == "my id is [REDACTED]"
+    assert result["structured_messages"][2]["content"] == "tool output should remain"
+    assert result["structured_messages"][2]["role"] == "tool"
+    assert result["structured_messages"][3]["content"] == "Acknowledged"
+
+    del os.environ["PROMPT_SECURITY_API_KEY"]
+    del os.environ["PROMPT_SECURITY_API_BASE"]
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_modify_request_preserves_original_tool_role_when_checking_tool_results():
+    """Test modify action does not leak Prompt Security's temporary role='other' to model messages."""
+    os.environ["PROMPT_SECURITY_API_KEY"] = "test-key"
+    os.environ["PROMPT_SECURITY_API_BASE"] = "https://test.prompt.security"
+
+    guardrail = PromptSecurityGuardrail(
+        guardrail_name="test-guard",
+        event_hook="pre_call",
+        default_on=True,
+        check_tool_results=True,
+    )
+
+    request_data = {
+        "messages": [
+            {"role": "user", "content": "Summarize this tool output"},
+            {"role": "tool", "content": "customer id is 228230355"},
+        ]
+    }
+    inputs = {
+        "texts": ["Summarize this tool output", "customer id is 228230355"],
+        "structured_messages": request_data["messages"],
+    }
+
+    # Prompt Security sees the tool message transformed to role='other'.
+    modified_messages = [
+        {"role": "user", "content": "Summarize this tool output"},
+        {"role": "other", "content": "customer id is [REDACTED]"},
+    ]
+
+    mock_response = Response(
+        json={
+            "result": {
+                "prompt": {"action": "modify", "modified_messages": modified_messages}
+            }
+        },
+        status_code=200,
+        request=Request(method="POST", url="https://test.prompt.security/api/protect"),
+    )
+    mock_response.raise_for_status = lambda: None
+
+    with patch.object(guardrail.async_handler, "post", return_value=mock_response):
+        result = await guardrail.apply_guardrail(
+            inputs=inputs,
+            request_data=request_data,
+            input_type="request",
+        )
+
+    assert result["texts"] == ["Summarize this tool output", "customer id is [REDACTED]"]
+    assert result["structured_messages"][1]["role"] == "tool"
+    assert result["structured_messages"][1]["content"] == "customer id is [REDACTED]"
+
+    del os.environ["PROMPT_SECURITY_API_KEY"]
+    del os.environ["PROMPT_SECURITY_API_BASE"]
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_modify_request_length_mismatch_falls_back_to_modified_texts():
+    """Test mismatch between scanned and modified message lengths uses modified text fallback."""
+    os.environ["PROMPT_SECURITY_API_KEY"] = "test-key"
+    os.environ["PROMPT_SECURITY_API_BASE"] = "https://test.prompt.security"
+
+    guardrail = PromptSecurityGuardrail(
+        guardrail_name="test-guard",
+        event_hook="pre_call",
+        default_on=True,
+    )
+
+    request_data = {
+        "messages": [
+            {"role": "user", "content": "my id is 228230355"},
+            {"role": "assistant", "content": "Acknowledged"},
+        ]
+    }
+    inputs = {
+        "texts": ["my id is 228230355", "Acknowledged"],
+        "structured_messages": request_data["messages"],
+    }
+
+    mock_response = Response(
+        json={
+            "result": {
+                "prompt": {
+                    "action": "modify",
+                    # Scanned length is 2 but modified length is 1.
+                    "modified_messages": [
+                        {"role": "user", "content": "my id is [REDACTED]"}
+                    ],
+                }
+            }
+        },
+        status_code=200,
+        request=Request(method="POST", url="https://test.prompt.security/api/protect"),
+    )
+    mock_response.raise_for_status = lambda: None
+
+    with patch.object(guardrail.async_handler, "post", return_value=mock_response):
+        result = await guardrail.apply_guardrail(
+            inputs=inputs,
+            request_data=request_data,
+            input_type="request",
+        )
+
+    assert result["texts"] == ["my id is [REDACTED]"]
+    assert result["structured_messages"] == request_data["messages"]
 
     del os.environ["PROMPT_SECURITY_API_KEY"]
     del os.environ["PROMPT_SECURITY_API_BASE"]

@@ -288,7 +288,19 @@ class PromptSecurityGuardrail(CustomGuardrail):
                         if not isinstance(modified_message, dict):
                             continue
                         original_idx = filtered_message_indexes[modified_idx]
-                        messages[original_idx] = modified_message
+                        original_message = messages[original_idx]
+                        if not isinstance(original_message, dict):
+                            messages[original_idx] = modified_message
+                            continue
+
+                        # Preserve the original role for in-flight request messages.
+                        # Prompt Security may transform non-standard roles to "other"
+                        # for scanning, but "other" should never be sent to model providers.
+                        merged_message = {**original_message, **modified_message}
+                        merged_message["role"] = original_message.get(
+                            "role", merged_message.get("role")
+                        )
+                        messages[original_idx] = merged_message
 
                     inputs["texts"] = self._extract_texts_from_messages(messages)
                     if structured_messages:
