@@ -256,6 +256,14 @@ const config = {
   themeConfig:
     /** @type {import('@docusaurus/preset-classic').ThemeConfig} */
     ({
+      announcementBar: {
+        id: 'trivy_compromise_resolved',
+        content:
+          '🔒 The Trivy supply-chain compromise has been fully mitigated and resolved. All affected packages have been deleted and current releases are safe to use. Please refer to our <a href="/blog/security-townhall-updates">Security Townhall</a> for a deeper understanding of the problem, and <a href="/blog/ci-cd-v2-improvements">CI/CD v2</a> for how we\'re improving moving forward.',
+        backgroundColor: '#e6f4ea',
+        textColor: '#1e4620',
+        isCloseable: true,
+      },
       // Replace with your project's social card
       image: 'img/docusaurus-social-card.png',
       navbar: {
