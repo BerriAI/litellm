@@ -39,7 +39,6 @@ class LiteLLMDatabase:
 
         query = """
         SELECT
-            dus.id,
             dus.date,
             dus.user_id,
             dus.api_key,
@@ -59,13 +58,13 @@ class LiteLLMDatabase:
             vt.team_id,
             vt.key_alias  AS api_key_alias,
             tt.team_alias,
-            ut.user_email AS user_email
+            ut.user_email
         FROM "LiteLLM_DailyUserSpend" dus
         LEFT JOIN "LiteLLM_VerificationToken" vt  ON dus.api_key   = vt.token
         LEFT JOIN "LiteLLM_TeamTable"         tt  ON vt.team_id    = tt.team_id
         LEFT JOIN "LiteLLM_UserTable"         ut  ON dus.user_id   = ut.user_id
         WHERE dus.date = $1
-        ORDER BY dus.created_at ASC
+        ORDER BY dus.date, dus.user_id, dus.model ASC
         """
 
         params: List[Any] = [date_str]
