@@ -40,6 +40,7 @@ class TestMCPClient:
         with pytest.raises(
             ValueError, match="stdio_config is required for stdio transport"
         ):
+
             async def _noop(session):
                 return None
 
@@ -251,11 +252,11 @@ class TestMCPClient:
             server_url="http://example.com/sse",
             transport_type="sse",
             auth_type=MCPAuth.token,
-            auth_value="my-secret-token"
+            auth_value="my-secret-token",
         )
-        
+
         headers = client._get_auth_headers()
-        
+
         assert "Authorization" in headers
         assert headers["Authorization"] == "token my-secret-token"
 
@@ -266,27 +267,27 @@ class TestMCPClient:
             server_url="http://example.com/sse",
             transport_type="sse",
             auth_type=MCPAuth.bearer_token,
-            auth_value="bearer-token"
+            auth_value="bearer-token",
         )
         headers = client._get_auth_headers()
         assert headers["Authorization"] == "Bearer bearer-token"
-        
+
         # Test API key
         client = MCPClient(
             server_url="http://example.com/sse",
             transport_type="sse",
             auth_type=MCPAuth.api_key,
-            auth_value="api-key"
+            auth_value="api-key",
         )
         headers = client._get_auth_headers()
         assert headers["X-API-Key"] == "api-key"
-        
+
         # Test basic auth (gets base64 encoded)
         client = MCPClient(
             server_url="http://example.com/sse",
             transport_type="sse",
             auth_type=MCPAuth.basic,
-            auth_value="user:pass"
+            auth_value="user:pass",
         )
         headers = client._get_auth_headers()
         assert headers["Authorization"].startswith("Basic ")
@@ -298,11 +299,11 @@ class TestMCPClient:
             transport_type="sse",
             auth_type=MCPAuth.token,
             auth_value="my-token",
-            extra_headers={"X-Custom-Header": "custom-value"}
+            extra_headers={"X-Custom-Header": "custom-value"},
         )
-        
+
         headers = client._get_auth_headers()
-        
+
         assert headers["Authorization"] == "token my-token"
         assert headers["X-Custom-Header"] == "custom-value"
 
