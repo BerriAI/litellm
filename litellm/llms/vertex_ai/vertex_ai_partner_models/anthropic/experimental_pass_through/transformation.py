@@ -16,6 +16,13 @@ from ....vertex_llm_base import VertexBase
 
 
 class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, VertexBase):
+    @staticmethod
+    def _has_vertex_predict_endpoint(api_base: str) -> bool:
+        api_base_without_query = api_base.split("?", 1)[0]
+        return api_base_without_query.endswith(
+            (":rawPredict", ":streamRawPredict")
+        )
+
     def validate_anthropic_messages_environment(
         self,
         headers: dict,
@@ -51,18 +58,18 @@ class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, Vert
             # Authorization already in headers, but we still need project_id
             project_id = vertex_ai_project
 
-        # Always normalize the Vertex URL, even when a custom api_base is supplied.
-        # get_complete_vertex_url() appends the required :rawPredict/:streamRawPredict
-        # suffix for partner-model passthrough requests.
-        api_base = self.get_complete_vertex_url(
-            custom_api_base=api_base,
-            vertex_location=vertex_ai_location,
-            vertex_project=vertex_ai_project,
-            project_id=project_id or "",
-            partner=VertexPartnerProvider.claude,
-            stream=optional_params.get("stream", False),
-            model=model,
-        )
+        if api_base is None or not self._has_vertex_predict_endpoint(api_base):
+            # Normalize Vertex model URLs, but preserve fully-qualified endpoints
+            # provided by callers (for example ...:rawPredict).
+            api_base = self.get_complete_vertex_url(
+                custom_api_base=api_base,
+                vertex_location=vertex_ai_location,
+                vertex_project=vertex_ai_project,
+                project_id=project_id or "",
+                partner=VertexPartnerProvider.claude,
+                stream=optional_params.get("stream", False),
+                model=model,
+            )
 
         headers["content-type"] = "application/json"
 
