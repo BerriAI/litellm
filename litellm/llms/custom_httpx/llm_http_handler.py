@@ -22,7 +22,7 @@ import litellm
 import litellm.litellm_core_utils
 import litellm.types
 import litellm.types.utils
-from litellm._logging import verbose_logger
+from litellm._logging import _redact_string, verbose_logger
 from litellm.anthropic_beta_headers_manager import update_headers_with_filtered_beta
 from litellm.constants import REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
 from litellm.litellm_core_utils.realtime_streaming import RealTimeStreaming
@@ -4856,12 +4856,12 @@ class BaseLLMHTTPHandler:
 
         except websockets.exceptions.InvalidStatusCode as e:  # type: ignore
             verbose_logger.exception(f"Error connecting to backend: {e}")
-            await websocket.close(code=e.status_code, reason=str(e))
+            await websocket.close(code=e.status_code, reason=_redact_string(str(e)))
         except Exception as e:
             verbose_logger.exception(f"Error connecting to backend: {e}")
             try:
                 await websocket.close(
-                    code=1011, reason=f"Internal server error: {str(e)}"
+                    code=1011, reason=_redact_string(f"Internal server error: {str(e)}")
                 )
             except RuntimeError as close_error:
                 if "already completed" in str(close_error) or "websocket.close" in str(
@@ -5143,12 +5143,12 @@ class BaseLLMHTTPHandler:
 
         except websockets.exceptions.InvalidStatusCode as e:  # type: ignore
             verbose_logger.exception(f"Error connecting to responses WS backend: {e}")
-            await websocket.close(code=e.status_code, reason=str(e))
+            await websocket.close(code=e.status_code, reason=_redact_string(str(e)))
         except Exception as e:
             verbose_logger.exception(f"Error in responses WS: {e}")
             try:
                 await websocket.close(
-                    code=1011, reason=f"Internal server error: {str(e)}"
+                    code=1011, reason=_redact_string(f"Internal server error: {str(e)}")
                 )
             except RuntimeError as close_error:
                 if "already completed" in str(close_error) or "websocket.close" in str(
