@@ -1006,10 +1006,19 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
             _admin_allow_client_tags = True
             break
     if not _admin_allow_client_tags:
+        _stripped_from: List[str] = []
         for _meta_key in ("metadata", "litellm_metadata"):
             _user_meta = data.get(_meta_key)
-            if isinstance(_user_meta, dict):
+            if isinstance(_user_meta, dict) and "tags" in _user_meta:
                 _user_meta.pop("tags", None)
+                _stripped_from.append(_meta_key)
+        if _stripped_from:
+            verbose_proxy_logger.warning(
+                "Stripped caller-supplied tags from %s: this key/team does "
+                "not have `allow_client_tags: true` in its metadata. Set it "
+                "to opt into client-supplied routing/budget tags.",
+                ", ".join(_stripped_from),
+            )
 
     ##########################################################
     # Init - Proxy Server Request
