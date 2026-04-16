@@ -126,10 +126,7 @@ const updateProxyBaseUrl = (serverRootPath: string, receivedProxyBaseUrl: string
     return;
   }
   const browserLocation = getWindowLocation();
-  const resolvedDefaultProxyBaseUrl =
-    isLocal && process.env.NEXT_PUBLIC_USE_REWRITES !== "true"
-      ? "http://localhost:4000"
-      : browserLocation?.origin ?? null;
+  const resolvedDefaultProxyBaseUrl = defaultProxyBaseUrl ?? browserLocation?.origin ?? null;
   let initialProxyBaseUrl = receivedProxyBaseUrl || resolvedDefaultProxyBaseUrl;
   console.log("proxyBaseUrl:", proxyBaseUrl);
   console.log("serverRootPath:", serverRootPath);

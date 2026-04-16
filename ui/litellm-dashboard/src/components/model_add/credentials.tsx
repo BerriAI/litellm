@@ -17,7 +17,6 @@ import {
   TableRow,
   Text,
 } from "@tremor/react";
-import { Form } from "antd";
 import { UploadProps } from "antd/es/upload";
 import { useState } from "react";
 import DeleteResourceModal from "../common_components/DeleteResourceModal";
@@ -43,7 +42,6 @@ const CredentialsPanel: React.FC<CredentialsPanelProps> = ({ uploadProps }) => {
   const [credentialToDelete, setCredentialToDelete] = useState<CredentialItem | null>(null);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [isCredentialDeleting, setIsCredentialDeleting] = useState(false);
-  const [form] = Form.useForm();
 
   const restrictedFields = ["credential_name", "custom_llm_provider"];
   const handleUpdateCredential = async (values: any) => {
