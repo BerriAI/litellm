@@ -9,10 +9,10 @@ URL to connect to the validated IP directly — no TOCTOU gap, no DNS
 rebinding. Redirects are followed manually with validation at each hop.
 """
 
-import ipaddress
+import asyncio
 import socket
 from ipaddress import ip_address, ip_network
-from typing import Any, Optional, Tuple, Union
+from typing import Any, Tuple
 from urllib.parse import urlparse, urlunparse
 
 import litellm
@@ -136,6 +136,17 @@ def validate_url(url: str) -> Tuple[str, str]:
 _MAX_REDIRECTS = 10
 
 
+def _extract_redirect_url(response: Any, request_url: str) -> str:
+    """Extract and resolve the redirect target from a response's Location header."""
+    import httpx
+
+    location = response.headers.get("location")
+    if not location:
+        raise SSRFError("Redirect response has no Location header")
+    # Resolve relative URLs against the request URL
+    return str(httpx.URL(request_url).join(location))
+
+
 def safe_get(client: Any, url: str, **kwargs: Any) -> Any:
     """
     Fetch a user-supplied URL with SSRF protection on every redirect hop.
@@ -145,7 +156,7 @@ def safe_get(client: Any, url: str, **kwargs: Any) -> Any:
     (each hop validated). No breaking change for legitimate CDN redirects.
 
     Args:
-        client: An httpx.Client or httpx.AsyncClient (sync version).
+        client: An httpx.Client (sync).
         url: The user-supplied URL.
         **kwargs: Additional kwargs passed to client.get().
 
@@ -162,9 +173,9 @@ def safe_get(client: Any, url: str, **kwargs: Any) -> Any:
             follow_redirects=False,
             **kwargs,
         )
-        if not response.is_redirect or response.next_request is None:
+        if not response.is_redirect:
             return response
-        url = str(response.next_request.url)
+        url = _extract_redirect_url(response, validated_url)
     raise SSRFError("Too many redirects")
 
 
@@ -180,7 +191,7 @@ async def async_safe_get(client: Any, url: str, **kwargs: Any) -> Any:
             follow_redirects=False,
             **kwargs,
         )
-        if not response.is_redirect or response.next_request is None:
+        if not response.is_redirect:
             return response
-        url = str(response.next_request.url)
+        url = _extract_redirect_url(response, validated_url)
     raise SSRFError("Too many redirects")
