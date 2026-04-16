@@ -53,10 +53,13 @@ async def test_ahealth_check_wildcard_models_respects_max_tokens():
     Test that ahealth_check_wildcard_models respects max_tokens if passed,
     otherwise defaults to 10.
     """
-    with patch(
-        "litellm.litellm_core_utils.llm_request_utils.pick_cheapest_chat_models_from_llm_provider",
-        return_value=["gpt-4o-mini"],
-    ), patch("litellm.acompletion", new_callable=AsyncMock):
+    with (
+        patch(
+            "litellm.litellm_core_utils.llm_request_utils.pick_cheapest_chat_models_from_llm_provider",
+            return_value=["gpt-4o-mini"],
+        ),
+        patch("litellm.acompletion", new_callable=AsyncMock),
+    ):
         # Test Case 1: No max_tokens passed, should default to 10
         model_params = {}
         await HealthCheckHelpers.ahealth_check_wildcard_models(
