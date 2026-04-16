@@ -211,6 +211,23 @@ class TestPkceTokenExchange:
             with pytest.raises(GetAccessTokenError):
                 _exchange_code_for_tokens(code="c", code_verifier="v", redirect_uri="r")
 
+    def test_raises_on_generic_exception(self):
+        """
+        Non-HTTPStatusError exceptions (e.g. JSON decode, connection
+        reset) funnel through the generic Exception handler.
+        """
+        fake_client = MagicMock()
+        fake_client.post.side_effect = RuntimeError("connection reset")
+
+        with patch(
+            "litellm.llms.chatgpt.pkce._get_httpx_client",
+            return_value=fake_client,
+        ):
+            with pytest.raises(GetAccessTokenError) as excinfo:
+                _exchange_code_for_tokens(code="c", code_verifier="v", redirect_uri="r")
+            assert excinfo.value.status_code == 400
+            assert "connection reset" in excinfo.value.message
+
     def test_raises_on_http_error(self):
         fake_client = MagicMock()
         request = httpx.Request("POST", CHATGPT_OAUTH_TOKEN_URL)

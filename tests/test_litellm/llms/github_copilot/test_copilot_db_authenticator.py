@@ -240,3 +240,42 @@ class _Awaitable:
             return self._value
 
         return _coro().__await__()
+
+
+class TestPersistScheduling:
+    def test_schedule_starts_background_thread(self, monkeypatch):
+        from litellm.llms.github_copilot import db_authenticator as mod
+
+        calls = []
+
+        def _fake_sync(item):
+            calls.append(item.credential_name)
+
+        monkeypatch.setattr(mod, "_persist_item_sync", _fake_sync)
+        item = CredentialItem(
+            credential_name="c",
+            credential_values={"access_token": "gho_abc"},
+            credential_info={"type": CREDENTIAL_TYPE},
+        )
+        mod._schedule_db_persist(item)
+        import time
+
+        for _ in range(100):
+            if calls:
+                break
+            time.sleep(0.01)
+        assert calls == ["c"]
+
+    def test_persist_item_sync_swallows_exceptions(self, monkeypatch):
+        from litellm.llms.github_copilot import db_authenticator as mod
+
+        async def _boom(item):
+            raise RuntimeError("db offline")
+
+        monkeypatch.setattr(mod, "persist_credential_to_db", _boom)
+        item = CredentialItem(
+            credential_name="c",
+            credential_values={"access_token": "gho_abc"},
+            credential_info={"type": CREDENTIAL_TYPE},
+        )
+        mod._persist_item_sync(item)  # must not raise

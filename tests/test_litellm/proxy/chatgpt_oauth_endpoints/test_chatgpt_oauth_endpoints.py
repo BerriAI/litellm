@@ -380,6 +380,64 @@ class TestBackgroundWorker:
         # Verify the item is in the in-memory cache too
         assert any(c.credential_name == "my-creds" for c in litellm.credential_list)
 
+    def test_worker_marks_error_on_db_persist_failure(self, monkeypatch):
+        """
+        If tokens are obtained but the DB write fails, the session should
+        flip to ``error`` with an informative message (the in-memory cache
+        was already updated; next retry via UI will retry the DB write).
+        """
+        from litellm.proxy.chatgpt_oauth_endpoints.endpoints import (
+            _run_device_code_flow,
+        )
+
+        session_id = "s1"
+        with _sessions_lock:
+            _sessions[session_id] = {
+                "status": "pending",
+                "credential_name": "my-creds",
+                "expires_at": time.time() + 600,
+                "cancelled": False,
+            }
+
+        auth = MagicMock()
+        auth._poll_for_authorization_code.return_value = {
+            "authorization_code": "ac",
+            "code_challenge": "cc",
+            "code_verifier": "cv",
+        }
+        auth._exchange_code_for_tokens.return_value = {
+            "access_token": "a",
+            "refresh_token": "r",
+            "id_token": "i",
+        }
+        auth._build_auth_record.return_value = {
+            "access_token": "a",
+            "refresh_token": "r",
+            "id_token": "i",
+            "account_id": "acct-1",
+            "expires_at": 1700000000,
+        }
+
+        async def _boom(item):
+            raise RuntimeError("prisma disconnected")
+
+        monkeypatch.setattr(
+            "litellm.proxy.chatgpt_oauth_endpoints.endpoints.persist_credential_to_db",
+            _boom,
+        )
+        monkeypatch.setattr(litellm, "credential_list", [])
+
+        _run_device_code_flow(
+            session_id=session_id,
+            credential_name="my-creds",
+            device_code={"interval": "5"},
+            authenticator=auth,
+        )
+
+        with _sessions_lock:
+            assert _sessions[session_id]["status"] == "error"
+            assert "DB persist failed" in _sessions[session_id]["message"]
+
     def test_worker_marks_error_on_auth_failure(self, monkeypatch):
         from litellm.llms.chatgpt.common_utils import GetAccessTokenError
         from litellm.proxy.chatgpt_oauth_endpoints.endpoints import (

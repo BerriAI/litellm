@@ -246,7 +246,8 @@ def _run_device_code_flow(
         access_token = authenticator._poll_for_access_token(
             device_code_info["device_code"]
         )
-        if _get_session(session_id).get("cancelled"):  # type: ignore[union-attr]
+        session_snapshot = _get_session(session_id)
+        if session_snapshot is None or session_snapshot.get("cancelled"):
             return
     except GithubCopilotError as exc:
         _update_session(session_id, status="error", message=exc.message)

@@ -19,7 +19,7 @@ import {
   TableRow,
   Text,
 } from "@tremor/react";
-import { Form } from "antd";
+import { Button as AntdButton, Form, Tooltip } from "antd";
 import { UploadProps } from "antd/es/upload";
 import { useState } from "react";
 import DeleteResourceModal from "../common_components/DeleteResourceModal";
@@ -191,32 +191,37 @@ const CredentialsPanel: React.FC<CredentialsPanelProps> = ({ uploadProps }) => {
                     {renderProviderBadge((credential.credential_info?.custom_llm_provider as string) || "-")}
                   </TableCell>
                   <TableCell>
-                    <Button
-                      icon={PencilAltIcon}
-                      variant="light"
-                      size="sm"
-                      onClick={() => {
-                        setSelectedCredential(credential);
-                        setIsUpdateModalOpen(true);
-                      }}
-                    />
+                    <Tooltip title="Edit">
+                      <AntdButton
+                        type="text"
+                        size="small"
+                        icon={<PencilAltIcon className="w-4 h-4" />}
+                        onClick={() => {
+                          setSelectedCredential(credential);
+                          setIsUpdateModalOpen(true);
+                        }}
+                      />
+                    </Tooltip>
                     {getOAuthRefreshCall(credential) && (
-                      <Button
-                        icon={RefreshIcon}
-                        variant="light"
-                        size="sm"
-                        tooltip="Refresh OAuth tokens"
-                        onClick={() => handleRefreshCredential(credential)}
+                      <Tooltip title="Refresh OAuth tokens">
+                        <AntdButton
+                          type="text"
+                          size="small"
+                          icon={<RefreshIcon className="w-4 h-4" />}
+                          onClick={() => handleRefreshCredential(credential)}
+                          className="ml-2"
+                        />
+                      </Tooltip>
+                    )}
+                    <Tooltip title="Delete">
+                      <AntdButton
+                        type="text"
+                        size="small"
+                        icon={<TrashIcon className="w-4 h-4" />}
+                        onClick={() => openDeleteModal(credential)}
                         className="ml-2"
                       />
-                    )}
-                    <Button
-                      icon={TrashIcon}
-                      variant="light"
-                      size="sm"
-                      onClick={() => openDeleteModal(credential)}
-                      className="ml-2"
-                    />
+                    </Tooltip>
                   </TableCell>
                 </TableRow>
               ))

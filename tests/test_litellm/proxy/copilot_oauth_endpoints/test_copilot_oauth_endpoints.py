@@ -260,6 +260,39 @@ class TestBackgroundWorker:
         with _sessions_lock:
             assert _sessions[session_id]["status"] == "success"
 
+    def test_worker_marks_error_on_db_persist_failure(self, monkeypatch):
+        from litellm.proxy.copilot_oauth_endpoints.endpoints import (
+            _run_device_code_flow,
+        )
+
+        session_id = "s1"
+        with _sessions_lock:
+            _sessions[session_id] = {
+                "status": "pending",
+                "credential_name": "c",
+                "expires_at": time.time() + 600,
+                "cancelled": False,
+            }
+
+        auth = MagicMock()
+        auth._poll_for_access_token.return_value = "gho_fresh"
+
+        def _boom(self, tok):
+            raise RuntimeError("prisma disconnected")
+
+        monkeypatch.setattr(DBAuthenticator, "store_access_token", _boom)
+
+        _run_device_code_flow(
+            session_id=session_id,
+            credential_name="c",
+            device_code_info={"device_code": "dc", "user_code": "UC"},
+            authenticator=auth,
+        )
+
+        with _sessions_lock:
+            assert _sessions[session_id]["status"] == "error"
+            assert "DB persist failed" in _sessions[session_id]["message"]
+
     def test_worker_marks_error_on_poll_failure(self):
         from litellm.proxy.copilot_oauth_endpoints.endpoints import (
             _run_device_code_flow,

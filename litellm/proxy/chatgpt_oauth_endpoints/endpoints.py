@@ -267,7 +267,8 @@ def _run_device_code_flow(
     """
     try:
         auth_code = authenticator._poll_for_authorization_code(device_code)
-        if _get_session(session_id).get("cancelled"):  # type: ignore[union-attr]
+        session_snapshot = _get_session(session_id)
+        if session_snapshot is None or session_snapshot.get("cancelled"):
             return
         tokens = authenticator._exchange_code_for_tokens(auth_code)
     except ChatGPTAuthError as exc:
