@@ -39,6 +39,46 @@ class TestIsBlockedIp:
     def test_unparseable_is_blocked(self):
         assert _is_blocked_ip("not-an-ip") is True
 
+    # Coverage delta picked up by switching to `not ip.is_global` (RFC 6890)
+    # over the old hand-maintained CIDR list.
+    def test_blocks_cgnat_alibaba_metadata(self):
+        """100.100.100.200 is Alibaba Cloud metadata; lives in CGNAT."""
+        assert _is_blocked_ip("100.100.100.200") is True
+
+    def test_blocks_ietf_protocol_assignments_old_oracle_metadata(self):
+        """192.0.0.192 was the legacy Oracle Cloud metadata IP."""
+        assert _is_blocked_ip("192.0.0.192") is True
+
+    def test_blocks_documentation_ranges(self):
+        assert _is_blocked_ip("192.0.2.1") is True
+        assert _is_blocked_ip("198.51.100.1") is True
+        assert _is_blocked_ip("203.0.113.1") is True
+
+    def test_blocks_multicast(self):
+        assert _is_blocked_ip("224.0.0.1") is True
+
+    def test_blocks_reserved_future_use(self):
+        assert _is_blocked_ip("240.0.0.1") is True
+
+    def test_blocks_broadcast(self):
+        assert _is_blocked_ip("255.255.255.255") is True
+
+    def test_blocks_azure_wire_server(self):
+        """168.63.129.16 is globally routable but cloud-internal — explicit exception."""
+        assert _is_blocked_ip("168.63.129.16") is True
+
+    def test_blocks_aws_ipv6_imds(self):
+        """fd00:ec2::254 is AWS's IPv6 IMDS, in IPv6 ULA (fc00::/7)."""
+        assert _is_blocked_ip("fd00:ec2::254") is True
+
+    def test_blocks_ipv4_mapped_private(self):
+        """::ffff:10.0.0.1 must be unwrapped and blocked as 10.0.0.1."""
+        assert _is_blocked_ip("::ffff:10.0.0.1") is True
+
+    def test_blocks_ipv4_mapped_azure_wire_server(self):
+        """::ffff:168.63.129.16 must be unwrapped and blocked via the exception list."""
+        assert _is_blocked_ip("::ffff:168.63.129.16") is True
+
 
 class TestValidateUrl:
     def test_blocks_loopback(self):
@@ -92,7 +132,13 @@ class TestValidateUrl:
         with pytest.raises(SSRFError, match="DNS resolution failed"):
             validate_url("http://this-domain-does-not-exist-xyz123.invalid/test")
 
-    def test_blocks_localhost_hostname(self):
+    def test_blocks_localhost_hostname(self, monkeypatch):
+        def fake(host, port, *a, **kw):
+            return [
+                (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("127.0.0.1", port or 80))
+            ]
+
+        monkeypatch.setattr(url_utils.socket, "getaddrinfo", fake)
         with pytest.raises(SSRFError):
             validate_url("http://localhost/")
 
@@ -179,6 +225,49 @@ class TestHostHeaderFormatting:
         monkeypatch.setattr(url_utils.socket, "getaddrinfo", fake)
         _, host = validate_url("http://[2001:db8::1]/")
         assert host == "[2001:db8::1]"
+
+
+class TestRedirectHostnamePreservation:
+    """Relative-location redirects must keep the original hostname, not the
+    rewritten IP, so the next hop's Host header still identifies the site."""
+
+    def test_relative_redirect_preserves_hostname_for_next_hop(self, monkeypatch):
+        def fake(host, port, *a, **kw):
+            return [
+                (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", port))
+            ]
+
+        monkeypatch.setattr(url_utils.socket, "getaddrinfo", fake)
+
+        class FakeResponse:
+            def __init__(self, status, location=None):
+                self.status_code = status
+                self.headers = {"location": location} if location else {}
+                self.is_redirect = 300 <= status < 400
+
+        hops = []
+
+        class FakeClient:
+            def __init__(self):
+                self._n = 0
+
+            def get(self, url, headers=None, follow_redirects=False, **kw):
+                hops.append({"url": url, "host": (headers or {}).get("Host")})
+                self._n += 1
+                if self._n == 1:
+                    return FakeResponse(302, "/redirected")
+                return FakeResponse(200)
+
+        url_utils.safe_get(FakeClient(), "http://example.com/initial")
+        assert len(hops) == 2
+        # Both hops must carry the ORIGINAL hostname in the Host header.
+        assert hops[0]["host"] == "example.com"
+        assert hops[1]["host"] == "example.com"
+        # Both outbound URLs go to the resolved IP (rewritten), not the hostname.
+        assert "93.184.216.34" in hops[0]["url"]
+        assert "93.184.216.34" in hops[1]["url"]
+        # The second hop resolved /redirected relative to the original, not the IP.
+        assert hops[1]["url"].endswith("/redirected")
 
 
 class TestValidationMasterSwitch:
@@ -284,7 +373,11 @@ class TestHostAllowlist:
     def test_allowlist_permits_loopback(self, monkeypatch):
         """Admin may opt into loopback if they explicitly configure it."""
         monkeypatch.setattr(litellm, "user_url_allowed_hosts", ["localhost"])
-        # localhost resolves locally without needing mocks
+
+        def fake(host, port, *a, **kw):
+            return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("127.0.0.1", port))]
+
+        monkeypatch.setattr(url_utils.socket, "getaddrinfo", fake)
         rewritten, host = validate_url("http://localhost:8080/")
         assert host == "localhost:8080"
 
