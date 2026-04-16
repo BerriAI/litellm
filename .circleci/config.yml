@@ -638,7 +638,7 @@ jobs:
           username: ${DOCKERHUB_USERNAME}
           password: ${DOCKERHUB_PASSWORD}
     working_directory: ~/project
-    resource_class: large
+    resource_class: xlarge
 
     steps:
       - checkout
