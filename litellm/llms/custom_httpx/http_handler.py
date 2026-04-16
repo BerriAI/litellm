@@ -1019,6 +1019,7 @@ class HTTPHandler:
             url,
             params=params,
             headers=headers,
+            follow_redirects=_follow_redirects,
         )
 
         return response
