@@ -191,9 +191,9 @@ class MCPServerManager:
     ) -> None:
         raw = getattr(client, "_last_initialize_instructions", None)
         if raw and str(raw).strip():
-            self._upstream_initialize_instructions_by_server_id[server.server_id] = (
-                str(raw).strip()
-            )
+            self._upstream_initialize_instructions_by_server_id[server.server_id] = str(
+                raw
+            ).strip()
 
     def get_registry(self) -> Dict[str, MCPServer]:
         """
