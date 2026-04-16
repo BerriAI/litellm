@@ -30,6 +30,7 @@ from litellm.constants import (
 )
 from litellm.litellm_core_utils.default_encoding import encoding as default_encoding
 from litellm.llms.custom_httpx.http_handler import _get_httpx_client
+from litellm.proxy.common_utils.url_utils import validate_url
 from litellm.types.llms.anthropic import (
     AnthropicMessagesToolResultParam,
     AnthropicMessagesToolUseParam,
@@ -211,9 +212,14 @@ def get_image_dimensions(
     """
     img_data = None
     try:
-        # Try to open as URL
+        # Try to open as URL — validate and pin to resolved IP
+        validated_url, original_host = validate_url(data)
         client = _get_httpx_client()
-        response = client.get(data)
+        response = client.get(
+            validated_url,
+            headers={"Host": original_host},
+            follow_redirects=False,
+        )
         img_data = response.read()
     except Exception:
         # If not URL, assume it's base64
