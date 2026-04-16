@@ -1534,13 +1534,20 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 f"Invalid effort value: {effort}. Must be one of: "
                 f"'high', 'medium', 'low', 'xhigh', 'max'"
             )
-        # xhigh / max are opt-in effort levels; gate them on the model map
-        # capability flag (``supports_xhigh_reasoning_effort`` / ``supports_max_reasoning_effort``).
-        if effort in ("xhigh", "max") and not self._supports_effort_level(
-            model, effort
+        # ``max`` is Claude Opus 4.6 and 4.7 only (not Sonnet 4.6, not Opus 4.5).
+        # Keep this hardcoded so the error message is specific and stable.
+        if effort == "max" and not (
+            self._is_opus_4_6_model(model) or self._is_opus_4_7_model(model)
         ):
             raise ValueError(
-                f"effort={effort!r} is not supported by this model. Got model: {model}"
+                f"effort='max' is only supported by Claude Opus 4.6 and 4.7. "
+                f"Got model: {model}"
+            )
+        # ``xhigh`` is data-driven via ``supports_xhigh_reasoning_effort`` so
+        # enabling it for a new model is a pure model-map change.
+        if effort == "xhigh" and not self._supports_effort_level(model, "xhigh"):
+            raise ValueError(
+                f"effort='xhigh' is not supported by this model. Got model: {model}"
             )
         data["output_config"] = output_config
 
