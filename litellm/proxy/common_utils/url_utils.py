@@ -148,11 +148,12 @@ def safe_get(client: Any, url: str, **kwargs: Any) -> Any:
         The final httpx.Response.
     """
     kwargs.pop("follow_redirects", None)
+    caller_headers = kwargs.pop("headers", {})
     for _ in range(_MAX_REDIRECTS):
         validated_url, original_host = validate_url(url)
         response = client.get(
             validated_url,
-            headers={**kwargs.pop("headers", {}), "Host": original_host},
+            headers={**caller_headers, "Host": original_host},
             follow_redirects=False,
             **kwargs,
         )
@@ -165,11 +166,12 @@ def safe_get(client: Any, url: str, **kwargs: Any) -> Any:
 async def async_safe_get(client: Any, url: str, **kwargs: Any) -> Any:
     """Async version of safe_get."""
     kwargs.pop("follow_redirects", None)
+    caller_headers = kwargs.pop("headers", {})
     for _ in range(_MAX_REDIRECTS):
         validated_url, original_host = validate_url(url)
         response = await client.get(
             validated_url,
-            headers={**kwargs.pop("headers", {}), "Host": original_host},
+            headers={**caller_headers, "Host": original_host},
             follow_redirects=False,
             **kwargs,
         )
