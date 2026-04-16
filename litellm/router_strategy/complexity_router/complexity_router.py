@@ -367,12 +367,8 @@ class ComplexityRouter(CustomLogger):
                         call_type = ct
                         break
 
-        # 2. Fall back to data-shape inference
         if call_type is None:
-            if "input" in request_kwargs:
-                call_type = CallTypes.responses
-            else:
-                return None
+            return None
 
         if call_type not in mappings:
             return None
