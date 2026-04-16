@@ -83,7 +83,7 @@ Note: Reasoning cannot be turned off on Gemini 2.5 Pro models.
 :::
 
 :::tip Gemini 3 Models
-For **Gemini 3+ models** (e.g., `gemini-3-pro-preview`), LiteLLM automatically maps `reasoning_effort` to the new `thinking_level` parameter instead of `thinking_budget`. The `thinking_level` parameter uses `"low"` or `"high"` values for better control over reasoning depth.
+For **Gemini 3+ models** (e.g., `gemini-3-pro-preview`), LiteLLM maps `reasoning_effort` to the `thinking_level` field instead of `thinking_budget` when you set it. Supported levels depend on the model (Flash-family models also support `minimal` and `medium`). If you omit `reasoning_effort`, LiteLLM does **not** send a default `thinking_level` — the request uses the **Gemini API defaults** (Gemini 3 Flash defaults to `high` on the API).
 :::
 
 :::warning Image Models
@@ -104,12 +104,12 @@ For **Gemini 3+ models** (e.g., `gemini-3-pro-preview`), LiteLLM automatically m
 
 | reasoning_effort | thinking_level | Notes |
 | ---------------- | -------------- | ----- |
-| "minimal"        | "low" | Minimizes latency and cost |
+| "minimal"        | `"minimal"` (Flash / some 3.1) or `"low"` | Flash-family IDs use `minimal` when supported |
 | "low"            | "low" | Best for simple instruction following or chat |
-| "medium"         | "high" | Maps to high (medium not yet available) |
+| "medium"         | `"medium"` or `"high"` | `"medium"` where the API supports it; otherwise `"high"` |
 | "high"           | "high" | Maximizes reasoning depth |
-| "disable"        | "low" | Cannot fully disable thinking in Gemini 3 |
-| "none"           | "low" | Cannot fully disable thinking in Gemini 3 |
+| "disable"        | `"minimal"` (Flash) or `"low"` | Cannot fully disable thinking in Gemini 3 |
+| "none"           | `"minimal"` (Flash) or `"low"` | Cannot fully disable thinking in Gemini 3 |
 
 <Tabs>
 <TabItem value="sdk" label="SDK">
