@@ -112,6 +112,14 @@ from litellm.types.proxy.management_endpoints.team_endpoints import (
 router = APIRouter()
 
 
+def _sanitize_for_log(value: Any) -> str:
+    """Strip CR/LF from user-controlled values to prevent log injection."""
+    try:
+        text = str(value)
+    except Exception:
+        text = repr(value)
+    return text.replace("\r", "").replace("\n", "")
+
 async def _verify_team_access(
     team_obj: LiteLLM_TeamTable,
     user_api_key_dict: UserAPIKeyAuth,
@@ -284,6 +292,61 @@ class TeamMemberBudgetHandler:
         data_dict.pop("team_member_budget_duration", None)
         data_dict.pop("team_member_rpm_limit", None)
         data_dict.pop("team_member_tpm_limit", None)
+
+    @staticmethod
+    async def backfill_team_member_budget_entries(
+        team_id: str,
+        members_with_roles: List[Union[Member, dict]],
+        team_member_budget_id: str,
+        prisma_client: PrismaClient,
+    ) -> None:
+        """
+        Create team_memberships entries for existing members that don't have one.
+
+        Called after team_member_budget is set/updated on a team to ensure
+        members who joined before the budget was configured also get budget
+        enforcement.
+
+        Only creates missing entries — does not touch existing memberships
+        (which may carry individual per-member budgets).
+        """
+        if not members_with_roles:
+            return
+
+        # Batch-fetch existing memberships for this team (avoids N+1 queries)
+        existing_memberships = (
+            await prisma_client.db.litellm_teammembership.find_many(
+                where={"team_id": team_id}
+            )
+        )
+        existing_user_ids = {m.user_id for m in existing_memberships}
+
+        # Identify members with no existing membership row.
+        # members_with_roles may contain Member instances or raw dicts depending
+        # on how the team was fetched/deserialized.
+        missing = []
+        for m in members_with_roles:
+            user_id = m.get("user_id") if isinstance(m, dict) else m.user_id
+            if user_id is not None and user_id not in existing_user_ids:
+                missing.append(
+                    {
+                        "team_id": team_id,
+                        "user_id": user_id,
+                        "budget_id": team_member_budget_id,
+                    }
+                )
+
+        if missing:
+            await prisma_client.db.litellm_teammembership.create_many(
+                data=missing,
+                skip_duplicates=True,  # safety net against concurrent races
+            )
+            verbose_proxy_logger.info(
+                "Backfilled %d team_memberships for team %s with budget %s",
+                len(missing),
+                _sanitize_for_log(team_id),
+                _sanitize_for_log(team_member_budget_id),
+            )
 
 
 def _get_default_team_param(field: str) -> Any:
@@ -1551,6 +1614,18 @@ async def update_team(  # noqa: PLR0915
                 team_member_tpm_limit=data.team_member_tpm_limit,
                 team_member_budget_duration=data.team_member_budget_duration,
             )
+            # Backfill team_memberships for members who joined before the
+            # budget was configured — they won't have a membership row yet.
+            _backfill_budget_id = (updated_kv.get("metadata") or {}).get(
+                "team_member_budget_id"
+            )
+            if _backfill_budget_id and existing_team_row.members_with_roles:
+                await TeamMemberBudgetHandler.backfill_team_member_budget_entries(
+                    team_id=data.team_id,
+                    members_with_roles=existing_team_row.members_with_roles,
+                    team_member_budget_id=_backfill_budget_id,
+                    prisma_client=prisma_client,
+                )
         else:
             TeamMemberBudgetHandler._clean_team_member_fields(updated_kv)
 
