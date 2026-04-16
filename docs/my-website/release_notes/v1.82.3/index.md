@@ -262,6 +262,9 @@ pip install litellm==1.82.3
 - **[OpenRouter](../../docs/providers/openrouter)**
     - Image edit support for OpenRouter models - [PR #22403](https://github.com/BerriAI/litellm/pull/22403)
 
+- **[Google Gemini](../../docs/providers/gemini)**
+    - Gemini 3 — no injected default `thinking_level` when `reasoning_effort` is omitted (matches Gemini API; Flash may default to `high` vs old `minimal`) — [Gemini 3 blog](../../blog/gemini_3)
+
 - **[Google Vertex AI](../../docs/providers/vertex)**
     - VIDEO modality token usage tracking in `completion_tokens_details` - [PR #22550](https://github.com/BerriAI/litellm/pull/22550)
 
