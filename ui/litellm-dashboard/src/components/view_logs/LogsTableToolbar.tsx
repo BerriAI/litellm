@@ -26,7 +26,6 @@ interface LogsTableToolbarProps {
   isButtonLoading: boolean;
   onRefetch: () => void;
   filteredLogs: PaginatedResponse;
-  hasBackendFilters: boolean;
 }
 
 export function LogsTableToolbar({
@@ -49,7 +48,6 @@ export function LogsTableToolbar({
   isButtonLoading,
   onRefetch,
   filteredLogs,
-  hasBackendFilters,
 }: LogsTableToolbarProps) {
   const [quickSelectOpen, setQuickSelectOpen] = useState(false);
   const quickSelectRef = useRef<HTMLDivElement>(null);
@@ -227,7 +225,7 @@ export function LogsTableToolbar({
           </div>
         </div>
       </div>
-      {isLiveTail && currentPage === 1 && !hasBackendFilters && (
+      {isLiveTail && currentPage === 1 && (
         <div className="mb-4 px-4 py-2 bg-green-50 border border-greem-200 rounded-md flex items-center justify-between">
           <div className="flex items-center gap-2">
             <span className="text-sm text-green-700">Auto-refreshing every 15 seconds</span>

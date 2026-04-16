@@ -108,7 +108,6 @@ export default function SpendLogsTable({
   const {
     logsQuery,
     filteredLogs,
-    hasBackendFilters,
     allTeams,
     handleFilterChange,
     handleFilterReset: handleFilterResetFromHook,
@@ -291,7 +290,6 @@ export default function SpendLogsTable({
                     isButtonLoading={isButtonLoading}
                     onRefetch={() => logsQuery.refetch()}
                     filteredLogs={filteredLogs}
-                    hasBackendFilters={hasBackendFilters}
                   />
                   <DataTable
                     columns={createColumns({
