@@ -29,7 +29,6 @@ class TestBedrockMoonshotInvoke(BaseLLMChatTest):
     """
     
     def get_base_completion_call_args(self) -> dict:
-        litellm._turn_on_debug()
         return {
             "model": "bedrock/invoke/moonshot.kimi-k2-thinking",
         }
