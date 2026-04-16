@@ -17,6 +17,7 @@ export enum Providers {
   BASETEN = "Baseten",
   BYTEZ = "Bytez",
   Cerebras = "Cerebras",
+  ChatGPT = "ChatGPT (OAuth)",
   CLARIFAI = "Clarifai",
   CLOUDFLARE = "Cloudflare",
   CODESTRAL = "Codestral",

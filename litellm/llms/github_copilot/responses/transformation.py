@@ -7,6 +7,7 @@ which is required for models like gpt-5.1-codex that only support the /responses
 Implementation based on analysis of the copilot-api project by caozhiyuan:
 https://github.com/caozhiyuan/copilot-api
 """
+
 from typing import TYPE_CHECKING, Any, Dict, Optional, Union
 
 from litellm._logging import verbose_logger
@@ -26,6 +27,7 @@ from ..common_utils import (
     GetAPIKeyError,
     get_copilot_default_headers,
 )
+from ..db_authenticator import resolve_authenticator
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -104,7 +106,10 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
         """
         try:
             # Get GitHub Copilot API key via OAuth
-            api_key = self.authenticator.get_api_key()
+            authenticator = resolve_authenticator(
+                None, litellm_params, self.authenticator
+            )
+            api_key = authenticator.get_api_key()
 
             if not api_key:
                 raise AuthenticationError(
@@ -165,9 +170,8 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
         added in the future by detecting account type.
         """
         # Use provided api_base or fall back to authenticator's base or default
-        api_base = (
-            api_base or self.authenticator.get_api_base() or GITHUB_COPILOT_API_BASE
-        )
+        authenticator = resolve_authenticator(None, litellm_params, self.authenticator)
+        api_base = api_base or authenticator.get_api_base() or GITHUB_COPILOT_API_BASE
 
         # Remove trailing slashes
         api_base = api_base.rstrip("/")

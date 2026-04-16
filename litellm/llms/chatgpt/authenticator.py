@@ -341,6 +341,11 @@ class Authenticator:
         self._write_auth_file(auth_data)
         return refreshed
 
+    def login_pkce(self, **kwargs: Any) -> Dict[str, str]:
+        from .pkce import login_pkce as _login_pkce
+
+        return _login_pkce(self, **kwargs)
+
     def _build_auth_record(self, tokens: Dict[str, str]) -> Dict[str, Any]:
         access_token = tokens.get("access_token")
         id_token = tokens.get("id_token")

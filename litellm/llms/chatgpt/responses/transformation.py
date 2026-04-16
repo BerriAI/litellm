@@ -25,6 +25,7 @@ from ..common_utils import (
     get_chatgpt_default_headers,
     get_chatgpt_default_instructions,
 )
+from ..db_authenticator import resolve_authenticator
 
 
 class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
@@ -42,8 +43,9 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
         model: str,
         litellm_params: Optional[GenericLiteLLMParams],
     ) -> dict:
+        authenticator = resolve_authenticator(litellm_params, self.authenticator)
         try:
-            access_token = self.authenticator.get_access_token()
+            access_token = authenticator.get_access_token()
         except GetAccessTokenError as e:
             raise AuthenticationError(
                 model=model,
@@ -51,7 +53,7 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
                 message=str(e),
             )
 
-        account_id = self.authenticator.get_account_id()
+        account_id = authenticator.get_account_id()
         session_id = ensure_chatgpt_session_id(litellm_params)
         default_headers = get_chatgpt_default_headers(
             access_token, account_id, session_id

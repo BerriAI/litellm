@@ -113,6 +113,7 @@ proxy-runtime = [
 [project.scripts]
 litellm = "litellm:run_server"
 litellm-proxy = "litellm.proxy.client.cli:cli"
+litellm-chatgpt-login = "litellm.llms.chatgpt.cli:cli"
 
 [dependency-groups]
 dev = [

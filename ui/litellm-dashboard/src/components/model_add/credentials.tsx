@@ -1,10 +1,12 @@
 import {
+  chatgptOauthRefreshCall,
+  copilotOauthRefreshCall,
   credentialCreateCall,
   credentialDeleteCall,
   CredentialItem,
   credentialUpdateCall,
 } from "@/components/networking"; // Assume this is your networking function
-import { PencilAltIcon, TrashIcon } from "@heroicons/react/outline";
+import { PencilAltIcon, RefreshIcon, TrashIcon } from "@heroicons/react/outline";
 import {
   Badge,
   Button,
@@ -125,6 +127,29 @@ const CredentialsPanel: React.FC<CredentialsPanelProps> = ({ uploadProps }) => {
     }
   };
 
+  const getOAuthRefreshCall = (credential: CredentialItem) => {
+    const type = (credential.credential_info as Record<string, unknown> | undefined)?.type;
+    if (type === "chatgpt_oauth") return chatgptOauthRefreshCall;
+    if (type === "copilot_oauth") return copilotOauthRefreshCall;
+    return null;
+  };
+
+  const handleRefreshCredential = async (credential: CredentialItem) => {
+    const refreshCall = getOAuthRefreshCall(credential);
+    if (!accessToken || !refreshCall) return;
+    try {
+      await refreshCall(accessToken, credential.credential_name);
+      NotificationsManager.success(
+        `Refreshed tokens for ${credential.credential_name}`,
+      );
+      await refetchCredentials();
+    } catch (error) {
+      NotificationsManager.error(
+        error instanceof Error ? error.message : "Failed to refresh credential",
+      );
+    }
+  };
+
   const openDeleteModal = (credential: CredentialItem) => {
     setCredentialToDelete(credential);
     setIsDeleteModalOpen(true);
@@ -175,6 +200,16 @@ const CredentialsPanel: React.FC<CredentialsPanelProps> = ({ uploadProps }) => {
                         setIsUpdateModalOpen(true);
                       }}
                     />
+                    {getOAuthRefreshCall(credential) && (
+                      <Button
+                        icon={RefreshIcon}
+                        variant="light"
+                        size="sm"
+                        tooltip="Refresh OAuth tokens"
+                        onClick={() => handleRefreshCredential(credential)}
+                        className="ml-2"
+                      />
+                    )}
                     <Button
                       icon={TrashIcon}
                       variant="light"
