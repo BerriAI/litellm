@@ -14,6 +14,8 @@ from ipaddress import ip_address, ip_network
 from typing import Any, Tuple
 from urllib.parse import urlparse, urlunparse
 
+import httpx
+
 import litellm
 
 _BLOCKED_NETWORKS = [
@@ -142,8 +144,6 @@ _MAX_REDIRECTS = 10
 
 def _extract_redirect_url(response: Any, request_url: str) -> str:
     """Extract and resolve the redirect target from a response's Location header."""
-    import httpx
-
     location = response.headers.get("location")
     if not location:
         raise SSRFError("Redirect response has no Location header")
