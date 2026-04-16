@@ -56,11 +56,15 @@ class BasePassthroughUtils:
             # Combine request headers with custom headers
             headers = {**request_headers, **headers}
 
-        # Always process x-pass- prefixed headers (strip prefix and forward)
+        # Process x-pass- prefixed headers (strip prefix and forward)
+        # Certain protocol-level and credential headers are excluded from this mechanism.
+        _PROTECTED_HEADERS = {"authorization", "api-key", "host", "content-length"}
         for header_name, header_value in request_headers.items():
             if header_name.lower().startswith(PASS_THROUGH_HEADER_PREFIX):
                 # Strip the 'x-pass-' prefix to get the actual header name
                 actual_header_name = header_name[len(PASS_THROUGH_HEADER_PREFIX) :]
+                if actual_header_name.lower() in _PROTECTED_HEADERS:
+                    continue
                 headers[actual_header_name] = header_value
 
         return headers
