@@ -8,7 +8,6 @@ from litellm._logging import verbose_logger
 from litellm.integrations.arize import _utils
 from litellm.integrations.langfuse.langfuse_otel_attributes import (
     LangfuseLLMObsOTELAttributes,
-    get_langfuse_observation_input_by_type,
 )
 from litellm.integrations.opentelemetry import OpenTelemetry, OpenTelemetryConfig
 from litellm.types.integrations.langfuse_otel import (
@@ -243,14 +242,6 @@ class LangfuseOtelLogger(OpenTelemetry):
 
         metadata = LangfuseOtelLogger._extract_langfuse_metadata(kwargs)
         LangfuseOtelLogger._set_metadata_attributes(span=span, metadata=metadata)
-
-        input_payload = get_langfuse_observation_input_by_type(kwargs)
-        if input_payload is not None:
-            safe_set_attribute(
-                span,
-                LangfuseSpanAttributes.OBSERVATION_INPUT.value,
-                safe_dumps(input_payload),
-            )
 
         LangfuseOtelLogger._set_observation_output(span=span, response_obj=response_obj)
 

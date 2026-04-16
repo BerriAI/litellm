@@ -257,21 +257,14 @@ class TestLangfuseOtelIntegration:
             ],
         )
 
-        kwargs = {
-            "messages": [{"role": "user", "content": "What's the weather in Tokyo?"}],
-        }
-
         with patch(
             "litellm.integrations.arize._utils.safe_set_attribute"
         ) as mock_safe_set_attribute:
             LangfuseOtelLogger._set_langfuse_specific_attributes(
-                MagicMock(), kwargs, response_obj
+                MagicMock(), {}, response_obj
             )
 
             expect_output = {
-                LangfuseSpanAttributes.OBSERVATION_INPUT.value: [
-                    {"role": "user", "content": "What's the weather in Tokyo?"}
-                ],
                 LangfuseSpanAttributes.OBSERVATION_OUTPUT.value: {
                     "role": "assistant",
                     "content": "The weather in Tokyo is sunny.",
@@ -571,6 +564,46 @@ class TestLangfuseOtelResponsesAPI:
             "show me connected applications with high risk"
             in actual_attributes["langfuse.observation.input"]
         )
+
+    def test_langfuse_observation_input_skips_null_messages(self):
+        """Explicit null messages should not serialize as `{\"messages\": null}`."""
+        kwargs = {
+            "messages": None,
+            "optional_params": {
+                "tools": [{"type": "function", "name": "list_applications"}]
+            },
+        }
+
+        from litellm.integrations.langfuse.langfuse_otel_attributes import (
+            get_langfuse_observation_input_by_type,
+        )
+
+        assert get_langfuse_observation_input_by_type(kwargs) == {
+            "tools": [{"type": "function", "name": "list_applications"}]
+        }
+
+    def test_langfuse_specific_attributes_do_not_rewrite_observation_input(self):
+        """Observation input should be owned by set_messages, not rewritten later."""
+        from litellm.types.integrations.langfuse_otel import LangfuseSpanAttributes
+
+        kwargs = {
+            "input": [{"role": "user", "content": "hello"}],
+            "optional_params": {"instructions": "Reply briefly."},
+            "litellm_params": {"metadata": {"generation_name": "gen-name"}},
+        }
+
+        with patch(
+            "litellm.integrations.arize._utils.safe_set_attribute"
+        ) as mock_safe_set_attribute:
+            LangfuseOtelLogger._set_langfuse_specific_attributes(
+                MagicMock(), kwargs, None
+            )
+
+            actual_keys = [
+                call.args[1] for call in mock_safe_set_attribute.call_args_list
+            ]
+            assert LangfuseSpanAttributes.GENERATION_NAME.value in actual_keys
+            assert LangfuseSpanAttributes.OBSERVATION_INPUT.value not in actual_keys
 
     def test_responses_api_metadata_extraction(self):
         """Test that metadata is correctly extracted from ResponsesAPI kwargs."""

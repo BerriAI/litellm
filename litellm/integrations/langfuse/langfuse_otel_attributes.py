@@ -128,7 +128,9 @@ def get_langfuse_observation_input_by_type(
         return prompt
 
     prompt: dict[str, Any] = {}
-    if "messages" in kwargs:
+    # Preserve explicit empty chat message lists without serializing `null`
+    # when callers pass `messages=None`.
+    if messages is not None:
         prompt["messages"] = messages
     for key in ("functions", "tools"):
         value = optional_params.get(key)
