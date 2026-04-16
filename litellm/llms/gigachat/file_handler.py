@@ -16,12 +16,10 @@ from litellm.llms.custom_httpx.http_handler import (
     _get_httpx_client,
     get_async_httpx_client,
 )
+from litellm.llms.gigachat.utils import get_api_base
 from litellm.types.utils import LlmProviders
 
 from .authenticator import get_access_token, get_access_token_async
-
-# GigaChat API endpoint
-GIGACHAT_BASE_URL = "https://gigachat.devices.sberbank.ru/api/v1"
 
 # Simple in-memory cache for file IDs
 _file_cache: Dict[str, str] = {}
@@ -82,6 +80,7 @@ def upload_file_sync(
     image_url: str,
     credentials: Optional[str] = None,
     api_base: Optional[str] = None,
+    litellm_params: Optional[dict] = None,
 ) -> Optional[str]:
     """
     Upload file to GigaChat and return file_id (sync).
@@ -114,10 +113,12 @@ def upload_file_sync(
         filename = f"{uuid.uuid4()}.{ext}"
 
         # Get access token
-        access_token = get_access_token(credentials)
+        access_token = get_access_token(
+            credentials=credentials, litellm_params=litellm_params
+        )
 
         # Upload to GigaChat
-        base_url = api_base or GIGACHAT_BASE_URL
+        base_url = get_api_base(api_base)
         upload_url = f"{base_url}/files"
 
         client = _get_httpx_client(params={"ssl_verify": False})
@@ -147,6 +148,7 @@ async def upload_file_async(
     image_url: str,
     credentials: Optional[str] = None,
     api_base: Optional[str] = None,
+    litellm_params: Optional[dict] = None,
 ) -> Optional[str]:
     """
     Upload file to GigaChat and return file_id (async).
@@ -179,10 +181,12 @@ async def upload_file_async(
         filename = f"{uuid.uuid4()}.{ext}"
 
         # Get access token
-        access_token = await get_access_token_async(credentials)
+        access_token = await get_access_token_async(
+            credentials=credentials, litellm_params=litellm_params
+        )
 
         # Upload to GigaChat
-        base_url = api_base or GIGACHAT_BASE_URL
+        base_url = get_api_base(api_base)
         upload_url = f"{base_url}/files"
 
         client = get_async_httpx_client(

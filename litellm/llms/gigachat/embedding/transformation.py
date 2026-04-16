@@ -14,13 +14,11 @@ from litellm import LlmProviders
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.llms.gigachat.utils import get_api_base
 from litellm.types.llms.openai import AllEmbeddingInputValues, AllMessageValues
 from litellm.types.utils import EmbeddingResponse
 
 from ..authenticator import get_access_token
-
-# GigaChat API endpoint
-GIGACHAT_BASE_URL = "https://gigachat.devices.sberbank.ru/api/v1"
 
 
 class GigaChatEmbeddingError(BaseLLMException):
@@ -82,7 +80,7 @@ class GigaChatEmbeddingConfig(BaseEmbeddingConfig):
         Returns:
             Tuple of (custom_llm_provider, api_base, dynamic_api_key)
         """
-        api_base = api_base or GIGACHAT_BASE_URL
+        api_base = get_api_base(api_base)
         return LlmProviders.GIGACHAT.value, api_base, api_key
 
     def get_complete_url(
@@ -95,7 +93,7 @@ class GigaChatEmbeddingConfig(BaseEmbeddingConfig):
         stream: Optional[bool] = None,
     ) -> str:
         """Get the complete URL for embeddings endpoint."""
-        base = api_base or GIGACHAT_BASE_URL
+        base = get_api_base(api_base)
         return f"{base}/embeddings"
 
     def transform_embedding_request(
@@ -194,7 +192,9 @@ class GigaChatEmbeddingConfig(BaseEmbeddingConfig):
         Set up headers with OAuth token for GigaChat.
         """
         # Get access token via OAuth
-        access_token = get_access_token(api_key)
+        access_token = get_access_token(
+            credentials=api_key, litellm_params=litellm_params
+        )
 
         default_headers = {
             "Content-Type": "application/json",
