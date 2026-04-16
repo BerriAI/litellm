@@ -977,11 +977,17 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
             "Setting client-provided x-api-key as api_key parameter (will override deployment key)"
         )
 
-    # Strip internal pipeline state from user input
+    # Strip internal pipeline state and admin-injection slots from user input.
+    # The proxy writes user_api_key_metadata / user_api_key_team_metadata
+    # into data[_metadata_variable_name] below; if a caller pre-populates
+    # either key on the OTHER metadata field, _get_admin_metadata lookups
+    # would treat the caller's payload as admin-configured.
     for _meta_key in ("metadata", "litellm_metadata"):
         _user_meta = data.get(_meta_key)
         if isinstance(_user_meta, dict):
             _user_meta.pop("_pipeline_managed_guardrails", None)
+            _user_meta.pop("user_api_key_metadata", None)
+            _user_meta.pop("user_api_key_team_metadata", None)
 
     ##########################################################
     # Init - Proxy Server Request

@@ -241,6 +241,22 @@ class TestCustomGuardrailShouldRunGuardrail:
             result is False
         ), "Admin config in metadata must not be shadowed by user-supplied litellm_metadata"
 
+        # Test 6: After the pre-call strip runs, user-injected
+        # user_api_key_metadata in the non-authoritative metadata key is gone.
+        # _get_admin_metadata must then surface admin config unchanged.
+        data_post_strip = {
+            "model": "gpt-3.5-turbo",
+            "messages": [{"role": "user", "content": "test"}],
+            "metadata": {"user_api_key_metadata": {"disable_global_guardrails": True}},
+            "litellm_metadata": {},  # post-strip: attacker payload removed
+        }
+        result = custom_guardrail.should_run_guardrail(
+            data=data_post_strip, event_type=GuardrailEventHooks.pre_call
+        )
+        assert (
+            result is False
+        ), "Admin config in metadata must be respected when other metadata key is empty"
+
     def test_should_run_guardrail_with_opted_out_global_guardrails(self):
         """Test that per-guardrail opt-out only works from admin metadata"""
         from litellm.types.guardrails import GuardrailEventHooks
