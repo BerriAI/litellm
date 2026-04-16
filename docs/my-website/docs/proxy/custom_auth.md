@@ -232,12 +232,14 @@ general_settings:
 
 ### Optional: run LiteLLM's post-custom-auth checks
 
-If your custom auth function returns a `UserAPIKeyAuth` object and you want LiteLLM to run the built-in checks on that object, enable the following flags in `general_settings`:
+If your custom auth function returns a `UserAPIKeyAuth` object and you want LiteLLM to run the built-in checks on that object, enable the following flags in `litellm_settings` and `general_settings`:
 
 ```yaml
+litellm_settings:
+  enable_post_custom_auth_checks: true   # opt in to LiteLLM post-auth checks
+
 general_settings:
   custom_auth: custom_auth.user_api_key_auth
-  enable_post_custom_auth_checks: true   # opt in to LiteLLM post-auth checks
   custom_auth_run_common_checks: true    # optional: also run standard model access checks
 ```
 

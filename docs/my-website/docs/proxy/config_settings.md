@@ -185,6 +185,7 @@ router_settings:
 | langfuse_default_tags | array of strings | Default tags for Langfuse Logging. Use this if you want to control which LiteLLM-specific fields are logged as tags by the LiteLLM proxy. By default LiteLLM Proxy logs no LiteLLM-specific fields as tags. [Further docs](./logging#litellm-specific-tags-on-langfuse---cache_hit-cache_key) |
 | set_verbose | boolean | [DEPRECATED - see debugging docs](./debugging) Use `--debug` or `--detailed_debug` CLI flags, or set `LITELLM_LOG` env var to "INFO", "DEBUG", or "ERROR" instead. |
 | json_logs | boolean | If true, logs will be in json format. If you need to store the logs as JSON, just set the `litellm.json_logs = True`. We currently just log the raw POST request from litellm as a JSON [Further docs](./debugging) |
+| enable_post_custom_auth_checks | boolean | If true, runs LiteLLM post-custom-auth checks (for example expiry, end-user budget, and model budget checks) on `UserAPIKeyAuth` objects returned by custom auth handlers. Default is false for performance. |
 | default_fallbacks | array of strings | List of fallback models to use if a specific model group is misconfigured / bad. [Further docs](./reliability#default-fallbacks) |
 | request_timeout | integer | The timeout for requests in seconds. If not set, the default value is `6000 seconds`. [For reference OpenAI Python SDK defaults to `600 seconds`.](https://github.com/openai/openai-python/blob/main/src/openai/_constants.py) |
 | force_ipv4 | boolean | If true, litellm will force ipv4 for all LLM requests. Some users have seen httpx ConnectionError when using ipv6 + Anthropic API |
@@ -285,7 +286,6 @@ router_settings:
 | always_include_stream_usage | boolean | If true, includes usage metrics in every streaming response chunk |
 | auto_redirect_ui_login_to_sso | boolean | If true, automatically redirects UI login page to SSO provider |
 | control_plane_url | string | URL of the control plane for cross-instance state sharing |
-| enable_post_custom_auth_checks | boolean | If true, runs LiteLLM post-custom-auth checks (for example expiry, end-user budget, and model budget checks) on `UserAPIKeyAuth` objects returned by custom auth handlers. Default is false for performance. |
 | custom_auth_run_common_checks | boolean | If true, runs standard auth validation checks alongside custom auth handlers |
 | custom_ui_sso_sign_in_handler | string | Custom handler for SSO sign-in logic in the UI |
 | database_connection_pool_timeout | integer | Database connection pool timeout in seconds |
