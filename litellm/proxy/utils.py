@@ -4525,29 +4525,20 @@ class PrismaClient:
 
     async def get_all_latest_health_checks(self):
         """
-        Get the latest health check for each model
+        Get the latest health check for each model.
+
+        Uses DB-level DISTINCT ON (model_id, model_name) with ORDER BY checked_at DESC
+        (via Prisma ``distinct`` + ``order``) so we never load the full history into memory.
         """
         try:
-            # Get all unique model names first
-            all_checks = await self.db.litellm_healthchecktable.find_many(
-                order={"checked_at": "desc"}
+            return await self.db.litellm_healthchecktable.find_many(
+                distinct=["model_id", "model_name"],
+                order=[
+                    {"model_id": "asc"},
+                    {"model_name": "asc"},
+                    {"checked_at": "desc"},
+                ],
             )
-
-            # Group by model_name and get the latest for each
-            latest_checks = {}
-            for check in all_checks:
-                # Create a unique key: prefer model_id if available, otherwise use model_name
-                # This ensures we get the latest check for each unique model
-                if check.model_id:
-                    key = (check.model_id, check.model_name)
-                else:
-                    key = (None, check.model_name)
-
-                # Only add if we haven't seen this key yet (since checks are ordered by checked_at desc)
-                if key not in latest_checks:
-                    latest_checks[key] = check
-
-            return list(latest_checks.values())
         except Exception as e:
             verbose_proxy_logger.error(f"Error getting all latest health checks: {e}")
             return []
