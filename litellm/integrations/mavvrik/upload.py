@@ -44,6 +44,12 @@ from litellm._logging import verbose_proxy_logger
 AGENT_BASE_PATH = "/metrics/agent/ai/{connection_id}"
 UPLOAD_URL_PATH = "/metrics/agent/ai/{connection_id}/upload-url"
 
+
+def _utc_now() -> _dt:
+    """Return current UTC datetime. Extracted for easy test patching."""
+    return _dt.now(_tz.utc)
+
+
 _MAX_RETRIES = 3
 _RETRY_BACKOFF_BASE = 1.0  # seconds; doubles each retry
 
@@ -136,8 +142,9 @@ class MavvrikUploader:
         if epoch:
             marker_dt = _dt.fromtimestamp(float(epoch), tz=_tz.utc)
         else:
-            now = _dt.now(_tz.utc)
-            marker_dt = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+            marker_dt = _utc_now().replace(
+                day=1, hour=0, minute=0, second=0, microsecond=0
+            )
 
         marker_iso = marker_dt.isoformat()
         verbose_proxy_logger.info(

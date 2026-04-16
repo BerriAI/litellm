@@ -25,6 +25,7 @@ from litellm.integrations.mavvrik.logger import MavvrikLogger
 from litellm.integrations.mavvrik.register import (
     _CONFIG_KEY,
     is_mavvrik_setup,  # noqa: F401
+    register_logger_and_job,
 )
 from litellm.integrations.mavvrik.upload import MavvrikUploader
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
@@ -172,11 +173,11 @@ async def init_mavvrik_settings(
             marker=initial_marker,
         )
 
-        # Delegate logger creation + job scheduling to the mavvrik module
+        # Delegate logger creation + job scheduling to the mavvrik module.
+        # proxy_server is imported inside the try block to guard against the
+        # circular import: proxy_server → mavvrik_endpoints → proxy_server.
         try:
             import litellm.proxy.proxy_server as _pserver
-
-            from litellm.integrations.mavvrik.register import register_logger_and_job
 
             _scheduler = getattr(_pserver, "scheduler", None)
             await register_logger_and_job(

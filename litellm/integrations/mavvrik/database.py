@@ -39,6 +39,11 @@ class LiteLLMDatabase:
         """
         client = self._ensure_prisma_client()
 
+        # query_raw is used here instead of Prisma model methods because the query
+        # requires a 4-table LEFT JOIN (DailyUserSpend → VerificationToken →
+        # TeamTable → UserTable). Prisma's relational API cannot express a multi-hop
+        # JOIN in a single query without N+1 round-trips. This matches the pattern
+        # used in the CloudZero integration (litellm/integrations/cloudzero/database.py).
         query = """
         SELECT
             dus.date,
