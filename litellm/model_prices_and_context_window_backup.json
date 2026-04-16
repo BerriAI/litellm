@@ -1146,8 +1146,7 @@
         "supports_vision": true,
         "supports_xhigh_reasoning_effort": true,
         "tool_use_system_prompt_tokens": 346,
-        "supports_native_structured_output": true,
-        "supports_max_reasoning_effort": true
+        "supports_native_structured_output": true
     },
     "global.anthropic.claude-opus-4-7": {
         "cache_creation_input_token_cost": 6.25e-06,
@@ -1175,8 +1174,7 @@
         "supports_vision": true,
         "supports_xhigh_reasoning_effort": true,
         "tool_use_system_prompt_tokens": 346,
-        "supports_native_structured_output": true,
-        "supports_max_reasoning_effort": true
+        "supports_native_structured_output": true
     },
     "us.anthropic.claude-opus-4-7": {
         "cache_creation_input_token_cost": 6.875e-06,
@@ -1204,8 +1202,7 @@
         "supports_vision": true,
         "supports_xhigh_reasoning_effort": true,
         "tool_use_system_prompt_tokens": 346,
-        "supports_native_structured_output": true,
-        "supports_max_reasoning_effort": true
+        "supports_native_structured_output": true
     },
     "eu.anthropic.claude-opus-4-7": {
         "cache_creation_input_token_cost": 6.875e-06,
@@ -1233,8 +1230,7 @@
         "supports_vision": true,
         "supports_xhigh_reasoning_effort": true,
         "tool_use_system_prompt_tokens": 346,
-        "supports_native_structured_output": true,
-        "supports_max_reasoning_effort": true
+        "supports_native_structured_output": true
     },
     "au.anthropic.claude-opus-4-7": {
         "cache_creation_input_token_cost": 6.875e-06,
@@ -1262,8 +1258,7 @@
         "supports_vision": true,
         "supports_xhigh_reasoning_effort": true,
         "tool_use_system_prompt_tokens": 346,
-        "supports_native_structured_output": true,
-        "supports_max_reasoning_effort": true
+        "supports_native_structured_output": true
     },
     "anthropic.claude-sonnet-4-6": {
         "cache_creation_input_token_cost": 3.75e-06,
@@ -1944,8 +1939,7 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_xhigh_reasoning_effort": true,
-        "tool_use_system_prompt_tokens": 159,
-        "supports_max_reasoning_effort": true
+        "tool_use_system_prompt_tokens": 159
     },
     "azure_ai/claude-opus-4-1": {
         "cache_creation_input_token_cost": 1.875e-05,
@@ -9173,8 +9167,7 @@
         "provider_specific_entry": {
             "us": 1.1,
             "fast": 6.0
-        },
-        "supports_max_reasoning_effort": true
+        }
     },
     "claude-opus-4-7-20260416": {
         "cache_creation_input_token_cost": 6.25e-06,
@@ -9206,8 +9199,7 @@
         "provider_specific_entry": {
             "us": 1.1,
             "fast": 6.0
-        },
-        "supports_max_reasoning_effort": true
+        }
     },
     "claude-sonnet-4-20250514": {
         "deprecation_date": "2026-05-14",
@@ -31355,8 +31347,7 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_xhigh_reasoning_effort": true,
-        "tool_use_system_prompt_tokens": 346,
-        "supports_max_reasoning_effort": true
+        "tool_use_system_prompt_tokens": 346
     },
     "vertex_ai/claude-opus-4-7@default": {
         "cache_creation_input_token_cost": 6.25e-06,
@@ -31383,8 +31374,7 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_xhigh_reasoning_effort": true,
-        "tool_use_system_prompt_tokens": 346,
-        "supports_max_reasoning_effort": true
+        "tool_use_system_prompt_tokens": 346
     },
     "vertex_ai/claude-sonnet-4-5": {
         "cache_creation_input_token_cost": 3.75e-06,
