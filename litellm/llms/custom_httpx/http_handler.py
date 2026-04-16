@@ -367,24 +367,39 @@ class MaskedHTTPStatusError(httpx.HTTPStatusError):
         # Mask the original exception message too (it contains the full URL)
         masked_original_message = mask_sensitive_info(str(original_error))
 
-        # Safely access response content — decompression can fail (e.g. zlib error)
+        # Safely access response content — decompression can fail (e.g. zlib error).
+        # `.content` returns already-decoded bytes, so we must strip transport
+        # encoding headers before rebuilding the Response (otherwise httpx will
+        # try to decode the bytes a second time and raise DecodingError).
         try:
             response_content = original_error.response.content
         except Exception:
             response_content = b""
 
+        response_headers = {
+            k: v
+            for k, v in original_error.response.headers.items()
+            if k.lower() not in ("content-encoding", "content-length")
+        }
+
+        masked_request = httpx.Request(
+            method=original_error.request.method,
+            url=masked_url,
+            headers=original_error.request.headers,
+            content=original_error.request.content,
+        )
+
         super().__init__(
             message=masked_original_message,
-            request=httpx.Request(
-                method=original_error.request.method,
-                url=masked_url,
-                headers=original_error.request.headers,
-                content=original_error.request.content,
-            ),
+            request=masked_request,
+            # Attach the masked request so `response.request` is set — otherwise
+            # downstream code that inspects err.response.request (e.g.
+            # exception_mapping_utils) hits `RuntimeError: .request not set`.
             response=httpx.Response(
                 status_code=original_error.response.status_code,
                 content=response_content,
-                headers=original_error.response.headers,
+                headers=response_headers,
+                request=masked_request,
             ),
         )
         self.message = message
@@ -912,9 +927,9 @@ class AsyncHTTPHandler:
         if AIOHTTP_CONNECTOR_LIMIT > 0:
             transport_connector_kwargs["limit"] = AIOHTTP_CONNECTOR_LIMIT
         if AIOHTTP_CONNECTOR_LIMIT_PER_HOST > 0:
-            transport_connector_kwargs[
-                "limit_per_host"
-            ] = AIOHTTP_CONNECTOR_LIMIT_PER_HOST
+            transport_connector_kwargs["limit_per_host"] = (
+                AIOHTTP_CONNECTOR_LIMIT_PER_HOST
+            )
 
         return LiteLLMAiohttpTransport(
             client=lambda: ClientSession(

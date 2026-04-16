@@ -77,13 +77,63 @@ class TestMaskedHTTPStatusError:
         orig = _make_httpx_status_error()
 
         with patch.object(
-            type(orig.response), "content",
-            new_callable=lambda: property(lambda self: (_ for _ in ()).throw(Exception("zlib error"))),
+            type(orig.response),
+            "content",
+            new_callable=lambda: property(
+                lambda self: (_ for _ in ()).throw(Exception("zlib error"))
+            ),
         ):
             masked = MaskedHTTPStatusError(orig)
 
         assert masked.response.content == b""
         assert masked.status_code == 400
+
+    def test_response_request_is_set(self):
+        """response.request must be set so downstream code can read it safely.
+
+        Regression: if the inner httpx.Response is constructed without
+        request=..., accessing masked.response.request raises
+        RuntimeError("The .request property has not been set.").
+        """
+        orig = _make_httpx_status_error(url="https://api.example.com?key=KEY_X")
+        masked = MaskedHTTPStatusError(orig)
+
+        # Must not raise RuntimeError.
+        req = masked.response.request
+        assert req is not None
+        # The attached request must be the masked one, not the original.
+        assert "KEY_X" not in str(req.url)
+
+    def test_strips_content_encoding_to_avoid_double_decode(self):
+        """If the upstream response declared Content-Encoding (e.g. gzip),
+        the rebuilt Response must not carry that header over — otherwise httpx
+        tries to decode the already-decoded bytes again and raises DecodingError.
+        """
+        # Build a gzipped upstream response so .content decodes once cleanly.
+        import gzip
+
+        body = b'{"error": "bad request"}'
+        gzipped = gzip.compress(body)
+        request = httpx.Request("POST", "https://api.example.com?key=KEY")
+        response = httpx.Response(
+            status_code=400,
+            content=gzipped,
+            headers={
+                "content-encoding": "gzip",
+                "content-length": str(len(gzipped)),
+                "content-type": "application/json",
+            },
+            request=request,
+        )
+        orig = httpx.HTTPStatusError("400", request=request, response=response)
+
+        # Previously this raised httpx.DecodingError; must now succeed.
+        masked = MaskedHTTPStatusError(orig)
+
+        # Content must be the once-decoded bytes, not a double-decode attempt.
+        assert masked.response.content == body
+        # Content-Encoding must have been stripped from the rebuilt headers.
+        assert "content-encoding" not in {k.lower() for k in masked.response.headers}
 
 
 class TestSafeResponseHelpers:
@@ -93,7 +143,11 @@ class TestSafeResponseHelpers:
 
     def test_safe_get_response_text_error(self):
         response = MagicMock(spec=httpx.Response)
-        type(response).text = property(lambda self: (_ for _ in ()).throw(UnicodeDecodeError("utf-8", b"", 0, 1, "bad")))
+        type(response).text = property(
+            lambda self: (_ for _ in ()).throw(
+                UnicodeDecodeError("utf-8", b"", 0, 1, "bad")
+            )
+        )
         assert _safe_get_response_text(response) == ""
 
     def test_safe_read_response_normal(self):
