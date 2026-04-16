@@ -80,13 +80,10 @@ import NotificationsManager from "./molecules/notifications_manager";
 const isLocal = process.env.NODE_ENV === "development";
 // In dev, if NEXT_PUBLIC_USE_REWRITES=true the Next.js dev server proxies API calls
 // to the backend — use relative URLs (null) so rewrites can intercept them.
-// NEXT_PUBLIC_LITELLM_PROXY_URL overrides the hardcoded localhost:4000 default,
-// which is useful when running the frontend against a port-forwarded K8s backend.
 const defaultProxyBaseUrl =
-  process.env.NEXT_PUBLIC_LITELLM_PROXY_URL ??
-  (isLocal && process.env.NEXT_PUBLIC_USE_REWRITES !== "true"
+  isLocal && process.env.NEXT_PUBLIC_USE_REWRITES !== "true"
     ? "http://localhost:4000"
-    : null);
+    : null;
 const defaultServerRootPath = "/";
 export let serverRootPath = defaultServerRootPath;
 const WORKER_URL_KEY = "litellm_worker_url";
@@ -126,7 +123,10 @@ const updateProxyBaseUrl = (serverRootPath: string, receivedProxyBaseUrl: string
     return;
   }
   const browserLocation = getWindowLocation();
-  const resolvedDefaultProxyBaseUrl = defaultProxyBaseUrl ?? browserLocation?.origin ?? null;
+  const resolvedDefaultProxyBaseUrl =
+    isLocal && process.env.NEXT_PUBLIC_USE_REWRITES !== "true"
+      ? "http://localhost:4000"
+      : browserLocation?.origin ?? null;
   let initialProxyBaseUrl = receivedProxyBaseUrl || resolvedDefaultProxyBaseUrl;
   console.log("proxyBaseUrl:", proxyBaseUrl);
   console.log("serverRootPath:", serverRootPath);
