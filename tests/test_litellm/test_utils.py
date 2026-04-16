@@ -769,6 +769,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "supports_minimal_reasoning_effort": {"type": "boolean"},
                 "supports_none_reasoning_effort": {"type": "boolean"},
                 "supports_xhigh_reasoning_effort": {"type": "boolean"},
+                "supports_max_reasoning_effort": {"type": "boolean"},
                 "supports_service_tier": {"type": "boolean"},
                 "supports_preset": {"type": "boolean"},
                 "tool_use_system_prompt_tokens": {"type": "number"},

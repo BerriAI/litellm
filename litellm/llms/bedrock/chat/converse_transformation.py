@@ -1298,12 +1298,16 @@ class AmazonConverseConfig(BaseConfig):
             # Add computer use tools and anthropic_beta if needed (only when computer use tools are present)
             if computer_use_tools:
                 # Determine the correct computer-use beta header based on model
-                # "computer-use-2025-11-24" for Claude Opus 4.6, Claude Opus 4.5
+                # "computer-use-2025-11-24" for Claude Opus 4.7, Opus 4.6, and Opus 4.5
                 # "computer-use-2025-01-24" for Claude Sonnet 4.5, Haiku 4.5, Opus 4.1, Sonnet 4, Opus 4, and Sonnet 3.7
                 # "computer-use-2024-10-22" for older models
                 model_lower = model.lower()
                 if (
-                    "opus-4.6" in model_lower
+                    "opus-4.7" in model_lower
+                    or "opus_4.7" in model_lower
+                    or "opus-4-7" in model_lower
+                    or "opus_4_7" in model_lower
+                    or "opus-4.6" in model_lower
                     or "opus_4.6" in model_lower
                     or "opus-4-6" in model_lower
                     or "opus_4_6" in model_lower
