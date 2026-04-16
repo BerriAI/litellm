@@ -159,9 +159,7 @@ def test_get_cache_key_responses_api():
     key_b = cache.get_cache_key(**kwargs_b)
 
     assert isinstance(key_a, str) and len(key_a) > 0
-    assert key_a != key_b, (
-        "instructions must be part of the Responses API cache key"
-    )
+    assert key_a != key_b, "instructions must be part of the Responses API cache key"
 
     # Sanity: identical payloads must still collide (cache hits still work)
     key_a_again = cache.get_cache_key(**kwargs_a)
@@ -177,9 +175,9 @@ def test_get_cache_key_responses_api():
     ]:
         kx = {**base_kwargs, param: value_x}
         ky = {**base_kwargs, param: value_y}
-        assert cache.get_cache_key(**kx) != cache.get_cache_key(**ky), (
-            f"Responses-API param `{param}` is not part of the cache key"
-        )
+        assert cache.get_cache_key(**kx) != cache.get_cache_key(
+            **ky
+        ), f"Responses-API param `{param}` is not part of the cache key"
 
 
 def test_get_hashed_cache_key():
