@@ -504,7 +504,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                                 "This may indicate a missing caller update."
                             )
                             request_data = {}
-                        pii_tokens = self._get_or_create_request_scoped_pii_tokens(
+                        pii_tokens = self._ensure_request_scoped_pii_tokens(
                             request_data
                         )
 
@@ -931,12 +931,13 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             )
         return response
 
-    def _get_or_create_request_scoped_pii_tokens(
+    def _ensure_request_scoped_pii_tokens(
         self, request_data: Dict[str, Any]
     ) -> Dict[str, str]:
         """
-        Return request-scoped token map and ensure it is anchored in all
-        metadata locations used in pre/post guardrail hooks.
+        Return the request-scoped token map, creating it if needed, and anchor
+        the same dict under both ``metadata`` and ``litellm_metadata`` for hooks
+        that only read one of those namespaces.
         """
         metadata = request_data.get("metadata")
         if not isinstance(metadata, dict):
@@ -955,11 +956,14 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
 
         return cast(Dict[str, str], pii_tokens)
 
-    def _get_request_scoped_pii_tokens(
+    def _resolve_request_scoped_pii_tokens(
         self, request_data: Optional[Dict[str, Any]]
     ) -> Dict[str, str]:
         """
-        Read request-scoped pii token map with fallback across known metadata paths.
+        Resolve the request-scoped token map from ``metadata`` or ``litellm_metadata``.
+
+        If the map exists only under ``metadata``, assigns the same dict onto
+        ``litellm_metadata`` so post-call paths that read the latter stay in sync.
         """
         if not request_data:
             return {}
@@ -1026,7 +1030,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         Process an Anthropic native message dict for PII masking/unmasking.
         Handles content blocks with type == "text".
         """
-        pii_tokens = self._get_request_scoped_pii_tokens(request_data)
+        pii_tokens = self._resolve_request_scoped_pii_tokens(request_data)
         if not pii_tokens and mode == "unmask":
             verbose_proxy_logger.debug(
                 "No pii_tokens found for Anthropic response unmask"
@@ -1067,7 +1071,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         Helper to recursively process a ModelResponse for PII.
         Handles all choices and tool calls.
         """
-        pii_tokens = self._get_request_scoped_pii_tokens(request_data)
+        pii_tokens = self._resolve_request_scoped_pii_tokens(request_data)
         if not pii_tokens and mode == "unmask":
             verbose_proxy_logger.debug(
                 "No pii_tokens found in request_data — nothing to unmask"
@@ -1297,7 +1301,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                 yield chunk
             return
 
-        pii_tokens = self._get_request_scoped_pii_tokens(request_data)
+        pii_tokens = self._resolve_request_scoped_pii_tokens(request_data)
         if not pii_tokens and request_data:
             verbose_proxy_logger.debug(
                 "No pii_tokens found in request_data for streaming unmask path"
@@ -1360,7 +1364,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
 
         # When input_type is "response" and pii_tokens are available,
         # unmask the text instead of masking it.
-        pii_tokens = self._get_request_scoped_pii_tokens(request_data)
+        pii_tokens = self._resolve_request_scoped_pii_tokens(request_data)
 
         new_texts = []
         if input_type == "response":
