@@ -42,7 +42,7 @@ class TestUpdateLlmRouterResilience:
         mock_router.get_model_list.return_value = []
         mock_router.get_model_ids.return_value = []
 
-        mock_proxy_logging = MagicMock()
+        mock_proxy_logging = AsyncMock()
 
         with (
             patch.object(
@@ -51,7 +51,7 @@ class TestUpdateLlmRouterResilience:
                 new_callable=AsyncMock,
                 side_effect=Exception("httpcore.ReadTimeout"),
             ),
-            patch.object(proxy_config, "_add_deployment", return_value=1) as mock_add,
+            patch.object(proxy_config, "_add_deployment",new_callable=AsyncMock, return_value=1) as mock_add,
             patch.object(
                 proxy_config,
                 "_delete_deployment",
@@ -82,7 +82,7 @@ class TestUpdateLlmRouterResilience:
         mock_router.get_model_list.return_value = []
         mock_router.get_model_ids.return_value = []
 
-        mock_proxy_logging = MagicMock()
+        mock_proxy_logging = AsyncMock()
 
         with (
             patch.object(
@@ -91,7 +91,7 @@ class TestUpdateLlmRouterResilience:
                 new_callable=AsyncMock,
                 return_value={"model_list": []},
             ),
-            patch.object(proxy_config, "_add_deployment", return_value=1) as mock_add,
+            patch.object(proxy_config, "_add_deployment",new_callable=AsyncMock, return_value=1) as mock_add,
             patch.object(
                 proxy_config,
                 "_delete_deployment",
