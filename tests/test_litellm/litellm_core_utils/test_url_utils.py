@@ -1,7 +1,32 @@
+import socket
+
 import pytest
 
 import litellm
+from litellm.litellm_core_utils import url_utils
 from litellm.litellm_core_utils.url_utils import SSRFError, _is_blocked_ip, validate_url
+
+
+@pytest.fixture
+def mock_dns_public(monkeypatch):
+    """Resolve any hostname to 93.184.216.34 (public)."""
+
+    def fake_getaddrinfo(host, port, *args, **kwargs):
+        return [
+            (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", port or 80))
+        ]
+
+    monkeypatch.setattr(url_utils.socket, "getaddrinfo", fake_getaddrinfo)
+
+
+@pytest.fixture
+def mock_dns_failure(monkeypatch):
+    """Make every DNS lookup raise gaierror."""
+
+    def fake_getaddrinfo(host, port, *args, **kwargs):
+        raise socket.gaierror("Name or service not known")
+
+    monkeypatch.setattr(url_utils.socket, "getaddrinfo", fake_getaddrinfo)
 
 
 class TestIsBlockedIp:
@@ -48,22 +73,22 @@ class TestValidateUrl:
         with pytest.raises(SSRFError):
             validate_url("http:///path")
 
-    def test_allows_public_https(self):
+    def test_allows_public_https(self, mock_dns_public):
         rewritten, host = validate_url("https://example.com/image.png")
         assert host == "example.com"
         assert rewritten == "https://example.com/image.png"
 
-    def test_rewrites_public_http_to_ip(self):
+    def test_rewrites_public_http_to_ip(self, mock_dns_public):
         rewritten, host = validate_url("http://example.com/image.png")
         assert host == "example.com"
         assert "example.com" not in rewritten
 
-    def test_preserves_path_and_query(self):
+    def test_preserves_path_and_query(self, mock_dns_public):
         rewritten, host = validate_url("http://example.com/path?key=value")
         assert "/path" in rewritten
         assert "key=value" in rewritten
 
-    def test_dns_failure_raises(self):
+    def test_dns_failure_raises(self, mock_dns_failure):
         with pytest.raises(SSRFError, match="DNS resolution failed"):
             validate_url("http://this-domain-does-not-exist-xyz123.invalid/test")
 
@@ -75,13 +100,17 @@ class TestValidateUrl:
         with pytest.raises(SSRFError):
             validate_url("http://[::1]/")
 
-    def test_https_rewrites_when_ssl_verify_disabled(self, monkeypatch):
+    def test_https_rewrites_when_ssl_verify_disabled(
+        self, monkeypatch, mock_dns_public
+    ):
         monkeypatch.setattr(litellm, "ssl_verify", False)
         rewritten, host = validate_url("https://example.com/image.png")
         assert host == "example.com"
         assert "example.com" not in rewritten  # rewritten to IP
 
-    def test_https_not_rewritten_when_ssl_verify_enabled(self, monkeypatch):
+    def test_https_not_rewritten_when_ssl_verify_enabled(
+        self, monkeypatch, mock_dns_public
+    ):
         monkeypatch.setattr(litellm, "ssl_verify", True)
         rewritten, host = validate_url("https://example.com/image.png")
         assert rewritten == "https://example.com/image.png"
