@@ -327,14 +327,45 @@ def _global_proxy_budget_check(
             )
 
 
+_GUARDRAIL_MODIFICATION_KEYS: tuple = (
+    "guardrails",
+    "disable_global_guardrails",
+    "disable_global_guardrail",
+    "opted_out_global_guardrails",
+)
+
+
 def _guardrail_modification_check(
     request_body: dict, team_object: Optional[LiteLLM_TeamTable]
 ) -> None:
-    _request_metadata: dict = request_body.get("metadata", {}) or {}
-    if not _request_metadata.get("guardrails"):
-        return
+    """
+    Reject user-supplied metadata flags that would modify guardrail behavior
+    unless the team has explicit permission. Checked keys include the plural
+    ``guardrails`` list plus the per-request toggles that influence whether
+    default-on guardrails run (``disable_global_guardrails``,
+    ``disable_global_guardrail`` singular, and ``opted_out_global_guardrails``).
 
+    User-supplied values for the bypass toggles are also silently ignored by
+    ``_get_admin_metadata`` at read time; this check adds defense in depth by
+    failing loudly at the auth layer so operators see an explicit 403 instead
+    of a confusing silent-ignore.
+    """
     from litellm.proxy.guardrails.guardrail_helpers import can_modify_guardrails
+
+    def _user_requested_modification(container: Any) -> bool:
+        if not isinstance(container, dict):
+            return False
+        return any(container.get(key) for key in _GUARDRAIL_MODIFICATION_KEYS)
+
+    # Check both metadata keys — callers can populate either depending on the
+    # endpoint. Cover the top-level too so root-level injection is rejected.
+    modifies = (
+        _user_requested_modification(request_body.get("metadata"))
+        or _user_requested_modification(request_body.get("litellm_metadata"))
+        or _user_requested_modification(request_body)
+    )
+    if not modifies:
+        return
 
     if not can_modify_guardrails(team_object):
         raise HTTPException(
@@ -451,9 +482,9 @@ async def common_checks(  # noqa: PLR0915
                 model=_model,
                 team_object=team_object,
                 llm_router=llm_router,
-                team_model_aliases=valid_token.team_model_aliases
-                if valid_token
-                else None,
+                team_model_aliases=(
+                    valid_token.team_model_aliases if valid_token else None
+                ),
             ):
                 raise ProxyException(
                     message=f"Team not allowed to access model. Team={team_object.team_id}, Model={_model}. Allowed team models = {team_object.models}",
