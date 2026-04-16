@@ -1870,26 +1870,20 @@ async def update_cache(  # noqa: PLR0915
         ## CHECK IF USER PROJECTED SPEND > SOFT LIMIT
         if (
             existing_spend_obj.soft_budget_cooldown is False
-            and existing_spend_obj.litellm_budget_table is not None
+            and existing_spend_obj.soft_budget is not None
             and (
                 _is_projected_spend_over_limit(
                     current_spend=new_spend,
-                    soft_budget_limit=existing_spend_obj.litellm_budget_table[
-                        "soft_budget"
-                    ],
+                    soft_budget_limit=existing_spend_obj.soft_budget,
                 )
                 is True
             )
         ):
             projected_spend, projected_exceeded_date = _get_projected_spend_over_limit(
                 current_spend=new_spend,
-                soft_budget_limit=existing_spend_obj.litellm_budget_table.get(
-                    "soft_budget", None
-                ),
+                soft_budget_limit=existing_spend_obj.soft_budget,
             )  # type: ignore
-            soft_limit = existing_spend_obj.litellm_budget_table.get(
-                "soft_budget", float("inf")
-            )
+            soft_limit = existing_spend_obj.soft_budget
             call_info = CallInfo(
                 token=existing_spend_obj.token or "",
                 spend=new_spend,
@@ -1897,7 +1891,7 @@ async def update_cache(  # noqa: PLR0915
                 max_budget=soft_limit,
                 user_id=existing_spend_obj.user_id,
                 projected_spend=projected_spend,
-                projected_exceeded_date=projected_exceeded_date,
+                projected_exceeded_date=str(projected_exceeded_date),
                 event_group=Litellm_EntityType.KEY,
             )
             # alert user
