@@ -496,6 +496,7 @@ from litellm.proxy.utils import (
     _get_openapi_url,
     _get_projected_spend_over_limit,
     _get_redoc_url,
+    _get_openapi_url,
     _is_projected_spend_over_limit,
     _is_valid_team_configs,
     get_custom_url,
