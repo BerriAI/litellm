@@ -110,7 +110,7 @@ export function LogsTableToolbar({
                 </button>
 
                 {quickSelectOpen && (
-                  <div className="absolute right-0 mt-2 w-64 bg-white rounded-lg shadow-lg border p-2 z-50">
+                  <div className="absolute left-0 mt-2 w-64 bg-white rounded-lg shadow-lg border p-2 z-50">
                     <div className="space-y-1">
                       {QUICK_SELECT_OPTIONS.map((option) => (
                         <button
