@@ -99,11 +99,6 @@ class MavvrikDatabase:
             raise
         except Exception as exc:
             verbose_logger.warning(
-                "MavvrikLogger: get_earliest_date failed (non-fatal): %s", exc
+                "MavvrikDatabase: get_earliest_date failed (non-fatal): %s", exc
             )
         return None
-
-
-# Backwards-compatible alias — other modules still import LiteLLMDatabase.
-# This will be removed once all callers are updated.
-LiteLLMDatabase = MavvrikDatabase
