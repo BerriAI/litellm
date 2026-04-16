@@ -1,10 +1,10 @@
 """Database extraction layer for the Mavvrik integration.
 
 Queries LiteLLM_DailyUserSpend joined with VerificationToken, TeamTable,
-and UserTable — identical to the CloudZero approach, returning a Polars DataFrame.
+and UserTable, returning a Polars DataFrame.
 
 Additionally provides get/set helpers for Mavvrik settings (including the
-marker that tracks the last successfully uploaded date) stored in LiteLLM_Config.
+marker that tracks the last successfully exported date) stored in LiteLLM_Config.
 """
 
 import json
@@ -42,30 +42,23 @@ class LiteLLMDatabase:
         # query_raw is used here instead of Prisma model methods because the query
         # requires a 4-table LEFT JOIN (DailyUserSpend → VerificationToken →
         # TeamTable → UserTable). Prisma's relational API cannot express a multi-hop
-        # JOIN in a single query without N+1 round-trips. This matches the pattern
-        # used in the CloudZero integration (litellm/integrations/cloudzero/database.py).
+        # JOIN in a single query without N+1 round-trips.
+        #
+        # dus.* selects all columns from LiteLLM_DailyUserSpend so that any new
+        # columns added to that table in future LiteLLM versions are automatically
+        # included in the export without requiring a code change here.
+        # Only specific non-overlapping columns are selected from the JOIN tables to
+        # avoid ambiguity (spend, user_id, team_id, created_at etc. exist in multiple
+        # tables and cannot be selected via wildcards).
         query = """
         SELECT
-            dus.date,
-            dus.user_id,
-            dus.api_key,
-            dus.model,
-            dus.model_group,
-            dus.custom_llm_provider,
-            dus.prompt_tokens,
-            dus.completion_tokens,
-            dus.spend,
-            dus.api_requests,
-            dus.successful_requests,
-            dus.failed_requests,
-            dus.cache_creation_input_tokens,
-            dus.cache_read_input_tokens,
-            dus.created_at,
-            dus.updated_at,
+            dus.*,
             vt.team_id,
-            vt.key_alias  AS api_key_alias,
+            vt.key_alias    AS api_key_alias,
+            vt.organization_id,
             tt.team_alias,
-            ut.user_email
+            ut.user_email,
+            ut.user_alias
         FROM "LiteLLM_DailyUserSpend" dus
         LEFT JOIN "LiteLLM_VerificationToken" vt  ON dus.api_key   = vt.token
         LEFT JOIN "LiteLLM_TeamTable"         tt  ON vt.team_id    = tt.team_id
@@ -146,7 +139,7 @@ class LiteLLMDatabase:
         """Advance the upload marker to new_marker (ISO-8601 UTC string).
 
         Reads current settings, updates only the marker field, and writes back.
-        This is called after each successful GCS upload so the next scheduled
+        This is called after each successful export so the next scheduled
         run starts from where we left off (delta / incremental pattern).
         """
         settings = await self.get_mavvrik_settings()
