@@ -8675,6 +8675,12 @@ class ProviderConfigManager:
             )
 
             return AzurePassthroughConfig()
+        elif LlmProviders.GIGACHAT == provider:
+            from litellm.llms.gigachat.passthrough.transformation import (
+                GigaChatPassthroughConfig,
+            )
+
+            return GigaChatPassthroughConfig()
         return None
 
     @staticmethod
