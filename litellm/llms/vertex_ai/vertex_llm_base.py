@@ -136,7 +136,10 @@ class VertexBase:
                             json_obj,
                             scopes=["https://www.googleapis.com/auth/cloud-platform"],
                         )
-                elif isinstance(credential_source, dict) and "executable" in credential_source:
+                elif (
+                    isinstance(credential_source, dict)
+                    and "executable" in credential_source
+                ):
                     creds = self._credentials_from_pluggable(
                         json_obj,
                         scopes=["https://www.googleapis.com/auth/cloud-platform"],
@@ -270,7 +273,10 @@ class VertexBase:
 
         if api_base is None:
             api_base = get_vertex_base_url(vertex_location)
-        if partner == VertexPartnerProvider.llama:
+        if (
+            partner == VertexPartnerProvider.llama
+            or partner == VertexPartnerProvider.xai
+        ):
             return f"{api_base}/v1/projects/{vertex_project}/locations/{vertex_location}/endpoints/openapi/chat/completions"
         elif partner == VertexPartnerProvider.mistralai:
             if stream:
