@@ -59,6 +59,11 @@ export default function SpendLogsTable({
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("desc");
 
 
+  const [selectedTimeInterval, setSelectedTimeInterval] = useState<{ value: number; unit: string }>({
+    value: 24,
+    unit: "hours",
+  });
+
   const [isLiveTail, setIsLiveTail] = useState<boolean>(() => {
     const storedValue = sessionStorage.getItem("isLiveTail");
     // default to true if nothing is stored
@@ -124,6 +129,7 @@ export default function SpendLogsTable({
     setStartTime(moment().subtract(24, "hours").format("YYYY-MM-DDTHH:mm"));
     setEndTime(moment().format("YYYY-MM-DDTHH:mm"));
     setIsCustomDate(false);
+    setSelectedTimeInterval({ value: 24, unit: "hours" });
     setCurrentPage(1);
   }, [handleFilterResetFromHook]);
 
@@ -259,6 +265,8 @@ export default function SpendLogsTable({
                     onEndTimeChange={setEndTime}
                     isCustomDate={isCustomDate}
                     onIsCustomDateChange={setIsCustomDate}
+                    selectedTimeInterval={selectedTimeInterval}
+                    onSelectedTimeIntervalChange={setSelectedTimeInterval}
                     isLiveTail={isLiveTail}
                     onIsLiveTailChange={setIsLiveTail}
                     currentPage={currentPage}
