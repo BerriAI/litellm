@@ -28,19 +28,13 @@ import httpx
 
 import litellm
 
-_BLOCKED_NETWORKS = [
-    ip_network("0.0.0.0/8"),
-    ip_network("10.0.0.0/8"),
-    ip_network("100.64.0.0/10"),
-    ip_network("127.0.0.0/8"),
-    ip_network("169.254.0.0/16"),
-    ip_network("172.16.0.0/12"),
-    ip_network("192.0.0.0/24"),
-    ip_network("192.168.0.0/16"),
-    ip_network("198.18.0.0/15"),
-    ip_network("::1/128"),
-    ip_network("fc00::/7"),
-    ip_network("fe80::/10"),
+# Globally-routable IPs that are cloud-internal. Everything else
+# non-public is caught by ``not ip.is_global`` (RFC 6890, as implemented by
+# Python's ``ipaddress`` module). This list only holds IPs that are
+# publicly routable *and* point to cloud-fabric services reachable from
+# inside a VM via special in-fabric routing.
+_CLOUD_METADATA_EXCEPTIONS = [
+    ip_network("168.63.129.16/32"),  # Azure Wire Server
 ]
 
 _ALLOWED_SCHEMES = ("http", "https")
@@ -53,13 +47,22 @@ class SSRFError(ValueError):
 
 
 def _is_blocked_ip(addr: str) -> bool:
+    """Return True for any IP not safe to reach from a user-supplied URL.
+
+    Policy: default-deny via ``ip.is_global`` (RFC 6890), plus an explicit
+    exception list for globally-routable cloud-fabric IPs that are still
+    dangerous from inside a cloud VM (currently just Azure Wire Server).
+    Unparseable addresses fail closed.
+    """
     try:
         ip = ip_address(addr)
     except ValueError:
         return True  # fail-closed: unparseable addresses are blocked
     if ip.version == 6 and hasattr(ip, "ipv4_mapped") and ip.ipv4_mapped:
         ip = ip.ipv4_mapped
-    return any(ip in net for net in _BLOCKED_NETWORKS)
+    if not ip.is_global or ip.is_multicast:
+        return True
+    return any(ip in net for net in _CLOUD_METADATA_EXCEPTIONS)
 
 
 def _normalize_host(host: str) -> str:
@@ -225,7 +228,9 @@ def safe_get(client: Any, url: str, **kwargs: Any) -> Any:
         )
         if not response.is_redirect:
             return response
-        url = _extract_redirect_url(response, validated_url)
+        # Resolve the next hop against the ORIGINAL (pre-rewrite) URL so
+        # relative Location headers keep the original hostname.
+        url = _extract_redirect_url(response, url)
     raise SSRFError("Too many redirects")
 
 
@@ -246,5 +251,7 @@ async def async_safe_get(client: Any, url: str, **kwargs: Any) -> Any:
         )
         if not response.is_redirect:
             return response
-        url = _extract_redirect_url(response, validated_url)
+        # Resolve the next hop against the ORIGINAL (pre-rewrite) URL so
+        # relative Location headers keep the original hostname.
+        url = _extract_redirect_url(response, url)
     raise SSRFError("Too many redirects")
