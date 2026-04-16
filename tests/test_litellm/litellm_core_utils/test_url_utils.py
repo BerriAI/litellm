@@ -1,7 +1,7 @@
 import pytest
 
 import litellm
-from litellm.proxy.common_utils.url_utils import SSRFError, _is_blocked_ip, validate_url
+from litellm.litellm_core_utils.url_utils import SSRFError, _is_blocked_ip, validate_url
 
 
 class TestIsBlockedIp:
