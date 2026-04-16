@@ -1,6 +1,18 @@
 import pytest
 
-from litellm.proxy.common_utils.url_utils import SSRFError, validate_url
+import litellm
+from litellm.proxy.common_utils.url_utils import SSRFError, _is_blocked_ip, validate_url
+
+
+class TestIsBlockedIp:
+    def test_blocks_private(self):
+        assert _is_blocked_ip("10.0.0.1") is True
+
+    def test_allows_public(self):
+        assert _is_blocked_ip("8.8.8.8") is False
+
+    def test_unparseable_is_blocked(self):
+        assert _is_blocked_ip("not-an-ip") is True
 
 
 class TestValidateUrl:
@@ -62,3 +74,14 @@ class TestValidateUrl:
     def test_blocks_ipv6_loopback(self):
         with pytest.raises(SSRFError):
             validate_url("http://[::1]/")
+
+    def test_https_rewrites_when_ssl_verify_disabled(self, monkeypatch):
+        monkeypatch.setattr(litellm, "ssl_verify", False)
+        rewritten, host = validate_url("https://example.com/image.png")
+        assert host == "example.com"
+        assert "example.com" not in rewritten  # rewritten to IP
+
+    def test_https_not_rewritten_when_ssl_verify_enabled(self, monkeypatch):
+        monkeypatch.setattr(litellm, "ssl_verify", True)
+        rewritten, host = validate_url("https://example.com/image.png")
+        assert rewritten == "https://example.com/image.png"
