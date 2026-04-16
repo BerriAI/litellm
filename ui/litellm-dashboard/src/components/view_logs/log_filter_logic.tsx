@@ -5,8 +5,15 @@ import { Team } from "../key_team_helpers/key_list";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { fetchAllTeams } from "../../components/key_team_helpers/filter_helpers";
 import { defaultPageSize } from "../constants";
-import { PaginatedResponse } from ".";
-import type { LogsSortField } from "./columns";
+import type { LogEntry, LogsSortField } from "./columns";
+
+export interface PaginatedResponse {
+  data: LogEntry[];
+  total: number;
+  page: number;
+  page_size: number;
+  total_pages: number;
+}
 
 function useDebouncedValue<T>(value: T, delayMs: number): T {
   const [debounced, setDebounced] = useState(value);

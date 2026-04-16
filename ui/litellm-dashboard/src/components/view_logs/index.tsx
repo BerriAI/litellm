@@ -1,5 +1,5 @@
 import moment from "moment";
-import { useCallback, useDeferredValue, useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { SettingOutlined } from "@ant-design/icons";
 import { Tab, TabGroup, TabList, TabPanel, TabPanels } from "@tremor/react";
 import { Button } from "antd";
@@ -26,14 +26,6 @@ interface SpendLogsTableProps {
   userRole: string | null;
   userID: string | null;
   premiumUser: boolean;
-}
-
-export interface PaginatedResponse {
-  data: LogEntry[];
-  total: number;
-  page: number;
-  page_size: number;
-  total_pages: number;
 }
 
 export default function SpendLogsTable({
@@ -77,10 +69,6 @@ export default function SpendLogsTable({
     sessionStorage.setItem("isLiveTail", JSON.stringify(isLiveTail));
   }, [isLiveTail]);
 
-  const [selectedTimeInterval, setSelectedTimeInterval] = useState<{ value: number; unit: string }>({
-    value: 24,
-    unit: "hours",
-  });
 
   useEffect(() => {
     const fetchKeyInfo = async () => {
@@ -131,19 +119,11 @@ export default function SpendLogsTable({
     currentPage,
   });
 
-  // Defer the transition from "Fetching" to "Fetch" so the button stays loading until
-  // the table has rendered with the new data (avoids the visual gap where the button
-  // exits loading state before the table updates)
-  const isFetchingDeferred = useDeferredValue(logsQuery.isFetching);
-  const isButtonLoading = logsQuery.isFetching || isFetchingDeferred;
-
   const handleFilterReset = useCallback(() => {
     handleFilterResetFromHook();
-    // Reset custom time range to default (last 24 hours)
     setStartTime(moment().subtract(24, "hours").format("YYYY-MM-DDTHH:mm"));
     setEndTime(moment().format("YYYY-MM-DDTHH:mm"));
     setIsCustomDate(false);
-    setSelectedTimeInterval({ value: 24, unit: "hours" });
     setCurrentPage(1);
   }, [handleFilterResetFromHook]);
 
@@ -279,15 +259,13 @@ export default function SpendLogsTable({
                     onEndTimeChange={setEndTime}
                     isCustomDate={isCustomDate}
                     onIsCustomDateChange={setIsCustomDate}
-                    selectedTimeInterval={selectedTimeInterval}
-                    onSelectedTimeIntervalChange={setSelectedTimeInterval}
                     isLiveTail={isLiveTail}
                     onIsLiveTailChange={setIsLiveTail}
                     currentPage={currentPage}
                     onCurrentPageChange={setCurrentPage}
                     pageSize={pageSize}
                     isLoading={logsQuery.isLoading}
-                    isButtonLoading={isButtonLoading}
+                    isButtonLoading={logsQuery.isFetching}
                     onRefetch={() => logsQuery.refetch()}
                     filteredLogs={filteredLogs}
                   />

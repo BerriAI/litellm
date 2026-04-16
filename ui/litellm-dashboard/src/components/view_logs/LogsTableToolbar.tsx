@@ -4,7 +4,7 @@ import { SyncOutlined } from "@ant-design/icons";
 import { Button, Switch } from "antd";
 import { QUICK_SELECT_OPTIONS } from "./constants";
 import { getTimeRangeDisplay } from "./logs_utils";
-import type { PaginatedResponse } from ".";
+import type { PaginatedResponse } from "./log_filter_logic";
 
 interface LogsTableToolbarProps {
   searchTerm: string;
@@ -15,8 +15,6 @@ interface LogsTableToolbarProps {
   onEndTimeChange: (value: string) => void;
   isCustomDate: boolean;
   onIsCustomDateChange: (value: boolean) => void;
-  selectedTimeInterval: { value: number; unit: string };
-  onSelectedTimeIntervalChange: (value: { value: number; unit: string }) => void;
   isLiveTail: boolean;
   onIsLiveTailChange: (value: boolean) => void;
   currentPage: number;
@@ -37,8 +35,6 @@ export function LogsTableToolbar({
   onEndTimeChange,
   isCustomDate,
   onIsCustomDateChange,
-  selectedTimeInterval,
-  onSelectedTimeIntervalChange,
   isLiveTail,
   onIsLiveTailChange,
   currentPage,
@@ -50,6 +46,7 @@ export function LogsTableToolbar({
   filteredLogs,
 }: LogsTableToolbarProps) {
   const [quickSelectOpen, setQuickSelectOpen] = useState(false);
+  const [selectedTimeInterval, setSelectedTimeInterval] = useState<{ value: number; unit: string }>({ value: 24, unit: "hours" });
   const quickSelectRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -127,7 +124,7 @@ export function LogsTableToolbar({
                                 .subtract(option.value, option.unit as any)
                                 .format("YYYY-MM-DDTHH:mm"),
                             );
-                            onSelectedTimeIntervalChange({ value: option.value, unit: option.unit });
+                            setSelectedTimeInterval({ value: option.value, unit: option.unit });
                             onIsCustomDateChange(false);
                             setQuickSelectOpen(false);
                           }}
