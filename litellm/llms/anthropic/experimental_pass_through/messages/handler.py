@@ -8,7 +8,7 @@
 import asyncio
 import contextvars
 from functools import partial
-from typing import Any, AsyncIterator, Coroutine, Dict, List, Optional, Union, cast
+from typing import Any, AsyncIterator, Coroutine, Dict, List, Optional, Tuple, Type, Union, cast
 
 import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -57,6 +57,7 @@ async def _execute_pre_request_hooks(
     tools: Optional[List[Dict]],
     stream: Optional[bool],
     custom_llm_provider: Optional[str],
+    skip_callback_types: Optional[Tuple[Type[Any], ...]] = None,
     **kwargs,
 ) -> Dict:
     """
@@ -86,6 +87,7 @@ async def _execute_pre_request_hooks(
 
     # Build complete request kwargs dict
     request_kwargs = {
+        "messages": messages,
         "tools": tools,
         "stream": stream,
         "litellm_params": {
@@ -101,6 +103,8 @@ async def _execute_pre_request_hooks(
 
     for callback in litellm.callbacks:
         if not isinstance(callback, _CustomLogger):
+            continue
+        if skip_callback_types and isinstance(callback, skip_callback_types):
             continue
 
         # Call the pre-request hook
@@ -199,10 +203,43 @@ async def anthropic_messages(
         except Exception:
             pass
 
+    # Execute pre-request hooks first so user CustomLoggers can mutate request
+    # params even when a MessagesInterceptor handles the call. Skip only the
+    # advisor interception hook here so advisor tools remain visible.
+    from litellm.integrations.advisor_interception.handler import (
+        AdvisorInterceptionLogger,
+    )
+
+    request_kwargs = await _execute_pre_request_hooks(
+        model=model,
+        messages=messages,
+        tools=tools,
+        stream=stream,
+        custom_llm_provider=custom_llm_provider,
+        skip_callback_types=(AdvisorInterceptionLogger,),
+        **kwargs,
+    )
+
+    # Extract modified parameters
+    messages = request_kwargs.pop("messages", messages)
+    tools = request_kwargs.pop("tools", tools)
+    stream = request_kwargs.pop("stream", stream)
+    # Propagate provider derived in pre-request hooks.
+    if not custom_llm_provider:
+        custom_llm_provider = request_kwargs.get("litellm_params", {}).get(
+            "custom_llm_provider"
+        )
+        if not custom_llm_provider:
+            try:
+                _, custom_llm_provider, _, _ = litellm.get_llm_provider(model=model)
+            except Exception:
+                pass
+    request_kwargs.pop("litellm_params", None)
+    kwargs.update(request_kwargs)
+
     # Run registered MessagesInterceptors (e.g. advisor orchestration loop)
-    # BEFORE pre-request hooks, because hooks like AdvisorInterceptionLogger
-    # would convert the advisor_20260301 tool into an OpenAI function tool,
-    # making it invisible to the Messages API interceptor.
+    # after non-advisor pre-request hooks have had a chance to mutate request
+    # data, while keeping advisor tools unconverted for visibility.
     for interceptor in get_messages_interceptors():
         if interceptor.can_handle(tools, custom_llm_provider):
             return await interceptor.handle(
@@ -216,34 +253,6 @@ async def anthropic_messages(
                 api_base=api_base,
                 **kwargs,
             )
-
-    # Execute pre-request hooks to allow CustomLoggers to modify request
-    request_kwargs = await _execute_pre_request_hooks(
-        model=model,
-        messages=messages,
-        tools=tools,
-        stream=stream,
-        custom_llm_provider=custom_llm_provider,
-        **kwargs,
-    )
-
-    # Extract modified parameters
-    tools = request_kwargs.pop("tools", tools)
-    stream = request_kwargs.pop("stream", stream)
-    # Propagate the provider derived inside pre-request hooks, if not already set.
-    if not custom_llm_provider:
-        custom_llm_provider = request_kwargs.get("litellm_params", {}).get(
-            "custom_llm_provider"
-        )
-        if not custom_llm_provider:
-            try:
-                _, custom_llm_provider, _, _ = litellm.get_llm_provider(model=model)
-            except Exception:
-                pass
-    # Remove litellm_params from kwargs (only needed for hooks)
-    request_kwargs.pop("litellm_params", None)
-    # Merge back any other modifications
-    kwargs.update(request_kwargs)
 
     # Short-circuit web-search-only requests: detect the pattern, execute
     # search directly via Tavily/Perplexity, and return a synthetic response

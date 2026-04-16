@@ -17,6 +17,7 @@ from litellm.types.llms.anthropic_messages.anthropic_response import (
 )
 from litellm.types.llms.anthropic_tool_search import get_tool_search_beta_header
 from litellm.types.router import GenericLiteLLMParams
+from litellm.utils import resolve_proxy_model_alias_to_litellm_model
 
 from ...common_utils import (
     AnthropicError,
@@ -26,26 +27,6 @@ from ...common_utils import (
 )
 
 DEFAULT_ANTHROPIC_API_VERSION = "2023-06-01"
-
-
-def _resolve_proxy_model_alias_to_litellm_model(model: str) -> str:
-    """Resolve proxy model_name alias to configured litellm model string."""
-    try:
-        from litellm.proxy.proxy_server import llm_router
-    except Exception:
-        return ""
-
-    model_list = getattr(llm_router, "model_list", None) or []
-    for deployment in model_list:
-        if not isinstance(deployment, dict):
-            continue
-        if deployment.get("model_name") != model:
-            continue
-        litellm_params = deployment.get("litellm_params") or {}
-        configured_model = litellm_params.get("model")
-        if isinstance(configured_model, str):
-            return configured_model
-    return ""
 
 
 def _normalize_anthropic_advisor_tool_models(tools: List[Dict]) -> List[Dict]:
@@ -68,7 +49,7 @@ def _normalize_anthropic_advisor_tool_models(tools: List[Dict]) -> List[Dict]:
         updated_tool = dict(tool)
         advisor_model = updated_tool.get("model")
         if isinstance(advisor_model, str) and advisor_model.strip():
-            resolved = _resolve_proxy_model_alias_to_litellm_model(advisor_model.strip())
+            resolved = resolve_proxy_model_alias_to_litellm_model(advisor_model.strip())
             canonical_model = resolved or advisor_model.strip()
             if canonical_model.startswith("anthropic/"):
                 canonical_model = canonical_model.split("/", 1)[1]

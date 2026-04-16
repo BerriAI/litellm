@@ -59,11 +59,15 @@ async def test_pre_request_hook_anthropic_converts_standard_tool_to_native():
         "litellm_params": {"custom_llm_provider": "anthropic"},
     }
 
-    result = await logger.async_pre_request_hook(
-        model="claude-sonnet-4-6",
-        messages=[{"role": "user", "content": "Help"}],
-        kwargs=kwargs,
-    )
+    with patch(
+        "litellm.integrations.advisor_interception.handler.supports_native_advisor_tool",
+        return_value=True,
+    ):
+        result = await logger.async_pre_request_hook(
+            model="claude-sonnet-4-6",
+            messages=[{"role": "user", "content": "Help"}],
+            kwargs=kwargs,
+        )
     assert result is not None
     tool = result["tools"][0]
     assert tool["type"] == "advisor_20260301"
@@ -551,6 +555,33 @@ def test_default_advisor_model_is_none_by_default():
     assert logger.default_advisor_model is None
 
 
+def test_is_native_anthropic_advisor_model_delegates_to_model_capability(monkeypatch):
+    monkeypatch.setattr(
+        "litellm.integrations.advisor_interception.handler.resolve_proxy_model_alias_to_litellm_model",
+        lambda model: "anthropic/new-native-advisor-model"
+        if model == "proxy_alias"
+        else "",
+    )
+    monkeypatch.setattr(
+        "litellm.integrations.advisor_interception.handler.supports_native_advisor_tool",
+        lambda model, custom_llm_provider=None: (
+            custom_llm_provider == "anthropic"
+            and model == "anthropic/new-native-advisor-model"
+        ),
+    )
+
+    assert (
+        AdvisorInterceptionLogger._is_native_anthropic_advisor_model("proxy_alias")
+        is True
+    )
+    assert (
+        AdvisorInterceptionLogger._is_native_anthropic_advisor_model(
+            "anthropic/claude-opus-4-6"
+        )
+        is False
+    )
+
+
 def test_convert_tools_raises_when_no_advisor_model():
     logger = AdvisorInterceptionLogger()
     kwargs = {
@@ -602,6 +633,28 @@ async def test_run_agentic_loop_raises_when_no_advisor_model():
             stream=False,
             kwargs={"litellm_call_id": "no-model-test", "custom_llm_provider": "openai"},
         )
+
+
+@pytest.mark.asyncio
+async def test_async_log_failure_event_cleans_up_call_tracking_sets():
+    logger = AdvisorInterceptionLogger(enabled_providers=["openai"])
+    logger._advisor_config_by_call_id["failed-call"] = {
+        "advisor_model": "claude-opus-4-6",
+        "max_uses": 2,
+    }
+    logger._converted_stream_call_ids.add("failed-call")
+    logger._skip_post_hook_call_ids.add("failed-call")
+
+    await logger.async_log_failure_event(
+        kwargs={"litellm_call_id": "failed-call"},
+        response_obj=Exception("boom"),
+        start_time=None,
+        end_time=None,
+    )
+
+    assert "failed-call" not in logger._advisor_config_by_call_id
+    assert "failed-call" not in logger._converted_stream_call_ids
+    assert "failed-call" not in logger._skip_post_hook_call_ids
 
 
 @pytest.mark.asyncio

@@ -12,6 +12,7 @@ from typing import Dict
 from unittest.mock import patch
 
 import pytest
+import litellm
 
 ADVISOR_TOOL = {
     "type": "advisor_20260301",
@@ -34,7 +35,9 @@ def _text_resp(text: str, model: str = "gpt-4o-mini") -> Dict:
     }
 
 
-def _advisor_call_resp(question: str = "How do I approach this?", tool_id: str = "tid_01") -> Dict:
+def _advisor_call_resp(
+    question: str = "How do I approach this?", tool_id: str = "tid_01"
+) -> Dict:
     return {
         "id": "msg_int_test",
         "type": "message",
@@ -44,7 +47,7 @@ def _advisor_call_resp(question: str = "How do I approach this?", tool_id: str =
             {
                 "type": "tool_use",
                 "id": tool_id,
-                "name": "advisor",
+                "name": "consult_advisor",
                 "input": {"question": question},
             }
         ],
@@ -93,8 +96,9 @@ async def test_full_dispatch_interceptor_fires_and_loop_completes():
             custom_llm_provider="openai",
         )
 
-    # 3 internal calls: executor → advisor → executor-final
-    assert call_count == 3
+    # 2 calls to _call_messages_handler: executor -> executor-final.
+    # Advisor subcall runs via _call_advisor_with_router (acompletion path).
+    assert call_count == 2
 
     assert isinstance(result, dict)
     content = result.get("content", [])
@@ -183,3 +187,66 @@ async def test_anthropic_provider_bypasses_interceptor():
     content = result.get("content", []) if isinstance(result, dict) else []
     text_blocks = [b for b in content if b.get("type") == "text"]
     assert any("Native anthropic" in b.get("text", "") for b in text_blocks)
+
+
+@pytest.mark.asyncio
+async def test_messages_interceptor_path_still_runs_non_advisor_pre_request_hooks():
+    """
+    Pre-request hooks should still run for intercepted /messages requests, while
+    advisor tool conversion must be skipped so interceptors can still see the
+    native advisor_20260301 tool.
+    """
+    from litellm.integrations.advisor_interception.handler import (
+        AdvisorInterceptionLogger,
+    )
+    from litellm.integrations.custom_logger import CustomLogger
+    from litellm.llms.anthropic.experimental_pass_through.messages.handler import (
+        anthropic_messages,
+    )
+
+    class _NonAdvisorHookLogger(CustomLogger):
+        async def async_pre_request_hook(self, model, messages, kwargs):
+            kwargs["metadata"] = {"from_non_advisor_hook": True}
+            return kwargs
+
+    class _CaptureInterceptor:
+        def __init__(self):
+            self.seen_kwargs = {}
+            self.seen_tools = None
+
+        def can_handle(self, tools, custom_llm_provider):
+            return True
+
+        async def handle(self, **kwargs):
+            self.seen_kwargs = kwargs
+            self.seen_tools = kwargs.get("tools")
+            return _text_resp("interceptor handled request")
+
+    capture_interceptor = _CaptureInterceptor()
+    original_callbacks = litellm.callbacks
+    try:
+        litellm.callbacks = [
+            AdvisorInterceptionLogger(default_advisor_model="claude-opus-4-6"),
+            _NonAdvisorHookLogger(),
+        ]
+        with patch(
+            "litellm.llms.anthropic.experimental_pass_through.messages.handler.get_messages_interceptors",
+            return_value=[capture_interceptor],
+        ):
+            result = await anthropic_messages(
+                model="openai/gpt-4o-mini",
+                messages=MESSAGES,
+                tools=[ADVISOR_TOOL],
+                stream=False,
+                max_tokens=256,
+                custom_llm_provider="openai",
+            )
+    finally:
+        litellm.callbacks = original_callbacks
+
+    assert isinstance(result, dict)
+    assert capture_interceptor.seen_kwargs.get("metadata") == {
+        "from_non_advisor_hook": True
+    }
+    assert isinstance(capture_interceptor.seen_tools, list)
+    assert capture_interceptor.seen_tools[0].get("type") == "advisor_20260301"

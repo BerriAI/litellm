@@ -24,6 +24,10 @@ from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
 )
 from litellm.types.llms.anthropic import ANTHROPIC_ADVISOR_TOOL_TYPE
+from litellm.utils import (
+    resolve_proxy_model_alias_to_litellm_model,
+    supports_native_advisor_tool,
+)
 
 ADVISOR_MAX_USES: int = _c.ADVISOR_MAX_USES
 ADVISOR_TOOL_DESCRIPTION: str = _c.ADVISOR_TOOL_DESCRIPTION
@@ -203,43 +207,13 @@ def _resolve_default_advisor_model() -> str:
     return params.get("default_advisor_model", "") or ""
 
 
-def _is_anthropic_opus_46_model(model: str) -> bool:
-    """Return True for Anthropic Claude Opus 4.6 model identifiers."""
-    normalized = model.lower().replace("_", "-")
-    return "anthropic/" in normalized and "claude-opus-4-6" in normalized
-
-
-def _resolve_proxy_model_alias_to_litellm_model(model: str) -> str:
-    """
-    Resolve a proxy ``model_name`` alias to its configured ``litellm_params.model``.
-
-    Example: ``claude_opus`` -> ``anthropic/claude-opus-4-6``.
-    """
-    try:
-        from litellm.proxy.proxy_server import llm_router
-    except Exception:
-        return ""
-
-    model_list = getattr(llm_router, "model_list", None) or []
-    for deployment in model_list:
-        if not isinstance(deployment, dict):
-            continue
-        if deployment.get("model_name") != model:
-            continue
-        litellm_params = deployment.get("litellm_params") or {}
-        configured_model = litellm_params.get("model")
-        if isinstance(configured_model, str):
-            return configured_model
-    return ""
-
-
 def _should_use_native_anthropic_advisor(
     tools: List[Dict], custom_llm_provider: Optional[str]
 ) -> bool:
     """
     Use Anthropic's native advisor path only when:
     - executor provider is Anthropic, and
-    - advisor model resolves to Anthropic Claude Opus 4.6.
+    - advisor model supports the native advisor capability.
     """
     if custom_llm_provider != "anthropic":
         return False
@@ -255,12 +229,12 @@ def _should_use_native_anthropic_advisor(
     if not advisor_model:
         return False
 
-    if _is_anthropic_opus_46_model(advisor_model):
-        return True
-
     # Proxy requests commonly pass advisor model as a model_name alias.
-    resolved_proxy_model = _resolve_proxy_model_alias_to_litellm_model(advisor_model)
-    if _is_anthropic_opus_46_model(resolved_proxy_model):
+    resolved_proxy_model = resolve_proxy_model_alias_to_litellm_model(advisor_model)
+    model_to_check = resolved_proxy_model or advisor_model
+    if supports_native_advisor_tool(
+        model=model_to_check, custom_llm_provider="anthropic"
+    ):
         return True
 
     try:
@@ -269,8 +243,8 @@ def _should_use_native_anthropic_advisor(
         resolved_model, advisor_provider, _, _ = litellm.get_llm_provider(
             model=advisor_model
         )
-        return advisor_provider == "anthropic" and _is_anthropic_opus_46_model(
-            resolved_model
+        return advisor_provider == "anthropic" and supports_native_advisor_tool(
+            model=resolved_model, custom_llm_provider=advisor_provider
         )
     except Exception:
         return False

@@ -23,6 +23,10 @@ from litellm.integrations.advisor_interception.tools import (
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.types.integrations.advisor_interception import AdvisorInterceptionConfig
 from litellm.types.utils import CallTypes, LlmProviders
+from litellm.utils import (
+    resolve_proxy_model_alias_to_litellm_model,
+    supports_native_advisor_tool,
+)
 
 
 class AdvisorInterceptionLogger(CustomLogger):
@@ -224,6 +228,18 @@ class AdvisorInterceptionLogger(CustomLogger):
             return self._wrap_as_streaming_if_needed(result)
         return result
 
+    async def async_log_failure_event(
+        self, kwargs, response_obj, start_time, end_time
+    ) -> None:
+        """
+        Cleanup per-call advisor state on failure paths.
+        """
+        call_id = kwargs.get("litellm_call_id")
+        if isinstance(call_id, str):
+            self._advisor_config_by_call_id.pop(call_id, None)
+            self._skip_post_hook_call_ids.discard(call_id)
+            self._converted_stream_call_ids.discard(call_id)
+
     async def async_should_run_chat_completion_agentic_loop(
         self,
         response: Any,
@@ -244,7 +260,7 @@ class AdvisorInterceptionLogger(CustomLogger):
             return False, {}
 
         # Only skip the orchestration loop for native providers when the advisor
-        # model is actually supported natively (Anthropic Claude Opus 4.6).
+        # model is actually supported natively by the provider.
         # For Anthropic executors with a non-native advisor model, fall through
         # to the orchestration loop below.
         if custom_llm_provider in ADVISOR_NATIVE_PROVIDERS:
@@ -422,6 +438,8 @@ class AdvisorInterceptionLogger(CustomLogger):
         finally:
             if isinstance(call_id, str):
                 self._advisor_config_by_call_id.pop(call_id, None)
+                self._skip_post_hook_call_ids.discard(call_id)
+                self._converted_stream_call_ids.discard(call_id)
 
     @staticmethod
     def _wrap_as_streaming_if_needed(response: Any) -> Any:
@@ -456,33 +474,16 @@ class AdvisorInterceptionLogger(CustomLogger):
     @staticmethod
     def _is_native_anthropic_advisor_model(advisor_model: str) -> bool:
         """
-        Return True only when the advisor model resolves to Anthropic Claude Opus 4.6,
-        which is the only model Anthropic supports as a native advisor.
+        Return True when the advisor model supports Anthropic native advisor.
 
         Handles bare model names, litellm provider-prefixed names
         (e.g. ``anthropic/claude-opus-4-6``) and proxy model aliases.
         """
-        # Resolve proxy alias → underlying litellm model string first.
-        try:
-            llm_router = AdvisorInterceptionLogger._get_llm_router()
-            if llm_router is not None:
-                for deployment in llm_router.model_list or []:
-                    if deployment.get("model_name") == advisor_model:
-                        advisor_model = (
-                            deployment.get("litellm_params", {}).get("model")
-                            or advisor_model
-                        )
-                        break
-        except Exception:
-            pass
-
-        normalized = advisor_model.lower().replace("_", "-")
-        # Must be an Anthropic model and specifically opus-4-6.
-        is_anthropic = normalized.startswith("anthropic/") or (
-            "/" not in normalized and "claude" in normalized
+        resolved_model = resolve_proxy_model_alias_to_litellm_model(advisor_model)
+        model_to_check = resolved_model or advisor_model
+        return supports_native_advisor_tool(
+            model=model_to_check, custom_llm_provider="anthropic"
         )
-        is_opus_46 = "claude-opus-4-6" in normalized or "claude-opus-4.6" in normalized
-        return is_anthropic and is_opus_46
 
     @staticmethod
     async def _call_advisor_model(
