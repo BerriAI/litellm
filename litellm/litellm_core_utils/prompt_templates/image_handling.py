@@ -10,7 +10,7 @@ import litellm
 from litellm import verbose_logger
 from litellm.caching.caching import InMemoryCache
 from litellm.constants import MAX_IMAGE_URL_DOWNLOAD_SIZE_MB
-from litellm.proxy.common_utils.url_utils import async_safe_get, safe_get
+from litellm.litellm_core_utils.url_utils import async_safe_get, safe_get
 
 MAX_IMGS_IN_MEMORY = 10
 

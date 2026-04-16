@@ -15,7 +15,7 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
-from litellm.proxy.common_utils.url_utils import async_safe_get
+from litellm.litellm_core_utils.url_utils import async_safe_get
 from litellm.proxy._experimental.mcp_server.tool_registry import (
     global_mcp_tool_registry,
 )

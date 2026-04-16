@@ -30,7 +30,7 @@ from litellm.constants import (
 )
 from litellm.litellm_core_utils.default_encoding import encoding as default_encoding
 from litellm.llms.custom_httpx.http_handler import _get_httpx_client
-from litellm.proxy.common_utils.url_utils import safe_get
+from litellm.litellm_core_utils.url_utils import safe_get
 from litellm.types.llms.anthropic import (
     AnthropicMessagesToolResultParam,
     AnthropicMessagesToolUseParam,
