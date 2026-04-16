@@ -862,6 +862,14 @@ def responses(
             if _mapped is not None:
                 reasoning = _mapped
                 local_vars["reasoning"] = _mapped
+        # Override reasoning effort if force_reasoning_effort is configured
+        force_reasoning_effort = local_vars.pop("force_reasoning_effort", None)
+        if force_reasoning_effort:
+            if isinstance(reasoning, dict):
+                reasoning = {**reasoning, "effort": force_reasoning_effort}
+            else:
+                reasoning = {"effort": force_reasoning_effort}
+            local_vars["reasoning"] = reasoning
         # Get ResponsesAPIOptionalRequestParams with only valid parameters
         response_api_optional_params: ResponsesAPIOptionalRequestParams = (
             ResponsesAPIRequestUtils.get_requested_response_api_optional_param(

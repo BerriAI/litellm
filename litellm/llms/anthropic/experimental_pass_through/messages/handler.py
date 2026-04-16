@@ -441,6 +441,18 @@ def anthropic_messages_handler(
             params=local_vars
         )
     )
+    force_reasoning_effort = litellm_params.force_reasoning_effort
+    if force_reasoning_effort:
+        output_config = anthropic_messages_optional_request_params.get("output_config") or {}
+        anthropic_messages_optional_request_params["output_config"] = {
+            **output_config,
+            "effort": force_reasoning_effort,
+        }
+        # Effort alone does not trigger reasoning — force-enable thinking too
+        thinking = anthropic_messages_optional_request_params.get("thinking")
+        if not isinstance(thinking, dict) or thinking.get("type") == "disabled":
+            anthropic_messages_optional_request_params["thinking"] = {"type": "adaptive"}
+
     return base_llm_http_handler.anthropic_messages_handler(
         model=model,
         messages=messages,
