@@ -26,15 +26,133 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import gc
+import json
 import logging
 import os
 import sys
+import threading
+import time
+import tracemalloc
+from pathlib import Path
 from typing import Any, Dict, Iterable
 
 import pytest
 
 sys.path.insert(0, os.path.abspath("../.."))
 import litellm  # noqa: E402  (path manipulation must precede import)
+
+
+# ---------------------------------------------------------------------------
+# Diagnostic instrumentation (off by default).
+# Enable with ``LLM_TRANSLATION_DIAGNOSTIC=1``.
+#
+# Per-test JSONL records are appended to
+# ``test-results/diagnostic-<worker>.jsonl``. Columns:
+#   - ts: wall clock (seconds since epoch)
+#   - idx: test index on this worker
+#   - phase: "setup" | "teardown"
+#   - test: nodeid
+#   - rss_mb: process RSS in MiB
+#   - fds: open file descriptors
+#   - threads: live thread count
+#   - tasks: pending asyncio tasks on the session event loop
+#   - cache_n: entries in in_memory_llm_clients_cache
+#   - azure_closed: bool — whether ANY cached Azure client has is_closed=True
+#   - gc_objs: total number of Python objects tracked by gc
+#
+# One JSONL record makes failures diagnosable: compare the last passing test's
+# teardown values to the failing test's setup values. Anything that spikes
+# (rss_mb, cache_n, azure_closed flipping True) is the culprit.
+# ---------------------------------------------------------------------------
+
+_DIAGNOSTIC_ENABLED = os.environ.get("LLM_TRANSLATION_DIAGNOSTIC") == "1"
+_DIAGNOSTIC_DIR = Path(os.environ.get("LLM_TRANSLATION_DIAGNOSTIC_DIR", "test-results"))
+_WORKER_ID = os.environ.get("PYTEST_XDIST_WORKER", "main")
+_TEST_COUNTER = 0
+
+
+def _diag_file() -> Path:
+    _DIAGNOSTIC_DIR.mkdir(parents=True, exist_ok=True)
+    return _DIAGNOSTIC_DIR / f"diagnostic-{_WORKER_ID}.jsonl"
+
+
+def _proc_rss_mb() -> float:
+    """Read RSS from /proc/self/status (Linux); fall back to 0 on other OSes."""
+    try:
+        with open("/proc/self/status", "r") as f:
+            for line in f:
+                if line.startswith("VmRSS:"):
+                    # e.g. "VmRSS:      12345 kB"
+                    kb = int(line.split()[1])
+                    return round(kb / 1024.0, 1)
+    except Exception:
+        pass
+    return 0.0
+
+
+def _open_fds() -> int:
+    try:
+        return len(os.listdir("/proc/self/fd"))
+    except Exception:
+        return 0
+
+
+def _count_async_tasks(loop: asyncio.AbstractEventLoop) -> int:
+    try:
+        return sum(1 for t in asyncio.all_tasks(loop) if not t.done())
+    except Exception:
+        return 0
+
+
+def _cache_snapshot() -> tuple[int, bool]:
+    """Return (cache_entry_count, any_cached_azure_client_is_closed)."""
+    cache = getattr(litellm, "in_memory_llm_clients_cache", None)
+    cache_dict = getattr(cache, "cache_dict", None)
+    if not isinstance(cache_dict, dict):
+        return (0, False)
+
+    azure_closed = False
+    for value in cache_dict.values():
+        # AsyncAzureOpenAI exposes .is_closed via the inner httpx client.
+        try:
+            inner_client = getattr(value, "_client", None) or getattr(
+                value, "client", None
+            )
+            if inner_client is not None and getattr(inner_client, "is_closed", False):
+                azure_closed = True
+                break
+        except Exception:
+            continue
+    return (len(cache_dict), azure_closed)
+
+
+def _emit_diag(phase: str, nodeid: str, loop: asyncio.AbstractEventLoop) -> None:
+    global _TEST_COUNTER
+    if not _DIAGNOSTIC_ENABLED:
+        return
+
+    cache_n, azure_closed = _cache_snapshot()
+    record = {
+        "ts": time.time(),
+        "idx": _TEST_COUNTER,
+        "phase": phase,
+        "test": nodeid,
+        "rss_mb": _proc_rss_mb(),
+        "fds": _open_fds(),
+        "threads": threading.active_count(),
+        "tasks": _count_async_tasks(loop),
+        "cache_n": cache_n,
+        "azure_closed": azure_closed,
+        "gc_objs": len(gc.get_objects()),
+        "worker": _WORKER_ID,
+    }
+    try:
+        with _diag_file().open("a") as f:
+            f.write(json.dumps(record) + "\n")
+    except Exception:
+        # Instrumentation must never fail the test.
+        pass
 
 
 # ---------------------------------------------------------------------------
@@ -252,7 +370,7 @@ def _restore_env_vars(initial_env: Dict[str, str], current_env: Iterable[str]) -
 
 
 @pytest.fixture(autouse=True)
-def isolate_litellm_state(event_loop):
+def isolate_litellm_state(event_loop, request):
     """Snapshot state, run the test, restore state.
 
     HTTP client cleanup is deliberately NOT done here:
@@ -265,7 +383,12 @@ def isolate_litellm_state(event_loop):
         client pool is bounded by the number of distinct ``cache_key``
         tuples, not by the test count.
     """
+    global _TEST_COUNTER
+    _TEST_COUNTER += 1
+    nodeid = request.node.nodeid
+
     # ---- Setup ----
+    _emit_diag("setup", nodeid, event_loop)
     _reset_scalar_attributes()
     _reset_provider_model_collections()
     _reset_logger_levels()
@@ -286,6 +409,7 @@ def isolate_litellm_state(event_loop):
         pass
     _drain_pending_tasks(event_loop)
     _restore_env_vars(initial_env, list(os.environ))
+    _emit_diag("teardown", nodeid, event_loop)
 
 
 # ---------------------------------------------------------------------------

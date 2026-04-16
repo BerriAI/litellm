@@ -672,6 +672,7 @@ jobs:
           command: |
             pwd
             ls
+            mkdir -p test-results
             # Add --timeout to kill hanging tests after 120s (2 min)
             # Add --durations=20 to show 20 slowest tests for debugging
             # Subdirectories with dedicated jobs (maintain this list as new jobs are added)
@@ -682,12 +683,29 @@ jobs:
             for dir in "${IGNORE_DIRS[@]}"; do
               IGNORE_ARGS="$IGNORE_ARGS --ignore=$dir"
             done
+            # DIAGNOSTIC: this branch dumps per-test memory/FD/cache state
+            # to test-results/diagnostic-<worker>.jsonl for post-run analysis.
+            export LLM_TRANSLATION_DIAGNOSTIC=1
+            export LLM_TRANSLATION_DIAGNOSTIC_DIR="$(pwd)/test-results"
             uv run --no-sync python -m pytest -v tests/llm_translation $IGNORE_ARGS --junitxml=test-results/junit.xml --durations=20 -n 8 --timeout=120 --timeout_method=thread --retries 2 --retry-delay 5
           no_output_timeout: 15m
+      # DIAGNOSTIC: always run even if tests failed, so we get the JSONL files.
+      - run:
+          name: Summarise diagnostic JSONL
+          when: always
+          command: |
+            echo "=== Diagnostic files produced ==="
+            ls -la test-results/ || true
+            uv run --no-sync python tests/llm_translation/_diagnostic_report.py test-results/ || true
 
       # Store test results
       - store_test_results:
           path: test-results
+      # DIAGNOSTIC: persist the per-worker JSONL files so we can download them
+      # from the CircleCI UI (Artifacts tab on the job).
+      - store_artifacts:
+          path: test-results
+          destination: llm-translation-diagnostic
   realtime_translation_testing:
     docker:
       - image: cimg/python:3.11
