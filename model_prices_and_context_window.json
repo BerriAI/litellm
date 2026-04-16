@@ -38538,5 +38538,55 @@
         "tool_use_system_prompt_tokens": 346,
         "supports_native_structured_output": true,
         "supports_pdf_input": true
+    },
+    "sail_research/moonshotai/Kimi-K2.5": {
+        "litellm_provider": "sail_research",
+        "mode": "responses",
+        "supported_endpoints": [
+            "/v1/responses"
+        ],
+        "supports_function_calling": true
+    },
+    "sail_research/zai-org/GLM-5": {
+        "litellm_provider": "sail_research",
+        "mode": "responses",
+        "max_input_tokens": 202752,
+        "supported_endpoints": [
+            "/v1/responses"
+        ],
+        "supports_function_calling": true
+    },
+    "sail_research/zai-org/GLM-5.1-FP8": {
+        "litellm_provider": "sail_research",
+        "mode": "responses",
+        "max_input_tokens": 202752,
+        "supported_endpoints": [
+            "/v1/responses"
+        ],
+        "supports_function_calling": true
+    },
+    "sail_research/deepseek-ai/DeepSeek-V3.2": {
+        "litellm_provider": "sail_research",
+        "mode": "responses",
+        "supported_endpoints": [
+            "/v1/responses"
+        ],
+        "supports_function_calling": true
+    },
+    "sail_research/openai/gpt-oss-20b": {
+        "litellm_provider": "sail_research",
+        "mode": "responses",
+        "supported_endpoints": [
+            "/v1/responses"
+        ],
+        "supports_function_calling": true
+    },
+    "sail_research/openai/gpt-oss-120b": {
+        "litellm_provider": "sail_research",
+        "mode": "responses",
+        "supported_endpoints": [
+            "/v1/responses"
+        ],
+        "supports_function_calling": true
     }
 }
