@@ -15,6 +15,8 @@ from ipaddress import ip_address, ip_network
 from typing import Any, Optional, Tuple, Union
 from urllib.parse import urlparse, urlunparse
 
+import litellm
+
 _BLOCKED_NETWORKS = [
     ip_network("0.0.0.0/8"),
     ip_network("10.0.0.0/8"),
@@ -43,7 +45,7 @@ def _is_blocked_ip(addr: str) -> bool:
     try:
         ip = ip_address(addr)
     except ValueError:
-        return False
+        return True  # fail-closed: unparseable addresses are blocked
     if ip.version == 6 and hasattr(ip, "ipv4_mapped") and ip.ipv4_mapped:
         ip = ip.ipv4_mapped
     return any(ip in net for net in _BLOCKED_NETWORKS)
@@ -104,10 +106,13 @@ def validate_url(url: str) -> Tuple[str, str]:
                 "provider configuration instead of a user-supplied URL."
             )
 
-    # For HTTPS, TLS certificate validation binds the connection to the
-    # hostname — DNS rebinding can't redirect to a different server because
-    # the cert wouldn't match. Return the original URL.
-    if parsed.scheme == "https":
+    # For HTTPS with SSL verification enabled, TLS certificate validation
+    # binds the connection to the hostname — DNS rebinding can't redirect
+    # to a different server because the cert wouldn't match.
+    # When SSL verification is disabled, this defense doesn't apply, so
+    # we rewrite to the validated IP like HTTP.
+    ssl_verify = getattr(litellm, "ssl_verify", True)
+    if parsed.scheme == "https" and ssl_verify is not False:
         return url, hostname
 
     # For HTTP, rewrite URL to connect to the validated IP directly
