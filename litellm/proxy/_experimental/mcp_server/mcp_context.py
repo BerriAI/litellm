@@ -14,3 +14,8 @@ from typing import Optional
 _mcp_active_toolset_id: ContextVar[Optional[str]] = ContextVar(
     "_mcp_active_toolset_id", default=None
 )
+
+# Per-request merged InitializeResult.instructions; set in MCP HTTP/SSE handlers.
+_mcp_gateway_initialize_instructions: ContextVar[Optional[str]] = ContextVar(
+    "_mcp_gateway_initialize_instructions", default=None
+)
