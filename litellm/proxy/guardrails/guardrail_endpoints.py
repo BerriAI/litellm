@@ -5,12 +5,15 @@ CRUD ENDPOINTS FOR GUARDRAILS
 import concurrent.futures
 import inspect
 import json
+import os
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Type, TypeVar, Union, cast
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
+
+from litellm.proxy.common_utils.path_utils import safe_join
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
@@ -1348,8 +1351,6 @@ async def get_category_yaml(category_name: str):
     Returns:
         The raw YAML or JSON content of the category file with file type indicator
     """
-    import os
-
     # Get the categories directory path
     categories_dir = os.path.join(
         os.path.dirname(__file__),
@@ -1359,8 +1360,11 @@ async def get_category_yaml(category_name: str):
     )
 
     # Try to find the file with either .yaml or .json extension
-    yaml_path = os.path.join(categories_dir, f"{category_name}.yaml")
-    json_path = os.path.join(categories_dir, f"{category_name}.json")
+    try:
+        yaml_path = safe_join(categories_dir, f"{category_name}.yaml")
+        json_path = safe_join(categories_dir, f"{category_name}.json")
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid category name")
 
     category_file_path = None
     file_type = None
@@ -1403,8 +1407,6 @@ async def get_major_airlines():
     Get the major airlines list from IATA (competitor intent, airline type).
     Returns airline id, match variants (pipe-separated), and tags.
     """
-    import os
-
     airlines_path = os.path.join(
         os.path.dirname(__file__),
         "guardrail_hooks",
