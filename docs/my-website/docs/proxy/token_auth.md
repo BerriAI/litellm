@@ -792,16 +792,18 @@ litellm_jwtauth:
 
 ## Route JWT-Shaped Machine Tokens to OAuth2
 
-Use this when both are enabled:
+Use this when:
 - `enable_jwt_auth: true` for standard JWT validation
-- `enable_oauth2_auth: true` for OAuth2 introspection
+- machine tokens are JWT-shaped and should be routed to OAuth2 based on claims
 
-If some machine tokens are also JWT-shaped, configure `routing_overrides` to route matching tokens to OAuth2.
+`routing_overrides` supports two operating modes:
+- **Selective mode**: set `enable_oauth2_auth: false` to send only matching JWTs to OAuth2 on LLM + info routes
+- **Global mode**: set `enable_oauth2_auth: true` to also enable OAuth2 on LLM + info routes
 
 ```yaml title="config.yaml"
 general_settings:
   enable_jwt_auth: true
-  enable_oauth2_auth: true
+  enable_oauth2_auth: false
   litellm_jwtauth:
     user_id_jwt_field: "sub"
     routing_overrides:
@@ -822,7 +824,7 @@ general_settings:
 ```yaml title="config.yaml"
 general_settings:
   enable_jwt_auth: true
-  enable_oauth2_auth: true
+  enable_oauth2_auth: false
   litellm_jwtauth:
     routing_overrides:
       - iss: ["machine-issuer.example.com", "backup-issuer.example.com"]

@@ -2637,3 +2637,50 @@ async def test_handle_logging_proxy_only_error_skips_handlers_for_pass_through()
     mock_async.assert_not_called()
     mock_sync.assert_not_called()
     assert logging_obj.call_type == CallTypes.pass_through.value
+
+
+def test_handle_exception_on_proxy_preserves_status_code():
+    """
+    OpenAI batch creation returns 429 for rate limits. LiteLLM wraps this as a
+    RateLimitError with status_code=429. handle_exception_on_proxy must pass
+    that status code through instead of hardcoding 500.
+    """
+    from litellm.proxy.utils import handle_exception_on_proxy
+
+    rate_limit_error = litellm.RateLimitError(
+        message="Rate limit exceeded: batch creation limit of 2000/hour hit",
+        llm_provider="openai",
+        model="gpt-4o",
+    )
+
+    result = handle_exception_on_proxy(rate_limit_error)
+
+    assert int(result.code) == 429, f"Expected 429, got {result.code}"
+
+
+def test_handle_exception_on_proxy_defaults_to_500_for_unknown_exceptions():
+    """
+    Generic exceptions with no status_code should still return 500.
+    """
+    from litellm.proxy.utils import handle_exception_on_proxy
+
+    result = handle_exception_on_proxy(Exception("something went wrong"))
+
+    assert int(result.code) == 500, f"Expected 500, got {result.code}"
+
+
+def test_handle_exception_on_proxy_preserves_auth_error_status_code():
+    """
+    AuthenticationError (401) should also pass through correctly.
+    """
+    from litellm.proxy.utils import handle_exception_on_proxy
+
+    auth_error = litellm.AuthenticationError(
+        message="Invalid API key",
+        llm_provider="openai",
+        model="gpt-4o",
+    )
+
+    result = handle_exception_on_proxy(auth_error)
+
+    assert int(result.code) == 401, f"Expected 401, got {result.code}"

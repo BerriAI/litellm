@@ -24,10 +24,22 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Set up uv
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
+        with:
+          version: "0.10.9"
+          enable-cache: false
+
       - name: Check litellm version on PyPI
         id: check-litellm
         run: |
-          VERSION=$(grep -m1 '^version' pyproject.toml | sed 's/version = "\(.*\)"/\1/')
+          VERSION=$(python - <<'PY'
+          import tomllib
+
+          with open("pyproject.toml", "rb") as f:
+              print(tomllib.load(f)["project"]["version"])
+          PY
+          )
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "Checking if litellm $VERSION exists on PyPI..."
 
@@ -42,43 +54,46 @@ jobs:
 
       - name: Sanity check proxy-extras version
         run: |
-          # Read pinned version from requirements.txt
-          REQ_VERSION=$(grep -oP 'litellm-proxy-extras==\K[0-9.]+' requirements.txt)
-          if [ -z "$REQ_VERSION" ]; then
-            echo "::error::Could not find litellm-proxy-extras version in requirements.txt"
-            exit 1
-          fi
-          echo "requirements.txt pins litellm-proxy-extras==$REQ_VERSION"
+          # Read pinned version from project optional dependencies
+          PYPROJECT_VERSION=$(python3 - <<'PY'
+          import sys
+          import tomllib
 
-          # Read pinned version from pyproject.toml dependency
-          PYPROJECT_VERSION=$(python3 -c "
-          import re
-          with open('pyproject.toml') as f:
-              content = f.read()
-          match = re.search(r'litellm-proxy-extras\s*=\s*\{version\s*=\s*\"([^\"]+)\"', content)
-          if match:
-              print(match.group(1).lstrip('^~>='))
-          else:
-              import sys
-              print('::error::Could not find litellm-proxy-extras dependency in pyproject.toml', file=sys.stderr)
+          with open("pyproject.toml", "rb") as f:
+              proxy_requirements = tomllib.load(f)["project"]["optional-dependencies"]["proxy"]
+
+          version = None
+          for requirement in proxy_requirements:
+              normalized = requirement.split(";", 1)[0].strip()
+              if not normalized.startswith("litellm-proxy-extras"):
+                  continue
+              parts = normalized.split("==", 1)
+              if len(parts) == 2 and parts[0].strip() == "litellm-proxy-extras":
+                  candidate = parts[1].strip()
+                  if candidate:
+                      version = candidate
+                      break
+
+          if version is None:
+              print(
+                  "::error::Could not find an exact litellm-proxy-extras pin in project.optional-dependencies.proxy",
+                  file=sys.stderr,
+              )
               sys.exit(1)
-          ")
+
+          print(version)
+          PY
+          )
           echo "pyproject.toml pins litellm-proxy-extras version: $PYPROJECT_VERSION"
 
-          # Check that both pinned versions match
-          if [ "$REQ_VERSION" != "$PYPROJECT_VERSION" ]; then
-            echo "::error::Version mismatch: requirements.txt has $REQ_VERSION but pyproject.toml has $PYPROJECT_VERSION"
-            exit 1
-          fi
-
           # Check that the pinned version exists on PyPI
-          echo "Checking if litellm-proxy-extras $REQ_VERSION exists on PyPI..."
-          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "https://pypi.org/pypi/litellm-proxy-extras/$REQ_VERSION/json")
+          echo "Checking if litellm-proxy-extras $PYPROJECT_VERSION exists on PyPI..."
+          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "https://pypi.org/pypi/litellm-proxy-extras/$PYPROJECT_VERSION/json")
           if [ "$HTTP_STATUS" != "200" ]; then
-            echo "::error::litellm-proxy-extras $REQ_VERSION is not published on PyPI yet. Publish it before releasing litellm."
+            echo "::error::litellm-proxy-extras $PYPROJECT_VERSION is not published on PyPI yet. Publish it before releasing litellm."
             exit 1
           fi
-          echo "litellm-proxy-extras $REQ_VERSION exists on PyPI. Sanity check passed."
+          echo "litellm-proxy-extras $PYPROJECT_VERSION exists on PyPI. Sanity check passed."
 
   publish-litellm:
     name: Publish litellm to PyPI
@@ -100,16 +115,19 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Set up uv
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
+        with:
+          version: "0.10.9"
+          enable-cache: false
+
       - name: Copy model prices backup
         run: cp model_prices_and_context_window.json litellm/model_prices_and_context_window_backup.json
-
-      - name: Install build tools
-        run: python -m pip install --upgrade pip build==1.4.2
 
       - name: Build package
         run: |
           rm -rf build dist
-          python -m build
+          uv build
 
       - name: Verify build artifacts
         env:
@@ -129,8 +147,7 @@ jobs:
 
       - name: Validate package metadata
         run: |
-          pip install twine==6.2.0
-          twine check dist/*
+          uv tool run --from 'twine==6.2.0' twine check dist/*
 
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@ed0c53931b1dc9bd32cbe73a98c7f6766f8a527e # v1.13.0
