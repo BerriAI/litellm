@@ -82,13 +82,18 @@ def test_env_reference_in_litellm_params_metadata_raises():
 def test_non_string_values_are_not_flagged():
     kwargs = {
         "langsmith_sampling_rate": 0.5,
-        "turn_off_message_logging": True,
     }
 
     params = initialize_standard_callback_dynamic_params(kwargs)
 
     assert params.get("langsmith_sampling_rate") == 0.5
-    assert params.get("turn_off_message_logging") is True
+
+
+def test_turn_off_message_logging_not_extracted_from_request():
+    """turn_off_message_logging is admin-only — must not be settable via request."""
+    kwargs = {"turn_off_message_logging": True}
+    params = initialize_standard_callback_dynamic_params(kwargs)
+    assert params.get("turn_off_message_logging") is None
 
 
 def test_empty_kwargs_returns_empty_params():
