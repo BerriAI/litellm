@@ -105,26 +105,32 @@ def _count_async_tasks(loop: asyncio.AbstractEventLoop) -> int:
         return 0
 
 
-def _cache_snapshot() -> tuple[int, bool]:
-    """Return (cache_entry_count, any_cached_azure_client_is_closed)."""
+def _cache_snapshot() -> tuple[int, bool, list[str], list[str]]:
+    """Return (count, any_closed, closed_key_types, all_key_types).
+
+    key_types use the first 40 chars of each cache key, which is enough to
+    distinguish "azure-xxx" from "httpx-xxx" from aiohttp-based keys while
+    keeping the JSONL small.
+    """
     cache = getattr(litellm, "in_memory_llm_clients_cache", None)
     cache_dict = getattr(cache, "cache_dict", None)
     if not isinstance(cache_dict, dict):
-        return (0, False)
+        return (0, False, [], [])
 
-    azure_closed = False
-    for value in cache_dict.values():
-        # AsyncAzureOpenAI exposes .is_closed via the inner httpx client.
+    closed_keys: list[str] = []
+    all_keys: list[str] = []
+    for key, value in cache_dict.items():
+        short_key = str(key)[:40]
+        all_keys.append(short_key)
+        # AsyncAzureOpenAI / AsyncOpenAI wrap httpx in _client; AsyncHTTPHandler
+        # uses .client; httpx.AsyncClient itself has .is_closed.
+        inner = getattr(value, "_client", None) or getattr(value, "client", None) or value
         try:
-            inner_client = getattr(value, "_client", None) or getattr(
-                value, "client", None
-            )
-            if inner_client is not None and getattr(inner_client, "is_closed", False):
-                azure_closed = True
-                break
+            if getattr(inner, "is_closed", False):
+                closed_keys.append(short_key)
         except Exception:
             continue
-    return (len(cache_dict), azure_closed)
+    return (len(cache_dict), bool(closed_keys), closed_keys, all_keys)
 
 
 def _emit_diag(phase: str, nodeid: str, loop: asyncio.AbstractEventLoop) -> None:
@@ -132,7 +138,7 @@ def _emit_diag(phase: str, nodeid: str, loop: asyncio.AbstractEventLoop) -> None
     if not _DIAGNOSTIC_ENABLED:
         return
 
-    cache_n, azure_closed = _cache_snapshot()
+    cache_n, any_closed, closed_keys, all_keys = _cache_snapshot()
     record = {
         "ts": time.time(),
         "idx": _TEST_COUNTER,
@@ -143,7 +149,13 @@ def _emit_diag(phase: str, nodeid: str, loop: asyncio.AbstractEventLoop) -> None
         "threads": threading.active_count(),
         "tasks": _count_async_tasks(loop),
         "cache_n": cache_n,
-        "azure_closed": azure_closed,
+        "azure_closed": any_closed,
+        # New: list the exact short cache keys whose client reports
+        # is_closed=True. This lets us see which client flipped, and between
+        # which two tests. Full key list is for distinguishing azure vs. openai
+        # vs. httpx cache entries without needing to know their structure.
+        "closed_keys": closed_keys,
+        "cache_keys": all_keys,
         "gc_objs": len(gc.get_objects()),
         "worker": _WORKER_ID,
     }

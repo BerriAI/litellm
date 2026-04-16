@@ -63,18 +63,23 @@ def _report_worker(worker: str, records: List[Dict[str, Any]]) -> None:
         f"gc +{last['gc_objs'] - first['gc_objs']}"
     )
 
-    # Azure client closed transitions.
-    flipped = []
-    prev = False
+    # Azure client closed transitions — now with *which* key flipped.
+    # A "flip" is any new key that appears in record.closed_keys vs. the
+    # previous record's closed_keys.
+    prev_closed: set[str] = set()
+    flips: List[tuple[Dict[str, Any], set[str]]] = []
     for r in records:
-        cur = bool(r.get("azure_closed"))
-        if cur and not prev:
-            flipped.append(r)
-        prev = cur
-    if flipped:
-        print(f"\n  Azure-client-closed flipped True {len(flipped)} times. First 5:")
-        for r in flipped[:5]:
+        cur_closed = set(r.get("closed_keys") or [])
+        new_flips = cur_closed - prev_closed
+        if new_flips:
+            flips.append((r, new_flips))
+        prev_closed = cur_closed
+    if flips:
+        print(f"\n  Client-closed transitions detected: {len(flips)}. Showing first 10:")
+        for r, new in flips[:10]:
             print(f"    {_fmt_row(r)}")
+            for k in sorted(new):
+                print(f"      + closed key: {k!r}")
 
     # Large RSS jumps between adjacent records.
     jumps = []
@@ -85,7 +90,7 @@ def _report_worker(worker: str, records: List[Dict[str, Any]]) -> None:
             continue
         if dr >= 50:
             jumps.append((dr, a, b))
-    jumps.sort(reverse=True)
+    jumps.sort(key=lambda x: x[0], reverse=True)
     if jumps:
         print(f"\n  Top RSS jumps (>=50 MiB) — {len(jumps)} total, showing top 5:")
         for dr, a, b in jumps[:5]:
@@ -103,7 +108,7 @@ def _report_worker(worker: str, records: List[Dict[str, Any]]) -> None:
             d = phases["teardown"]["cache_n"] - phases["setup"]["cache_n"]
             if d > 0:
                 growth.append((d, phases["setup"], phases["teardown"]))
-    growth.sort(reverse=True)
+    growth.sort(key=lambda x: x[0], reverse=True)
     if growth:
         print(f"\n  Tests that grew cache_n — showing top 10:")
         for d, s, t in growth[:10]:
