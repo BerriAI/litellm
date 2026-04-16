@@ -22,12 +22,18 @@ from fastapi import APIRouter, Depends, HTTPException
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.mavvrik.database import LiteLLMDatabase
 from litellm.integrations.mavvrik.exporter import MavvrikExporter as MavvrikLogger  # MavvrikLogger renamed to MavvrikExporter — alias kept for local references until Task 7 refactor
-from litellm.integrations.mavvrik.register import (
-    _CONFIG_KEY,
-    is_mavvrik_setup,  # noqa: F401
-    register_logger_and_job,
-)
-from litellm.integrations.mavvrik.upload import MavvrikUploader
+from litellm.integrations.mavvrik.scheduler import MavvrikScheduler
+from litellm.integrations.mavvrik.settings import MavvrikSettings as _MavvrikSettings
+
+_CONFIG_KEY = _MavvrikSettings().config_key
+
+
+async def is_mavvrik_setup() -> bool:  # noqa: F401 — re-exported for any callers
+    return await _MavvrikSettings().is_setup()
+
+
+register_logger_and_job = MavvrikScheduler.register_exporter_and_job
+from litellm.integrations.mavvrik.client import MavvrikClient as MavvrikUploader
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 from litellm.proxy._types import CommonProxyErrors, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
