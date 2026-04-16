@@ -211,13 +211,15 @@ def get_image_dimensions(
         Tuple[int, int]: The width and height of the image.
     """
     img_data = None
-    try:
-        # Try to open as URL with SSRF protection
-        client = _get_httpx_client()
-        response = safe_get(client, data)
-        img_data = response.read()
-    except Exception:
-        # If not URL, assume it's base64
+    if data.startswith(("http://", "https://")):
+        try:
+            client = _get_httpx_client()
+            response = safe_get(client, data)
+            img_data = response.read()
+        except Exception:
+            pass
+    if img_data is None:
+        # Not a URL or fetch failed — assume base64
         _header, encoded = data.split(",", 1)
         img_data = base64.b64decode(encoded)
 
