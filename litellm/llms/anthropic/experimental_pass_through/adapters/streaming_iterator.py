@@ -201,7 +201,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
             self.sent_content_block_finish = True
             self.chunk_queue.append(processed_chunk)
         else:
-            self.chunk_queue.append(processed_chunk)
+            self._queue_transition_trigger_delta(self.chunk_queue, processed_chunk)
 
     async def _prime_async_first_content_block(self) -> None:
         from .transformation import LiteLLMAnthropicMessagesAdapter
@@ -281,7 +281,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
             self.sent_content_block_finish = True
             self.chunk_queue.append(processed_chunk)
         else:
-            self.chunk_queue.append(processed_chunk)
+            self._queue_transition_trigger_delta(self.chunk_queue, processed_chunk)
 
     def __next__(self):
         from .transformation import LiteLLMAnthropicMessagesAdapter
