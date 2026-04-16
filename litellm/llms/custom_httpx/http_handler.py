@@ -30,7 +30,9 @@ from litellm.constants import (
     AIOHTTP_KEEPALIVE_TIMEOUT,
     AIOHTTP_NEEDS_CLEANUP_CLOSED,
     AIOHTTP_TTL_DNS_CACHE,
+    COMPLETION_HTTP_FALLBACK_SECONDS,
     DEFAULT_SSL_CIPHERS,
+    HTTP_HANDLER_CONNECT_TIMEOUT_SECONDS,
 )
 from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
 from litellm.types.llms.custom_http import *
@@ -70,7 +72,10 @@ def get_default_headers() -> dict:
 headers = get_default_headers()
 
 # https://www.python-httpx.org/advanced/timeouts
-_DEFAULT_TIMEOUT = httpx.Timeout(timeout=5.0, connect=5.0)
+_DEFAULT_TIMEOUT = httpx.Timeout(
+    timeout=COMPLETION_HTTP_FALLBACK_SECONDS,
+    connect=HTTP_HANDLER_CONNECT_TIMEOUT_SECONDS,
+)
 
 
 def _prepare_request_data_and_content(
@@ -1244,7 +1249,7 @@ def get_async_httpx_client(
         _new_client = AsyncHTTPHandler(**handler_params)
     else:
         _new_client = AsyncHTTPHandler(
-            timeout=httpx.Timeout(timeout=600.0, connect=5.0),
+            timeout=_DEFAULT_TIMEOUT,
             shared_session=shared_session,
         )
 
@@ -1293,7 +1298,7 @@ def _get_httpx_client(params: Optional[dict] = None) -> HTTPHandler:
         }
         _new_client = HTTPHandler(**handler_params)
     else:
-        _new_client = HTTPHandler(timeout=httpx.Timeout(timeout=600.0, connect=5.0))
+        _new_client = HTTPHandler(timeout=_DEFAULT_TIMEOUT)
 
     cache.set_cache(
         key=_cache_key_name,
