@@ -220,7 +220,7 @@ def _make_handler(
             error = params.get("error", [None])[0]
             if error:
                 result["error"] = params.get("error_description", [error])[0]
-                self._respond_html(400, _ERROR_HTML.format(message=result["error"]))
+                self._respond_html(400, _ERROR_HTML.format(message=__import__('html').escape(result["error"])))
                 completed.set()
                 return
             state = params.get("state", [None])[0]
