@@ -61,12 +61,11 @@ class ContextCachingEndpoints(VertexBase):
         Returns
             token, url
         """
+        auth_header: Optional[str]
         if custom_llm_provider == "gemini":
             auth_header = {"x-goog-api-key": gemini_api_key}  # type: ignore[assignment]
             endpoint = "cachedContents"
-            url = "https://generativelanguage.googleapis.com/v1beta/{}".format(
-                endpoint
-            )
+            url = "https://generativelanguage.googleapis.com/v1beta/{}".format(endpoint)
         elif custom_llm_provider == "vertex_ai":
             auth_header = vertex_auth_header
             endpoint = "cachedContents"
@@ -93,9 +92,9 @@ class ContextCachingEndpoints(VertexBase):
             model=model,
             vertex_project=vertex_project,
             vertex_location=vertex_location,
-            vertex_api_version="v1beta1"
-            if custom_llm_provider == "vertex_ai_beta"
-            else "v1",
+            vertex_api_version=(
+                "v1beta1" if custom_llm_provider == "vertex_ai_beta" else "v1"
+            ),
         )
 
     def check_cache(
