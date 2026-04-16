@@ -125,7 +125,7 @@ general_settings:
   database_url: string
   database_connection_pool_limit: 0  # default 10
   database_connection_timeout: 0  # default 60s
-  allow_requests_on_db_unavailable: boolean  # if true, will allow requests that can not connect to the DB to verify Virtual Key to still work 
+  allow_requests_on_db_unavailable: boolean  # allow_requests_on_db_unavailable: if true, degrade gracefully on DB outages so requests may still run; virtual keys are not reliably verified against the DB. Use only on private, non-internet-exposed networks (e.g. VPC), not on public multi-tenant gateways.
 
   custom_auth: string
   max_parallel_requests: 0 # the max parallel requests allowed per deployment
