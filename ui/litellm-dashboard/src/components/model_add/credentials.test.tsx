@@ -1,4 +1,4 @@
-import { CredentialItem } from "@/components/networking";
+import { credentialCreateCall, CredentialItem } from "@/components/networking";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { UploadProps } from "antd/es/upload";
@@ -16,6 +16,29 @@ vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
 
 vi.mock("@/app/(dashboard)/hooks/credentials/useCredentials", () => ({
   useCredentials: () => mockUseCredentials(),
+  credentialsKeys: { all: ["credentials"] },
+}));
+
+vi.mock("@/components/networking", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/components/networking")>();
+  return {
+    ...actual,
+    credentialCreateCall: vi.fn(),
+  };
+});
+
+// Mock the modal to expose a direct submit trigger so tests don't need to
+// interact with Ant Design form internals and multi-step validation.
+vi.mock("./AddCredentialModal", () => ({
+  default: ({ open, onAddCredential }: any) =>
+    open ? (
+      <button
+        data-testid="mock-add-credential-submit"
+        onClick={() => onAddCredential({ credential_name: "test-cred", custom_llm_provider: "openai" })}
+      >
+        Submit Credential
+      </button>
+    ) : null,
 }));
 
 const createQueryClient = () =>
@@ -33,7 +56,6 @@ describe("CredentialsPanel", () => {
     mockUseAuthorized.mockReturnValue({ accessToken: "test-token" });
     mockUseCredentials.mockReturnValue({
       data: { credentials: [] },
-      refetch: vi.fn(),
     });
 
     render(
@@ -57,7 +79,6 @@ describe("CredentialsPanel", () => {
     mockUseAuthorized.mockReturnValue({ accessToken: "test-token" });
     mockUseCredentials.mockReturnValue({
       data: { credentials },
-      refetch: vi.fn(),
     });
 
     render(
@@ -73,7 +94,6 @@ describe("CredentialsPanel", () => {
     mockUseAuthorized.mockReturnValue({ accessToken: "test-token" });
     mockUseCredentials.mockReturnValue({
       data: { credentials: [] },
-      refetch: vi.fn(),
     });
 
     render(
@@ -89,7 +109,6 @@ describe("CredentialsPanel", () => {
     mockUseAuthorized.mockReturnValue({ accessToken: "test-token" });
     mockUseCredentials.mockReturnValue({
       data: { credentials: [] },
-      refetch: vi.fn(),
     });
 
     render(
@@ -105,7 +124,39 @@ describe("CredentialsPanel", () => {
     });
 
     await waitFor(() => {
-      expect(screen.getByText("Add New Credential")).toBeInTheDocument();
+      expect(screen.getByTestId("mock-add-credential-submit")).toBeInTheDocument();
+    });
+  });
+
+  it("should invalidate shared credentials cache after adding a credential", async () => {
+    const queryClient = createQueryClient();
+    const invalidateSpy = vi.spyOn(queryClient, "invalidateQueries").mockResolvedValue();
+
+    mockUseAuthorized.mockReturnValue({ accessToken: "test-token" });
+    mockUseCredentials.mockReturnValue({ data: { credentials: [] } });
+    (credentialCreateCall as ReturnType<typeof vi.fn>).mockResolvedValue({});
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <CredentialsPanel uploadProps={DEFAULT_UPLOAD_PROPS} />
+      </QueryClientProvider>,
+    );
+
+    // Open modal
+    act(() => {
+      fireEvent.click(screen.getByRole("button", { name: /add credential/i }));
+    });
+
+    // Trigger submission via the mocked modal's direct submit button
+    await waitFor(() => screen.getByTestId("mock-add-credential-submit"));
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("mock-add-credential-submit"));
+    });
+
+    await waitFor(() => {
+      expect(invalidateSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ queryKey: ["credentials"] }),
+      );
     });
   });
 });
