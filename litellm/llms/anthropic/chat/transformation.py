@@ -1473,20 +1473,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             **optional_params,
         }
 
-        ## Handle output_config (Anthropic-specific parameter)
-        if "output_config" in optional_params:
-            output_config = optional_params.get("output_config")
-            if output_config and isinstance(output_config, dict):
-                effort = output_config.get("effort")
-                if effort and effort not in ["high", "medium", "low", "max"]:
-                    raise ValueError(
-                        f"Invalid effort value: {effort}. Must be one of: 'high', 'medium', 'low', 'max'"
-                    )
-                if effort == "max" and not self._is_opus_4_6_model(model):
-                    raise ValueError(
-                        f"effort='max' is only supported by Claude Opus 4.6. Got model: {model}"
-                    )
-                data["output_config"] = output_config
+        self._apply_output_config(
+            data=data, model=model, optional_params=optional_params
+        )
 
         return data
 
