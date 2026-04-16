@@ -63,7 +63,7 @@ async def test_allm_passthrough_route_with_hosted_vllm_model_does_not_raise():
                     "model": "anything",  # will be replaced internally with normalized model
                     "messages": [{"role": "user", "content": "Hello"}],
                 },
-                client=client,
+                http_client=client,
             )
 
             # Then it should not raise and return a successful httpx.Response
