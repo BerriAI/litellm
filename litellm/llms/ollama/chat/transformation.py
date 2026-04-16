@@ -349,7 +349,7 @@ class OllamaChatConfig(BaseConfig):
         response_json = raw_response.json()
 
         ## RESPONSE OBJECT
-        _done_reason = response_json.get("done_reason", "stop")
+        _done_reason = response_json.get("done_reason") or "stop"
         model_response.choices[0].finish_reason = _done_reason
         response_json_message = response_json.get("message")
         if response_json_message is not None:
