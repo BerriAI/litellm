@@ -291,8 +291,6 @@ class Authenticator:
         sync_client = _get_httpx_client()
         max_attempts = 12  # 1 minute (12 * 5 seconds)
 
-        for attempt in range(max_attempts):
-            try:
         access_token_url = os.getenv(
             "GITHUB_COPILOT_ACCESS_TOKEN_URL", DEFAULT_GITHUB_ACCESS_TOKEN_URL
         )
