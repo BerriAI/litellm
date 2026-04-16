@@ -114,3 +114,190 @@ class TestValidateUrl:
         monkeypatch.setattr(litellm, "ssl_verify", True)
         rewritten, host = validate_url("https://example.com/image.png")
         assert rewritten == "https://example.com/image.png"
+
+
+class TestHostHeaderFormatting:
+    """RFC 7230 §5.4: IPv6 literals must be bracketed in the Host header."""
+
+    def test_ipv4_no_port(self, monkeypatch):
+        def fake(host, port, *a, **kw):
+            return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("1.2.3.4", port))]
+
+        monkeypatch.setattr(url_utils.socket, "getaddrinfo", fake)
+        _, host = validate_url("http://example.com/")
+        assert host == "example.com"
+
+    def test_ipv4_with_explicit_nondefault_port(self, monkeypatch):
+        def fake(host, port, *a, **kw):
+            return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("1.2.3.4", port))]
+
+        monkeypatch.setattr(url_utils.socket, "getaddrinfo", fake)
+        _, host = validate_url("http://example.com:8080/")
+        assert host == "example.com:8080"
+
+    def test_ipv4_with_explicit_default_port_strips_port(self, monkeypatch):
+        def fake(host, port, *a, **kw):
+            return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("1.2.3.4", port))]
+
+        monkeypatch.setattr(url_utils.socket, "getaddrinfo", fake)
+        _, host = validate_url("http://example.com:80/")
+        assert host == "example.com"
+
+    def test_ipv6_literal_is_bracketed_with_port(self, monkeypatch):
+        """Regression: IPv6 + port produced ambiguous `Host: 2001:db8::1:8080`."""
+        monkeypatch.setattr(litellm, "user_url_allowed_hosts", ["[2001:db8::1]"])
+
+        def fake(host, port, *a, **kw):
+            return [
+                (
+                    socket.AF_INET6,
+                    socket.SOCK_STREAM,
+                    6,
+                    "",
+                    ("2001:db8::1", port, 0, 0),
+                )
+            ]
+
+        monkeypatch.setattr(url_utils.socket, "getaddrinfo", fake)
+        _, host = validate_url("http://[2001:db8::1]:8080/")
+        assert host == "[2001:db8::1]:8080"
+
+    def test_ipv6_literal_is_bracketed_without_port(self, monkeypatch):
+        monkeypatch.setattr(litellm, "user_url_allowed_hosts", ["[2001:db8::1]"])
+
+        def fake(host, port, *a, **kw):
+            return [
+                (
+                    socket.AF_INET6,
+                    socket.SOCK_STREAM,
+                    6,
+                    "",
+                    ("2001:db8::1", port, 0, 0),
+                )
+            ]
+
+        monkeypatch.setattr(url_utils.socket, "getaddrinfo", fake)
+        _, host = validate_url("http://[2001:db8::1]/")
+        assert host == "[2001:db8::1]"
+
+
+class TestValidationMasterSwitch:
+    def test_disabled_bypasses_fetch_in_safe_get(self, monkeypatch):
+        """When user_url_validation is False, safe_get delegates to client.get without validation."""
+        monkeypatch.setattr(litellm, "user_url_validation", False)
+
+        calls = []
+
+        class FakeClient:
+            def get(self, url, **kwargs):
+                calls.append((url, kwargs))
+
+                class R:
+                    is_redirect = False
+
+                return R()
+
+        url_utils.safe_get(FakeClient(), "http://127.0.0.1/internal")
+        assert calls and calls[0][0] == "http://127.0.0.1/internal"
+        assert calls[0][1].get("follow_redirects") is True
+
+    def test_enabled_still_blocks(self, monkeypatch):
+        monkeypatch.setattr(litellm, "user_url_validation", True)
+        with pytest.raises(SSRFError):
+            validate_url("http://127.0.0.1/")
+
+
+class TestHostAllowlist:
+    def test_allowlisted_hostname_permits_private_ip(self, monkeypatch):
+        monkeypatch.setattr(litellm, "user_url_allowed_hosts", ["internal.corp"])
+
+        def fake(host, port, *a, **kw):
+            return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("10.0.1.5", port))]
+
+        monkeypatch.setattr(url_utils.socket, "getaddrinfo", fake)
+        rewritten, host = validate_url("http://internal.corp/path")
+        assert host == "internal.corp"
+        assert "10.0.1.5" in rewritten
+
+    def test_non_allowlisted_hostname_still_blocked(self, monkeypatch):
+        monkeypatch.setattr(litellm, "user_url_allowed_hosts", ["internal.corp"])
+
+        def fake(host, port, *a, **kw):
+            return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("10.0.1.5", port))]
+
+        monkeypatch.setattr(url_utils.socket, "getaddrinfo", fake)
+        with pytest.raises(SSRFError):
+            validate_url("http://other.corp/")
+
+    def test_allowlist_case_insensitive(self, monkeypatch):
+        monkeypatch.setattr(litellm, "user_url_allowed_hosts", ["Internal.Corp"])
+
+        def fake(host, port, *a, **kw):
+            return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("10.0.1.5", port))]
+
+        monkeypatch.setattr(url_utils.socket, "getaddrinfo", fake)
+        rewritten, _ = validate_url("http://internal.corp/")
+        assert "10.0.1.5" in rewritten
+
+    def test_allowlist_with_port_matches_explicit_port(self, monkeypatch):
+        monkeypatch.setattr(litellm, "user_url_allowed_hosts", ["internal.corp:8080"])
+
+        def fake(host, port, *a, **kw):
+            return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("10.0.1.5", port))]
+
+        monkeypatch.setattr(url_utils.socket, "getaddrinfo", fake)
+        rewritten, host = validate_url("http://internal.corp:8080/")
+        assert host == "internal.corp:8080"
+        assert "10.0.1.5" in rewritten
+
+    def test_allowlist_with_port_matches_default_port(self, monkeypatch):
+        """Admin entry `host:443` matches `https://host/` (port=None, default 443)."""
+        monkeypatch.setattr(litellm, "user_url_allowed_hosts", ["internal.corp:443"])
+
+        def fake(host, port, *a, **kw):
+            return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("10.0.1.5", port))]
+
+        monkeypatch.setattr(url_utils.socket, "getaddrinfo", fake)
+        # Should succeed — no SSRFError raised
+        validate_url("https://internal.corp/")
+
+    def test_allowlist_port_specific_does_not_match_other_port(self, monkeypatch):
+        monkeypatch.setattr(litellm, "user_url_allowed_hosts", ["internal.corp:8080"])
+
+        def fake(host, port, *a, **kw):
+            return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("10.0.1.5", port))]
+
+        monkeypatch.setattr(url_utils.socket, "getaddrinfo", fake)
+        with pytest.raises(SSRFError):
+            validate_url("http://internal.corp:9090/")
+
+    def test_allowlist_host_entry_matches_any_port(self, monkeypatch):
+        monkeypatch.setattr(litellm, "user_url_allowed_hosts", ["internal.corp"])
+
+        def fake(host, port, *a, **kw):
+            return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("10.0.1.5", port))]
+
+        monkeypatch.setattr(url_utils.socket, "getaddrinfo", fake)
+        validate_url("http://internal.corp:9090/")
+        validate_url("https://internal.corp:8443/")
+
+    def test_allowlist_permits_loopback(self, monkeypatch):
+        """Admin may opt into loopback if they explicitly configure it."""
+        monkeypatch.setattr(litellm, "user_url_allowed_hosts", ["localhost"])
+        # localhost resolves locally without needing mocks
+        rewritten, host = validate_url("http://localhost:8080/")
+        assert host == "localhost:8080"
+
+    def test_empty_allowlist_retains_default_deny(self, monkeypatch):
+        monkeypatch.setattr(litellm, "user_url_allowed_hosts", [])
+        with pytest.raises(SSRFError):
+            validate_url("http://127.0.0.1/")
+
+    def test_allowlist_strips_trailing_dot(self, monkeypatch):
+        monkeypatch.setattr(litellm, "user_url_allowed_hosts", ["internal.corp."])
+
+        def fake(host, port, *a, **kw):
+            return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("10.0.1.5", port))]
+
+        monkeypatch.setattr(url_utils.socket, "getaddrinfo", fake)
+        validate_url("http://internal.corp/")
