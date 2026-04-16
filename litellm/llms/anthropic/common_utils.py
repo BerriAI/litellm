@@ -256,6 +256,27 @@ class AnthropicModelInfo(BaseLLMModelInfo):
             )
         )
 
+    @staticmethod
+    def _is_claude_4_7_model(model: str) -> bool:
+        """Check if the model is a Claude 4.7 model (Opus 4.7)."""
+        model_lower = model.lower()
+        return any(
+            v in model_lower
+            for v in (
+                "opus-4-7",
+                "opus_4_7",
+                "opus-4.7",
+                "opus_4.7",
+            )
+        )
+
+    @staticmethod
+    def _is_adaptive_thinking_model(model: str) -> bool:
+        """Claude 4.6+ models use adaptive thinking with output_config effort."""
+        return AnthropicModelInfo._is_claude_4_6_model(
+            model
+        ) or AnthropicModelInfo._is_claude_4_7_model(model)
+
     def is_effort_used(
         self, optional_params: Optional[dict], model: Optional[str] = None
     ) -> bool:
@@ -263,14 +284,14 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         Check if effort parameter is being used and requires a beta header.
 
         Returns True if effort-related parameters are present and
-        the model requires the effort beta header. Claude 4.6 models
+        the model requires the effort beta header. Claude 4.6+ models
         use output_config as a stable API feature — no beta header needed.
         """
         if not optional_params:
             return False
 
-        # Claude 4.6 models use output_config as a stable API feature — no beta header needed
-        if model and self._is_claude_4_6_model(model):
+        # Claude 4.6+ models use output_config as a stable API feature — no beta header needed
+        if model and self._is_adaptive_thinking_model(model):
             return False
 
         # Check if reasoning_effort is provided for Claude Opus 4.5
