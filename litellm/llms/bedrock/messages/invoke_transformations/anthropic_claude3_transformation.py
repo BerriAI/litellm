@@ -125,7 +125,7 @@ class AmazonAnthropicClaudeMessagesConfig(
         - `scope` (e.g., "global") - always removed
         - `ttl` - removed for older models; Claude 4.5+ supports "5m" and "1h"
 
-        Processes both `system` and `messages` content blocks.
+        Processes `tools`, `system`, and `messages` content blocks.
 
         Args:
             anthropic_messages_request: The request dictionary to modify in-place
@@ -151,6 +151,12 @@ class AmazonAnthropicClaudeMessagesConfig(
             for item in content:
                 if isinstance(item, dict) and "cache_control" in item:
                     _sanitize_cache_control(item["cache_control"])
+
+        # Process tools
+        if "tools" in anthropic_messages_request:
+            for tool in anthropic_messages_request["tools"]:
+                if isinstance(tool, dict) and "cache_control" in tool:
+                    _sanitize_cache_control(tool["cache_control"])
 
         # Process system (list of content blocks)
         if "system" in anthropic_messages_request:
@@ -394,9 +400,9 @@ class AmazonAnthropicClaudeMessagesConfig(
 
         # 1. anthropic_version is required for all claude models
         if "anthropic_version" not in anthropic_messages_request:
-            anthropic_messages_request[
-                "anthropic_version"
-            ] = self.DEFAULT_BEDROCK_ANTHROPIC_API_VERSION
+            anthropic_messages_request["anthropic_version"] = (
+                self.DEFAULT_BEDROCK_ANTHROPIC_API_VERSION
+            )
 
         # 2. `stream` is not allowed in request body for bedrock invoke
         if "stream" in anthropic_messages_request:
@@ -573,7 +579,9 @@ class AmazonAnthropicClaudeMessagesConfig(
 
                 raw_input = stop_usage.get("input_tokens")
                 if raw_input is not None:
-                    delta_usage["input_tokens"] = raw_input if isinstance(raw_input, int) else 0
+                    delta_usage["input_tokens"] = (
+                        raw_input if isinstance(raw_input, int) else 0
+                    )
 
                 if delta_usage:
                     pending_delta["usage"] = delta_usage  # type: ignore[arg-type]

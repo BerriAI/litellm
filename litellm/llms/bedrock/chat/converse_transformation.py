@@ -1293,7 +1293,7 @@ class AmazonConverseConfig(BaseConfig):
             )
 
             # Process regular function tools using existing logic
-            bedrock_tools = _bedrock_tools_pt(regular_tools)
+            bedrock_tools = _bedrock_tools_pt(regular_tools, model=model)
 
             # Add computer use tools and anthropic_beta if needed (only when computer use tools are present)
             if computer_use_tools:
@@ -1357,7 +1357,7 @@ class AmazonConverseConfig(BaseConfig):
                 additional_request_params["tools"] = transformed_computer_tools
         else:
             # No computer use tools, process all tools as regular tools
-            bedrock_tools = _bedrock_tools_pt(filtered_tools)
+            bedrock_tools = _bedrock_tools_pt(filtered_tools, model=model)
 
         # Append pre-formatted tools (systemTool etc.) after transformation
         bedrock_tools.extend(pre_formatted_tools)
@@ -1744,9 +1744,7 @@ class AmazonConverseConfig(BaseConfig):
 
         return message, returned_finish_reason
 
-    def _translate_message_content(
-        self, content_blocks: List[ContentBlock]
-    ) -> Tuple[
+    def _translate_message_content(self, content_blocks: List[ContentBlock]) -> Tuple[
         str,
         List[ChatCompletionToolCallChunk],
         Optional[List[BedrockConverseReasoningContentBlock]],
@@ -1763,9 +1761,9 @@ class AmazonConverseConfig(BaseConfig):
         """
         content_str = ""
         tools: List[ChatCompletionToolCallChunk] = []
-        reasoningContentBlocks: Optional[
-            List[BedrockConverseReasoningContentBlock]
-        ] = None
+        reasoningContentBlocks: Optional[List[BedrockConverseReasoningContentBlock]] = (
+            None
+        )
         citationsContentBlocks: Optional[List[CitationsContentBlock]] = None
         for idx, content in enumerate(content_blocks):
             """
@@ -1976,9 +1974,9 @@ class AmazonConverseConfig(BaseConfig):
         chat_completion_message: ChatCompletionResponseMessage = {"role": "assistant"}
         content_str = ""
         tools: List[ChatCompletionToolCallChunk] = []
-        reasoningContentBlocks: Optional[
-            List[BedrockConverseReasoningContentBlock]
-        ] = None
+        reasoningContentBlocks: Optional[List[BedrockConverseReasoningContentBlock]] = (
+            None
+        )
         citationsContentBlocks: Optional[List[CitationsContentBlock]] = None
 
         if message is not None:
@@ -1997,17 +1995,17 @@ class AmazonConverseConfig(BaseConfig):
             provider_specific_fields["citationsContent"] = citationsContentBlocks
 
         if provider_specific_fields:
-            chat_completion_message[
-                "provider_specific_fields"
-            ] = provider_specific_fields
+            chat_completion_message["provider_specific_fields"] = (
+                provider_specific_fields
+            )
 
         if reasoningContentBlocks is not None:
-            chat_completion_message[
-                "reasoning_content"
-            ] = self._transform_reasoning_content(reasoningContentBlocks)
-            chat_completion_message[
-                "thinking_blocks"
-            ] = self._transform_thinking_blocks(reasoningContentBlocks)
+            chat_completion_message["reasoning_content"] = (
+                self._transform_reasoning_content(reasoningContentBlocks)
+            )
+            chat_completion_message["thinking_blocks"] = (
+                self._transform_thinking_blocks(reasoningContentBlocks)
+            )
         chat_completion_message["content"] = content_str
         filtered_tools = self._filter_json_mode_tools(
             json_mode=json_mode,
