@@ -2647,6 +2647,8 @@ class StandardLoggingAdditionalHeaders(TypedDict, total=False):
     x_ratelimit_limit_tokens: int
     x_ratelimit_remaining_requests: int
     x_ratelimit_remaining_tokens: int
+    x_ratelimit_reset_requests: str
+    x_ratelimit_reset_tokens: str
 
 
 class StandardLoggingHiddenParams(TypedDict):
