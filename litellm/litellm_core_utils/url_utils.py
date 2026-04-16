@@ -170,7 +170,7 @@ def validate_url(url: str) -> Tuple[str, str]:
     is_ipv6 = addrinfo[0][0] == socket.AF_INET6
     ip_host = f"[{validated_ip}]" if is_ipv6 else validated_ip
 
-    if port:
+    if port is not None:
         new_netloc = f"{ip_host}:{port}"
     else:
         new_netloc = ip_host
