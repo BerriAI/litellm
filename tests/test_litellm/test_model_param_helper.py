@@ -57,6 +57,6 @@ def test_get_all_llm_api_params_includes_responses_api():
         "safety_identifier",
     }
     missing = responses_only_params - all_params
-    assert missing == set(), (
-        f"Responses-API kwargs missing from cache-key allow-list: {sorted(missing)}"
-    )
+    assert (
+        missing == set()
+    ), f"Responses-API kwargs missing from cache-key allow-list: {sorted(missing)}"
