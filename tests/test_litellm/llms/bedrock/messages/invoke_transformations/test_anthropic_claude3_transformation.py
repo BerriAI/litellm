@@ -429,7 +429,10 @@ def test_bedrock_invoke_messages_skips_thinking_injection_when_already_enabled()
         litellm_params=GenericLiteLLMParams(),
         headers={},
     )
-    assert result["thinking"]["budget_tokens"] == 2048
+    # Claude 4.6/4.7 reject ``thinking.type=enabled``; legacy ``enabled`` is
+    # translated to ``adaptive`` (budget_tokens => output_config.effort) and the
+    # pre-4.6 ``interleaved-thinking-2025-05-14`` beta must not be attached.
+    assert result["thinking"]["type"] == "adaptive"
     betas = result.get("anthropic_beta") or []
     assert "interleaved-thinking-2025-05-14" not in betas
 
