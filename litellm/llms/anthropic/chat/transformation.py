@@ -61,6 +61,7 @@ from litellm.types.utils import (
 from litellm.utils import (
     ModelResponse,
     Usage,
+    _supports_factory,
     add_dummy_tool,
     any_assistant_message_has_thinking_blocks,
     get_max_tokens,
@@ -175,6 +176,30 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         """Check if the model is Claude Opus 4.5."""
         return "opus-4-6" in model.lower() or "opus_4_6" in model.lower()
 
+    @staticmethod
+    def _is_opus_4_7_model(model: str) -> bool:
+        """Check if the model is specifically Claude Opus 4.7."""
+        model_lower = model.lower()
+        return any(
+            v in model_lower for v in ("opus-4-7", "opus_4_7", "opus-4.7", "opus_4.7")
+        )
+
+    @staticmethod
+    def _supports_effort_level(model: str, level: str) -> bool:
+        """Check ``supports_{level}_reasoning_effort`` in the model map.
+
+        Mirrors the pattern used in ``openai/chat/gpt_5_transformation.py`` so
+        that adding support for a new effort level is a pure model-map change.
+        """
+        try:
+            return _supports_factory(
+                model=model,
+                custom_llm_provider="anthropic",
+                key=f"supports_{level}_reasoning_effort",
+            )
+        except Exception:
+            return False
+
     def get_supported_openai_params(self, model: str):
         params = [
             "stream",
@@ -193,9 +218,14 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             "speed",
         ]
 
-        if "claude-3-7-sonnet" in model or supports_reasoning(
-            model=model,
-            custom_llm_provider=self.custom_llm_provider,
+        if (
+            "claude-3-7-sonnet" in model
+            or AnthropicConfig._is_claude_4_6_model(model)
+            or AnthropicConfig._is_claude_4_7_model(model)
+            or supports_reasoning(
+                model=model,
+                custom_llm_provider=self.custom_llm_provider,
+            )
         ):
             params.append("thinking")
             params.append("reasoning_effort")
@@ -710,7 +740,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
     ) -> Optional[AnthropicThinkingParam]:
         if reasoning_effort is None or reasoning_effort == "none":
             return None
-        if AnthropicConfig._is_claude_opus_4_6(model):
+        if AnthropicConfig._is_claude_4_6_model(
+            model
+        ) or AnthropicConfig._is_claude_4_7_model(model):
             return AnthropicThinkingParam(
                 type="adaptive",
             )
@@ -881,6 +913,12 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                         "opus-4-5",
                         "opus-4.6",
                         "opus-4-6",
+                        "opus-4.7",
+                        "opus-4-7",
+                        "sonnet-4.6",
+                        "sonnet-4-6",
+                        "sonnet_4.6",
+                        "sonnet_4_6",
                     }
                 ):
                     _output_format = (
@@ -918,6 +956,21 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 optional_params["thinking"] = AnthropicConfig._map_reasoning_effort(
                     reasoning_effort=value, model=model
                 )
+                # For Claude 4.6+ models, effort is controlled via output_config,
+                # not thinking budget_tokens. Map reasoning_effort to output_config.
+                if AnthropicConfig._is_claude_4_6_model(
+                    model
+                ) or AnthropicConfig._is_claude_4_7_model(model):
+                    effort_map = {
+                        "low": "low",
+                        "minimal": "low",
+                        "medium": "medium",
+                        "high": "high",
+                        "xhigh": "xhigh",
+                        "max": "max",
+                    }
+                    mapped_effort = effort_map.get(value, value)
+                    optional_params["output_config"] = {"effort": mapped_effort}
             elif param == "web_search_options" and isinstance(value, dict):
                 hosted_web_search_tool = self.map_web_search_tool(
                     cast(OpenAIWebSearchOptions, value)
@@ -1289,6 +1342,37 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 data["output_config"] = output_config
 
         return data
+
+    def _apply_output_config(
+        self, data: dict, model: str, optional_params: dict
+    ) -> None:
+        """Validate and apply output_config to the request data."""
+        if "output_config" not in optional_params:
+            return
+        output_config = optional_params.get("output_config")
+        if not output_config or not isinstance(output_config, dict):
+            return
+        effort = output_config.get("effort")
+        valid_efforts = ["high", "medium", "low", "xhigh", "max"]
+        if effort and effort not in valid_efforts:
+            raise ValueError(
+                f"Invalid effort value: {effort}. Must be one of: "
+                f"'high', 'medium', 'low', 'xhigh', 'max'"
+            )
+        # ``max`` is Claude Opus 4.6 only (not Sonnet 4.6, not Opus 4.5/4.7).
+        # Keep this hardcoded so the error message is specific and stable.
+        if effort == "max" and not self._is_opus_4_6_model(model):
+            raise ValueError(
+                f"effort='max' is only supported by Claude Opus 4.6. "
+                f"Got model: {model}"
+            )
+        # ``xhigh`` is data-driven via ``supports_xhigh_reasoning_effort`` so
+        # enabling it for a new model is a pure model-map change.
+        if effort == "xhigh" and not self._supports_effort_level(model, "xhigh"):
+            raise ValueError(
+                f"effort='xhigh' is not supported by this model. Got model: {model}"
+            )
+        data["output_config"] = output_config
 
     def _transform_response_for_json_mode(
         self,
