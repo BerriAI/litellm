@@ -19,7 +19,8 @@ Configuration can be loaded from:
 
 Environment Variables:
 - LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS: Set to "True" to disable remote fetching
-- LITELLM_ANTHROPIC_BETA_HEADERS_URL: Custom URL for remote config (optional)
+- LITELLM_EXTRA_ANTHROPIC_BETA_HEADERS: Comma-separated extra anthropic-beta values to
+  unconditionally inject with highest priority (bypass provider-mapping filtering)
 """
 
 import json
@@ -337,6 +338,15 @@ def update_headers_with_filtered_beta(
     Update headers dict by filtering and transforming anthropic-beta header values.
     Modifies the headers dict in place and returns it.
 
+    Extra beta values can be injected via the ``LITELLM_EXTRA_ANTHROPIC_BETA_HEADERS``
+    environment variable (comma-separated).  These values are always included in the
+    final header and bypass provider-mapping filtering — they have the highest
+    priority and are prepended before the filtered values.
+
+    Environment Variables:
+        LITELLM_EXTRA_ANTHROPIC_BETA_HEADERS: Comma-separated list of extra anthropic-beta
+            values to unconditionally add (e.g. "my-beta-1,my-beta-2").
+
     Args:
         headers: Request headers dict (will be modified in place)
         provider: Provider name
@@ -345,11 +355,16 @@ def update_headers_with_filtered_beta(
         Updated headers dict
     """
     existing_beta = headers.get("anthropic-beta")
-    if not existing_beta:
+
+    # Read extra beta headers from environment variable (highest priority, bypass filtering)
+    env_beta_raw = os.getenv("LITELLM_EXTRA_ANTHROPIC_BETA_HEADERS", "")
+    env_beta_values = [b.strip() for b in env_beta_raw.split(",") if b.strip()]
+
+    if not existing_beta and not env_beta_values:
         return headers
 
     # Parse existing beta headers
-    beta_values = [b.strip() for b in existing_beta.split(",") if b.strip()]
+    beta_values = [b.strip() for b in existing_beta.split(",") if b.strip()] if existing_beta else []
 
     # Filter and transform based on provider
     filtered_beta_values = filter_and_transform_beta_headers(
@@ -357,9 +372,14 @@ def update_headers_with_filtered_beta(
         provider=provider,
     )
 
+    # Merge: env var values come first (highest priority, always included, bypass filtering),
+    # followed by provider-filtered values.  dict.fromkeys preserves insertion order and
+    # deduplicates so env var entries are never overwritten by a filtered duplicate.
+    merged = list(dict.fromkeys(env_beta_values + filtered_beta_values))
+
     # Update or remove the header
-    if filtered_beta_values:
-        headers["anthropic-beta"] = ",".join(filtered_beta_values)
+    if merged:
+        headers["anthropic-beta"] = ",".join(merged)
     else:
         # Remove the header if no values remain
         headers.pop("anthropic-beta", None)
