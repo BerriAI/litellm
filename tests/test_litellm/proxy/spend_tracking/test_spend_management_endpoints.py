@@ -456,35 +456,41 @@ async def test_ui_view_spend_logs_with_user_id(client, monkeypatch):
         "litellm.proxy.proxy_server.prisma_client",
         make_ui_spend_logs_mock_prisma(mock_spend_logs, filter_by_user),
     )
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin_user"
+    )
 
     start_date, end_date = _default_date_range()
 
-    # Make the request with user_id filter
-    response = client.get(
-        "/spend/logs/ui",
-        params={
-            "user_id": "test_user_1",
-            "start_date": start_date,
-            "end_date": end_date,
-        },
-        headers={"Authorization": "Bearer sk-test"},
-    )
+    try:
+        # Make the request with user_id filter
+        response = client.get(
+            "/spend/logs/ui",
+            params={
+                "user_id": "test_user_1",
+                "start_date": start_date,
+                "end_date": end_date,
+            },
+            headers={"Authorization": "Bearer sk-test"},
+        )
 
-    # Assert response
-    assert response.status_code == 200
-    data = response.json()
+        # Assert response
+        assert response.status_code == 200
+        data = response.json()
 
-    # Verify the response structure
-    assert "data" in data
-    assert "total" in data
-    assert "page" in data
-    assert "page_size" in data
-    assert "total_pages" in data
+        # Verify the response structure
+        assert "data" in data
+        assert "total" in data
+        assert "page" in data
+        assert "page_size" in data
+        assert "total_pages" in data
 
-    # Verify the filtered data
-    assert data["total"] == 1
-    assert len(data["data"]) == 1
-    assert data["data"][0]["user"] == "test_user_1"
+        # Verify the filtered data
+        assert data["total"] == 1
+        assert len(data["data"]) == 1
+        assert data["data"][0]["user"] == "test_user_1"
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
 
 
 # Mock spend logs with distinct values for sorting tests.

@@ -38,6 +38,7 @@ from litellm.constants import (
     MCP_METADATA_TIMEOUT,
     MCP_NPM_CACHE_DIR,
     MCP_STDIO_ALLOWED_COMMANDS,
+    MCP_UV_CACHE_DIR,
     MCP_TOOL_LISTING_TIMEOUT,
 )
 from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
@@ -1123,6 +1124,11 @@ class MCPServerManager:
             # or be read-only, causing npx to fail with ENOENT.
             if "NPM_CONFIG_CACHE" not in resolved_env:
                 resolved_env["NPM_CONFIG_CACHE"] = MCP_NPM_CACHE_DIR
+            # Ensure uvx-based STDIO MCP servers have a writable cache dir.
+            # In containers the default (~/.cache/uv) may not exist
+            # or be read-only, causing uvx to fail when downloading packages.
+            if "UV_CACHE_DIR" not in resolved_env:
+                resolved_env["UV_CACHE_DIR"] = MCP_UV_CACHE_DIR
             # Defense-in-depth: block commands not in the allowlist.
             # The Pydantic validator blocks new servers; this catches legacy
             # config/DB records predating the allowlist.

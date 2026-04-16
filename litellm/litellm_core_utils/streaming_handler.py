@@ -127,9 +127,9 @@ class CustomStreamWrapper:
 
         self.system_fingerprint: Optional[str] = None
         self.received_finish_reason: Optional[str] = None
-        self.intermittent_finish_reason: Optional[
-            str
-        ] = None  # finish reasons that show up mid-stream
+        self.intermittent_finish_reason: Optional[str] = (
+            None  # finish reasons that show up mid-stream
+        )
         self.special_tokens = [
             "<|assistant|>",
             "<|system|>",
@@ -835,6 +835,12 @@ class CustomStreamWrapper:
                 getattr(model_response.choices[0].delta, "reasoning_items", None)
                 is not None
             )
+            or (
+                not self.sent_first_chunk
+                and hasattr(model_response.choices[0].delta, "role")
+                and model_response.choices[0].delta.role is not None
+                and self.custom_llm_provider in ("azure", "azure_ai")
+            )
         ):
             return True
         else:
@@ -1524,9 +1530,9 @@ class CustomStreamWrapper:
                                                 t.function.arguments = ""
                             _json_delta = delta.model_dump()
                             if "role" not in _json_delta or _json_delta["role"] is None:
-                                _json_delta[
-                                    "role"
-                                ] = "assistant"  # mistral's api returns role as None
+                                _json_delta["role"] = (
+                                    "assistant"  # mistral's api returns role as None
+                                )
                             if "tool_calls" in _json_delta and isinstance(
                                 _json_delta["tool_calls"], list
                             ):
@@ -1564,6 +1570,7 @@ class CustomStreamWrapper:
                         self.stream_options is not None
                         and self.stream_options["include_usage"] is True
                     ):
+                        model_response.choices = []
                         return model_response
                     return
             ## CHECK FOR TOOL USE
@@ -1863,11 +1870,14 @@ class CustomStreamWrapper:
                             response,
                             cache_hit,
                         )  # log response
-                    choice = response.choices[0]
-                    if isinstance(choice, StreamingChoices):
-                        self.response_uptil_now += choice.delta.get("content", "") or ""
-                    else:
-                        self.response_uptil_now += ""
+                    if response.choices:
+                        choice = response.choices[0]
+                        if isinstance(choice, StreamingChoices):
+                            self.response_uptil_now += (
+                                choice.delta.get("content", "") or ""
+                            )
+                        else:
+                            self.response_uptil_now += ""
                     self.rules.post_call_rules(
                         input=self.response_uptil_now, model=self.model
                     )
@@ -1875,7 +1885,7 @@ class CustomStreamWrapper:
                     self.chunks.append(response)
 
                     # Add mcp_list_tools to first chunk if present
-                    if not self.sent_first_chunk:
+                    if not self.sent_first_chunk and response.choices:
                         response = self._add_mcp_list_tools_to_first_chunk(response)
                         self.sent_first_chunk = True
 
@@ -2043,16 +2053,19 @@ class CustomStreamWrapper:
                             completion_start_time=datetime.datetime.now()
                         )
 
-                    choice = processed_chunk.choices[0]
-                    if isinstance(choice, StreamingChoices):
-                        self.response_uptil_now += choice.delta.get("content", "") or ""
-                    else:
-                        self.response_uptil_now += ""
+                    if processed_chunk.choices:
+                        choice = processed_chunk.choices[0]
+                        if isinstance(choice, StreamingChoices):
+                            self.response_uptil_now += (
+                                choice.delta.get("content", "") or ""
+                            )
+                        else:
+                            self.response_uptil_now += ""
                     self.rules.post_call_rules(
                         input=self.response_uptil_now, model=self.model
                     )
                     # Add mcp_list_tools to first chunk if present
-                    if not self.sent_first_chunk:
+                    if not self.sent_first_chunk and processed_chunk.choices:
                         processed_chunk = self._add_mcp_list_tools_to_first_chunk(
                             processed_chunk
                         )

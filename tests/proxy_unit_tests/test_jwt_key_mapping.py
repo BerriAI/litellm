@@ -425,3 +425,421 @@ async def test_create_success_returns_response_without_token():
         assert isinstance(result, JWTKeyMappingResponse)
         assert "token" not in result.model_fields
         assert result.jwt_claim_name == "email"
+
+
+# ──────────────────────────────────────────────
+# Tests: unregistered_jwt_client_behavior
+# ──────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_reject_behavior_raises_403_on_no_mapping():
+    """
+    When unregistered_jwt_client_behavior='reject' and no mapping exists,
+    _resolve_jwt_to_virtual_key must raise HTTP 403.
+    """
+    from litellm.proxy._types import UnregisteredJWTClientBehavior
+
+    jwt_handler = JWTHandler()
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(
+        virtual_key_claim_field="email",
+        unregistered_jwt_client_behavior=UnregisteredJWTClientBehavior.REJECT,
+    )
+    jwt_claims = {"email": "unknown@example.com"}
+
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_jwtkeymapping.find_first = AsyncMock(return_value=None)
+
+    user_api_key_cache = DualCache()
+
+    with patch("litellm.proxy.auth.user_api_key_auth.get_key_object", new_callable=AsyncMock):
+        with pytest.raises(HTTPException) as exc_info:
+            await _resolve_jwt_to_virtual_key(
+                jwt_claims=jwt_claims,
+                jwt_handler=jwt_handler,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                parent_otel_span=None,
+                proxy_logging_obj=None,
+            )
+        assert exc_info.value.status_code == 403
+        assert "unknown@example.com" in exc_info.value.detail
+
+
+@pytest.mark.asyncio
+async def test_reject_behavior_caches_sentinel_after_db_miss():
+    """
+    On a fresh DB miss with REJECT, the __NO_MAPPING__ sentinel must be written
+    to cache so that subsequent rejected requests are served from cache and do
+    not re-query the DB.
+    """
+    from litellm.proxy._types import UnregisteredJWTClientBehavior
+
+    jwt_handler = JWTHandler()
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(
+        virtual_key_claim_field="email",
+        unregistered_jwt_client_behavior=UnregisteredJWTClientBehavior.REJECT,
+        virtual_key_mapping_cache_ttl=300,
+    )
+    jwt_claims = {"email": "unknown@example.com"}
+
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_jwtkeymapping.find_first = AsyncMock(return_value=None)
+
+    user_api_key_cache = DualCache()
+
+    with patch("litellm.proxy.auth.user_api_key_auth.get_key_object", new_callable=AsyncMock):
+        # First call — DB miss, should raise 403 and write sentinel
+        with pytest.raises(HTTPException) as exc_info:
+            await _resolve_jwt_to_virtual_key(
+                jwt_claims=jwt_claims,
+                jwt_handler=jwt_handler,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                parent_otel_span=None,
+                proxy_logging_obj=None,
+            )
+        assert exc_info.value.status_code == 403
+
+        # Sentinel must now be in cache
+        cached = await user_api_key_cache.async_get_cache(
+            "jwt_key_mapping:email:unknown@example.com"
+        )
+        assert cached == "__NO_MAPPING__"
+
+        # Second call — must raise 403 from cache, no additional DB hit
+        prisma_client.db.litellm_jwtkeymapping.find_first.reset_mock()
+        with pytest.raises(HTTPException) as exc_info2:
+            await _resolve_jwt_to_virtual_key(
+                jwt_claims=jwt_claims,
+                jwt_handler=jwt_handler,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                parent_otel_span=None,
+                proxy_logging_obj=None,
+            )
+        assert exc_info2.value.status_code == 403
+        prisma_client.db.litellm_jwtkeymapping.find_first.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_reject_behavior_raises_403_on_cached_no_mapping():
+    """
+    When the negative-cache sentinel __NO_MAPPING__ is present and behavior is
+    'reject', the function must also raise HTTP 403 (not return None silently).
+    """
+    from litellm.proxy._types import UnregisteredJWTClientBehavior
+
+    jwt_handler = JWTHandler()
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(
+        virtual_key_claim_field="email",
+        unregistered_jwt_client_behavior=UnregisteredJWTClientBehavior.REJECT,
+    )
+    jwt_claims = {"email": "unknown@example.com"}
+
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_jwtkeymapping.find_first = AsyncMock(return_value=None)
+
+    # Pre-populate the negative cache so the DB is not hit
+    user_api_key_cache = DualCache()
+    cache_key = "jwt_key_mapping:email:unknown@example.com"
+    await user_api_key_cache.async_set_cache(cache_key, "__NO_MAPPING__")
+
+    with patch("litellm.proxy.auth.user_api_key_auth.get_key_object", new_callable=AsyncMock):
+        with pytest.raises(HTTPException) as exc_info:
+            await _resolve_jwt_to_virtual_key(
+                jwt_claims=jwt_claims,
+                jwt_handler=jwt_handler,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                parent_otel_span=None,
+                proxy_logging_obj=None,
+            )
+        assert exc_info.value.status_code == 403
+        # DB must NOT have been hit (sentinel served from cache)
+        prisma_client.db.litellm_jwtkeymapping.find_first.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_auto_register_creates_key_and_mapping():
+    """
+    When unregistered_jwt_client_behavior='auto_register' and no mapping exists,
+    _resolve_jwt_to_virtual_key must create a key + mapping row and return a
+    UserAPIKeyAuth object.
+    """
+    from litellm.proxy._types import UnregisteredJWTClientBehavior
+
+    jwt_handler = JWTHandler()
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(
+        virtual_key_claim_field="sub",
+        unregistered_jwt_client_behavior=UnregisteredJWTClientBehavior.AUTO_REGISTER,
+        virtual_key_mapping_cache_ttl=300,
+    )
+    jwt_claims = {"sub": "new-user-42"}
+
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_jwtkeymapping.find_first = AsyncMock(return_value=None)
+    prisma_client.db.litellm_jwtkeymapping.create = AsyncMock()
+
+    user_api_key_cache = DualCache()
+    mock_key_obj = UserAPIKeyAuth(token="hashed_auto_key", team_id=None)
+
+    with patch(
+        "litellm.proxy.auth.user_api_key_auth.get_key_object", new_callable=AsyncMock
+    ) as mock_get_key, patch(
+        "litellm.proxy.management_endpoints.key_management_endpoints.generate_key_helper_fn",
+        new_callable=AsyncMock,
+    ) as mock_gen_key:
+        mock_gen_key.return_value = {"token": "hashed_auto_key", "key": "sk-auto-key"}
+        mock_get_key.return_value = mock_key_obj
+
+        result = await _resolve_jwt_to_virtual_key(
+            jwt_claims=jwt_claims,
+            jwt_handler=jwt_handler,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            parent_otel_span=None,
+            proxy_logging_obj=None,
+        )
+
+    assert result == mock_key_obj
+    # Mapping row must have been created
+    prisma_client.db.litellm_jwtkeymapping.create.assert_called_once()
+    call_data = prisma_client.db.litellm_jwtkeymapping.create.call_args[1]["data"]
+    assert call_data["jwt_claim_name"] == "sub"
+    assert call_data["jwt_claim_value"] == "new-user-42"
+    assert call_data["token"] == "hashed_auto_key"
+    # Cache must now hold the token hash
+    cached = await user_api_key_cache.async_get_cache("jwt_key_mapping:sub:new-user-42")
+    assert cached == "hashed_auto_key"
+
+
+@pytest.mark.asyncio
+async def test_auto_register_triggers_on_stale_no_mapping_sentinel():
+    """
+    If the cache holds a stale __NO_MAPPING__ sentinel (written under a prior
+    fallback_team_mapping config) and behavior is now AUTO_REGISTER, the sentinel
+    must be evicted and auto-registration must run — not silently return None.
+    """
+    from litellm.proxy._types import UnregisteredJWTClientBehavior
+
+    jwt_handler = JWTHandler()
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(
+        virtual_key_claim_field="email",
+        unregistered_jwt_client_behavior=UnregisteredJWTClientBehavior.AUTO_REGISTER,
+        virtual_key_mapping_cache_ttl=300,
+    )
+    jwt_claims = {"email": "alice@corp.com"}
+
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_jwtkeymapping.find_first = AsyncMock(return_value=None)
+    prisma_client.db.litellm_jwtkeymapping.create = AsyncMock()
+
+    user_api_key_cache = DualCache()
+    # Seed the stale sentinel
+    await user_api_key_cache.async_set_cache(
+        "jwt_key_mapping:email:alice@corp.com", "__NO_MAPPING__"
+    )
+
+    mock_key_obj = UserAPIKeyAuth(token="hashed_auto_key", team_id=None)
+
+    with patch(
+        "litellm.proxy.auth.user_api_key_auth.get_key_object", new_callable=AsyncMock
+    ) as mock_get_key, patch(
+        "litellm.proxy.management_endpoints.key_management_endpoints.generate_key_helper_fn",
+        new_callable=AsyncMock,
+    ) as mock_gen_key:
+        mock_gen_key.return_value = {"token": "hashed_auto_key", "key": "sk-auto-key"}
+        mock_get_key.return_value = mock_key_obj
+
+        result = await _resolve_jwt_to_virtual_key(
+            jwt_claims=jwt_claims,
+            jwt_handler=jwt_handler,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            parent_otel_span=None,
+            proxy_logging_obj=None,
+        )
+
+    # Must have auto-registered, not returned None
+    assert result == mock_key_obj
+    prisma_client.db.litellm_jwtkeymapping.create.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_auto_register_race_condition_unique_conflict():
+    """
+    If two concurrent requests both call _auto_register_jwt_mapping and the
+    second hits a unique-constraint violation on create, it must fall back to
+    fetching the winner's mapping — no error surfaced to the caller.
+    """
+    from litellm.proxy.auth.user_api_key_auth import _auto_register_jwt_mapping
+    from litellm.proxy._types import UnregisteredJWTClientBehavior
+
+    jwt_handler = JWTHandler()
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(
+        virtual_key_claim_field="sub",
+        unregistered_jwt_client_behavior=UnregisteredJWTClientBehavior.AUTO_REGISTER,
+        virtual_key_mapping_cache_ttl=300,
+    )
+
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_jwtkeymapping.create = AsyncMock(
+        side_effect=Exception("Unique constraint failed (P2002)")
+    )
+    # Simulate the winner's mapping already in DB after the conflict
+    winner_mapping = MagicMock()
+    winner_mapping.token = "winner_token_hash"
+    winner_mapping.is_active = True
+    prisma_client.db.litellm_jwtkeymapping.find_first = AsyncMock(
+        return_value=winner_mapping
+    )
+
+    user_api_key_cache = DualCache()
+    mock_key_obj = UserAPIKeyAuth(token="winner_token_hash", team_id=None)
+
+    with patch(
+        "litellm.proxy.auth.user_api_key_auth.get_key_object", new_callable=AsyncMock
+    ) as mock_get_key, patch(
+        "litellm.proxy.management_endpoints.key_management_endpoints.generate_key_helper_fn",
+        new_callable=AsyncMock,
+        return_value={"token": "loser_token_hash", "key": "sk-loser"},
+    ):
+        mock_get_key.return_value = mock_key_obj
+
+        result = await _auto_register_jwt_mapping(
+            virtual_key_claim_field="sub",
+            claim_value="user-42",
+            jwt_handler=jwt_handler,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            parent_otel_span=None,
+            proxy_logging_obj=None,
+            cache_key="jwt_key_mapping:sub:user-42",
+        )
+
+    assert result == mock_key_obj
+    # Cache should hold the winner's token, not the loser's
+    cached = await user_api_key_cache.async_get_cache("jwt_key_mapping:sub:user-42")
+    assert cached == "winner_token_hash"
+    mock_get_key.assert_called_once_with(
+        hashed_token="winner_token_hash",
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        parent_otel_span=None,
+        proxy_logging_obj=None,
+    )
+
+
+# ──────────────────────────────────────────────
+# Tests: prisma_client=None does not bypass no-match policy
+# ──────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_reject_behavior_enforced_when_prisma_client_is_none():
+    """
+    When prisma_client is None and behavior is REJECT, a 403 must be raised —
+    not silently fallen through to team auth.
+    """
+    from litellm.proxy._types import UnregisteredJWTClientBehavior
+
+    jwt_handler = JWTHandler()
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(
+        virtual_key_claim_field="email",
+        unregistered_jwt_client_behavior=UnregisteredJWTClientBehavior.REJECT,
+    )
+    jwt_claims = {"email": "unknown@example.com"}
+
+    user_api_key_cache = DualCache()
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _resolve_jwt_to_virtual_key(
+            jwt_claims=jwt_claims,
+            jwt_handler=jwt_handler,
+            prisma_client=None,  # no DB
+            user_api_key_cache=user_api_key_cache,
+            parent_otel_span=None,
+            proxy_logging_obj=None,
+        )
+    assert exc_info.value.status_code == 403
+    assert "unknown@example.com" in exc_info.value.detail
+
+
+@pytest.mark.asyncio
+async def test_fallback_team_mapping_returns_none_when_prisma_client_is_none():
+    """
+    When prisma_client is None and behavior is FALLBACK_TEAM_MAPPING, the
+    function must return None (fall through to team auth) — not raise.
+    """
+    from litellm.proxy._types import UnregisteredJWTClientBehavior
+
+    jwt_handler = JWTHandler()
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(
+        virtual_key_claim_field="email",
+        unregistered_jwt_client_behavior=UnregisteredJWTClientBehavior.FALLBACK_TEAM_MAPPING,
+    )
+    jwt_claims = {"email": "anyone@example.com"}
+
+    result = await _resolve_jwt_to_virtual_key(
+        jwt_claims=jwt_claims,
+        jwt_handler=jwt_handler,
+        prisma_client=None,
+        user_api_key_cache=DualCache(),
+        parent_otel_span=None,
+        proxy_logging_obj=None,
+    )
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_auto_register_raises_500_when_prisma_client_is_none():
+    """
+    AUTO_REGISTER without a DB connection must raise HTTP 500 with a clear
+    message — it cannot create keys without a database.
+    """
+    from litellm.proxy._types import UnregisteredJWTClientBehavior
+
+    jwt_handler = JWTHandler()
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(
+        virtual_key_claim_field="sub",
+        unregistered_jwt_client_behavior=UnregisteredJWTClientBehavior.AUTO_REGISTER,
+    )
+    jwt_claims = {"sub": "new-user-42"}
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _resolve_jwt_to_virtual_key(
+            jwt_claims=jwt_claims,
+            jwt_handler=jwt_handler,
+            prisma_client=None,
+            user_api_key_cache=DualCache(),
+            parent_otel_span=None,
+            proxy_logging_obj=None,
+        )
+    assert exc_info.value.status_code == 500
+    assert "AUTO_REGISTER requires a database" in exc_info.value.detail
+
+
+# ──────────────────────────────────────────────
+# Tests: backward-compat alias jwt_client_id_field
+# ──────────────────────────────────────────────
+
+
+def test_jwt_client_id_field_alias_maps_to_virtual_key_claim_field():
+    """
+    jwt_client_id_field (old doc name) must silently alias to virtual_key_claim_field.
+    """
+    auth = LiteLLM_JWTAuth(jwt_client_id_field="azp")
+    assert auth.virtual_key_claim_field == "azp"
+
+
+def test_jwt_client_id_field_does_not_raise_on_duplicate():
+    """
+    If both jwt_client_id_field and virtual_key_claim_field are supplied,
+    virtual_key_claim_field takes precedence and no error is raised.
+    """
+    auth = LiteLLM_JWTAuth(
+        jwt_client_id_field="old_field",
+        virtual_key_claim_field="new_field",
+    )
+    assert auth.virtual_key_claim_field == "new_field"

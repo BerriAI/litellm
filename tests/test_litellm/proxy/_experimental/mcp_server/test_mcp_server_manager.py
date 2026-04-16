@@ -160,6 +160,39 @@ class TestMCPServerManager:
         client2 = await manager._create_mcp_client(server_with_cache)
         assert client2.stdio_config["env"]["NPM_CONFIG_CACHE"] == "/custom/cache"
 
+    async def test_create_mcp_client_stdio_injects_uv_cache_dir(self):
+        """Test that _create_mcp_client injects UV_CACHE_DIR for uvx when not already set,
+        and preserves user-provided UV_CACHE_DIR when present."""
+        from litellm.constants import MCP_UV_CACHE_DIR
+
+        manager = MCPServerManager()
+
+        # Case 1: UV_CACHE_DIR not set -> should be injected
+        server_no_cache = MCPServer(
+            server_id="stdio-uvx-1",
+            name="test_uvx_server",
+            url=None,
+            transport=MCPTransport.stdio,
+            command="uvx",
+            args=["mcp-server-fetch"],
+            env={},
+        )
+        client = await manager._create_mcp_client(server_no_cache)
+        assert client.stdio_config["env"]["UV_CACHE_DIR"] == MCP_UV_CACHE_DIR
+
+        # Case 2: UV_CACHE_DIR already set -> should NOT be overwritten
+        server_with_cache = MCPServer(
+            server_id="stdio-uvx-2",
+            name="test_uvx_server_custom",
+            url=None,
+            transport=MCPTransport.stdio,
+            command="uvx",
+            args=["mcp-server-fetch"],
+            env={"UV_CACHE_DIR": "/custom/uv_cache"},
+        )
+        client2 = await manager._create_mcp_client(server_with_cache)
+        assert client2.stdio_config["env"]["UV_CACHE_DIR"] == "/custom/uv_cache"
+
     def test_build_stdio_env_only_accepts_x_prefixed_placeholders(self):
         """Ensure only ${X-*} placeholders are substituted from headers."""
         manager = MCPServerManager()
