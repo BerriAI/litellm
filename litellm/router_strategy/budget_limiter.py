@@ -310,6 +310,16 @@ class RouterBudgetLimiting(CustomLogger):
         deployment_configs: Dict[str, GenericBudgetInfo] = {}
         deployment_providers: List[Optional[str]] = []
 
+        # Resolve tags once before the loop (loop-invariant)
+        _request_tags: List[str] = []
+        if self.tag_budget_config:
+            _request_tags = _get_tags_from_request_kwargs(
+                request_kwargs=request_kwargs,
+                metadata_variable_name=get_metadata_variable_name_from_kwargs(
+                    request_kwargs or {}
+                ),
+            )
+
         for deployment in healthy_deployments:
             # Check provider budgets
             if self.provider_budget_config:
@@ -336,20 +346,14 @@ class RouterBudgetLimiting(CustomLogger):
                         cache_keys.append(
                             f"deployment_spend:{model_id}:{budget_config.budget_duration}"
                         )
-            # Check tag budgets
-            if self.tag_budget_config:
-                request_tags = _get_tags_from_request_kwargs(
-                    request_kwargs=request_kwargs,
-                    metadata_variable_name=get_metadata_variable_name_from_kwargs(
-                        request_kwargs or {}
-                    ),
+
+        # Check tag budgets (outside loop — tags are per-request, not per-deployment)
+        for _tag in _request_tags:
+            _tag_budget_config = self._get_budget_config_for_tag(_tag)
+            if _tag_budget_config:
+                cache_keys.append(
+                    f"tag_spend:{_tag}:{_tag_budget_config.budget_duration}"
                 )
-                for _tag in request_tags:
-                    _tag_budget_config = self._get_budget_config_for_tag(_tag)
-                    if _tag_budget_config:
-                        cache_keys.append(
-                            f"tag_spend:{_tag}:{_tag_budget_config.budget_duration}"
-                        )
         return (
             cache_keys,
             provider_configs,
