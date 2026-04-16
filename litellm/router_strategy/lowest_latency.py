@@ -77,6 +77,11 @@ class LowestLatencyLoggingHandler(CustomLogger):
                 precise_minute = f"{current_date}-{current_hour}-{current_minute}"
 
                 response_ms = end_time - start_time
+                response_seconds: float = (
+                    response_ms.total_seconds()
+                    if isinstance(response_ms, timedelta)
+                    else float(response_ms)
+                )
                 time_to_first_token_response_time = None
 
                 if kwargs.get("stream", None) is not None and kwargs["stream"] is True:
@@ -85,7 +90,7 @@ class LowestLatencyLoggingHandler(CustomLogger):
                         kwargs.get("completion_start_time", end_time) - start_time
                     )
 
-                final_value: Union[float, timedelta] = response_ms
+                final_value: float = response_seconds
                 time_to_first_token: Optional[float] = None
                 total_tokens = 0
 
@@ -302,6 +307,11 @@ class LowestLatencyLoggingHandler(CustomLogger):
                 precise_minute = f"{current_date}-{current_hour}-{current_minute}"
 
                 response_ms = end_time - start_time
+                response_seconds: float = (
+                    response_ms.total_seconds()
+                    if isinstance(response_ms, timedelta)
+                    else float(response_ms)
+                )
                 time_to_first_token_response_time = None
                 if kwargs.get("stream", None) is not None and kwargs["stream"] is True:
                     # only log ttft for streaming request
@@ -309,7 +319,7 @@ class LowestLatencyLoggingHandler(CustomLogger):
                         kwargs.get("completion_start_time", end_time) - start_time
                     )
 
-                final_value: Union[float, timedelta] = response_ms
+                final_value: float = response_seconds
                 total_tokens = 0
                 time_to_first_token: Optional[float] = None
 
@@ -331,7 +341,7 @@ class LowestLatencyLoggingHandler(CustomLogger):
                         if final_value is not None:
                             final_value = float(final_value)
                         else:
-                            final_value = response_ms
+                            final_value = response_seconds
 
                         if time_to_first_token_response_time is not None:
                             if isinstance(time_to_first_token_response_time, timedelta):
