@@ -324,6 +324,9 @@ def get_llm_provider(  # noqa: PLR0915
                     elif endpoint == "https://api.inference.wandb.ai/v1":
                         custom_llm_provider = "wandb"
                         dynamic_api_key = get_secret_str("WANDB_API_KEY")
+                    elif endpoint == "https://gigachat.devices.sberbank.ru/api/v1":
+                        custom_llm_provider = "gigachat"
+                        dynamic_api_key = get_secret_str("GIGACHAT_API_KEY")
 
                     if api_base is not None and not isinstance(api_base, str):
                         raise Exception(
@@ -459,6 +462,8 @@ def get_llm_provider(  # noqa: PLR0915
             custom_llm_provider = "amazon_nova"
         elif model.startswith("sap/"):
             custom_llm_provider = "sap"
+        elif model in litellm.gigachat_models or model.startswith("gigachat/"):
+            custom_llm_provider = "gigachat"
         if not custom_llm_provider:
             if litellm.suppress_debug_info is False:
                 print()  # noqa
@@ -944,6 +949,13 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
             api_base or get_secret_str("MANUS_API_BASE") or "https://api.manus.im"
         )
         dynamic_api_key = api_key or get_secret_str("MANUS_API_KEY")
+    elif custom_llm_provider == "gigachat":
+        api_base = (
+            api_base
+            or get_secret_str("GIGACHAT_API_BASE")
+            or "https://gigachat.devices.sberbank.ru/api/v1"
+        )
+        dynamic_api_key = api_key or get_secret_str("GIGACHAT_API_KEY")
 
     if api_base is not None and not isinstance(api_base, str):
         raise Exception("api base needs to be a string. api_base={}".format(api_base))
