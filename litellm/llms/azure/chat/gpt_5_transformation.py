@@ -31,7 +31,20 @@ class AzureOpenAIGPT5Config(AzureOpenAIConfig, OpenAIGPT5Config):
             model = "azure/" + model[len(cls.GPT5_SERIES_ROUTE) :]
         elif not model.startswith("azure/"):
             model = "azure/" + model
-        return super()._supports_reasoning_effort_level(model, level)
+
+        if super()._supports_reasoning_effort_level(model, level):
+            return True
+
+        # Fallback: registry lookup fails for Azure deployment names
+        # (e.g. "gpt-5.1-DataZoneStandard") that are not in
+        # model_prices_and_context_window.json. Use string matching as a
+        # safe fallback, consistent with the behaviour in litellm 1.81.x.
+        model_name = model.split("/")[-1]
+        if level == "none":
+            return model_name.startswith("gpt-5.1") or model_name.startswith(
+                "gpt-5.2"
+            )
+        return False
 
     @classmethod
     def is_model_gpt_5_model(cls, model: str) -> bool:
