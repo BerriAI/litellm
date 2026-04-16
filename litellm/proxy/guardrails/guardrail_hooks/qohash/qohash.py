@@ -4,6 +4,7 @@ Qostodian Nexus (by Qohash) — LiteLLM guardrail integration.
 import os
 from typing import TYPE_CHECKING, Literal, Optional, Type
 
+from litellm.integrations.custom_guardrail import log_guardrail_information
 from litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api.generic_guardrail_api import (
     GenericGuardrailAPI,
 )
@@ -44,6 +45,7 @@ class QostodianNexus(GenericGuardrailAPI):
             **kwargs,
         )
 
+    @log_guardrail_information
     async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,
