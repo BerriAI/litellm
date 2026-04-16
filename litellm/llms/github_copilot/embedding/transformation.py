@@ -103,8 +103,8 @@ class GithubCopilotEmbeddingConfig(BaseEmbeddingConfig):
         """
         # Use provided api_base or fall back to authenticator's base or default
         effective_api_base = (
-            self.authenticator.get_api_base()
-            or api_base
+            api_base
+            or self.authenticator.get_api_base()
             or os.getenv("GITHUB_COPILOT_API_BASE")
             or DEFAULT_GITHUB_COPILOT_API_BASE
         )

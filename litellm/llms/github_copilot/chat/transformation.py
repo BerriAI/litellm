@@ -31,8 +31,11 @@ class GithubCopilotConfig(OpenAIConfig):
         api_key: Optional[str],
         custom_llm_provider: str,
     ) -> Tuple[Optional[str], Optional[str], str]:
-        dynamic_api_base = self.authenticator.get_api_base() or os.getenv(
-            "GITHUB_COPILOT_API_BASE", DEFAULT_GITHUB_COPILOT_API_BASE
+        dynamic_api_base = (
+            api_base
+            or self.authenticator.get_api_base()
+            or os.getenv("GITHUB_COPILOT_API_BASE")
+            or DEFAULT_GITHUB_COPILOT_API_BASE
         )
         try:
             dynamic_api_key = self.authenticator.get_api_key()
