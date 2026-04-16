@@ -1897,3 +1897,40 @@ class TestGuardrailModificationCheck:
         ):
             # no-op, should not raise
             self._call({"metadata": {"disable_global_guardrails": True}})
+
+    def test_rejects_string_encoded_metadata_bypass(self):
+        """Regression: attacker sends metadata as JSON string to bypass the
+        isinstance(dict) guard. The check must coerce the string to dict
+        and evaluate guardrail modification keys inside it."""
+        import json as _json
+
+        from fastapi import HTTPException
+
+        attacker_payload = {"disable_global_guardrails": True}
+        with patch(
+            "litellm.proxy.guardrails.guardrail_helpers.can_modify_guardrails",
+            return_value=False,
+        ):
+            with pytest.raises(HTTPException) as exc:
+                self._call({"metadata": _json.dumps(attacker_payload)})
+            assert exc.value.status_code == 403
+
+    def test_rejects_string_encoded_litellm_metadata_bypass(self):
+        """Same bypass via the litellm_metadata key."""
+        import json as _json
+
+        from fastapi import HTTPException
+
+        attacker_payload = {"guardrails": ["evaded"]}
+        with patch(
+            "litellm.proxy.guardrails.guardrail_helpers.can_modify_guardrails",
+            return_value=False,
+        ):
+            with pytest.raises(HTTPException) as exc:
+                self._call({"litellm_metadata": _json.dumps(attacker_payload)})
+            assert exc.value.status_code == 403
+
+    def test_noop_when_string_is_not_json_object(self):
+        """Unparseable strings should not trigger a 403 — they have no keys."""
+        self._call({"metadata": "not-json"})
+        self._call({"metadata": '"just a string"'})

@@ -350,12 +350,30 @@ def _guardrail_modification_check(
     failing loudly at the auth layer so operators see an explicit 403 instead
     of a confusing silent-ignore.
     """
+    from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
     from litellm.proxy.guardrails.guardrail_helpers import can_modify_guardrails
 
+    def _coerce_to_dict(container: Any) -> Optional[dict]:
+        """Accept dict or JSON-string (from multipart/form-data or extra_body).
+
+        Without this, an attacker can smuggle guardrail keys past the check by
+        sending ``{"metadata": "{\\"disable_global_guardrails\\": true}"}`` —
+        ``isinstance(dict)`` on the string returns False, the check returns
+        no-modification, and ``add_litellm_data_to_request`` parses the string
+        to a dict downstream.
+        """
+        if isinstance(container, dict):
+            return container
+        if isinstance(container, str):
+            parsed = safe_json_loads(container)
+            return parsed if isinstance(parsed, dict) else None
+        return None
+
     def _user_requested_modification(container: Any) -> bool:
-        if not isinstance(container, dict):
+        coerced = _coerce_to_dict(container)
+        if coerced is None:
             return False
-        return any(container.get(key) for key in _GUARDRAIL_MODIFICATION_KEYS)
+        return any(coerced.get(key) for key in _GUARDRAIL_MODIFICATION_KEYS)
 
     # Check both metadata keys — callers can populate either depending on the
     # endpoint. Cover the top-level too so root-level injection is rejected.
