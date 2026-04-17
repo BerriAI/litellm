@@ -1,21 +1,21 @@
-# Upgrading LiteLLM Proxy (pip/venv)
+# Upgrading LiteLLM Proxy (uv/venv)
 
-Guide for upgrading LiteLLM Proxy when installed via pip in a virtual environment.
+Guide for upgrading LiteLLM Proxy when installed via uv in a virtual environment.
 
 :::info Important
 Always activate your virtual environment before running any `litellm` or `prisma` commands. All commands in this guide assume you're working inside an activated venv.
 :::
 
-## How pip/venv Upgrades Work
+## How uv/venv Upgrades Work
 
 There are two pieces that need to stay in sync:
 
 1. **Prisma client** - Generated Python code that talks to the DB
 2. **DB schema** - Tables/columns in PostgreSQL
 
-When you upgrade via pip, the `litellm-proxy-extras` package ships with a new `schema.prisma` and a `migrations/` directory. But unlike the Docker image, pip install does NOT automatically regenerate the Prisma client or run migrations. You have to do both manually.
+When you upgrade via uv, the `litellm-proxy-extras` package ships with a new `schema.prisma` and a `migrations/` directory. But unlike the Docker image, `uv add` does not automatically regenerate the Prisma client or run migrations. You have to do both manually.
 
-## Upgrade Workflow (pip/venv)
+## Upgrade Workflow (uv/venv)
 
 ### 1. Stop the proxy
 
@@ -30,7 +30,7 @@ pg_dump -h <host> -U <user> -d <db> -F c -f backup_$(date +%Y%m%d).dump
 ### 3. Upgrade the package
 
 ```bash
-pip install 'litellm[proxy]==<version>'
+uv add 'litellm[proxy]==<version>'
 ```
 
 ### 4. Regenerate the Prisma client
@@ -91,7 +91,7 @@ litellm --config your_config.yaml --port 4000
 
 ### Before applying migrations: Preview what will change
 
-Run `pip install 'litellm[proxy]==<version>'` first (Step 3) so the new `schema.prisma` is available.
+Run `uv add 'litellm[proxy]==<version>'` first (Step 3) so the new `schema.prisma` is available.
 
 ```bash
 prisma migrate diff \

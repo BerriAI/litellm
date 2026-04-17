@@ -1,3 +1,4 @@
+import sys
 from datetime import datetime
 from typing import List, Optional
 import pytest
@@ -7,6 +8,14 @@ import asyncio
 from unittest import mock
 from fastapi.testclient import TestClient
 from fastapi import FastAPI
+
+# MCP requires Python >= 3.10.  Tests that mock functions defined inside the
+# ``if MCP_AVAILABLE`` block cannot run on older interpreters because those
+# module-level names simply don't exist.
+_SKIP_NO_MCP = pytest.mark.skipif(
+    sys.version_info < (3, 10),
+    reason="MCP requires Python >= 3.10",
+)
 
 from starlette import status
 
@@ -109,6 +118,7 @@ def test_does_mcp_server_exist():
     assert False == does_mcp_server_exist(mcp_server_records, not_found_record)
 
 
+@_SKIP_NO_MCP
 @pytest.mark.asyncio
 async def test_create_mcp_server_direct():
     """
@@ -198,6 +208,7 @@ async def test_create_mcp_server_direct():
         mock_manager.add_server.assert_called_once_with(expected_response)
 
 
+@_SKIP_NO_MCP
 @pytest.mark.asyncio
 async def test_create_duplicate_mcp_server():
     """
@@ -258,6 +269,7 @@ async def test_create_duplicate_mcp_server():
         assert "already exists" in str(exc_info.value.detail)
 
 
+@_SKIP_NO_MCP
 @pytest.mark.asyncio
 async def test_create_mcp_server_auth_failure():
     """
@@ -302,6 +314,7 @@ async def test_create_mcp_server_auth_failure():
         assert "permission" in str(exc_info.value.detail)
 
 
+@_SKIP_NO_MCP
 @pytest.mark.asyncio
 async def test_create_mcp_server_invalid_alias():
     """
@@ -356,6 +369,7 @@ async def test_create_mcp_server_invalid_alias():
         )
 
 
+@_SKIP_NO_MCP
 @pytest.mark.asyncio
 async def test_edit_mcp_server_redacts_credentials():
     with mock.patch(
