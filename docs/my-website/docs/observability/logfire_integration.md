@@ -17,11 +17,11 @@ join our [discord](https://discord.gg/wuPM9dRgDw)
 Ensure you have installed the following packages to use this integration
 
 ```shell
-pip install litellm
+uv add litellm
 
-pip install opentelemetry-api==1.25.0
-pip install opentelemetry-sdk==1.25.0
-pip install opentelemetry-exporter-otlp==1.25.0
+uv add opentelemetry-api==1.25.0
+uv add opentelemetry-sdk==1.25.0
+uv add opentelemetry-exporter-otlp==1.25.0
 ```
 
 ## Quick Start
@@ -33,7 +33,7 @@ litellm.callbacks = ["logfire"]
 ```
 
 ```python
-# pip install logfire
+# uv add logfire
 import litellm
 import os
 

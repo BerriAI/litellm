@@ -17,7 +17,7 @@ model_list:
       api_base: https://exampleopenaiendpoint-production.up.railway.app/
 ```
 
-2. `pip install locust`
+2. `uv add locust`
 
 3. Create a file called `locustfile.py` on your local machine. Copy the contents from the litellm load test located [here](https://github.com/BerriAI/litellm/blob/main/.github/workflows/locustfile.py)
 

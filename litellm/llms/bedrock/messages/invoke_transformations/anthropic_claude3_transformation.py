@@ -13,6 +13,8 @@ from typing import (
 import httpx
 
 from litellm.anthropic_beta_headers_manager import filter_and_transform_beta_headers
+from litellm.constants import BEDROCK_MIN_THINKING_BUDGET_TOKENS
+from litellm.litellm_core_utils.litellm_logging import verbose_logger
 from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
     AnthropicMessagesConfig,
@@ -25,8 +27,10 @@ from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation
     AmazonInvokeConfig,
 )
 from litellm.llms.bedrock.common_utils import (
+    ensure_bedrock_anthropic_messages_tool_names,
     get_anthropic_beta_from_headers,
     is_claude_4_5_on_bedrock,
+    normalize_tool_input_schema_types_for_bedrock_invoke,
     remove_custom_field_from_tools,
 )
 from litellm.types.llms.anthropic import ANTHROPIC_TOOL_SEARCH_BETA_HEADER
@@ -203,9 +207,77 @@ class AmazonAnthropicClaudeMessagesConfig(
             "opus_4.6",
             "opus-4-6",
             "opus_4_6",
+            "opus-4.7",
+            "opus_4.7",
+            "opus-4-7",
+            "opus_4_7",
         ]
 
         return any(pattern in model_lower for pattern in supported_patterns)
+
+    def _ensure_thinking_for_clear_thinking_context_management(
+        self,
+        anthropic_messages_request: Dict,
+        model: str,
+    ) -> bool:
+        """
+        Bedrock rejects ``clear_thinking_20251015`` context-management edits unless
+        extended thinking is ``enabled`` or ``adaptive``. Claude Code often sends
+        context management without a top-level ``thinking`` field.
+
+        When we detect that edit type on a model that supports extended thinking on
+        Bedrock, inject a minimal ``thinking`` config so the request succeeds.
+
+        Returns:
+            True if ``thinking`` was added or upgraded for this fix (caller may
+            need to add the interleaved-thinking beta header).
+        """
+        cm = anthropic_messages_request.get("context_management")
+        if not isinstance(cm, dict):
+            return False
+        edits = cm.get("edits")
+        if not isinstance(edits, list):
+            return False
+        needs_thinking = any(
+            isinstance(e, dict) and e.get("type") == "clear_thinking_20251015"
+            for e in edits
+        )
+        if not needs_thinking:
+            return False
+        if not self._supports_extended_thinking_on_bedrock(model):
+            return False
+
+        thinking = anthropic_messages_request.get("thinking")
+        if isinstance(thinking, dict):
+            t = thinking.get("type")
+            if t in ("enabled", "adaptive"):
+                return False
+            # ``disabled`` or unknown — replace with enabled so clear_thinking is valid
+            verbose_logger.debug(
+                "Bedrock clear_thinking_20251015: replacing thinking=%s with minimal enabled thinking",
+                thinking,
+            )
+
+        max_tokens = anthropic_messages_request.get("max_tokens")
+        budget = BEDROCK_MIN_THINKING_BUDGET_TOKENS
+        if isinstance(max_tokens, int) and max_tokens <= budget:
+            verbose_logger.warning(
+                "Bedrock clear_thinking_20251015: max_tokens=%s is not greater than "
+                "minimum thinking budget (%s); cannot inject thinking safely",
+                max_tokens,
+                budget,
+            )
+            return False
+
+        anthropic_messages_request["thinking"] = {
+            "type": "enabled",
+            "budget_tokens": budget,
+        }
+        verbose_logger.debug(
+            "Bedrock clear_thinking_20251015: injected thinking with budget_tokens=%s",
+            budget,
+        )
+        return True
 
     def _is_claude_opus_4_5(self, model: str) -> bool:
         """
@@ -279,6 +351,10 @@ class AmazonAnthropicClaudeMessagesConfig(
             "sonnet_4.6",
             "sonnet-4-6",
             "sonnet_4_6",
+            # NOTE: Opus 4.7 on Bedrock does not support server-side tool search
+            # as of launch (2026-04-16). Bedrock rejects the tool type with:
+            # "tool type 'tool_search_tool_..._20251119' is not supported for this model".
+            # Re-add the opus-4.7 patterns here once AWS announces support.
         ]
 
         return any(pattern in model_lower for pattern in supported_patterns)
@@ -404,6 +480,13 @@ class AmazonAnthropicClaudeMessagesConfig(
         if "model" in anthropic_messages_request:
             anthropic_messages_request.pop("model", None)
 
+        injected_thinking_for_clear_thinking = (
+            self._ensure_thinking_for_clear_thinking_context_management(
+                anthropic_messages_request=anthropic_messages_request,
+                model=model,
+            )
+        )
+
         # 4. Remove `ttl` field from cache_control in messages (Bedrock doesn't support it for older models)
         self._remove_ttl_from_cache_control(
             anthropic_messages_request=anthropic_messages_request, model=model
@@ -426,6 +509,8 @@ class AmazonAnthropicClaudeMessagesConfig(
         # which causes Bedrock to reject the request with "Extra inputs are not permitted"
         # Ref: https://github.com/BerriAI/litellm/issues/22847
         remove_custom_field_from_tools(anthropic_messages_request)
+        normalize_tool_input_schema_types_for_bedrock_invoke(anthropic_messages_request)
+        ensure_bedrock_anthropic_messages_tool_names(anthropic_messages_request)
 
         # 6. AUTO-INJECT beta headers based on features used
         anthropic_model_info = AnthropicModelInfo()
@@ -450,6 +535,9 @@ class AmazonAnthropicClaudeMessagesConfig(
             ),
         )
         beta_set.update(auto_betas)
+
+        if injected_thinking_for_clear_thinking:
+            beta_set.add("interleaved-thinking-2025-05-14")
 
         self._get_tool_search_beta_header_for_bedrock(
             model=model,

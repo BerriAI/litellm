@@ -6,7 +6,7 @@ Common utilities used across bedrock chat/embedding/image generation
 
 import json
 import os
-from typing import TYPE_CHECKING, Dict, List, Literal, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union
 
 if TYPE_CHECKING:
     from litellm.types.llms.bedrock import BedrockCreateBatchRequest
@@ -68,6 +68,88 @@ def remove_custom_field_from_tools(request_body: dict) -> None:
     for tool in tools:
         if isinstance(tool, dict):
             tool.pop("custom", None)
+
+
+def normalize_json_schema_custom_types_to_object(schema: dict) -> None:
+    """
+    In-place: replace JSON Schema ``type: \"custom\"`` with ``\"object\"`` (iterative walk).
+
+    Anthropic / Claude Code use ``custom`` for tool schemas; Bedrock Invoke and
+    Bedrock Converse only accept standard JSON Schema type strings.
+
+    Uses an explicit stack (not recursion) to satisfy recursive-function guards in CI.
+    """
+    stack: List[Any] = [schema]
+    seen: set[int] = set()
+    while stack:
+        node = stack.pop()
+        if not isinstance(node, dict):
+            continue
+        node_id = id(node)
+        if node_id in seen:
+            continue
+        seen.add(node_id)
+        if node.get("type") == "custom":
+            node["type"] = "object"
+        items = node.get("items")
+        if isinstance(items, dict):
+            stack.append(items)
+        addl = node.get("additionalProperties")
+        if isinstance(addl, dict):
+            stack.append(addl)
+        props = node.get("properties")
+        if isinstance(props, dict):
+            for sub in props.values():
+                if isinstance(sub, dict):
+                    stack.append(sub)
+        for combiner in ("allOf", "anyOf", "oneOf"):
+            arr = node.get(combiner)
+            if isinstance(arr, list):
+                for sub in arr:
+                    if isinstance(sub, dict):
+                        stack.append(sub)
+
+
+def normalize_tool_input_schema_types_for_bedrock_invoke(request_body: dict) -> None:
+    """
+    Bedrock Invoke (Anthropic Messages) validates ``input_schema`` as JSON Schema.
+    Anthropic's API allows ``type: \"custom\"`` for Claude Code custom tools; Bedrock
+    rejects it with: ``tools.0.custom.input_schema.type: Input should be 'object'``.
+
+    Normalizes ``type: \"custom\"`` to ``\"object\"`` throughout each tool's
+    ``input_schema`` (recursive for nested properties, items, combinators).
+
+    Args:
+        request_body: Request dictionary to modify in-place.
+    """
+    tools = request_body.get("tools")
+    if not tools or not isinstance(tools, list):
+        return
+    for tool in tools:
+        if not isinstance(tool, dict):
+            continue
+        input_schema = tool.get("input_schema")
+        if isinstance(input_schema, dict):
+            normalize_json_schema_custom_types_to_object(input_schema)
+
+
+def ensure_bedrock_anthropic_messages_tool_names(request_body: dict) -> None:
+    """
+    Bedrock Invoke (Anthropic Messages) requires each tool to include ``name``.
+    Some clients send only ``input_schema``; Bedrock then errors with
+    ``tools.0.custom.name: Field required``.
+
+    In-place: set ``name`` to ``litellm_unnamed_tool_{index}`` when missing or blank.
+    """
+    tools = request_body.get("tools")
+    if not tools or not isinstance(tools, list):
+        return
+    for i, tool in enumerate(tools):
+        if not isinstance(tool, dict):
+            continue
+        name = tool.get("name")
+        if name is None or (isinstance(name, str) and not name.strip()):
+            tool["name"] = f"litellm_unnamed_tool_{i}"
 
 
 class AmazonBedrockGlobalConfig:
@@ -507,6 +589,10 @@ def is_claude_4_5_on_bedrock(model: str) -> bool:
         "opus_4.6",
         "opus-4-6",
         "opus_4_6",
+        "opus-4.7",
+        "opus_4.7",
+        "opus-4-7",
+        "opus_4_7",
     ]
     return any(pattern in model_lower for pattern in claude_4_5_patterns)
 

@@ -1420,6 +1420,24 @@ def test_cache_control_not_preserved_in_tools_for_non_claude():
     assert "cache_control" not in result[0]
 
 
+def test_translate_anthropic_tools_to_openai_fills_missing_tool_name():
+    """Schema-only tools (no ``name``) must not crash the Converse adapter path."""
+    tools = [
+        {
+            "input_schema": {
+                "type": "object",
+                "properties": {"q": {"type": "string"}},
+                "required": ["q"],
+            },
+        },
+        {"name": "", "input_schema": {"type": "object", "properties": {}}},
+    ]
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    result, _ = adapter.translate_anthropic_tools_to_openai(tools=tools, model=None)
+    assert result[0]["function"]["name"] == "litellm_unnamed_tool_0"
+    assert result[1]["function"]["name"] == "litellm_unnamed_tool_1"
+
+
 def test_translate_openai_content_to_anthropic_reasoning_content_without_thinking_blocks():
     """
     Test that reasoning_content is converted to thinking block when thinking_blocks is not present.

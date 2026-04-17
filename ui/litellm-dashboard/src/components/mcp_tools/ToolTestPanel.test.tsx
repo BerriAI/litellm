@@ -89,7 +89,7 @@ describe("ToolTestPanel defaults", () => {
     expect(screen.getByLabelText("message")).toHaveValue("");
     expect(screen.getByLabelText("attempts")).toHaveValue(0);
     expect(screen.getByLabelText("ratio")).toHaveValue(0.4);
-    expect(screen.getByDisplayValue("True")).toBeInTheDocument();
+    expect(screen.getByTitle("True")).toBeInTheDocument();
 
     const keywordsTextarea = screen.getByTestId("textarea-keywords");
     expect(JSON.parse(keywordsTextarea.value)).toEqual([""]);
