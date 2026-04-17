@@ -406,12 +406,6 @@ async def test_save_background_health_checks_to_db_exception_handling():
 @pytest.mark.asyncio
 async def test_get_all_latest_health_checks_with_model_id(mock_prisma):
     """Test get_all_latest_health_checks properly groups by model_id"""
-    # Create mock checks with same model_name but different model_id
-    mock_check1 = MagicMock()
-    mock_check1.model_id = "model-123"
-    mock_check1.model_name = "gpt-3.5-turbo"
-    mock_check1.checked_at = datetime.now(timezone.utc) - timedelta(minutes=10)
-    
     mock_check2 = MagicMock()
     mock_check2.model_id = "model-456"
     mock_check2.model_name = "gpt-3.5-turbo"
@@ -424,7 +418,7 @@ async def test_get_all_latest_health_checks_with_model_id(mock_prisma):
     
     # Order by checked_at desc
     mock_prisma.db.litellm_healthchecktable.find_many = AsyncMock(
-        return_value=[mock_check3, mock_check2, mock_check1]
+        return_value=[mock_check3, mock_check2]
     )
     
     result = await mock_prisma.get_all_latest_health_checks()
@@ -445,18 +439,13 @@ async def test_get_all_latest_health_checks_with_model_id(mock_prisma):
 @pytest.mark.asyncio
 async def test_get_all_latest_health_checks_without_model_id(mock_prisma):
     """Test get_all_latest_health_checks groups by model_name when model_id is None"""
-    mock_check1 = MagicMock()
-    mock_check1.model_id = None
-    mock_check1.model_name = "gpt-3.5-turbo"
-    mock_check1.checked_at = datetime.now(timezone.utc) - timedelta(minutes=10)
-    
     mock_check2 = MagicMock()
     mock_check2.model_id = None
     mock_check2.model_name = "gpt-3.5-turbo"
     mock_check2.checked_at = datetime.now(timezone.utc) - timedelta(minutes=1)  # Latest
     
     mock_prisma.db.litellm_healthchecktable.find_many = AsyncMock(
-        return_value=[mock_check2, mock_check1]
+        return_value=[mock_check2]
     )
     
     result = await mock_prisma.get_all_latest_health_checks()
@@ -465,6 +454,41 @@ async def test_get_all_latest_health_checks_without_model_id(mock_prisma):
     assert len(result) == 1
     assert result[0].model_name == "gpt-3.5-turbo"
     assert result[0].checked_at == mock_check2.checked_at  # Latest
+
+
+@pytest.mark.asyncio
+async def test_get_all_latest_health_checks_same_name_with_and_without_model_id(mock_prisma):
+    """
+    Same model_name can appear twice after DISTINCT ON: once keyed by (model_id, name)
+    and once by (NULL, name) — different Postgres groups than a single row with id.
+    """
+    now = datetime.now(timezone.utc)
+    with_id = MagicMock()
+    with_id.model_id = "deployment-abc"
+    with_id.model_name = "gpt-4"
+    with_id.checked_at = now - timedelta(minutes=2)
+
+    without_id = MagicMock()
+    without_id.model_id = None
+    without_id.model_name = "gpt-4"
+    without_id.checked_at = now - timedelta(minutes=1)
+
+    mock_prisma.db.litellm_healthchecktable.find_many = AsyncMock(
+        return_value=[without_id, with_id]
+    )
+
+    result = await mock_prisma.get_all_latest_health_checks()
+
+    assert len(result) == 2
+    names = {r.model_name for r in result}
+    assert names == {"gpt-4"}
+    ids = {r.model_id for r in result}
+    assert "deployment-abc" in ids
+    assert None in ids
+
+    by_key = {(r.model_id, r.model_name): r for r in result}
+    assert by_key[("deployment-abc", "gpt-4")].checked_at == with_id.checked_at
+    assert by_key[(None, "gpt-4")].checked_at == without_id.checked_at
 
 
 @pytest.mark.asyncio
