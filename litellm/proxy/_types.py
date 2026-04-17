@@ -1,6 +1,6 @@
 import enum
 import json
-from datetime import datetime
+from datetime import date, datetime
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Literal, Optional, Union
 
 import httpx
@@ -4531,3 +4531,196 @@ class CostEstimateResponse(LiteLLMPydanticObjectBase):
     input_cost_per_token: Optional[float] = None
     output_cost_per_token: Optional[float] = None
     provider: Optional[str] = None
+
+
+# ============================================================================
+# GPU Playground — per-user overnight GPU container booking system
+# ============================================================================
+#
+# Three tables back these types (see schema.prisma):
+#   LiteLLM_PlaygroundNode      — per-node inventory
+#   LiteLLM_PlaygroundBooking   — user bookings, state machine (allocated ->
+#                                 active -> terminated / cancelled /
+#                                 activation_failed)
+#   LiteLLM_UserSSHKey          — registered SSH public keys
+#
+# Status values are enforced via Literal at the API boundary (Pydantic), not
+# via DB CHECK constraints (§9-D1 of the integration plan). The `user_id`
+# field refers to LiteLLM_UserTable.user_id — grid resolves email -> user_id
+# via its existing check_user_exists path before forwarding a request.
+
+
+PlaygroundBookingStatus = Literal[
+    "allocated",
+    "active",
+    "terminated",
+    "cancelled",
+    "activation_failed",
+]
+
+
+PlaygroundBookingPhase = Literal["open", "overflow", "closed"]
+
+
+# --- Node ------------------------------------------------------------------
+
+
+class CreatePlaygroundNodeRequest(LiteLLMPydanticObjectBase):
+    name: str
+    ip_address: str
+    model_path: str
+    total_gpus: int = Field(default=8, ge=1)
+    gpu_type: str = "H200"
+    is_playground_eligible: bool = True
+    is_healthy: bool = True
+    ssh_user: str = "orchestrator"
+
+
+class UpdatePlaygroundNodeRequest(LiteLLMPydanticObjectBase):
+    name: Optional[str] = None
+    ip_address: Optional[str] = None
+    model_path: Optional[str] = None
+    total_gpus: Optional[int] = Field(default=None, ge=1)
+    gpu_type: Optional[str] = None
+    is_playground_eligible: Optional[bool] = None
+    is_healthy: Optional[bool] = None
+    ssh_user: Optional[str] = None
+
+
+class PlaygroundNodeResponse(LiteLLMPydanticObjectBase):
+    node_id: str
+    name: str
+    ip_address: str
+    total_gpus: int
+    gpu_type: str
+    is_playground_eligible: bool
+    is_healthy: bool
+    ssh_user: str
+    model_path: str
+    created_at: datetime
+    updated_at: datetime
+
+
+# --- Booking ---------------------------------------------------------------
+
+
+class CreatePlaygroundBookingRequest(LiteLLMPydanticObjectBase):
+    gpu_count: int = Field(ge=1, le=8)
+    preferred_node: Optional[str] = None
+    # Admin-only: when a caller with PROXY_ADMIN role is acting on behalf of
+    # another user (e.g. grid forwarding a user's JWT-authenticated request),
+    # set target_user_id to the litellm user_id of the real caller. Ignored
+    # for non-admin callers.
+    target_user_id: Optional[str] = None
+
+
+class PlaygroundBookingResponse(LiteLLMPydanticObjectBase):
+    booking_id: str
+    user_id: str
+    gpu_count: int
+    preferred_node: Optional[str] = None
+    status: PlaygroundBookingStatus
+    allocated_node: str
+    allocated_gpus: str
+    container_id: Optional[str] = None
+    night_of: date
+    is_overflow: bool
+    created_at: datetime
+    updated_at: datetime
+
+
+# --- SSH keys --------------------------------------------------------------
+
+
+class AddPlaygroundSSHKeyRequest(LiteLLMPydanticObjectBase):
+    public_key: str
+    name: str
+    target_user_id: Optional[str] = None  # admin-on-behalf-of
+
+
+class PlaygroundSSHKeyResponse(LiteLLMPydanticObjectBase):
+    ssh_key_id: str
+    user_id: str
+    public_key: str
+    fingerprint: str
+    name: str
+    created_at: datetime
+
+
+# --- Slots / status --------------------------------------------------------
+
+
+class PlaygroundSlotNode(LiteLLMPydanticObjectBase):
+    node_id: str
+    name: str
+    ip_address: str
+    gpu_type: str
+    total_gpus: int
+    available_gpus: int
+
+
+class PlaygroundSlotsResponse(LiteLLMPydanticObjectBase):
+    night_of: date
+    booking_phase: PlaygroundBookingPhase
+    nodes: List[PlaygroundSlotNode]
+
+
+class PlaygroundAdminStatusResponse(LiteLLMPydanticObjectBase):
+    night_of: date
+    booking_phase: PlaygroundBookingPhase
+    total_bookings_tonight: int
+    nodes: List[PlaygroundNodeResponse]
+    bookings_by_node: Dict[str, int]
+
+
+# --- Internal / cron -------------------------------------------------------
+
+
+class PlaygroundAllocationBooking(LiteLLMPydanticObjectBase):
+    booking_id: str
+    user_id: str
+    user_email: Optional[str] = None
+    gpu_devices: str
+    ssh_public_key: str = ""
+
+
+class PlaygroundAllocationNode(LiteLLMPydanticObjectBase):
+    node_ip: str
+    ssh_user: str
+    model_path: str
+    bookings: List[PlaygroundAllocationBooking]
+
+
+class PlaygroundAllocationsTonightResponse(LiteLLMPydanticObjectBase):
+    night_of: date
+    nodes: List[PlaygroundAllocationNode]
+
+
+class ActivationStatusReportItem(LiteLLMPydanticObjectBase):
+    booking_id: str
+    # Restricted subset of PlaygroundBookingStatus — activate.sh only ever
+    # reports success or failure. This prevents the cron (or a compromised
+    # cron key) from flipping a booking back to "allocated" or "cancelled",
+    # which would confuse the next night's allocator.
+    status: Literal["active", "activation_failed"]
+    container_id: Optional[str] = None
+    # Optional free-text error context populated by activate.sh on failed
+    # bookings ("missing_user_email", "ssh_rc_255", "container_start_failed",
+    # etc). Pydantic's default extra="ignore" would silently drop this but
+    # we want it in the log line at line-of-sight, so accept it explicitly.
+    error: Optional[str] = None
+
+
+class ActivationStatusReportRequest(LiteLLMPydanticObjectBase):
+    results: List[ActivationStatusReportItem]
+
+
+class ActivationStatusReportResponse(LiteLLMPydanticObjectBase):
+    updated_count: int
+    bookings: List[PlaygroundBookingResponse]
+
+
+class TeardownStatusResponse(LiteLLMPydanticObjectBase):
+    night_of: date
+    terminated_count: int
+    bookings: List[PlaygroundBookingResponse]

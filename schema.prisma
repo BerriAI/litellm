@@ -1188,7 +1188,7 @@ model LiteLLM_AccessGroupTable {
   access_group_id    String   @id @default(uuid())
   access_group_name  String   @unique
   description        String?
-  
+
   // Resource memberships - explicit arrays per type
   access_model_names        String[] @default([])
   access_mcp_server_ids   String[] @default([])
@@ -1216,4 +1216,58 @@ model LiteLLM_ClaudeCodePluginTable {
   created_by    String?
 
   @@map("LiteLLM_ClaudeCodePluginTable")
+}
+
+// GPU Playground — per-node inventory. A node is eligible for playground
+// allocations only when is_playground_eligible=true AND is_healthy=true.
+model LiteLLM_PlaygroundNode {
+  node_id                String    @id @default(uuid())
+  name                   String
+  ip_address             String    @unique
+  total_gpus             Int       @default(8)
+  gpu_type               String    @default("H200")
+  is_playground_eligible Boolean   @default(false)
+  is_healthy             Boolean   @default(true)
+  ssh_user               String    @default("orchestrator")
+  model_path             String
+  created_at             DateTime  @default(now())
+  updated_at             DateTime  @default(now()) @updatedAt
+
+  bookings               LiteLLM_PlaygroundBooking[] @relation("BookingToNode")
+}
+
+// GPU Playground — booking rows. status allowed values (Pydantic-enforced at
+// the API layer, not DB-enforced — matches litellm schema convention):
+//   allocated | active | terminated | cancelled | activation_failed
+model LiteLLM_PlaygroundBooking {
+  booking_id      String    @id @default(uuid())
+  user_id         String    // litellm user_id, resolved from email by the caller
+  gpu_count       Int
+  preferred_node  String?
+  status          String    @default("allocated")
+  allocated_node  String    // FK -> LiteLLM_PlaygroundNode.ip_address
+  allocated_gpus  String    // comma-separated gpu indices (e.g. "0,1,2")
+  container_id    String?
+  night_of        DateTime  @client.Date
+  is_overflow     Boolean   @default(false)
+  created_at      DateTime  @default(now())
+  updated_at      DateTime  @default(now()) @updatedAt
+
+  node            LiteLLM_PlaygroundNode @relation("BookingToNode", fields: [allocated_node], references: [ip_address])
+
+  @@index([night_of])
+  @@index([user_id])
+  @@index([status])
+}
+
+// GPU Playground — per-user SSH public keys used to access playground containers
+model LiteLLM_UserSSHKey {
+  ssh_key_id   String    @id @default(uuid())
+  user_id      String
+  public_key   String
+  fingerprint  String    @unique
+  name         String
+  created_at   DateTime  @default(now())
+
+  @@index([user_id])
 }
