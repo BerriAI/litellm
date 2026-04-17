@@ -841,6 +841,10 @@ class PrometheusMetricsConfig(BaseModel):
         None,
         description="List of labels to include for these metrics. If None, includes all default labels.",
     )
+    exclude_labels: Optional[List[str]] = Field(
+        None,
+        description="List of labels to exclude from these metrics. Applied after include_labels.",
+    )
 
 
 class PrometheusSettings(BaseModel):
@@ -849,7 +853,7 @@ class PrometheusSettings(BaseModel):
     prometheus_metrics_config: Optional[List[PrometheusMetricsConfig]] = Field(
         None,
         description="Configuration for filtering Prometheus metrics by groups and labels",
-    )
+    ) 6a34147f38 (feat(prometheus): add exclude_labels support to PrometheusMetricsConfig)
 
 
 class NoOpMetric:
