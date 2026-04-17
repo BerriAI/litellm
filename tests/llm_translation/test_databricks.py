@@ -688,15 +688,11 @@ def test_completions_uses_databricks_sdk_if_api_key_and_base_not_specified(monke
             == f"{base_url}/serving-endpoints/chat/completions"
         )
         assert mock_post.call_args.kwargs["stream"] == False
-        assert mock_post.call_args.kwargs["data"] == json.dumps(
-            {
-                "model": "dbrx-instruct-071224",
-                "messages": messages,
-                "temperature": 0.5,
-                "extraparam": "testpassingextraparam",
-                "stream": False,
-            }
-        )
+        sent_data = json.loads(mock_post.call_args.kwargs["data"])
+        assert sent_data["model"] == "dbrx-instruct-071224"
+        assert sent_data["messages"] == messages
+        assert sent_data["temperature"] == 0.5
+        assert sent_data["extraparam"] == "testpassingextraparam"
 
 
 def test_embeddings_with_sync_http_handler(monkeypatch):

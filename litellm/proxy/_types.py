@@ -247,6 +247,9 @@ class KeyManagementRoutes(str, enum.Enum):
     # team usage routes
     TEAM_DAILY_ACTIVITY = "/team/daily/activity"
 
+    # team spend-log viewing
+    SPEND_LOGS = "/spend/logs"
+
 
 class LiteLLMRoutes(enum.Enum):
     openai_route_names = [
@@ -494,10 +497,12 @@ class LiteLLMRoutes(enum.Enum):
         "/v2/key/info",
         "/model_group/info",
         "/health",
+        "/health/services",
         "/key/list",
         "/user/filter/ui",
         "/models",
         "/v1/models",
+        "/sso/get/ui_settings",
     ]
 
     # NOTE: ROUTES ONLY FOR MASTER KEY - only the Master Key should be able to Reset Spend
@@ -520,6 +525,7 @@ class LiteLLMRoutes(enum.Enum):
         KeyManagementRoutes.KEY_UNBLOCK.value,
         KeyManagementRoutes.KEY_BULK_UPDATE.value,
         KeyManagementRoutes.TEAM_DAILY_ACTIVITY.value,
+        KeyManagementRoutes.SPEND_LOGS.value,
         KeyManagementRoutes.KEY_RESET_SPEND.value,
         KeyManagementRoutes.KEY_ALIASES.value,
     ]
@@ -566,6 +572,8 @@ class LiteLLMRoutes(enum.Enum):
         "/spend/tags",
         "/spend/calculate",
         "/spend/logs",
+        "/spend/logs/ui",
+        "/spend/logs/session/ui",
         "/cost/estimate",
     ]
 
@@ -581,6 +589,7 @@ class LiteLLMRoutes(enum.Enum):
         "/global/spend/report",
         "/global/spend/provider",
         "/global/spend/tags",
+        "/global/spend/all_tag_names",
     ]
 
     public_routes = set(
@@ -602,6 +611,9 @@ class LiteLLMRoutes(enum.Enum):
         ]
     )
 
+    # Retained for backwards compatibility with JWT auth configs that reference
+    # "ui_routes" in admin_allowed_routes. Not used by the proxy's own route
+    # authorization — UI tokens now go through the same RBAC path as API tokens.
     ui_routes = [
         "/sso",
         "/sso/get/ui_settings",
@@ -627,19 +639,16 @@ class LiteLLMRoutes(enum.Enum):
 
     internal_user_routes = (
         [
-            "/global/spend/tags",
-            "/global/spend/keys",
-            "/global/spend/models",
-            "/global/spend/provider",
-            "/global/spend/end_users",
             "/global/activity",
             "/global/activity/model",
+            "/global/activity/cache_hits",
             "/v1/models/{model_id}",
             "/models/{model_id}",
             "/guardrails/list",
             "/v2/guardrails/list",
         ]
         + spend_tracking_routes
+        + global_spend_tracking_routes
         + key_management_routes
     )
 
@@ -694,6 +703,9 @@ class LiteLLMRoutes(enum.Enum):
         "/tag/list",
         "/audit",
         "/audit/{id}",
+        "/global/activity",
+        "/global/activity/model",
+        "/global/activity/cache_hits",
     ] + info_routes
 
     # All routes accesible by an Org Admin
@@ -1125,6 +1137,7 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
     tool_name_to_description: Optional[Dict[str, str]] = None
     extra_headers: Optional[List[str]] = None
     static_headers: Optional[Dict[str, str]] = None
+    instructions: Optional[str] = None
     # Stdio-specific fields
     command: Optional[str] = None
     args: List[str] = Field(default_factory=list)
@@ -1207,6 +1220,7 @@ class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
     tool_name_to_description: Optional[Dict[str, str]] = None
     extra_headers: Optional[List[str]] = None
     static_headers: Optional[Dict[str, str]] = None
+    instructions: Optional[str] = None
     # Stdio-specific fields
     command: Optional[str] = None
     args: List[str] = Field(default_factory=list)
@@ -1258,6 +1272,7 @@ class LiteLLM_MCPServerTable(LiteLLMPydanticObjectBase):
     transport: MCPTransportType
     auth_type: Optional[MCPAuthType] = None
     credentials: Optional[MCPCredentials] = None
+    instructions: Optional[str] = None
     created_at: Optional[datetime] = None
     created_by: Optional[str] = None
     updated_at: Optional[datetime] = None
@@ -2435,6 +2450,7 @@ class LiteLLM_VerificationTokenView(LiteLLM_VerificationToken):
     end_user_model_max_budget: Optional[dict] = None
 
     # Organization Params
+    organization_alias: Optional[str] = None
     organization_max_budget: Optional[float] = None
     organization_tpm_limit: Optional[int] = None
     organization_rpm_limit: Optional[int] = None

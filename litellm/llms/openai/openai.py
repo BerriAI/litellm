@@ -32,6 +32,7 @@ import litellm
 from litellm import LlmProviders
 from litellm._logging import verbose_logger
 from litellm.constants import DEFAULT_MAX_RETRIES
+from litellm.files.types import FileContentStreamingResult
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
@@ -1750,6 +1751,92 @@ class OpenAIFilesAPI(BaseLLM):
         response = cast(OpenAI, openai_client).files.content(**file_content_request)
 
         return HttpxBinaryResponseContent(response=response.response)
+
+    async def afile_content_streaming(
+        self,
+        file_content_request: FileContentRequest,
+        openai_client: AsyncOpenAI,
+        chunk_size: int = 1024 * 1024,
+    ) -> FileContentStreamingResult:
+        response_cm = openai_client.files.with_streaming_response.content(
+            **file_content_request
+        )
+        response = await response_cm.__aenter__()
+        headers = dict(response.headers)
+
+        async def _stream() -> AsyncIterator[bytes]:
+            exc: Optional[BaseException] = None
+            try:
+                async for chunk in response.iter_bytes(chunk_size=chunk_size):
+                    yield chunk
+            except BaseException as e:
+                exc = e
+                raise
+            finally:
+                if exc is None:
+                    await response_cm.__aexit__(None, None, None)
+                else:
+                    await response_cm.__aexit__(type(exc), exc, exc.__traceback__)
+
+        return FileContentStreamingResult(stream_iterator=_stream(), headers=headers)
+
+    def file_content_streaming(
+        self,
+        _is_async: bool,
+        file_content_request: FileContentRequest,
+        api_base: str,
+        api_key: Optional[str],
+        timeout: Union[float, httpx.Timeout],
+        max_retries: Optional[int],
+        organization: Optional[str],
+        chunk_size: int = 1024 * 1024,
+        client: Optional[Union[OpenAI, AsyncOpenAI]] = None,
+    ) -> FileContentStreamingResult:
+        openai_client: Optional[Union[OpenAI, AsyncOpenAI]] = self.get_openai_client(
+            api_key=api_key,
+            api_base=api_base,
+            timeout=timeout,
+            max_retries=max_retries,
+            organization=organization,
+            client=client,
+            _is_async=_is_async,
+        )
+        if openai_client is None:
+            raise ValueError(
+                "OpenAI client is not initialized. Make sure api_key is passed or OPENAI_API_KEY is set in the environment."
+            )
+
+        if _is_async is True:
+            if not isinstance(openai_client, AsyncOpenAI):
+                raise ValueError(
+                    "OpenAI client is not an instance of AsyncOpenAI. Make sure you passed an AsyncOpenAI client."
+                )
+            return self.afile_content_streaming(  # type: ignore
+                file_content_request=file_content_request,
+                openai_client=openai_client,
+                chunk_size=chunk_size,
+            )
+
+        response_cm = cast(OpenAI, openai_client).files.with_streaming_response.content(
+            **file_content_request
+        )
+        response = response_cm.__enter__()
+        headers = dict(response.headers)
+
+        def _stream() -> Iterator[bytes]:
+            exc: Optional[BaseException] = None
+            try:
+                yield from response.iter_bytes(chunk_size=chunk_size)
+            except BaseException as e:
+                exc = e
+                raise
+            finally:
+                if exc is None:
+                    response_cm.__exit__(None, None, None)
+                else:
+                    response_cm.__exit__(type(exc), exc, exc.__traceback__)
+
+        return FileContentStreamingResult(stream_iterator=_stream(), headers=headers)
 
     async def aretrieve_file(
         self,

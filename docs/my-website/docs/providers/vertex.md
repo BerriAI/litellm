@@ -1216,7 +1216,7 @@ curl http://0.0.0.0:4000/chat/completions \
 </Tabs>
 
 ## Pre-requisites
-* `pip install google-cloud-aiplatform` (pre-installed on proxy docker image)
+* `uv add google-cloud-aiplatform` (pre-installed on proxy docker image)
 * Authentication: 
     * run `gcloud auth application-default login` See [Google Cloud Docs](https://cloud.google.com/docs/authentication/external/set-up-adc)
     * Alternatively you can set `GOOGLE_APPLICATION_CREDENTIALS`
