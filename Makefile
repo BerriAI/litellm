@@ -125,7 +125,7 @@ check-import-safety: install-dev
 # Combined linting (matches test-linting.yml workflow)
 lint: format-check lint-ruff lint-mypy check-circular-imports check-import-safety
 
-# Faster linting for local development (only checks changed code)
+# Faster linting for local development (checks changed files in full + changed-line formatting + mypy)
 lint-dev: lint-format-changed lint-ruff-FULL-dev lint-mypy check-circular-imports check-import-safety
 
 # Testing targets
