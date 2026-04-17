@@ -1171,6 +1171,169 @@ def test_has_any_special_delta_attributes(
     assert result is False
 
 
+def test_calculate_total_usage_with_cost():
+    from litellm.litellm_core_utils.streaming_handler import calculate_total_usage
+
+    chunk1_usage = Usage(completion_tokens=1, prompt_tokens=10, total_tokens=11)
+    chunk1 = ModelResponseStream(
+        id="test-1",
+        created=1745513206,
+        model="openrouter/test",
+        choices=[
+            StreamingChoices(finish_reason=None, index=0, delta=Delta(content="Hi"))
+        ],
+        usage=chunk1_usage,
+    )
+
+    chunk2_usage = Usage(
+        completion_tokens=5, prompt_tokens=10, total_tokens=15, cost=0.00025
+    )
+    chunk2 = ModelResponseStream(
+        id="test-1",
+        created=1745513207,
+        model="openrouter/test",
+        choices=[
+            StreamingChoices(finish_reason="stop", index=0, delta=Delta(content=""))
+        ],
+        usage=chunk2_usage,
+    )
+
+    usage = calculate_total_usage([chunk1, chunk2])
+
+    assert hasattr(usage, "cost")
+    assert usage.cost == 0.00025
+    assert usage.prompt_tokens == 10
+    assert usage.completion_tokens == 5
+
+
+@pytest.mark.asyncio
+async def test_openrouter_streaming_cost_after_finish_reason(logging_obj: Logging):
+    from litellm.utils import ModelResponseListIterator
+
+    chunk1 = ModelResponseStream(
+        id="chatcmpl-or",
+        created=1742056047,
+        model="openrouter/claude",
+        choices=[
+            StreamingChoices(
+                finish_reason=None, index=0, delta=Delta(content="Hi", role="assistant")
+            )
+        ],
+        usage=None,
+    )
+    chunk2 = ModelResponseStream(
+        id="chatcmpl-or",
+        created=1742056048,
+        model="openrouter/claude",
+        choices=[
+            StreamingChoices(finish_reason="stop", index=0, delta=Delta(content=""))
+        ],
+        usage=None,
+    )
+    chunk3_usage = Usage(
+        completion_tokens=5, prompt_tokens=10, total_tokens=15, cost=0.00025
+    )
+    chunk3 = ModelResponseStream(
+        id="chatcmpl-or",
+        created=1742056049,
+        model="openrouter/claude",
+        choices=[
+            StreamingChoices(finish_reason=None, index=0, delta=Delta(content=""))
+        ],
+        usage=chunk3_usage,
+    )
+
+    completion_stream = ModelResponseListIterator(
+        model_responses=[chunk1, chunk2, chunk3]
+    )
+    response = CustomStreamWrapper(
+        completion_stream=completion_stream,
+        model="openrouter/claude",
+        custom_llm_provider="openrouter",
+        logging_obj=logging_obj,
+        stream_options={"include_usage": True},
+    )
+
+    collected_chunks = []
+    async for chunk in response:
+        collected_chunks.append(chunk)
+
+    usage_chunks = [c for c in collected_chunks if hasattr(c, "usage") and c.usage]
+    assert len(usage_chunks) > 0
+    assert hasattr(usage_chunks[-1].usage, "cost")
+    assert usage_chunks[-1].usage.cost == 0.00025
+
+
+def test_openrouter_streaming_cost_propagates_to_hidden_params():
+    """
+    Verify that provider-reported cost from usage.cost flows into
+    _hidden_params["additional_headers"]["llm_provider-x-litellm-response-cost"]
+    on the complete streaming response, so litellm's cost calculator uses it.
+    """
+    import litellm
+
+    chunk1 = ModelResponseStream(
+        id="chatcmpl-or",
+        created=1742056047,
+        model="openrouter/claude",
+        choices=[
+            StreamingChoices(
+                finish_reason=None, index=0, delta=Delta(content="Hi", role="assistant")
+            )
+        ],
+        usage=None,
+    )
+    chunk2 = ModelResponseStream(
+        id="chatcmpl-or",
+        created=1742056048,
+        model="openrouter/claude",
+        choices=[
+            StreamingChoices(finish_reason="stop", index=0, delta=Delta(content=""))
+        ],
+        usage=None,
+    )
+    chunk3 = ModelResponseStream(
+        id="chatcmpl-or",
+        created=1742056049,
+        model="openrouter/claude",
+        choices=[
+            StreamingChoices(finish_reason=None, index=0, delta=Delta(content=""))
+        ],
+        usage=Usage(
+            completion_tokens=5, prompt_tokens=10, total_tokens=15, cost=0.00025
+        ),
+    )
+
+    # Build the complete response as stream_chunk_builder does
+    complete_response = litellm.stream_chunk_builder(
+        chunks=[chunk1, chunk2, chunk3],
+        messages=[{"role": "user", "content": "test"}],
+    )
+
+    assert complete_response is not None
+    assert hasattr(complete_response.usage, "cost")
+    assert complete_response.usage.cost == 0.00025
+
+    # Use the real propagation method from CustomStreamWrapper
+    CustomStreamWrapper._propagate_usage_cost_to_hidden_params(complete_response)
+
+    assert "additional_headers" in complete_response._hidden_params
+    assert (
+        complete_response._hidden_params["additional_headers"][
+            "llm_provider-x-litellm-response-cost"
+        ]
+        == 0.00025
+    )
+
+    # Verify the cost calculator would pick this up
+    from litellm.cost_calculator import get_response_cost_from_hidden_params
+
+    provider_cost = get_response_cost_from_hidden_params(
+        complete_response._hidden_params
+    )
+    assert provider_cost == 0.00025
+
+
 def test_handle_special_delta_attributes(
     initialized_custom_stream_wrapper: CustomStreamWrapper,
 ):
