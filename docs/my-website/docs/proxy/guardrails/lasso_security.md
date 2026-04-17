@@ -11,7 +11,7 @@ Use [Lasso Security](https://www.lasso.security/) to protect your LLM applicatio
 The Lasso guardrail requires the `ulid-py` package (version 1.1.0 or higher) for generating unique conversation identifiers:
 
 ```shell
-pip install ulid-py>=1.1.0
+uv add ulid-py>=1.1.0
 ```
 
 This package is used to create lexicographically sortable identifiers for tracking conversations and sessions in the Lasso Security platform.

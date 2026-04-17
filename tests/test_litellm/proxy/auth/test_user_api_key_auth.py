@@ -126,6 +126,280 @@ async def test_custom_auth_honors_key_level_model_access_restriction_denied_with
         assert exc.value.type == ProxyErrorTypes.key_model_access_denied
 
 
+def _proxy_server_attrs_for_custom_auth(*, user_custom_auth):
+    """
+    Build the minimal set of proxy_server module attributes that
+    _user_api_key_auth_builder reads when exercising a custom-auth return path.
+    """
+    mock_cache = AsyncMock()
+    mock_cache.async_get_cache = AsyncMock(return_value=None)
+    mock_cache.delete_cache = MagicMock()
+
+    mock_proxy_logging_obj = MagicMock()
+    mock_proxy_logging_obj.internal_usage_cache = MagicMock()
+    mock_proxy_logging_obj.internal_usage_cache.dual_cache = AsyncMock()
+    mock_proxy_logging_obj.internal_usage_cache.dual_cache.async_delete_cache = (
+        AsyncMock()
+    )
+    mock_proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
+
+    return {
+        "prisma_client": MagicMock(),
+        "user_api_key_cache": mock_cache,
+        "proxy_logging_obj": mock_proxy_logging_obj,
+        "master_key": "sk-master-key",
+        "general_settings": {},
+        "llm_model_list": [],
+        "llm_router": None,
+        "open_telemetry_logger": None,
+        "model_max_budget_limiter": MagicMock(),
+        "user_custom_auth": user_custom_auth,
+        "jwt_handler": None,
+        "litellm_proxy_admin_name": "admin",
+    }
+
+
+@pytest.mark.asyncio
+async def test_user_custom_auth_skips_post_custom_auth_checks_by_default():
+    """
+    Regression test: after v1.82.6, _run_post_custom_auth_checks was unconditionally
+    invoked on the user_custom_auth return path, which caused a ~44% RPS drop for
+    custom-auth deployments due to per-request DB lookups on trusted tokens.
+    The outer gate (litellm.enable_post_custom_auth_checks, default False) must
+    short-circuit that call so the fast path returns the validated token unchanged.
+    """
+    from fastapi import Request
+    from starlette.datastructures import URL
+
+    import litellm
+    import litellm.proxy.proxy_server as _proxy_server_mod
+    from litellm.proxy._types import LitellmUserRoles
+    from litellm.proxy.auth.user_api_key_auth import _user_api_key_auth_builder
+
+    trusted_token = UserAPIKeyAuth(
+        api_key="sk-custom-auth-trusted",
+        user_id="custom-user-123",
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+    )
+    mock_user_custom_auth = AsyncMock(return_value=trusted_token)
+
+    attrs = _proxy_server_attrs_for_custom_auth(
+        user_custom_auth=mock_user_custom_auth
+    )
+    originals = {attr: getattr(_proxy_server_mod, attr, None) for attr in attrs}
+    original_flag = getattr(litellm, "enable_post_custom_auth_checks", False)
+
+    try:
+        for attr, val in attrs.items():
+            setattr(_proxy_server_mod, attr, val)
+        litellm.enable_post_custom_auth_checks = False  # explicit: documents default
+
+        with patch(
+            "litellm.proxy.auth.user_api_key_auth._run_post_custom_auth_checks",
+            new_callable=AsyncMock,
+        ) as mock_post_checks:
+            request = Request(scope={"type": "http"})
+            request._url = URL(url="/chat/completions")
+
+            result = await _user_api_key_auth_builder(
+                request=request,
+                api_key="Bearer sk-custom-auth-trusted",
+                azure_api_key_header="",
+                anthropic_api_key_header=None,
+                google_ai_studio_api_key_header=None,
+                azure_apim_header=None,
+                request_data={},
+            )
+
+            mock_user_custom_auth.assert_awaited_once()
+            mock_post_checks.assert_not_awaited()
+            assert result.user_id == "custom-user-123"
+    finally:
+        for attr, val in originals.items():
+            setattr(_proxy_server_mod, attr, val)
+        litellm.enable_post_custom_auth_checks = original_flag
+
+
+@pytest.mark.asyncio
+async def test_user_custom_auth_runs_post_custom_auth_checks_when_opt_in():
+    """
+    Opt-in half of the outer-gate regression test: when
+    litellm.enable_post_custom_auth_checks=True, the user_custom_auth return path
+    must invoke _run_post_custom_auth_checks so deployments that rely on the
+    v1.82.6 DB-lookup behavior keep working after an explicit opt-in.
+    """
+    from fastapi import Request
+    from starlette.datastructures import URL
+
+    import litellm
+    import litellm.proxy.proxy_server as _proxy_server_mod
+    from litellm.proxy._types import LitellmUserRoles
+    from litellm.proxy.auth.user_api_key_auth import _user_api_key_auth_builder
+
+    trusted_token = UserAPIKeyAuth(
+        api_key="sk-custom-auth-trusted",
+        user_id="custom-user-123",
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+    )
+    mock_user_custom_auth = AsyncMock(return_value=trusted_token)
+
+    attrs = _proxy_server_attrs_for_custom_auth(
+        user_custom_auth=mock_user_custom_auth
+    )
+    originals = {attr: getattr(_proxy_server_mod, attr, None) for attr in attrs}
+    original_flag = getattr(litellm, "enable_post_custom_auth_checks", False)
+
+    try:
+        for attr, val in attrs.items():
+            setattr(_proxy_server_mod, attr, val)
+        litellm.enable_post_custom_auth_checks = True
+
+        with patch(
+            "litellm.proxy.auth.user_api_key_auth._run_post_custom_auth_checks",
+            new_callable=AsyncMock,
+            return_value=trusted_token,
+        ) as mock_post_checks:
+            request = Request(scope={"type": "http"})
+            request._url = URL(url="/chat/completions")
+
+            await _user_api_key_auth_builder(
+                request=request,
+                api_key="Bearer sk-custom-auth-trusted",
+                azure_api_key_header="",
+                anthropic_api_key_header=None,
+                google_ai_studio_api_key_header=None,
+                azure_apim_header=None,
+                request_data={},
+            )
+
+            mock_user_custom_auth.assert_awaited_once()
+            mock_post_checks.assert_awaited_once()
+    finally:
+        for attr, val in originals.items():
+            setattr(_proxy_server_mod, attr, val)
+        litellm.enable_post_custom_auth_checks = original_flag
+
+
+@pytest.mark.asyncio
+async def test_enterprise_custom_auth_skips_post_custom_auth_checks_by_default():
+    """
+    Mirror of test_user_custom_auth_skips_post_custom_auth_checks_by_default for the
+    enterprise_custom_auth branch. Greptile explicitly asked for both branches to
+    be covered in PR #24589 and the fix touches both return paths.
+    """
+    from fastapi import Request
+    from starlette.datastructures import URL
+
+    import litellm
+    import litellm.proxy.proxy_server as _proxy_server_mod
+    from litellm.proxy._types import LitellmUserRoles
+    from litellm.proxy.auth.user_api_key_auth import _user_api_key_auth_builder
+
+    trusted_token = UserAPIKeyAuth(
+        api_key="sk-enterprise-custom-auth-trusted",
+        user_id="enterprise-user-456",
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+    )
+    mock_enterprise_custom_auth = AsyncMock(return_value=trusted_token)
+
+    attrs = _proxy_server_attrs_for_custom_auth(user_custom_auth=None)
+    originals = {attr: getattr(_proxy_server_mod, attr, None) for attr in attrs}
+    original_flag = getattr(litellm, "enable_post_custom_auth_checks", False)
+
+    try:
+        for attr, val in attrs.items():
+            setattr(_proxy_server_mod, attr, val)
+        litellm.enable_post_custom_auth_checks = False
+
+        with patch(
+            "litellm.proxy.auth.user_api_key_auth.enterprise_custom_auth",
+            new=mock_enterprise_custom_auth,
+        ), patch(
+            "litellm.proxy.auth.user_api_key_auth._run_post_custom_auth_checks",
+            new_callable=AsyncMock,
+        ) as mock_post_checks:
+            request = Request(scope={"type": "http"})
+            request._url = URL(url="/chat/completions")
+
+            result = await _user_api_key_auth_builder(
+                request=request,
+                api_key="Bearer sk-enterprise-custom-auth-trusted",
+                azure_api_key_header="",
+                anthropic_api_key_header=None,
+                google_ai_studio_api_key_header=None,
+                azure_apim_header=None,
+                request_data={},
+            )
+
+            mock_enterprise_custom_auth.assert_awaited_once()
+            mock_post_checks.assert_not_awaited()
+            assert result.user_id == "enterprise-user-456"
+    finally:
+        for attr, val in originals.items():
+            setattr(_proxy_server_mod, attr, val)
+        litellm.enable_post_custom_auth_checks = original_flag
+
+
+@pytest.mark.asyncio
+async def test_enterprise_custom_auth_runs_post_custom_auth_checks_when_opt_in():
+    """
+    Opt-in mirror for the enterprise_custom_auth branch: when the outer flag is
+    set, _run_post_custom_auth_checks must still fire so users who depend on the
+    v1.82.6 behavior have a working migration path.
+    """
+    from fastapi import Request
+    from starlette.datastructures import URL
+
+    import litellm
+    import litellm.proxy.proxy_server as _proxy_server_mod
+    from litellm.proxy._types import LitellmUserRoles
+    from litellm.proxy.auth.user_api_key_auth import _user_api_key_auth_builder
+
+    trusted_token = UserAPIKeyAuth(
+        api_key="sk-enterprise-custom-auth-trusted",
+        user_id="enterprise-user-456",
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+    )
+    mock_enterprise_custom_auth = AsyncMock(return_value=trusted_token)
+
+    attrs = _proxy_server_attrs_for_custom_auth(user_custom_auth=None)
+    originals = {attr: getattr(_proxy_server_mod, attr, None) for attr in attrs}
+    original_flag = getattr(litellm, "enable_post_custom_auth_checks", False)
+
+    try:
+        for attr, val in attrs.items():
+            setattr(_proxy_server_mod, attr, val)
+        litellm.enable_post_custom_auth_checks = True
+
+        with patch(
+            "litellm.proxy.auth.user_api_key_auth.enterprise_custom_auth",
+            new=mock_enterprise_custom_auth,
+        ), patch(
+            "litellm.proxy.auth.user_api_key_auth._run_post_custom_auth_checks",
+            new_callable=AsyncMock,
+            return_value=trusted_token,
+        ) as mock_post_checks:
+            request = Request(scope={"type": "http"})
+            request._url = URL(url="/chat/completions")
+
+            await _user_api_key_auth_builder(
+                request=request,
+                api_key="Bearer sk-enterprise-custom-auth-trusted",
+                azure_api_key_header="",
+                anthropic_api_key_header=None,
+                google_ai_studio_api_key_header=None,
+                azure_apim_header=None,
+                request_data={},
+            )
+
+            mock_enterprise_custom_auth.assert_awaited_once()
+            mock_post_checks.assert_awaited_once()
+    finally:
+        for attr, val in originals.items():
+            setattr(_proxy_server_mod, attr, val)
+        litellm.enable_post_custom_auth_checks = original_flag
+
+
 @pytest.mark.parametrize(
     "custom_litellm_key_header, api_key, passed_in_key",
     [

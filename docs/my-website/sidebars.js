@@ -83,6 +83,7 @@ const sidebars = {
           "proxy/guardrails/openai_moderation",
           "proxy/guardrails/pangea",
           "proxy/guardrails/pillar_security",
+          "proxy/guardrails/promptguard",
           "proxy/guardrails/pii_masking_v2",
           "proxy/guardrails/panw_prisma_airs",
           "proxy/guardrails/secret_detection",
@@ -252,6 +253,11 @@ const sidebars = {
               type: "doc",
               id: "image_generation",
               label: "image_generation()",
+            },
+            {
+              type: "doc",
+              id: "completion/prompt_compression",
+              label: "compress()",
             },
             {
               type: "doc",
@@ -1143,6 +1149,7 @@ const sidebars = {
       label: "Troubleshooting",
       items: [
         "troubleshoot/ui_issues",
+        "troubleshoot/cost_discrepancy",
         "mcp_troubleshoot",
         {
           type: "category",
@@ -1279,6 +1286,7 @@ const learnSidebar = {
           items: [
             "completion/prefix",
             "completion/predict_outputs",
+            "completion/prompt_compression",
             "completion/message_trimming",
             "completion/prompt_caching",
             "completion/prompt_formatting",

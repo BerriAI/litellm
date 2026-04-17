@@ -2,6 +2,7 @@
 This file contains common utils for anthropic calls.
 """
 
+import copy
 from typing import Any, Dict, List, Optional, Union
 
 import httpx
@@ -256,6 +257,27 @@ class AnthropicModelInfo(BaseLLMModelInfo):
             )
         )
 
+    @staticmethod
+    def _is_claude_4_7_model(model: str) -> bool:
+        """Check if the model is a Claude 4.7 model (Opus 4.7)."""
+        model_lower = model.lower()
+        return any(
+            v in model_lower
+            for v in (
+                "opus-4-7",
+                "opus_4_7",
+                "opus-4.7",
+                "opus_4.7",
+            )
+        )
+
+    @staticmethod
+    def _is_adaptive_thinking_model(model: str) -> bool:
+        """Claude 4.6+ models use adaptive thinking with output_config effort."""
+        return AnthropicModelInfo._is_claude_4_6_model(
+            model
+        ) or AnthropicModelInfo._is_claude_4_7_model(model)
+
     def is_effort_used(
         self, optional_params: Optional[dict], model: Optional[str] = None
     ) -> bool:
@@ -263,14 +285,14 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         Check if effort parameter is being used and requires a beta header.
 
         Returns True if effort-related parameters are present and
-        the model requires the effort beta header. Claude 4.6 models
+        the model requires the effort beta header. Claude 4.6+ models
         use output_config as a stable API feature — no beta header needed.
         """
         if not optional_params:
             return False
 
-        # Claude 4.6 models use output_config as a stable API feature — no beta header needed
-        if model and self._is_claude_4_6_model(model):
+        # Claude 4.6+ models use output_config as a stable API feature — no beta header needed
+        if model and self._is_adaptive_thinking_model(model):
             return False
 
         # Check if reasoning_effort is provided for Claude Opus 4.5
@@ -639,15 +661,23 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         return AnthropicTokenCounter()
 
 
-def strip_advisor_blocks_from_messages(messages: List[Any]) -> List[Any]:
+def strip_advisor_blocks_from_messages(
+    messages: List[Any], replace_with_text: bool = False
+) -> List[Any]:
     """
-    Remove server_tool_use (name='advisor') and advisor_tool_result blocks from
-    assistant message content when the advisor tool is absent from the request.
+    Remove (or replace) server_tool_use (name='advisor') and advisor_tool_result blocks
+    from assistant message content.
 
     Prevents Anthropic 400 invalid_request_error: if advisor_tool_result blocks
     exist in history but the advisor tool is not in the tools array, the API rejects
     the request. This happens when the user has removed the advisor tool for cost
     control or on a follow-up turn.
+
+    Args:
+        messages: Conversation history to process (mutated in-place).
+        replace_with_text: When True, replace the advisor exchange with an
+            <advisor_feedback> text block so the executor retains the semantic
+            context of what the advisor said.  When False (default), strip silently.
     """
     for message in messages:
         if not isinstance(message, dict) or message.get("role") != "assistant":
@@ -655,7 +685,9 @@ def strip_advisor_blocks_from_messages(messages: List[Any]) -> List[Any]:
         content = message.get("content")
         if not isinstance(content, list):
             continue
-        advisor_ids: set = set()
+
+        # Collect advisor server_tool_use ids and their advice text (for replace mode).
+        advisor_id_to_text: dict = {}
         for block in content:
             if (
                 isinstance(block, dict)
@@ -664,27 +696,129 @@ def strip_advisor_blocks_from_messages(messages: List[Any]) -> List[Any]:
             ):
                 bid = block.get("id")
                 if bid:
-                    advisor_ids.add(bid)
-        if not advisor_ids:
+                    advisor_id_to_text[bid] = None  # text filled in below
+
+        if not advisor_id_to_text:
             continue
-        message["content"] = [
-            block
-            for block in content
-            if not (
-                isinstance(block, dict)
-                and (
-                    (
-                        block.get("type") == "server_tool_use"
-                        and block.get("name") == "advisor"
+
+        # If replacing, collect the advisor response text from advisor_tool_result blocks.
+        if replace_with_text:
+            for block in content:
+                if (
+                    isinstance(block, dict)
+                    and block.get("type") == "advisor_tool_result"
+                    and block.get("tool_use_id") in advisor_id_to_text
+                ):
+                    raw = block.get("content") or ""
+                    text = (
+                        raw
+                        if isinstance(raw, str)
+                        else next(
+                            (
+                                b.get("text", "")
+                                for b in raw
+                                if isinstance(b, dict) and b.get("type") == "text"
+                            ),
+                            "",
+                        )
                     )
-                    or (
-                        block.get("type") == "advisor_tool_result"
-                        and block.get("tool_use_id") in advisor_ids
-                    )
-                )
+                    advisor_id_to_text[block["tool_use_id"]] = text
+
+        new_content = []
+        for block in content:
+            if not isinstance(block, dict):
+                new_content.append(block)
+                continue
+            is_advisor_use = (
+                block.get("type") == "server_tool_use"
+                and block.get("name") == "advisor"
+                and block.get("id") in advisor_id_to_text
             )
-        ]
+            is_advisor_result = (
+                block.get("type") == "advisor_tool_result"
+                and block.get("tool_use_id") in advisor_id_to_text
+            )
+            if is_advisor_use:
+                if replace_with_text:
+                    advice = advisor_id_to_text.get(block.get("id")) or ""
+                    if advice:
+                        new_content.append(
+                            {
+                                "type": "text",
+                                "text": f"<advisor_feedback>\n{advice}\n</advisor_feedback>",
+                            }
+                        )
+                # else: drop silently
+            elif is_advisor_result:
+                pass  # always drop — replaced above (or stripped)
+            else:
+                new_content.append(block)
+
+        message["content"] = new_content
     return messages
+
+
+def is_anthropic_invalid_thinking_signature_error(error_text: str) -> bool:
+    """
+    Detect Anthropic 400 when encrypted thinking signatures in history do not match
+    the current deployment (e.g. user rotated API key or switched model endpoint).
+
+    Example API message:
+    messages.N.content.M: Invalid `signature` in `thinking` block
+    """
+    if not error_text:
+        return False
+    lower = error_text.lower()
+    return (
+        "invalid" in lower
+        and "signature" in lower
+        and "thinking" in lower
+        and "block" in lower
+    )
+
+
+def strip_thinking_blocks_from_anthropic_messages(messages: List[Any]) -> List[Any]:
+    """
+    Return a new message list with thinking / redacted_thinking content blocks removed
+    from each message. Used to recover from invalid thinking signatures on retry.
+
+    Messages whose content is a list and becomes empty after stripping are omitted,
+    since Anthropic rejects empty content arrays.
+    """
+    out: List[Any] = []
+    for m in messages:
+        if not isinstance(m, dict):
+            out.append(m)
+            continue
+        mm = copy.deepcopy(m)
+        content = mm.get("content")
+        if isinstance(content, list):
+            filtered = [
+                b
+                for b in content
+                if not (
+                    isinstance(b, dict)
+                    and b.get("type") in ("thinking", "redacted_thinking")
+                )
+            ]
+            if not filtered:
+                continue
+            mm["content"] = filtered
+        out.append(mm)
+    return out
+
+
+def strip_thinking_blocks_from_anthropic_messages_request_dict(
+    data: Dict[str, Any],
+) -> None:
+    """
+    Mutate an Anthropic Messages-style request dict: strip thinking blocks from
+    ``messages`` and remove the top-level ``thinking`` extended-thinking param.
+    """
+    msgs = data.get("messages")
+    if isinstance(msgs, list):
+        data["messages"] = strip_thinking_blocks_from_anthropic_messages(msgs)
+    data.pop("thinking", None)
 
 
 def process_anthropic_headers(headers: Union[httpx.Headers, dict]) -> dict:

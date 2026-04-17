@@ -1,189 +1,251 @@
-[tool.poetry]
+[project]
 name = "litellm"
-version = "1.83.7"
+version = "1.83.9"
 description = "Library to easily interface with LLM API providers"
-authors = ["BerriAI"]
-license = "MIT"
 readme = "README.md"
-packages = [
-    { include = "litellm" },
-    { include = "litellm/py.typed"},
+requires-python = ">=3.9, <3.14"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [
+    { name = "BerriAI" },
+]
+dependencies = [
+    "fastuuid==0.14.0",
+    "httpx==0.28.1",
+    "openai==2.24.0",
+    "python-dotenv==1.0.1",
+    "tiktoken==0.12.0",
+    "importlib-metadata==8.5.0",
+    "tokenizers==0.22.2",
+    "click==8.1.8",
+    "jinja2==3.1.6",
+    "aiohttp==3.13.3",
+    "pydantic==2.12.5",
+    "jsonschema==4.23.0",
 ]
 
-[tool.poetry.urls]
-homepage = "https://litellm.ai"
+[project.urls]
 Homepage = "https://litellm.ai"
-repository = "https://github.com/BerriAI/litellm"
 Repository = "https://github.com/BerriAI/litellm"
-documentation = "https://docs.litellm.ai"
 Documentation = "https://docs.litellm.ai"
 
-# Dependencies pinned from `pip install litellm[proxy]==1.83.0` PyPI resolution.
-# Docker builds use requirements.txt (different pins). These two paths are independent.
-[tool.poetry.dependencies]
-python = ">=3.9,<4.0"
-fastuuid = "0.14.0"
-httpx = "0.28.1"
-openai = "2.30.0"
-python-dotenv = "1.0.1"
-tiktoken = "0.12.0"
-importlib-metadata = "8.5.0"
-tokenizers = "0.22.2"
-click = "8.1.8"
-jinja2 = "3.1.6"
-aiohttp = "3.13.5"
-pydantic = "2.12.5"
-jsonschema = "4.23.0"
-numpydoc = {version = "1.8.0", optional = true} # not in Docker or PyPI proxy extra
-
-uvicorn = {version = "0.33.0", optional = true}
-uvloop = {version = "0.21.0", optional = true, markers="sys_platform != 'win32'"}
-gunicorn = {version = "23.0.0", optional = true}
-fastapi = {version = "0.124.4", optional = true}
-backoff = {version = "2.2.1", optional = true}
-pyyaml = {version = "6.0.3", optional = true}
-rq = {version = "2.7.0", optional = true}
-orjson = {version = "3.10.15", optional = true}
-apscheduler = {version = "3.11.2", optional = true}
-fastapi-sso = { version = "0.16.0", optional = true }
-PyJWT = { version = "2.12.1", optional = true, python = ">=3.9" }
-python-multipart = { version = "0.0.20", optional = true}
-cryptography = {version = "43.0.3", optional = true} # Docker uses 46.0.5; pyproject uses 43.0.3 for Poetry Python 3.9.0/3.9.1 compat
-prisma = {version = "0.11.0", optional = true}
-azure-identity = {version = "1.25.3", optional = true, python = ">=3.9"}
-azure-keyvault-secrets = {version = "4.10.0", optional = true}
-azure-storage-blob = {version = "12.28.0", optional = true}
-google-cloud-kms = {version = "2.24.2", optional = true} # not in PyPI proxy extra
-google-cloud-iam = {version = "2.19.1", optional = true}
-google-cloud-aiplatform = {version = "1.133.0", optional = true}
-resend = {version = "2.23.0", optional = true} # not in PyPI proxy extra
-pynacl = {version = "1.6.2", optional = true}
-websockets = {version = "15.0.1", optional = true}
-boto3 = { version = "1.42.80", optional = true }
-redisvl = {version = "0.4.1", optional = true, markers = "python_version >= '3.9' and python_version < '3.14'"}
-mcp = {version = "1.26.0", optional = true, python = ">=3.10"}
-a2a-sdk = {version = "0.3.25", optional = true, python = ">=3.10"}
-litellm-proxy-extras = {version = "0.4.65", optional = true}
-rich = {version = "13.9.4", optional = true}
-litellm-enterprise = {version = "0.1.37", optional = true}
-diskcache = {version = "5.6.3", optional = true}
-polars = {version = "1.39.3", optional = true, python = ">=3.10"}
-semantic-router = {version = "0.1.12", optional = true, python = ">=3.9,<3.14"}
-mlflow = {version = "3.9.0", optional = true, python = ">=3.10"} # not in PyPI proxy extra
-soundfile = {version = "0.12.1", optional = true}
-pyroscope-io = {version = "0.8.16", optional = true, markers = "sys_platform != 'win32'"}
-# grpcio: pinned to 1.80.0 (past reconnect bug #38290 in 1.68.x, has Python 3.14 wheels)
-grpcio = {version = "1.80.0", optional = true}
-
-[tool.poetry.extras]
+# Dependencies pinned from the published `litellm[proxy]==1.83.0` resolution.
+# Docker and CI should prefer `uv.lock` rather than maintaining parallel installers.
+[project.optional-dependencies]
 proxy = [
-    "gunicorn",
-    "uvicorn",
-    "uvloop",
-    "fastapi",
-    "backoff",
-    "pyyaml",
-    "rq",
-    "orjson",
-    "apscheduler",
-    "fastapi-sso",
-    "PyJWT",
-    "python-multipart",
-    "cryptography",
-    "pynacl",
-    "websockets",
-    "boto3",
-    "azure-identity",
-    "azure-storage-blob",
-    "mcp",
-    "litellm-proxy-extras",
-    "litellm-enterprise",
-    "rich",
-    "polars",
-    "soundfile",
-    "pyroscope-io",
+    "gunicorn==23.0.0",
+    "uvicorn==0.33.0",
+    "uvloop==0.21.0; sys_platform != 'win32'",
+    "fastapi==0.124.4",
+    "backoff==2.2.1",
+    "pyyaml==6.0.3",
+    "rq==2.7.0",
+    "orjson==3.10.15",
+    "apscheduler==3.11.2",
+    "fastapi-sso==0.16.0",
+    "PyJWT==2.11.0; python_version >= '3.9'",
+    "python-multipart==0.0.20",
+    "cryptography==46.0.7",
+    "pynacl==1.6.2",
+    "websockets==15.0.1",
+    "boto3==1.42.59",
+    "azure-identity==1.25.2; python_version >= '3.9'",
+    "azure-storage-blob==12.28.0",
+    "mcp==1.26.0; python_version >= '3.10'",
+    "litellm-proxy-extras==0.4.66",
+    "litellm-enterprise==0.1.37",
+    "RestrictedPython==8.1",
+    "rich==13.9.4",
+    "polars==1.38.1; python_version >= '3.10'",
+    "soundfile==0.12.1",
+    "pyroscope-io==0.8.16; sys_platform != 'win32'",
 ]
-
 extra_proxy = [
-    "prisma",
-    "azure-identity",
-    "azure-keyvault-secrets",
-    "google-cloud-kms",
-    "google-cloud-iam",
-    "resend",
-    "redisvl",
-    "a2a-sdk"
+    "prisma==0.11.0",
+    "azure-identity==1.25.2; python_version >= '3.9'",
+    "azure-keyvault-secrets==4.10.0",
+    # Not in PyPI proxy extra.
+    "google-cloud-kms==2.24.2",
+    "google-cloud-iam==2.19.1",
+    # Not in PyPI proxy extra.
+    "resend==2.23.0",
+    "redisvl==0.4.1; python_version >= '3.9' and python_version < '3.14'",
+    "a2a-sdk==0.3.24; python_version >= '3.10'",
 ]
-
 utils = [
-    "numpydoc",
+    # Not in Docker or PyPI proxy extra.
+    "numpydoc==1.8.0",
+]
+caching = ["diskcache==5.6.3"]
+semantic-router = [
+    "semantic-router==0.1.12; python_version >= '3.9' and python_version < '3.14'",
+    "aurelio-sdk==0.0.19; python_version >= '3.9' and python_version < '3.14'",
+]
+mlflow = ["mlflow==3.9.0; python_version >= '3.10'"]
+grpc = [
+    # Newest non-yanked release older than the 30-day cutoff.
+    "grpcio==1.78.0",
+]
+google = ["google-cloud-aiplatform==1.133.0"]
+proxy-runtime = [
+    # Historically bundled in the proxy Docker images via requirements.txt.
+    # Keep these in a dedicated extra so uv-based images preserve the same
+    # feature surface without forcing the base SDK install to grow.
+    "google-cloud-aiplatform==1.133.0",
+    "google-genai==1.37.0",
+    "anthropic[vertex]==0.84.0",
+    "grpcio==1.78.0",
+    "prometheus-client==0.20.0",
+    "langfuse==2.59.7",
+    "opentelemetry-api==1.28.0",
+    "opentelemetry-sdk==1.28.0",
+    "opentelemetry-exporter-otlp==1.28.0",
+    "ddtrace==2.19.0",
+    "sentry-sdk==2.21.0",
+    "mangum==0.17.0",
+    "azure-ai-contentsafety==1.0.0",
+    "azure-storage-file-datalake==12.20.0",
+    "pypdf==6.7.5; python_version < '3.14'",
+    "llm-sandbox==0.3.31; python_version >= '3.10'",
+    "detect-secrets==1.5.0",
 ]
 
+[project.scripts]
+litellm = "litellm:run_server"
+litellm-proxy = "litellm.proxy.client.cli:cli"
 
+[dependency-groups]
+dev = [
+    "diff-cover==9.7.2",
+    "flake8==7.3.0",
+    "black==24.10.0",
+    "mypy==1.19.0",
+    "pytest==8.3.5",
+    "pytest-mock==3.15.1",
+    "pytest-asyncio==1.2.0",
+    "pytest-postgresql==7.0.2",
+    # pytest-postgresql imports psycopg v3 during pytest startup. Keep the base
+    # package and the binary wheel in the default dev environment so local
+    # pytest works without requiring a system libpq install.
+    "psycopg==3.2.13; python_version < '3.10'",
+    "psycopg==3.3.3; python_version >= '3.10'",
+    "psycopg-binary==3.2.13; python_version < '3.10'",
+    "psycopg-binary==3.3.3; python_version >= '3.10'",
+    "pytest-xdist==3.8.0",
+    "requests-mock==1.12.1",
+    "responses==0.26.0",
+    "respx==0.22.0",
+    "ruff==0.15.3",
+    "types-requests==2.32.4.20260107; python_version >= '3.10'",
+    "types-setuptools==75.8.0.20250225",
+    "types-redis==4.6.0.20241004",
+    "types-PyYAML==6.0.12.20250915",
+    "opentelemetry-api==1.28.0",
+    "opentelemetry-sdk==1.28.0",
+    "opentelemetry-exporter-otlp==1.28.0",
+    "langfuse==2.59.7",
+    "fastapi-offline==1.7.6",
+    "fakeredis==2.34.1",
+    "pytest-rerunfailures==15.1",
+    "pytest-cov==5.0.0",
+    "parameterized==0.9.0",
+    "openapi-core==0.22.0; python_version < '3.14'",
+    "pytest-timeout==2.4.0",
+]
+proxy-dev = [
+    "prisma==0.11.0",
+    "hypercorn==0.17.3",
+    "prometheus-client==0.20.0",
+    "opentelemetry-api==1.28.0",
+    "opentelemetry-sdk==1.28.0",
+    "opentelemetry-exporter-otlp==1.28.0",
+    "azure-identity==1.25.2; python_version >= '3.9'",
+    "a2a-sdk==0.3.24; python_version >= '3.10'",
+]
+ci = [
+    # These are lazily imported at call sites; keep them out of core deps to
+    # avoid bloating the base SDK install (google-generativeai pulls grpcio +
+    # protobuf, Pillow is a compiled C extension).
+    "tenacity==8.5.0",
+    "google-generativeai==0.8.6",
+    "Pillow==11.3.0; python_version < '3.10'",
+    "Pillow==12.1.1; python_version >= '3.10'",
+    # Azure batch E2E tests still import psycopg2 directly.
+    "psycopg2-binary==2.9.11",
+    "pytest-codspeed==4.3.0",
+    "pytest-retry==1.7.0",
+    "pyarrow==21.0.0; python_version < '3.10'",
+    "pyarrow==22.0.0; python_version >= '3.10'",
+    "langchain==0.3.27; python_version < '3.10'",
+    "langchain==1.2.10; python_version >= '3.10'",
+    "lunary==1.0.36; python_version < '3.10'",
+    "lunary==1.4.36; python_version == '3.10'",
+    "lunary==1.4.37; python_version >= '3.11'",
+    "logfire==4.6.0",
+    "traceloop-sdk==0.33.12",
+    "detect-secrets==1.5.0",
+    "PyGithub==2.8.1",
+    "aiodynamo==24.7",
+    "argon2-cffi==25.1.0",
+    "assemblyai==0.52.4",
+    "jsonlines==4.0.0",
+    "anthropic==0.84.0",
+    "blockbuster==1.5.26",
+    "beautifulsoup4==4.14.3",
+    "pylint==3.3.9; python_version < '3.10'",
+    "pylint==4.0.5; python_version >= '3.10'",
+    "pyright==1.1.408",
+    "langchain-mcp-adapters==0.2.1; python_version >= '3.10'",
+    "langchain-openai==1.1.10; python_version >= '3.10'",
+    "langgraph==1.0.10; python_version >= '3.10'",
+    # langgraph-prebuilt 1.0.9 imports ExecutionInfo/ServerInfo from
+    # langgraph.runtime, which is not exported until langgraph 1.1.0.
+    # Pin to 1.0.8 so it pairs correctly with langgraph==1.0.10.
+    "langgraph-prebuilt==1.0.8; python_version >= '3.10'",
+    "claude-agent-sdk==0.1.44; python_version >= '3.10'",
+]
+healthcheck = [
+    "httpx==0.28.1",
+    "pyyaml==6.0.3",
+]
 
-caching = ["diskcache"]
+[build-system]
+requires = ["uv_build==0.10.7"]
+build-backend = "uv_build"
 
-semantic-router = ["semantic-router"]
+[tool.uv]
+default-groups = ["dev"]
+required-version = "==0.10.9"
+exclude-newer = "3 days"
 
-mlflow = ["mlflow"]
+[tool.uv.sources]
+litellm-proxy-extras = { workspace = true }
+litellm-enterprise = { workspace = true }
 
-grpc = ["grpcio"]
+[tool.uv.workspace]
+members = ["enterprise", "litellm-proxy-extras"]
 
-google = ["google-cloud-aiplatform"]
+[tool.uv.build-backend]
+module-root = ""
+source-exclude = [
+    "litellm/proxy/enterprise",
+    "**/__pycache__",
+    "**/__pycache__/**",
+    "**/.mypy_cache",
+    "**/.mypy_cache/**",
+    "**/.pytest_cache",
+    "**/.pytest_cache/**",
+    "**/.ruff_cache",
+    "**/.ruff_cache/**",
+]
 
 [tool.isort]
 profile = "black"
 
-[tool.poetry.scripts]
-litellm = 'litellm:run_server'
-litellm-proxy = 'litellm.proxy.client.cli:cli'
-
-[tool.poetry.group.dev.dependencies]
-diff-cover = "9.7.2"
-flake8 = "7.3.0"
-black = "24.10.0"
-mypy = "1.19.0"
-pytest = "8.3.5"
-pytest-mock = "3.15.1"
-pytest-asyncio = "1.2.0"
-pytest-postgresql = "7.0.2"
-pytest-xdist = "3.8.0"
-requests-mock = "1.12.1"
-responses = "0.26.0"
-respx = "0.22.0"
-ruff = "0.15.3"
-types-requests = {version = "2.32.4.20260107", python = ">=3.10"}
-types-setuptools = "75.8.0.20250225"
-types-redis = "4.6.0.20241004"
-types-PyYAML = "6.0.12.20250915"
-opentelemetry-api = "1.28.0"
-opentelemetry-sdk = "1.28.0"
-opentelemetry-exporter-otlp = "1.28.0"
-langfuse = "2.59.7"
-fastapi-offline = "1.7.6"
-fakeredis = "2.34.1"
-pytest-rerunfailures = "15.1"
-pytest-cov = "5.0.0"
-parameterized = "0.9.0"
-
-[tool.poetry.group.proxy-dev.dependencies]
-prisma = "0.11.0"
-hypercorn = "0.17.3"
-prometheus-client = "0.20.0"
-opentelemetry-api = "1.28.0"
-opentelemetry-sdk = "1.28.0"
-opentelemetry-exporter-otlp = "1.28.0"
-azure-identity = {version = "1.25.3", python = ">=3.9"}
-a2a-sdk = {version = "0.3.25", python = ">=3.10"}
-
-[build-system]
-requires = ["poetry-core", "wheel"]
-build-backend = "poetry.core.masonry.api"
-
 [tool.commitizen]
-version = "1.83.7"
+version = "1.83.9"
 version_files = [
-    "pyproject.toml:^version"
+    "pyproject.toml:^version",
 ]
 
 [tool.mypy]
