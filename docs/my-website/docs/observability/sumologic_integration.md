@@ -25,7 +25,7 @@ join our [discord](https://discord.gg/wuPM9dRgDw)
 For more details, see the [HTTP Logs & Metrics Source](https://www.sumologic.com/help/docs/send-data/hosted-collectors/http-source/logs-metrics/) documentation.
 
 ```shell
-pip install litellm
+uv add litellm
 ```
 
 ## Quick Start

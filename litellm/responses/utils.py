@@ -1,4 +1,5 @@
 import base64
+import re
 from typing import (
     Any,
     Dict,
@@ -225,6 +226,15 @@ class ResponsesAPIRequestUtils:
                     model_id=model_id,
                 )
             )
+
+        # Encode container IDs in the response output
+        responses_api_response = (
+            ResponsesAPIRequestUtils._update_container_ids_in_response(
+                responses_api_response=responses_api_response,
+                custom_llm_provider=custom_llm_provider,
+                litellm_metadata=litellm_metadata,
+            )
+        )
 
         return responses_api_response
 
@@ -521,6 +531,245 @@ class ResponsesAPIRequestUtils:
             )
         )
         return decoded_response_id.get("response_id", previous_response_id)
+
+    @staticmethod
+    def _build_container_id(
+        custom_llm_provider: Optional[str],
+        model_id: Optional[str],
+        container_id: str,
+    ) -> str:
+        """Build a managed container ID with provider and model info encoded.
+        
+        Format: cntr_{base64("litellm:custom_llm_provider:{provider};model_id:{model};container_id:{original}")}
+        """
+        # Avoid serializing Python None as the literal string "None" (breaks router affinity).
+        provider_part = "" if custom_llm_provider is None else custom_llm_provider
+        model_part = "" if model_id is None else model_id
+        assembled_id = f"litellm:custom_llm_provider:{provider_part};model_id:{model_part};container_id:{container_id}"
+        base64_encoded_id = base64.b64encode(assembled_id.encode("utf-8")).decode("utf-8")
+        return f"cntr_{base64_encoded_id}"
+
+    @staticmethod
+    def _decode_container_id(container_id: str) -> DecodedResponseId:
+        """Decode a managed container ID to extract provider, model, and original container ID.
+        
+        Returns:
+            DecodedResponseId with custom_llm_provider, model_id, and response_id (original container_id)
+        """
+        try:
+            # If it doesn't start with cntr_, it's not a managed ID
+            if not container_id.startswith("cntr_"):
+                return DecodedResponseId(
+                    custom_llm_provider=None,
+                    model_id=None,
+                    response_id=container_id,
+                )
+            
+            # Remove prefix and decode
+            cleaned_id = container_id.replace("cntr_", "")
+            decoded_id = base64.b64decode(cleaned_id.encode("utf-8")).decode("utf-8")
+            
+            # Parse components using regex to handle semicolons in the container_id
+            if not decoded_id.startswith("litellm:"):
+                return DecodedResponseId(
+                    custom_llm_provider=None,
+                    model_id=None,
+                    response_id=container_id,
+                )
+            
+            # Use regex to extract the three parts, allowing semicolons in container_id
+            # Format: litellm:custom_llm_provider:{provider};model_id:{model};container_id:{container}
+            # * for provider/model allows empty segments (missing router model_id).
+            pattern = r"^litellm:custom_llm_provider:([^;]*);model_id:([^;]*);container_id:(.+)$"
+            match = re.match(pattern, decoded_id)
+            
+            if not match:
+                return DecodedResponseId(
+                    custom_llm_provider=None,
+                    model_id=None,
+                    response_id=container_id,
+                )
+            
+            raw_provider = match.group(1)
+            raw_model_id = match.group(2)
+            custom_llm_provider = (
+                None if raw_provider in ("", "None") else raw_provider
+            )
+            model_id = None if raw_model_id in ("", "None") else raw_model_id
+            original_container_id = match.group(3)
+            
+            return DecodedResponseId(
+                custom_llm_provider=custom_llm_provider,
+                model_id=model_id,
+                response_id=original_container_id,
+            )
+        except Exception as e:
+            verbose_logger.debug(f"Error decoding container_id '{container_id}': {e}")
+            return DecodedResponseId(
+                custom_llm_provider=None,
+                model_id=None,
+                response_id=container_id,
+            )
+
+    @staticmethod
+    def decode_container_id_to_original(container_id: str) -> str:
+        """Decode a managed container ID to get the original provider-issued ID.
+        
+        This is used when making upstream API calls - we need to send the original
+        container ID that the provider issued, not our encoded version.
+        """
+        decoded = ResponsesAPIRequestUtils._decode_container_id(container_id)
+        return decoded.get("response_id", container_id)
+
+    @staticmethod
+    def _encode_container_ids_in_annotations(
+        annotations: Any,
+        custom_llm_provider: Optional[str],
+        model_id: Optional[str],
+    ) -> None:
+        """Encode ``container_id`` on each annotation (e.g. ``container_file_citation``)."""
+        if not annotations or not isinstance(annotations, list):
+            return
+        for ann in annotations:
+            ResponsesAPIRequestUtils._encode_container_id_on_output_item(
+                ann,
+                custom_llm_provider,
+                model_id,
+            )
+
+    @staticmethod
+    def _encode_container_ids_in_message_content(
+        content: Any,
+        custom_llm_provider: Optional[str],
+        model_id: Optional[str],
+    ) -> None:
+        """Walk message ``content`` parts and encode citation ``container_id`` values."""
+        if not content:
+            return
+        if isinstance(content, list):
+            for part in content:
+                if isinstance(part, dict):
+                    ResponsesAPIRequestUtils._encode_container_ids_in_annotations(
+                        part.get("annotations"),
+                        custom_llm_provider,
+                        model_id,
+                    )
+                else:
+                    ResponsesAPIRequestUtils._encode_container_ids_in_annotations(
+                        getattr(part, "annotations", None),
+                        custom_llm_provider,
+                        model_id,
+                    )
+
+    @staticmethod
+    def _encode_container_id_on_output_item(
+        item: Any,
+        custom_llm_provider: Optional[str],
+        model_id: Optional[str],
+    ) -> None:
+        """Mutate one output item (dict or object): wrap raw ``container_id`` as LiteLLM-managed.
+
+        Handles top-level ``container_id`` and nested ``code_interpreter_call.container_id``
+        (some wire payloads nest the tool call). Used by non-streaming responses and by
+        streaming ``response.output_item.*`` events so UIs see managed IDs incrementally.
+
+        For ``message`` items, also encodes ``container_id`` inside
+        ``content[].annotations`` (``container_file_citation``), which is what clients use
+        to fetch generated files.
+        """
+        if item is None:
+            return
+
+        def _maybe_encode(container_id: str) -> Optional[str]:
+            decoded = ResponsesAPIRequestUtils._decode_container_id(container_id)
+            if decoded.get("custom_llm_provider") is not None:
+                return None
+            return ResponsesAPIRequestUtils._build_container_id(
+                custom_llm_provider=custom_llm_provider,
+                model_id=model_id,
+                container_id=container_id,
+            )
+
+        if isinstance(item, dict):
+            cid = item.get("container_id")
+            if isinstance(cid, str):
+                enc = _maybe_encode(cid)
+                if enc is not None:
+                    item["container_id"] = enc
+            nested = item.get("code_interpreter_call")
+            if isinstance(nested, dict):
+                nc = nested.get("container_id")
+                if isinstance(nc, str):
+                    enc = _maybe_encode(nc)
+                    if enc is not None:
+                        nested["container_id"] = enc
+            if item.get("type") == "message":
+                ResponsesAPIRequestUtils._encode_container_ids_in_message_content(
+                    item.get("content"),
+                    custom_llm_provider,
+                    model_id,
+                )
+            return
+
+        cid_attr = getattr(item, "container_id", None)
+        if isinstance(cid_attr, str):
+            enc = _maybe_encode(cid_attr)
+            if enc is not None:
+                try:
+                    setattr(item, "container_id", enc)
+                except Exception:
+                    verbose_logger.debug(
+                        "Could not set container_id on streaming output item",
+                        exc_info=True,
+                    )
+
+        nested_obj = getattr(item, "code_interpreter_call", None)
+        if nested_obj is not None:
+            ResponsesAPIRequestUtils._encode_container_id_on_output_item(
+                nested_obj,
+                custom_llm_provider,
+                model_id,
+            )
+
+        if getattr(item, "type", None) == "message":
+            ResponsesAPIRequestUtils._encode_container_ids_in_message_content(
+                getattr(item, "content", None),
+                custom_llm_provider,
+                model_id,
+            )
+
+    @staticmethod
+    def _update_container_ids_in_response(
+        responses_api_response: Union[ResponsesAPIResponse, Dict[str, Any]],
+        custom_llm_provider: Optional[str],
+        litellm_metadata: Optional[Dict[str, Any]] = None,
+    ) -> Union[ResponsesAPIResponse, Dict[str, Any]]:
+        """Encode container IDs in the response output with provider/model info.
+        
+        This walks through all output items and encodes any container_id fields
+        so that follow-up container API calls can auto-route to the correct provider.
+        """
+        litellm_metadata = litellm_metadata or {}
+        model_info: Dict[str, Any] = litellm_metadata.get("model_info", {}) or {}
+        model_id = model_info.get("id")
+        
+        # Get the output list
+        if isinstance(responses_api_response, dict):
+            output = responses_api_response.get("output", [])
+        else:
+            output = getattr(responses_api_response, "output", [])
+        
+        if not output:
+            return responses_api_response
+        
+        for item in output:
+            ResponsesAPIRequestUtils._encode_container_id_on_output_item(
+                item=item,
+                custom_llm_provider=custom_llm_provider,
+                model_id=model_id,
+            )
+        
+        return responses_api_response
 
     @staticmethod
     def convert_text_format_to_text_param(

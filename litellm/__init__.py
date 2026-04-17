@@ -164,6 +164,7 @@ initialized_langfuse_clients: int = 0
 langfuse_default_tags: Optional[List[str]] = None
 langsmith_batch_size: Optional[int] = None
 prometheus_initialize_budget_metrics: Optional[bool] = False
+prometheus_latency_buckets: Optional[List[float]] = None
 require_auth_for_metrics_endpoint: Optional[bool] = False
 argilla_batch_size: Optional[int] = None
 datadog_use_v1: Optional[bool] = False  # if you want to use v1 datadog logged payload.
@@ -203,6 +204,7 @@ add_user_information_to_llm_headers: Optional[
     bool
 ] = None  # adds user_id, team_id, token hash (params from StandardLoggingMetadata) to request headers
 store_audit_logs = False  # Enterprise feature, allow users to see audit logs
+skip_system_message_in_guardrail: bool = False
 ### end of callbacks #############
 
 email: Optional[
@@ -1174,6 +1176,7 @@ from litellm.types.utils import LlmProviders
 
 ## Lazy loading this is not straightforward, will leave it here for now.
 from .main import *  # type: ignore
+from .compression import compress  # type: ignore[no-redef]
 
 # Skills API
 from .skills.main import (

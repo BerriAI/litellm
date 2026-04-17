@@ -86,6 +86,8 @@ _SECRET_RE = _build_secret_patterns()
 
 
 def _redact_string(value: str) -> str:
+    if not _ENABLE_SECRET_REDACTION:
+        return value
     return _SECRET_RE.sub(_REDACTED, value)
 
 

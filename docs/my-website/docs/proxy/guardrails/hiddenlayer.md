@@ -174,6 +174,7 @@ guardrails:
 - **`default_on`**: Automatically attach the guardrail to every request unless the client opts out.
 - **`hl-project-id` header**: Routes scans to a specific HiddenLayer project.
 - **`hl-requester-id` header**: Sets `metadata.requester_id` for auditing.
+- **`hl-session-id` header**: Groups related requests into a session for contextual analysis and tracing in the HiddenLayer console.
 
 ## Environment variables
 
