@@ -106,7 +106,7 @@ class UserAPIKeyAuthExceptionHandler:
                     message=e.message,
                     type=ProxyErrorTypes.budget_exceeded,
                     param=None,
-                    code=429,
+                    code=400,
                 )
             if isinstance(e, HTTPException):
                 raise ProxyException(
