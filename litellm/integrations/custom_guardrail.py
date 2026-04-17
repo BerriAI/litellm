@@ -268,7 +268,11 @@ class CustomGuardrail(CustomLogger):
         team_meta: dict = {}
         key_meta: dict = {}
         for key in ("metadata", "litellm_metadata"):
-            meta = data.get(key) or {}
+            # Defensive: an unparsed JSON-string metadata could leak past the
+            # proxy's normal parse path; don't AttributeError on .get().
+            meta = data.get(key)
+            if not isinstance(meta, dict):
+                continue
             team_meta = meta.get("user_api_key_team_metadata") or team_meta
             key_meta = meta.get("user_api_key_metadata") or key_meta
         return {**team_meta, **key_meta}

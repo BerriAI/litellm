@@ -981,13 +981,16 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
     # Init - Proxy Server Request
     # we do this as soon as entering so we track the original request
     ##########################################################
-    # Track arrival time for queue time metric
+    # Track arrival time for queue time metric. The body snapshot is filled
+    # in after the admin-injection strip below so the audit / spend-tracking
+    # consumers of proxy_server_request["body"] see the cleaned metadata
+    # rather than attacker-forged user_api_key_* fields.
     arrival_time = time.time()
     data["proxy_server_request"] = {
         "url": str(request.url),
         "method": request.method,
         "headers": _headers,
-        "body": copy.copy(data),  # use copy instead of deepcopy
+        "body": None,  # filled in post-strip; see below
         "arrival_time": arrival_time,  # Track when request arrived at proxy
     }
 
@@ -1087,19 +1090,24 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
 
     # Strip internal pipeline state and admin-injection slots from user input.
     # Runs AFTER the string-to-dict parse above so JSON-string metadata (sent
-    # via multipart/form-data or extra_body) cannot smuggle `user_api_key_metadata`
-    # past the isinstance(dict) guard.
+    # via multipart/form-data or extra_body) cannot smuggle admin fields past
+    # the isinstance(dict) guard.
     #
-    # The proxy writes user_api_key_metadata / user_api_key_team_metadata into
-    # data[_metadata_variable_name] below; if a caller pre-populates either
-    # key on the OTHER metadata field, _get_admin_metadata lookups would treat
-    # the caller's payload as admin-configured.
+    # The proxy populates a family of ``user_api_key_*`` fields below
+    # (user_api_key_metadata, user_api_key_user_id, user_api_key_alias,
+    # user_api_key_spend, user_api_key_team_metadata, …) into
+    # data[_metadata_variable_name]. Because the proxy only writes to ONE of
+    # the two metadata dicts, a caller pre-populating any of these keys on
+    # the OTHER metadata dict would have their forged values surface in
+    # guardrails, spend tracking, audit logs, and identity resolution. Strip
+    # by prefix so new ``user_api_key_*`` fields added in the future are
+    # covered without per-key maintenance.
     for _meta_key in ("metadata", "litellm_metadata"):
         _user_meta = data.get(_meta_key)
         if isinstance(_user_meta, dict):
             _user_meta.pop("_pipeline_managed_guardrails", None)
-            _user_meta.pop("user_api_key_metadata", None)
-            _user_meta.pop("user_api_key_team_metadata", None)
+            for _k in [k for k in _user_meta if k.startswith("user_api_key_")]:
+                _user_meta.pop(_k, None)
 
     # Strip caller-supplied routing/budget tags unless the admin has opted
     # this key or team in via metadata.allow_client_tags=True. Tags drive
@@ -1132,9 +1140,15 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
                 ", ".join(_stripped_from),
             )
 
+    # Fill in the proxy_server_request body snapshot now that metadata has
+    # been parsed and stripped. Consumers (standard_logging_payload, lago,
+    # spend_tracking_utils, streaming_iterator) read `body` to audit the
+    # request; taking the snapshot here ensures they see cleaned metadata.
+    data["proxy_server_request"]["body"] = copy.copy(data)
+
     # Snapshot the (now-cleaned) requester-supplied metadata for downstream
     # consumers. Taking the deepcopy AFTER the strip prevents attacker-
-    # injected admin slots (user_api_key_metadata, tags without opt-in,
+    # injected admin slots (user_api_key_*, tags without opt-in,
     # _pipeline_managed_guardrails) from surviving in requester_metadata
     # where guardrails and audit paths may read from it.
     if "metadata" in data and isinstance(data["metadata"], dict):
