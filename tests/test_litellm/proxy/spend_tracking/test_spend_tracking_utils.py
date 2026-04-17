@@ -1548,3 +1548,17 @@ class TestGetSpendLogsId:
         # Hash-based id, not the client uuid
         assert result is not None
         assert result != "client-uuid"
+
+    def test_acreate_file_unchanged(self):
+        """The acreate_file hash path is also independent of the flag."""
+        result = self.fn(
+            call_type="acreate_file",
+            response_obj={"id": "file-id", "data": "y"},
+            kwargs={
+                "litellm_call_id": "client-uuid",
+                "litellm_call_id_from_client": True,
+            },
+        )
+        # Hash-based id, not the client uuid
+        assert result is not None
+        assert result != "client-uuid"
