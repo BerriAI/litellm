@@ -1,10 +1,6 @@
-from datetime import datetime
+from fastapi import APIRouter, Depends, Request, Response
+from fastapi.responses import ORJSONResponse
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
-from fastapi.responses import ORJSONResponse, StreamingResponse
-
-import litellm
-from litellm._uuid import uuid
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
@@ -30,11 +26,17 @@ async def google_generate_content(
     fastapi_response: Response,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
-    from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
     from litellm.proxy.proxy_server import (
         general_settings,
         llm_router,
         proxy_config,
+        proxy_logging_obj,
+        select_data_generator,
+        user_api_base,
+        user_max_tokens,
+        user_model,
+        user_request_timeout,
+        user_temperature,
         version,
     )
 
@@ -47,33 +49,33 @@ async def google_generate_content(
     if generation_config:
         data["config"] = generation_config
 
-    # Add user authentication metadata for cost tracking
-    data = await add_litellm_data_to_request(
-        data=data,
-        request=request,
-        user_api_key_dict=user_api_key_dict,
-        proxy_config=proxy_config,
-        general_settings=general_settings,
-        version=version,
-    )
-
-    # Create logging object with full request metadata so callbacks (e.g. S3) get user/trace_id
-    data["litellm_call_id"] = request.headers.get(
-        "x-litellm-call-id", str(uuid.uuid4())
-    )
-    logging_obj, data = litellm.utils.function_setup(
-        original_function="agenerate_content",
-        rules_obj=litellm.utils.Rules(),
-        start_time=datetime.now(),
-        **data,
-    )
-    data["litellm_logging_obj"] = logging_obj
-
-    # call router
-    if llm_router is None:
-        raise HTTPException(status_code=500, detail="Router not initialized")
-    response = await llm_router.agenerate_content(**data)
-    return response
+    processor = ProxyBaseLLMRequestProcessing(data=data)
+    try:
+        return await processor.base_process_llm_request(
+            request=request,
+            fastapi_response=fastapi_response,
+            user_api_key_dict=user_api_key_dict,
+            route_type="agenerate_content",
+            proxy_logging_obj=proxy_logging_obj,
+            llm_router=llm_router,
+            general_settings=general_settings,
+            proxy_config=proxy_config,
+            select_data_generator=select_data_generator,
+            model=data.get("model"),
+            user_model=user_model,
+            user_temperature=user_temperature,
+            user_request_timeout=user_request_timeout,
+            user_max_tokens=user_max_tokens,
+            user_api_base=user_api_base,
+            version=version,
+        )
+    except Exception as e:
+        raise await processor._handle_llm_api_exception(
+            e=e,
+            user_api_key_dict=user_api_key_dict,
+            proxy_logging_obj=proxy_logging_obj,
+            version=version,
+        )
 
 
 @router.post(
@@ -90,11 +92,17 @@ async def google_stream_generate_content(
     fastapi_response: Response,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
-    from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
     from litellm.proxy.proxy_server import (
         general_settings,
         llm_router,
         proxy_config,
+        proxy_logging_obj,
+        select_data_generator,
+        user_api_base,
+        user_max_tokens,
+        user_model,
+        user_request_timeout,
+        user_temperature,
         version,
     )
 
@@ -110,37 +118,33 @@ async def google_stream_generate_content(
     if generation_config:
         data["config"] = generation_config
 
-    # Add user authentication metadata for cost tracking
-    data = await add_litellm_data_to_request(
-        data=data,
-        request=request,
-        user_api_key_dict=user_api_key_dict,
-        proxy_config=proxy_config,
-        general_settings=general_settings,
-        version=version,
-    )
-
-    # Create logging object with full request metadata so streaming END callbacks (e.g. S3) get user/trace_id
-    data["litellm_call_id"] = request.headers.get(
-        "x-litellm-call-id", str(uuid.uuid4())
-    )
-    logging_obj, data = litellm.utils.function_setup(
-        original_function="agenerate_content_stream",
-        rules_obj=litellm.utils.Rules(),
-        start_time=datetime.now(),
-        **data,
-    )
-    data["litellm_logging_obj"] = logging_obj
-
-    # call router
-    if llm_router is None:
-        raise HTTPException(status_code=500, detail="Router not initialized")
-    response = await llm_router.agenerate_content_stream(**data)
-
-    # Check if response is an async iterator (streaming response)
-    if response is not None and hasattr(response, "__aiter__"):
-        return StreamingResponse(content=response, media_type="text/event-stream")
-    return response
+    processor = ProxyBaseLLMRequestProcessing(data=data)
+    try:
+        return await processor.base_process_llm_request(
+            request=request,
+            fastapi_response=fastapi_response,
+            user_api_key_dict=user_api_key_dict,
+            route_type="agenerate_content_stream",
+            proxy_logging_obj=proxy_logging_obj,
+            llm_router=llm_router,
+            general_settings=general_settings,
+            proxy_config=proxy_config,
+            select_data_generator=select_data_generator,
+            model=data.get("model"),
+            user_model=user_model,
+            user_temperature=user_temperature,
+            user_request_timeout=user_request_timeout,
+            user_max_tokens=user_max_tokens,
+            user_api_base=user_api_base,
+            version=version,
+        )
+    except Exception as e:
+        raise await processor._handle_llm_api_exception(
+            e=e,
+            user_api_key_dict=user_api_key_dict,
+            proxy_logging_obj=proxy_logging_obj,
+            version=version,
+        )
 
 
 @router.post(
@@ -190,11 +194,20 @@ async def google_count_tokens(request: Request, model_name: str):
         messages=messages,  # compatibility when use openai-like endpoint
     )
 
-    # Call the internal token counter function with direct request flag set to False
-    token_response = await internal_token_counter(
-        request=token_request,
-        call_endpoint=True,
-    )
+    try:
+        # Call the internal token counter function with direct request flag set to False
+        token_response = await internal_token_counter(
+            request=token_request,
+            call_endpoint=True,
+        )
+    except Exception as e:
+        raise ProxyException(
+            message=getattr(e, "message", str(e)),
+            type=getattr(e, "type", "invalid_request_error"),
+            param=getattr(e, "param", None),
+            code=getattr(e, "status_code", 500),
+        )
+
     if token_response is not None:
         # cast the response to the well known format
         original_response: dict = token_response.original_response or {}
