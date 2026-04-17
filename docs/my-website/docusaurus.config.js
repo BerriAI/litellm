@@ -1,10 +1,60 @@
 // @ts-check
 // Note: type annotations allow type checking and IDEs autocompletion
 
+const fs = require('fs');
+const path = require('path');
 // @ts-ignore
 const lightCodeTheme = require('prism-react-renderer/themes/vsLight');
 // @ts-ignore
 const darkCodeTheme = require('prism-react-renderer/themes/nightOwl');
+
+const COPY_MARKDOWN_STATIC_DIR = '.generated/copy-markdown-static';
+const COPY_MARKDOWN_SOURCE_PREFIX = '__source_markdown';
+
+function copyMarkdownSourcesForClient(siteDir) {
+  const sourceRoots = ['docs', 'release_notes'];
+  const generatedRoot = path.join(siteDir, COPY_MARKDOWN_STATIC_DIR);
+  const outputRoot = path.join(generatedRoot, COPY_MARKDOWN_SOURCE_PREFIX);
+
+  fs.rmSync(generatedRoot, {recursive: true, force: true});
+  fs.mkdirSync(outputRoot, {recursive: true});
+
+  const shouldCopyFile = (filename) =>
+    filename.endsWith('.md') || filename.endsWith('.mdx');
+
+  const copyDirectory = (absoluteDirPath, relativeDirPath) => {
+    const entries = fs.readdirSync(absoluteDirPath, {withFileTypes: true});
+    for (const entry of entries) {
+      const relativePath = path
+        .join(relativeDirPath, entry.name)
+        .replaceAll(path.sep, '/');
+      const absoluteEntryPath = path.join(absoluteDirPath, entry.name);
+
+      if (entry.isDirectory()) {
+        copyDirectory(absoluteEntryPath, relativePath);
+        continue;
+      }
+
+      if (!entry.isFile() || !shouldCopyFile(entry.name)) {
+        continue;
+      }
+
+      const outputFilePath = path.join(outputRoot, relativePath);
+      fs.mkdirSync(path.dirname(outputFilePath), {recursive: true});
+      fs.copyFileSync(absoluteEntryPath, outputFilePath);
+    }
+  };
+
+  for (const sourceRoot of sourceRoots) {
+    const sourceRootAbsolutePath = path.join(siteDir, sourceRoot);
+    if (!fs.existsSync(sourceRootAbsolutePath)) {
+      continue;
+    }
+    copyDirectory(sourceRootAbsolutePath, sourceRoot);
+  }
+}
+
+copyMarkdownSourcesForClient(__dirname);
 
 const inkeepConfig = {
   baseSettings: {
@@ -53,6 +103,7 @@ const config = {
   // Set the /<baseUrl>/ pathname under which your site is served
   // For GitHub pages deployment, it is often '/<projectName>/'
   baseUrl: '/',
+  staticDirectories: ['static', COPY_MARKDOWN_STATIC_DIR],
 
   onBrokenLinks: 'warn',
   onBrokenMarkdownLinks: 'warn',

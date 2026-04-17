@@ -1,0 +1,27 @@
+.copyMarkdownToolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin: 0 0 0.75rem 0;
+}
+
+.copyMarkdownButton {
+  border: 1px solid var(--ifm-color-emphasis-300);
+  border-radius: 6px;
+  background: var(--ifm-background-surface-color);
+  color: var(--ifm-font-color-base);
+  font-size: 0.8rem;
+  font-weight: 500;
+  line-height: 1;
+  padding: 0.45rem 0.65rem;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background-color 0.15s ease;
+}
+
+.copyMarkdownButton:hover:not(:disabled) {
+  border-color: var(--ifm-color-primary);
+}
+
+.copyMarkdownButton:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
