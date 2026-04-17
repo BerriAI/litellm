@@ -224,6 +224,12 @@ def get_vertex_base_model_name(model: str) -> str:
     return model
 
 
+_VERTEX_MULTI_REGION_URLS = {
+    "us": "https://aiplatform.us.rep.googleapis.com",
+    "eu": "https://aiplatform.eu.rep.googleapis.com",
+}
+
+
 def get_vertex_base_url(
     vertex_location: Optional[str],
 ) -> str:
@@ -232,8 +238,9 @@ def get_vertex_base_url(
     """
     if vertex_location == "global":
         return "https://aiplatform.googleapis.com"
-    else:
-        return f"https://{vertex_location}-aiplatform.googleapis.com"
+    if vertex_location in _VERTEX_MULTI_REGION_URLS:
+        return _VERTEX_MULTI_REGION_URLS[vertex_location]
+    return f"https://{vertex_location}-aiplatform.googleapis.com"
 
 
 def _get_embedding_url(
