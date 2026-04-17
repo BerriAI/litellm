@@ -187,6 +187,17 @@ const config = {
       },
     ],
 
+    [
+      '@signalwire/docusaurus-plugin-llms-txt',
+      {
+        content: {
+          enableMarkdownFiles: true,
+          enableLlmsFullTxt: true,
+          includeDocs: true,
+        },
+      },
+    ],
+
     () => ({
       name: 'cripchat',
       injectHtmlTags() {
@@ -239,7 +250,7 @@ const config = {
     ],
   ],
 
-  themes: ['@docusaurus/theme-mermaid'],
+  themes: ['@docusaurus/theme-mermaid', '@signalwire/docusaurus-theme-llms-txt'],
   markdown: {
     mermaid: true,
   },
