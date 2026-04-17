@@ -73,6 +73,7 @@ class PrometheusLogger(CustomLogger):
             from prometheus_client import Counter, Gauge, Histogram
 
             # Always initialize label_filters, even for non-premium users
+            self.exclude_label_filters: Dict[str, List[str]] = {}
             self.label_filters = self._parse_prometheus_config()
 
             _custom_buckets = litellm.prometheus_latency_buckets
@@ -610,6 +611,13 @@ class PrometheusLogger(CustomLogger):
                     if label_error:
                         label_errors.append(label_error)
 
+                if config.exclude_labels:
+                    label_error = self._validate_single_metric_labels(
+                        metric_name, config.exclude_labels
+                    )
+                    if label_error:
+                        label_errors.append(label_error)
+
         return ValidationResults(metric_errors=metric_errors, label_errors=label_errors)
 
     def _validate_single_metric_name(
@@ -653,10 +661,12 @@ class PrometheusLogger(CustomLogger):
 
         for config in parsed_configs:
             for metric_name in config.metrics:
+                if self._validate_single_metric_name(metric_name) is not None:
+                    continue
                 if config.include_labels:
-                    # Only add if metric name is valid (validation already passed)
-                    if self._validate_single_metric_name(metric_name) is None:
-                        label_filters[metric_name] = config.include_labels
+                    label_filters[metric_name] = config.include_labels
+                if config.exclude_labels:
+                    self.exclude_label_filters[metric_name] = config.exclude_labels
 
         return label_filters
 
@@ -969,19 +979,21 @@ class PrometheusLogger(CustomLogger):
         # Get default labels for this metric from PrometheusMetricLabels
         default_labels = PrometheusMetricLabels.get_labels(metric_name)
 
-        # If no label filtering is configured for this metric, use default labels
-        if metric_name not in self.label_filters:
-            return default_labels
+        # Apply include_labels filter (allowlist)
+        if metric_name in self.label_filters:
+            configured_labels = self.label_filters[metric_name]
+            default_labels = [
+                label for label in default_labels if label in configured_labels
+            ]
 
-        # Get configured labels for this metric
-        configured_labels = self.label_filters[metric_name]
+        # Apply exclude_labels filter (blocklist)
+        if metric_name in self.exclude_label_filters:
+            excluded_labels = self.exclude_label_filters[metric_name]
+            default_labels = [
+                label for label in default_labels if label not in excluded_labels
+            ]
 
-        # Return intersection of configured and default labels to ensure we only use valid labels
-        filtered_labels = [
-            label for label in default_labels if label in configured_labels
-        ]
-
-        return filtered_labels
+        return default_labels
 
     def _inc_labeled_counter(
         self,
