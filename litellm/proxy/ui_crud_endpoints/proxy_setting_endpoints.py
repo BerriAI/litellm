@@ -100,6 +100,15 @@ class UISettings(BaseModel):
         description="If enabled, forwards client headers (e.g. Authorization) to the LLM API. Required for Claude Code with Max subscription.",
     )
 
+    forward_llm_provider_auth_headers: bool = Field(
+        default=False,
+        description=(
+            "If enabled, forwards LLM provider auth headers (x-api-key, "
+            "x-goog-api-key, api-key, ocp-apim-subscription-key) to the upstream "
+            "provider. Required for Claude Code BYOK (bring-your-own-key) flows."
+        ),
+    )
+
     enable_projects_ui: bool = Field(
         default=False,
         description="If enabled, shows the Projects feature in the UI sidebar and the project field in key management.",
@@ -149,6 +158,7 @@ ALLOWED_UI_SETTINGS_FIELDS = {
     "enabled_ui_pages_internal_users",
     "require_auth_for_public_ai_hub",
     "forward_client_headers_to_llm_api",
+    "forward_llm_provider_auth_headers",
     "enable_projects_ui",
     "disable_agents_for_internal_users",
     "allow_agents_for_team_admins",
@@ -162,6 +172,7 @@ ALLOWED_UI_SETTINGS_FIELDS = {
 # general_settings at runtime (on both read and write).
 _RUNTIME_GENERAL_SETTINGS_FLAGS = [
     "forward_client_headers_to_llm_api",
+    "forward_llm_provider_auth_headers",
     "disable_agents_for_internal_users",
     "allow_agents_for_team_admins",
     "disable_vector_stores_for_internal_users",
