@@ -31,6 +31,7 @@ from litellm.constants import (
 )
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.proxy._types import (
     RBAC_ROLES,
     CallInfo,
@@ -350,7 +351,6 @@ def _guardrail_modification_check(
     failing loudly at the auth layer so operators see an explicit 403 instead
     of a confusing silent-ignore.
     """
-    from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
     from litellm.proxy.guardrails.guardrail_helpers import can_modify_guardrails
 
     def _coerce_to_dict(container: Any) -> Optional[dict]:
