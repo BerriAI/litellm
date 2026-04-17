@@ -26,7 +26,7 @@ GITHUB_API_KEY_URL = "https://api.github.com/copilot_internal/v2/token"
 
 class Authenticator:
     def __init__(self) -> None:
-        """GitHub Copilot authenticator - sets up configurable token file paths."""
+        """Initialize the GitHub Copilot authenticator with configurable token paths."""
         # Token storage paths
         self.token_dir = os.getenv(
             "GITHUB_COPILOT_TOKEN_DIR",
@@ -194,7 +194,7 @@ class Authenticator:
         if not os.path.exists(self.token_dir):
             os.makedirs(self.token_dir, exist_ok=True)
 
-    def _get_github_headers(self, access_token: Optional[str] = None) -> dict:
+    def _get_github_headers(self, access_token: Optional[str] = None) -> Dict[str, str]:
         """
         Generate standard GitHub headers for API requests.
 
