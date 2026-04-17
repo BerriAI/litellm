@@ -441,6 +441,10 @@ class ProxyExtrasDBManager:
                                         logger.warning(
                                             f"Failed to resolve migration {failed_migration}: {resolve_err}"
                                         )
+                                    # Apply any schema drift not covered by the marked-as-applied migration
+                                    ProxyExtrasDBManager._resolve_all_migrations(
+                                        migrations_dir, schema_path, mark_all_applied=False
+                                    )
                                 else:
                                     logger.info(
                                         f"Found failed migration: {failed_migration}, marking as rolled back"
@@ -564,6 +568,10 @@ class ProxyExtrasDBManager:
                                         logger.warning(
                                             f"Failed to resolve migration {migration_name}: {resolve_err}"
                                         )
+                                    # Apply any schema drift not covered by the marked-as-applied migration
+                                    ProxyExtrasDBManager._resolve_all_migrations(
+                                        migrations_dir, schema_path, mark_all_applied=False
+                                    )
                             else:
                                 # Unknown P3018 error - log and re-raise for safety
                                 logger.warning(
