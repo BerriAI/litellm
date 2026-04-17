@@ -338,7 +338,7 @@ model_list:
 
 ## Health Check Max Tokens
 
-By default, health checks use `max_tokens=1` to minimize cost and latency. For wildcard models, the default is `max_tokens=10`.
+By default, health checks use `max_tokens=5` to balance reliability with low cost and latency. For wildcard models, the default is `max_tokens=10`.
 
 You can override this per-model by setting `health_check_max_tokens` in the `model_info` section of your config.yaml.
 
@@ -351,6 +351,30 @@ model_list:
     model_info:
       health_check_max_tokens: 5 # 👈 OVERRIDE HEALTH CHECK MAX TOKENS
 ```
+
+### Reasoning vs non-reasoning defaults
+
+Reasoning models (per `supports_reasoning` in the model map) often need a higher health-check `max_tokens` because providers count reasoning tokens toward the completion budget. You can set **separate** limits without listing every model:
+
+**Per deployment (`model_info`)** — used when `health_check_max_tokens` is not set. Ignored for wildcard routes (`*` in `litellm_params.model`, i.e. the deployment model string; not `health_check_model`).
+
+```yaml
+model_list:
+  - model_name: openai-stack
+    litellm_params:
+      model: openai/gpt-5-nano
+      api_key: os.environ/OPENAI_API_KEY
+    model_info:
+      health_check_max_tokens_reasoning: 128
+      health_check_max_tokens_non_reasoning: 1
+```
+
+**Global (environment)**:
+
+- `BACKGROUND_HEALTH_CHECK_MAX_TOKENS_REASONING` — for non-wildcard reasoning models, this value takes precedence when set
+- `BACKGROUND_HEALTH_CHECK_MAX_TOKENS` — global fallback for all models (including wildcard routes)
+
+If neither is set, non-wildcard models default to `5` and wildcard routes omit `max_tokens`.
 
 ## `/health/readiness`
 
