@@ -9986,3 +9986,68 @@ export const listMCPUserCredentials = async (
   if (!response.ok) return [];
   return response.json();
 };
+
+export interface SkillRegistryItem {
+  skill_id: string;
+  display_title: string | null;
+  description: string | null;
+  examples: string[];
+  tags: string[];
+}
+
+export const fetchSkillsRegistry = async (
+  accessToken: string,
+  limit = 50,
+): Promise<SkillRegistryItem[]> => {
+  const base = proxyBaseUrl ?? "";
+  const response = await fetch(`${base}/v1/skills/registry?limit=${limit}`, {
+    headers: { [globalLitellmHeaderName]: `Bearer ${accessToken}` },
+  });
+  if (!response.ok) return [];
+  const data = await response.json();
+  return data.data ?? [];
+};
+
+export const testGitHubSkillConnection = async (
+  accessToken: string,
+  repoUrl: string,
+  pat: string,
+): Promise<{ status: string; message?: string }> => {
+  const base = proxyBaseUrl ?? "";
+  const response = await fetch(`${base}/v1/skills/test-github-connection`, {
+    method: "POST",
+    headers: {
+      [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ repo_url: repoUrl, github_pat: pat }),
+  });
+  return response.json();
+};
+
+export const createSkillFromGitHub = async (
+  accessToken: string,
+  repoUrl: string,
+  pat: string,
+  displayTitle?: string,
+): Promise<{ skill_id: string; display_title?: string }> => {
+  const base = proxyBaseUrl ?? "";
+  const response = await fetch(`${base}/v1/skills`, {
+    method: "POST",
+    headers: {
+      [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      custom_llm_provider: "litellm_proxy",
+      github_repo_url: repoUrl,
+      github_pat: pat,
+      display_title: displayTitle || undefined,
+    }),
+  });
+  if (!response.ok) {
+    const err = await response.text();
+    throw new Error(err);
+  }
+  return response.json();
+};
