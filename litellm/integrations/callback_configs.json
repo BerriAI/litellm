@@ -454,5 +454,50 @@
       }
     },
     "description": "SQS Queue (AWS) Logging Integration"
+  },
+  {
+    "id": "aliyun_sls",
+    "displayName": "Aliyun SLS",
+    "logo": "aliyun.svg",
+    "supports_key_team_logging": false,
+    "dynamic_params": {
+      "aliyun_sls_region": {
+        "type": "text",
+        "ui_name": "Region",
+        "description": "Aliyun region ID, e.g. cn-hangzhou",
+        "required": true
+      },
+      "aliyun_sls_project": {
+        "type": "text",
+        "ui_name": "Project",
+        "description": "SLS project name",
+        "required": true
+      },
+      "aliyun_sls_logstore": {
+        "type": "text",
+        "ui_name": "Logstore",
+        "description": "SLS logstore name",
+        "required": true
+      },
+      "aliyun_sls_access_key_id": {
+        "type": "password",
+        "ui_name": "Access Key ID",
+        "description": "Alibaba Cloud AccessKey ID",
+        "required": true
+      },
+      "aliyun_sls_access_key_secret": {
+        "type": "password",
+        "ui_name": "Access Key Secret",
+        "description": "Alibaba Cloud AccessKey Secret",
+        "required": true
+      },
+      "aliyun_sls_endpoint": {
+        "type": "text",
+        "ui_name": "Endpoint (optional)",
+        "description": "Custom SLS endpoint, e.g. cn-hangzhou.log.aliyuncs.com. Defaults to {region}.log.aliyuncs.com",
+        "required": false
+      }
+    },
+    "description": "Aliyun SLS (Simple Log Service) Logging Integration"
   }
 ]

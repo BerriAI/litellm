@@ -4279,6 +4279,16 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
             gitlab_logger = GitLabPromptManager(gitlab_config=gitlab_config)
             _in_memory_loggers.append(gitlab_logger)
             return gitlab_logger  # type: ignore
+        elif logging_integration == "aliyun_sls":
+            from litellm.integrations.aliyun_sls import AliyunSLSLogger
+
+            for callback in _in_memory_loggers:
+                if isinstance(callback, AliyunSLSLogger):
+                    return callback
+
+            aliyun_sls_logger = AliyunSLSLogger()
+            _in_memory_loggers.append(aliyun_sls_logger)
+            return aliyun_sls_logger  # type: ignore
         return None
     except Exception as e:
         verbose_logger.exception(

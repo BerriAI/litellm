@@ -150,6 +150,21 @@ export const CALLBACK_CONFIGS: CallbackConfig[] = [
     },
     description: "SQS Queue (AWS) Logging Integration",
   },
+  {
+    id: "aliyun_sls",
+    displayName: "Aliyun SLS",
+    logo: `${asset_logos_folder}aliyun.svg`,
+    supports_key_team_logging: false,
+    dynamic_params: {
+      aliyun_sls_region: "text",
+      aliyun_sls_project: "text",
+      aliyun_sls_logstore: "text",
+      aliyun_sls_access_key_id: "password",
+      aliyun_sls_access_key_secret: "password",
+      aliyun_sls_endpoint: "text",
+    },
+    description: "Aliyun SLS (Simple Log Service) Logging Integration",
+  },
 ];
 
 // Create callbackInfo object mapping display names to config objects
