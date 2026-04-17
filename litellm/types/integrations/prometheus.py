@@ -4,8 +4,6 @@ from enum import Enum
 from types import MappingProxyType
 from typing import Any, ClassVar, Dict, List, Literal, Mapping, Optional, Tuple, Union
 
-from typing_extensions import Annotated
-
 import litellm
 
 
@@ -786,6 +784,7 @@ class UserAPIKeyLabelValues:
     org_id: Optional[str] = None
     org_alias: Optional[str] = None
 
+    #Added for test compatibility.
     def __init__(self, **kwargs: Any) -> None:
         """
         Match former Pydantic behavior: unknown keys are ignored; ``api_key_hash`` maps to
