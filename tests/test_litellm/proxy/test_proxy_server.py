@@ -4965,3 +4965,160 @@ async def test_increment_spend_counters_team_and_member():
     finally:
         ps.user_api_key_cache = original_key_cache
         ps.spend_counter_cache = original_counter_cache
+
+
+@pytest.mark.asyncio
+async def test_init_and_increment_spend_counter_reseeds_from_db_on_counter_miss():
+    """When the Redis counter is missing, the reseed path reads the
+    authoritative spend from the DB (not a stale cache), so the next
+    increment continues from the correct base value."""
+    from litellm.caching.dual_cache import DualCache
+
+    counter_cache = DualCache()
+    recorded_increments: list = []
+
+    async def record_increment(key, value, ttl=None, **kwargs):
+        recorded_increments.append({"key": key, "value": value, "ttl": ttl})
+        return value
+
+    fake_redis = AsyncMock()
+    fake_redis.async_increment = AsyncMock(side_effect=record_increment)
+    fake_redis.async_get_cache = AsyncMock(return_value=None)  # counter missing
+    counter_cache.redis_cache = fake_redis
+
+    # Prisma returns spend=42.0 (authoritative) while the stale cached
+    # value (would be read only if prisma is None) is 10.0. The counter
+    # must seed from 42, not 10.
+    db_row = MagicMock()
+    db_row.spend = 42.0
+    fake_prisma = MagicMock()
+    fake_prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=db_row)
+
+    stale_cache = DualCache()
+    stale_team = MagicMock()
+    stale_team.spend = 10.0
+    stale_cache.in_memory_cache.set_cache(key="team_id:team-9", value=stale_team)
+
+    import litellm.proxy.proxy_server as ps
+    from litellm.proxy.proxy_server import _init_and_increment_spend_counter
+
+    orig_user, orig_counter, orig_prisma = (
+        ps.user_api_key_cache,
+        ps.spend_counter_cache,
+        ps.prisma_client,
+    )
+    ps.user_api_key_cache = stale_cache
+    ps.spend_counter_cache = counter_cache
+    ps.prisma_client = fake_prisma
+    try:
+        await _init_and_increment_spend_counter(
+            counter_key="spend:team:team-9",
+            source_cache_key="team_id:team-9",
+            increment=1.5,
+        )
+
+        fake_prisma.db.litellm_teamtable.find_unique.assert_awaited_once_with(
+            where={"team_id": "team-9"}
+        )
+        # Two increments keyed on the counter: seed ($42) then request ($1.50).
+        writes = [(c["key"], c["value"]) for c in recorded_increments]
+        assert ("spend:team:team-9", 42.0) in writes
+        assert ("spend:team:team-9", 1.5) in writes
+    finally:
+        ps.user_api_key_cache = orig_user
+        ps.spend_counter_cache = orig_counter
+        ps.prisma_client = orig_prisma
+
+
+@pytest.mark.asyncio
+async def test_increment_spend_counters_uses_long_ttl_on_redis_writes():
+    """Every counter write (key, team, team_member) must carry the long
+    TTL. Redis's 60s default would expire counters mid-cycle and re-seed
+    from stale cached spend, causing budget bypass."""
+    from litellm.caching.dual_cache import DualCache
+    from litellm.constants import SPEND_COUNTER_REDIS_TTL_SECONDS
+    from litellm.proxy._types import (
+        LiteLLM_TeamTable,
+        LiteLLM_VerificationTokenView,
+        hash_token,
+    )
+
+    key_cache = DualCache()
+    counter_cache = DualCache()
+
+    hashed_token = hash_token("sk-ttl-test-token")
+    # Seed budget_limits so the per-window counter paths also fire.
+    key_cache.in_memory_cache.set_cache(
+        key=hashed_token,
+        value=LiteLLM_VerificationTokenView(
+            token=hashed_token,
+            spend=0.0,
+            max_budget=10.0,
+            budget_limits=[{"budget_duration": "1h", "max_budget": 1.0}],
+        ),
+    )
+    # Seed team + membership so increment_spend_counters exercises
+    # all counter paths (key, team, team_member, plus window variants).
+    key_cache.in_memory_cache.set_cache(
+        key="team_id:team-1",
+        value=LiteLLM_TeamTable(
+            team_id="team-1",
+            spend=0.0,
+            budget_limits=[{"budget_duration": "1d", "max_budget": 5.0}],
+        ),
+    )
+    key_cache.in_memory_cache.set_cache(
+        key="team_membership:user-1:team-1",
+        value={"user_id": "user-1", "team_id": "team-1", "spend": 0.0},
+    )
+
+    recorded_writes: list = []
+
+    async def record_increment(key, value, ttl=None, **kwargs):
+        recorded_writes.append({"op": "increment", "key": key, "ttl": ttl})
+        return value
+
+    async def record_set(key, value, **kwargs):
+        recorded_writes.append({"op": "set", "key": key, "ttl": kwargs.get("ttl")})
+
+    fake_redis = AsyncMock()
+    fake_redis.async_increment = AsyncMock(side_effect=record_increment)
+    fake_redis.async_set_cache = AsyncMock(side_effect=record_set)
+    fake_redis.async_get_cache = AsyncMock(return_value=None)
+    counter_cache.redis_cache = fake_redis
+
+    import litellm.proxy.proxy_server as ps
+
+    original_key_cache = ps.user_api_key_cache
+    original_counter_cache = ps.spend_counter_cache
+    ps.user_api_key_cache = key_cache
+    ps.spend_counter_cache = counter_cache
+
+    try:
+        from litellm.proxy.proxy_server import increment_spend_counters
+
+        await increment_spend_counters(
+            token=hashed_token,
+            team_id="team-1",
+            user_id="user-1",
+            response_cost=0.05,
+        )
+
+        # Every write carries the long TTL.
+        for call in recorded_writes:
+            assert call["ttl"] == SPEND_COUNTER_REDIS_TTL_SECONDS, (
+                f"expected ttl={SPEND_COUNTER_REDIS_TTL_SECONDS} on every "
+                f"counter write, got ttl={call['ttl']} "
+                f"on op={call['op']} key={call['key']}"
+            )
+
+        # All three primary counter keys plus the per-window counters were touched.
+        keys_written = {c["key"] for c in recorded_writes}
+        assert f"spend:key:{hashed_token}" in keys_written
+        assert "spend:team:team-1" in keys_written
+        assert "spend:team_member:user-1:team-1" in keys_written
+        assert f"spend:key:{hashed_token}:window:1h" in keys_written
+        assert "spend:team:team-1:window:1d" in keys_written
+    finally:
+        ps.user_api_key_cache = original_key_cache
+        ps.spend_counter_cache = original_counter_cache
