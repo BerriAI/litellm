@@ -113,7 +113,7 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
         if isinstance(pages, list):
             if len(pages) == 0:
                 return ""
-            if all(isinstance(p, bool) for p in pages):
+            if any(isinstance(p, bool) for p in pages):
                 raise ValueError("`pages` must be integers, not booleans")
             if all(isinstance(p, int) for p in pages):
                 if any(p < 0 for p in pages):
