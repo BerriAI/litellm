@@ -13,17 +13,26 @@ function normalizeSourcePath(source) {
 }
 
 async function copyTextToClipboard(text) {
+  let clipboardWriteError = null;
   if (
     typeof navigator !== 'undefined' &&
     navigator.clipboard &&
     typeof navigator.clipboard.writeText === 'function'
   ) {
-    await navigator.clipboard.writeText(text);
-    return;
+    try {
+      await navigator.clipboard.writeText(text);
+      return;
+    } catch (error) {
+      clipboardWriteError = error;
+    }
   }
 
   if (typeof document === 'undefined') {
-    throw new Error('Clipboard API unavailable');
+    throw new Error(
+      clipboardWriteError instanceof Error
+        ? `Clipboard API unavailable: ${clipboardWriteError.message}`
+        : 'Clipboard API unavailable',
+    );
   }
 
   const textarea = document.createElement('textarea');
@@ -38,7 +47,11 @@ async function copyTextToClipboard(text) {
   document.body.removeChild(textarea);
 
   if (!success) {
-    throw new Error('Fallback copy command failed');
+    throw new Error(
+      clipboardWriteError instanceof Error
+        ? `Fallback copy command failed after writeText error: ${clipboardWriteError.message}`
+        : 'Fallback copy command failed',
+    );
   }
 }
 
