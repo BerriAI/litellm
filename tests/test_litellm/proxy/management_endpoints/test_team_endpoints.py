@@ -5128,6 +5128,16 @@ async def test_update_team_guardrails_with_org_id():
             return_value=mock_org
         )
 
+        # Destination-org guard in update_team queries for the caller's
+        # ORG_ADMIN membership on the destination org. Return a match so
+        # the guardrails-update path (the subject under test) proceeds.
+        mock_org_admin_membership = MagicMock()
+        mock_org_admin_membership.user_id = "org-admin-guardrails-test"
+        mock_org_admin_membership.organization_id = "test-org-guardrails"
+        mock_prisma.db.litellm_organizationmembership.find_many = AsyncMock(
+            return_value=[mock_org_admin_membership]
+        )
+
         # Mock team update
         mock_updated_team = MagicMock(spec=LiteLLM_TeamTable)
         mock_updated_team.team_id = "team-guardrails-123"

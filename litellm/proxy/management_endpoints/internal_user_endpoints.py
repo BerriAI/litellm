@@ -1180,6 +1180,23 @@ async def _update_single_user_helper(
                     "error": "User does not have permission to update this user. Only PROXY_ADMIN can update other users."
                 },
             )
+    else:
+        # Silent-create guard: if the target user doesn't exist, the update
+        # path falls through to an upsert that creates a new user with
+        # caller-supplied fields (models, metadata, budgets, …). Only
+        # PROXY_ADMIN is allowed to create users this way; otherwise an org
+        # admin could spawn arbitrary users attached to nothing by supplying
+        # a fresh email, bypassing the /user/new org/team-scoping checks.
+        if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value:
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "error": (
+                        "User not found. Only PROXY_ADMIN can create users "
+                        "via /user/update; use /user/new instead."
+                    )
+                },
+            )
 
     existing_metadata = (
         cast(Dict, getattr(existing_user_row, "metadata", {}) or {})
