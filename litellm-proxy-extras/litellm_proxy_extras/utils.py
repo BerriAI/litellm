@@ -290,7 +290,40 @@ class ProxyExtrasDBManager:
 
         # check if the migration was created
         if not diff_sql_path.exists():
-            logger.warning("Migration diff was not created")
+            logger.warning(
+                "Migration diff was not created (prisma migrate diff failed — "
+                "likely a pooler URL). Falling back to direct SQL execution of "
+                "each migration file."
+            )
+            # Fall back: run each migration SQL file directly via prisma db execute.
+            # This works with pooler URLs (no schema introspection needed) and is
+            # safe to re-run because migrations use IF NOT EXISTS / IF EXISTS guards.
+            migration_files = sorted(Path(migrations_dir).glob("*/migration.sql"))
+            for mig_file in migration_files:
+                try:
+                    subprocess.run(
+                        [
+                            _get_prisma_command(),
+                            "db",
+                            "execute",
+                            "--file",
+                            str(mig_file),
+                            "--schema",
+                            schema_path,
+                        ],
+                        timeout=60,
+                        check=True,
+                        capture_output=True,
+                        text=True,
+                        env=_get_prisma_env(),
+                    )
+                    logger.info(f"Applied migration: {mig_file.parent.name}")
+                except subprocess.CalledProcessError as e:
+                    logger.warning(
+                        f"Failed to apply migration {mig_file.parent.name}: {e.stderr}"
+                    )
+                except subprocess.TimeoutExpired:
+                    logger.warning(f"Migration {mig_file.parent.name} timed out.")
             return
         logger.info(f"Migration diff created at {diff_sql_path}")
 
@@ -433,7 +466,9 @@ class ProxyExtrasDBManager:
                                         )
                                     # Apply any schema drift not covered by the marked-as-applied migration
                                     ProxyExtrasDBManager._resolve_all_migrations(
-                                        migrations_dir, schema_path, mark_all_applied=False
+                                        migrations_dir,
+                                        schema_path,
+                                        mark_all_applied=False,
                                     )
                                 else:
                                     logger.info(
@@ -560,7 +595,9 @@ class ProxyExtrasDBManager:
                                         )
                                     # Apply any schema drift not covered by the marked-as-applied migration
                                     ProxyExtrasDBManager._resolve_all_migrations(
-                                        migrations_dir, schema_path, mark_all_applied=False
+                                        migrations_dir,
+                                        schema_path,
+                                        mark_all_applied=False,
                                     )
                             else:
                                 # Unknown P3018 error - log and re-raise for safety
