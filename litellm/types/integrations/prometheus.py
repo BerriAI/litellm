@@ -792,6 +792,10 @@ class UserAPIKeyLabelValues:
         )
 
     def __repr__(self) -> str:
+        # Perf: this object is constructed on every Prometheus logging path; verbose
+        # dataclass/Pydantic-style repr is expensive and often pulled in accidentally
+        # via f-strings / debug logging. Return empty so accidental stringification
+        # stays cheap. (Dataclass default `str()` delegates to `__repr__`.)
         return ""
 
     def model_dump(self) -> Dict[str, Any]:
