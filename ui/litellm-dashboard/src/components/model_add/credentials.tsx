@@ -9,7 +9,6 @@ import {
 import { PencilAltIcon, RefreshIcon, TrashIcon } from "@heroicons/react/outline";
 import {
   Badge,
-  Button,
   Card,
   Table,
   TableBody,
@@ -19,7 +18,7 @@ import {
   TableRow,
   Text,
 } from "@tremor/react";
-import { Button as AntdButton, Form, Tooltip } from "antd";
+import { Button, Form, Tooltip } from "antd";
 import { UploadProps } from "antd/es/upload";
 import { useState } from "react";
 import DeleteResourceModal from "../common_components/DeleteResourceModal";
@@ -192,7 +191,7 @@ const CredentialsPanel: React.FC<CredentialsPanelProps> = ({ uploadProps }) => {
                   </TableCell>
                   <TableCell>
                     <Tooltip title="Edit">
-                      <AntdButton
+                      <Button
                         type="text"
                         size="small"
                         icon={<PencilAltIcon className="w-4 h-4" />}
@@ -204,7 +203,7 @@ const CredentialsPanel: React.FC<CredentialsPanelProps> = ({ uploadProps }) => {
                     </Tooltip>
                     {getOAuthRefreshCall(credential) && (
                       <Tooltip title="Refresh OAuth tokens">
-                        <AntdButton
+                        <Button
                           type="text"
                           size="small"
                           icon={<RefreshIcon className="w-4 h-4" />}
@@ -214,7 +213,7 @@ const CredentialsPanel: React.FC<CredentialsPanelProps> = ({ uploadProps }) => {
                       </Tooltip>
                     )}
                     <Tooltip title="Delete">
-                      <AntdButton
+                      <Button
                         type="text"
                         size="small"
                         icon={<TrashIcon className="w-4 h-4" />}

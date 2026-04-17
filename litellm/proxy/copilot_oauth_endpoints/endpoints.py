@@ -101,7 +101,6 @@ def _get_session(session_id: str) -> Optional[Dict[str, Any]]:
 @router.post(
     "/start",
     response_model=StartResponse,
-    dependencies=[Depends(user_api_key_auth)],
 )
 async def start_oauth(
     body: StartRequest,
@@ -163,7 +162,6 @@ async def start_oauth(
 @router.get(
     "/status",
     response_model=StatusResponse,
-    dependencies=[Depends(user_api_key_auth)],
 )
 async def oauth_status(
     session_id: str = Query(
@@ -184,7 +182,6 @@ async def oauth_status(
 
 @router.post(
     "/cancel",
-    dependencies=[Depends(user_api_key_auth)],
 )
 async def oauth_cancel(
     session_id: str = Query(
@@ -207,7 +204,6 @@ async def oauth_cancel(
 @router.post(
     "/refresh",
     response_model=RefreshResponse,
-    dependencies=[Depends(user_api_key_auth)],
 )
 async def oauth_refresh(
     body: RefreshRequest,
