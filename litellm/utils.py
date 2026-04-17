@@ -2741,6 +2741,9 @@ def resolve_proxy_model_alias_to_litellm_model(model: str) -> str:
     except Exception:
         return ""
 
+    if llm_router is None:
+        return ""
+
     try:
         model_list = llm_router.get_model_list(model_name=model) or []
     except Exception:

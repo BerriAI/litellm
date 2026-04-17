@@ -15,7 +15,7 @@ How it works:
 """
 
 import uuid
-from typing import Any, AsyncIterator, Dict, List, Optional, Union
+from typing import Any, AsyncIterator, Dict, List, Optional, Union, cast
 
 import litellm.constants as _c
 from litellm._logging import verbose_logger
@@ -23,11 +23,8 @@ from litellm.llms.anthropic.common_utils import strip_advisor_blocks_from_messag
 from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
 )
+from litellm.types.llms.openai import AllMessageValues
 from litellm.types.llms.anthropic import ANTHROPIC_ADVISOR_TOOL_TYPE
-from litellm.utils import (
-    resolve_proxy_model_alias_to_litellm_model,
-    supports_native_advisor_tool,
-)
 
 ADVISOR_MAX_USES: int = _c.ADVISOR_MAX_USES
 ADVISOR_TOOL_DESCRIPTION: str = _c.ADVISOR_TOOL_DESCRIPTION
@@ -52,8 +49,9 @@ class AdvisorOrchestrationHandler(MessagesInterceptor):
         has_advisor = any(t.get("type") == ANTHROPIC_ADVISOR_TOOL_TYPE for t in tools)
         if not has_advisor:
             return False
-        # Keep Anthropic-native advisor behavior for Claude Opus 4.6.
-        if _should_use_native_anthropic_advisor(tools, custom_llm_provider):
+        # Direct Anthropic /messages: the API handles advisor_20260301 natively;
+        # do not run the LiteLLM orchestration loop here.
+        if custom_llm_provider == "anthropic":
             return False
         return True
 
@@ -205,49 +203,6 @@ def _resolve_default_advisor_model() -> str:
 
     params = getattr(litellm, "advisor_interception_params", None) or {}
     return params.get("default_advisor_model", "") or ""
-
-
-def _should_use_native_anthropic_advisor(
-    tools: List[Dict], custom_llm_provider: Optional[str]
-) -> bool:
-    """
-    Use Anthropic's native advisor path only when:
-    - executor provider is Anthropic, and
-    - advisor model supports the native advisor capability.
-    """
-    if custom_llm_provider != "anthropic":
-        return False
-
-    advisor_tool = next(
-        (t for t in tools if t.get("type") == ANTHROPIC_ADVISOR_TOOL_TYPE),
-        None,
-    )
-    if advisor_tool is None:
-        return False
-
-    advisor_model = (advisor_tool.get("model") or _resolve_default_advisor_model() or "").strip()
-    if not advisor_model:
-        return False
-
-    # Proxy requests commonly pass advisor model as a model_name alias.
-    resolved_proxy_model = resolve_proxy_model_alias_to_litellm_model(advisor_model)
-    model_to_check = resolved_proxy_model or advisor_model
-    if supports_native_advisor_tool(
-        model=model_to_check, custom_llm_provider="anthropic"
-    ):
-        return True
-
-    try:
-        import litellm
-
-        resolved_model, advisor_provider, _, _ = litellm.get_llm_provider(
-            model=advisor_model
-        )
-        return advisor_provider == "anthropic" and supports_native_advisor_tool(
-            model=resolved_model, custom_llm_provider=advisor_provider
-        )
-    except Exception:
-        return False
 
 
 _SYNTHETIC_ADVISOR_TOOL_NAME = "consult_advisor"
@@ -530,12 +485,14 @@ async def _call_advisor_with_router(
     if api_base is not None:
         kwargs["api_base"] = api_base
 
+    openai_messages: List[AllMessageValues] = cast(List[AllMessageValues], messages)
+
     openai_response = None
     if llm_router is not None:
         try:
             openai_response = await llm_router.acompletion(
                 model=model,
-                messages=messages,
+                messages=openai_messages,
                 tools=None,
                 max_tokens=max_tokens,
                 **kwargs,
@@ -550,7 +507,7 @@ async def _call_advisor_with_router(
     if openai_response is None:
         openai_response = await _litellm.acompletion(
             model=model,
-            messages=messages,
+            messages=openai_messages,
             tools=None,
             max_tokens=max_tokens,
             **kwargs,

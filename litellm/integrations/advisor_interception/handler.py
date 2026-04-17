@@ -169,7 +169,7 @@ class AdvisorInterceptionLogger(CustomLogger):
         converted_stream = (
             isinstance(call_id, str) and call_id in self._converted_stream_call_ids
         )
-        if converted_stream:
+        if converted_stream and isinstance(call_id, str):
             self._converted_stream_call_ids.discard(call_id)
 
         if isinstance(call_id, str) and call_id in self._skip_post_hook_call_ids:
