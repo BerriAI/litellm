@@ -81,9 +81,9 @@ def _update_internal_new_user_params(data_json: dict, data: NewUserRequest) -> d
     auto_create_key = data_json.pop("auto_create_key", True)
 
     if auto_create_key is False:
-        data_json[
-            "table_name"
-        ] = "user"  # only create a user, don't create key if 'auto_create_key' set to False
+        data_json["table_name"] = (
+            "user"  # only create a user, don't create key if 'auto_create_key' set to False
+        )
 
     if litellm.default_internal_user_params and (
         data.user_role != LitellmUserRoles.PROXY_ADMIN.value
@@ -395,6 +395,7 @@ async def new_user(
     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - internal user-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"]}. IF null or {} then no object permission.
     - prompts: Optional[List[str]] - List of allowed prompts for the user. If specified, the user will only be able to use these specific prompts.
     - organizations: List[str] - List of organization id's the user is a member of
+    - password: Optional[str] - Password for the user (minimum 8 characters). Stored as a scrypt hash; never returned in responses.
     Returns:
     - key: (str) The generated api key for the user
     - expires: (datetime) Datetime object for when key expires.
@@ -419,12 +420,6 @@ async def new_user(
         if prisma_client is None:
             raise HTTPException(
                 status_code=400, detail=CommonProxyErrors.db_not_connected_error.value
-            )
-
-        if prisma_client is None:
-            raise HTTPException(
-                status_code=500,
-                detail=CommonProxyErrors.db_not_connected_error.value,
             )
         # Check for duplicate user_id or email
         await _check_duplicate_user_id(data.user_id, prisma_client)
@@ -455,6 +450,10 @@ async def new_user(
         data_json = data.json()  # type: ignore
         data_json = _update_internal_new_user_params(data_json, data)
         _hash_password_in_dict(data_json)
+        # Pop password before passing to generate_key_helper_fn — the function
+        # does not accept a password parameter and user_data does not include it.
+        # We store it via a targeted update after the user row is created.
+        hashed_password = data_json.pop("password", None)
         teams = data.teams
         if teams is None:
             teams = check_if_default_team_set()
@@ -463,6 +462,26 @@ async def new_user(
         )
 
         response = await generate_key_helper_fn(request_type="user", **data_json)
+
+        # Store the hashed password on the newly created user row.
+        if hashed_password is not None:
+            created_user_id = response.get("user_id")
+            if created_user_id is None:
+                raise HTTPException(
+                    status_code=500,
+                    detail="User was created but user_id was not returned — password could not be stored.",
+                )
+            try:
+                await prisma_client.db.litellm_usertable.update(
+                    where={"user_id": created_user_id},
+                    data={"password": hashed_password},
+                )
+            except Exception as pwd_err:
+                # Roll back the user row so the caller can safely retry.
+                await prisma_client.db.litellm_usertable.delete(
+                    where={"user_id": created_user_id}
+                )
+                raise pwd_err
         # Admin UI Logic
         # Add User to Team and Organization
         # if team_id passed add this user to the team
@@ -1103,9 +1122,9 @@ def _update_internal_user_params(
         "budget_duration" not in non_default_values
     ):  # applies internal user limits, if user role updated
         if is_internal_user and litellm.internal_user_budget_duration is not None:
-            non_default_values[
-                "budget_duration"
-            ] = litellm.internal_user_budget_duration
+            non_default_values["budget_duration"] = (
+                litellm.internal_user_budget_duration
+            )
             from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 
             non_default_values["budget_reset_at"] = get_budget_reset_time(
@@ -2399,13 +2418,13 @@ async def ui_view_users(
             }
 
         # Query users with pagination and filters
-        users: Optional[
-            List[BaseModel]
-        ] = await prisma_client.db.litellm_usertable.find_many(
-            where=where_conditions,
-            skip=skip,
-            take=page_size,
-            order={"created_at": "desc"},
+        users: Optional[List[BaseModel]] = (
+            await prisma_client.db.litellm_usertable.find_many(
+                where=where_conditions,
+                skip=skip,
+                take=page_size,
+                order={"created_at": "desc"},
+            )
         )
 
         if not users:
