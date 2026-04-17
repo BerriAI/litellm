@@ -999,13 +999,17 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 # Thinking disabled
                 params["includeThoughts"] = False
         else:
-            # For older Gemini models, use thinkingBudget
-            if thinking_enabled and not VertexGeminiConfig._is_thinking_budget_zero(
-                thinking_budget
-            ):
-                params["includeThoughts"] = True
-            if thinking_budget is not None and isinstance(thinking_budget, int):
-                params["thinkingBudget"] = thinking_budget
+            # For older Gemini models, use thinkingBudget instead of thinkingLevel
+            if thinking_enabled:
+                if VertexGeminiConfig._is_thinking_budget_zero(thinking_budget):
+                    # thinkingBudget: 0 is rejected by models with a minimum budget (e.g. gemini-2.5-pro).
+                    params["includeThoughts"] = False
+                else:
+                    params["includeThoughts"] = True
+                    if thinking_budget is not None and isinstance(thinking_budget, int):
+                        params["thinkingBudget"] = thinking_budget
+            else:
+                params["includeThoughts"] = False
 
         return params
 
