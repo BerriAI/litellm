@@ -57,7 +57,7 @@ These headers are useful for clients to understand the current rate limit status
 | `x-litellm-version` | string | LiteLLM version | |
 | `x-litellm-model-group` | string | Routed `model_list[].model_name` (client `model`) | |
 
-### Example (`"model": "my-chat-model"`)
+### Example
 
 ```yaml
 model_list:
