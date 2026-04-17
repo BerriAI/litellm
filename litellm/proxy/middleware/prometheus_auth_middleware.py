@@ -2,6 +2,7 @@
 Prometheus Auth Middleware - Pure ASGI implementation
 """
 import json
+from typing import List
 
 from fastapi import Request
 from starlette.types import ASGIApp, Receive, Scope, Send
@@ -39,8 +40,17 @@ class PrometheusAuthMiddleware:
 
         # Only run auth if configured to do so
         if litellm.require_auth_for_metrics_endpoint is True:
-            # Construct Request only when auth is actually needed
-            request = Request(scope, receive)
+            # user_api_key_auth reads the request body, which consumes ASGI `receive`.
+            # Buffer those messages and replay them for the inner app; otherwise a
+            # successful auth would forward an exhausted receive and /metrics hangs.
+            buffered_messages: List[dict] = []
+
+            async def receive_for_auth() -> dict:
+                message = await receive()
+                buffered_messages.append(message)
+                return message
+
+            request = Request(scope, receive_for_auth)
             api_key = request.headers.get(_AUTHORIZATION_HEADER) or ""
 
             try:
@@ -68,6 +78,19 @@ class PrometheusAuthMiddleware:
                     }
                 )
                 return
+
+            replay_idx = 0
+
+            async def receive_replay() -> dict:
+                nonlocal replay_idx
+                if replay_idx < len(buffered_messages):
+                    msg = buffered_messages[replay_idx]
+                    replay_idx += 1
+                    return msg
+                return await receive()
+
+            await self.app(scope, receive_replay, send)
+            return
 
         # Pass through to the inner application
         await self.app(scope, receive, send)
