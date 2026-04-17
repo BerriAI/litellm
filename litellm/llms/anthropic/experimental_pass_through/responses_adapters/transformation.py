@@ -168,8 +168,22 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                         elif btype == "thinking":
                             thinking_text = block.get("thinking", "")
                             if thinking_text:
-                                asst_parts.append(
-                                    {"type": "output_text", "text": thinking_text}
+                                # Thinking blocks must become top-level
+                                # reasoning items, not output_text inside
+                                # the assistant message. Otherwise the
+                                # provider sees two output_text blocks
+                                # and loses the thinking/response boundary.
+                                input_items.append(
+                                    {
+                                        "type": "reasoning",
+                                        "id": block.get("signature") or "",
+                                        "summary": [
+                                            {
+                                                "type": "summary_text",
+                                                "text": thinking_text,
+                                            }
+                                        ],
+                                    }
                                 )
                     if asst_parts:
                         input_items.append(
