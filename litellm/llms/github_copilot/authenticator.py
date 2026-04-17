@@ -194,7 +194,7 @@ class Authenticator:
         if not os.path.exists(self.token_dir):
             os.makedirs(self.token_dir, exist_ok=True)
 
-    def _get_github_headers(self, access_token: Optional[str] = None) -> Dict[str, str]:
+    def _get_github_headers(self, access_token: Optional[str] = None) -> dict:
         """
         Generate standard GitHub headers for API requests.
 
