@@ -51,13 +51,42 @@ These headers are useful for clients to understand the current rate limit status
 ## LiteLLM Specific Headers
 | Header | Type | Description | Available on Pass-Through Endpoints |
 |--------|------|-------------|-------------|
-| `x-litellm-call-id` | string | Unique identifier for the API call | ✅ |
-| `x-litellm-model-id` | string | Unique identifier for the model used | |
-| `x-litellm-model-api-base` | string | Base URL of the API endpoint | ✅ |
-| `x-litellm-version` | string | Version of LiteLLM being used | |
-| `x-litellm-model-group` | string | Routed **`model_name`** from `model_list` (client-visible alias) | |
+| `x-litellm-call-id` | string | Id for this request | ✅ |
+| `x-litellm-model-id` | string | Deployment id (`model_info.id`) | |
+| `x-litellm-model-api-base` | string | API base URL | ✅ |
+| `x-litellm-version` | string | LiteLLM version | |
+| `x-litellm-model-group` | string | Routed `model_list[].model_name` (client `model`) | |
 
-This header names the **model group** LiteLLM selected: the **`model_name`** entry in your proxy `model_list`—the same value clients send as `model`. It does **not** mirror **`litellm_params.model`** (the actual provider model id LiteLLM forwards upstream). Use **`x-litellm-model-id`** when you need the deployment identifier.
+### Example (`"model": "my-chat-model"`)
+
+```yaml
+model_list:
+  - model_name: my-chat-model          # clients call this
+    litellm_params:
+      model: gpt-4o-mini               # LiteLLM calls this upstream
+    model_info:
+      id: "7c9f2a1b3d8e4f0a2c6b5d9e1f3a7b8c"   # optional; auto-generated if omitted
+```
+
+| Header | Example | Notes |
+|--------|---------|-------|
+| `x-litellm-model-group` | `my-chat-model` | `model_name` / request `model`; not `litellm_params.model`. |
+| `x-litellm-model-id` | `7c9f2a1b3d8e4f0a2c6b5d9e1f3a7b8c` | Which deployment row; use with `/v1/model/info?litellm_model_id=...`. |
+| Response body `model` | often `my-chat-model` | Often restamped to match the client; upstream id stays in config. |
+
+### More examples (illustrative)
+
+| Header | Example | Meaning |
+|--------|---------|---------|
+| `x-litellm-response-cost` | `0.000214` | This call (USD). |
+| `x-litellm-key-spend` | `12.847` | Key total after this call. |
+| `x-litellm-response-duration-ms` | `842.3` | Proxy end-to-end (ms). |
+| `x-litellm-overhead-duration-ms` | `15.1` | LiteLLM overhead (ms). |
+| `x-litellm-attempted-retries` | `0` | Retries. |
+| `x-litellm-attempted-fallbacks` | `1` | Fallbacks to another deployment. |
+| `x-litellm-call-id` | `019b2c4d-e5f6-7890-abcd-ef1234567890` | Logs / tracing. |
+| `x-litellm-version` | `1.55.3` | Version. |
+| `x-litellm-model-api-base` | `https://api.openai.com/v1` | Provider base (no query string). |
 
 ## Response headers from LLM providers
 
