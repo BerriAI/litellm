@@ -80,6 +80,10 @@ class GigaChatPassthroughConfig(BasePassthroughConfig):
         from litellm.types.utils import LlmProviders, ModelResponse
         from litellm.utils import ProviderConfigManager
 
+        # cost tracking only for completions 
+        if "completions" not in endpoint:
+            return None
+
         provider_chat_config = ProviderConfigManager.get_provider_chat_config(
             provider=LlmProviders(custom_llm_provider),
             model=model,

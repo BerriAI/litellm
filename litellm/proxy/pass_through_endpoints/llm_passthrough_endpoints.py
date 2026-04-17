@@ -2573,7 +2573,7 @@ async def handle_gigachat_passthrough_router_model(
     data["custom_llm_provider"] = "gigachat"
 
     # Remove sensitive keys from data
-    keys = ["gigachat_auth_url", "gigachat_access_token", "gigachat_scope"]
+    keys = ["gigachat_auth_url", "gigachat_access_token", "gigachat_scope", "api_base", "api_key"]
     for key in keys:
         data.pop(key, None)
 
