@@ -2403,23 +2403,28 @@ async def gigachat_proxy_route(
 
     ## check for streaming
     request_body = await get_request_body(request)
-    is_router_model = is_passthrough_request_using_router_model(
-        request_body, llm_router
-    )
+    is_router_model = False
 
     model = request_body.get("model")
-    if not model:
-        msg = "Model is required"
-        raise ValueError(msg)
+    if model:    
+        is_router_model = is_passthrough_request_using_router_model(
+            request_body, llm_router
+        )
+    elif any(word in endpoint for word in ("completions", "embeddings")):
+        raise HTTPException(
+            status_code=400, detail={"error": "Model is required in request body"}
+        )
+
 
     # If router model, use dedicated router passthrough handler
     # This uses the same common processing path as non-router models
-    if is_router_model and llm_router:
+    if model and is_router_model and llm_router:
         return await handle_gigachat_passthrough_router_model(
             model=model,
             endpoint=endpoint,
             request=request,
             request_body=request_body,
+            fastapi_response=fastapi_response,
             llm_router=llm_router,
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,
@@ -2490,6 +2495,7 @@ async def handle_gigachat_passthrough_router_model(
     endpoint: str,
     request: Request,
     request_body: dict,
+    fastapi_response: Response,
     llm_router: litellm.Router,
     user_api_key_dict: UserAPIKeyAuth,
     proxy_logging_obj,
@@ -2587,7 +2593,7 @@ async def handle_gigachat_passthrough_router_model(
     try:
         result = await base_llm_response_processor.base_passthrough_process_llm_request(
             request=request,
-            fastapi_response=FastAPIResponse(),
+            fastapi_response=fastapi_response,
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,
             llm_router=llm_router,
