@@ -239,7 +239,10 @@ async def test_litellm_call_info_from_hidden_params():
         proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
 
         await proxy_logging.post_call_response_headers_hook(
-            data={"model": "gpt-4", "metadata": {"model_info": {"id": "model-abc", "provider": "HubSpot"}}},
+            data={
+                "model": "gpt-4",
+                "metadata": {"model_info": {"id": "model-abc", "provider": "HubSpot"}},
+            },
             user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
             response=MockResponse(),
         )
@@ -271,7 +274,10 @@ async def test_litellm_call_info_from_litellm_metadata():
         proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
 
         await proxy_logging.post_call_response_headers_hook(
-            data={"model": "gpt-4", "litellm_metadata": {"model_info": {"id": "deploy-xyz"}}},
+            data={
+                "model": "gpt-4",
+                "litellm_metadata": {"model_info": {"id": "deploy-xyz"}},
+            },
             user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
             response=MockResponse(),
         )
@@ -310,7 +316,11 @@ async def test_litellm_call_info_backwards_compatible():
     injector = HeaderInjectorLogger(headers={"x-test": "1"})
 
     class MockResponse:
-        _hidden_params = {"custom_llm_provider": "openai", "api_base": "https://api.openai.com", "model_id": "m1"}
+        _hidden_params = {
+            "custom_llm_provider": "openai",
+            "api_base": "https://api.openai.com",
+            "model_id": "m1",
+        }
 
     with patch("litellm.callbacks", [injector]):
         from litellm.proxy.utils import ProxyLogging

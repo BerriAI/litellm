@@ -230,7 +230,9 @@ async def test_stream_with_fallbacks_closes_stream_on_generator_close():
         break
     await result.aclose()
 
-    assert stream_closed, "model_response stream was not closed by stream_with_fallbacks finally block"
+    assert (
+        stream_closed
+    ), "model_response stream was not closed by stream_with_fallbacks finally block"
 
 
 @pytest.mark.asyncio

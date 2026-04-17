@@ -206,9 +206,7 @@ def test_enrich_http_exception_with_guardrail_context_dict_detail():
         guardrail_name = "bedrock-pii-guard"
         event_hook = "post_call"
 
-    exc = HTTPException(
-        status_code=400, detail={"error": "Violated guardrail policy"}
-    )
+    exc = HTTPException(status_code=400, detail={"error": "Violated guardrail policy"})
     _enrich_http_exception_with_guardrail_context(exc, StubCallback())
     assert exc.detail["guardrail_name"] == "bedrock-pii-guard"
     assert exc.detail["guardrail_mode"] == "post_call"

@@ -771,13 +771,17 @@ async def test_create_pass_through_route_with_cost_per_request():
     )
 
     # Mock the pass_through_request function to capture its call
-    with patch(
-        "litellm.proxy.pass_through_endpoints.pass_through_endpoints.pass_through_request"
-    ) as mock_pass_through, patch(
-        "litellm.proxy.pass_through_endpoints.pass_through_endpoints.InitPassThroughEndpointHelpers.is_registered_pass_through_route"
-    ) as mock_is_registered, patch(
-        "litellm.proxy.pass_through_endpoints.pass_through_endpoints.InitPassThroughEndpointHelpers.get_registered_pass_through_route"
-    ) as mock_get_registered:
+    with (
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.pass_through_request"
+        ) as mock_pass_through,
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.InitPassThroughEndpointHelpers.is_registered_pass_through_route"
+        ) as mock_is_registered,
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.InitPassThroughEndpointHelpers.get_registered_pass_through_route"
+        ) as mock_get_registered,
+    ):
         mock_pass_through.return_value = MagicMock()
         mock_is_registered.return_value = True
         mock_get_registered.return_value = None
@@ -2153,15 +2157,20 @@ async def test_create_pass_through_route_custom_body_url_target():
         _forward_headers=True,
     )
 
-    with patch(
-        "litellm.proxy.pass_through_endpoints.pass_through_endpoints.pass_through_request"
-    ) as mock_pass_through, patch(
-        "litellm.proxy.pass_through_endpoints.pass_through_endpoints.InitPassThroughEndpointHelpers.is_registered_pass_through_route"
-    ) as mock_is_registered, patch(
-        "litellm.proxy.pass_through_endpoints.pass_through_endpoints.InitPassThroughEndpointHelpers.get_registered_pass_through_route"
-    ) as mock_get_registered, patch(
-        "litellm.proxy.pass_through_endpoints.pass_through_endpoints._parse_request_data_by_content_type"
-    ) as mock_parse_request:
+    with (
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.pass_through_request"
+        ) as mock_pass_through,
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.InitPassThroughEndpointHelpers.is_registered_pass_through_route"
+        ) as mock_is_registered,
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.InitPassThroughEndpointHelpers.get_registered_pass_through_route"
+        ) as mock_get_registered,
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints._parse_request_data_by_content_type"
+        ) as mock_parse_request,
+    ):
         mock_pass_through.return_value = MagicMock()
         mock_is_registered.return_value = True
         mock_get_registered.return_value = None
@@ -2226,15 +2235,20 @@ async def test_create_pass_through_route_no_custom_body_falls_back():
         custom_headers={},
     )
 
-    with patch(
-        "litellm.proxy.pass_through_endpoints.pass_through_endpoints.pass_through_request"
-    ) as mock_pass_through, patch(
-        "litellm.proxy.pass_through_endpoints.pass_through_endpoints.InitPassThroughEndpointHelpers.is_registered_pass_through_route"
-    ) as mock_is_registered, patch(
-        "litellm.proxy.pass_through_endpoints.pass_through_endpoints.InitPassThroughEndpointHelpers.get_registered_pass_through_route"
-    ) as mock_get_registered, patch(
-        "litellm.proxy.pass_through_endpoints.pass_through_endpoints._parse_request_data_by_content_type"
-    ) as mock_parse_request:
+    with (
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.pass_through_request"
+        ) as mock_pass_through,
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.InitPassThroughEndpointHelpers.is_registered_pass_through_route"
+        ) as mock_is_registered,
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.InitPassThroughEndpointHelpers.get_registered_pass_through_route"
+        ) as mock_get_registered,
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints._parse_request_data_by_content_type"
+        ) as mock_parse_request,
+    ):
         mock_pass_through.return_value = MagicMock()
         mock_is_registered.return_value = True
         mock_get_registered.return_value = None

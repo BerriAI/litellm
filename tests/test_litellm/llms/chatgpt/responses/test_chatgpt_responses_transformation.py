@@ -3,6 +3,7 @@ Tests for ChatGPT subscription Responses API transformation
 
 Source: litellm/llms/chatgpt/responses/transformation.py
 """
+
 import json
 import os
 import sys
@@ -103,9 +104,7 @@ class TestChatGPTResponsesAPITransformation:
 
         assert request["stream"] is True
         assert "reasoning.encrypted_content" in request["include"]
-        assert request["instructions"].startswith(
-            "You are Codex, based on GPT-5."
-        )
+        assert request["instructions"].startswith("You are Codex, based on GPT-5.")
 
     @pytest.mark.parametrize(
         "model_name",
@@ -124,7 +123,9 @@ class TestChatGPTResponsesAPITransformation:
                 "user": "user_123",
                 "temperature": 0.2,
                 "top_p": 0.9,
-                "context_management": [{"type": "compaction", "compact_threshold": 200000}],
+                "context_management": [
+                    {"type": "compaction", "compact_threshold": 200000}
+                ],
                 "metadata": {"foo": "bar"},
                 "max_output_tokens": 123,
                 "stream_options": {"include_usage": True},
@@ -151,7 +152,10 @@ class TestChatGPTResponsesAPITransformation:
         assert request["previous_response_id"] == "resp_123"
         assert request["reasoning"] == {"effort": "medium"}
         assert request["tools"] == [{"type": "function", "function": {"name": "hello"}}]
-        assert request["tool_choice"] == {"type": "function", "function": {"name": "hello"}}
+        assert request["tool_choice"] == {
+            "type": "function",
+            "function": {"name": "hello"},
+        }
 
     @pytest.mark.parametrize(
         ("model_name", "response_model"),

@@ -2460,7 +2460,9 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                     setattr(e, "litellm_response_headers", litellm_response_headers)
                     raise e  # it's already mapped
             raised_exc = APIConnectionError(
-                message="{}\n{}".format(original_exception, _redact_string(traceback.format_exc())),
+                message="{}\n{}".format(
+                    original_exception, _redact_string(traceback.format_exc())
+                ),
                 llm_provider="",
                 model="",
             )

@@ -16,7 +16,10 @@ def test_function_call_output_list_input_text_is_converted_to_tool_string_conten
         tool_call_output={
             "type": "function_call_output",
             "call_id": "call_1",
-            "output": [{"type": "input_text", "text": "hello"}, {"type": "input_text", "text": " world"}],
+            "output": [
+                {"type": "input_text", "text": "hello"},
+                {"type": "input_text", "text": " world"},
+            ],
         }
     )
 
@@ -37,4 +40,3 @@ def test_function_call_output_string_passthrough():
     )
     assert len(out) == 1
     assert out[0]["content"] == '{"ok":true}'
-

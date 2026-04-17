@@ -40,7 +40,7 @@ async def test_memory_baseline_1k(test_router, limit_memory):
     Memory baseline test with 1,000 requests.
     Uses @pytest.mark.limit_leaks("40 MB") to enforce memory limit.
     If this passes but higher request count tests fail, indicates progressive memory leak.
-    
+
     NOTE: This test should be run INDIVIDUALLY, not with other tests in this file.
     Running multiple tests together causes memory baseline drift, making it difficult
     to accurately detect linear memory growth. Run with:
@@ -57,7 +57,7 @@ async def test_memory_baseline_2k(test_router, limit_memory):
     Memory baseline test with 2,000 requests.
     Uses @pytest.mark.limit_leaks("40 MB") to enforce memory limit.
     If this passes but test_memory_baseline_4k fails, indicates progressive memory leak.
-    
+
     NOTE: This test should be run INDIVIDUALLY, not with other tests in this file.
     Running multiple tests together causes memory baseline drift, making it difficult
     to accurately detect linear memory growth. Run with:
@@ -75,14 +75,13 @@ async def test_memory_baseline_4k(test_router, limit_memory):
     Uses @pytest.mark.limit_leaks("40 MB") to enforce memory limit.
     If test_memory_baseline_1k and test_memory_baseline_2k pass but this fails,
     it's a clear sign of sequential/progressive memory growth.
-    
+
     NOTE: This test should be run INDIVIDUALLY, not with other tests in this file.
     Running multiple tests together causes memory baseline drift, making it difficult
     to accurately detect linear memory growth. Run with:
         pytest tests/load_tests/test_linear_memory_growth.py::test_memory_baseline_4k -v
     """
     await run_memory_baseline_test(4000, test_router, limit_memory)
-
 
 
 @pytest.mark.asyncio
@@ -94,7 +93,7 @@ async def test_memory_baseline_10k(test_router, limit_memory):
     Uses @pytest.mark.limit_leaks("40 MB") to enforce memory limit.
     If test_memory_baseline_1k and test_memory_baseline_2k pass but this fails,
     it's a clear sign of sequential/progressive memory growth.
-    
+
     NOTE: This test should be run INDIVIDUALLY, not with other tests in this file.
     Running multiple tests together causes memory baseline drift, making it difficult
     to accurately detect linear memory growth. Run with:
@@ -112,7 +111,7 @@ async def test_memory_baseline_30k(test_router, limit_memory):
     Uses @pytest.mark.limit_leaks("40 MB") to enforce memory limit.
     If test_memory_baseline_1k and test_memory_baseline_2k pass but this fails,
     it's a clear sign of sequential/progressive memory growth.
-    
+
     NOTE: This test should be run INDIVIDUALLY, not with other tests in this file.
     Running multiple tests together causes memory baseline drift, making it difficult
     to accurately detect linear memory growth. Run with:

@@ -86,9 +86,7 @@ class TestCanadianOntarioDriversLicence:
 
     def test_in_sentence(self):
         pattern = get_compiled_pattern("ca_on_drivers_licence")
-        assert (
-            pattern.search("Driver's licence C1111-22222-33333 on file") is not None
-        )
+        assert pattern.search("Driver's licence C1111-22222-33333 on file") is not None
 
     def test_compact_format_not_matched(self):
         """Compact format (no dashes/spaces) uses a separate pattern"""

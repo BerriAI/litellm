@@ -38,10 +38,7 @@ class TestGoogleAIStudioFilesTransformation:
         )
 
         # API key is passed via x-goog-api-key header, not in URL
-        assert (
-            url
-            == "https://generativelanguage.googleapis.com/v1beta/files/test123"
-        )
+        assert url == "https://generativelanguage.googleapis.com/v1beta/files/test123"
         assert "key=" not in url
 
         # CRITICAL: params should be empty dict, not contain Content-Type or any other params
@@ -65,10 +62,7 @@ class TestGoogleAIStudioFilesTransformation:
         )
 
         # API key is passed via x-goog-api-key header, not in URL
-        assert (
-            url
-            == "https://generativelanguage.googleapis.com/v1beta/files/test123"
-        )
+        assert url == "https://generativelanguage.googleapis.com/v1beta/files/test123"
         assert "key=" not in url
 
         # CRITICAL: params should be empty dict
@@ -94,8 +88,7 @@ class TestGoogleAIStudioFilesTransformation:
         )
 
         assert (
-            url
-            == "https://generativelanguage.googleapis.com/v1beta/files/cctqueckiggb"
+            url == "https://generativelanguage.googleapis.com/v1beta/files/cctqueckiggb"
         )
         assert "key=" not in url
         assert params == {}

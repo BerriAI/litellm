@@ -173,7 +173,13 @@ async def test_pass_through_endpoint_rerank(client):
 )
 @pytest.mark.asyncio
 async def test_pass_through_endpoint_rpm_limit(
-    client, monkeypatch, auth, rpm_limit, requests_to_make, expected_status_codes, num_users
+    client,
+    monkeypatch,
+    auth,
+    rpm_limit,
+    requests_to_make,
+    expected_status_codes,
+    num_users,
 ):
     monkeypatch.setattr("httpx.AsyncClient.request", mock_request)
     import litellm
@@ -211,7 +217,9 @@ async def test_pass_through_endpoint_rpm_limit(
     mock_api_keys = [f"sk-test-{uuid.uuid4().hex}" for _ in range(num_users)]
 
     for mock_api_key in mock_api_keys:
-        cache_value = UserAPIKeyAuth(token=hash_token(mock_api_key), rpm_limit=rpm_limit)
+        cache_value = UserAPIKeyAuth(
+            token=hash_token(mock_api_key), rpm_limit=rpm_limit
+        )
         user_api_key_cache.set_cache(key=hash_token(mock_api_key), value=cache_value)
 
     _json_data = {
@@ -243,8 +251,12 @@ async def test_pass_through_endpoint_rpm_limit(
         first_user_responses = responses[requests_to_make:]
         second_user_responses = responses[:requests_to_make]
 
-        first_user_status_codes = sorted([response.status_code for response in first_user_responses])
-        second_user_status_codes = sorted([response.status_code for response in second_user_responses])
+        first_user_status_codes = sorted(
+            [response.status_code for response in first_user_responses]
+        )
+        second_user_status_codes = sorted(
+            [response.status_code for response in second_user_responses]
+        )
 
         expected_status_codes.sort()
         assert first_user_status_codes == expected_status_codes
@@ -307,7 +319,9 @@ async def test_pass_through_endpoint_sequential_rpm_limit(
     mock_api_keys = [f"sk-test-{uuid.uuid4().hex}" for _ in range(2)]
 
     for mock_api_key in mock_api_keys:
-        cache_value = UserAPIKeyAuth(token=hash_token(mock_api_key), rpm_limit=rpm_limit)
+        cache_value = UserAPIKeyAuth(
+            token=hash_token(mock_api_key), rpm_limit=rpm_limit
+        )
         user_api_key_cache.set_cache(key=hash_token(mock_api_key), value=cache_value)
 
     _json_data = {
@@ -340,8 +354,12 @@ async def test_pass_through_endpoint_sequential_rpm_limit(
         first_user_responses.append(first_user_response)
         second_user_responses.append(second_user_response)
 
-    first_user_status_codes = sorted([response.status_code for response in first_user_responses])
-    second_user_status_codes = sorted([response.status_code for response in second_user_responses])
+    first_user_status_codes = sorted(
+        [response.status_code for response in first_user_responses]
+    )
+    second_user_status_codes = sorted(
+        [response.status_code for response in second_user_responses]
+    )
 
     expected_status_codes.sort()
     assert first_user_status_codes == expected_status_codes
@@ -444,6 +462,7 @@ async def test_aaapass_through_endpoint_pass_through_keys_langfuse(
         # For langfuse custom_auth_parser, the Authorization header must be valid base64
         # Format: base64(public_key:secret_key) where public_key is the LiteLLM API key
         import base64
+
         auth_token = base64.b64encode(f"{mock_api_key}:anything".encode()).decode()
         response = client.post(
             "/api/public/ingestion",
@@ -537,13 +556,17 @@ async def test_pass_through_endpoint_bing(client, monkeypatch):
     # Parse first URL
     parsed_first = urlparse(str(first_transformed_url))
     first_params = parse_qs(parsed_first.query)
-    
+
     # Parse second URL
     parsed_second = urlparse(str(second_transformed_url))
     second_params = parse_qs(parsed_second.query)
 
     # Expected values (parse_qs decodes + as space)
-    expected_first_params = {"q": ["bob barker"], "setLang": ["en-US"], "mkt": ["en-US"]}
+    expected_first_params = {
+        "q": ["bob barker"],
+        "setLang": ["en-US"],
+        "mkt": ["en-US"],
+    }
     expected_second_params = {"setLang": ["en-US"], "mkt": ["en-US"]}
 
     # Assert the response - compare base URL and params separately

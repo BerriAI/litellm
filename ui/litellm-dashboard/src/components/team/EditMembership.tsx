@@ -21,7 +21,7 @@ interface ModalConfig {
   additionalFields?: Array<{
     name: string;
     label: string | React.ReactNode;
-    type: "input" | "select" | "numerical";
+    type: "input" | "select" | "numerical" | "multi-select";
     options?: Array<{ label: string; value: string }>;
     rules?: any[];
     step?: number;
@@ -65,6 +65,8 @@ const MemberModal = <T extends BaseMember>({
           max_budget_in_team: (initialData as any).max_budget_in_team || null,
           tpm_limit: (initialData as any).tpm_limit || null,
           rpm_limit: (initialData as any).rpm_limit || null,
+          // Keep array values for multi-select fields
+          allowed_models: (initialData as any).allowed_models || [],
         };
         console.log("Setting form values:", formValues);
         form.setFieldsValue(formValues);
@@ -115,7 +117,7 @@ const MemberModal = <T extends BaseMember>({
   const renderField = (field: {
     name: string;
     label: string | React.ReactNode;
-    type: "input" | "select" | "numerical";
+    type: "input" | "select" | "numerical" | "multi-select";
     options?: Array<{ label: string; value: string }>;
     rules?: any[];
     step?: number;
@@ -143,6 +145,15 @@ const MemberModal = <T extends BaseMember>({
               </Select.Option>
             ))}
           </Select>
+        );
+      case "multi-select":
+        return (
+          <Select
+            mode="multiple"
+            placeholder={field.placeholder || "Select options"}
+            options={field.options}
+            allowClear
+          />
         );
       default:
         return null;

@@ -10,11 +10,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from litellm.proxy._types import (ProxyErrorTypes, ProxyException,
-                                  UserAPIKeyAuth)
+from litellm.proxy._types import ProxyErrorTypes, ProxyException, UserAPIKeyAuth
 from litellm.proxy.auth.auth_checks import check_tools_allowlist
 from litellm.proxy.guardrails.tool_name_extraction import (
-    TOOL_CAPABLE_CALL_TYPES, extract_request_tool_names)
+    TOOL_CAPABLE_CALL_TYPES,
+    extract_request_tool_names,
+)
 
 
 def _token(metadata=None, team_metadata=None):
@@ -109,9 +110,7 @@ class TestCheckToolsAllowlist:
     @pytest.mark.asyncio
     async def test_no_allowlist_passes(self):
         token = _token(metadata={}, team_metadata={})
-        body = {
-            "tools": [{"type": "function", "function": {"name": "get_weather"}}]
-        }
+        body = {"tools": [{"type": "function", "function": {"name": "get_weather"}}]}
         await check_tools_allowlist(
             request_body=body,
             valid_token=token,
@@ -122,9 +121,7 @@ class TestCheckToolsAllowlist:
     @pytest.mark.asyncio
     async def test_allowed_tool_passes(self):
         token = _token(metadata={"allowed_tools": ["get_weather"]})
-        body = {
-            "tools": [{"type": "function", "function": {"name": "get_weather"}}]
-        }
+        body = {"tools": [{"type": "function", "function": {"name": "get_weather"}}]}
         await check_tools_allowlist(
             request_body=body,
             valid_token=token,
@@ -135,9 +132,7 @@ class TestCheckToolsAllowlist:
     @pytest.mark.asyncio
     async def test_disallowed_tool_raises(self):
         token = _token(metadata={"allowed_tools": ["other_tool"]})
-        body = {
-            "tools": [{"type": "function", "function": {"name": "get_weather"}}]
-        }
+        body = {"tools": [{"type": "function", "function": {"name": "get_weather"}}]}
         with pytest.raises(ProxyException) as exc_info:
             await check_tools_allowlist(
                 request_body=body,
@@ -154,9 +149,7 @@ class TestCheckToolsAllowlist:
             metadata={},
             team_metadata={"allowed_tools": ["get_weather"]},
         )
-        body = {
-            "tools": [{"type": "function", "function": {"name": "get_weather"}}]
-        }
+        body = {"tools": [{"type": "function", "function": {"name": "get_weather"}}]}
         await check_tools_allowlist(
             request_body=body,
             valid_token=token,
@@ -170,9 +163,7 @@ class TestCheckToolsAllowlist:
             metadata={"allowed_tools": ["get_weather"]},
             team_metadata={"allowed_tools": ["other_tool"]},
         )
-        body = {
-            "tools": [{"type": "function", "function": {"name": "get_weather"}}]
-        }
+        body = {"tools": [{"type": "function", "function": {"name": "get_weather"}}]}
         await check_tools_allowlist(
             request_body=body,
             valid_token=token,

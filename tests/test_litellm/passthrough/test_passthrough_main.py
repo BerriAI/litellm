@@ -66,20 +66,24 @@ def test_bedrock_application_inference_profile_url_encoding():
     mock_provider_config.sign_request.return_value = ({}, None)
     mock_provider_config.is_streaming_request.return_value = False
 
-    with patch(
-        "litellm.utils.ProviderConfigManager.get_provider_passthrough_config",
-        return_value=mock_provider_config,
-    ), patch(
-        "litellm.litellm_core_utils.get_litellm_params.get_litellm_params",
-        return_value={},
-    ), patch(
-        "litellm.litellm_core_utils.get_llm_provider_logic.get_llm_provider",
-        return_value=("test-model", "bedrock", "test-key", "test-base"),
-    ), patch.object(
-        client.client, "send", return_value=MagicMock(status_code=200)
-    ) as mock_send, patch.object(
-        client.client, "build_request"
-    ) as mock_build_request:
+    with (
+        patch(
+            "litellm.utils.ProviderConfigManager.get_provider_passthrough_config",
+            return_value=mock_provider_config,
+        ),
+        patch(
+            "litellm.litellm_core_utils.get_litellm_params.get_litellm_params",
+            return_value={},
+        ),
+        patch(
+            "litellm.litellm_core_utils.get_llm_provider_logic.get_llm_provider",
+            return_value=("test-model", "bedrock", "test-key", "test-base"),
+        ),
+        patch.object(
+            client.client, "send", return_value=MagicMock(status_code=200)
+        ) as mock_send,
+        patch.object(client.client, "build_request") as mock_build_request,
+    ):
 
         # Mock logging object
         mock_logging_obj = MagicMock()
@@ -120,20 +124,24 @@ def test_bedrock_non_application_inference_profile_no_encoding():
     mock_provider_config.sign_request.return_value = ({}, None)
     mock_provider_config.is_streaming_request.return_value = False
 
-    with patch(
-        "litellm.utils.ProviderConfigManager.get_provider_passthrough_config",
-        return_value=mock_provider_config,
-    ), patch(
-        "litellm.litellm_core_utils.get_litellm_params.get_litellm_params",
-        return_value={},
-    ), patch(
-        "litellm.litellm_core_utils.get_llm_provider_logic.get_llm_provider",
-        return_value=("test-model", "bedrock", "test-key", "test-base"),
-    ), patch.object(
-        client.client, "send", return_value=MagicMock(status_code=200)
-    ) as mock_send, patch.object(
-        client.client, "build_request"
-    ) as mock_build_request:
+    with (
+        patch(
+            "litellm.utils.ProviderConfigManager.get_provider_passthrough_config",
+            return_value=mock_provider_config,
+        ),
+        patch(
+            "litellm.litellm_core_utils.get_litellm_params.get_litellm_params",
+            return_value={},
+        ),
+        patch(
+            "litellm.litellm_core_utils.get_llm_provider_logic.get_llm_provider",
+            return_value=("test-model", "bedrock", "test-key", "test-base"),
+        ),
+        patch.object(
+            client.client, "send", return_value=MagicMock(status_code=200)
+        ) as mock_send,
+        patch.object(client.client, "build_request") as mock_build_request,
+    ):
 
         # Mock logging object
         mock_logging_obj = MagicMock()
@@ -294,15 +302,19 @@ async def test_pass_through_request_stream_param_override(
     # Create the request
     request = mock_request(headers={}, method="POST", request_body=request_body)
 
-    with patch(
-        "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_async_httpx_client",
-        return_value=mock_client_obj,
-    ), patch(
-        "litellm.proxy.proxy_server.proxy_logging_obj.pre_call_hook",
-        return_value=request_body,  # Return the request body unchanged
-    ), patch(
-        "litellm.proxy.pass_through_endpoints.pass_through_endpoints.pass_through_endpoint_logging.pass_through_async_success_handler",
-        new=AsyncMock(),  # Mock the success handler
+    with (
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_async_httpx_client",
+            return_value=mock_client_obj,
+        ),
+        patch(
+            "litellm.proxy.proxy_server.proxy_logging_obj.pre_call_hook",
+            return_value=request_body,  # Return the request body unchanged
+        ),
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.pass_through_endpoint_logging.pass_through_async_success_handler",
+            new=AsyncMock(),  # Mock the success handler
+        ),
     ):
         # Call pass_through_request with stream=False parameter
         response = await pass_through_request(
@@ -385,15 +397,19 @@ async def test_pass_through_request_stream_param_no_override(
     # Create the request
     request = mock_request(headers={}, method="POST", request_body=request_body)
 
-    with patch(
-        "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_async_httpx_client",
-        return_value=mock_client_obj,
-    ), patch(
-        "litellm.proxy.proxy_server.proxy_logging_obj.pre_call_hook",
-        return_value=request_body,  # Return the request body unchanged
-    ), patch(
-        "litellm.proxy.pass_through_endpoints.pass_through_endpoints.pass_through_endpoint_logging.pass_through_async_success_handler",
-        new=AsyncMock(),  # Mock the success handler
+    with (
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_async_httpx_client",
+            return_value=mock_client_obj,
+        ),
+        patch(
+            "litellm.proxy.proxy_server.proxy_logging_obj.pre_call_hook",
+            return_value=request_body,  # Return the request body unchanged
+        ),
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.pass_through_endpoint_logging.pass_through_async_success_handler",
+            new=AsyncMock(),  # Mock the success handler
+        ),
     ):
         # Call pass_through_request with stream=False parameter
         response = await pass_through_request(
@@ -452,24 +468,33 @@ def test_azure_with_custom_api_base_and_key():
     )
     mock_provider_config.is_streaming_request.return_value = False
 
-    with patch(
-        "litellm.utils.ProviderConfigManager.get_provider_passthrough_config",
-        return_value=mock_provider_config,
-    ), patch(
-        "litellm.litellm_core_utils.get_litellm_params.get_litellm_params",
-        return_value={},
-    ), patch(
-        "litellm.litellm_core_utils.get_llm_provider_logic.get_llm_provider",
-        return_value=("gpt-4.1", "azure", "my-custom-key", "https://my-custom-base"),
-    ), patch.object(
-        client.client,
-        "send",
-        return_value=MagicMock(
-            status_code=200, json=lambda: {"id": "chatcmpl-123", "choices": []}
+    with (
+        patch(
+            "litellm.utils.ProviderConfigManager.get_provider_passthrough_config",
+            return_value=mock_provider_config,
         ),
-    ) as mock_send, patch.object(
-        client.client, "build_request"
-    ) as mock_build_request:
+        patch(
+            "litellm.litellm_core_utils.get_litellm_params.get_litellm_params",
+            return_value={},
+        ),
+        patch(
+            "litellm.litellm_core_utils.get_llm_provider_logic.get_llm_provider",
+            return_value=(
+                "gpt-4.1",
+                "azure",
+                "my-custom-key",
+                "https://my-custom-base",
+            ),
+        ),
+        patch.object(
+            client.client,
+            "send",
+            return_value=MagicMock(
+                status_code=200, json=lambda: {"id": "chatcmpl-123", "choices": []}
+            ),
+        ) as mock_send,
+        patch.object(client.client, "build_request") as mock_build_request,
+    ):
 
         # Mock logging object
         mock_logging_obj = MagicMock()
@@ -521,7 +546,9 @@ def test_content_param_forwarded_to_build_request():
 
     mock_provider_config = MagicMock()
     mock_provider_config.get_complete_url.return_value = (
-        httpx.URL("https://my-azure.openai.azure.com/openai/deployments/gpt-4/chat/completions"),
+        httpx.URL(
+            "https://my-azure.openai.azure.com/openai/deployments/gpt-4/chat/completions"
+        ),
         "https://my-azure.openai.azure.com",
     )
     mock_provider_config.get_api_key.return_value = "test-key"
@@ -532,20 +559,27 @@ def test_content_param_forwarded_to_build_request():
 
     raw_content = b'{"model":"gpt-4","messages":[{"role":"user","content":"hi"}]}'
 
-    with patch(
-        "litellm.utils.ProviderConfigManager.get_provider_passthrough_config",
-        return_value=mock_provider_config,
-    ), patch(
-        "litellm.litellm_core_utils.get_litellm_params.get_litellm_params",
-        return_value={},
-    ), patch(
-        "litellm.litellm_core_utils.get_llm_provider_logic.get_llm_provider",
-        return_value=("gpt-4", "azure", "test-key", "https://my-azure.openai.azure.com"),
-    ), patch.object(
-        client.client, "send", return_value=MagicMock(status_code=200)
-    ), patch.object(
-        client.client, "build_request"
-    ) as mock_build_request:
+    with (
+        patch(
+            "litellm.utils.ProviderConfigManager.get_provider_passthrough_config",
+            return_value=mock_provider_config,
+        ),
+        patch(
+            "litellm.litellm_core_utils.get_litellm_params.get_litellm_params",
+            return_value={},
+        ),
+        patch(
+            "litellm.litellm_core_utils.get_llm_provider_logic.get_llm_provider",
+            return_value=(
+                "gpt-4",
+                "azure",
+                "test-key",
+                "https://my-azure.openai.azure.com",
+            ),
+        ),
+        patch.object(client.client, "send", return_value=MagicMock(status_code=200)),
+        patch.object(client.client, "build_request") as mock_build_request,
+    ):
 
         mock_logging_obj = MagicMock()
         mock_logging_obj.update_environment_variables = MagicMock()
@@ -574,7 +608,12 @@ def test_content_param_forwarded_to_build_request():
 def _make_429_streaming_response() -> MagicMock:
     """Build a mock httpx.Response that looks like a streaming 429 from Azure."""
     error_body = json.dumps(
-        {"error": {"code": "429", "message": "Rate limit exceeded. Retry after 10 seconds."}}
+        {
+            "error": {
+                "code": "429",
+                "message": "Rate limit exceeded. Retry after 10 seconds.",
+            }
+        }
     ).encode()
 
     mock = MagicMock(spec=httpx.Response)
@@ -627,8 +666,13 @@ async def test_allm_passthrough_route_429_streaming_raises():
         "https://my-azure.openai.azure.com",
     )
     mock_provider_config.get_api_key.return_value = "fake-azure-key"
-    mock_provider_config.validate_environment.return_value = {"api-key": "fake-azure-key"}
-    mock_provider_config.sign_request.return_value = ({"api-key": "fake-azure-key"}, None)
+    mock_provider_config.validate_environment.return_value = {
+        "api-key": "fake-azure-key"
+    }
+    mock_provider_config.sign_request.return_value = (
+        {"api-key": "fake-azure-key"},
+        None,
+    )
     mock_provider_config.is_streaming_request.return_value = True
 
     mock_429_response = _make_429_streaming_response()
@@ -641,24 +685,26 @@ async def test_allm_passthrough_route_429_streaming_raises():
     mock_logging_obj.update_environment_variables = MagicMock()
     mock_logging_obj.async_flush_passthrough_collected_chunks = AsyncMock()
 
-    with patch(
-        "litellm.utils.ProviderConfigManager.get_provider_passthrough_config",
-        return_value=mock_provider_config,
-    ), patch(
-        "litellm.litellm_core_utils.get_litellm_params.get_litellm_params",
-        return_value={},
-    ), patch(
-        "litellm.litellm_core_utils.get_llm_provider_logic.get_llm_provider",
-        return_value=(
-            "gpt-4",
-            "azure",
-            "fake-azure-key",
-            "https://my-azure.openai.azure.com",
+    with (
+        patch(
+            "litellm.utils.ProviderConfigManager.get_provider_passthrough_config",
+            return_value=mock_provider_config,
         ),
-    ), patch.object(
-        async_client.client, "send", mock_send
-    ), patch.object(
-        async_client.client, "build_request", mock_build_request
+        patch(
+            "litellm.litellm_core_utils.get_litellm_params.get_litellm_params",
+            return_value={},
+        ),
+        patch(
+            "litellm.litellm_core_utils.get_llm_provider_logic.get_llm_provider",
+            return_value=(
+                "gpt-4",
+                "azure",
+                "fake-azure-key",
+                "https://my-azure.openai.azure.com",
+            ),
+        ),
+        patch.object(async_client.client, "send", mock_send),
+        patch.object(async_client.client, "build_request", mock_build_request),
     ):
         result = await allm_passthrough_route(
             model="azure/gpt-4",

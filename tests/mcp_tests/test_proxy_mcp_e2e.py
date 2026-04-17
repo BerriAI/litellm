@@ -50,7 +50,9 @@ def _initialize_proxy(config_path: str) -> None:
     asyncio.run(initialize(config=config_path, debug=True))
 
 
-def _start_proxy_server(config_path: str) -> tuple[str, uvicorn.Server, threading.Thread, socket.socket]:
+def _start_proxy_server(
+    config_path: str,
+) -> tuple[str, uvicorn.Server, threading.Thread, socket.socket]:
     _initialize_proxy(config_path)
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -168,9 +170,7 @@ class TestProxyMcpSimpleConnections:
                     tools_result = await session.list_tools()
                     assert any(tool.name.endswith("add") for tool in tools_result.tools)
 
-                    result = await session.call_tool(
-                        "add", arguments={"a": 3, "b": 4}
-                    )
+                    result = await session.call_tool("add", arguments={"a": 3, "b": 4})
                     assert result.content
                     first_content = result.content[0]
                     text = getattr(first_content, "text", None)
@@ -193,9 +193,7 @@ class TestProxyMcpSimpleConnections:
                     tools_result = await session.list_tools()
                     assert any(tool.name.endswith("add") for tool in tools_result.tools)
 
-                    result = await session.call_tool(
-                        "add", arguments={"a": 5, "b": 6}
-                    )
+                    result = await session.call_tool("add", arguments={"a": 5, "b": 6})
                     assert result.content
                     first_content = result.content[0]
                     text = getattr(first_content, "text", None)
@@ -225,14 +223,14 @@ class TestProxyMcpSimpleConnections:
                     async def _call_and_get_text(
                         tool_name: str, *, a: int, b: int
                     ) -> str | None:
-                        result = await session.call_tool(tool_name, arguments={"a": a, "b": b})
+                        result = await session.call_tool(
+                            tool_name, arguments={"a": a, "b": b}
+                        )
                         assert result.content
                         first_content = result.content[0]
                         return getattr(first_content, "text", None)
 
-                    stdio_result = await _call_and_get_text(
-                        "math_stdio-add", a=2, b=3
-                    )
+                    stdio_result = await _call_and_get_text("math_stdio-add", a=2, b=3)
                     streamable_result = await _call_and_get_text(
                         "math_streamable_http-add", a=4, b=5
                     )
@@ -301,4 +299,3 @@ class TestProxyMcpStatelessBehavior:
                     assert result_b.content
                     text_b = getattr(result_b.content[0], "text", None)
                     assert text_b == "300"
-

@@ -86,7 +86,9 @@ async def test_azure_prompt_shield_guardrail_attack_detected():
             )
 
         assert exc_info.value.status_code == 400
-        assert "Violated Azure Prompt Shield guardrail policy" in str(exc_info.value.detail)
+        assert "Violated Azure Prompt Shield guardrail policy" in str(
+            exc_info.value.detail
+        )
 
 
 @pytest.mark.asyncio
@@ -108,7 +110,8 @@ async def test_azure_prompt_shield_long_prompt_splitting():
     }
 
     with patch.object(
-        azure_prompt_shield_guardrail.async_handler, "post",
+        azure_prompt_shield_guardrail.async_handler,
+        "post",
         return_value=mock_response,
     ) as mock_post:
         await azure_prompt_shield_guardrail.async_pre_call_hook(
@@ -164,7 +167,8 @@ async def test_azure_prompt_shield_attack_detected_in_chunk():
         return make_mock_response(False)
 
     with patch.object(
-        azure_prompt_shield_guardrail.async_handler, "post",
+        azure_prompt_shield_guardrail.async_handler,
+        "post",
         side_effect=post_side_effect,
     ):
         with pytest.raises(HTTPException) as exc_info:
@@ -183,7 +187,9 @@ async def test_azure_prompt_shield_attack_detected_in_chunk():
             )
 
         assert exc_info.value.status_code == 400
-        assert "Violated Azure Prompt Shield guardrail policy" in str(exc_info.value.detail)
+        assert "Violated Azure Prompt Shield guardrail policy" in str(
+            exc_info.value.detail
+        )
 
 
 def test_split_text_by_words():
@@ -193,23 +199,35 @@ def test_split_text_by_words():
         api_key="test_key",
         api_base="test_base",
     )
-    
+
     # Test short text (no splitting needed)
     short_text = "Hello world"
     chunks = guardrail.split_text_by_words(short_text, 100)
     assert len(chunks) == 1
     assert chunks[0] == short_text
-    
+
     # Test text that needs splitting
     text = "word1 word2 word3 word4 word5"
     chunks = guardrail.split_text_by_words(text, 20)
     assert len(chunks) > 1
     # Verify no word is broken
     for chunk in chunks:
-        assert "word1" in chunk or "word2" in chunk or "word3" in chunk or "word4" in chunk or "word5" in chunk
+        assert (
+            "word1" in chunk
+            or "word2" in chunk
+            or "word3" in chunk
+            or "word4" in chunk
+            or "word5" in chunk
+        )
         # No partial words
-        assert "word1" in chunk or "word2" in chunk or "word3" in chunk or "word4" in chunk or "word5" in chunk
-    
+        assert (
+            "word1" in chunk
+            or "word2" in chunk
+            or "word3" in chunk
+            or "word4" in chunk
+            or "word5" in chunk
+        )
+
     # Test with very long single word (edge case)
     long_word = "supercalifragilisticexpialidocious" * 10
     chunks = guardrail.split_text_by_words(long_word, 50)
@@ -217,11 +235,11 @@ def test_split_text_by_words():
     # Each chunk should be exactly 50 chars except possibly the last
     for i, chunk in enumerate(chunks[:-1]):
         assert len(chunk) == 50
-    
+
     # Test empty string
     chunks = guardrail.split_text_by_words("", 100)
     assert chunks == [""]
-    
+
     # Test with punctuation and special characters
     text_with_punctuation = "Hello, world! How are you? I'm fine."
     chunks = guardrail.split_text_by_words(text_with_punctuation, 30)
@@ -238,10 +256,10 @@ def test_split_prompt_preserves_content():
         api_key="test_key",
         api_base="test_base",
     )
-    
+
     original_text = "The quick brown fox jumps over the lazy dog. " * 100
     chunks = guardrail.split_text_by_words(original_text, 1000)
-    
+
     # Whitespace-preserving split: concatenation reproduces original exactly
     assert "".join(chunks) == original_text
 

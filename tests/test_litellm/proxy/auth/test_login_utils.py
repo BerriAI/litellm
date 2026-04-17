@@ -117,7 +117,10 @@ async def test_authenticate_user_admin_login_with_master_key_as_password():
     mock_prisma_client = MagicMock()
     mock_prisma_client.db.litellm_usertable.find_first = AsyncMock(return_value=None)
 
-    env_vars = {"UI_USERNAME": ui_username, "DATABASE_URL": "postgresql://test:test@localhost/test"}
+    env_vars = {
+        "UI_USERNAME": ui_username,
+        "DATABASE_URL": "postgresql://test:test@localhost/test",
+    }
     # Remove UI_PASSWORD to test fallback to master_key
     if "UI_PASSWORD" in os.environ:
         # Keep other env vars but don't set UI_PASSWORD
@@ -162,6 +165,7 @@ async def test_authenticate_user_admin_login_with_master_key_as_password():
             if original_ui_password:
                 os.environ["UI_PASSWORD"] = original_ui_password
 
+
 @pytest.mark.asyncio
 async def test_authenticate_user_invalid_credentials():
     """Test authentication failure with invalid credentials"""
@@ -172,7 +176,9 @@ async def test_authenticate_user_invalid_credentials():
     mock_prisma_client = MagicMock()
     mock_prisma_client.db.litellm_usertable.find_first = AsyncMock(return_value=None)
 
-    with patch.dict(os.environ, {"UI_USERNAME": ui_username, "UI_PASSWORD": "correct-password"}):
+    with patch.dict(
+        os.environ, {"UI_USERNAME": ui_username, "UI_PASSWORD": "correct-password"}
+    ):
         with pytest.raises(ProxyException) as exc_info:
             await authenticate_user(
                 username=ui_username,
@@ -328,7 +334,9 @@ async def test_authenticate_user_database_required_for_admin():
     mock_prisma_client = MagicMock()
     mock_prisma_client.db.litellm_usertable.find_first = AsyncMock(return_value=None)
 
-    with patch.dict(os.environ, {"UI_USERNAME": ui_username, "UI_PASSWORD": ui_password}):
+    with patch.dict(
+        os.environ, {"UI_USERNAME": ui_username, "UI_PASSWORD": ui_password}
+    ):
         with patch(
             "litellm.proxy.auth.login_utils.user_update",
             new_callable=AsyncMock,
@@ -417,9 +425,7 @@ def test_authenticate_user_non_ascii_direct_comparison():
     # secrets.compare_digest(username, username)  # TypeError!
 
     # But works with the fix:
-    result = secrets.compare_digest(
-        username.encode("utf-8"), username.encode("utf-8")
-    )
+    result = secrets.compare_digest(username.encode("utf-8"), username.encode("utf-8"))
     assert result is True
 
     # And correctly returns False for different passwords
