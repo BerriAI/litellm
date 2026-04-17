@@ -1,8 +1,9 @@
-import React from "react";
-import { Form, Input, Switch, Collapse, Select, Space, Tooltip } from "antd";
+import React, { useState } from "react";
+import { Form, Input, Switch, Collapse, Select, Space, Tooltip, Modal, List, Tag, message } from "antd";
 import { Button as AntButton } from "antd";
-import { PlusOutlined, MinusCircleOutlined, InfoCircleOutlined } from "@ant-design/icons";
+import { PlusOutlined, MinusCircleOutlined, InfoCircleOutlined, GithubOutlined, AppstoreOutlined, CheckCircleOutlined, CloseCircleOutlined, LoadingOutlined } from "@ant-design/icons";
 import { AGENT_FORM_CONFIG, SKILL_FIELD_CONFIG } from "./agent_config";
+import { fetchSkillsRegistry, testGitHubSkillConnection, createSkillFromGitHub, SkillRegistryItem } from "../networking";
 
 import CostConfigFields from "./cost_config_fields";
 
@@ -11,14 +12,72 @@ const { Panel } = Collapse;
 interface AgentFormFieldsProps {
   showAgentName?: boolean;
   visiblePanels?: string[];
+  accessToken?: string | null;
 }
 
-/**
- * Reusable form fields component for agent forms
- * Uses shared configuration from agent_config.ts
- */
-const AgentFormFields: React.FC<AgentFormFieldsProps> = ({ showAgentName = true, visiblePanels }) => {
+const AgentFormFields: React.FC<AgentFormFieldsProps> = ({ showAgentName = true, visiblePanels, accessToken }) => {
   const shouldShow = (key: string) => !visiblePanels || visiblePanels.includes(key);
+
+  // Registry modal state
+  const [registryOpen, setRegistryOpen] = useState(false);
+  const [registryItems, setRegistryItems] = useState<SkillRegistryItem[]>([]);
+  const [registryLoading, setRegistryLoading] = useState(false);
+
+  // GitHub import modal state
+  const [githubOpen, setGithubOpen] = useState(false);
+  const [githubRepoUrl, setGithubRepoUrl] = useState("");
+  const [githubPat, setGithubPat] = useState("");
+  const [testStatus, setTestStatus] = useState<"idle" | "loading" | "ok" | "error">("idle");
+  const [testMessage, setTestMessage] = useState("");
+  const [importLoading, setImportLoading] = useState(false);
+
+  const openRegistry = async () => {
+    if (!accessToken) return;
+    setRegistryOpen(true);
+    setRegistryLoading(true);
+    const items = await fetchSkillsRegistry(accessToken);
+    setRegistryItems(items);
+    setRegistryLoading(false);
+  };
+
+  const handleTestConnection = async () => {
+    if (!accessToken || !githubRepoUrl || !githubPat) return;
+    setTestStatus("loading");
+    const result = await testGitHubSkillConnection(accessToken, githubRepoUrl, githubPat);
+    if (result.status === "ok") {
+      setTestStatus("ok");
+      setTestMessage("");
+    } else {
+      setTestStatus("error");
+      setTestMessage(result.message ?? "Connection failed");
+    }
+  };
+
+  const handleGitHubImport = async () => {
+    if (!accessToken) return;
+    setImportLoading(true);
+    try {
+      await createSkillFromGitHub(accessToken, githubRepoUrl, githubPat);
+      message.success("Skill imported from GitHub successfully");
+      setGithubOpen(false);
+      setGithubRepoUrl("");
+      setGithubPat("");
+      setTestStatus("idle");
+    } catch (e: any) {
+      message.error(`Import failed: ${e.message}`);
+    } finally {
+      setImportLoading(false);
+    }
+  };
+
+  const resetGithubModal = () => {
+    setGithubOpen(false);
+    setGithubRepoUrl("");
+    setGithubPat("");
+    setTestStatus("idle");
+    setTestMessage("");
+  };
+
   return (
     <>
       {showAgentName && (
@@ -70,7 +129,7 @@ const AgentFormFields: React.FC<AgentFormFieldsProps> = ({ showAgentName = true,
                     >
                       <Input placeholder={SKILL_FIELD_CONFIG.id.placeholder} />
                     </Form.Item>
-                    
+
                     <Form.Item
                       {...field}
                       label={SKILL_FIELD_CONFIG.name.label}
@@ -79,7 +138,7 @@ const AgentFormFields: React.FC<AgentFormFieldsProps> = ({ showAgentName = true,
                     >
                       <Input placeholder={SKILL_FIELD_CONFIG.name.placeholder} />
                     </Form.Item>
-                    
+
                     <Form.Item
                       {...field}
                       label={SKILL_FIELD_CONFIG.description.label}
@@ -88,7 +147,7 @@ const AgentFormFields: React.FC<AgentFormFieldsProps> = ({ showAgentName = true,
                     >
                       <Input.TextArea rows={SKILL_FIELD_CONFIG.description.rows} placeholder={SKILL_FIELD_CONFIG.description.placeholder} />
                     </Form.Item>
-                    
+
                     <Form.Item
                       {...field}
                       label={SKILL_FIELD_CONFIG.tags.label}
@@ -99,7 +158,7 @@ const AgentFormFields: React.FC<AgentFormFieldsProps> = ({ showAgentName = true,
                     >
                       <Input placeholder={SKILL_FIELD_CONFIG.tags.placeholder} />
                     </Form.Item>
-                    
+
                     <Form.Item
                       {...field}
                       label={SKILL_FIELD_CONFIG.examples.label}
@@ -109,10 +168,10 @@ const AgentFormFields: React.FC<AgentFormFieldsProps> = ({ showAgentName = true,
                     >
                       <Input placeholder={SKILL_FIELD_CONFIG.examples.placeholder} />
                     </Form.Item>
-                    
-                    <AntButton 
-                      type="link" 
-                      danger 
+
+                    <AntButton
+                      type="link"
+                      danger
                       onClick={() => remove(field.name)}
                       icon={<MinusCircleOutlined />}
                     >
@@ -120,14 +179,137 @@ const AgentFormFields: React.FC<AgentFormFieldsProps> = ({ showAgentName = true,
                     </AntButton>
                   </div>
                 ))}
-                <AntButton 
-                  type="dashed" 
-                  onClick={() => add()} 
-                  icon={<PlusOutlined />}
-                  style={{ width: '100%' }}
+
+                <Space style={{ width: '100%' }} direction="vertical">
+                  <AntButton
+                    type="dashed"
+                    onClick={() => add()}
+                    icon={<PlusOutlined />}
+                    style={{ width: '100%' }}
+                  >
+                    Add Skill Manually
+                  </AntButton>
+                  {accessToken && (
+                    <Space style={{ width: '100%' }}>
+                      <AntButton
+                        icon={<AppstoreOutlined />}
+                        style={{ flex: 1 }}
+                        onClick={openRegistry}
+                      >
+                        Browse Registry
+                      </AntButton>
+                      <AntButton
+                        icon={<GithubOutlined />}
+                        style={{ flex: 1 }}
+                        onClick={() => setGithubOpen(true)}
+                      >
+                        Import from GitHub
+                      </AntButton>
+                    </Space>
+                  )}
+                </Space>
+
+                {/* Registry browser modal */}
+                <Modal
+                  title="Skill Registry"
+                  open={registryOpen}
+                  onCancel={() => setRegistryOpen(false)}
+                  footer={null}
+                  width={600}
                 >
-                  Add Skill
-                </AntButton>
+                  <List
+                    loading={registryLoading}
+                    dataSource={registryItems}
+                    locale={{ emptyText: "No skills in registry" }}
+                    renderItem={(item) => (
+                      <List.Item
+                        actions={[
+                          <AntButton
+                            type="primary"
+                            size="small"
+                            key="add"
+                            onClick={() => {
+                              add({
+                                id: item.skill_id,
+                                name: item.display_title ?? item.skill_id,
+                                description: item.description ?? "",
+                                tags: item.tags,
+                                examples: item.examples,
+                              });
+                              setRegistryOpen(false);
+                              message.success(`Added "${item.display_title ?? item.skill_id}"`);
+                            }}
+                          >
+                            Add
+                          </AntButton>,
+                        ]}
+                      >
+                        <List.Item.Meta
+                          title={item.display_title ?? item.skill_id}
+                          description={
+                            <>
+                              <div style={{ marginBottom: 4 }}>{item.description}</div>
+                              {item.tags.map((t) => <Tag key={t}>{t}</Tag>)}
+                            </>
+                          }
+                        />
+                      </List.Item>
+                    )}
+                  />
+                </Modal>
+
+                {/* GitHub import modal */}
+                <Modal
+                  title="Import Skill from GitHub"
+                  open={githubOpen}
+                  onCancel={resetGithubModal}
+                  footer={[
+                    <AntButton key="cancel" onClick={resetGithubModal}>
+                      Cancel
+                    </AntButton>,
+                    <AntButton
+                      key="import"
+                      type="primary"
+                      disabled={testStatus !== "ok"}
+                      loading={importLoading}
+                      onClick={handleGitHubImport}
+                    >
+                      Import Skill
+                    </AntButton>,
+                  ]}
+                >
+                  <Space direction="vertical" style={{ width: '100%' }}>
+                    <Input
+                      placeholder="https://github.com/org/my-skill"
+                      value={githubRepoUrl}
+                      onChange={(e) => { setGithubRepoUrl(e.target.value); setTestStatus("idle"); }}
+                      addonBefore="Repo URL"
+                    />
+                    <Input.Password
+                      placeholder="ghp_xxxxxxxxxxxx"
+                      value={githubPat}
+                      onChange={(e) => { setGithubPat(e.target.value); setTestStatus("idle"); }}
+                      addonBefore="GitHub PAT"
+                    />
+                    <AntButton
+                      onClick={handleTestConnection}
+                      loading={testStatus === "loading"}
+                      disabled={!githubRepoUrl || !githubPat}
+                    >
+                      Test Connection
+                    </AntButton>
+                    {testStatus === "ok" && (
+                      <span style={{ color: "#52c41a" }}>
+                        <CheckCircleOutlined /> Connected successfully
+                      </span>
+                    )}
+                    {testStatus === "error" && (
+                      <span style={{ color: "#ff4d4f" }}>
+                        <CloseCircleOutlined /> {testMessage}
+                      </span>
+                    )}
+                  </Space>
+                </Modal>
               </>
             )}
           </Form.List>
@@ -260,4 +442,3 @@ const AgentFormFields: React.FC<AgentFormFieldsProps> = ({ showAgentName = true,
 };
 
 export default AgentFormFields;
-
