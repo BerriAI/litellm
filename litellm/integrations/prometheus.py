@@ -1220,7 +1220,8 @@ class PrometheusLogger(CustomLogger):
         # increment litellm_proxy_total_requests_metric for all successful requests
         # (both streaming and non-streaming) in this single location to prevent
         # double-counting that occurs when async_post_call_success_hook also increments
-        self._inc_labeled_counter(
+        PrometheusLogger._inc_labeled_counter(
+            self,
             self.litellm_proxy_total_requests_metric,
             "litellm_proxy_total_requests_metric",
             enum_values,
@@ -1248,21 +1249,24 @@ class PrometheusLogger(CustomLogger):
         ):
             _tags = standard_logging_payload["request_tags"]
 
-        self._inc_labeled_counter(
+        PrometheusLogger._inc_labeled_counter(
+            self,
             self.litellm_tokens_metric,
             "litellm_total_tokens_metric",
             enum_values,
             label_context=label_context,
             amount=float(standard_logging_payload["total_tokens"]),
         )
-        self._inc_labeled_counter(
+        PrometheusLogger._inc_labeled_counter(
+            self,
             self.litellm_input_tokens_metric,
             "litellm_input_tokens_metric",
             enum_values,
             label_context=label_context,
             amount=float(standard_logging_payload["prompt_tokens"]),
         )
-        self._inc_labeled_counter(
+        PrometheusLogger._inc_labeled_counter(
+            self,
             self.litellm_output_tokens_metric,
             "litellm_output_tokens_metric",
             enum_values,
@@ -1291,7 +1295,8 @@ class PrometheusLogger(CustomLogger):
 
         if cache_hit is True:
             # Increment cache hits counter
-            self._inc_labeled_counter(
+            PrometheusLogger._inc_labeled_counter(
+                self,
                 self.litellm_cache_hits_metric,
                 "litellm_cache_hits_metric",
                 enum_values,
@@ -1301,7 +1306,8 @@ class PrometheusLogger(CustomLogger):
             # Increment cached tokens counter
             total_tokens = standard_logging_payload.get("total_tokens", 0)
             if total_tokens > 0:
-                self._inc_labeled_counter(
+                PrometheusLogger._inc_labeled_counter(
+                    self,
                     self.litellm_cached_tokens_metric,
                     "litellm_cached_tokens_metric",
                     enum_values,
@@ -1310,7 +1316,8 @@ class PrometheusLogger(CustomLogger):
                 )
         else:
             # cache_hit is False - increment cache misses counter
-            self._inc_labeled_counter(
+            PrometheusLogger._inc_labeled_counter(
+                self,
                 self.litellm_cache_misses_metric,
                 "litellm_cache_misses_metric",
                 enum_values,
@@ -1384,13 +1391,15 @@ class PrometheusLogger(CustomLogger):
         enum_values: UserAPIKeyLabelValues,
         label_context: Optional[PrometheusLabelFactoryContext] = None,
     ):
-        self._inc_labeled_counter(
+        PrometheusLogger._inc_labeled_counter(
+            self,
             self.litellm_requests_metric,
             "litellm_requests_metric",
             enum_values,
             label_context=label_context,
         )
-        self._inc_labeled_counter(
+        PrometheusLogger._inc_labeled_counter(
+            self,
             self.litellm_spend_metric,
             "litellm_spend_metric",
             enum_values,
@@ -1796,13 +1805,15 @@ class PrometheusLogger(CustomLogger):
                 else None,
             )
             _label_ctx = PrometheusLabelFactoryContext(enum_values)
-            self._inc_labeled_counter(
+            PrometheusLogger._inc_labeled_counter(
+                self,
                 self.litellm_proxy_failed_requests_metric,
                 "litellm_proxy_failed_requests_metric",
                 enum_values,
                 label_context=_label_ctx,
             )
-            self._inc_labeled_counter(
+            PrometheusLogger._inc_labeled_counter(
+                self,
                 self.litellm_proxy_total_requests_metric,
                 "litellm_proxy_total_requests_metric",
                 enum_values,
@@ -2039,14 +2050,16 @@ class PrometheusLogger(CustomLogger):
             )
             _deployment_label_ctx = PrometheusLabelFactoryContext(enum_values)
             if exception is not None:
-                self._inc_labeled_counter(
+                PrometheusLogger._inc_labeled_counter(
+                    self,
                     self.litellm_deployment_failure_responses,
                     "litellm_deployment_failure_responses",
                     enum_values,
                     label_context=_deployment_label_ctx,
                 )
 
-            self._inc_labeled_counter(
+            PrometheusLogger._inc_labeled_counter(
+                self,
                 self.litellm_deployment_total_requests,
                 "litellm_deployment_total_requests",
                 enum_values,
@@ -2216,13 +2229,15 @@ class PrometheusLogger(CustomLogger):
                 api_provider=llm_provider or "",
             )
 
-            self._inc_labeled_counter(
+            PrometheusLogger._inc_labeled_counter(
+                self,
                 self.litellm_deployment_success_responses,
                 "litellm_deployment_success_responses",
                 enum_values,
                 label_context=label_context,
             )
-            self._inc_labeled_counter(
+            PrometheusLogger._inc_labeled_counter(
+                self,
                 self.litellm_deployment_total_requests,
                 "litellm_deployment_total_requests",
                 enum_values,
@@ -2491,7 +2506,8 @@ class PrometheusLogger(CustomLogger):
             exception_class=self._get_exception_class_name(original_exception),
             tags=_tags,
         )
-        self._inc_labeled_counter(
+        PrometheusLogger._inc_labeled_counter(
+            self,
             self.litellm_deployment_successful_fallbacks,
             "litellm_deployment_successful_fallbacks",
             enum_values,
@@ -2536,7 +2552,8 @@ class PrometheusLogger(CustomLogger):
             tags=_tags,
         )
 
-        self._inc_labeled_counter(
+        PrometheusLogger._inc_labeled_counter(
+            self,
             self.litellm_deployment_failed_fallbacks,
             "litellm_deployment_failed_fallbacks",
             enum_values,
