@@ -2263,7 +2263,7 @@ class TestPanwAirsMcpForceRun:
                 "test_panw_airs",
                 False,
                 "pre_call",
-                _simple_data(disable_global_guardrail=True),
+                _simple_data(disable_global_guardrails=True),
                 GuardrailEventHooks.pre_mcp_call,
                 False,
                 id="honors_disable_global_on_mcp_hooks",

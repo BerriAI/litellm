@@ -93,6 +93,23 @@ def test_baseten_model_api_pricing_entries():
         assert model_info["output_cost_per_token"] == output_cost
 
 
+def test_wandb_model_api_pricing_entries():
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    expected_pricing = {
+        "wandb/moonshotai/Kimi-K2.5": (6e-07, 3e-06),
+        "wandb/MiniMaxAI/MiniMax-M2.5": (3e-07, 1.2e-06),
+    }
+
+    for model_name, (input_cost, output_cost) in expected_pricing.items():
+        model_info = litellm.model_cost.get(model_name)
+        assert model_info is not None, f"Missing model pricing entry: {model_name}"
+        assert model_info["litellm_provider"] == "wandb"
+        assert model_info["input_cost_per_token"] == input_cost
+        assert model_info["output_cost_per_token"] == output_cost
+
+
 def test_cost_calculator_with_usage(monkeypatch):
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
@@ -1859,7 +1876,7 @@ def test_gemini_without_cache_tokens_details():
             "promptTokensDetails": [
                 {"modality": "TEXT", "tokenCount": 6},
                 {"modality": "IMAGE", "tokenCount": 258},
-            ]
+            ],
             # No cacheTokensDetails
         }
     }
@@ -1997,3 +2014,27 @@ def test_additional_costs_only_for_azure_ai():
         completion_tokens=50,
     )
     assert result is None, "Vertex AI should have no additional costs"
+
+
+def test_openrouter_gemini_3_1_flash_lite_preview_pricing():
+    """
+    Test that openrouter/google/gemini-3.1-flash-lite-preview has a pricing entry.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/25604
+
+    The model exists and is callable via OpenRouter, but was missing from
+    model_prices_and_context_window.json when other Gemini 3.x variants were present.
+    This caused ValueError: This model isn't mapped yet during router pre-call checks.
+    """
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    model_name = "openrouter/google/gemini-3.1-flash-lite-preview"
+    model_info = litellm.model_cost.get(model_name)
+
+    assert model_info is not None, f"Missing model pricing entry: {model_name}"
+    assert model_info["litellm_provider"] == "openrouter"
+    assert model_info["input_cost_per_token"] == 2.5e-07
+    assert model_info["output_cost_per_token"] == 1.5e-06
+    assert model_info["max_input_tokens"] == 1048576
+    assert model_info["max_output_tokens"] == 65536

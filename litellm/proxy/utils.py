@@ -77,7 +77,7 @@ from litellm import (
     ModelResponseStream,
     Router,
 )
-from litellm._logging import verbose_proxy_logger
+from litellm._logging import _redact_string, verbose_proxy_logger
 from litellm._service_logger import ServiceLogging, ServiceTypes
 from litellm.caching.caching import DualCache, RedisCache
 from litellm.caching.dual_cache import LimitedSizeOrderedDict
@@ -155,7 +155,7 @@ def print_verbose(print_statement):
 
     verbose_proxy_logger.debug("{}\n{}".format(print_statement, traceback.format_exc()))
     if litellm.set_verbose:
-        print(f"LiteLLM Proxy: {print_statement}")  # noqa
+        print(f"LiteLLM Proxy: {_redact_string(str(print_statement))}")  # noqa
 
 
 def _get_email_logger_class():
@@ -1721,6 +1721,7 @@ class ProxyLogging:
             error_message = str(original_exception)
         if isinstance(traceback_str, str):
             error_message += traceback_str[:1000]
+        error_message = _redact_string(error_message)
         asyncio.create_task(
             self.alerting_handler(
                 message=f"DB read/write call failed: {error_message}",
@@ -1791,7 +1792,7 @@ class ProxyLogging:
 
             asyncio.create_task(
                 self.alerting_handler(
-                    message=f"LLM API call failed: `{exception_str}`",
+                    message=_redact_string(f"LLM API call failed: `{exception_str}`"),
                     level="High",
                     alert_type=AlertType.llm_exceptions,
                     request_data=request_data,
@@ -4525,29 +4526,20 @@ class PrismaClient:
 
     async def get_all_latest_health_checks(self):
         """
-        Get the latest health check for each model
+        Get the latest health check for each model.
+
+        Uses DB-level DISTINCT ON (model_id, model_name) with ORDER BY checked_at DESC
+        (via Prisma ``distinct`` + ``order``) so we never load the full history into memory.
         """
         try:
-            # Get all unique model names first
-            all_checks = await self.db.litellm_healthchecktable.find_many(
-                order={"checked_at": "desc"}
+            return await self.db.litellm_healthchecktable.find_many(
+                distinct=["model_id", "model_name"],
+                order=[
+                    {"model_id": "asc"},
+                    {"model_name": "asc"},
+                    {"checked_at": "desc"},
+                ],
             )
-
-            # Group by model_name and get the latest for each
-            latest_checks = {}
-            for check in all_checks:
-                # Create a unique key: prefer model_id if available, otherwise use model_name
-                # This ensures we get the latest check for each unique model
-                if check.model_id:
-                    key = (check.model_id, check.model_name)
-                else:
-                    key = (None, check.model_name)
-
-                # Only add if we haven't seen this key yet (since checks are ordered by checked_at desc)
-                if key not in latest_checks:
-                    latest_checks[key] = check
-
-            return list(latest_checks.values())
         except Exception as e:
             verbose_proxy_logger.error(f"Error getting all latest health checks: {e}")
             return []
@@ -5353,6 +5345,22 @@ def _get_docs_url() -> Optional[str]:
         return None
 
     return "/"
+
+def _get_openapi_url() -> Optional[str]:
+    """
+    Get the OpenAPI JSON URL from the environment variables.
+
+    - If OPENAPI_URL is set, return it.
+    - If NO_OPENAPI is True, return None.
+    - Otherwise, default to "/openapi.json".
+    """
+    if openapi_url := os.getenv("OPENAPI_URL"):
+        return openapi_url
+
+    if str_to_bool(os.getenv("NO_OPENAPI")) is True:
+        return None
+
+    return "/openapi.json"
 
 
 def handle_exception_on_proxy(e: Exception) -> ProxyException:

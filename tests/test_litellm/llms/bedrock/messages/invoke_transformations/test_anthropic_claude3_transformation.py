@@ -1,4 +1,5 @@
 import asyncio
+import copy
 import json
 import os
 import sys
@@ -12,7 +13,12 @@ import pytest
 sys.path.insert(0, os.path.abspath("../../../../../.."))
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.llms.bedrock.common_utils import remove_custom_field_from_tools
+from litellm.llms.bedrock.common_utils import (
+    ensure_bedrock_anthropic_messages_tool_names,
+    normalize_tool_input_schema_types_for_bedrock_invoke,
+    remove_custom_field_from_tools,
+)
+from litellm.constants import BEDROCK_MIN_THINKING_BUDGET_TOKENS
 from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation import (
     AmazonAnthropicClaudeMessagesConfig,
     AmazonAnthropicClaudeMessagesStreamDecoder,
@@ -292,6 +298,173 @@ def test_remove_custom_field_from_tools():
     request4 = {"tools": None}
     remove_custom_field_from_tools(request4)
     assert request4["tools"] is None
+
+
+def test_normalize_tool_input_schema_types_for_bedrock_invoke():
+    """
+    Claude Code sends ``input_schema.type: \"custom\"`` for custom tools.
+    Bedrock Invoke rejects this; it requires JSON Schema ``type: \"object\"``.
+    """
+
+    request = {
+        "tools": [
+            {
+                "name": "Agent",
+                "type": "custom",
+                "description": "subagent",
+                "input_schema": {
+                    "type": "custom",
+                    "additionalProperties": False,
+                    "properties": {
+                        "nested": {
+                            "type": "custom",
+                            "properties": {"x": {"type": "string"}},
+                        }
+                    },
+                    "required": ["nested"],
+                },
+            },
+            {
+                "name": "Read",
+                "input_schema": {"type": "object", "properties": {}},
+            },
+        ]
+    }
+
+    normalize_tool_input_schema_types_for_bedrock_invoke(request)
+
+    agent_tool = request["tools"][0]
+    assert agent_tool["type"] == "custom"
+    assert agent_tool["input_schema"]["type"] == "object"
+    assert agent_tool["input_schema"]["properties"]["nested"]["type"] == "object"
+    assert request["tools"][1]["input_schema"]["type"] == "object"
+
+    request2 = {"messages": []}
+    normalize_tool_input_schema_types_for_bedrock_invoke(request2)
+    assert request2 == {"messages": []}
+
+
+def test_ensure_bedrock_anthropic_messages_tool_names():
+    request = {
+        "tools": [
+            {"input_schema": {"type": "object", "properties": {}}},
+            {"name": "", "input_schema": {"type": "object", "properties": {}}},
+            {"name": "  ", "input_schema": {"type": "object", "properties": {}}},
+            {"name": "KeepMe", "input_schema": {"type": "object", "properties": {}}},
+        ]
+    }
+    ensure_bedrock_anthropic_messages_tool_names(request)
+    assert request["tools"][0]["name"] == "litellm_unnamed_tool_0"
+    assert request["tools"][1]["name"] == "litellm_unnamed_tool_1"
+    assert request["tools"][2]["name"] == "litellm_unnamed_tool_2"
+    assert request["tools"][3]["name"] == "KeepMe"
+
+
+def test_bedrock_invoke_messages_transform_adds_name_when_tool_missing_name():
+    """Bedrock requires tools.0.custom.name when the payload is schema-only."""
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    optional_params = {
+        "max_tokens": 128,
+        "tools": [
+            {
+                "input_schema": {
+                    "type": "object",
+                    "properties": {"questions": {"type": "array"}},
+                    "required": ["questions"],
+                },
+            }
+        ],
+        "stream": False,
+    }
+    result = cfg.transform_anthropic_messages_request(
+        model="anthropic.claude-3-haiku-20240307-v1:0",
+        messages=[{"role": "user", "content": "hi"}],
+        anthropic_messages_optional_request_params=copy.deepcopy(optional_params),
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+    assert result["tools"][0]["name"] == "litellm_unnamed_tool_0"
+
+
+def test_bedrock_invoke_messages_skips_thinking_injection_when_already_enabled():
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    optional_params = {
+        "max_tokens": 32000,
+        "stream": False,
+        "thinking": {"type": "enabled", "budget_tokens": 2048},
+        "context_management": {
+            "edits": [{"type": "clear_thinking_20251015", "keep": "all"}]
+        },
+    }
+    result = cfg.transform_anthropic_messages_request(
+        model="global.anthropic.claude-sonnet-4-6-v1:0",
+        messages=[{"role": "user", "content": "hi"}],
+        anthropic_messages_optional_request_params=copy.deepcopy(optional_params),
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+    # Claude 4.6/4.7 reject ``thinking.type=enabled``; legacy ``enabled`` is
+    # translated to ``adaptive`` (budget_tokens => output_config.effort) and the
+    # pre-4.6 ``interleaved-thinking-2025-05-14`` beta must not be attached.
+    assert result["thinking"]["type"] == "adaptive"
+    betas = result.get("anthropic_beta") or []
+    assert "interleaved-thinking-2025-05-14" not in betas
+
+
+def test_bedrock_invoke_messages_transform_converts_custom_tool_schema_type_to_object():
+    """
+    End-to-end: AmazonAnthropicClaudeMessagesConfig must emit Bedrock Invoke bodies
+    where every ``input_schema`` uses JSON Schema types (``object``), not Anthropic
+    ``type: \"custom\"`` (root and nested).
+    """
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    tools = [
+        {
+            "name": "Agent",
+            "type": "custom",
+            "description": "Subagent",
+            "input_schema": {
+                "type": "custom",
+                "additionalProperties": False,
+                "properties": {
+                    "prompt": {"type": "string"},
+                    "nested": {
+                        "type": "custom",
+                        "properties": {"x": {"type": "string"}},
+                        "required": ["x"],
+                    },
+                },
+                "required": ["prompt"],
+            },
+        }
+    ]
+    optional_params = {
+        "max_tokens": 256,
+        "tools": copy.deepcopy(tools),
+        "stream": False,
+    }
+    messages = [{"role": "user", "content": "hi"}]
+
+    result = cfg.transform_anthropic_messages_request(
+        model="anthropic.claude-3-haiku-20240307-v1:0",
+        messages=messages,
+        anthropic_messages_optional_request_params=optional_params,
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert "tools" in result
+    schema = result["tools"][0]["input_schema"]
+    assert schema["type"] == "object"
+    assert schema["properties"]["nested"]["type"] == "object"
+    # Tool discriminator stays Anthropic-side; only input_schema is normalized
+    assert result["tools"][0]["type"] == "custom"
 
 
 def test_remove_scope_from_cache_control():

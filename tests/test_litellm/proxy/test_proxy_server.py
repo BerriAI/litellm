@@ -104,7 +104,10 @@ def test_login_v2_returns_redirect_url_and_sets_cookie(monkeypatch):
     )
 
     assert response.status_code == 200
-    assert response.json() == {"redirect_url": "http://testserver/ui/?login=success"}
+    assert response.json() == {
+        "redirect_url": "http://testserver/ui/?login=success",
+        "token": "signed-token",
+    }
     assert response.cookies.get("token") == "signed-token"
 
     mock_authenticate_user.assert_awaited_once_with(

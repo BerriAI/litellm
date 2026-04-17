@@ -4,7 +4,7 @@ https://together.ai/
 
 
 ```python
-!pip install litellm
+!uv add litellm
 ```
 
 

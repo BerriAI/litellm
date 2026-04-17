@@ -20,6 +20,7 @@ from pydantic import BaseModel
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import CommonProxyErrors, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.path_utils import safe_filename
 from litellm.types.prompts.init_prompts import (
     ListPromptsResponse,
     PromptInfo,
@@ -1356,8 +1357,8 @@ async def convert_prompt_file_to_json(
         # Read file content
         file_content = await file.read()
 
-        # Create temporary file
-        temp_file_path = Path(tempfile.mkdtemp()) / file.filename
+        # Create temporary file — use safe_filename to prevent path traversal
+        temp_file_path = Path(tempfile.mkdtemp()) / safe_filename(file.filename)
         temp_file_path.write_bytes(file_content)
 
         # Create a PromptManager instance just for conversion

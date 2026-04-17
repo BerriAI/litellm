@@ -11,7 +11,11 @@ from typing import List, Optional
 import litellm
 
 logger = logging.getLogger(__name__)
-from litellm.constants import DEFAULT_HEALTH_CHECK_PROMPT, HEALTH_CHECK_TIMEOUT_SECONDS
+from litellm.constants import (
+    BACKGROUND_HEALTH_CHECK_MAX_TOKENS,
+    DEFAULT_HEALTH_CHECK_PROMPT,
+    HEALTH_CHECK_TIMEOUT_SECONDS,
+)
 
 ILLEGAL_DISPLAY_PARAMS = [
     "messages",
@@ -242,7 +246,9 @@ async def _perform_health_check(
                 cleaned["model_id"] = _model_id
                 if isinstance(is_healthy, Exception):
                     exceptions_by_model_id[_model_id] = is_healthy
-                    cleaned["exception_status"] = getattr(is_healthy, "status_code", 500)
+                    cleaned["exception_status"] = getattr(
+                        is_healthy, "status_code", 500
+                    )
             unhealthy_endpoints.append(cleaned)
 
     return healthy_endpoints, unhealthy_endpoints, exceptions_by_model_id
@@ -301,6 +307,8 @@ def _update_litellm_params_for_health_check(
     _health_check_max_tokens = model_info.get("health_check_max_tokens", None)
     if _health_check_max_tokens is not None:
         litellm_params["max_tokens"] = _health_check_max_tokens
+    elif BACKGROUND_HEALTH_CHECK_MAX_TOKENS is not None:
+        litellm_params["max_tokens"] = BACKGROUND_HEALTH_CHECK_MAX_TOKENS
     elif "*" not in (
         model_info.get("health_check_model") or litellm_params.get("model") or ""
     ):

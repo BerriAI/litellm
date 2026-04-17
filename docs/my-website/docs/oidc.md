@@ -57,11 +57,30 @@ oidc/config_name_here/
 
 #### Unofficial Providers (not recommended)
 
-For the unofficial `file` provider, you can use the following format:
+For the unofficial `file` provider, you can use the following format
+(note the double slash — the path after `oidc/file/` must be absolute):
 
 ```
-oidc/file/home/user/dave/this_is_a_file_with_a_token.txt
+oidc/file//var/run/secrets/my-token
 ```
+
+For safety, the resolved path must live inside an allowed credential
+directory. By default the following directories are allowed:
+
+- `/var/run/secrets`
+- `/run/secrets`
+
+If your deployment mounts credentials elsewhere, set the
+`LITELLM_OIDC_ALLOWED_CREDENTIAL_DIRS` environment variable to a
+comma-separated list of absolute directories. The value replaces the
+default list, so include the defaults if you still need them:
+
+```bash
+export LITELLM_OIDC_ALLOWED_CREDENTIAL_DIRS="/var/run/secrets,/etc/litellm/creds"
+```
+
+Paths that resolve (after following symlinks and `..`) outside the
+allowlist are rejected.
 
 For the unofficial `env`, use the following format, where `SECRET_TOKEN` is the name of the environment variable that contains the token:
 

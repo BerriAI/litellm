@@ -17,6 +17,7 @@ vi.mock("@/components/networking", () => ({
   fetchMCPAccessGroups: vi.fn(),
   getTeamPermissionsCall: vi.fn(),
   organizationInfoCall: vi.fn(),
+  getRouterSettingsCall: vi.fn().mockResolvedValue({ fields: [] }),
 }));
 
 vi.mock("@/components/utils/dataUtils", () => ({
@@ -276,15 +277,17 @@ describe("TeamInfoView", () => {
     it("should display guardrails in overview when present", async () => {
       vi.mocked(networking.teamInfoCall).mockResolvedValue(
         createMockTeamData({
-          guardrails: ["guardrail1", "guardrail2"],
+          metadata: { guardrails: ["guardrail1", "guardrail2"] },
         })
       );
 
       renderWithProviders(<TeamInfoView {...defaultProps} />);
 
       await waitFor(() => {
-        expect(screen.getByText("Guardrails")).toBeInTheDocument();
+        expect(screen.getByText("Guardrails Settings")).toBeInTheDocument();
       });
+      expect(screen.getByText("guardrail1")).toBeInTheDocument();
+      expect(screen.getByText("guardrail2")).toBeInTheDocument();
     });
 
     it("should display policies in overview when present", async () => {
