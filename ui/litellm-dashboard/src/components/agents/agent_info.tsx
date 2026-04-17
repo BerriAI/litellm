@@ -293,11 +293,11 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({
                     </Form.Item>
 
                     {detectedAgentType === "a2a" ? (
-                      <AgentFormFields showAgentName={true} />
+                      <AgentFormFields showAgentName={true} accessToken={accessToken} />
                     ) : selectedAgentTypeInfo ? (
                       <DynamicAgentFormFields agentTypeInfo={selectedAgentTypeInfo} />
                     ) : (
-                    <AgentFormFields showAgentName={true} />
+                    <AgentFormFields showAgentName={true} accessToken={accessToken} />
                     )}
 
                     <Divider />
