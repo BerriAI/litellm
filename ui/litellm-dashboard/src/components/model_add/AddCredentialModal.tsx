@@ -92,7 +92,14 @@ const AddCredentialsModal: React.FC<AddCredentialsModalProps> = ({ open, onCance
           </AntdSelect>
         </Form.Item>
 
-        {selectedProvider === Providers.ChatGPT ? (
+        {/*
+          `selectedProvider` holds the enum *key* string at runtime
+          (``AntdSelect.Option value={providerEnum}`` binds the key, and the
+          ``as Providers`` cast on setState is not enforced). Compare against
+          the key names, not ``Providers.ChatGPT`` / ``Providers.GITHUB_COPILOT``
+          which resolve to enum *values* and would never match.
+        */}
+        {(selectedProvider as unknown as keyof typeof Providers) === "ChatGPT" ? (
           <ChatGPTLoginButton
             credentialName={credentialName}
             onSuccess={() => {
@@ -100,7 +107,7 @@ const AddCredentialsModal: React.FC<AddCredentialsModalProps> = ({ open, onCance
               form.resetFields();
             }}
           />
-        ) : selectedProvider === Providers.GITHUB_COPILOT ? (
+        ) : (selectedProvider as unknown as keyof typeof Providers) === "GITHUB_COPILOT" ? (
           <CopilotLoginButton
             credentialName={credentialName}
             onSuccess={() => {
@@ -128,8 +135,8 @@ const AddCredentialsModal: React.FC<AddCredentialsModalProps> = ({ open, onCance
             >
               Cancel
             </Button>
-            {selectedProvider !== Providers.ChatGPT &&
-              selectedProvider !== Providers.GITHUB_COPILOT && (
+            {(selectedProvider as unknown as keyof typeof Providers) !== "ChatGPT" &&
+              (selectedProvider as unknown as keyof typeof Providers) !== "GITHUB_COPILOT" && (
                 <Button htmlType="submit">{"Add Credential"}</Button>
               )}
           </div>
