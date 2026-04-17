@@ -2,8 +2,6 @@ import os
 import sys
 from unittest.mock import patch
 
-import pytest
-
 sys.path.insert(
     0, os.path.abspath("../../../../..")
 )  # Adds the parent directory to the system path
@@ -21,16 +19,17 @@ def test_vercel_ai_gateway_extra_body_transformation():
         messages=[{"role": "user", "content": "Hello, world!"}],
         optional_params={
             "extra_body": {
-                "providerOptions": {
-                    "gateway": {"order": ["azure", "openai"]}
-                }
+                "providerOptions": {"gateway": {"order": ["azure", "openai"]}}
             }
         },
         litellm_params={},
         headers={},
     )
 
-    assert transformed_request["extra_body"]["providerOptions"]["gateway"]["order"] == ["azure", "openai"]
+    assert transformed_request["extra_body"]["providerOptions"]["gateway"]["order"] == [
+        "azure",
+        "openai",
+    ]
     assert transformed_request["messages"] == [
         {"role": "user", "content": "Hello, world!"}
     ]
@@ -39,28 +38,31 @@ def test_vercel_ai_gateway_extra_body_transformation():
 def test_vercel_ai_gateway_provider_options_mapping():
     """Test that providerOptions from non_default_params is moved to extra_body"""
     config = VercelAIGatewayConfig()
-    
+
     non_default_params = {
-        "providerOptions": {
-            "gateway": {"order": ["azure", "openai"]}
-        }
+        "providerOptions": {"gateway": {"order": ["azure", "openai"]}}
     }
     optional_params = {}
     model = "vercel_ai_gateway/openai/gpt-4o"
-    
+
     result = config.map_openai_params(
         non_default_params, optional_params, model, drop_params=False
     )
-    
-    assert result["extra_body"]["providerOptions"]["gateway"]["order"] == ["azure", "openai"]
+
+    assert result["extra_body"]["providerOptions"]["gateway"]["order"] == [
+        "azure",
+        "openai",
+    ]
     assert "providerOptions" not in result
 
 
 def test_vercel_ai_gateway_get_supported_openai_params():
     """Test that extra_body is included in supported params"""
     config = VercelAIGatewayConfig()
-    supported_params = config.get_supported_openai_params("vercel_ai_gateway/openai/gpt-4o")
-    
+    supported_params = config.get_supported_openai_params(
+        "vercel_ai_gateway/openai/gpt-4o"
+    )
+
     assert "extra_body" in supported_params
     assert "temperature" in supported_params
     assert "max_tokens" in supported_params
@@ -70,7 +72,7 @@ def test_vercel_ai_gateway_get_supported_openai_params():
 def test_vercel_ai_gateway_get_openai_compatible_provider_info():
     """Test provider info retrieval with environment variables"""
     config = VercelAIGatewayConfig()
-    
+
     with patch.dict(
         "os.environ",
         {
@@ -86,27 +88,72 @@ def test_vercel_ai_gateway_get_openai_compatible_provider_info():
 def test_vercel_ai_gateway_error_class():
     """Test error class creation"""
     config = VercelAIGatewayConfig()
-    
+
     error_message = "Test error"
     status_code = 400
     headers = {"Content-Type": "application/json"}
-    
+
     error_class = config.get_error_class(error_message, status_code, headers)
-    
+
     assert isinstance(error_class, VercelAIGatewayException)
     assert error_class.message == error_message
     assert error_class.status_code == status_code
     assert error_class.headers == headers
 
 
+def test_vercel_ai_gateway_reasoning_effort_mapping():
+    """Test that reasoning_effort is converted to extra_body.reasoning format"""
+    config = VercelAIGatewayConfig()
+
+    non_default_params = {"reasoning_effort": "high"}
+    optional_params = {}
+    model = "vercel_ai_gateway/openai/gpt-4o"
+
+    result = config.map_openai_params(
+        non_default_params, optional_params, model, drop_params=False
+    )
+
+    assert result["extra_body"]["reasoning"] == {"effort": "high", "enabled": True}
+    assert "reasoning_effort" not in result
+
+
+def test_vercel_ai_gateway_reasoning_effort_with_existing_extra_body():
+    """Test that reasoning_effort merges with existing extra_body instead of overwriting it"""
+    config = VercelAIGatewayConfig()
+
+    non_default_params = {
+        "reasoning_effort": "high",
+        "providerOptions": {"gateway": {"order": ["azure", "openai"]}},
+    }
+    optional_params = {}
+    model = "vercel_ai_gateway/openai/gpt-4o"
+
+    result = config.map_openai_params(
+        non_default_params, optional_params, model, drop_params=False
+    )
+
+    # Both keys must coexist in extra_body — neither should be silently dropped
+    assert result["extra_body"]["reasoning"] == {"effort": "high", "enabled": True}
+    assert result["extra_body"]["providerOptions"] == {
+        "gateway": {"order": ["azure", "openai"]}
+    }
+    assert "reasoning_effort" not in result
+
+
+def test_vercel_ai_gateway_reasoning_effort_in_supported_params():
+    """Test that reasoning_effort is included in supported params"""
+    config = VercelAIGatewayConfig()
+    supported_params = config.get_supported_openai_params(
+        "vercel_ai_gateway/openai/gpt-4o"
+    )
+
+    assert "reasoning_effort" in supported_params
+
+
 def test_vercel_ai_gateway_exception_inheritance():
     """Test that VercelAIGatewayException inherits from BaseLLMException"""
     from litellm.llms.base_llm.chat.transformation import BaseLLMException
-    
-    exception = VercelAIGatewayException(
-        message="test", 
-        status_code=500, 
-        headers={}
-    )
-    
+
+    exception = VercelAIGatewayException(message="test", status_code=500, headers={})
+
     assert isinstance(exception, BaseLLMException)

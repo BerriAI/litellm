@@ -246,6 +246,36 @@ curl http://localhost:4000/v1/chat/completions \
 
 For more detailed information on using the LiteLLM Proxy, see the [LiteLLM Proxy documentation](../providers/litellm_proxy).
 
+## Reasoning Effort
+
+LiteLLM automatically converts the standard `reasoning_effort` parameter into the format required by Vercel AI Gateway.
+
+**Input (standard LiteLLM format):**
+```python showLineNumbers title="reasoning_effort with Vercel AI Gateway"
+import litellm
+
+response = litellm.completion(
+    model="vercel_ai_gateway/anthropic/claude-sonnet-4-5",
+    messages=[{"role": "user", "content": "Explain quantum entanglement"}],
+    reasoning_effort="high"
+)
+```
+
+LiteLLM converts this to the Vercel AI Gateway `extra_body` format automatically:
+
+```json
+{
+  "extra_body": {
+    "reasoning": {
+      "effort": "high",
+      "enabled": true
+    }
+  }
+}
+```
+
+Supported values for `reasoning_effort`: `"low"`, `"medium"`, `"high"`.
+
 ## Additional Resources
 
 - [Vercel AI Gateway Documentation](https://vercel.com/docs/ai-gateway)
