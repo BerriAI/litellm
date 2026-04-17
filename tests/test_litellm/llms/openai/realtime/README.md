@@ -19,14 +19,14 @@ There was confusion about the correct parameter name for passing headers to `web
 - **websockets < 14.0**: Used `extra_headers` parameter ✅
 - **websockets >= 14.0**: Uses `additional_headers` parameter ✅
 
-**LiteLLM uses websockets 15.0.1** (per requirements.txt), which requires `additional_headers`.
+**LiteLLM uses websockets 15.0.1** (per `uv.lock`), which requires `additional_headers`.
 
 ### Verification
 
 You can verify the correct parameter name:
 
 ```bash
-poetry run python -c "import websockets; import inspect; print(inspect.signature(websockets.connect))"
+uv run python -c "import websockets; import inspect; print(inspect.signature(websockets.connect))"
 ```
 
 This shows: `additional_headers: 'HeadersLike | None' = None` for websockets 15.0.1.
@@ -60,10 +60,10 @@ If you see test failures related to header parameters:
 
 1. **Check installed websockets version:**
    ```bash
-   poetry run python -c "import websockets; print(websockets.__version__)"
+   uv run python -c "import websockets; print(websockets.__version__)"
    ```
 
-2. **Check requirements.txt** for the specified version
+2. **Check `uv.lock`** for the pinned version
 
 3. **Verify the correct parameter:**
    - websockets >= 14.0: use `additional_headers`

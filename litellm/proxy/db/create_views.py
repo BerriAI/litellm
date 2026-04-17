@@ -4,6 +4,12 @@ from litellm import verbose_logger
 
 _db = Any
 
+# Markers that indicate a view/relation does not yet exist in the database.
+# Keeping these in one place avoids repeating the check across all view blocks
+# and prevents overly broad matches (e.g. bare 'undefined' would also match
+# 'undefined function' or 'column undefined_col referenced in query').
+_VIEW_NOT_FOUND_MARKERS = ("does not exist", "no such table", "undefined table")
+
 
 async def create_missing_views(db: _db):  # noqa: PLR0915
     """
@@ -18,14 +24,17 @@ async def create_missing_views(db: _db):  # noqa: PLR0915
 
     If the view doesn't exist, one will be created.
     """
+
     try:
         # Try to select one row from the view
         await db.query_raw("""SELECT 1 FROM "LiteLLM_VerificationTokenView" LIMIT 1""")
-        print("LiteLLM_VerificationTokenView Exists!")  # noqa
-    except Exception:
+        verbose_logger.debug("LiteLLM_VerificationTokenView Exists!")
+    except Exception as e:
+        error_msg = str(e).lower()
+        if not any(marker in error_msg for marker in _VIEW_NOT_FOUND_MARKERS):
+            raise
         # If an error occurs, the view does not exist, so create it
-        await db.execute_raw(
-            """
+        await db.execute_raw("""
                 CREATE VIEW "LiteLLM_VerificationTokenView" AS
                 SELECT
                 v.*,
@@ -37,15 +46,17 @@ async def create_missing_views(db: _db):  # noqa: PLR0915
                 FROM "LiteLLM_VerificationToken" v
                 LEFT JOIN "LiteLLM_TeamTable" t ON v.team_id = t.team_id
                 LEFT JOIN "LiteLLM_ProjectTable" p ON v.project_id = p.project_id;
-            """
-        )
+            """)
 
-        print("LiteLLM_VerificationTokenView Created!")  # noqa
+        verbose_logger.debug("LiteLLM_VerificationTokenView Created!")
 
     try:
         await db.query_raw("""SELECT 1 FROM "MonthlyGlobalSpend" LIMIT 1""")
-        print("MonthlyGlobalSpend Exists!")  # noqa
-    except Exception:
+        verbose_logger.debug("MonthlyGlobalSpend Exists!")
+    except Exception as e:
+        error_msg = str(e).lower()
+        if not any(marker in error_msg for marker in _VIEW_NOT_FOUND_MARKERS):
+            raise
         sql_query = """
         CREATE OR REPLACE VIEW "MonthlyGlobalSpend" AS 
         SELECT
@@ -60,12 +71,15 @@ async def create_missing_views(db: _db):  # noqa: PLR0915
         """
         await db.execute_raw(query=sql_query)
 
-        print("MonthlyGlobalSpend Created!")  # noqa
+        verbose_logger.debug("MonthlyGlobalSpend Created!")
 
     try:
         await db.query_raw("""SELECT 1 FROM "Last30dKeysBySpend" LIMIT 1""")
-        print("Last30dKeysBySpend Exists!")  # noqa
-    except Exception:
+        verbose_logger.debug("Last30dKeysBySpend Exists!")
+    except Exception as e:
+        error_msg = str(e).lower()
+        if not any(marker in error_msg for marker in _VIEW_NOT_FOUND_MARKERS):
+            raise
         sql_query = """
         CREATE OR REPLACE VIEW "Last30dKeysBySpend" AS
         SELECT 
@@ -88,12 +102,15 @@ async def create_missing_views(db: _db):  # noqa: PLR0915
         """
         await db.execute_raw(query=sql_query)
 
-        print("Last30dKeysBySpend Created!")  # noqa
+        verbose_logger.debug("Last30dKeysBySpend Created!")
 
     try:
         await db.query_raw("""SELECT 1 FROM "Last30dModelsBySpend" LIMIT 1""")
-        print("Last30dModelsBySpend Exists!")  # noqa
-    except Exception:
+        verbose_logger.debug("Last30dModelsBySpend Exists!")
+    except Exception as e:
+        error_msg = str(e).lower()
+        if not any(marker in error_msg for marker in _VIEW_NOT_FOUND_MARKERS):
+            raise
         sql_query = """
         CREATE OR REPLACE VIEW "Last30dModelsBySpend" AS
         SELECT
@@ -111,11 +128,14 @@ async def create_missing_views(db: _db):  # noqa: PLR0915
         """
         await db.execute_raw(query=sql_query)
 
-        print("Last30dModelsBySpend Created!")  # noqa
+        verbose_logger.debug("Last30dModelsBySpend Created!")
     try:
         await db.query_raw("""SELECT 1 FROM "MonthlyGlobalSpendPerKey" LIMIT 1""")
-        print("MonthlyGlobalSpendPerKey Exists!")  # noqa
-    except Exception:
+        verbose_logger.debug("MonthlyGlobalSpendPerKey Exists!")
+    except Exception as e:
+        error_msg = str(e).lower()
+        if not any(marker in error_msg for marker in _VIEW_NOT_FOUND_MARKERS):
+            raise
         sql_query = """
             CREATE OR REPLACE VIEW "MonthlyGlobalSpendPerKey" AS 
             SELECT
@@ -132,13 +152,16 @@ async def create_missing_views(db: _db):  # noqa: PLR0915
         """
         await db.execute_raw(query=sql_query)
 
-        print("MonthlyGlobalSpendPerKey Created!")  # noqa
+        verbose_logger.debug("MonthlyGlobalSpendPerKey Created!")
     try:
         await db.query_raw(
             """SELECT 1 FROM "MonthlyGlobalSpendPerUserPerKey" LIMIT 1"""
         )
-        print("MonthlyGlobalSpendPerUserPerKey Exists!")  # noqa
-    except Exception:
+        verbose_logger.debug("MonthlyGlobalSpendPerUserPerKey Exists!")
+    except Exception as e:
+        error_msg = str(e).lower()
+        if not any(marker in error_msg for marker in _VIEW_NOT_FOUND_MARKERS):
+            raise
         sql_query = """
             CREATE OR REPLACE VIEW "MonthlyGlobalSpendPerUserPerKey" AS 
             SELECT
@@ -157,12 +180,15 @@ async def create_missing_views(db: _db):  # noqa: PLR0915
         """
         await db.execute_raw(query=sql_query)
 
-        print("MonthlyGlobalSpendPerUserPerKey Created!")  # noqa
+        verbose_logger.debug("MonthlyGlobalSpendPerUserPerKey Created!")
 
     try:
         await db.query_raw("""SELECT 1 FROM "DailyTagSpend" LIMIT 1""")
-        print("DailyTagSpend Exists!")  # noqa
-    except Exception:
+        verbose_logger.debug("DailyTagSpend Exists!")
+    except Exception as e:
+        error_msg = str(e).lower()
+        if not any(marker in error_msg for marker in _VIEW_NOT_FOUND_MARKERS):
+            raise
         sql_query = """
         CREATE OR REPLACE VIEW "DailyTagSpend" AS
         SELECT
@@ -175,12 +201,15 @@ async def create_missing_views(db: _db):  # noqa: PLR0915
         """
         await db.execute_raw(query=sql_query)
 
-        print("DailyTagSpend Created!")  # noqa
+        verbose_logger.debug("DailyTagSpend Created!")
 
     try:
         await db.query_raw("""SELECT 1 FROM "Last30dTopEndUsersSpend" LIMIT 1""")
-        print("Last30dTopEndUsersSpend Exists!")  # noqa
-    except Exception:
+        verbose_logger.debug("Last30dTopEndUsersSpend Exists!")
+    except Exception as e:
+        error_msg = str(e).lower()
+        if not any(marker in error_msg for marker in _VIEW_NOT_FOUND_MARKERS):
+            raise
         sql_query = """
         CREATE VIEW "Last30dTopEndUsersSpend" AS
         SELECT end_user, COUNT(*) AS total_events, SUM(spend) AS total_spend
@@ -193,7 +222,7 @@ async def create_missing_views(db: _db):  # noqa: PLR0915
         """
         await db.execute_raw(query=sql_query)
 
-        print("Last30dTopEndUsersSpend Created!")  # noqa
+        verbose_logger.debug("Last30dTopEndUsersSpend Created!")
 
     return
 
