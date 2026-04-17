@@ -17,6 +17,8 @@ export default function UISettings() {
   const disableTeamAdminDeleteProperty = schema?.properties?.disable_team_admin_delete_team_user;
   const requireAuthForPublicAIHubProperty = schema?.properties?.require_auth_for_public_ai_hub;
   const forwardClientHeadersProperty = schema?.properties?.forward_client_headers_to_llm_api;
+  const forwardLLMProviderAuthHeadersProperty =
+    schema?.properties?.forward_llm_provider_auth_headers;
   const enableProjectsUIProperty = schema?.properties?.enable_projects_ui;
   const enabledPagesProperty = schema?.properties?.enabled_ui_pages_internal_users;
   const disableAgentsProperty = schema?.properties?.disable_agents_for_internal_users;
@@ -73,6 +75,20 @@ export default function UISettings() {
   const handleToggleForwardClientHeaders = (checked: boolean) => {
     updateSettings(
       { forward_client_headers_to_llm_api: checked },
+      {
+        onSuccess: () => {
+          NotificationManager.success("UI settings updated successfully");
+        },
+        onError: (error) => {
+          NotificationManager.fromBackend(error);
+        },
+      },
+    );
+  };
+
+  const handleToggleForwardLLMProviderAuthHeaders = (checked: boolean) => {
+    updateSettings(
+      { forward_llm_provider_auth_headers: checked },
       {
         onSuccess: () => {
           NotificationManager.success("UI settings updated successfully");
@@ -280,6 +296,26 @@ export default function UISettings() {
               <Typography.Text type="secondary">
                 {forwardClientHeadersProperty?.description ??
                   "If enabled, forwards client headers (e.g. Authorization) to the LLM API. Required for Claude Code with Max subscription."}
+              </Typography.Text>
+            </Space>
+          </Space>
+
+          <Space align="start" size="middle">
+            <Switch
+              checked={Boolean(values.forward_llm_provider_auth_headers)}
+              disabled={isUpdating}
+              loading={isUpdating}
+              onChange={handleToggleForwardLLMProviderAuthHeaders}
+              aria-label={
+                forwardLLMProviderAuthHeadersProperty?.description ??
+                "Forward LLM provider auth headers"
+              }
+            />
+            <Space direction="vertical" size={4}>
+              <Typography.Text strong>Forward LLM provider auth headers</Typography.Text>
+              <Typography.Text type="secondary">
+                {forwardLLMProviderAuthHeadersProperty?.description ??
+                  "If enabled, forwards provider auth headers (x-api-key, x-goog-api-key, api-key) to the LLM provider. Required for Claude Code BYOK."}
               </Typography.Text>
             </Space>
           </Space>
