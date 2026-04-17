@@ -27,6 +27,8 @@
   --ifm-font-size-base: 15px;
   --ifm-line-height-base: 1.65;
   --ifm-border-radius: 6px;
+  /* Code fences: slightly more inset than Infima default (1rem), esp. next to bash left accent */
+  --ifm-pre-padding: 1.25rem;
   /* Wider reading column — reduces excessive whitespace on large monitors */
   --ifm-container-width: 1380px;
   --ifm-container-width-xl: 1560px;
@@ -307,6 +309,38 @@ li.tabs__item--active {
   border-radius: var(--ifm-border-radius);
   font-size: 12.5px !important;
   line-height: 1.6;
+}
+
+/* Docusaurus line-number mode uses vertical-only padding on the inner wrapper; restore horizontal inset */
+.theme-code-block span[class*='codeLineContent'] {
+  padding-left: var(--ifm-pre-padding);
+}
+
+/* Doc + blog: both render under `article > .markdown`. Blog prose `.markdown code` and
+   `pre:not(.prism-code) code` were zeroing inner padding on fenced blocks — match Infima/CodeBlock. */
+article .markdown pre:not(.prism-code) code {
+  background: transparent;
+  border: none;
+  padding: 0;
+  color: inherit;
+}
+
+article .markdown pre.prism-code code[class*='codeBlockLinesWithNumbering'] {
+  padding: var(--ifm-pre-padding) 0 !important;
+  font-size: var(--ifm-code-font-size) !important;
+  line-height: var(--ifm-pre-line-height) !important;
+  background: transparent !important;
+  border: none !important;
+  color: inherit !important;
+}
+
+article .markdown pre.prism-code code[class*='codeBlockLines']:not([class*='codeBlockLinesWithNumbering']) {
+  padding: var(--ifm-pre-padding) !important;
+  font-size: var(--ifm-code-font-size) !important;
+  line-height: var(--ifm-pre-line-height) !important;
+  background: transparent !important;
+  border: none !important;
+  color: inherit !important;
 }
 
 [data-theme='dark'] .prism-code {
@@ -879,13 +913,6 @@ video {
   border: 1px solid #e5e7eb !important;
   border-radius: 8px;
   box-shadow: 0 1px 3px rgba(0,0,0,0.06);
-}
-
-.blog-wrapper article .markdown pre code {
-  background: transparent;
-  border: none;
-  padding: 0;
-  color: inherit;
 }
 
 /* Hide tags section at bottom of blog posts */
