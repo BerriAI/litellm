@@ -1415,6 +1415,23 @@ def test_vertex_request_labels_from_litellm_params_extracts_requester_metadata()
     assert vertex_request_labels_from_litellm_params(lp) == {"team": "analytics"}
 
 
+def test_vertex_request_labels_from_litellm_params_accepts_litellm_metadata():
+    lp = {
+        "litellm_metadata": {
+            "requester_metadata": {"team": "platform", "count": 3}
+        }
+    }
+    assert vertex_request_labels_from_litellm_params(lp) == {"team": "platform"}
+
+
+def test_vertex_request_labels_prefers_metadata_over_litellm_metadata():
+    lp = {
+        "metadata": {"requester_metadata": {"source": "metadata"}},
+        "litellm_metadata": {"requester_metadata": {"source": "litellm_metadata"}},
+    }
+    assert vertex_request_labels_from_litellm_params(lp) == {"source": "metadata"}
+
+
 def test_pop_vertex_request_labels_prefers_explicit_labels_then_metadata():
     optional = {"labels": {"env": "prod"}}
     litellm_params = {"metadata": {"requester_metadata": {"team": "x"}}}
@@ -1423,6 +1440,16 @@ def test_pop_vertex_request_labels_prefers_explicit_labels_then_metadata():
 
     optional2: dict = {}
     assert pop_vertex_request_labels(optional2, litellm_params) == {"team": "x"}
+
+
+def test_pop_vertex_request_labels_uses_litellm_metadata_when_metadata_absent():
+    optional: dict = {}
+    litellm_params = {
+        "litellm_metadata": {"requester_metadata": {"team": "from_litellm_meta"}}
+    }
+    assert pop_vertex_request_labels(optional, litellm_params) == {
+        "team": "from_litellm_meta"
+    }
 
 
 def test_vertex_text_embedding_request_includes_labels_from_metadata():
