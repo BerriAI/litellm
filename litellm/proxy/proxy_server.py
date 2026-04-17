@@ -3130,11 +3130,19 @@ class ProxyConfig:
                             cache_params[key] = get_secret(value)
 
                     ## to pass a complete url, or set ssl=True, etc. just set it as `os.environ[REDIS_URL] = <your-redis-url>`, _redis.py checks for REDIS specific environment variables
-                    self._init_cache(cache_params=cache_params)
-                    if litellm.cache is not None:
-                        verbose_proxy_logger.debug(
-                            f"{blue_color_code}Set Cache on LiteLLM Proxy{reset_color_code}"
+                    try:
+                        self._init_cache(cache_params=cache_params)
+                        if litellm.cache is not None:
+                            verbose_proxy_logger.debug(
+                                f"{blue_color_code}Set Cache on LiteLLM Proxy{reset_color_code}"
+                            )
+                    except Exception as e:
+                        verbose_proxy_logger.warning(
+                            f"Cache initialisation failed - proxy will start without caching. "
+                            f"Error: {e}. "
+                            "Fix your cache configuration and restart the proxy to enable caching."
                         )
+                        litellm.cache = None
                 elif key == "cache" and value is False:
                     pass
                 elif key == "guardrails":
