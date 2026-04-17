@@ -1516,6 +1516,7 @@ def prepare_metadata_fields(
     """
     Check LiteLLM_ManagementEndpoint_MetadataFields (proxy/_types.py) for fields that are allowed to be updated
     """
+    metadata_provided_in_update = "metadata" in non_default_values
     if "metadata" not in non_default_values:  # allow user to set metadata to none
         non_default_values["metadata"] = existing_metadata.copy()
 
@@ -1544,7 +1545,8 @@ def prepare_metadata_fields(
         )
 
     non_default_values["metadata"] = casted_metadata
-    encrypt_logging_callback_vars(non_default_values["metadata"])
+    if metadata_provided_in_update and "logging" in casted_metadata:
+        encrypt_logging_callback_vars(non_default_values["metadata"])
     return non_default_values
 
 

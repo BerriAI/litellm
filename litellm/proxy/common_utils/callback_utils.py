@@ -1,6 +1,11 @@
 import copy
 from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Literal, Optional
 
+from litellm.proxy.common_utils.encrypt_decrypt_utils import (
+    decrypt_value_helper,
+    encrypt_value_helper,
+)
+
 import litellm
 from litellm import get_secret
 from litellm._logging import verbose_proxy_logger
@@ -546,8 +551,6 @@ def encrypt_logging_callback_vars(metadata: Optional[Dict]) -> Optional[Dict]:
     if not isinstance(logging_configs, list):
         return metadata
 
-    from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
-
     for entry in logging_configs:
         if not isinstance(entry, dict):
             continue
@@ -568,11 +571,14 @@ def encrypt_logging_callback_vars(metadata: Optional[Dict]) -> Optional[Dict]:
 def redact_sensitive_logging_metadata(metadata: Optional[Dict]) -> Optional[Dict]:
     """
     Return a copy of `metadata` with credential values inside
-    `metadata["logging"][*]["callback_vars"]` replaced by "***".
+    `metadata["logging"][*]["callback_vars"]` partially masked.
 
-    Values that are just environment-variable references
-    (e.g. "os.environ/LANGFUSE_SECRET_KEY") are left as-is because they
-    don't expose the actual secret — they're just pointers.
+    Each value is replaced with "...XYZ" where XYZ is the last 3 characters
+    of the plaintext (decrypting first if the value is encrypted), giving
+    admins a visual hint without exposing the full secret.
+
+    Values that are environment-variable references
+    (e.g. "os.environ/LANGFUSE_SECRET_KEY") are left as-is.
     """
     if not metadata:
         return metadata
@@ -590,9 +596,23 @@ def redact_sensitive_logging_metadata(metadata: Optional[Dict]) -> Optional[Dict
         if not isinstance(callback_vars, dict):
             continue
         for key, value in callback_vars.items():
-            # Keep env-var pointers; scrub anything that looks like a real secret
-            if isinstance(value, str) and value.startswith("os.environ/"):
+            if not isinstance(value, str):
+                callback_vars[key] = "***"
                 continue
-            callback_vars[key] = "***"
+            # Keep env-var pointers as-is
+            if value.startswith("os.environ/"):
+                continue
+            # Decrypt to get plaintext (no-op for already-plaintext rows)
+            plaintext = str(
+                decrypt_value_helper(
+                    value=value,
+                    key=key,
+                    exception_type="debug",
+                    return_original_value=True,
+                )
+                or value
+            )
+            suffix = plaintext[-3:] if len(plaintext) >= 3 else plaintext
+            callback_vars[key] = f"...{suffix}"
 
     return metadata

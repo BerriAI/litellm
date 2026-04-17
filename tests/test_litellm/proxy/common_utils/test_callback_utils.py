@@ -94,7 +94,7 @@ def test_normalize_callback_names_lowercases_strings():
 
 
 def test_redact_scrubs_real_secret_values():
-    """Real credential values must be replaced with '***'."""
+    """Real credential values must be partially masked showing last 3 chars."""
     metadata = {
         "logging": [
             {
@@ -110,9 +110,9 @@ def test_redact_scrubs_real_secret_values():
     }
     result = redact_sensitive_logging_metadata(metadata)
     vars_ = result["logging"][0]["callback_vars"]
-    assert vars_["langfuse_public_key"] == "***"
-    assert vars_["langfuse_secret_key"] == "***"
-    assert vars_["langfuse_host"] == "***"
+    assert vars_["langfuse_public_key"] == "...123"
+    assert vars_["langfuse_secret_key"] == "...ret"
+    assert vars_["langfuse_host"] == "...com"
 
 
 def test_redact_keeps_env_var_references():
@@ -178,7 +178,7 @@ def test_redact_mixed_env_and_real_values():
     result = redact_sensitive_logging_metadata(metadata)
     vars_ = result["logging"][0]["callback_vars"]
     assert vars_["langfuse_public_key"] == "os.environ/LANGFUSE_PUBLIC_KEY"
-    assert vars_["langfuse_secret_key"] == "***"
+    assert vars_["langfuse_secret_key"] == "...ret"
 
 
 # ---------------------------------------------------------------------------
