@@ -1132,6 +1132,13 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
             if isinstance(_user_meta, dict) and "tags" in _user_meta:
                 _user_meta.pop("tags", None)
                 _stripped_from.append(_meta_key)
+        # Also strip the root-level `tags` field. get_tags_from_request_body
+        # reads request_body["tags"] directly and feeds it to the policy
+        # engine, so leaving it in place here would let the strip-in-metadata
+        # above be trivially bypassed by moving the tags to the body root.
+        if "tags" in data:
+            data.pop("tags", None)
+            _stripped_from.append("tags (root)")
         if _stripped_from:
             verbose_proxy_logger.warning(
                 "Stripped caller-supplied tags from %s: this key/team does "

@@ -596,6 +596,11 @@ async def test_add_litellm_data_to_request_ignores_root_level_tags_without_permi
     )
 
     assert "tags" not in (updated.get("metadata") or {})
+    # Also ensure the root-level tags are removed. get_tags_from_request_body
+    # reads request_body["tags"] directly, so leaving it in place would let
+    # the policy engine see caller-supplied tags even after the metadata
+    # strip.
+    assert "tags" not in updated
 
 
 @pytest.mark.asyncio
