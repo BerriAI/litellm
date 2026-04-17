@@ -11,6 +11,7 @@ from ..common_utils import (
     GetAPIKeyError,
     get_copilot_default_headers,
 )
+from ..db_authenticator import resolve_authenticator
 
 
 class GithubCopilotConfig(OpenAIConfig):
@@ -30,9 +31,10 @@ class GithubCopilotConfig(OpenAIConfig):
         api_key: Optional[str],
         custom_llm_provider: str,
     ) -> Tuple[Optional[str], Optional[str], str]:
-        dynamic_api_base = self.authenticator.get_api_base() or GITHUB_COPILOT_API_BASE
+        authenticator = resolve_authenticator(api_key, None, self.authenticator)
+        dynamic_api_base = authenticator.get_api_base() or GITHUB_COPILOT_API_BASE
         try:
-            dynamic_api_key = self.authenticator.get_api_key()
+            dynamic_api_key = authenticator.get_api_key()
         except GetAPIKeyError as e:
             raise AuthenticationError(
                 model=model,
@@ -83,8 +85,11 @@ class GithubCopilotConfig(OpenAIConfig):
         )
 
         # Add Copilot-specific headers (editor-version, user-agent, etc.)
+        authenticator = resolve_authenticator(
+            api_key, litellm_params, self.authenticator
+        )
         try:
-            copilot_api_key = self.authenticator.get_api_key()
+            copilot_api_key = authenticator.get_api_key()
             copilot_headers = get_copilot_default_headers(copilot_api_key)
             validated_headers = {**copilot_headers, **validated_headers}
         except GetAPIKeyError:
