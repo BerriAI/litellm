@@ -387,8 +387,10 @@ class DatabricksBase:
         if api_key is not None:
             headers["Authorization"] = f"Bearer {api_key}"
 
-        # Set User-Agent with optional custom prefix
-        headers["User-Agent"] = self._build_user_agent(custom_user_agent)
+        # Set User-Agent with optional custom prefix, but don't overwrite
+        # if the caller explicitly set one (e.g. via extra_headers)
+        if "User-Agent" not in headers:
+            headers["User-Agent"] = self._build_user_agent(custom_user_agent)
 
         # Debug logging with redaction (never log actual tokens)
         verbose_logger.debug(

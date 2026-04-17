@@ -334,6 +334,40 @@ class TestValidateEnvironmentUserAgent:
 
         assert headers["User-Agent"].startswith("mycompany_litellm/")
 
+    def test_extra_headers_user_agent_preserved(self, monkeypatch):
+        """User-Agent set via headers dict (extra_headers) is not overwritten."""
+        monkeypatch.delenv("DATABRICKS_CLIENT_ID", raising=False)
+        monkeypatch.delenv("DATABRICKS_CLIENT_SECRET", raising=False)
+
+        databricks_base = DatabricksBase()
+
+        api_base, headers = databricks_base.databricks_validate_environment(
+            api_key="test-key",
+            api_base="https://adb-123.net/serving-endpoints",
+            endpoint_type="chat_completions",
+            custom_endpoint=False,
+            headers={"User-Agent": "My-Custom-Agent/1.0"},
+        )
+
+        assert headers["User-Agent"] == "My-Custom-Agent/1.0"
+
+    def test_default_user_agent_when_not_in_headers(self, monkeypatch):
+        """Default User-Agent is set when headers dict has no User-Agent."""
+        monkeypatch.delenv("DATABRICKS_CLIENT_ID", raising=False)
+        monkeypatch.delenv("DATABRICKS_CLIENT_SECRET", raising=False)
+
+        databricks_base = DatabricksBase()
+
+        api_base, headers = databricks_base.databricks_validate_environment(
+            api_key="test-key",
+            api_base="https://adb-123.net/serving-endpoints",
+            endpoint_type="chat_completions",
+            custom_endpoint=False,
+            headers={},
+        )
+
+        assert headers["User-Agent"].startswith("litellm/")
+
 
 class TestSDKPartnerTelemetry:
     """Test that SDK partner telemetry is registered."""
