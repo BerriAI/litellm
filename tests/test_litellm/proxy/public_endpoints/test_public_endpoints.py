@@ -164,6 +164,23 @@ def test_anthropic_provider_fields_support_byok():
     assert fields_by_key["api_key"].get("tooltip"), (
         "Anthropic api_key must have a tooltip explaining the BYOK use case."
     )
+    assert "api_base" in fields_by_key, (
+        "Anthropic provider form must expose api_base so cloud customers "
+        "can override the upstream URL without env var access."
+    )
+    api_base_field = fields_by_key["api_base"]
+    assert api_base_field["required"] is False
+    assert api_base_field["field_type"] == "text"
+    assert api_base_field.get("tooltip"), (
+        "api_base should have a tooltip explaining it is optional."
+    )
+
+    # UI forms render fields in credential_fields order; api_base should come first
+    # so an admin sees the URL override before the key field.
+    field_order = [f["key"] for f in anthropic["credential_fields"]]
+    assert field_order.index("api_base") < field_order.index("api_key"), (
+        "api_base must appear before api_key in credential_fields (matches AI21 and ANTHROPIC_TEXT convention)."
+    )
 
 
 def test_public_model_hub_with_healthy_model():

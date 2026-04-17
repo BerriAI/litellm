@@ -215,6 +215,16 @@
     "litellm_provider": "anthropic",
     "credential_fields": [
       {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": null,
+        "tooltip": "Optional. Override the upstream Anthropic API URL. Defaults to https://api.anthropic.com.",
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
         "key": "api_key",
         "label": "API Key",
         "placeholder": "sk-",
