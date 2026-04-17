@@ -3429,6 +3429,7 @@ def _transform_verification_tokens_to_deleted_records(
             "litellm_organization_table",
             "object_permission",
             "id",
+            "budget_limits",
         ):
             record.pop(rel_key, None)
 
