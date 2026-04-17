@@ -45,7 +45,7 @@ For security inquiries, please contact us at support@berri.ai
 | **Certification** | **Status**                                                                                      |
 |-------------------|-------------------------------------------------------------------------------------------------|
 | SOC 2 Type I      | Certified. Report available upon request on Enterprise plan.                                                           |
-| SOC 2 Type II     | Certified. Report available upon request on Enterprise plan.                   |
+| SOC 2 Type II     | In progress. Expected by Q3 2026. Report available upon request on Enterprise plan. |
 | ISO 27001          | Certified. Report available upon request on Enterprise                              |
 
 
@@ -134,7 +134,7 @@ Point of contact email address for general security-related questions: krrish@be
 
 Has the Vendor been audited / certified? 
 - SOC 2 Type I. Certified. Report available upon request on Enterprise plan.
-- SOC 2 Type II. In progress. Certificate available by April 15th, 2025.
+- SOC 2 Type II. In progress. Expected by Q3 2026.
 - ISO 27001. Certified. Report available upon request on Enterprise plan.
 
 Has an information security management system been implemented? 
