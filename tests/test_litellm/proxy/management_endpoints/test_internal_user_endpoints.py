@@ -1956,6 +1956,43 @@ async def test_delete_user_rejects_org_admin_deleting_outside_scope(mocker):
     ) == 0
 
 
+@pytest.mark.asyncio
+async def test_user_update_rejects_silent_create_for_non_proxy_admin(mocker):
+    """Regression: `/user/update` with an unknown user_email used to fall
+    through to an INSERT, silently creating a new user with caller-supplied
+    budget, models, and metadata. An org admin could use this to spawn
+    arbitrary users outside the /user/new authorization flow."""
+    from fastapi import HTTPException
+
+    from litellm.proxy._types import UpdateUserRequest, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        _update_single_user_helper,
+    )
+
+    mock_prisma_client = mocker.MagicMock()
+    # user_email lookup yields None → would silently create pre-fix.
+    mock_prisma_client.db.litellm_usertable.find_first = mocker.AsyncMock(
+        return_value=None
+    )
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    user_request = UpdateUserRequest(
+        user_email="newcomer@example.com",
+        max_budget=1_000_000,
+        models=["gpt-4"],
+    )
+    org_admin = UserAPIKeyAuth(
+        user_id="org-admin",
+        user_role=LitellmUserRoles.ORG_ADMIN,
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        await _update_single_user_helper(
+            user_request=user_request, user_api_key_dict=org_admin
+        )
+    assert exc.value.status_code == 404
+
+
 # =====================================================================
 # /v2/user/info endpoint tests
 # =====================================================================
