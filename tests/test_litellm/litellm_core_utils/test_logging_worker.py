@@ -360,3 +360,34 @@ class TestLoggingWorker:
         assert worker2._bound_loop is not None
 
         await worker2.stop()
+
+    @pytest.mark.asyncio
+    async def test_flush_waits_for_in_flight_task_after_queue_is_empty(self):
+        """Flush must wait for dequeued work that has not called task_done() yet."""
+        worker = LoggingWorker(timeout=1.0, max_queue_size=10, concurrency=1)
+        worker.start()
+
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        async def slow_task():
+            started.set()
+            await release.wait()
+
+        worker.enqueue(slow_task())
+
+        await asyncio.wait_for(started.wait(), timeout=2.0)
+
+        # The worker has already dequeued the item, so qsize() can be zero
+        # even though the logging coroutine is still running.
+        assert worker._queue is not None
+        assert worker._queue.empty() is True
+
+        flush_task = asyncio.create_task(worker.flush())
+        await asyncio.sleep(0.05)
+
+        assert flush_task.done() is False
+
+        release.set()
+        await asyncio.wait_for(flush_task, timeout=2.0)
+        await worker.stop()
