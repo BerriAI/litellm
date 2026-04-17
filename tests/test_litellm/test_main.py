@@ -18,6 +18,10 @@ import litellm
 from litellm import main as litellm_main
 
 
+async def _async_fake_bedrock_image_details(image_url):
+    return "ZmFrZS1pbWFnZQ==", "image/png"
+
+
 @pytest.fixture(autouse=True)
 def clear_client_cache():
     """
@@ -39,6 +43,12 @@ def add_api_keys_to_env(monkeypatch):
     monkeypatch.setenv("AWS_ACCESS_KEY_ID", "my-fake-aws-access-key-id")
     monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "my-fake-aws-secret-access-key")
     monkeypatch.setenv("AWS_REGION", "us-east-1")
+    # Keep these transformation tests on the simple access-key path. A leaked
+    # session token or role/web-identity env var pushes Bedrock auth down a
+    # different branch and fails before the mocked HTTP client is exercised.
+    monkeypatch.delenv("AWS_SESSION_TOKEN", raising=False)
+    monkeypatch.delenv("AWS_ROLE_ARN", raising=False)
+    monkeypatch.delenv("AWS_WEB_IDENTITY_TOKEN_FILE", raising=False)
 
 
 @pytest.fixture
@@ -160,11 +170,30 @@ def test_completion_missing_role(openai_api_response):
 async def test_url_with_format_param(model, sync_mode, monkeypatch):
     from litellm import acompletion, completion
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+    from litellm.litellm_core_utils.prompt_templates import factory as prompt_factory
 
     if sync_mode:
         client = HTTPHandler()
     else:
         client = AsyncHTTPHandler()
+
+    # This test is about request shaping, not live image downloads. Stub the
+    # URL->image conversion helpers so suite-level network/client state from
+    # earlier tests cannot prevent the mocked provider client from being hit.
+    fake_base64_image = "data:image/png;base64,ZmFrZS1pbWFnZQ=="
+    monkeypatch.setattr(
+        prompt_factory, "convert_url_to_base64", lambda url: fake_base64_image
+    )
+    monkeypatch.setattr(
+        prompt_factory.BedrockImageProcessor,
+        "get_image_details",
+        staticmethod(lambda image_url: ("ZmFrZS1pbWFnZQ==", "image/png")),
+    )
+    monkeypatch.setattr(
+        prompt_factory.BedrockImageProcessor,
+        "get_image_details_async",
+        staticmethod(_async_fake_bedrock_image_details),
+    )
 
     args = {
         "model": model,
@@ -184,6 +213,8 @@ async def test_url_with_format_param(model, sync_mode, monkeypatch):
             }
         ],
     }
+    if model.startswith("gemini/"):
+        args["api_key"] = "test-api-key"
     with patch.object(client, "post", new=MagicMock()) as mock_client:
         try:
             if sync_mode:

@@ -4,6 +4,7 @@ title: "April Townhall: Security + Product Roadmap"
 date: 2026-04-02T07:30:00
 authors:
   - krrish
+  - ishaan-alt
 description: "Join the LiteLLM April townhall on Friday, 10 April at 7:30 AM to learn about LiteLLM's security and product roadmap."
 tags: [announcement, townhall]
 hide_table_of_contents: true

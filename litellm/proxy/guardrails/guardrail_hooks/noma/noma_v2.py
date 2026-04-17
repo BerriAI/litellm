@@ -274,6 +274,15 @@ class NomaV2Guardrail(CustomGuardrail):
         if application_id is None:
             application_id = self._get_non_empty_str(self.application_id)
 
+        # Fall back to API key alias for per-key traceability in Noma dashboard
+        # (ports v1 fallback from PR #16832).
+        if application_id is None:
+            application_id = self._get_non_empty_str(
+                request_data.get("litellm_metadata", {}).get("user_api_key_alias")
+            ) or self._get_non_empty_str(
+                request_data.get("metadata", {}).get("user_api_key_alias")
+            )
+
         try:
             payload = self._build_scan_payload(
                 inputs=inputs,

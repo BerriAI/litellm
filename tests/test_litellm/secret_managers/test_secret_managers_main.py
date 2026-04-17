@@ -199,14 +199,33 @@ def test_oidc_azure_ad_token_success(mock_get_azure_ad_token_provider, monkeypat
         mock_token_provider.assert_called_once_with()
 
 
-def test_oidc_file_success(tmp_path):
+def test_oidc_file_success(tmp_path, monkeypatch):
     token_file = tmp_path / "token.txt"
     token_file.write_text("file_token")
+    monkeypatch.setenv("LITELLM_OIDC_ALLOWED_CREDENTIAL_DIRS", str(tmp_path))
 
     secret_name = f"oidc/file/{token_file}"
     result = get_secret(secret_name)
 
     assert result == "file_token"
+
+
+def test_oidc_file_rejects_path_outside_allowlist(tmp_path, monkeypatch):
+    outside_file = tmp_path / "outside.txt"
+    outside_file.write_text("should_not_read")
+    # Allowlist a different directory.
+    allowed_dir = tmp_path / "allowed"
+    allowed_dir.mkdir()
+    monkeypatch.setenv("LITELLM_OIDC_ALLOWED_CREDENTIAL_DIRS", str(allowed_dir))
+
+    with pytest.raises(ValueError, match="outside the allowed credential directories"):
+        get_secret(f"oidc/file/{outside_file}")
+
+
+def test_oidc_file_rejects_relative_path(tmp_path, monkeypatch):
+    monkeypatch.setenv("LITELLM_OIDC_ALLOWED_CREDENTIAL_DIRS", str(tmp_path))
+    with pytest.raises(ValueError, match="must be absolute"):
+        get_secret("oidc/file/relative/path/token")
 
 
 def test_oidc_env_success(mock_env):

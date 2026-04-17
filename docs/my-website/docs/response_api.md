@@ -831,7 +831,7 @@ The system automatically selects the appropriate mode based on provider capabili
 
 ```python showLineNumbers title="WebSocket with Python"
 import json
-from websocket import create_connection  # pip install websocket-client
+from websocket import create_connection  # uv add websocket-client
 
 # Connect to LiteLLM proxy WebSocket endpoint
 ws = create_connection(

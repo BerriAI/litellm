@@ -15,6 +15,12 @@ from litellm.llms.ollama.chat.transformation import OllamaChatConfig, OllamaChat
 from litellm.types.llms.openai import AllMessageValues
 from litellm.utils import get_optional_params
 
+import json
+from unittest.mock import MagicMock
+
+import litellm
+from litellm.types.utils import Choices, Message, ModelResponse
+
 
 class TestEvent(BaseModel):
     name: str
@@ -427,12 +433,6 @@ class TestOllamaToolCalling:
 
     def test_finish_reason_stop_when_no_tool_calls(self):
         """Test that finish_reason remains 'stop' when no tool_calls present."""
-        import json
-        from unittest.mock import MagicMock
-
-        import litellm
-        from litellm.types.utils import Choices, Message, ModelResponse
-
         config = OllamaChatConfig()
 
         # Simulated Ollama response without tool_calls
@@ -474,6 +474,140 @@ class TestOllamaToolCalling:
         # finish_reason should be "stop" (default behavior)
         assert result.choices[0].finish_reason == "stop"
         assert result.choices[0].message.tool_calls is None
+
+
+class TestOllamaFinishReasonLength:
+    """Tests for done_reason 'length' → finish_reason 'length' mapping.
+
+    Ollama returns done_reason='length' when a response is truncated by num_predict
+    (max_tokens). Previously finish_reason was hardcoded to 'stop', hiding truncation.
+    The Anthropic pass-through adapter then maps OpenAI 'length' → 'max_tokens'.
+    """
+
+    def test_finish_reason_length_non_streaming(self):
+        """Non-streaming: done_reason='length' must propagate as finish_reason='length'."""
+        config = OllamaChatConfig()
+
+        ollama_response = {
+            "model": "qwen3:2b",
+            "created_at": "2025-01-11T00:00:00.000000Z",
+            "message": {
+                "role": "assistant",
+                "content": "A neural network learns through",
+            },
+            "done": True,
+            "done_reason": "length",
+            "prompt_eval_count": 20,
+            "eval_count": 20,
+        }
+
+        mock_response = MagicMock()
+        mock_response.json.return_value = ollama_response
+        mock_response.text = json.dumps(ollama_response)
+
+        mock_logging = MagicMock()
+
+        model_response = ModelResponse()
+        model_response.choices = [Choices(message=Message(content=""), index=0)]
+
+        result = config.transform_response(
+            model="qwen3:2b",
+            raw_response=mock_response,
+            model_response=model_response,
+            logging_obj=mock_logging,
+            request_data={},
+            messages=[{"role": "user", "content": "Explain neural networks."}],
+            optional_params={},
+            litellm_params={},
+            encoding=None,
+            api_key=None,
+            json_mode=False,
+        )
+
+        assert result.choices[0].finish_reason == "length", (
+            f"Expected 'length' when done_reason='length', got '{result.choices[0].finish_reason}'"
+        )
+
+    def test_finish_reason_stop_non_streaming(self):
+        """Non-streaming: done_reason='stop' (natural finish) must stay 'stop'."""
+        config = OllamaChatConfig()
+
+        ollama_response = {
+            "model": "qwen3:2b",
+            "created_at": "2025-01-11T00:00:00.000000Z",
+            "message": {"role": "assistant", "content": "2 + 2 = 4."},
+            "done": True,
+            "done_reason": "stop",
+            "prompt_eval_count": 10,
+            "eval_count": 8,
+        }
+
+        mock_response = MagicMock()
+        mock_response.json.return_value = ollama_response
+        mock_response.text = json.dumps(ollama_response)
+
+        mock_logging = MagicMock()
+
+        model_response = ModelResponse()
+        model_response.choices = [Choices(message=Message(content=""), index=0)]
+
+        result = config.transform_response(
+            model="qwen3:2b",
+            raw_response=mock_response,
+            model_response=model_response,
+            logging_obj=mock_logging,
+            request_data={},
+            messages=[{"role": "user", "content": "What is 2+2?"}],
+            optional_params={},
+            litellm_params={},
+            encoding=None,
+            api_key=None,
+            json_mode=False,
+        )
+
+        assert result.choices[0].finish_reason == "stop", (
+            f"Expected 'stop' for natural finish, got '{result.choices[0].finish_reason}'"
+        )
+
+    def test_finish_reason_length_streaming(self):
+        """Streaming: done_reason='length' in final chunk must produce finish_reason='length'."""
+        iterator = OllamaChatCompletionResponseIterator(
+            streaming_response=iter([]),
+            sync_stream=True,
+        )
+
+        done_chunk = {
+            "model": "qwen3:2b",
+            "message": {"role": "assistant", "content": "A neural network learns through"},
+            "done": True,
+            "done_reason": "length",
+        }
+
+        result = iterator.chunk_parser(done_chunk)
+
+        assert result.choices[0].finish_reason == "length", (
+            f"Expected 'length' when done_reason='length', got '{result.choices[0].finish_reason}'"
+        )
+
+    def test_finish_reason_stop_streaming(self):
+        """Streaming: done_reason='stop' in final chunk must produce finish_reason='stop'."""
+        iterator = OllamaChatCompletionResponseIterator(
+            streaming_response=iter([]),
+            sync_stream=True,
+        )
+
+        done_chunk = {
+            "model": "qwen3:2b",
+            "message": {"role": "assistant", "content": "2 + 2 = 4."},
+            "done": True,
+            "done_reason": "stop",
+        }
+
+        result = iterator.chunk_parser(done_chunk)
+
+        assert result.choices[0].finish_reason == "stop", (
+            f"Expected 'stop' for natural finish, got '{result.choices[0].finish_reason}'"
+        )
 
 
 class TestOllamaReasoningContentStreaming:
