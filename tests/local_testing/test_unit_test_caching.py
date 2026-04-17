@@ -131,6 +131,55 @@ def test_get_cache_key_text_completion():
     assert cache_key_2 == cache_key_3
 
 
+def test_get_cache_key_responses_api():
+    """
+    Regression test: two /v1/responses calls that differ only in
+    `instructions` (or any Responses-API-only param) must produce
+    different cache keys. Mirrors the chat / embedding / text-completion
+    cache-key tests above.
+    """
+    cache = Cache()
+
+    base_kwargs = {
+        "model": "openai/gpt-4.1",
+        "input": [{"role": "user", "content": "what is the weather"}],
+        "temperature": 0.3,
+    }
+
+    kwargs_a = {
+        **base_kwargs,
+        "instructions": "summarize the weather on 10th May",
+    }
+    kwargs_b = {
+        **base_kwargs,
+        "instructions": "summarize the weather on 7th May",
+    }
+
+    key_a = cache.get_cache_key(**kwargs_a)
+    key_b = cache.get_cache_key(**kwargs_b)
+
+    assert isinstance(key_a, str) and len(key_a) > 0
+    assert key_a != key_b, "instructions must be part of the Responses API cache key"
+
+    # Sanity: identical payloads must still collide (cache hits still work)
+    key_a_again = cache.get_cache_key(**kwargs_a)
+    assert key_a == key_a_again
+
+    # Spot-check a handful of other Responses-only params individually.
+    for param, value_x, value_y in [
+        ("previous_response_id", "resp_aaa", "resp_bbb"),
+        ("reasoning", {"effort": "low"}, {"effort": "high"}),
+        ("include", ["reasoning.encrypted_content"], []),
+        ("max_output_tokens", 100, 500),
+        ("background", True, False),
+    ]:
+        kx = {**base_kwargs, param: value_x}
+        ky = {**base_kwargs, param: value_y}
+        assert cache.get_cache_key(**kx) != cache.get_cache_key(
+            **ky
+        ), f"Responses-API param `{param}` is not part of the cache key"
+
+
 def test_get_hashed_cache_key():
     cache = Cache()
     cache_key = "model:gpt-3.5-turbo,messages:Hello world"
