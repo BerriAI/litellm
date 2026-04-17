@@ -2243,7 +2243,9 @@ def encode(model="", text="", custom_tokenizer: Optional[dict] = None):
     return enc
 
 
-def decode(model="", tokens: List[int] = [], custom_tokenizer: Optional[dict] = None):
+def decode(model="", tokens: Optional[List[int]] = None, custom_tokenizer: Optional[dict] = None):
+    if tokens is None:
+        tokens = []
     tokenizer_json = custom_tokenizer or _select_tokenizer(model=model)
     dec = tokenizer_json["tokenizer"].decode(tokens)
     return dec
