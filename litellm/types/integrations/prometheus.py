@@ -1,5 +1,5 @@
 import re
-from dataclasses import dataclass, field, fields
+from dataclasses import MISSING, dataclass, field, fields
 from enum import Enum
 from types import MappingProxyType
 from typing import Any, ClassVar, Dict, List, Literal, Mapping, Optional, Tuple, Union
@@ -743,7 +743,13 @@ class PrometheusMetricLabels:
         return default_labels + custom_labels
 
 
-@dataclass(frozen=True)
+_USER_API_KEY_LABEL_VALUE_INIT_ALIASES: Dict[str, str] = {
+    # Some tests / call sites use ``api_key_hash``; Prometheus field is ``hashed_api_key``.
+    "api_key_hash": "hashed_api_key",
+}
+
+
+@dataclass(frozen=True, init=False)
 class UserAPIKeyLabelValues:
     """
     Prometheus metric label inputs (Python field names match historical Pydantic ``model_dump`` keys).
@@ -779,6 +785,31 @@ class UserAPIKeyLabelValues:
     stream: Optional[str] = None
     org_id: Optional[str] = None
     org_alias: Optional[str] = None
+
+    def __init__(self, **kwargs: Any) -> None:
+        """
+        Match former Pydantic behavior: unknown keys are ignored; ``api_key_hash`` maps to
+        ``hashed_api_key``. This supports ``**standard_logging_payload`` in tests.
+        """
+        field_names = {f.name for f in fields(self)}
+        merged: Dict[str, Any] = {}
+        for f in fields(self):
+            if f.default_factory is not MISSING:
+                merged[f.name] = f.default_factory()
+            else:
+                merged[f.name] = f.default
+
+        for k, v in kwargs.items():
+            if k in field_names:
+                merged[k] = v
+                continue
+            canon = _USER_API_KEY_LABEL_VALUE_INIT_ALIASES.get(k)
+            if canon is not None and canon in field_names:
+                merged[canon] = v
+
+        for f in fields(self):
+            object.__setattr__(self, f.name, merged[f.name])
+        self.__post_init__()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "tags", tuple(self.tags))
