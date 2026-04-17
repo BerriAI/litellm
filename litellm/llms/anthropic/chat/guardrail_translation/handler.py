@@ -408,6 +408,9 @@ class AnthropicMessagesHandler(BaseTranslation):
             inputs["model"] = response_model
         return inputs
 
+    # Backward-compat alias — subclasses that overrode _build_guardrail_inputs still work
+    _build_guardrail_inputs = _build_output_guardrail_inputs
+
     async def process_output_streaming_response(
         self,
         responses_so_far: List[Any],

@@ -245,8 +245,8 @@ class A2AGuardrailHandler(BaseTranslation):
 
         # Collect text from each chunk in order (by original index in responses_so_far)
         text_parts: List[str] = []
-        chunk_indices_with_text: List[int] = []  # indices into valid_parsed
-        for idx, (orig_i, obj) in enumerate(valid_parsed):
+        chunk_indices_with_text: List[int] = []  # indices into responses_so_far
+        for orig_i, obj in valid_parsed:
             t = extract_text_from_a2a_response(obj)
             if t:
                 text_parts.append(t)
