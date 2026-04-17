@@ -68,7 +68,7 @@ class LemonadeChatConfig(OpenAILikeChatConfig):
         This method queries the Lemonade /models endpoint to retrieve the list of available models.
 
         Args:
-            api_key: Optional API key (Lemonade doesn't require authentication)
+            api_key: Optional API key for authentication
             api_base: Optional API base URL (defaults to LEMONADE_API_BASE env var or http://localhost:8000)
 
         Returns:
