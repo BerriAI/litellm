@@ -1548,10 +1548,13 @@ async def test_get_allowed_mcp_servers_for_key_returns_empty_when_db_returns_non
 
     mock_prisma = object()
 
-    with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma), patch(
-        "litellm.proxy.auth.auth_checks.get_object_permission",
-        new_callable=AsyncMock,
-    ) as mock_get_perm:
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
+        patch(
+            "litellm.proxy.auth.auth_checks.get_object_permission",
+            new_callable=AsyncMock,
+        ) as mock_get_perm,
+    ):
         mock_get_perm.return_value = None
 
         result = await MCPRequestHandler._get_allowed_mcp_servers_for_key(
@@ -1690,7 +1693,8 @@ class TestAgentMCPPermissions:
             MCPRequestHandler, "_get_key_object_permission", return_value=key_perm
         ):
             with patch.object(
-                MCPRequestHandler, "_get_team_object_permission",
+                MCPRequestHandler,
+                "_get_team_object_permission",
                 new_callable=AsyncMock,
                 return_value=team_perm,
             ):
@@ -1723,7 +1727,8 @@ class TestAgentMCPPermissions:
             MCPRequestHandler, "_get_key_object_permission", return_value=key_perm
         ):
             with patch.object(
-                MCPRequestHandler, "_get_team_object_permission",
+                MCPRequestHandler,
+                "_get_team_object_permission",
                 new_callable=AsyncMock,
                 return_value=None,
             ):
@@ -1758,12 +1763,16 @@ async def test_tool_permission_servers_included_in_allowed_servers():
         user_id="test-user",
     )
 
-    with patch.object(
-        MCPRequestHandler, "_get_key_object_permission", return_value=perm
-    ), patch.object(
-        MCPRequestHandler, "_get_mcp_servers_from_access_groups",
-        new_callable=AsyncMock,
-        return_value=[],
+    with (
+        patch.object(
+            MCPRequestHandler, "_get_key_object_permission", return_value=perm
+        ),
+        patch.object(
+            MCPRequestHandler,
+            "_get_mcp_servers_from_access_groups",
+            new_callable=AsyncMock,
+            return_value=[],
+        ),
     ):
         result = await MCPRequestHandler._get_allowed_mcp_servers_for_key(
             user_api_key_auth=user_api_key_auth,

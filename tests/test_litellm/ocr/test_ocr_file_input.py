@@ -8,6 +8,7 @@ Tests that:
 3. The proxy rejects type="file" documents received via JSON (security guard).
 4. The proxy returns user-friendly errors for invalid JSON bodies.
 """
+
 import base64
 import os
 import tempfile
@@ -218,7 +219,11 @@ class TestConvertFileDocumentToUrlDocument:
         content = b"some content"
         with pytest.raises(ValueError, match="Invalid MIME type"):
             convert_file_document_to_url_document(
-                {"type": "file", "file": content, "mime_type": "text/html; charset=utf-8\nX-Injected: true"}
+                {
+                    "type": "file",
+                    "file": content,
+                    "mime_type": "text/html; charset=utf-8\nX-Injected: true",
+                }
             )
 
     def test_should_override_mime_type_for_file_path(self):
@@ -460,5 +465,7 @@ class TestProxySecurityGuard:
         result = await self._parse_multipart(mock_request)
 
         assert result["document"]["type"] == "document_url"
-        assert result["document"]["document_url"].startswith("data:application/pdf;base64,")
+        assert result["document"]["document_url"].startswith(
+            "data:application/pdf;base64,"
+        )
         assert result["model"] == "mistral/mistral-ocr-latest"

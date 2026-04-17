@@ -88,7 +88,9 @@ class TestVertexMultimodalEmbedding:
             ),
         ]
         result = self.config.process_openai_embedding_input(input_data)
-        assert result == expected_output, f"Expected {expected_output}, but got {result}"
+        assert (
+            result == expected_output
+        ), f"Expected {expected_output}, but got {result}"
 
     def test_process_multiple_text_and_base64_image_pairs(self):
         """Test multiple text + base64 image pairs in a single request."""
@@ -110,18 +112,26 @@ class TestVertexMultimodalEmbedding:
             ),
         ]
         result = self.config.process_openai_embedding_input(input_data)
-        assert result == expected_output, f"Expected {expected_output}, but got {result}"
+        assert (
+            result == expected_output
+        ), f"Expected {expected_output}, but got {result}"
 
     def test_process_base64_image_only_in_list(self):
         """Test that standalone base64 images in a list are processed correctly."""
         base64_image = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII="
         input_data = [base64_image, base64_image]
         expected_output = [
-            Instance(image=InstanceImage(bytesBase64Encoded=base64_image.split(",")[1])),
-            Instance(image=InstanceImage(bytesBase64Encoded=base64_image.split(",")[1])),
+            Instance(
+                image=InstanceImage(bytesBase64Encoded=base64_image.split(",")[1])
+            ),
+            Instance(
+                image=InstanceImage(bytesBase64Encoded=base64_image.split(",")[1])
+            ),
         ]
         result = self.config.process_openai_embedding_input(input_data)
-        assert result == expected_output, f"Expected {expected_output}, but got {result}"
+        assert (
+            result == expected_output
+        ), f"Expected {expected_output}, but got {result}"
 
     def test_process_text_and_gcs_image_input(self):
         """Test that text + GCS image combinations are correctly merged."""
@@ -134,4 +144,6 @@ class TestVertexMultimodalEmbedding:
             ),
         ]
         result = self.config.process_openai_embedding_input(input_data)
-        assert result == expected_output, f"Expected {expected_output}, but got {result}"
+        assert (
+            result == expected_output
+        ), f"Expected {expected_output}, but got {result}"

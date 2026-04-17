@@ -514,12 +514,16 @@ def strip_bedrock_routing_prefix(model: str) -> str:
 
 
 def strip_bedrock_throughput_suffix(model: str) -> str:
-    """Strip throughput tier suffixes from Bedrock model names."""
+    """Strip throughput tier suffixes and context window suffixes from Bedrock model names."""
     import re
 
     # Pattern matches model:version:throughput where throughput is like 51k, 18k, etc.
     # Keep the model:version part, strip the :throughput suffix
-    return re.sub(r"(:\d+):\d+k$", r"\1", model)
+    model = re.sub(r"(:\d+):\d+k$", r"\1", model)
+    # Strip context window suffixes like [1m], [200k], etc.
+    # e.g. "us.anthropic.claude-opus-4-6-v1[1m]" -> "us.anthropic.claude-opus-4-6-v1"
+    model = re.sub(r"\[\w+\]$", "", model)
+    return model
 
 
 def get_bedrock_base_model(model: str) -> str:
@@ -589,6 +593,10 @@ def is_claude_4_5_on_bedrock(model: str) -> bool:
         "opus_4.6",
         "opus-4-6",
         "opus_4_6",
+        "opus-4.7",
+        "opus_4.7",
+        "opus-4-7",
+        "opus_4_7",
     ]
     return any(pattern in model_lower for pattern in claude_4_5_patterns)
 
@@ -1144,9 +1152,11 @@ class CommonBatchFilesUtils:
 
         return (
             dict(prepped.headers),
-            request_data.encode("utf-8")
-            if isinstance(request_data, str)
-            else request_data,
+            (
+                request_data.encode("utf-8")
+                if isinstance(request_data, str)
+                else request_data
+            ),
         )
 
     def generate_unique_job_name(self, model: str, prefix: str = "litellm") -> str:

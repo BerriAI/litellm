@@ -16,7 +16,11 @@ async def test_make_call_passes_logging_obj_to_client_post():
     """make_call must pass logging_obj to client.post so track_llm_api_timing can set llm_api_duration_ms for litellm_overhead_time_ms."""
     mock_client = AsyncMock()
     mock_response = MagicMock()
-    mock_response.aiter_lines = MagicMock(return_value=iter([b'data: {"type":"message_start"}\n', b'data: {"type":"message_delta"}\n']))
+    mock_response.aiter_lines = MagicMock(
+        return_value=iter(
+            [b'data: {"type":"message_start"}\n', b'data: {"type":"message_delta"}\n']
+        )
+    )
     mock_client.post.return_value = mock_response
 
     logging_obj = MagicMock()

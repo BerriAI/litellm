@@ -33,62 +33,8 @@ class TestAnthropicFilesHandler:
     @pytest.fixture
     def mock_anthropic_batch_results_succeeded(self):
         """Mock Anthropic batch results with succeeded status"""
-        return json.dumps({
-            "custom_id": "test-request-1",
-            "result": {
-                "type": "succeeded",
-                "message": {
-                    "id": "msg_123",
-                    "model": "claude-3-5-sonnet-20241022",
-                    "role": "assistant",
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": "Hello, world!"
-                        }
-                    ],
-                    "stop_reason": "end_turn",
-                    "stop_sequence": None,
-                    "usage": {
-                        "input_tokens": 10,
-                        "output_tokens": 5
-                    }
-                }
-            }
-        }).encode("utf-8")
-
-    @pytest.fixture
-    def mock_anthropic_batch_results_errored(self):
-        """Mock Anthropic batch results with errored status"""
-        return json.dumps({
-            "custom_id": "test-request-2",
-            "result": {
-                "type": "errored",
-                "error": {
-                    "error": {
-                        "type": "invalid_request_error",
-                        "message": "Invalid request"
-                    },
-                    "request_id": "req_456"
-                }
-            }
-        }).encode("utf-8")
-
-    @pytest.fixture
-    def mock_anthropic_batch_results_canceled(self):
-        """Mock Anthropic batch results with canceled status"""
-        return json.dumps({
-            "custom_id": "test-request-3",
-            "result": {
-                "type": "canceled"
-            }
-        }).encode("utf-8")
-
-    @pytest.fixture
-    def mock_anthropic_batch_results_mixed(self):
-        """Mock Anthropic batch results with multiple result types"""
-        lines = [
-            json.dumps({
+        return json.dumps(
+            {
                 "custom_id": "test-request-1",
                 "result": {
                     "type": "succeeded",
@@ -96,41 +42,89 @@ class TestAnthropicFilesHandler:
                         "id": "msg_123",
                         "model": "claude-3-5-sonnet-20241022",
                         "role": "assistant",
-                        "content": [{"type": "text", "text": "Success"}],
+                        "content": [{"type": "text", "text": "Hello, world!"}],
                         "stop_reason": "end_turn",
-                        "usage": {"input_tokens": 10, "output_tokens": 5}
-                    }
-                }
-            }),
-            json.dumps({
+                        "stop_sequence": None,
+                        "usage": {"input_tokens": 10, "output_tokens": 5},
+                    },
+                },
+            }
+        ).encode("utf-8")
+
+    @pytest.fixture
+    def mock_anthropic_batch_results_errored(self):
+        """Mock Anthropic batch results with errored status"""
+        return json.dumps(
+            {
                 "custom_id": "test-request-2",
                 "result": {
                     "type": "errored",
                     "error": {
                         "error": {
-                            "type": "rate_limit_error",
-                            "message": "Rate limit exceeded"
+                            "type": "invalid_request_error",
+                            "message": "Invalid request",
                         },
-                        "request_id": "req_456"
-                    }
+                        "request_id": "req_456",
+                    },
+                },
+            }
+        ).encode("utf-8")
+
+    @pytest.fixture
+    def mock_anthropic_batch_results_canceled(self):
+        """Mock Anthropic batch results with canceled status"""
+        return json.dumps(
+            {"custom_id": "test-request-3", "result": {"type": "canceled"}}
+        ).encode("utf-8")
+
+    @pytest.fixture
+    def mock_anthropic_batch_results_mixed(self):
+        """Mock Anthropic batch results with multiple result types"""
+        lines = [
+            json.dumps(
+                {
+                    "custom_id": "test-request-1",
+                    "result": {
+                        "type": "succeeded",
+                        "message": {
+                            "id": "msg_123",
+                            "model": "claude-3-5-sonnet-20241022",
+                            "role": "assistant",
+                            "content": [{"type": "text", "text": "Success"}],
+                            "stop_reason": "end_turn",
+                            "usage": {"input_tokens": 10, "output_tokens": 5},
+                        },
+                    },
                 }
-            }),
-            json.dumps({
-                "custom_id": "test-request-3",
-                "result": {
-                    "type": "expired"
+            ),
+            json.dumps(
+                {
+                    "custom_id": "test-request-2",
+                    "result": {
+                        "type": "errored",
+                        "error": {
+                            "error": {
+                                "type": "rate_limit_error",
+                                "message": "Rate limit exceeded",
+                            },
+                            "request_id": "req_456",
+                        },
+                    },
                 }
-            })
+            ),
+            json.dumps({"custom_id": "test-request-3", "result": {"type": "expired"}}),
         ]
         return "\n".join(lines).encode("utf-8")
 
     @pytest.mark.asyncio
-    async def test_afile_content_success(self, handler, mock_anthropic_batch_results_succeeded):
+    async def test_afile_content_success(
+        self, handler, mock_anthropic_batch_results_succeeded
+    ):
         """Test successful file content retrieval and transformation"""
         file_content_request: FileContentRequest = {
             "file_id": "batch_123",
             "extra_headers": None,
-            "extra_body": None
+            "extra_body": None,
         }
 
         # Mock the httpx client
@@ -138,19 +132,30 @@ class TestAnthropicFilesHandler:
             status_code=200,
             content=mock_anthropic_batch_results_succeeded,
             headers={"content-type": "application/json"},
-            request=httpx.Request(method="GET", url="https://api.anthropic.com/v1/messages/batches/batch_123/results")
+            request=httpx.Request(
+                method="GET",
+                url="https://api.anthropic.com/v1/messages/batches/batch_123/results",
+            ),
         )
 
-        with patch("litellm.llms.anthropic.files.handler.get_async_httpx_client") as mock_get_client:
+        with patch(
+            "litellm.llms.anthropic.files.handler.get_async_httpx_client"
+        ) as mock_get_client:
             mock_client = AsyncMock()
             mock_client.get = AsyncMock(return_value=mock_response)
             mock_get_client.return_value = mock_client
 
-            with patch.object(handler.anthropic_model_info, "get_api_key", return_value="test-api-key"):
-                with patch.object(handler.anthropic_model_info, "get_api_base", return_value="https://api.anthropic.com"):
+            with patch.object(
+                handler.anthropic_model_info, "get_api_key", return_value="test-api-key"
+            ):
+                with patch.object(
+                    handler.anthropic_model_info,
+                    "get_api_base",
+                    return_value="https://api.anthropic.com",
+                ):
                     result = await handler.afile_content(
                         file_content_request=file_content_request,
-                        api_key="test-api-key"
+                        api_key="test-api-key",
                     )
 
                     # Verify result
@@ -159,7 +164,9 @@ class TestAnthropicFilesHandler:
 
                     # Verify transformation to OpenAI format
                     content = result.response.content.decode("utf-8")
-                    lines = [line for line in content.strip().split("\n") if line.strip()]
+                    lines = [
+                        line for line in content.strip().split("\n") if line.strip()
+                    ]
                     assert len(lines) == 1
 
                     transformed_result = json.loads(lines[0])
@@ -168,37 +175,53 @@ class TestAnthropicFilesHandler:
                     assert "body" in transformed_result["response"]
                     # Verify body has required OpenAI format fields
                     assert "id" in transformed_result["response"]["body"]
-                    assert transformed_result["response"]["body"]["object"] == "chat.completion"
+                    assert (
+                        transformed_result["response"]["body"]["object"]
+                        == "chat.completion"
+                    )
                     assert "choices" in transformed_result["response"]["body"]
                     # Verify request_id matches the original message id
                     assert transformed_result["response"]["request_id"] == "msg_123"
 
     @pytest.mark.asyncio
-    async def test_afile_content_with_prefix(self, handler, mock_anthropic_batch_results_succeeded):
+    async def test_afile_content_with_prefix(
+        self, handler, mock_anthropic_batch_results_succeeded
+    ):
         """Test file content retrieval with anthropic_batch_results: prefix"""
         file_content_request: FileContentRequest = {
             "file_id": "anthropic_batch_results:batch_123",
             "extra_headers": None,
-            "extra_body": None
+            "extra_body": None,
         }
 
         mock_response = httpx.Response(
             status_code=200,
             content=mock_anthropic_batch_results_succeeded,
             headers={"content-type": "application/json"},
-            request=httpx.Request(method="GET", url="https://api.anthropic.com/v1/messages/batches/batch_123/results")
+            request=httpx.Request(
+                method="GET",
+                url="https://api.anthropic.com/v1/messages/batches/batch_123/results",
+            ),
         )
 
-        with patch("litellm.llms.anthropic.files.handler.get_async_httpx_client") as mock_get_client:
+        with patch(
+            "litellm.llms.anthropic.files.handler.get_async_httpx_client"
+        ) as mock_get_client:
             mock_client = AsyncMock()
             mock_client.get = AsyncMock(return_value=mock_response)
             mock_get_client.return_value = mock_client
 
-            with patch.object(handler.anthropic_model_info, "get_api_key", return_value="test-api-key"):
-                with patch.object(handler.anthropic_model_info, "get_api_base", return_value="https://api.anthropic.com"):
+            with patch.object(
+                handler.anthropic_model_info, "get_api_key", return_value="test-api-key"
+            ):
+                with patch.object(
+                    handler.anthropic_model_info,
+                    "get_api_base",
+                    return_value="https://api.anthropic.com",
+                ):
                     result = await handler.afile_content(
                         file_content_request=file_content_request,
-                        api_key="test-api-key"
+                        api_key="test-api-key",
                     )
 
                     assert isinstance(result, HttpxBinaryResponseContent)
@@ -208,110 +231,166 @@ class TestAnthropicFilesHandler:
                     assert "batch_123" in call_url
 
     @pytest.mark.asyncio
-    async def test_afile_content_errored_result(self, handler, mock_anthropic_batch_results_errored):
+    async def test_afile_content_errored_result(
+        self, handler, mock_anthropic_batch_results_errored
+    ):
         """Test transformation of errored batch results"""
         file_content_request: FileContentRequest = {
             "file_id": "batch_123",
             "extra_headers": None,
-            "extra_body": None
+            "extra_body": None,
         }
 
         mock_response = httpx.Response(
             status_code=200,
             content=mock_anthropic_batch_results_errored,
             headers={"content-type": "application/json"},
-            request=httpx.Request(method="GET", url="https://api.anthropic.com/v1/messages/batches/batch_123/results")
+            request=httpx.Request(
+                method="GET",
+                url="https://api.anthropic.com/v1/messages/batches/batch_123/results",
+            ),
         )
 
-        with patch("litellm.llms.anthropic.files.handler.get_async_httpx_client") as mock_get_client:
+        with patch(
+            "litellm.llms.anthropic.files.handler.get_async_httpx_client"
+        ) as mock_get_client:
             mock_client = AsyncMock()
             mock_client.get = AsyncMock(return_value=mock_response)
             mock_get_client.return_value = mock_client
 
-            with patch.object(handler.anthropic_model_info, "get_api_key", return_value="test-api-key"):
-                with patch.object(handler.anthropic_model_info, "get_api_base", return_value="https://api.anthropic.com"):
+            with patch.object(
+                handler.anthropic_model_info, "get_api_key", return_value="test-api-key"
+            ):
+                with patch.object(
+                    handler.anthropic_model_info,
+                    "get_api_base",
+                    return_value="https://api.anthropic.com",
+                ):
                     result = await handler.afile_content(
                         file_content_request=file_content_request,
-                        api_key="test-api-key"
+                        api_key="test-api-key",
                     )
 
                     content = result.response.content.decode("utf-8")
-                    lines = [line for line in content.strip().split("\n") if line.strip()]
+                    lines = [
+                        line for line in content.strip().split("\n") if line.strip()
+                    ]
                     assert len(lines) == 1
 
                     transformed_result = json.loads(lines[0])
                     assert transformed_result["custom_id"] == "test-request-2"
-                    assert transformed_result["response"]["status_code"] == 400  # invalid_request_error maps to 400
-                    assert transformed_result["response"]["body"]["error"]["type"] == "invalid_request_error"
-                    assert transformed_result["response"]["body"]["error"]["message"] == "Invalid request"
+                    assert (
+                        transformed_result["response"]["status_code"] == 400
+                    )  # invalid_request_error maps to 400
+                    assert (
+                        transformed_result["response"]["body"]["error"]["type"]
+                        == "invalid_request_error"
+                    )
+                    assert (
+                        transformed_result["response"]["body"]["error"]["message"]
+                        == "Invalid request"
+                    )
 
     @pytest.mark.asyncio
-    async def test_afile_content_canceled_result(self, handler, mock_anthropic_batch_results_canceled):
+    async def test_afile_content_canceled_result(
+        self, handler, mock_anthropic_batch_results_canceled
+    ):
         """Test transformation of canceled batch results"""
         file_content_request: FileContentRequest = {
             "file_id": "batch_123",
             "extra_headers": None,
-            "extra_body": None
+            "extra_body": None,
         }
 
         mock_response = httpx.Response(
             status_code=200,
             content=mock_anthropic_batch_results_canceled,
             headers={"content-type": "application/json"},
-            request=httpx.Request(method="GET", url="https://api.anthropic.com/v1/messages/batches/batch_123/results")
+            request=httpx.Request(
+                method="GET",
+                url="https://api.anthropic.com/v1/messages/batches/batch_123/results",
+            ),
         )
 
-        with patch("litellm.llms.anthropic.files.handler.get_async_httpx_client") as mock_get_client:
+        with patch(
+            "litellm.llms.anthropic.files.handler.get_async_httpx_client"
+        ) as mock_get_client:
             mock_client = AsyncMock()
             mock_client.get = AsyncMock(return_value=mock_response)
             mock_get_client.return_value = mock_client
 
-            with patch.object(handler.anthropic_model_info, "get_api_key", return_value="test-api-key"):
-                with patch.object(handler.anthropic_model_info, "get_api_base", return_value="https://api.anthropic.com"):
+            with patch.object(
+                handler.anthropic_model_info, "get_api_key", return_value="test-api-key"
+            ):
+                with patch.object(
+                    handler.anthropic_model_info,
+                    "get_api_base",
+                    return_value="https://api.anthropic.com",
+                ):
                     result = await handler.afile_content(
                         file_content_request=file_content_request,
-                        api_key="test-api-key"
+                        api_key="test-api-key",
                     )
 
                     content = result.response.content.decode("utf-8")
-                    lines = [line for line in content.strip().split("\n") if line.strip()]
+                    lines = [
+                        line for line in content.strip().split("\n") if line.strip()
+                    ]
                     assert len(lines) == 1
 
                     transformed_result = json.loads(lines[0])
                     assert transformed_result["custom_id"] == "test-request-3"
                     assert transformed_result["response"]["status_code"] == 400
-                    assert "Batch request was canceled" in transformed_result["response"]["body"]["error"]["message"]
+                    assert (
+                        "Batch request was canceled"
+                        in transformed_result["response"]["body"]["error"]["message"]
+                    )
 
     @pytest.mark.asyncio
-    async def test_afile_content_mixed_results(self, handler, mock_anthropic_batch_results_mixed):
+    async def test_afile_content_mixed_results(
+        self, handler, mock_anthropic_batch_results_mixed
+    ):
         """Test transformation of mixed batch results (succeeded, errored, expired)"""
         file_content_request: FileContentRequest = {
             "file_id": "batch_123",
             "extra_headers": None,
-            "extra_body": None
+            "extra_body": None,
         }
 
         mock_response = httpx.Response(
             status_code=200,
             content=mock_anthropic_batch_results_mixed,
             headers={"content-type": "application/json"},
-            request=httpx.Request(method="GET", url="https://api.anthropic.com/v1/messages/batches/batch_123/results")
+            request=httpx.Request(
+                method="GET",
+                url="https://api.anthropic.com/v1/messages/batches/batch_123/results",
+            ),
         )
 
-        with patch("litellm.llms.anthropic.files.handler.get_async_httpx_client") as mock_get_client:
+        with patch(
+            "litellm.llms.anthropic.files.handler.get_async_httpx_client"
+        ) as mock_get_client:
             mock_client = AsyncMock()
             mock_client.get = AsyncMock(return_value=mock_response)
             mock_get_client.return_value = mock_client
 
-            with patch.object(handler.anthropic_model_info, "get_api_key", return_value="test-api-key"):
-                with patch.object(handler.anthropic_model_info, "get_api_base", return_value="https://api.anthropic.com"):
+            with patch.object(
+                handler.anthropic_model_info, "get_api_key", return_value="test-api-key"
+            ):
+                with patch.object(
+                    handler.anthropic_model_info,
+                    "get_api_base",
+                    return_value="https://api.anthropic.com",
+                ):
                     result = await handler.afile_content(
                         file_content_request=file_content_request,
-                        api_key="test-api-key"
+                        api_key="test-api-key",
                     )
 
                     content = result.response.content.decode("utf-8")
-                    lines = [line for line in content.strip().split("\n") if line.strip()]
+                    lines = [
+                        line for line in content.strip().split("\n") if line.strip()
+                    ]
                     assert len(lines) == 3
 
                     # Check first result (succeeded)
@@ -320,7 +399,9 @@ class TestAnthropicFilesHandler:
 
                     # Check second result (errored)
                     result2 = json.loads(lines[1])
-                    assert result2["response"]["status_code"] == 429  # rate_limit_error maps to 429
+                    assert (
+                        result2["response"]["status_code"] == 429
+                    )  # rate_limit_error maps to 429
 
                     # Check third result (expired)
                     result3 = json.loads(lines[2])
@@ -333,14 +414,15 @@ class TestAnthropicFilesHandler:
         file_content_request: FileContentRequest = {
             "file_id": "batch_123",
             "extra_headers": None,
-            "extra_body": None
+            "extra_body": None,
         }
 
-        with patch.object(handler.anthropic_model_info, "get_auth_header", return_value=None):
+        with patch.object(
+            handler.anthropic_model_info, "get_auth_header", return_value=None
+        ):
             with pytest.raises(ValueError, match="Missing Anthropic API Key"):
                 await handler.afile_content(
-                    file_content_request=file_content_request,
-                    api_key=None
+                    file_content_request=file_content_request, api_key=None
                 )
 
     @pytest.mark.asyncio
@@ -349,13 +431,12 @@ class TestAnthropicFilesHandler:
         file_content_request: FileContentRequest = {
             "file_id": None,
             "extra_headers": None,
-            "extra_body": None
+            "extra_body": None,
         }
 
         with pytest.raises(ValueError, match="file_id is required"):
             await handler.afile_content(
-                file_content_request=file_content_request,
-                api_key="test-api-key"
+                file_content_request=file_content_request, api_key="test-api-key"
             )
 
     @pytest.mark.asyncio
@@ -364,27 +445,42 @@ class TestAnthropicFilesHandler:
         file_content_request: FileContentRequest = {
             "file_id": "batch_123",
             "extra_headers": None,
-            "extra_body": None
+            "extra_body": None,
         }
 
         mock_response = httpx.Response(
             status_code=404,
             content=b"Not Found",
-            request=httpx.Request(method="GET", url="https://api.anthropic.com/v1/messages/batches/batch_123/results")
+            request=httpx.Request(
+                method="GET",
+                url="https://api.anthropic.com/v1/messages/batches/batch_123/results",
+            ),
         )
-        mock_response.raise_for_status = MagicMock(side_effect=httpx.HTTPStatusError("Not Found", request=mock_response.request, response=mock_response))
+        mock_response.raise_for_status = MagicMock(
+            side_effect=httpx.HTTPStatusError(
+                "Not Found", request=mock_response.request, response=mock_response
+            )
+        )
 
-        with patch("litellm.llms.anthropic.files.handler.get_async_httpx_client") as mock_get_client:
+        with patch(
+            "litellm.llms.anthropic.files.handler.get_async_httpx_client"
+        ) as mock_get_client:
             mock_client = AsyncMock()
             mock_client.get = AsyncMock(return_value=mock_response)
             mock_get_client.return_value = mock_client
 
-            with patch.object(handler.anthropic_model_info, "get_api_key", return_value="test-api-key"):
-                with patch.object(handler.anthropic_model_info, "get_api_base", return_value="https://api.anthropic.com"):
+            with patch.object(
+                handler.anthropic_model_info, "get_api_key", return_value="test-api-key"
+            ):
+                with patch.object(
+                    handler.anthropic_model_info,
+                    "get_api_base",
+                    return_value="https://api.anthropic.com",
+                ):
                     with pytest.raises(httpx.HTTPStatusError):
                         await handler.afile_content(
                             file_content_request=file_content_request,
-                            api_key="test-api-key"
+                            api_key="test-api-key",
                         )
 
 
@@ -409,8 +505,8 @@ class TestAnthropicBatchesConfig:
                 "succeeded": 3,
                 "errored": 1,
                 "canceled": 0,
-                "expired": 0
-            }
+                "expired": 0,
+            },
         }
 
     @pytest.fixture
@@ -427,8 +523,8 @@ class TestAnthropicBatchesConfig:
                 "succeeded": 10,
                 "errored": 0,
                 "canceled": 0,
-                "expired": 0
-            }
+                "expired": 0,
+            },
         }
 
     @pytest.fixture
@@ -446,8 +542,8 @@ class TestAnthropicBatchesConfig:
                 "succeeded": 5,
                 "errored": 0,
                 "canceled": 3,
-                "expired": 0
-            }
+                "expired": 0,
+            },
         }
 
     def test_get_retrieve_batch_url(self, config):
@@ -456,7 +552,7 @@ class TestAnthropicBatchesConfig:
             api_base="https://api.anthropic.com",
             batch_id="batch_123",
             optional_params={},
-            litellm_params={}
+            litellm_params={},
         )
         assert url == "https://api.anthropic.com/v1/messages/batches/batch_123"
 
@@ -465,16 +561,23 @@ class TestAnthropicBatchesConfig:
             api_base="https://api.anthropic.com/",
             batch_id="batch_123",
             optional_params={},
-            litellm_params={}
+            litellm_params={},
         )
         assert url == "https://api.anthropic.com/v1/messages/batches/batch_123"
 
-    def test_transform_retrieve_batch_response_in_progress(self, config, mock_anthropic_batch_response_in_progress):
+    def test_transform_retrieve_batch_response_in_progress(
+        self, config, mock_anthropic_batch_response_in_progress
+    ):
         """Test transformation of in_progress batch response"""
         mock_response = httpx.Response(
             status_code=200,
-            content=json.dumps(mock_anthropic_batch_response_in_progress).encode("utf-8"),
-            request=httpx.Request(method="GET", url="https://api.anthropic.com/v1/messages/batches/batch_123")
+            content=json.dumps(mock_anthropic_batch_response_in_progress).encode(
+                "utf-8"
+            ),
+            request=httpx.Request(
+                method="GET",
+                url="https://api.anthropic.com/v1/messages/batches/batch_123",
+            ),
         )
 
         logging_obj = MagicMock()
@@ -482,7 +585,7 @@ class TestAnthropicBatchesConfig:
             model="claude-3-5-sonnet-20241022",
             raw_response=mock_response,
             logging_obj=logging_obj,
-            litellm_params={}
+            litellm_params={},
         )
 
         assert batch.id == "batch_123"
@@ -496,12 +599,17 @@ class TestAnthropicBatchesConfig:
         assert batch.in_progress_at is not None
         assert batch.completed_at is None
 
-    def test_transform_retrieve_batch_response_completed(self, config, mock_anthropic_batch_response_completed):
+    def test_transform_retrieve_batch_response_completed(
+        self, config, mock_anthropic_batch_response_completed
+    ):
         """Test transformation of completed batch response"""
         mock_response = httpx.Response(
             status_code=200,
             content=json.dumps(mock_anthropic_batch_response_completed).encode("utf-8"),
-            request=httpx.Request(method="GET", url="https://api.anthropic.com/v1/messages/batches/batch_456")
+            request=httpx.Request(
+                method="GET",
+                url="https://api.anthropic.com/v1/messages/batches/batch_456",
+            ),
         )
 
         logging_obj = MagicMock()
@@ -509,7 +617,7 @@ class TestAnthropicBatchesConfig:
             model="claude-3-5-sonnet-20241022",
             raw_response=mock_response,
             logging_obj=logging_obj,
-            litellm_params={}
+            litellm_params={},
         )
 
         assert batch.id == "batch_456"
@@ -519,12 +627,17 @@ class TestAnthropicBatchesConfig:
         assert batch.request_counts.completed == 10
         assert batch.request_counts.failed == 0
 
-    def test_transform_retrieve_batch_response_canceling(self, config, mock_anthropic_batch_response_canceling):
+    def test_transform_retrieve_batch_response_canceling(
+        self, config, mock_anthropic_batch_response_canceling
+    ):
         """Test transformation of canceling batch response"""
         mock_response = httpx.Response(
             status_code=200,
             content=json.dumps(mock_anthropic_batch_response_canceling).encode("utf-8"),
-            request=httpx.Request(method="GET", url="https://api.anthropic.com/v1/messages/batches/batch_789")
+            request=httpx.Request(
+                method="GET",
+                url="https://api.anthropic.com/v1/messages/batches/batch_789",
+            ),
         )
 
         logging_obj = MagicMock()
@@ -532,7 +645,7 @@ class TestAnthropicBatchesConfig:
             model="claude-3-5-sonnet-20241022",
             raw_response=mock_response,
             logging_obj=logging_obj,
-            litellm_params={}
+            litellm_params={},
         )
 
         assert batch.id == "batch_789"
@@ -546,16 +659,21 @@ class TestAnthropicBatchesConfig:
         mock_response = httpx.Response(
             status_code=200,
             content=b"invalid json",
-            request=httpx.Request(method="GET", url="https://api.anthropic.com/v1/messages/batches/batch_123")
+            request=httpx.Request(
+                method="GET",
+                url="https://api.anthropic.com/v1/messages/batches/batch_123",
+            ),
         )
 
         logging_obj = MagicMock()
-        with pytest.raises(ValueError, match="Failed to parse Anthropic batch response"):
+        with pytest.raises(
+            ValueError, match="Failed to parse Anthropic batch response"
+        ):
             config.transform_retrieve_batch_response(
                 model="claude-3-5-sonnet-20241022",
                 raw_response=mock_response,
                 logging_obj=logging_obj,
-                litellm_params={}
+                litellm_params={},
             )
 
     def test_transform_retrieve_batch_response_timestamp_parsing(self, config):
@@ -572,14 +690,17 @@ class TestAnthropicBatchesConfig:
                 "succeeded": 1,
                 "errored": 0,
                 "canceled": 0,
-                "expired": 0
-            }
+                "expired": 0,
+            },
         }
 
         mock_response = httpx.Response(
             status_code=200,
             content=json.dumps(batch_data).encode("utf-8"),
-            request=httpx.Request(method="GET", url="https://api.anthropic.com/v1/messages/batches/batch_123")
+            request=httpx.Request(
+                method="GET",
+                url="https://api.anthropic.com/v1/messages/batches/batch_123",
+            ),
         )
 
         logging_obj = MagicMock()
@@ -587,7 +708,7 @@ class TestAnthropicBatchesConfig:
             model="claude-3-5-sonnet-20241022",
             raw_response=mock_response,
             logging_obj=logging_obj,
-            litellm_params={}
+            litellm_params={},
         )
 
         # Verify timestamps are parsed correctly
@@ -612,14 +733,17 @@ class TestAnthropicBatchesConfig:
                 "succeeded": 0,
                 "errored": 0,
                 "canceled": 0,
-                "expired": 0
-            }
+                "expired": 0,
+            },
         }
 
         mock_response = httpx.Response(
             status_code=200,
             content=json.dumps(batch_data).encode("utf-8"),
-            request=httpx.Request(method="GET", url="https://api.anthropic.com/v1/messages/batches/batch_123")
+            request=httpx.Request(
+                method="GET",
+                url="https://api.anthropic.com/v1/messages/batches/batch_123",
+            ),
         )
 
         logging_obj = MagicMock()
@@ -627,7 +751,7 @@ class TestAnthropicBatchesConfig:
             model="claude-3-5-sonnet-20241022",
             raw_response=mock_response,
             logging_obj=logging_obj,
-            litellm_params={}
+            litellm_params={},
         )
 
         # Should still work with missing optional fields
@@ -636,4 +760,3 @@ class TestAnthropicBatchesConfig:
         assert batch.created_at is not None  # Should default to current time if missing
         assert batch.expires_at is None
         assert batch.completed_at is None
-

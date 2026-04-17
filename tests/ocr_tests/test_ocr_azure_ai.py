@@ -4,14 +4,16 @@ Test OCR functionality with Azure AI API.
 Note: Azure AI OCR automatically converts URLs to base64 data URIs since
 the Azure AI endpoint doesn't have internet access.
 """
+
 import os
 from base_ocr_unit_tests import BaseOCRTest
+
 
 class TestAzureAIOCR(BaseOCRTest):
     """
     Test class for Azure AI OCR functionality.
     Inherits from BaseOCRTest and provides Azure AI-specific configuration.
-    
+
     Note: For Azure AI, LiteLLM will automatically convert URLs to base64 data URIs before
     sending to the API, since Azure AI OCR endpoint doesn't have internet access.
     """

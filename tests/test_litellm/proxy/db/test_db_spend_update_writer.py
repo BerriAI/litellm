@@ -30,10 +30,11 @@ async def test_daily_spend_tracking_with_disabled_spend_logs():
     db_writer.add_spend_log_transaction_to_daily_user_transaction = AsyncMock()
 
     # Mock the imported modules/variables
-    with patch("litellm.proxy.proxy_server.disable_spend_logs", True), patch(
-        "litellm.proxy.proxy_server.prisma_client", MagicMock()
-    ), patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()), patch(
-        "litellm.proxy.proxy_server.litellm_proxy_budget_name", "test-budget"
+    with (
+        patch("litellm.proxy.proxy_server.disable_spend_logs", True),
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
+        patch("litellm.proxy.proxy_server.litellm_proxy_budget_name", "test-budget"),
     ):
         # Test data
         test_data = {
@@ -1230,13 +1231,15 @@ async def test_update_database_creates_single_task():
     db_writer._insert_spend_log_to_db = AsyncMock()
     db_writer._batch_database_updates = AsyncMock()
 
-    with patch("litellm.proxy.proxy_server.disable_spend_logs", False), patch(
-        "litellm.proxy.proxy_server.prisma_client", MagicMock()
-    ), patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()), patch(
-        "litellm.proxy.proxy_server.litellm_proxy_budget_name", "test-budget"
-    ), patch(
-        "litellm.proxy.db.db_spend_update_writer.asyncio.create_task"
-    ) as mock_create_task:
+    with (
+        patch("litellm.proxy.proxy_server.disable_spend_logs", False),
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
+        patch("litellm.proxy.proxy_server.litellm_proxy_budget_name", "test-budget"),
+        patch(
+            "litellm.proxy.db.db_spend_update_writer.asyncio.create_task"
+        ) as mock_create_task,
+    ):
         await db_writer.update_database(
             token="test-token",
             user_id="test-user",
@@ -1354,13 +1357,15 @@ async def test_daily_agent_receives_deepcopied_payload():
     }
     original_payload_ref["obj"] = fake_payload  # store reference to the original
 
-    with patch("litellm.proxy.proxy_server.disable_spend_logs", True), patch(
-        "litellm.proxy.proxy_server.prisma_client", MagicMock()
-    ), patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()), patch(
-        "litellm.proxy.proxy_server.litellm_proxy_budget_name", "test-budget"
-    ), patch(
-        "litellm.proxy.spend_tracking.spend_tracking_utils.get_logging_payload",
-        return_value=fake_payload,
+    with (
+        patch("litellm.proxy.proxy_server.disable_spend_logs", True),
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
+        patch("litellm.proxy.proxy_server.litellm_proxy_budget_name", "test-budget"),
+        patch(
+            "litellm.proxy.spend_tracking.spend_tracking_utils.get_logging_payload",
+            return_value=fake_payload,
+        ),
     ):
         await db_writer.update_database(
             token="test-token",
@@ -1398,8 +1403,8 @@ async def test_commit_spend_updates_uses_pipeline():
     mock_redis_update_buffer = AsyncMock()
     mock_redis_update_buffer.store_in_memory_spend_updates_in_redis = AsyncMock()
     # Return all-None tuple (no data to commit)
-    mock_redis_update_buffer.get_all_transactions_from_redis_buffer_pipeline = AsyncMock(
-        return_value=(None, None, None, None, None, None, None)
+    mock_redis_update_buffer.get_all_transactions_from_redis_buffer_pipeline = (
+        AsyncMock(return_value=(None, None, None, None, None, None, None))
     )
     db_writer.redis_update_buffer = mock_redis_update_buffer
 

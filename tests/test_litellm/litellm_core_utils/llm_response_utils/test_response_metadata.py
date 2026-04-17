@@ -190,7 +190,9 @@ class TestDetailedTiming:
 
     def test_detailed_timing_headers_in_custom_headers(self, monkeypatch):
         """When LITELLM_DETAILED_TIMING is true, headers flow to get_custom_headers."""
-        monkeypatch.setattr(common_request_processing_mod, "LITELLM_DETAILED_TIMING", True)
+        monkeypatch.setattr(
+            common_request_processing_mod, "LITELLM_DETAILED_TIMING", True
+        )
 
         user_api_key_dict = UserAPIKeyAuth(api_key="sk-test")
         hidden_params = {
@@ -213,7 +215,9 @@ class TestDetailedTiming:
 
     def test_detailed_timing_headers_absent_when_disabled(self, monkeypatch):
         """When LITELLM_DETAILED_TIMING is false, no timing headers emitted."""
-        monkeypatch.setattr(common_request_processing_mod, "LITELLM_DETAILED_TIMING", False)
+        monkeypatch.setattr(
+            common_request_processing_mod, "LITELLM_DETAILED_TIMING", False
+        )
 
         user_api_key_dict = UserAPIKeyAuth(api_key="sk-test")
         hidden_params = {

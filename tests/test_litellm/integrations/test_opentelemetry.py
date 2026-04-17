@@ -421,11 +421,12 @@ class TestOpenTelemetry(unittest.TestCase):
         otel.tracer = MagicMock()
 
         # Mock the dynamic header extraction and tracer creation
-        with patch.object(
-            otel, "_get_dynamic_otel_headers_from_kwargs"
-        ) as mock_get_headers, patch.object(
-            otel, "_get_tracer_with_dynamic_headers"
-        ) as mock_get_tracer:
+        with (
+            patch.object(
+                otel, "_get_dynamic_otel_headers_from_kwargs"
+            ) as mock_get_headers,
+            patch.object(otel, "_get_tracer_with_dynamic_headers") as mock_get_tracer,
+        ):
 
             # Test case 1: With dynamic headers
             mock_get_headers.return_value = {

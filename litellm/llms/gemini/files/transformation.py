@@ -3,6 +3,7 @@ Supports writing files to Google AI Studio Files API.
 
 For vertex ai, check out the vertex_ai/files/handler.py file.
 """
+
 import time
 from typing import Any, List, Literal, Optional
 from urllib.parse import urlparse
@@ -86,7 +87,7 @@ class GoogleAIStudioFilesHandler(GeminiModelInfo, BaseFilesConfig):
         if not final_api_key:
             raise ValueError("api_key is required")
 
-        url = "{}/{}?key={}".format(api_base, endpoint, final_api_key)
+        url = "{}/{}".format(api_base, endpoint)
         return url
 
     def get_supported_openai_params(
@@ -231,9 +232,9 @@ class GoogleAIStudioFilesHandler(GeminiModelInfo, BaseFilesConfig):
         )
         api_base = api_base.rstrip("/")
 
-        url = f"{api_base}/v1beta/{file_part}?key={api_key}"
+        url = f"{api_base}/v1beta/{file_part}"
 
-        # Return empty params dict - API key is already in URL, no query params needed
+        # API key is passed via x-goog-api-key header (set in validate_environment)
         return url, {}
 
     def _normalize_gemini_file_id(self, file_id: str) -> str:
@@ -300,9 +301,11 @@ class GoogleAIStudioFilesHandler(GeminiModelInfo, BaseFilesConfig):
                 object="file",
                 purpose="user_data",
                 status=status,
-                status_details=str(response_json.get("error", ""))
-                if gemini_state == "FAILED"
-                else None,
+                status_details=(
+                    str(response_json.get("error", ""))
+                    if gemini_state == "FAILED"
+                    else None
+                ),
             )
         except Exception as e:
             verbose_logger.exception(f"Error parsing file retrieve response: {str(e)}")

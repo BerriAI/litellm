@@ -97,7 +97,10 @@ class TestVertexAgentEngineChunkParser:
 
         result = iterator.chunk_parser(chunk)
 
-        assert result.choices[0].delta.content == "Hello! I can help you with financial analysis."
+        assert (
+            result.choices[0].delta.content
+            == "Hello! I can help you with financial analysis."
+        )
         assert result.choices[0].delta.role == "assistant"
         assert result.choices[0].finish_reason == "stop"
         assert result.usage["prompt_tokens"] == 100
@@ -125,4 +128,3 @@ class TestVertexAgentEngineChunkParser:
         assert result.choices[0].delta.content == "Partial response..."
         assert result.choices[0].finish_reason is None
         assert result.usage is None
-

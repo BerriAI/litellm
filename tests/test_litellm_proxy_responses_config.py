@@ -54,7 +54,7 @@ def test_litellm_proxy_responses_api_config_get_complete_url():
     # Test that it raises error when api_base is None and env var is not set
     if "LITELLM_PROXY_API_BASE" in os.environ:
         del os.environ["LITELLM_PROXY_API_BASE"]
-    
+
     with pytest.raises(ValueError, match="api_base not set"):
         config.get_complete_url(api_base=None, litellm_params={})
 
@@ -69,10 +69,10 @@ def test_litellm_proxy_responses_api_config_inherits_from_openai():
     )
 
     config = LiteLLMProxyResponsesAPIConfig()
-    
+
     # Should inherit from OpenAI config
     assert isinstance(config, OpenAIResponsesAPIConfig)
-    
+
     # Should have the correct provider set
     assert config.custom_llm_provider == LlmProviders.LITELLM_PROXY
 

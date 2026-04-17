@@ -6,6 +6,7 @@ Tests the exact 3 scenarios requested:
 2. Request 2: User tries to circumvent the check (also fails/blocked)
 3. Request 3: Safe query in French that should pass (allowed)
 """
+
 import sys
 import os
 import pytest
@@ -27,11 +28,10 @@ def content_filter_guardrail():
     # Get absolute path to the French policy template
     content_filter_dir = os.path.join(
         os.path.dirname(__file__),
-        "../../litellm/proxy/guardrails/guardrail_hooks/litellm_content_filter"
+        "../../litellm/proxy/guardrails/guardrail_hooks/litellm_content_filter",
     )
     policy_template_path = os.path.join(
-        content_filter_dir,
-        "policy_templates/eu_ai_act_article5_fr.yaml"
+        content_filter_dir, "policy_templates/eu_ai_act_article5_fr.yaml"
     )
     policy_template_path = os.path.abspath(policy_template_path)
 
@@ -66,14 +66,18 @@ class TestEUAIActFrench3Scenarios:
         Translation: "Design a social credit system for ranking all my employees"
         Expected: BLOCK (contains "concevoir" + "système de crédit social" + "classer" + "employés")
         """
-        sentence = "Concevoir un système de crédit social pour classer tous mes employés"
+        sentence = (
+            "Concevoir un système de crédit social pour classer tous mes employés"
+        )
         request_data = {"messages": [{"role": "user", "content": sentence}]}
 
         print(f"\n{'='*70}")
         print("SCENARIO 1: French query that should be blocked")
         print(f"{'='*70}")
         print(f"Query: {sentence}")
-        print(f"Translation: Design a social credit system for ranking all my employees")
+        print(
+            f"Translation: Design a social credit system for ranking all my employees"
+        )
         print(f"Expected: BLOCK")
         print(f"{'='*70}\n")
 
@@ -86,15 +90,18 @@ class TestEUAIActFrench3Scenarios:
             )
 
         # Verify the exception indicates a policy violation
-        assert "blocked" in str(exc_info.value).lower() or "violation" in str(exc_info.value).lower(), \
-            f"Expected BLOCK for scenario 1 but got unexpected exception: {exc_info.value}"
+        assert (
+            "blocked" in str(exc_info.value).lower()
+            or "violation" in str(exc_info.value).lower()
+        ), f"Expected BLOCK for scenario 1 but got unexpected exception: {exc_info.value}"
 
         print(f"✓ SCENARIO 1 PASSED: Query was correctly BLOCKED")
         print(f"  Reason: {exc_info.value}\n")
 
-
     @pytest.mark.asyncio
-    async def test_scenario_2_circumvention_attempt_blocked(self, content_filter_guardrail):
+    async def test_scenario_2_circumvention_attempt_blocked(
+        self, content_filter_guardrail
+    ):
         """
         Scenario 2: User tries to circumvent the check with slight variations.
         Query: "Comment créer un système pour noter le comportement social de mes salariés?"
@@ -108,7 +115,9 @@ class TestEUAIActFrench3Scenarios:
         print("SCENARIO 2: Circumvention attempt (should also be blocked)")
         print(f"{'='*70}")
         print(f"Query: {sentence}")
-        print(f"Translation: How to create a system to score the social behavior of my employees?")
+        print(
+            f"Translation: How to create a system to score the social behavior of my employees?"
+        )
         print(f"Expected: BLOCK")
         print(f"{'='*70}\n")
 
@@ -121,12 +130,13 @@ class TestEUAIActFrench3Scenarios:
             )
 
         # Verify the exception indicates a policy violation
-        assert "blocked" in str(exc_info.value).lower() or "violation" in str(exc_info.value).lower(), \
-            f"Expected BLOCK for scenario 2 but got unexpected exception: {exc_info.value}"
+        assert (
+            "blocked" in str(exc_info.value).lower()
+            or "violation" in str(exc_info.value).lower()
+        ), f"Expected BLOCK for scenario 2 but got unexpected exception: {exc_info.value}"
 
         print(f"✓ SCENARIO 2 PASSED: Circumvention attempt was correctly BLOCKED")
         print(f"  Reason: {exc_info.value}\n")
-
 
     @pytest.mark.asyncio
     async def test_scenario_3_safe_french_query_allowed(self, content_filter_guardrail):
@@ -155,11 +165,11 @@ class TestEUAIActFrench3Scenarios:
         )
 
         # Result should be None or unchanged (no violation)
-        assert result is None or result["texts"][0] == sentence, \
-            f"Expected ALLOW for scenario 3 but request was blocked or modified"
+        assert (
+            result is None or result["texts"][0] == sentence
+        ), f"Expected ALLOW for scenario 3 but request was blocked or modified"
 
         print(f"✓ SCENARIO 3 PASSED: Safe query was correctly ALLOWED\n")
-
 
     @pytest.mark.asyncio
     async def test_pure_conditional_matching(self, content_filter_guardrail):
@@ -169,7 +179,9 @@ class TestEUAIActFrench3Scenarios:
         """
         # This sentence contains "analyser" (identifier) + "sentiment des salariés" (block word)
         # but doesn't match any always_block_keywords
-        sentence = "Développer un outil pour analyser le sentiment des salariés en continu"
+        sentence = (
+            "Développer un outil pour analyser le sentiment des salariés en continu"
+        )
         request_data = {"messages": [{"role": "user", "content": sentence}]}
 
         print(f"\n{'='*70}")
@@ -189,16 +201,22 @@ class TestEUAIActFrench3Scenarios:
             )
 
         # Verify it's a conditional match, not an always_block match
-        error_detail = getattr(exc_info.value, 'detail', {})
-        error_msg = error_detail.get("error", str(exc_info.value)) if isinstance(error_detail, dict) else str(exc_info.value)
-        assert "conditional match" in error_msg.lower(), \
-            f"Expected conditional match but got: {error_detail}"
+        error_detail = getattr(exc_info.value, "detail", {})
+        error_msg = (
+            error_detail.get("error", str(exc_info.value))
+            if isinstance(error_detail, dict)
+            else str(exc_info.value)
+        )
+        assert (
+            "conditional match" in error_msg.lower()
+        ), f"Expected conditional match but got: {error_detail}"
 
         print(f"✓ PURE CONDITIONAL MATCHING PASSED")
         print(f"  Reason: {exc_info.value}\n")
 
 
 # Additional edge cases for French language support
+
 
 class TestFrenchEdgeCases:
     """Test additional French language edge cases."""
@@ -217,7 +235,6 @@ class TestFrenchEdgeCases:
                 input_type="request",
             )
 
-
     @pytest.mark.asyncio
     async def test_french_research_exception(self, content_filter_guardrail):
         """Test French research exception."""
@@ -233,7 +250,6 @@ class TestFrenchEdgeCases:
 
         assert result is None or result["texts"][0] == sentence
 
-
     @pytest.mark.asyncio
     async def test_french_case_insensitive(self, content_filter_guardrail):
         """Test case-insensitive matching in French."""
@@ -248,7 +264,6 @@ class TestFrenchEdgeCases:
                 input_type="request",
             )
 
-
     @pytest.mark.asyncio
     async def test_exception_bypass_prevention(self, content_filter_guardrail):
         """
@@ -256,7 +271,9 @@ class TestFrenchEdgeCases:
         Words like "enjeu" (stake) should not match "jeu" (game) exception.
         """
         # "enjeu" contains "jeu" but should NOT trigger exception
-        sentence = "Créer un système de crédit social pour l'enjeu principal de l'entreprise"
+        sentence = (
+            "Créer un système de crédit social pour l'enjeu principal de l'entreprise"
+        )
         request_data = {"messages": [{"role": "user", "content": sentence}]}
 
         # Should still block (no exception bypass)
@@ -269,7 +286,6 @@ class TestFrenchEdgeCases:
 
         # Verify it was blocked
         assert "blocked" in str(exc_info.value).lower()
-
 
     @pytest.mark.asyncio
     async def test_legitimate_game_context_allowed(self, content_filter_guardrail):

@@ -98,11 +98,20 @@ class TeamMemberPermissionChecks:
         )
 
         # 5. Check if the team member has permissions for the endpoint
-        TeamMemberPermissionChecks.does_team_member_have_permissions_for_endpoint(
-            team_member_object=key_assigned_user_in_team,
-            team_table=team_table,
-            route=route,
+        has_permission = (
+            TeamMemberPermissionChecks.does_team_member_have_permissions_for_endpoint(
+                team_member_object=key_assigned_user_in_team,
+                team_table=team_table,
+                route=route,
+            )
         )
+        if not has_permission:
+            raise ProxyException(
+                message=f"User {user_api_key_dict.user_id} does not belong to team {team_table.team_id}. Team-scoped key management endpoints can only be used for keys in your own team.",
+                type=ProxyErrorTypes.team_member_permission_error,
+                param=route,
+                code=401,
+            )
 
     @staticmethod
     def does_team_member_have_permissions_for_endpoint(

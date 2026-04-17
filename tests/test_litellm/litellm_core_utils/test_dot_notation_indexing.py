@@ -48,13 +48,7 @@ class TestGetNestedValue:
 
     def test_escaped_dot_nested(self):
         """Test multiple levels with escaped dots."""
-        data = {
-            "kubernetes.io": {
-                "pod.info": {
-                    "name": "my-pod"
-                }
-            }
-        }
+        data = {"kubernetes.io": {"pod.info": {"name": "my-pod"}}}
         assert get_nested_value(data, "kubernetes\\.io.pod\\.info.name") == "my-pod"
 
     def test_kubernetes_jwt_example(self):
@@ -67,43 +61,37 @@ class TestGetNestedValue:
             "jti": "randomstring",
             "kubernetes.io": {
                 "namespace": "namespace",
-                "node": {
-                    "name": "node-name",
-                    "uid": "node-uid"
-                },
-                "pod": {
-                    "name": "pod-name",
-                    "uid": "pod-uid"
-                },
+                "node": {"name": "node-name", "uid": "node-uid"},
+                "pod": {"name": "pod-name", "uid": "pod-uid"},
                 "serviceaccount": {
                     "name": "serviceaccount-name",
-                    "uid": "serviceaccount-uid"
+                    "uid": "serviceaccount-uid",
                 },
-                "warnafter": 1234567880
+                "warnafter": 1234567880,
             },
             "nbf": 123456789,
-            "sub": "system:serviceaccount:namespace:serviceaccount-name"
+            "sub": "system:serviceaccount:namespace:serviceaccount-name",
         }
-        
+
         # Test accessing kubernetes.io.namespace
         assert get_nested_value(jwt_token, "kubernetes\\.io.namespace") == "namespace"
-        
+
         # Test accessing nested values within kubernetes.io
         assert get_nested_value(jwt_token, "kubernetes\\.io.pod.name") == "pod-name"
-        assert get_nested_value(jwt_token, "kubernetes\\.io.serviceaccount.name") == "serviceaccount-name"
-        
+        assert (
+            get_nested_value(jwt_token, "kubernetes\\.io.serviceaccount.name")
+            == "serviceaccount-name"
+        )
+
         # Test accessing regular keys still works
-        assert get_nested_value(jwt_token, "sub") == "system:serviceaccount:namespace:serviceaccount-name"
+        assert (
+            get_nested_value(jwt_token, "sub")
+            == "system:serviceaccount:namespace:serviceaccount-name"
+        )
 
     def test_mixed_escaped_and_regular_dots(self):
         """Test path with both escaped dots (in keys) and regular dots (separators)."""
-        data = {
-            "config.v1": {
-                "settings": {
-                    "feature.enabled": True
-                }
-            }
-        }
+        data = {"config.v1": {"settings": {"feature.enabled": True}}}
         assert get_nested_value(data, "config\\.v1.settings.feature\\.enabled") is True
 
 
@@ -126,7 +114,9 @@ class TestDeleteNestedValue:
 
     def test_delete_array_wildcard(self):
         """Test deleting a field from all array elements."""
-        data = {"tools": [{"name": "t1", "secret": "s1"}, {"name": "t2", "secret": "s2"}]}
+        data = {
+            "tools": [{"name": "t1", "secret": "s1"}, {"name": "t2", "secret": "s2"}]
+        }
         result = delete_nested_value(data, "tools[*].secret")
         assert result == {"tools": [{"name": "t1"}, {"name": "t2"}]}
 
@@ -135,4 +125,3 @@ class TestDeleteNestedValue:
         data = {"items": [{"a": 1, "b": 2}, {"a": 3, "b": 4}]}
         result = delete_nested_value(data, "items[0].b")
         assert result == {"items": [{"a": 1}, {"a": 3, "b": 4}]}
-

@@ -30,11 +30,14 @@ async def test_custom_auth_run_post_custom_auth_checks_without_end_user_id():
         mock_common.assert_not_awaited()
 
     # With opt-in flag: common_checks SHOULD be called
-    with patch(
-        "litellm.proxy.auth.user_api_key_auth.common_checks", new_callable=AsyncMock
-    ) as mock_common, patch(
-        "litellm.proxy.proxy_server.general_settings",
-        {"custom_auth_run_common_checks": True},
+    with (
+        patch(
+            "litellm.proxy.auth.user_api_key_auth.common_checks", new_callable=AsyncMock
+        ) as mock_common,
+        patch(
+            "litellm.proxy.proxy_server.general_settings",
+            {"custom_auth_run_common_checks": True},
+        ),
     ):
         mock_common.return_value = True
         result = await _run_post_custom_auth_checks(

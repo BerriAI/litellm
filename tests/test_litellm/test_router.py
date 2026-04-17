@@ -274,7 +274,7 @@ async def test_async_router_afile_content_uses_deployment_custom_llm_provider():
     """
     Regression test: Ensure afile_content preserves deployment custom_llm_provider
     when model name lacks provider prefix (e.g., "gpt-4.1-mini" instead of "azure/gpt-4.1-mini").
-    
+
     This prevents "None is not a valid LlmProviders" errors when calling file content operations.
     """
     from unittest.mock import AsyncMock, MagicMock, patch
@@ -297,9 +297,11 @@ async def test_async_router_afile_content_uses_deployment_custom_llm_provider():
     # Mock the Azure file handler's afile_content method
     mock_response = MagicMock(spec=HttpxBinaryResponseContent)
     mock_response.response = MagicMock()
-    
-    with patch("litellm.llms.azure.files.handler.AzureOpenAIFilesAPI.afile_content", 
-               return_value=mock_response) as mock_afile_content:
+
+    with patch(
+        "litellm.llms.azure.files.handler.AzureOpenAIFilesAPI.afile_content",
+        return_value=mock_response,
+    ) as mock_afile_content:
         result = await router.afile_content(
             model="team-azure-batch",
             file_id="file-123",
@@ -3132,7 +3134,9 @@ def test_multiregion_team_deployments_unique_model_names():
 
     # Each deployment has a unique ID (critical for cooldown/retry to work)
     deployment_ids = {d["model_info"]["id"] for d in deployments}
-    assert len(deployment_ids) == 2, "Each deployment must have a unique ID for cooldown tracking"
+    assert (
+        len(deployment_ids) == 2
+    ), "Each deployment must have a unique ID for cooldown tracking"
 
     # Wrong team: returns nothing
     deployments = router._get_all_deployments(
@@ -3185,9 +3189,9 @@ async def test_multiregion_team_failover_between_regions():
     deployments = router._get_all_deployments(
         model_name="claude-sonnet", team_id="metis-team"
     )
-    assert len(deployments) == 2, (
-        "Router must find both regional deployments by team_public_model_name"
-    )
+    assert (
+        len(deployments) == 2
+    ), "Router must find both regional deployments by team_public_model_name"
 
     # Make a normal request — should succeed from one of the regions
     response = await router.acompletion(

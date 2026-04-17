@@ -261,7 +261,9 @@ async def test_post_call__with_anonymized_entities__it_doesnt_deanonymize_output
             response=llm_response(),
             user_api_key_dict=UserAPIKeyAuth(key_alias="test-key"),
         )
-        assert result["choices"][0]["message"]["content"] == "Hello [NAME_1]! How are you?"
+        assert (
+            result["choices"][0]["message"]["content"] == "Hello [NAME_1]! How are you?"
+        )
 
 
 @pytest.mark.asyncio

@@ -27,7 +27,9 @@ from litellm.types.proxy.management_endpoints.scim_v2 import (
 )
 
 
-def _make_mock_request(base_url="http://localhost:4000/", url="http://localhost:4000/scim/v2"):
+def _make_mock_request(
+    base_url="http://localhost:4000/", url="http://localhost:4000/scim/v2"
+):
     """Create a mock FastAPI Request object."""
     request = MagicMock()
     request.method = "GET"
@@ -65,7 +67,9 @@ class TestGetResourceTypes:
     def test_custom_base_url(self):
         resource_types = _get_resource_types("https://example.com/scim/v2")
         user_rt = next(rt for rt in resource_types if rt.id == "User")
-        assert user_rt.meta["location"] == "https://example.com/scim/v2/ResourceTypes/User"
+        assert (
+            user_rt.meta["location"] == "https://example.com/scim/v2/ResourceTypes/User"
+        )
 
     def test_model_dump_uses_schema_key(self):
         """Ensure model_dump() outputs 'schema' not 'schema_'."""
@@ -122,7 +126,9 @@ class TestGetScimBase:
         request = _make_mock_request()
         result = await get_scim_base(request)
 
-        assert result["schemas"] == ["urn:ietf:params:scim:api:messages:2.0:ListResponse"]
+        assert result["schemas"] == [
+            "urn:ietf:params:scim:api:messages:2.0:ListResponse"
+        ]
         assert result["totalResults"] == 2
         assert len(result["Resources"]) == 2
 
@@ -151,7 +157,10 @@ class TestGetScimBase:
         result = await get_scim_base(request)
 
         user_resource = next(r for r in result["Resources"] if r["id"] == "User")
-        assert user_resource["meta"]["location"] == "https://proxy.example.com/scim/v2/ResourceTypes/User"
+        assert (
+            user_resource["meta"]["location"]
+            == "https://proxy.example.com/scim/v2/ResourceTypes/User"
+        )
 
 
 class TestGetResourceTypesEndpoint:
@@ -160,7 +169,9 @@ class TestGetResourceTypesEndpoint:
         request = _make_mock_request()
         result = await get_resource_types(request)
 
-        assert result["schemas"] == ["urn:ietf:params:scim:api:messages:2.0:ListResponse"]
+        assert result["schemas"] == [
+            "urn:ietf:params:scim:api:messages:2.0:ListResponse"
+        ]
         assert result["totalResults"] == 2
 
     @pytest.mark.asyncio
@@ -208,7 +219,9 @@ class TestGetSchemasEndpoint:
         request = _make_mock_request()
         result = await get_schemas(request)
 
-        assert result["schemas"] == ["urn:ietf:params:scim:api:messages:2.0:ListResponse"]
+        assert result["schemas"] == [
+            "urn:ietf:params:scim:api:messages:2.0:ListResponse"
+        ]
         assert result["totalResults"] == 2
 
     @pytest.mark.asyncio

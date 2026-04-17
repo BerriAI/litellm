@@ -458,10 +458,7 @@ class TestToolPermissionGuardrail:
                 )
 
         assert excinfo.value.status_code == 400
-        assert (
-            excinfo.value.detail.get("detection_message")
-            == "blocked Read by policy"
-        )
+        assert excinfo.value.detail.get("detection_message") == "blocked Read by policy"
 
     @pytest.mark.asyncio
     async def test_async_pre_call_hook_rewrite_mode(self):
@@ -532,9 +529,7 @@ class TestToolPermissionGuardrailIntegration:
     def test_default_action_allow(self):
         guardrail = ToolPermissionGuardrail(
             guardrail_name="test-allow-default",
-            rules=[
-                {"id": "deny_read", "tool_name": r"^Read$", "decision": "deny"}
-            ],
+            rules=[{"id": "deny_read", "tool_name": r"^Read$", "decision": "deny"}],
             default_action="allow",
         )
 
@@ -610,8 +605,16 @@ class TestToolPermissionGuardrailIntegration:
         guardrail = ToolPermissionGuardrail(
             guardrail_name="test-decision-case",
             rules=[
-                {"id": "allow_bash", "tool_name": r"^Bash$", "decision": "Allow"},  # Capitalized
-                {"id": "deny_read", "tool_name": r"^Read$", "decision": "DENY"},  # Uppercase
+                {
+                    "id": "allow_bash",
+                    "tool_name": r"^Bash$",
+                    "decision": "Allow",
+                },  # Capitalized
+                {
+                    "id": "deny_read",
+                    "tool_name": r"^Read$",
+                    "decision": "DENY",
+                },  # Uppercase
             ],
             default_action="deny",
         )

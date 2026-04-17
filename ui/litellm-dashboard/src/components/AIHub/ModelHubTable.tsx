@@ -5,7 +5,10 @@ import MakeModelPublicForm from "@/components/AIHub/forms/MakeModelPublicForm";
 import { mcpHubColumns, MCPServerData } from "@/components/mcp_hub_table_columns";
 import { modelHubColumns } from "@/components/model_hub_table_columns";
 import UsefulLinksManagement from "@/components/AIHub/UsefulLinksManagement";
-import ClaudeCodeMarketplaceTab from "@/components/AIHub/ClaudeCodeMarketplaceTab";
+import { getClaudeCodePluginsList } from "@/components/networking";
+import { Plugin } from "@/components/claude_code_plugins/types";
+import SkillHubDashboard from "@/components/AIHub/SkillHubDashboard";
+import MakeSkillPublicForm from "@/components/claude_code_plugins/MakeSkillPublicForm";
 import { ModelDataTable } from "@/components/model_dashboard/table";
 import ModelFilters from "@/components/model_filters";
 import NotificationsManager from "@/components/molecules/notifications_manager";
@@ -78,6 +81,10 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
   const [selectedMcpServer, setSelectedMcpServer] = useState<null | MCPServerData>(null);
   const [isMcpModalVisible, setIsMcpModalVisible] = useState(false);
   const [isMakeMcpPublicModalVisible, setIsMakeMcpPublicModalVisible] = useState(false);
+  // Skill Hub state
+  const [skillHubData, setSkillHubData] = useState<Plugin[]>([]);
+  const [skillLoading, setSkillLoading] = useState<boolean>(false);
+  const [isMakeSkillPublicModalVisible, setIsMakeSkillPublicModalVisible] = useState(false);
   const router = useRouter();
   const { data: uiSettings, isLoading: isUISettingsLoading } = useUISettings();
 
@@ -207,6 +214,25 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
       fetchMcpData();
     }
   }, [publicPage, accessToken]);
+
+  // Fetch Skill Hub data — all skills for admins, enabled-only for public page
+  useEffect(() => {
+    const fetchSkillData = async () => {
+      if (!accessToken) return;
+      try {
+        setSkillLoading(true);
+        const enabledOnly = publicPage === true;
+        const response = await getClaudeCodePluginsList(accessToken, enabledOnly);
+        setSkillHubData(response.plugins);
+      } catch (error) {
+        console.error("Error fetching skill hub data", error);
+      } finally {
+        setSkillLoading(false);
+      }
+    };
+
+    fetchSkillData();
+  }, [accessToken, publicPage]);
 
   const showModal = (model: ModelGroupInfo) => {
     setSelectedModel(model);
@@ -406,7 +432,7 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
               <Tab>Model Hub</Tab>
               <Tab>Agent Hub</Tab>
               <Tab>MCP Hub</Tab>
-              <Tab>Claude Code Plugin Marketplace</Tab>
+              <Tab>Skill Hub</Tab>
             </TabList>
 
             <TabPanels>
@@ -492,9 +518,26 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
                 </div>
               </TabPanel>
 
-              {/* Plugin Marketplace Tab */}
+              {/* Skill Hub Tab */}
               <TabPanel>
-                <ClaudeCodeMarketplaceTab publicPage={publicPage} />
+                {publicPage == false && isAdminRole(userRole || "") && (
+                  <div className="flex justify-end mb-4">
+                    <Button onClick={() => setIsMakeSkillPublicModalVisible(true)}>
+                      Select Skills to Make Public
+                    </Button>
+                  </div>
+                )}
+                <SkillHubDashboard
+                  skills={skillHubData}
+                  isLoading={skillLoading}
+                  isAdmin={isAdminRole(userRole || "")}
+                  accessToken={accessToken}
+                  publicPage={publicPage}
+                  onPublishSuccess={async () => {
+                    const response = await getClaudeCodePluginsList(accessToken || "", publicPage);
+                    setSkillHubData(response.plugins);
+                  }}
+                />
               </TabPanel>
             </TabPanels>
           </TabGroup>
@@ -1054,6 +1097,18 @@ if __name__ == "__main__":
         accessToken={accessToken || ""}
         mcpHubData={mcpHubData || []}
         onSuccess={handleMakeMcpPublicSuccess}
+      />
+
+      {/* Make Skill Public Form */}
+      <MakeSkillPublicForm
+        visible={isMakeSkillPublicModalVisible}
+        onClose={() => setIsMakeSkillPublicModalVisible(false)}
+        accessToken={accessToken || ""}
+        skillsList={skillHubData}
+        onSuccess={async () => {
+          const response = await getClaudeCodePluginsList(accessToken || "", publicPage === true);
+          setSkillHubData(response.plugins);
+        }}
       />
     </div>
   );
