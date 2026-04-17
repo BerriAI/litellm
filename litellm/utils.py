@@ -7853,6 +7853,13 @@ def validate_and_fix_openai_messages(messages: List):
     """
     new_messages = []
     for message in messages:
+        # Convert pydantic models to dicts first to avoid mutating model
+        # fields in-place, which triggers PydanticSerializationUnexpectedValue
+        # warnings when model_dump() is called later.
+        if isinstance(message, BaseModel):
+            message = message.model_dump(exclude_none=True)
+        elif isinstance(message, dict):
+            message = message.copy()
         if not message.get("role"):
             message["role"] = "assistant"
         if message.get("tool_calls"):
