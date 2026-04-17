@@ -418,6 +418,14 @@ class ProxyExtrasDBManager:
 
                         logger.info("prisma migrate deploy completed")
 
+                        # Skip sanity check when deploy reports no pending migrations —
+                        # DB already matches schema, no drift to correct.
+                        if "No pending migrations to apply" in result.stdout:
+                            logger.info(
+                                "No pending migrations — skipping post-migration sanity check"
+                            )
+                            return True
+
                         # Run sanity check to ensure DB matches schema
                         logger.info("Running post-migration sanity check...")
                         ProxyExtrasDBManager._resolve_all_migrations(
