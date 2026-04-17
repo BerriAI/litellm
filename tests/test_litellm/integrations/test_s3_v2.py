@@ -292,6 +292,50 @@ class TestS3V2UnitTests:
 
         assert result == {"downloaded": "data"}
 
+    @patch("asyncio.create_task")
+    @patch("litellm.integrations.s3_v2.CustomBatchLogger.periodic_flush")
+    def test_s3_v2_put_url_encodes_spaces_in_object_key(
+        self, mock_periodic_flush, mock_create_task
+    ):
+        import requests
+        from unittest.mock import AsyncMock
+
+        from litellm.types.integrations.s3_v2 import s3BatchLoggingElement
+
+        mock_periodic_flush.return_value = None
+        mock_create_task.return_value = None
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.raise_for_status = MagicMock()
+
+        s3_object_key = "My Team/2025-09-14/test-key.json"
+        test_element = s3BatchLoggingElement(
+            s3_object_key=s3_object_key,
+            payload={"test": "data"},
+            s3_object_download_filename="test-file.json",
+        )
+
+        s3_logger = S3Logger(
+            s3_bucket_name="test-bucket",
+            s3_endpoint_url="https://s3.amazonaws.com",
+            s3_aws_access_key_id="test-key",
+            s3_aws_secret_access_key="test-secret",
+            s3_region_name="us-east-1",
+        )
+        s3_logger.async_httpx_client = AsyncMock()
+        s3_logger.async_httpx_client.put.return_value = mock_response
+
+        asyncio.run(s3_logger.async_upload_data_to_s3(test_element))
+
+        call_args = s3_logger.async_httpx_client.put.call_args
+        assert call_args is not None
+        actual_url = call_args[0][0]
+        raw_url = f"https://s3.amazonaws.com/test-bucket/{s3_object_key}"
+        expected_url = requests.Request("PUT", raw_url).prepare().url
+        assert actual_url == expected_url
+        assert " " not in actual_url
+
 @pytest.mark.asyncio
 async def test_async_upload_retries_on_s3_503():
     """

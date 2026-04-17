@@ -1767,6 +1767,143 @@ async def test_update_team_with_team_member_budget_duration():
 
 
 @pytest.mark.asyncio
+async def test_backfill_team_member_budget_entries_creates_missing_memberships():
+    """
+    When backfill_team_member_budget_entries is called, it should create
+    team_memberships rows only for members that don't already have one.
+
+    Regression test for: https://github.com/BerriAI/litellm/issues/25506
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.proxy._types import Member
+    from litellm.proxy.management_endpoints.team_endpoints import TeamMemberBudgetHandler
+
+    team_id = "team-abc"
+    budget_id = "budget-xyz"
+
+    # user-A already has a membership; user-B does not
+    existing_membership = MagicMock()
+    existing_membership.user_id = "user-A"
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_teammembership.find_many = AsyncMock(
+        return_value=[existing_membership]
+    )
+    mock_prisma.db.litellm_teammembership.create_many = AsyncMock(return_value=None)
+
+    # Test with Member instances
+    members = [
+        Member(user_id="user-A", role="user"),
+        Member(user_id="user-B", role="user"),
+    ]
+
+    await TeamMemberBudgetHandler.backfill_team_member_budget_entries(
+        team_id=team_id,
+        members_with_roles=members,
+        team_member_budget_id=budget_id,
+        prisma_client=mock_prisma,
+    )
+
+    # find_many should have been called to fetch existing memberships
+    mock_prisma.db.litellm_teammembership.find_many.assert_awaited_once_with(
+        where={"team_id": team_id}
+    )
+
+    # create_many should only create an entry for user-B (user-A already has one)
+    mock_prisma.db.litellm_teammembership.create_many.assert_awaited_once_with(
+        data=[{"team_id": team_id, "user_id": "user-B", "budget_id": budget_id}],
+        skip_duplicates=True,
+    )
+
+    # Also test with raw dicts (members_with_roles may be dicts when deserialized from DB)
+    mock_prisma.db.litellm_teammembership.find_many.reset_mock()
+    mock_prisma.db.litellm_teammembership.create_many.reset_mock()
+
+    members_as_dicts = [
+        {"user_id": "user-A", "role": "user"},
+        {"user_id": "user-B", "role": "user"},
+    ]
+
+    await TeamMemberBudgetHandler.backfill_team_member_budget_entries(
+        team_id=team_id,
+        members_with_roles=members_as_dicts,
+        team_member_budget_id=budget_id,
+        prisma_client=mock_prisma,
+    )
+
+    mock_prisma.db.litellm_teammembership.create_many.assert_awaited_once_with(
+        data=[{"team_id": team_id, "user_id": "user-B", "budget_id": budget_id}],
+        skip_duplicates=True,
+    )
+
+
+@pytest.mark.asyncio
+async def test_backfill_team_member_budget_entries_no_op_when_all_exist():
+    """
+    backfill_team_member_budget_entries should not call create_many when all
+    members already have a team_memberships entry.
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.proxy._types import Member
+    from litellm.proxy.management_endpoints.team_endpoints import TeamMemberBudgetHandler
+
+    team_id = "team-abc"
+    budget_id = "budget-xyz"
+
+    existing_a = MagicMock()
+    existing_a.user_id = "user-A"
+    existing_b = MagicMock()
+    existing_b.user_id = "user-B"
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_teammembership.find_many = AsyncMock(
+        return_value=[existing_a, existing_b]
+    )
+    mock_prisma.db.litellm_teammembership.create_many = AsyncMock(return_value=None)
+
+    members = [
+        Member(user_id="user-A", role="user"),
+        Member(user_id="user-B", role="user"),
+    ]
+
+    await TeamMemberBudgetHandler.backfill_team_member_budget_entries(
+        team_id=team_id,
+        members_with_roles=members,
+        team_member_budget_id=budget_id,
+        prisma_client=mock_prisma,
+    )
+
+    mock_prisma.db.litellm_teammembership.create_many.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_backfill_team_member_budget_entries_empty_members():
+    """
+    backfill_team_member_budget_entries should be a no-op when the member list
+    is empty (no DB queries at all).
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.proxy.management_endpoints.team_endpoints import TeamMemberBudgetHandler
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_teammembership.find_many = AsyncMock(return_value=[])
+    mock_prisma.db.litellm_teammembership.create_many = AsyncMock(return_value=None)
+
+    await TeamMemberBudgetHandler.backfill_team_member_budget_entries(
+        team_id="team-abc",
+        members_with_roles=[],
+        team_member_budget_id="budget-xyz",
+        prisma_client=mock_prisma,
+    )
+
+    mock_prisma.db.litellm_teammembership.find_many.assert_not_awaited()
+    mock_prisma.db.litellm_teammembership.create_many.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_bulk_team_member_add_success():
     """
     Test bulk_team_member_add with successful addition of multiple members
