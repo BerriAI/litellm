@@ -78,6 +78,22 @@ def _format_host_header(hostname: str, port: int, default_port: int) -> str:
     return f"{bracketed}:{port}"
 
 
+def _sockaddr_host(sockaddr: Any) -> str:
+    """Return the host element of a ``getaddrinfo`` sockaddr as ``str``.
+
+    ``getaddrinfo`` with ``IPPROTO_TCP`` returns AF_INET / AF_INET6 sockaddrs
+    whose first element is always a host string. mypy types it as
+    ``str | int`` (since sockaddrs for other families can hold ints), so we
+    narrow at the boundary. Fail closed if the stdlib ever returns something
+    unexpected — a non-string here would mean we have no IP to check against
+    the SSRF blocklist.
+    """
+    host = sockaddr[0]
+    if not isinstance(host, str):
+        raise SSRFError(f"getaddrinfo returned non-string host: {host!r}")
+    return host
+
+
 def _is_host_allowlisted(hostname: str, effective_port: int) -> bool:
     """Check whether a host is in the admin-configured allowlist.
 
@@ -148,9 +164,10 @@ def validate_url(url: str) -> Tuple[str, str]:
 
     if not is_allowlisted:
         for family, type_, proto, canonname, sockaddr in addrinfo:
-            if _is_blocked_ip(sockaddr[0]):
+            resolved_ip = _sockaddr_host(sockaddr)
+            if _is_blocked_ip(resolved_ip):
                 raise SSRFError(
-                    f"URL targets a blocked address ({sockaddr[0]}). "
+                    f"URL targets a blocked address ({resolved_ip}). "
                     "If this is a legitimate internal service, add the host "
                     "to `user_url_allowed_hosts` in general_settings."
                 )
@@ -166,7 +183,7 @@ def validate_url(url: str) -> Tuple[str, str]:
 
     # For HTTP, rewrite URL to connect to the validated IP directly
     # to prevent DNS rebinding (no TLS to bind the connection).
-    validated_ip = addrinfo[0][4][0]
+    validated_ip = _sockaddr_host(addrinfo[0][4])
     is_ipv6 = addrinfo[0][0] == socket.AF_INET6
     ip_host = f"[{validated_ip}]" if is_ipv6 else validated_ip
 
