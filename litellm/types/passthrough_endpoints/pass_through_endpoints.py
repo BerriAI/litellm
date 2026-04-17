@@ -13,6 +13,7 @@ class EndpointType(str, Enum):
     ANTHROPIC = "anthropic"
     OPENAI = "openai"
     GENERIC = "generic"
+    GOOGLE_GENAI = "google-genai"
 
 
 class PassthroughStandardLoggingPayload(TypedDict, total=False):

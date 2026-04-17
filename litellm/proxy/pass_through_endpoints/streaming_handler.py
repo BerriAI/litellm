@@ -16,6 +16,9 @@ from litellm.types.utils import StandardPassThroughResponseObject
 from .llm_provider_handlers.anthropic_passthrough_logging_handler import (
     AnthropicPassthroughLoggingHandler,
 )
+from .llm_provider_handlers.gemini_passthrough_logging_handler import (
+    GeminiPassthroughLoggingHandler,
+)
 from .llm_provider_handlers.openai_passthrough_logging_handler import (
     OpenAIPassthroughLoggingHandler,
 )
@@ -112,6 +115,7 @@ class PassThroughStreamingHandler:
         - Anthropic
         - Vertex AI
         - OpenAI
+        - Google GenAI
         """
         try:
             all_chunks = PassThroughStreamingHandler._convert_raw_bytes_to_str_lines(
@@ -167,6 +171,22 @@ class PassThroughStreamingHandler:
                     openai_passthrough_logging_handler_result["result"]
                 )
                 kwargs = openai_passthrough_logging_handler_result["kwargs"]
+            elif endpoint_type == EndpointType.GOOGLE_GENAI:
+                gemini_passthrough_logging_handler_result = GeminiPassthroughLoggingHandler._handle_logging_gemini_collected_chunks(
+                    litellm_logging_obj=litellm_logging_obj,
+                    passthrough_success_handler_obj=passthrough_success_handler_obj,
+                    url_route=url_route,
+                    request_body=request_body,
+                    endpoint_type=endpoint_type,
+                    start_time=start_time,
+                    all_chunks=all_chunks,
+                    end_time=end_time,
+                    model=model,
+                )
+                standard_logging_response_object = (
+                    gemini_passthrough_logging_handler_result["result"]
+                )
+                kwargs = gemini_passthrough_logging_handler_result["kwargs"]
 
             if standard_logging_response_object is None:
                 standard_logging_response_object = StandardPassThroughResponseObject(
