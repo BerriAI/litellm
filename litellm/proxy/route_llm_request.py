@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, Any, Literal, Optional
 from fastapi import HTTPException, status
 
 import litellm
+from litellm.proxy._types import UserAPIKeyAuth
 
 if TYPE_CHECKING:
     from litellm.router import Router as _Router
@@ -314,6 +315,7 @@ async def route_request(  # noqa: PLR0915 - Complex routing function, refactorin
         "acancel_run",
         "adelete_run",
     ],
+    user_api_key_dict: Optional[UserAPIKeyAuth] = None,
 ):
     """
     Common helper to route the request
@@ -548,7 +550,9 @@ async def route_request(  # noqa: PLR0915 - Complex routing function, refactorin
                     route_a2a_agent_request,
                 )
 
-                result = route_a2a_agent_request(data, route_type)
+                result = await route_a2a_agent_request(
+                    data, route_type, user_api_key_dict=user_api_key_dict
+                )
                 if result is not None:
                     return result
                 # Fall through to raise exception below if result is None
