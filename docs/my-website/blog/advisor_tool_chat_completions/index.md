@@ -289,12 +289,108 @@ response = client.chat.completions.create(
 print(response.choices[0].message.content)
 ```
 
+### Response Structure
+
+
+- **`advisor_tool_results`** : `server_tool_use` / `advisor_tool_result` pairs mirroring Anthropic’s shape (what the UI and logs can use).
+- **`advisor_iterations`** : per-sub-call token usage (`message` vs `advisor_message`), aligned with aggregated `usage` on the completion.
+
+```json title="chat.completion — gpt-4o-mini + claude-opus-4-6 advisor (excerpt)"
+{
+  "id": "chatcmpl-DVak9H9P1COkJNZMpz8IQWd4mqv7Y",
+  "created": 1776421781,
+  "model": "gpt-4o-mini",
+  "object": "chat.completion",
+  "system_fingerprint": "fp_2f65f9541c",
+  "choices": [
+    {
+      "finish_reason": "stop",
+      "index": 0,
+      "message": {
+        "content": "Here's the Python function that checks if a number is prime using the efficient approach as advised:\n\n```python\nimport math\n\ndef is_prime(n: int) -> bool:\n    \"\"\"…\"\"\"\n    …\n```\n\n### Explanation …\n\nFeel free to run this code in your Python environment to see the output!",
+        "role": "assistant",
+        "provider_specific_fields": {
+          "refusal": null,
+          "advisor_tool_results": [
+            {
+              "type": "server_tool_use",
+              "id": "call_fxYpOvEL5PAUEpjNYw2PU99C",
+              "name": "advisor"
+            },
+            {
+              "type": "advisor_tool_result",
+              "tool_use_id": "call_fxYpOvEL5PAUEpjNYw2PU99C",
+              "content": {
+                "type": "advisor_result",
+                "text": "# Prime Number Checker in Python\n\n… full advisor markdown (implementation, tests, 6k±1 explanation) …"
+              }
+            }
+          ],
+          "advisor_iterations": [
+            {
+              "type": "message",
+              "input_tokens": 113,
+              "cache_read_input_tokens": 0,
+              "cache_creation_input_tokens": 0,
+              "output_tokens": 31
+            },
+            {
+              "type": "advisor_message",
+              "input_tokens": 47,
+              "cache_read_input_tokens": 0,
+              "cache_creation_input_tokens": 0,
+              "output_tokens": 1024,
+              "model": "claude-opus-4-6"
+            },
+            {
+              "type": "message",
+              "input_tokens": 1075,
+              "cache_read_input_tokens": 0,
+              "cache_creation_input_tokens": 0,
+              "output_tokens": 649
+            }
+          ]
+        },
+        "annotations": []
+      },
+      "provider_specific_fields": {}
+    }
+  ],
+  "usage": {
+    "completion_tokens": 649,
+    "prompt_tokens": 1075,
+    "total_tokens": 1724,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": 0,
+      "audio_tokens": 0,
+      "reasoning_tokens": 0,
+      "rejected_prediction_tokens": 0
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": 0,
+      "cached_tokens": 0
+    }
+  },
+  "service_tier": "default"
+}
+```
+
+:::tip
+
+Top-level `usage` reflects the **final** executor turn after injection. Use `advisor_iterations` for the full breakdown (executor → advisor → executor follow-up).
+
+:::
+
 </TabItem>
 </Tabs>
 
 ---
 
 ## Messages API
+
+Working demo: calling the LiteLLM proxy **`/v1/messages`** with the advisor tool (same flow as Anthropic’s Messages API).
+
+<iframe width="840" height="500" src="https://www.loom.com/embed/ee10a816184042d09634fbd9dbfe1d79" frameborder="0" webkitallowfullscreen mozallowfullscreen allowfullscreen></iframe>
 
 <Tabs>
 <TabItem value="messages-sdk" label="SDK">
@@ -438,67 +534,65 @@ Both native and orchestration paths return `server_tool_use` and `advisor_tool_r
 
 ```json title="Messages API response"
 {
+  "id": "msg_6889286f94074716a142cf8edbc233c8",
+  "type": "message",
   "role": "assistant",
+  "model": "gpt-4o-mini",
+  "stop_sequence": null,
+  "usage": {
+    "input_tokens": 1554,
+    "output_tokens": 2659,
+    "cache_read_input_tokens": 0,
+    "cache_creation_input_tokens": 0,
+    "iterations": [
+      {
+        "type": "message",
+        "input_tokens": 90,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "output_tokens": 41
+      },
+      {
+        "type": "advisor_message",
+        "input_tokens": 37,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "output_tokens": 2494,
+        "model": "gemini-3.1-pro-preview"
+      },
+      {
+        "type": "message",
+        "input_tokens": 1427,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "output_tokens": 124
+      }
+    ]
+  },
   "content": [
     {
       "type": "text",
-      "text": "Here is the implementation:"
+      "text": "To .."
     },
     {
       "type": "server_tool_use",
-      "id": "srvtoolu_abc123",
-      "name": "advisor"
+      "id": "call_vjS9XeTVVysRstjeG3prGJz5",
+      "name": "advisor",
+      "input": {}
     },
     {
       "type": "advisor_tool_result",
-      "tool_use_id": "srvtoolu_abc123",
+      "tool_use_id": "call_vjS9XeTVVysRstjeG3prGJz5",
       "content": {
         "type": "advisor_result",
-        "text": "Use a channel-based coordination pattern..."
-      }
-    },
-    {
-      "type": "text",
-      "text": "Here's the full implementation..."
-    }
-  ]
-}
-```
-
-### Chat Completions API
-
-For chat completions, the advisor blocks are in `provider_specific_fields` on the response message:
-
-```python title="Accessing advisor results from chat completions"
-response = await litellm.acompletion(...)
-
-message = response.choices[0].message
-print(message.content)  # final answer
-
-# Advisor trace — available when the advisor was called
-psf = message.provider_specific_fields or {}
-for block in psf.get("advisor_tool_results", []):
-    if block["type"] == "advisor_tool_result":
-        print("Advisor said:", block["content"]["text"])
-```
-
-```json title="provider_specific_fields structure"
-{
-  "advisor_tool_results": [
-    {
-      "type": "server_tool_use",
-      "id": "call_abc123",
-      "name": "advisor"
-    },
-    {
-      "type": "advisor_tool_result",
-      "tool_use_id": "call_abc123",
-      "content": {
-        "type": "advisor_result",
-        "text": "Use a channel-based coordination pattern..."
+        "text": "Welcome to the project room. As your Technical Advisor, I will help you conceptualize, design, and plan a mini router. … _(full advisor markdown in live responses: phases for use case, hardware, connectivity, OpenWrt stack, thermal/power, and next-step questions — truncated here for docs length.)_"
       }
     }
-  ]
+  ],
+  "stop_reason": "end_turn",
+  "_hidden_params": {
+    "response_cost": 0.030328550000000003
+  }
 }
 ```
 
@@ -506,7 +600,7 @@ for block in psf.get("advisor_tool_results", []):
 
 ## Cost control
 
-Advisor calls run as separate sub-inferences billed at the advisor model's rates. Usage is reported in `usage.iterations[]` (Messages API) or accumulated in `usage` (Chat Completions):
+Advisor calls run as separate sub-inferences billed at the advisor model's rates. Usage is reported in `usage.iterations[]` in both messages endpoint and chat completion endpoint
 
 ```json title="Messages API usage with advisor sub-inference"
 {
@@ -547,6 +641,14 @@ tools=[
     }
 ]
 ```
+
+---
+
+## Logging
+
+In the proxy **Logs** UI you can open a single orchestrated row and see the aggregated cost, token usage, and **cost breakdown** for advisor calls.
+
+![LiteLLM proxy logs: advisor orchestration cost breakdown and usage](/img/blog/advisor-tool-logging-ui.png)
 
 ---
 
