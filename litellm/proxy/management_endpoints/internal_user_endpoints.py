@@ -2089,6 +2089,22 @@ async def delete_user(
                 },
             )
 
+    # Batch-fetch target memberships once before the per-user loop. Avoids
+    # an N+1 DB call when delete_user is called with a large user_ids list.
+    target_org_ids_by_user: Dict[str, set] = {}
+    if not caller_is_proxy_admin:
+        all_target_memberships = (
+            await prisma_client.db.litellm_organizationmembership.find_many(
+                where={"user_id": {"in": data.user_ids}}
+            )
+        )
+        for m in all_target_memberships:
+            if not m.organization_id:
+                continue
+            target_org_ids_by_user.setdefault(m.user_id, set()).add(
+                m.organization_id
+            )
+
     # check that all teams passed exist
     for user_id in data.user_ids:
         user_row = await prisma_client.db.litellm_usertable.find_unique(
@@ -2102,14 +2118,7 @@ async def delete_user(
             )
 
         if not caller_is_proxy_admin:
-            target_memberships = (
-                await prisma_client.db.litellm_organizationmembership.find_many(
-                    where={"user_id": user_id}
-                )
-            )
-            target_org_ids = {
-                m.organization_id for m in target_memberships if m.organization_id
-            }
+            target_org_ids = target_org_ids_by_user.get(user_id, set())
             # Org-admin may only delete users whose entire org membership is
             # within their admin scope. A target with ANY org outside the
             # caller's scope (or no org at all) requires PROXY_ADMIN.
