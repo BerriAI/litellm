@@ -147,6 +147,10 @@ async def persist_credential_to_db(item: CredentialItem) -> None:
     login endpoint (which can ``await`` it directly on the request event
     loop).
     """
+    # Inline imports: proxy_server transitively imports this module via
+    # the OAuth router (avoids circular), and prisma_client is a
+    # module-level global mutated at proxy startup — a top-level import
+    # would bind the stale None reference rather than the live client.
     from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
     from litellm.proxy.proxy_server import prisma_client
 
