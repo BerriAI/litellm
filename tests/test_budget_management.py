@@ -1,11 +1,24 @@
 # What is this?
 ## Unit tests for the /budget/* endpoints
 from litellm._uuid import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timezone
 
 import aiohttp
 import pytest
 import pytest_asyncio
+
+from litellm.litellm_core_utils.duration_parser import get_next_standardized_reset_time
+from litellm.proxy.common_utils.timezone_utils import get_budget_reset_timezone
+
+
+def _parse_budget_api_datetime(value: str) -> datetime:
+    """Parse ISO timestamps returned by the proxy JSON API."""
+    if value.endswith("Z"):
+        value = value[:-1] + "+00:00"
+    dt = datetime.fromisoformat(value)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
 
 
 async def delete_budget(session, budget_id):
@@ -61,30 +74,30 @@ async def budget_setup():
 @pytest.mark.asyncio
 async def test_create_budget_with_duration(budget_setup):
     """
-    Test creating a budget with a specified duration and verify that the 'budget_reset_at'
-    timestamp is correctly calculated as 'created_at' plus the budget duration (one day).
-
-    This test uses the budget_setup fixture, which handles both the creation and cleanup of the budget.
+    Test creating a budget with a specified duration and verify that 'budget_reset_at'
+    matches the next standardized reset (see get_budget_reset_time / new_budget), not
+    necessarily created_at + wall-clock duration.
     """
 
-    # Verify that the response includes a 'budget_reset_at' timestamp.
     assert (
         budget_setup["budget_reset_at"] is not None
     ), "The budget_reset_at field should not be None"
 
-    # Calculate the expected reset time: created_at + 1 day.
-    expected_reset_at_date = datetime.fromisoformat(
-        budget_setup["created_at"]
-    ) + timedelta(days=1)
+    created_at = _parse_budget_api_datetime(budget_setup["created_at"])
+    expected_reset_at = get_next_standardized_reset_time(
+        duration=budget_setup["budget_duration"],
+        current_time=created_at,
+        timezone_str=get_budget_reset_timezone(),
+    )
 
-    # Allow for a small tolerance in seconds for the timestamp calculation.
+    actual_reset_at = _parse_budget_api_datetime(budget_setup["budget_reset_at"])
+
     tolerance_seconds = 3
-    actual_reset_at_date = datetime.fromisoformat(budget_setup["budget_reset_at"])
     time_difference = abs(
-        (actual_reset_at_date - expected_reset_at_date).total_seconds()
+        (actual_reset_at - expected_reset_at).total_seconds()
     )
 
     assert time_difference <= tolerance_seconds, (
-        f"Expected budget_reset_at to be within {tolerance_seconds} seconds of {expected_reset_at_date}, "
+        f"Expected budget_reset_at to be within {tolerance_seconds} seconds of {expected_reset_at}, "
         f"but the difference was {time_difference} seconds."
     )
