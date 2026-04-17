@@ -104,7 +104,7 @@ describe("RouterSettingsForm", () => {
     const user = userEvent.setup();
     render(<RouterSettingsForm {...baseProps} onChange={onChange} />);
 
-    await user.click(screen.getByRole("switch"));
+    await user.click(screen.getAllByRole("switch")[0]);
 
     expect(onChange).toHaveBeenCalledWith(
       expect.objectContaining({ enableTagFiltering: true })
