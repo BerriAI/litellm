@@ -341,6 +341,12 @@ class AdvisorInterceptionLogger(CustomLogger):
         current_response = response
         advisor_uses = 0
         total_response_cost = self._safe_get_response_cost(current_response)
+        advisor_subcall_cost: float = 0.0
+        iterations: List[Dict[str, Any]] = [
+            self._build_iteration_entry(
+                response=current_response, iteration_type="message"
+            )
+        ]
         advisor_interactions: List[Dict[str, str]] = []
 
         try:
@@ -349,11 +355,26 @@ class AdvisorInterceptionLogger(CustomLogger):
                     current_response
                 )
                 if not advisor_calls:
+                    final_executor_cost = self._safe_get_response_cost(current_response)
+                    advisor_first_call_cost = max(
+                        total_response_cost - advisor_subcall_cost - final_executor_cost,
+                        0.0,
+                    )
                     self._set_response_cost_if_possible(
                         response=current_response, response_cost=total_response_cost
                     )
+                    self._store_advisor_cost_breakdown(
+                        logging_obj=kwargs.get("litellm_logging_obj") or logging_obj,
+                        final_executor_cost=final_executor_cost,
+                        advisor_first_call_cost=advisor_first_call_cost,
+                        advisor_subcall_cost=advisor_subcall_cost,
+                        total_response_cost=total_response_cost,
+                    )
                     self._inject_advisor_results_into_response(
                         current_response, advisor_interactions
+                    )
+                    self._inject_advisor_iterations_into_response(
+                        current_response, iterations
                     )
                     return current_response
                 if len(advisor_calls) != len(raw_tool_calls):
@@ -395,7 +416,16 @@ class AdvisorInterceptionLogger(CustomLogger):
                         api_key=advisor_api_key,
                         api_base=advisor_api_base,
                     )
-                    total_response_cost += self._safe_get_response_cost(advisor_response)
+                    advisor_call_cost = self._safe_get_response_cost(advisor_response)
+                    total_response_cost += advisor_call_cost
+                    advisor_subcall_cost += advisor_call_cost
+                    iterations.append(
+                        self._build_iteration_entry(
+                            response=advisor_response,
+                            iteration_type="advisor_message",
+                            model=advisor_model,
+                        )
+                    )
                     advisor_text = self._extract_text_content(advisor_response)
                     advisor_interactions.append({
                         "tool_use_id": advisor_call["id"],
@@ -435,6 +465,11 @@ class AdvisorInterceptionLogger(CustomLogger):
                     kwargs_for_followup=kwargs_for_followup,
                 )
                 total_response_cost += self._safe_get_response_cost(current_response)
+                iterations.append(
+                    self._build_iteration_entry(
+                        response=current_response, iteration_type="message"
+                    )
+                )
         finally:
             if isinstance(call_id, str):
                 self._advisor_config_by_call_id.pop(call_id, None)
@@ -894,6 +929,146 @@ class AdvisorInterceptionLogger(CustomLogger):
         except Exception:
             return 0.0
         return 0.0
+
+    @staticmethod
+    def _build_iteration_entry(
+        response: Any,
+        iteration_type: str,
+        model: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Build one entry for ``iterations[]`` on advisor-orchestrated responses.
+
+        Mirrors the Anthropic usage shape: ``input_tokens``, ``output_tokens``,
+        ``cache_read_input_tokens``, ``cache_creation_input_tokens``. For advisor
+        sub-calls, also includes the advisor model name.
+        """
+        input_tokens = 0
+        output_tokens = 0
+        cache_read_input_tokens = 0
+        cache_creation_input_tokens = 0
+
+        usage: Any = None
+        if isinstance(response, dict):
+            usage = response.get("usage")
+        else:
+            usage = getattr(response, "usage", None)
+
+        if usage is not None:
+            input_tokens = (
+                AdvisorInterceptionLogger._get_usage_value(usage, "prompt_tokens")
+                or 0
+            )
+            output_tokens = (
+                AdvisorInterceptionLogger._get_usage_value(usage, "completion_tokens")
+                or 0
+            )
+            cache_read_input_tokens = (
+                AdvisorInterceptionLogger._get_usage_value(
+                    usage, "cache_read_input_tokens"
+                )
+                or 0
+            )
+            cache_creation_input_tokens = (
+                AdvisorInterceptionLogger._get_usage_value(
+                    usage, "cache_creation_input_tokens"
+                )
+                or 0
+            )
+            if not cache_read_input_tokens:
+                prompt_tokens_details = AdvisorInterceptionLogger._get_usage_value(
+                    usage, "prompt_tokens_details"
+                )
+                if prompt_tokens_details is not None:
+                    cache_read_input_tokens = (
+                        AdvisorInterceptionLogger._get_usage_value(
+                            prompt_tokens_details, "cached_tokens"
+                        )
+                        or 0
+                    )
+
+        entry: Dict[str, Any] = {
+            "type": iteration_type,
+            "input_tokens": int(input_tokens or 0),
+            "cache_read_input_tokens": int(cache_read_input_tokens or 0),
+            "cache_creation_input_tokens": int(cache_creation_input_tokens or 0),
+            "output_tokens": int(output_tokens or 0),
+        }
+        if iteration_type == "advisor_message" and model is not None:
+            entry["model"] = model
+        return entry
+
+    @staticmethod
+    def _get_usage_value(usage_obj: Any, key: str) -> Any:
+        if usage_obj is None:
+            return None
+        if isinstance(usage_obj, dict):
+            return usage_obj.get(key)
+        return getattr(usage_obj, key, None)
+
+    @staticmethod
+    def _store_advisor_cost_breakdown(
+        logging_obj: Any,
+        final_executor_cost: float,
+        advisor_first_call_cost: float,
+        advisor_subcall_cost: float,
+        total_response_cost: float,
+    ) -> None:
+        """
+        Populate ``cost_breakdown.additional_costs`` on the logging object so
+        the proxy UI can display the advisor cost split (mirrors Azure Router).
+        """
+        if logging_obj is None:
+            return
+        if not hasattr(logging_obj, "set_cost_breakdown"):
+            return
+
+        additional_costs: Dict[str, float] = {}
+        if advisor_first_call_cost > 0:
+            additional_costs["Main Model (initial)"] = advisor_first_call_cost
+        if advisor_subcall_cost > 0:
+            additional_costs["Advisor Model"] = advisor_subcall_cost
+
+        try:
+            logging_obj.set_cost_breakdown(
+                input_cost=final_executor_cost,
+                output_cost=0.0,
+                total_cost=total_response_cost,
+                cost_for_built_in_tools_cost_usd_dollar=0.0,
+                additional_costs=additional_costs or None,
+            )
+        except Exception as breakdown_error:
+            verbose_logger.debug(
+                "AdvisorInterception: failed to store cost breakdown: %s",
+                str(breakdown_error),
+            )
+
+    @staticmethod
+    def _inject_advisor_iterations_into_response(
+        response: Any, iterations: List[Dict[str, Any]]
+    ) -> None:
+        """
+        Attach the per-iteration usage breakdown under
+        ``message.provider_specific_fields["advisor_iterations"]`` so callers
+        can inspect the full orchestration without breaking the OpenAI-compatible
+        ``usage`` shape.
+        """
+        if not iterations:
+            return
+
+        message = AdvisorInterceptionLogger._extract_first_choice_message_obj(response)
+        if message is None:
+            return
+
+        existing_psf = getattr(message, "provider_specific_fields", None) or {}
+        existing_psf["advisor_iterations"] = iterations
+        try:
+            message.provider_specific_fields = existing_psf
+        except Exception:
+            try:
+                setattr(message, "provider_specific_fields", existing_psf)
+            except Exception:
+                pass
 
     @staticmethod
     def _set_response_cost_if_possible(response: Any, response_cost: float) -> None:

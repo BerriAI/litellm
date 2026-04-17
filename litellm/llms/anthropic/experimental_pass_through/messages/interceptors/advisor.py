@@ -14,14 +14,17 @@ How it works:
 6. Wraps in FakeAnthropicMessagesStreamIterator if the caller requested streaming.
 """
 
+import asyncio
 import uuid
 from typing import Any, AsyncIterator, Dict, List, Optional, Union, cast
 
+import litellm
 import litellm.constants as _c
 from litellm._logging import verbose_logger
 from litellm.llms.anthropic.common_utils import strip_advisor_blocks_from_messages
 from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
+    AnthropicUsageIteration,
 )
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.llms.anthropic import ANTHROPIC_ADVISOR_TOOL_TYPE
@@ -117,8 +120,24 @@ class AdvisorOrchestrationHandler(MessagesInterceptor):
             kwargs.pop("litellm_call_id", None) or uuid.uuid4()
         )
         metadata_base: Dict = dict(kwargs.pop("metadata", None) or {})
+        # Hold the outer ``anthropic_messages`` logging obj — we attach the
+        # aggregated cost/breakdown to it in _finalize_orchestrated_response.
+        #
+        # We *keep* this object in kwargs so inner executor sub-calls share it:
+        # their inner @client wrappers (aresponses/acompletion) still populate
+        # ``custom_llm_provider``, ``api_base``, ``model_id`` on this shared
+        # model_call_details via ``update_environment_variables`` — fields the
+        # outer anthropic_messages path never sets on its own. We mark the
+        # sub-calls ``_is_litellm_internal_call=True`` so their @client skips
+        # emitting a duplicate log row; only the outer call emits a single
+        # aggregated entry.
+        litellm_logging_obj = kwargs.get("litellm_logging_obj", None)
+        kwargs["_is_litellm_internal_call"] = True
         iteration = 0
         advisor_interactions: List[Dict] = []
+        iterations: List[AnthropicUsageIteration] = []
+        advisor_first_call_cost: float = 0.0
+        advisor_subcall_cost: float = 0.0
 
         while True:
             # --- Executor call (always non-streaming) ---
@@ -137,6 +156,13 @@ class AdvisorOrchestrationHandler(MessagesInterceptor):
                 **kwargs,
             )
 
+            executor_cost = _get_response_cost(executor_response, model=model)
+            iterations.append(
+                _build_iteration_entry(
+                    response=executor_response, iteration_type="message"
+                )
+            )
+
             advisor_use_block = _find_advisor_tool_use(executor_response)
 
             if advisor_use_block is None:
@@ -145,9 +171,26 @@ class AdvisorOrchestrationHandler(MessagesInterceptor):
                 _inject_advisor_blocks_into_response(
                     executor_response, advisor_interactions
                 )
+                total_cost = (
+                    advisor_first_call_cost + advisor_subcall_cost + executor_cost
+                )
+                _finalize_orchestrated_response(
+                    response=executor_response,
+                    iterations=iterations,
+                    total_cost=total_cost,
+                    final_executor_cost=executor_cost,
+                    advisor_first_call_cost=advisor_first_call_cost,
+                    advisor_subcall_cost=advisor_subcall_cost,
+                    litellm_logging_obj=litellm_logging_obj,
+                )
                 if stream:
                     return FakeAnthropicMessagesStreamIterator(executor_response)
                 return executor_response
+
+            # Executor response triggered another advisor call → count it as a
+            # "first/intermediate" executor turn. Only the terminating turn is
+            # treated as the base response.
+            advisor_first_call_cost += executor_cost
 
             iteration += 1
             if iteration > max_uses:
@@ -173,6 +216,16 @@ class AdvisorOrchestrationHandler(MessagesInterceptor):
                 },
                 api_key=advisor_api_key,
                 api_base=advisor_api_base,
+            )
+
+            advisor_call_cost = _get_response_cost(advisor_response, model=advisor_model)
+            advisor_subcall_cost += advisor_call_cost
+            iterations.append(
+                _build_iteration_entry(
+                    response=advisor_response,
+                    iteration_type="advisor_message",
+                    model=advisor_model,
+                )
             )
 
             advisor_text = _extract_response_text(advisor_response)
@@ -231,6 +284,165 @@ def _make_synthetic_advisor_tool() -> Dict:
     }
 
 
+def _get_response_cost(response: Any, model: Optional[str] = None) -> float:
+    """
+    Extract the cost of a single sub-call response.
+
+    Prefers a pre-set ``_hidden_params["response_cost"]`` (produced by the
+    ``@client`` wrapper on BaseModel responses / preserved in
+    :func:`_openai_response_to_anthropic_dict`). Falls back to
+    ``litellm.completion_cost`` when the hidden param is missing — this covers
+    executor responses from ``anthropic_messages`` which return a plain dict.
+    """
+    if response is None:
+        return 0.0
+
+    hidden_params: Any = None
+    if isinstance(response, dict):
+        hidden_params = response.get("_hidden_params")
+    else:
+        hidden_params = getattr(response, "_hidden_params", None)
+
+    if isinstance(hidden_params, dict):
+        cost = hidden_params.get("response_cost")
+        if isinstance(cost, (int, float)):
+            return float(cost)
+
+    try:
+        cost = litellm.completion_cost(completion_response=response, model=model)
+        if isinstance(cost, (int, float)):
+            return float(cost)
+    except Exception as cost_error:
+        verbose_logger.debug(
+            "AdvisorOrchestration: completion_cost fallback failed for model '%s': %s",
+            model,
+            str(cost_error),
+        )
+    return 0.0
+
+
+def _build_iteration_entry(
+    response: Any,
+    iteration_type: str,
+    model: Optional[str] = None,
+) -> AnthropicUsageIteration:
+    """
+    Build one entry for ``usage.iterations[]`` on advisor-orchestrated
+    ``/v1/messages`` responses. Reads tokens from Anthropic-shaped usage on
+    the dict response.
+    """
+    usage: Dict[str, Any] = {}
+    if isinstance(response, dict):
+        maybe_usage = response.get("usage")
+        if isinstance(maybe_usage, dict):
+            usage = maybe_usage
+
+    entry: AnthropicUsageIteration = {
+        "type": iteration_type,  # type: ignore[typeddict-item]
+        "input_tokens": int(usage.get("input_tokens", 0) or 0),
+        "cache_read_input_tokens": int(usage.get("cache_read_input_tokens", 0) or 0),
+        "cache_creation_input_tokens": int(
+            usage.get("cache_creation_input_tokens", 0) or 0
+        ),
+        "output_tokens": int(usage.get("output_tokens", 0) or 0),
+    }
+    if iteration_type == "advisor_message" and model is not None:
+        entry["model"] = model
+    return entry
+
+
+def _finalize_orchestrated_response(
+    response: Any,
+    iterations: List[AnthropicUsageIteration],
+    total_cost: float,
+    final_executor_cost: float,
+    advisor_first_call_cost: float,
+    advisor_subcall_cost: float,
+    litellm_logging_obj: Any,
+) -> None:
+    """
+    Attach aggregated usage, per-iteration breakdown and total cost to the
+    terminating executor response, and publish the advisor cost split to the
+    parent ``litellm_logging_obj`` so the proxy UI can render it (same
+    plumbing Azure Router uses).
+    """
+    if not isinstance(response, dict):
+        return
+
+    aggregated_usage: Dict[str, Any] = {
+        "input_tokens": sum(it.get("input_tokens", 0) for it in iterations),
+        "output_tokens": sum(it.get("output_tokens", 0) for it in iterations),
+        "cache_read_input_tokens": sum(
+            it.get("cache_read_input_tokens", 0) for it in iterations
+        ),
+        "cache_creation_input_tokens": sum(
+            it.get("cache_creation_input_tokens", 0) for it in iterations
+        ),
+        "iterations": list(iterations),
+    }
+    response["usage"] = aggregated_usage
+
+    # Give the orchestrated response its own Anthropic-style id so the outer
+    # ``anthropic_messages`` log row is distinct from any inner sub-call log
+    # row in the proxy UI (the inner final executor sub-call shares this
+    # ``litellm_logging_obj`` and would otherwise overwrite its request_id).
+    response["id"] = f"msg_{uuid.uuid4().hex}"
+
+    hidden_params = response.get("_hidden_params")
+    if not isinstance(hidden_params, dict):
+        hidden_params = {}
+    hidden_params["response_cost"] = total_cost
+    response["_hidden_params"] = hidden_params
+
+    if litellm_logging_obj is not None:
+        try:
+            # Ensure downstream logging emits the aggregated cost even when the
+            # transformed ModelResponse path (which drops our dict hidden_params)
+            # is taken.
+            litellm_logging_obj.model_call_details["response_cost"] = total_cost
+        except Exception:
+            pass
+
+        # Restore call_type to ``anthropic_messages`` so the outer success
+        # handler runs ``_handle_anthropic_messages_response_logging`` and
+        # converts the final Anthropic dict to a ``ModelResponse`` — without
+        # this, the proxy UI's log row has no renderable output (the raw
+        # Anthropic ``content`` blocks are not recognised by the OpenAI-shaped
+        # renderer). Inner executor sub-calls (e.g. aresponses for OpenAI
+        # models) flip call_type to ``acompletion`` to dodge a separate bug in
+        # their own success path; that leaves us with the wrong call_type on
+        # the shared logging obj by the time orchestration finishes.
+        try:
+            from litellm.types.utils import CallTypes
+
+            litellm_logging_obj.call_type = CallTypes.anthropic_messages.value
+            litellm_logging_obj.model_call_details[
+                "call_type"
+            ] = CallTypes.anthropic_messages.value
+        except Exception:
+            pass
+
+        if hasattr(litellm_logging_obj, "set_cost_breakdown"):
+            additional_costs: Dict[str, float] = {}
+            if advisor_first_call_cost > 0:
+                additional_costs["Main Model (initial)"] = advisor_first_call_cost
+            if advisor_subcall_cost > 0:
+                additional_costs["Advisor Model"] = advisor_subcall_cost
+            try:
+                litellm_logging_obj.set_cost_breakdown(
+                    input_cost=final_executor_cost,
+                    output_cost=0.0,
+                    total_cost=total_cost,
+                    cost_for_built_in_tools_cost_usd_dollar=0.0,
+                    additional_costs=additional_costs or None,
+                )
+            except Exception as breakdown_error:
+                verbose_logger.debug(
+                    "AdvisorOrchestration: failed to store cost breakdown: %s",
+                    str(breakdown_error),
+                )
+
+
 def _find_advisor_tool_use(response: Any) -> Optional[Dict]:
     """Return the first tool_use block whose name matches our synthetic advisor."""
     content = response.get("content") if isinstance(response, dict) else []
@@ -249,7 +461,8 @@ def _find_advisor_tool_use(response: Any) -> Optional[Dict]:
 def _openai_response_to_anthropic_dict(response: Any) -> Dict:
     """Convert an OpenAI ChatCompletion response to a minimal Anthropic Messages dict.
 
-    Only the fields used by ``_extract_response_text`` are needed.
+    Preserves ``usage`` (mapped to Anthropic's shape) and ``_hidden_params`` so
+    the orchestration loop can aggregate cost and per-iteration token usage.
     """
     try:
         choices = response.choices if hasattr(response, "choices") else []
@@ -259,15 +472,60 @@ def _openai_response_to_anthropic_dict(response: Any) -> Dict:
             text = msg.content if hasattr(msg, "content") else msg.get("content", "")
             if text:
                 content_blocks.append({"type": "text", "text": text})
-        return {
+        anthropic_dict: Dict[str, Any] = {
             "id": getattr(response, "id", ""),
             "type": "message",
             "role": "assistant",
             "content": content_blocks,
             "stop_reason": "end_turn",
+            "usage": _openai_usage_to_anthropic_usage(response),
         }
+        hidden_params = getattr(response, "_hidden_params", None)
+        if hidden_params is not None:
+            anthropic_dict["_hidden_params"] = (
+                dict(hidden_params) if isinstance(hidden_params, dict) else hidden_params
+            )
+        return anthropic_dict
     except Exception:
         return {"content": [], "stop_reason": "end_turn"}
+
+
+def _openai_usage_to_anthropic_usage(response: Any) -> Dict[str, int]:
+    """Translate an OpenAI usage block (if any) to Anthropic token shape."""
+    usage = getattr(response, "usage", None)
+    if usage is None and isinstance(response, dict):
+        usage = response.get("usage")
+    if usage is None:
+        return {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+        }
+
+    def _get(obj: Any, key: str, default: int = 0) -> int:
+        if isinstance(obj, dict):
+            value = obj.get(key, default)
+        else:
+            value = getattr(obj, key, default)
+        return int(value or 0)
+
+    cache_read = _get(usage, "cache_read_input_tokens")
+    if not cache_read:
+        prompt_details = (
+            usage.get("prompt_tokens_details")
+            if isinstance(usage, dict)
+            else getattr(usage, "prompt_tokens_details", None)
+        )
+        if prompt_details is not None:
+            cache_read = _get(prompt_details, "cached_tokens")
+
+    return {
+        "input_tokens": _get(usage, "prompt_tokens"),
+        "output_tokens": _get(usage, "completion_tokens"),
+        "cache_creation_input_tokens": _get(usage, "cache_creation_input_tokens"),
+        "cache_read_input_tokens": cache_read,
+    }
 
 
 def _inject_advisor_blocks_into_response(
@@ -298,10 +556,17 @@ def _inject_advisor_blocks_into_response(
         tool_use_id = interaction["tool_use_id"]
         advisor_text = interaction["advisor_text"]
 
+        # ``input`` is required by
+        # ``AnthropicConfig.convert_tool_use_to_openai_format`` (it does
+        # ``json.dumps(block["input"])`` unconditionally when logging converts
+        # the Anthropic response to OpenAI format). We did not observe a real
+        # tool-call payload here — the advisor was invoked via a synthetic
+        # tool — so an empty object is the correct stub.
         content.append({
             "type": "server_tool_use",
             "id": tool_use_id,
             "name": "advisor",
+            "input": {},
         })
         content.append({
             "type": "advisor_tool_result",
@@ -431,17 +696,33 @@ async def _call_messages_handler(
     **kwargs,
 ) -> Any:
     """
-    Call anthropic_messages() — the public async /messages entry point — for
-    orchestration sub-calls (executor or advisor).
+    Dispatch an orchestration sub-call (executor turn) by invoking the
+    inner ``anthropic_messages_handler`` directly, **bypassing** the @client
+    wrapper around ``anthropic_messages``.
 
-    Using the public function (decorated with @client) ensures logging, retries,
-    and provider resolution all work correctly, identical to a direct user call.
+    Why bypass @client here:
+        - ``anthropic_messages`` is @client-decorated, which ``kwargs.pop``s
+          ``_is_litellm_internal_call`` before the body runs. Once popped, the
+          flag is gone from the kwargs forwarded to the inner
+          ``litellm.aresponses()`` / ``litellm.acompletion()`` call, so *those*
+          inner @client wrappers emit their own log rows.
+        - For advisor orchestration we want exactly ONE log row — the outer
+          ``anthropic_messages`` call the proxy received. Calling the inner
+          handler directly keeps ``_is_litellm_internal_call=True`` in kwargs
+          all the way down, so the inner aresponses/acompletion skip logging
+          and the outer call's @client emits the single aggregated entry.
+
+    The shared ``litellm_logging_obj`` is intentionally passed through in
+    kwargs so the inner aresponses/acompletion @client populates provider
+    metadata (``custom_llm_provider``, ``api_base``, ``model_id``) on the
+    outer log row.
     """
     from litellm.llms.anthropic.experimental_pass_through.messages.handler import (
-        anthropic_messages,
+        anthropic_messages_handler,
     )
 
-    return await anthropic_messages(
+    kwargs["is_async"] = True
+    result = anthropic_messages_handler(
         model=model,
         messages=messages,
         tools=tools,
@@ -450,6 +731,9 @@ async def _call_messages_handler(
         custom_llm_provider=custom_llm_provider,
         **kwargs,
     )
+    if asyncio.iscoroutine(result):
+        return await result
+    return result
 
 
 async def _call_advisor_with_router(
@@ -477,7 +761,10 @@ async def _call_advisor_with_router(
     except ImportError:
         pass
 
-    kwargs: Dict[str, Any] = {}
+    # Mark as internal so the @client decorator on acompletion skips
+    # emitting a log row — only the outer anthropic_messages call should
+    # produce a single aggregated log entry for the advisor request.
+    kwargs: Dict[str, Any] = {"_is_litellm_internal_call": True}
     if metadata is not None:
         kwargs["metadata"] = metadata
     if api_key is not None:

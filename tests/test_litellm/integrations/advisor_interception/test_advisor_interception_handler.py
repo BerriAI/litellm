@@ -189,6 +189,11 @@ async def test_run_chat_completion_agentic_loop_aggregates_subcall_costs(monkeyp
         created=123,
     )
     initial_response._hidden_params["response_cost"] = 1.0
+    initial_response.usage = {  # type: ignore[attr-defined]
+        "prompt_tokens": 100,
+        "completion_tokens": 20,
+        "total_tokens": 120,
+    }
 
     advisor_subcall_response = ModelResponse(
         id="advisor-subcall",
@@ -207,6 +212,11 @@ async def test_run_chat_completion_agentic_loop_aggregates_subcall_costs(monkeyp
         created=124,
     )
     advisor_subcall_response._hidden_params["response_cost"] = 0.3
+    advisor_subcall_response.usage = {  # type: ignore[attr-defined]
+        "prompt_tokens": 200,
+        "completion_tokens": 150,
+        "total_tokens": 350,
+    }
 
     final_response = ModelResponse(
         id="final",
@@ -225,6 +235,11 @@ async def test_run_chat_completion_agentic_loop_aggregates_subcall_costs(monkeyp
         created=125,
     )
     final_response._hidden_params["response_cost"] = 0.7
+    final_response.usage = {  # type: ignore[attr-defined]
+        "prompt_tokens": 300,
+        "completion_tokens": 40,
+        "total_tokens": 340,
+    }
 
     calls = {"count": 0}
 
@@ -238,13 +253,16 @@ async def test_run_chat_completion_agentic_loop_aggregates_subcall_costs(monkeyp
 
     monkeypatch.setattr(litellm, "acompletion", mock_acompletion)
 
+    fake_logging_obj = MagicMock()
+    fake_logging_obj.set_cost_breakdown = MagicMock()
+
     response = await logger.async_run_chat_completion_agentic_loop(
         tools={"advisor_config": {"advisor_model": "claude-opus-4-6", "max_uses": 3}},
         model="gpt-4o-mini",
         messages=[{"role": "user", "content": "Test"}],
         response=initial_response,
         optional_params={"tools": [get_litellm_advisor_tool_openai()], "max_tokens": 256},
-        logging_obj=None,
+        logging_obj=fake_logging_obj,
         stream=False,
         kwargs={"litellm_call_id": "cost-loop-1", "custom_llm_provider": "openai"},
     )
@@ -252,6 +270,29 @@ async def test_run_chat_completion_agentic_loop_aggregates_subcall_costs(monkeyp
     assert calls["count"] == 2
     assert response is final_response
     assert response._hidden_params["response_cost"] == pytest.approx(2.0)
+
+    fake_logging_obj.set_cost_breakdown.assert_called_once()
+    breakdown_kwargs = fake_logging_obj.set_cost_breakdown.call_args.kwargs
+    assert breakdown_kwargs["total_cost"] == pytest.approx(2.0)
+    assert breakdown_kwargs["input_cost"] == pytest.approx(0.7)
+    assert breakdown_kwargs["additional_costs"] == {
+        "Main Model (initial)": pytest.approx(1.0),
+        "Advisor Model": pytest.approx(0.3),
+    }
+
+    message = response.choices[0].message
+    advisor_iterations = message.provider_specific_fields["advisor_iterations"]
+    assert len(advisor_iterations) == 3
+    assert advisor_iterations[0]["type"] == "message"
+    assert advisor_iterations[0]["input_tokens"] == 100
+    assert advisor_iterations[0]["output_tokens"] == 20
+    assert advisor_iterations[1]["type"] == "advisor_message"
+    assert advisor_iterations[1]["model"] == "claude-opus-4-6"
+    assert advisor_iterations[1]["input_tokens"] == 200
+    assert advisor_iterations[1]["output_tokens"] == 150
+    assert advisor_iterations[2]["type"] == "message"
+    assert advisor_iterations[2]["input_tokens"] == 300
+    assert advisor_iterations[2]["output_tokens"] == 40
 
 
 @pytest.mark.asyncio

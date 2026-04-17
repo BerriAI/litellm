@@ -56,6 +56,23 @@ AnthropicResponseContentBlock: TypeAlias = Union[
 ]
 
 
+class AnthropicUsageIteration(TypedDict, total=False):
+    """
+    Per-iteration token usage for advisor-orchestrated requests.
+
+    Emitted in ``AnthropicUsage.iterations`` when LiteLLM runs the advisor
+    orchestration loop so callers can see the breakdown of executor vs.
+    advisor sub-calls.
+    """
+
+    type: Literal["message", "advisor_message"]
+    model: Optional[str]
+    input_tokens: int
+    output_tokens: int
+    cache_creation_input_tokens: int
+    cache_read_input_tokens: int
+
+
 class AnthropicUsage(TypedDict, total=False):
     """
     Input and output tokens used in the request
@@ -69,6 +86,15 @@ class AnthropicUsage(TypedDict, total=False):
     """
     cache_creation_input_tokens: int
     cache_read_input_tokens: int
+
+    """
+    Per-iteration breakdown for advisor-orchestrated requests.
+
+    Populated by LiteLLM's advisor orchestration loop; absent for normal
+    (non-advisor) requests. Each entry describes a single executor or advisor
+    sub-call that contributed to the aggregated usage above.
+    """
+    iterations: List[AnthropicUsageIteration]
 
 
 class AnthropicMessagesResponse(TypedDict, total=False):

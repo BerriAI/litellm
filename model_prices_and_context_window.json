@@ -38567,6 +38567,7 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "tool_use_system_prompt_tokens": 346,
+        "supports_native_advisor_tool": true,
         "supports_native_structured_output": true,
         "supports_pdf_input": true
     },
@@ -38590,6 +38591,7 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "tool_use_system_prompt_tokens": 346,
+        "supports_native_advisor_tool": true,
         "supports_native_structured_output": true,
         "supports_pdf_input": true
     }
