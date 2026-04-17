@@ -120,6 +120,7 @@ def _sanitize_for_log(value: Any) -> str:
         text = repr(value)
     return text.replace("\r", "").replace("\n", "")
 
+
 async def _verify_team_access(
     team_obj: LiteLLM_TeamTable,
     user_api_key_dict: UserAPIKeyAuth,
@@ -314,10 +315,8 @@ class TeamMemberBudgetHandler:
             return
 
         # Batch-fetch existing memberships for this team (avoids N+1 queries)
-        existing_memberships = (
-            await prisma_client.db.litellm_teammembership.find_many(
-                where={"team_id": team_id}
-            )
+        existing_memberships = await prisma_client.db.litellm_teammembership.find_many(
+            where={"team_id": team_id}
         )
         existing_user_ids = {m.user_id for m in existing_memberships}
 
@@ -1545,6 +1544,42 @@ async def update_team(  # noqa: PLR0915
         if (
             data.organization_id is not None and len(data.organization_id) > 0
         ):  # allow unsetting the organization_id
+            # If the caller is relocating the team to a different org, they
+            # must also be PROXY_ADMIN or an org-admin of the DESTINATION org.
+            # _verify_team_access above only checked the team's CURRENT org,
+            # so without this gate an org-admin could hand their team to any
+            # other org (or capture a team from another org they once
+            # administered into a new destination).
+            current_org_id = getattr(existing_team_row, "organization_id", None)
+            if (
+                data.organization_id != current_org_id
+                and user_api_key_dict.user_role
+                != LitellmUserRoles.PROXY_ADMIN.value
+            ):
+                # Is the caller org_admin of the destination org?
+                caller_memberships = (
+                    await prisma_client.db.litellm_organizationmembership.find_many(
+                        where={
+                            "user_id": user_api_key_dict.user_id,
+                            "organization_id": data.organization_id,
+                            "user_role": LitellmUserRoles.ORG_ADMIN.value,
+                        }
+                    )
+                    if user_api_key_dict.user_id
+                    else []
+                )
+                if not caller_memberships:
+                    raise HTTPException(
+                        status_code=403,
+                        detail={
+                            "error": (
+                                "Relocating a team to a different organization "
+                                "requires PROXY_ADMIN or org-admin of the "
+                                "destination org."
+                            )
+                        },
+                    )
+
             await fetch_and_validate_organization(
                 organization_id=data.organization_id,
                 existing_team_row=existing_team_row,
@@ -1659,12 +1694,12 @@ async def update_team(  # noqa: PLR0915
             updated_kv["router_settings"] = safe_dumps(updated_kv["router_settings"])
 
         updated_kv = prisma_client.jsonify_team_object(db_data=updated_kv)
-        team_row: Optional[
-            LiteLLM_TeamTable
-        ] = await prisma_client.db.litellm_teamtable.update(
-            where={"team_id": data.team_id},
-            data=updated_kv,
-            include={"litellm_model_table": True},  # type: ignore
+        team_row: Optional[LiteLLM_TeamTable] = (
+            await prisma_client.db.litellm_teamtable.update(
+                where={"team_id": data.team_id},
+                data=updated_kv,
+                include={"litellm_model_table": True},  # type: ignore
+            )
         )
 
         if team_row is None or team_row.team_id is None:
@@ -2411,13 +2446,13 @@ async def team_member_delete(
         )
 
         # Fetch keys before deletion to persist them
-        keys_to_delete: List[
-            LiteLLM_VerificationToken
-        ] = await prisma_client.db.litellm_verificationtoken.find_many(
-            where={
-                "user_id": {"in": list(user_ids_to_delete)},
-                "team_id": data.team_id,
-            }
+        keys_to_delete: List[LiteLLM_VerificationToken] = (
+            await prisma_client.db.litellm_verificationtoken.find_many(
+                where={
+                    "user_id": {"in": list(user_ids_to_delete)},
+                    "team_id": data.team_id,
+                }
+            )
         )
 
         if keys_to_delete:
@@ -2683,6 +2718,20 @@ async def bulk_team_member_add(
         )
 
     if data.all_users:
+        # `all_users=True` pulls every user in the database into this team,
+        # regardless of org. Any team admin could use it to capture every
+        # user across every org into a team they control. Restrict to
+        # PROXY_ADMIN.
+        if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value:
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "error": (
+                        "`all_users=true` is restricted to PROXY_ADMIN. "
+                        "Org/team admins must specify explicit member lists."
+                    )
+                },
+            )
         # get all users from the database
         all_users_in_db = await prisma_client.db.litellm_usertable.find_many(
             order={"created_at": "desc"}
@@ -2801,10 +2850,10 @@ async def delete_team(
     team_rows: List[LiteLLM_TeamTable] = []
     for team_id in data.team_ids:
         try:
-            team_row_base: Optional[
-                BaseModel
-            ] = await prisma_client.db.litellm_teamtable.find_unique(
-                where={"team_id": team_id}
+            team_row_base: Optional[BaseModel] = (
+                await prisma_client.db.litellm_teamtable.find_unique(
+                    where={"team_id": team_id}
+                )
             )
             if team_row_base is None:
                 raise Exception
@@ -2870,10 +2919,10 @@ async def delete_team(
         _persist_deleted_verification_tokens,
     )
 
-    keys_to_delete: List[
-        LiteLLM_VerificationToken
-    ] = await prisma_client.db.litellm_verificationtoken.find_many(
-        where={"team_id": {"in": data.team_ids}}
+    keys_to_delete: List[LiteLLM_VerificationToken] = (
+        await prisma_client.db.litellm_verificationtoken.find_many(
+            where={"team_id": {"in": data.team_ids}}
+        )
     )
 
     if keys_to_delete:
@@ -3110,11 +3159,11 @@ async def team_info(
             )
 
         try:
-            team_info: Optional[
-                BaseModel
-            ] = await prisma_client.db.litellm_teamtable.find_unique(
-                where={"team_id": team_id},
-                include={"object_permission": True},
+            team_info: Optional[BaseModel] = (
+                await prisma_client.db.litellm_teamtable.find_unique(
+                    where={"team_id": team_id},
+                    include={"object_permission": True},
+                )
             )
             if team_info is None:
                 raise Exception
@@ -3405,6 +3454,7 @@ async def _get_org_admin_org_ids(
         m.organization_id
         for m in (caller_user.organization_memberships or [])
         if m.user_role == LitellmUserRoles.ORG_ADMIN.value
+        and m.organization_id is not None
     ]
     return org_ids if org_ids else None
 
@@ -3439,13 +3489,8 @@ async def _build_team_list_where_conditions(
 
     if organization_id:
         where_conditions["organization_id"] = organization_id
-    elif org_admin_org_ids is not None and not user_id:
-        # Org admin without explicit org or user filter: scope to their orgs.
-        # NOTE: when user_id is provided, no org filter is applied — the
-        # query returns all teams the target user belongs to across all
-        # organisations.  This matches the legacy /team/list behaviour in
-        # _authorize_and_filter_teams which fetches direct-membership teams
-        # without an org constraint.
+    elif org_admin_org_ids is not None:
+        # Org admin: always scope to their orgs, even when filtering by user_id.
         where_conditions["organization_id"] = {"in": org_admin_org_ids}
 
     if user_id:
@@ -3815,7 +3860,7 @@ async def _authorize_and_filter_teams(
     Authorize the /team/list request and return filtered teams.
 
     - Proxy admins: all teams (or filtered by user_id if provided).
-    - Org admins: teams from their orgs + teams they are direct members of.
+    - Org admins: teams from their orgs (scoped to user_id if provided).
     - Own query (user_id matches caller): teams the user is a member of.
     - Others: 401.
     """
@@ -3843,6 +3888,7 @@ async def _authorize_and_filter_teams(
                     m.organization_id
                     for m in (caller_user.organization_memberships or [])
                     if m.user_role == LitellmUserRoles.ORG_ADMIN.value
+                    and m.organization_id is not None
                 ]
                 if not allowed_org_ids:
                     allowed_org_ids = None
@@ -3865,20 +3911,13 @@ async def _authorize_and_filter_teams(
         )
         if not user_id:
             return list(org_teams)
-        # Also include teams the user is a direct member of (outside their orgs)
-        seen_team_ids = {team.team_id for team in org_teams}
-        all_teams = list(org_teams)
-        # Prisma doesn't support filtering JSON array fields, so we fetch by membership separately
-        member_teams = await prisma_client.db.litellm_teamtable.find_many(
-            where={"team_id": {"not_in": list(seen_team_ids)}} if seen_team_ids else {},
-            include={"litellm_model_table": True},
-        )
-        for team in member_teams:
-            if team.members_with_roles and any(
-                m.get("user_id") == user_id for m in team.members_with_roles
-            ):
-                all_teams.append(team)
-        return all_teams
+        # Filter org teams to only those where the target user is a member
+        return [
+            team
+            for team in org_teams
+            if team.members_with_roles
+            and any(m.get("user_id") == user_id for m in team.members_with_roles)
+        ]
     elif user_id:
         # Regular user: fetch all and filter by membership (Prisma can't filter JSON arrays)
         response = await prisma_client.db.litellm_teamtable.find_many(
