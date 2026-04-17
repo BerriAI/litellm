@@ -2796,13 +2796,15 @@ class ProxyConfig:
         global redis_usage_cache, llm_router
         from litellm import Cache
 
+        # Construct the cache first; only update global TTL defaults on success
+        # so that a failed initialisation does not leave partial global state.
+        litellm.cache = Cache(**cache_params)
+
         if "default_in_memory_ttl" in cache_params:
             litellm.default_in_memory_ttl = cache_params["default_in_memory_ttl"]
 
         if "default_redis_ttl" in cache_params:
             litellm.default_redis_ttl = cache_params["default_redis_ttl"]
-
-        litellm.cache = Cache(**cache_params)
 
         if litellm.cache is not None and isinstance(
             litellm.cache.cache, (RedisCache, RedisClusterCache)
