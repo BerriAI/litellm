@@ -1849,7 +1849,7 @@ async def _process_single_key_update(
 
     # Delete cache
     await _delete_cache_key_object(
-        hashed_token=hash_token(key_update_item.key),
+        hashed_token=_hash_token_if_needed(key_update_item.key),
         user_api_key_cache=user_api_key_cache,
         proxy_logging_obj=proxy_logging_obj,
     )
@@ -3726,7 +3726,7 @@ async def _execute_virtual_key_regeneration(
 
     if hashed_api_key or key:
         await _delete_cache_key_object(
-            hashed_token=hash_token(key),
+            hashed_token=_hash_token_if_needed(key),
             user_api_key_cache=user_api_key_cache,
             proxy_logging_obj=proxy_logging_obj,
         )

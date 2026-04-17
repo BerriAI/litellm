@@ -433,6 +433,109 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             # contain API keys or other secrets) in error responses.
             raise Exception(f"Presidio PII analysis failed: {type(e).__name__}") from e
 
+    async def _post_presidio_anonymize(
+        self, text: str, analyze_results: Any
+    ) -> Any:
+        """POST to Presidio anonymize; returns parsed JSON body."""
+        # Use shared session to prevent memory leak (issue #14540)
+        async with self._get_session_iterator() as session:
+            anonymize_url = f"{self.presidio_anonymizer_api_base}anonymize"
+            verbose_proxy_logger.debug("Making request to: %s", anonymize_url)
+            anonymize_payload = {
+                "text": text,
+                "analyzer_results": analyze_results,
+            }
+            async with session.post(
+                anonymize_url,
+                json=anonymize_payload,
+                headers={"Accept": "application/json"},
+            ) as response:
+                if response.status >= 400:
+                    error_body = await response.text()
+                    raise Exception(
+                        f"Presidio anonymizer returned HTTP {response.status}: {error_body[:200]}"
+                    )
+                content_type = getattr(
+                    response,
+                    "content_type",
+                    response.headers.get("Content-Type", ""),
+                )
+                if "application/json" not in content_type:
+                    error_body = await response.text()
+                    raise Exception(
+                        f"Presidio anonymizer returned non-JSON Content-Type '{content_type}'; body: '{error_body[:200]}'"
+                    )
+                return await response.json()
+
+    def _finalize_presidio_anonymize_simple(
+        self,
+        redacted_text: Dict[str, Any],
+        masked_entity_count: Dict[str, int],
+    ) -> str:
+        # No need to build numbered tokens — just use Presidio's
+        # already-anonymized text directly.  The old code incorrectly
+        # applied anonymizer item positions (which reference the
+        # *output* text) to the *original* text, causing offset errors.
+        for item in redacted_text.get("items", []):
+            entity_type = item.get("entity_type", None)
+            if entity_type is not None:
+                masked_entity_count[entity_type] = (
+                    masked_entity_count.get(entity_type, 0) + 1
+                )
+        return redacted_text["text"]
+
+    def _finalize_presidio_anonymize_numbered_tokens(
+        self,
+        text: str,
+        analyze_results: Any,
+        request_data: Optional[Dict],
+        masked_entity_count: Dict[str, int],
+    ) -> str:
+        # output_parse_pii is True — we need sequentially numbered
+        # tokens and a pii_tokens mapping for later unmasking.
+        # Use analyze_results positions (which reference the ORIGINAL
+        # text) instead of anonymizer items (which reference the output).
+        new_text = text
+        if request_data is None:
+            verbose_proxy_logger.warning(
+                "Presidio anonymize_text called without request_data — "
+                "PII tokens cannot be stored per-request. "
+                "This may indicate a missing caller update."
+            )
+            request_data = {}
+        if not request_data.get("metadata"):
+            request_data["metadata"] = {}
+        if "pii_tokens" not in request_data["metadata"]:
+            request_data["metadata"]["pii_tokens"] = {}
+        pii_tokens = request_data["metadata"]["pii_tokens"]
+
+        # Assign sequence numbers in forward (left-to-right) order so
+        # that <PERSON_1> is the first entity in the text, etc.
+        sorted_forward = sorted(analyze_results, key=lambda x: x["start"])
+        seq_map = {}
+        for idx, ar in enumerate(sorted_forward, start=1):
+            seq_map[(ar["start"], ar["end"])] = idx
+
+        # Apply replacements in reverse order by start position so
+        # that replacing later spans first does not shift earlier
+        # coordinates in the original text.
+        for ar in reversed(sorted_forward):
+            start = ar["start"]
+            end = ar["end"]
+            entity_type = ar["entity_type"]
+            replacement = f"<{entity_type}>"
+            seq = seq_map[(start, end)]
+            if replacement.endswith(">"):
+                replacement = f"{replacement[:-1]}_{seq}>"
+            else:
+                replacement = f"{replacement}_{seq}"
+            pii_tokens[replacement] = text[start:end]
+            new_text = new_text[:start] + replacement + new_text[end:]
+            masked_entity_count[entity_type] = (
+                masked_entity_count.get(entity_type, 0) + 1
+            )
+        return new_text
+
     async def anonymize_text(
         self,
         text: str,
@@ -449,100 +552,20 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             if isinstance(analyze_results, list) and len(analyze_results) == 0:
                 return text
 
-            # Use shared session to prevent memory leak (issue #14540)
-            async with self._get_session_iterator() as session:
-                # Make the request to /anonymize
-                anonymize_url = f"{self.presidio_anonymizer_api_base}anonymize"
-                verbose_proxy_logger.debug("Making request to: %s", anonymize_url)
-                anonymize_payload = {
-                    "text": text,
-                    "analyzer_results": analyze_results,
-                }
-
-                async with session.post(
-                    anonymize_url,
-                    json=anonymize_payload,
-                    headers={"Accept": "application/json"},
-                ) as response:
-                    # Validate HTTP status
-                    if response.status >= 400:
-                        error_body = await response.text()
-                        raise Exception(
-                            f"Presidio anonymizer returned HTTP {response.status}: {error_body[:200]}"
-                        )
-
-                    # Validate Content-Type is JSON
-                    content_type = getattr(
-                        response,
-                        "content_type",
-                        response.headers.get("Content-Type", ""),
-                    )
-                    if "application/json" not in content_type:
-                        error_body = await response.text()
-                        raise Exception(
-                            f"Presidio anonymizer returned non-JSON Content-Type '{content_type}'; body: '{error_body[:200]}'"
-                        )
-
-                    redacted_text = await response.json()
-
-            new_text = text
-            if redacted_text is not None:
-                verbose_proxy_logger.debug("redacted_text: %s", redacted_text)
-                # Process items in reverse order by start position so that
-                # replacing later spans first does not shift earlier coordinates.
-                for item in sorted(
-                    redacted_text["items"], key=lambda x: x["start"], reverse=True
-                ):
-                    start = item["start"]
-                    end = item["end"]
-                    replacement = item["text"]  # replacement token
-                    if item["operator"] == "replace" and output_parse_pii is True:
-                        if request_data is None:
-                            verbose_proxy_logger.warning(
-                                "Presidio anonymize_text called without request_data — "
-                                "PII tokens cannot be stored per-request. "
-                                "This may indicate a missing caller update."
-                            )
-                            request_data = {}
-                        # Store pii_tokens in metadata to avoid leaking to LLM providers.
-                        # Providers like Anthropic reject unknown top-level fields.
-                        if not request_data.get("metadata"):
-                            request_data["metadata"] = {}
-                        if "pii_tokens" not in request_data["metadata"]:
-                            request_data["metadata"]["pii_tokens"] = {}
-                        pii_tokens = request_data["metadata"]["pii_tokens"]
-
-                        # Append a sequential number to make each token unique
-                        # per request, so unmasking maps back to the correct
-                        # original value.  Format: <PHONE_NUMBER_1>, <PHONE_NUMBER_2>
-                        # This is LLM-friendly and degrades gracefully if the
-                        # LLM doesn't echo the token verbatim.
-                        seq = len(pii_tokens) + 1
-                        if replacement.endswith(">"):
-                            replacement = f"{replacement[:-1]}_{seq}>"
-                        else:
-                            replacement = f"{replacement}_{seq}"
-
-                        # Use ORIGINAL text (not new_text) since start/end
-                        # reference the original text's coordinates.
-                        pii_tokens[replacement] = text[start:end]
-
-                    new_text = new_text[:start] + replacement + new_text[end:]
-                    entity_type = item.get("entity_type", None)
-                    if entity_type is not None:
-                        masked_entity_count[entity_type] = (
-                            masked_entity_count.get(entity_type, 0) + 1
-                        )
-                # When output_parse_pii is True, new_text contains sequentially
-                # numbered tokens (e.g. <PHONE_NUMBER_1>) that match the keys
-                # in pii_tokens.  Returning redacted_text["text"] (Presidio's
-                # original output) would send un-numbered tokens to the LLM,
-                # making unmasking impossible.
-                # When output_parse_pii is False, new_text == redacted_text["text"]
-                # because no suffix is appended.
-                return new_text
-            else:
+            redacted_text = await self._post_presidio_anonymize(text, analyze_results)
+            if redacted_text is None:
                 raise Exception("Invalid anonymizer response: received None")
+
+            verbose_proxy_logger.debug("redacted_text: %s", redacted_text)
+
+            if not output_parse_pii:
+                return self._finalize_presidio_anonymize_simple(
+                    redacted_text, masked_entity_count
+                )
+
+            return self._finalize_presidio_anonymize_numbered_tokens(
+                text, analyze_results, request_data, masked_entity_count
+            )
         except Exception as e:
             # Sanitize exception to avoid leaking the original text (which may
             # contain API keys or other secrets) in error responses.

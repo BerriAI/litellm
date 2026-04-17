@@ -638,7 +638,7 @@ jobs:
           username: ${DOCKERHUB_USERNAME}
           password: ${DOCKERHUB_PASSWORD}
     working_directory: ~/project
-    resource_class: large
+    resource_class: xlarge
 
     steps:
       - checkout
@@ -682,7 +682,7 @@ jobs:
             for dir in "${IGNORE_DIRS[@]}"; do
               IGNORE_ARGS="$IGNORE_ARGS --ignore=$dir"
             done
-            uv run --no-sync python -m pytest -v tests/llm_translation $IGNORE_ARGS --junitxml=test-results/junit.xml --durations=20 -n 8 --timeout=120 --timeout_method=thread --retries 2 --retry-delay 5
+            uv run --no-sync python -m pytest -v tests/llm_translation $IGNORE_ARGS --junitxml=test-results/junit.xml --durations=20 -n 4 --timeout=120 --timeout_method=thread --retries 2 --retry-delay 5 --max-worker-restart=5
           no_output_timeout: 15m
 
       # Store test results
@@ -2911,94 +2911,10 @@ jobs:
             rm -f /tmp/uv-install.sh
             echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$BASH_ENV"
             export PATH="$HOME/.local/bin:$PATH"
-            uv tool run --from 'coverage[toml]==7.10.6' coverage combine realtime_translation_coverage ocr_coverage search_coverage mcp_coverage litellm_mcps_tests_coverage logging_coverage audio_coverage local_testing_part1_coverage local_testing_part2_coverage pass_through_unit_tests_coverage batches_coverage guardrails_coverage redis_caching_coverage
+            uv tool run --from 'coverage[toml]==7.10.6' coverage combine realtime_translation_coverage ocr_coverage search_coverage mcp_coverage logging_coverage audio_coverage local_testing_part1_coverage local_testing_part2_coverage pass_through_unit_tests_coverage batches_coverage guardrails_coverage redis_caching_coverage
             uv tool run --from 'coverage[toml]==7.10.6' coverage xml
       - codecov/upload:
           file: ./coverage.xml
-
-  publish_proxy_extras:
-    docker:
-      - image: cimg/python:3.12
-    working_directory: ~/project/litellm-proxy-extras
-    environment:
-      TWINE_USERNAME: __token__
-
-    steps:
-      - checkout:
-          path: ~/project
-
-      - run:
-          name: Check if litellm-proxy-extras dir or pyproject.toml was modified
-          command: |
-            curl -LsSf -o /tmp/uv-install.sh https://astral.sh/uv/0.10.9/install.sh
-            echo "7fc46e39cb97290b57169c0c813a17970585ac519139f19006453c99b5f2f45f  /tmp/uv-install.sh" | sha256sum -c -
-            env UV_NO_MODIFY_PATH=1 sh /tmp/uv-install.sh
-            rm -f /tmp/uv-install.sh
-            echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$BASH_ENV"
-            echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$BASH_ENV"
-            export PATH="$HOME/.local/bin:$PATH"
-            # Get current version from pyproject.toml
-            CURRENT_VERSION=$(python -c 'import tomllib; from pathlib import Path; data = tomllib.loads(Path("pyproject.toml").read_text()); print(data["project"]["version"])')
-
-            # Get last published version from PyPI
-            LAST_VERSION=$(curl -s https://pypi.org/pypi/litellm-proxy-extras/json | python -c "import json, sys; print(json.load(sys.stdin)['info']['version'])")
-
-            echo "Current version: $CURRENT_VERSION"
-            echo "Last published version: $LAST_VERSION"
-
-            # Compare versions using Python's packaging.version
-            VERSION_COMPARE=$(uv run --with 'packaging==25.0' python -c "from packaging import version; print(1 if version.parse('$CURRENT_VERSION') < version.parse('$LAST_VERSION') else 0)")
-
-            echo "Version compare: $VERSION_COMPARE"
-            if [ "$VERSION_COMPARE" = "1" ]; then
-              echo "Error: Current version ($CURRENT_VERSION) is less than last published version ($LAST_VERSION)"
-              exit 1
-            fi
-
-            # If versions are equal or current is greater, compare against the published package contents.
-            EXTRACTED_DIR=$(uv run --with "litellm-proxy-extras==$LAST_VERSION" python -c 'import importlib.util; from pathlib import Path; spec = importlib.util.find_spec("litellm_proxy_extras"); assert spec is not None and spec.origin is not None, "litellm_proxy_extras not found in uv-run environment"; print(Path(spec.origin).resolve().parent)')
-
-            # Compare contents
-            if ! diff -r "$EXTRACTED_DIR" ./litellm_proxy_extras; then
-              if [ "$CURRENT_VERSION" = "$LAST_VERSION" ]; then
-                echo "Error: Changes detected in litellm-proxy-extras but version was not bumped"
-                echo "Current version: $CURRENT_VERSION"
-                echo "Last published version: $LAST_VERSION"
-                echo "Changes:"
-                diff -r "$EXTRACTED_DIR" ./litellm_proxy_extras
-                exit 1
-              fi
-            else
-              echo "No changes detected in litellm-proxy-extras. Skipping PyPI publish."
-              circleci step halt
-            fi
-
-      - run:
-          name: Get new version
-          command: |
-            NEW_VERSION=$(python -c 'import tomllib; from pathlib import Path; data = tomllib.loads(Path("pyproject.toml").read_text()); print(data["project"]["version"])')
-            echo "export NEW_VERSION=$NEW_VERSION" >> $BASH_ENV
-
-      - run:
-          name: Check if versions match
-          command: |
-            cd ~/project
-            # Check pyproject.toml
-            CURRENT_VERSION=$(uv run --with 'packaging==25.0' python -c 'import tomllib; from packaging.requirements import Requirement; from pathlib import Path; data = tomllib.loads(Path("pyproject.toml").read_text()); matches = [spec.version for requirement in data["project"]["optional-dependencies"]["proxy"] for parsed in [Requirement(requirement)] if parsed.name == "litellm-proxy-extras" and parsed.specifier for spec in parsed.specifier if spec.operator == "=="]; print(matches[0] if matches else (_ for _ in ()).throw(SystemExit("Could not find exact litellm-proxy-extras pin in project.optional-dependencies.proxy")))')
-            if [ "$CURRENT_VERSION" != "$NEW_VERSION" ]; then
-              echo "Error: Version in pyproject.toml ($CURRENT_VERSION) doesn't match new version ($NEW_VERSION)"
-              exit 1
-            fi
-
-      - run:
-          name: Publish to PyPI
-          command: |
-            echo -e "[pypi]\nusername = $PYPI_PUBLISH_USERNAME\npassword = $PYPI_PUBLISH_PASSWORD" > ~/.pypirc
-            echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$BASH_ENV"
-            export PATH="$HOME/.local/bin:$PATH"
-            rm -rf build dist
-            uv build
-            uv tool run --from 'twine==6.2.0' twine upload --verbose dist/*
 
   ui_build:
     docker:
@@ -3214,60 +3130,6 @@ jobs:
             - litellm-docker-database.tar.zst
 
 
-  prisma_schema_sync:
-    machine:
-      image: ubuntu-2204:2023.10.1
-    resource_class: medium
-    working_directory: ~/project
-    steps:
-      - checkout
-      - setup_google_dns
-      - attach_workspace:
-          at: ~/project
-      - run:
-          name: Start PostgreSQL Database
-          command: |
-            docker run -d \
-              --name postgres-db \
-              -e POSTGRES_USER=postgres \
-              -e POSTGRES_PASSWORD=postgres \
-              -e POSTGRES_DB=litellm_schema_sync \
-              -p 5432:5432 \
-              postgres:14
-      - wait_for_service:
-          url: tcp://localhost:5432
-          timeout: "60"
-      - run:
-          name: Load Docker Database Image
-          command: |
-            zstd -d litellm-docker-database.tar.zst --stdout | docker load
-            docker images | grep litellm-docker-database
-      - run:
-          name: Run schema sync via prisma db push
-          command: |
-            docker run -d \
-              -p 4000:4000 \
-              -e DATABASE_URL="postgresql://postgres:postgres@host.docker.internal:5432/litellm_schema_sync" \
-              -e LITELLM_MASTER_KEY="sk-1234" \
-              --name schema-sync \
-              --add-host=host.docker.internal:host-gateway \
-              -v $(pwd)/litellm/proxy/example_config_yaml/simple_config.yaml:/app/config.yaml \
-              litellm-docker-database:ci \
-              --config /app/config.yaml \
-              --port 4000 \
-              --use_prisma_db_push
-      - run:
-          name: Start outputting logs
-          command: docker logs -f schema-sync
-          background: true
-      - wait_for_service:
-          url: http://localhost:4000
-          timeout: "300"
-      - run:
-          name: Stop schema sync container
-          command: docker stop schema-sync
-
-
   test_bad_database_url:
     machine:
       image: ubuntu-2204:2023.10.1
@@ -3416,14 +3278,6 @@ workflows:
                 - main
                 - /litellm_.*/
       - build_docker_database_image:
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
-      - prisma_schema_sync:
-          requires:
-            - build_docker_database_image
           filters:
             branches:
               only:
@@ -3688,9 +3542,3 @@ workflows:
               only:
                 - main
                 - /litellm_.*/
-      - publish_proxy_extras:
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_release_day_.*/
