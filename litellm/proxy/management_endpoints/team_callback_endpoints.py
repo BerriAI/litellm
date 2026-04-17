@@ -19,6 +19,10 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.callback_utils import (
+    encrypt_logging_callback_vars,
+    redact_sensitive_logging_metadata,
+)
 from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
 
 router = APIRouter()
@@ -126,6 +130,7 @@ async def add_team_callbacks(
         team_callback_settings.append(data.model_dump())
 
         team_metadata["logging"] = team_callback_settings
+        encrypt_logging_callback_vars(team_metadata)
         team_metadata_json = json.dumps(team_metadata)  # update team_metadata
 
         new_team_row = await prisma_client.db.litellm_teamtable.update(
@@ -312,13 +317,22 @@ async def get_team_callbacks(
         # Convert to TeamCallbackMetadata object for consistent structure
         team_callback_settings_obj = TeamCallbackMetadata(**team_callback_settings)
 
+        redacted_metadata = redact_sensitive_logging_metadata(
+            {"logging": [{"callback_vars": team_callback_settings_obj.callback_vars}]}
+        )
+        redacted_vars = (
+            redacted_metadata["logging"][0]["callback_vars"]
+            if redacted_metadata
+            else team_callback_settings_obj.callback_vars
+        )
+
         return {
             "status": "success",
             "data": {
                 "team_id": team_id,
                 "success_callbacks": team_callback_settings_obj.success_callback,
                 "failure_callbacks": team_callback_settings_obj.failure_callback,
-                "callback_vars": team_callback_settings_obj.callback_vars,
+                "callback_vars": redacted_vars,
             },
         }
 
