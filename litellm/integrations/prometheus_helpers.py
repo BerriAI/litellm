@@ -51,8 +51,7 @@ class PrometheusLabelFactoryContext:
         self.enum_values = enum_values
         enum_dict = enum_values.model_dump()
         self._sanitized_enum: Dict[str, Optional[str]] = {
-            k: _sanitize_prometheus_label_value(v)
-            for k, v in enum_dict.items()
+            k: _sanitize_prometheus_label_value(v) for k, v in enum_dict.items()
         }
         self._custom_by_sanitized_key: Dict[str, Optional[str]] = {}
         if enum_values.custom_metadata_labels is not None:
