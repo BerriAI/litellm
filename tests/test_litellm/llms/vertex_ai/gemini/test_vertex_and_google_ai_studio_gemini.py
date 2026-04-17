@@ -938,12 +938,12 @@ def test_vertex_ai_map_thinking_param_with_budget_tokens_0():
 
 def test_vertex_ai_map_thinking_param_disabled():
     """
-    type="disabled" must produce includeThoughts: False with no thinkingBudget field.
+    type="adaptive" (non-enabled) must produce includeThoughts: False with no thinkingBudget field.
     """
     from litellm.types.llms.anthropic import AnthropicThinkingParam
 
     v = VertexGeminiConfig()
-    thinking_param: AnthropicThinkingParam = {"type": "disabled"}
+    thinking_param: AnthropicThinkingParam = {"type": "adaptive"}
     result = v._map_thinking_param(thinking_param=thinking_param)
     assert result == {"includeThoughts": False}
     assert "thinkingBudget" not in result
