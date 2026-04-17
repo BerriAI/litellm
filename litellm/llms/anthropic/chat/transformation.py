@@ -800,8 +800,14 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         if AnthropicConfig._is_claude_4_6_model(
             model
         ) or AnthropicConfig._is_claude_4_7_model(model):
+            # Claude Opus 4.7 omits thinking content from the response by default.
+            # Explicitly request the human-readable summary so callers using the
+            # ``reasoning_effort`` abstraction get the same behavior they had on
+            # 4.6 (where ``display="summarized"`` was the default upstream).
+            # See: https://platform.claude.com/docs/en/about-claude/models/whats-new-claude-4-7
             return AnthropicThinkingParam(
                 type="adaptive",
+                display="summarized",
             )
         elif reasoning_effort == "low":
             return AnthropicThinkingParam(
@@ -1015,11 +1021,11 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 if mcp_servers:
                     optional_params["mcp_servers"] = mcp_servers
             elif param == "tool_choice" or param == "parallel_tool_calls":
-                _tool_choice: Optional[
-                    AnthropicMessagesToolChoice
-                ] = self._map_tool_choice(
-                    tool_choice=non_default_params.get("tool_choice"),
-                    parallel_tool_use=non_default_params.get("parallel_tool_calls"),
+                _tool_choice: Optional[AnthropicMessagesToolChoice] = (
+                    self._map_tool_choice(
+                        tool_choice=non_default_params.get("tool_choice"),
+                        parallel_tool_use=non_default_params.get("parallel_tool_calls"),
+                    )
                 )
 
                 if _tool_choice is not None:
@@ -1122,9 +1128,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                         self.map_openai_context_management_to_anthropic(value)
                     )
                     if anthropic_context_management is not None:
-                        optional_params[
-                            "context_management"
-                        ] = anthropic_context_management
+                        optional_params["context_management"] = (
+                            anthropic_context_management
+                        )
             elif param == "speed" and isinstance(value, str):
                 # Pass through Anthropic-specific speed parameter for fast mode
                 optional_params["speed"] = value
@@ -1198,9 +1204,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                         text=system_message_block["content"],
                     )
                     if "cache_control" in system_message_block:
-                        anthropic_system_message_content[
-                            "cache_control"
-                        ] = system_message_block["cache_control"]
+                        anthropic_system_message_content["cache_control"] = (
+                            system_message_block["cache_control"]
+                        )
                     anthropic_system_message_list.append(
                         anthropic_system_message_content
                     )
@@ -1224,9 +1230,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                             )
                         )
                         if "cache_control" in _content:
-                            anthropic_system_message_content[
-                                "cache_control"
-                            ] = _content["cache_control"]
+                            anthropic_system_message_content["cache_control"] = (
+                                _content["cache_control"]
+                            )
 
                         anthropic_system_message_list.append(
                             anthropic_system_message_content
@@ -1569,9 +1575,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 )
         return _message
 
-    def extract_response_content(
-        self, completion_response: dict
-    ) -> Tuple[
+    def extract_response_content(self, completion_response: dict) -> Tuple[
         str,
         Optional[List[Any]],
         Optional[
@@ -1867,9 +1871,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             code_interpreter_results = self._build_code_interpreter_results(
                 tool_results, code_by_id, container_id
             )
-            provider_specific_fields[
-                "code_interpreter_results"
-            ] = code_interpreter_results
+            provider_specific_fields["code_interpreter_results"] = (
+                code_interpreter_results
+            )
 
         container = completion_response.get("container")
         if container is not None:
