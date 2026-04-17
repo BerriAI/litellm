@@ -16,6 +16,7 @@ import pytest
 import sys
 import os
 import json
+from typing import Optional
 from unittest.mock import AsyncMock, Mock, patch
 
 sys.path.insert(0, os.path.abspath("../.."))
@@ -41,73 +42,20 @@ class TestBedrockMoonshotInvoke(BaseLLMChatTest):
         pass
 
     # ---------------------------------------------------------------------
-    # The three overrides below replace inherited BaseLLMChatTest tests that
-    # would otherwise make live AWS Bedrock calls. The live versions were
+    # The overrides below replace inherited BaseLLMChatTest tests that would
+    # otherwise make live AWS Bedrock calls. The live versions were
     # consistently crashing llm_translation xdist workers. Each override
     # patches the HTTP client's post() so no network request is sent, and
-    # asserts on the outgoing request body (or a mocked response for cost)
-    # — which is what the translation lane is actually supposed to cover.
+    # asserts on the outgoing request body (and, where needed, parses a
+    # canned response) — which is what the translation lane is actually
+    # supposed to cover.
     # ---------------------------------------------------------------------
 
-    def test_developer_role_translation(self):
-        """Verify LiteLLM maps the ``developer`` role to ``system`` on the
-        outgoing Bedrock invoke request, without hitting the network."""
-        client = HTTPHandler()
-        with patch.object(client, "post", new=Mock()) as mock_post:
-            try:
-                litellm.completion(
-                    model="bedrock/invoke/moonshot.kimi-k2-thinking",
-                    messages=[
-                        {"role": "developer", "content": "Be a good bot!"},
-                        {"role": "user", "content": "Hello, how are you?"},
-                    ],
-                    aws_access_key_id="fake",
-                    aws_secret_access_key="fake",
-                    aws_region_name="us-west-2",
-                    client=client,
-                )
-            except Exception:
-                # The Mock() return value is not a parseable Bedrock response;
-                # we only care about the outgoing request body.
-                pass
-
-        mock_post.assert_called_once()
-        body = json.loads(mock_post.call_args.kwargs["data"])
-        assert body["messages"][0]["role"] == "system"
-        assert body["messages"][0]["content"] == "Be a good bot!"
-        assert body["messages"][1]["role"] == "user"
-
-    def test_message_with_name(self):
-        """Verify a user message carrying a ``name`` field is serialized into
-        the outgoing Bedrock invoke request without breaking the call."""
-        client = HTTPHandler()
-        with patch.object(client, "post", new=Mock()) as mock_post:
-            try:
-                litellm.completion(
-                    model="bedrock/invoke/moonshot.kimi-k2-thinking",
-                    messages=[
-                        {"role": "user", "content": "Hello", "name": "test_name"},
-                    ],
-                    aws_access_key_id="fake",
-                    aws_secret_access_key="fake",
-                    aws_region_name="us-west-2",
-                    client=client,
-                )
-            except Exception:
-                pass
-
-        mock_post.assert_called_once()
-        body = json.loads(mock_post.call_args.kwargs["data"])
-        assert body["messages"][0]["role"] == "user"
-        assert body["messages"][0]["content"] == "Hello"
-
-    async def test_completion_cost(self):
-        """Verify LiteLLM computes a positive cost from a mocked Bedrock
-        Moonshot response, using the local model cost map."""
-        os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-        litellm.model_cost = litellm.get_model_cost_map(url="")
-
-        response_body = {
+    @staticmethod
+    def _make_moonshot_response(content: str = "Hi!") -> Mock:
+        """Build a Mock httpx.Response that AmazonMoonshotConfig.transform_response
+        (which delegates to MoonshotChatConfig → OpenAI) can parse."""
+        body = {
             "id": "chatcmpl-test",
             "object": "chat.completion",
             "created": 1234567890,
@@ -115,7 +63,7 @@ class TestBedrockMoonshotInvoke(BaseLLMChatTest):
             "choices": [
                 {
                     "index": 0,
-                    "message": {"role": "assistant", "content": "Hi!"},
+                    "message": {"role": "assistant", "content": content},
                     "finish_reason": "stop",
                 }
             ],
@@ -125,12 +73,199 @@ class TestBedrockMoonshotInvoke(BaseLLMChatTest):
                 "total_tokens": 15,
             },
         }
-        mock_response = Mock()
-        mock_response.status_code = 200
-        mock_response.headers = {"Content-Type": "application/json"}
-        mock_response.text = json.dumps(response_body)
-        mock_response.json = lambda: response_body
+        mock_resp = Mock()
+        mock_resp.status_code = 200
+        mock_resp.headers = {"Content-Type": "application/json"}
+        mock_resp.text = json.dumps(body)
+        mock_resp.json = lambda: body
+        return mock_resp
 
+    def _invoke_with_mocked_post(
+        self,
+        *,
+        messages: list,
+        extra_kwargs: Optional[dict] = None,
+        response_content: str = "Hi!",
+    ) -> "tuple[Mock, object]":
+        """Run a sync litellm.completion() with HTTPHandler.post patched to
+        return a canned moonshot response. Returns (mock_post, response)."""
+        client = HTTPHandler()
+        mock_resp = self._make_moonshot_response(content=response_content)
+        with patch.object(
+            client, "post", new=Mock(return_value=mock_resp)
+        ) as mock_post:
+            response = litellm.completion(
+                model="bedrock/invoke/moonshot.kimi-k2-thinking",
+                messages=messages,
+                aws_access_key_id="fake",
+                aws_secret_access_key="fake",
+                aws_region_name="us-west-2",
+                client=client,
+                **(extra_kwargs or {}),
+            )
+        return mock_post, response
+
+    def test_developer_role_translation(self):
+        """Verify LiteLLM maps the ``developer`` role to ``system`` on the
+        outgoing Bedrock invoke request, without hitting the network."""
+        mock_post, response = self._invoke_with_mocked_post(
+            messages=[
+                {"role": "developer", "content": "Be a good bot!"},
+                {"role": "user", "content": "Hello, how are you?"},
+            ],
+        )
+        mock_post.assert_called_once()
+        body = json.loads(mock_post.call_args.kwargs["data"])
+        assert body["messages"][0]["role"] == "system"
+        assert body["messages"][0]["content"] == "Be a good bot!"
+        assert body["messages"][1]["role"] == "user"
+        assert response.choices[0].message.content is not None
+
+    def test_message_with_name(self):
+        """Verify a user message carrying a ``name`` field is serialized into
+        the outgoing Bedrock invoke request without breaking the call."""
+        mock_post, response = self._invoke_with_mocked_post(
+            messages=[{"role": "user", "content": "Hello", "name": "test_name"}],
+        )
+        mock_post.assert_called_once()
+        body = json.loads(mock_post.call_args.kwargs["data"])
+        assert body["messages"][0]["role"] == "user"
+        assert body["messages"][0]["content"] == "Hello"
+        assert response is not None
+
+    def test_content_list_handling(self):
+        """Verify the inherited content-list-handling test passes against a
+        mocked moonshot response (no network)."""
+        mock_post, response = self._invoke_with_mocked_post(
+            messages=[
+                {
+                    "role": "user",
+                    "content": [{"type": "text", "text": "Hello, how are you?"}],
+                }
+            ],
+        )
+        mock_post.assert_called_once()
+        assert response.choices[0].message.content is not None
+
+    def test_pydantic_model_input(self):
+        """Verify a completion call with a pydantic ``Message`` as input does
+        not raise and produces a parseable response."""
+        from litellm import Message
+
+        mock_post, response = self._invoke_with_mocked_post(
+            messages=[Message(content="Hello, how are you?", role="user")],
+        )
+        mock_post.assert_called_once()
+        assert response is not None
+
+    @pytest.mark.parametrize("response_format", [{"type": "text"}])
+    def test_response_format_type_text_with_tool_calls_no_tool_choice(
+        self, response_format
+    ):
+        """Verify response_format + tools + drop_params sends a valid request
+        and produces a response object."""
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_current_weather",
+                    "description": "Get the current weather in a given location",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "location": {
+                                "type": "string",
+                                "description": "The city and state, e.g. San Francisco, CA",
+                            },
+                            "unit": {
+                                "type": "string",
+                                "enum": ["celsius", "fahrenheit"],
+                            },
+                        },
+                        "required": ["location"],
+                    },
+                },
+            }
+        ]
+        mock_post, response = self._invoke_with_mocked_post(
+            messages=[
+                {"role": "user", "content": "What's the weather like in Boston today?"}
+            ],
+            extra_kwargs={
+                "response_format": response_format,
+                "tools": tools,
+                "drop_params": True,
+            },
+        )
+        mock_post.assert_called_once()
+        body = json.loads(mock_post.call_args.kwargs["data"])
+        assert "tools" in body
+        assert body["tools"][0]["function"]["name"] == "get_current_weather"
+        assert response is not None
+
+    def test_streaming(self):
+        """Verify stream=True routes to the invoke-with-response-stream
+        endpoint with the messages body. Iteration of the stream itself is
+        not exercised here — moonshot streaming delegates to the OpenAI
+        parser and is covered by the OpenAI test suite.
+
+        Note: bedrock invoke streaming cannot be intercepted by patching
+        the caller-supplied client, because ``CustomStreamWrapper.fetch_sync_stream``
+        at streaming_handler.py invokes the stored ``make_call`` partial with
+        ``client=litellm.module_level_client``, which overrides any client the
+        caller passed. Patch ``make_sync_call`` at its import site in
+        ``base_invoke_transformation`` so we observe the exact kwargs the
+        partial was built with at stream-wrapper construction time.
+        """
+        from litellm.utils import CustomStreamWrapper
+
+        captured: dict = {}
+
+        def fake_make_sync_call(**kwargs):
+            captured.update(kwargs)
+            # Return an empty iterator so the stream wrapper's iteration
+            # doesn't try to parse real bytes.
+            return iter([])
+
+        with patch(
+            "litellm.llms.bedrock.chat.invoke_transformations."
+            "base_invoke_transformation.make_sync_call",
+            new=fake_make_sync_call,
+        ):
+            response = litellm.completion(
+                model="bedrock/invoke/moonshot.kimi-k2-thinking",
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [{"type": "text", "text": "Hello, how are you?"}],
+                    }
+                ],
+                stream=True,
+                aws_access_key_id="fake",
+                aws_secret_access_key="fake",
+                aws_region_name="us-west-2",
+            )
+            assert isinstance(response, CustomStreamWrapper)
+            # Trigger fetch_sync_stream → make_call(...) → fake_make_sync_call.
+            try:
+                next(iter(response))
+            except StopIteration:
+                pass
+
+        assert captured, "make_sync_call was never invoked"
+        assert captured["api_base"].endswith("/invoke-with-response-stream")
+        body = json.loads(captured["data"])
+        # Bedrock invoke does not put stream=true in the body (the URL
+        # carries the streaming flag); verify the user message is present.
+        assert body["messages"][0]["role"] == "user"
+
+    async def test_completion_cost(self):
+        """Verify LiteLLM computes a positive cost from a mocked Bedrock
+        Moonshot response, using the local model cost map."""
+        os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+        litellm.model_cost = litellm.get_model_cost_map(url="")
+
+        mock_response = self._make_moonshot_response()
         client = AsyncHTTPHandler()
         with patch.object(client, "post", new=AsyncMock(return_value=mock_response)):
             response = await litellm.acompletion(
