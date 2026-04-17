@@ -12,9 +12,7 @@ https://ai.google.dev/static/api/interactions.openapi.json
 When the API spec changes, regenerate the types with:
 
 ```bash
-pip install datamodel-code-generator
-
-datamodel-codegen \
+uv tool run --from datamodel-code-generator datamodel-codegen \
     --url "https://ai.google.dev/static/api/interactions.openapi.json" \
     --output litellm/types/interactions/generated.py \
     --output-model-type pydantic_v2.BaseModel \
@@ -45,4 +43,3 @@ Then add the LiteLLM-specific types at the bottom of the generated file:
 **Response Types:**
 - `InteractionsAPIResponse` - LiteLLM response wrapper
 - `InteractionsAPIStreamingResponse` - Streaming response chunk
-

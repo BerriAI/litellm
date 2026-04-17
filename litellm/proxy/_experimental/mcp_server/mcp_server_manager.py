@@ -10,6 +10,7 @@ import asyncio
 import datetime
 import hashlib
 import json
+import os
 import re
 from typing import Any, Callable, Dict, List, Literal, Optional, Set, Tuple, Union, cast
 from urllib.parse import urlparse
@@ -35,6 +36,8 @@ from litellm.constants import (
     MCP_CLIENT_TIMEOUT,
     MCP_HEALTH_CHECK_TIMEOUT,
     MCP_METADATA_TIMEOUT,
+    MCP_NPM_CACHE_DIR,
+    MCP_STDIO_ALLOWED_COMMANDS,
     MCP_TOOL_LISTING_TIMEOUT,
 )
 from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
@@ -181,6 +184,16 @@ class MCPServerManager:
             "gmail_send_email": "zapier_mcp_server",
         }
         """
+        self._upstream_initialize_instructions_by_server_id: Dict[str, str] = {}
+
+    def _remember_upstream_initialize_instructions(
+        self, server: MCPServer, client: MCPClient
+    ) -> None:
+        raw = getattr(client, "_last_initialize_instructions", None)
+        if raw and str(raw).strip():
+            self._upstream_initialize_instructions_by_server_id[server.server_id] = str(
+                raw
+            ).strip()
 
     def get_registry(self) -> Dict[str, MCPServer]:
         """
@@ -201,6 +214,7 @@ class MCPServerManager:
             mcp_aliases: Optional dictionary mapping aliases to server names from litellm_settings
         """
         verbose_logger.debug("Loading MCP Servers from config-----")
+        self._upstream_initialize_instructions_by_server_id.clear()
 
         # Track which aliases have been used to ensure only first occurrence is used
         used_aliases = set()
@@ -348,6 +362,7 @@ class MCPServerManager:
                 aws_service_name=server_config.get("aws_service_name", None),
                 aws_role_name=server_config.get("aws_role_name", None),
                 aws_session_name=server_config.get("aws_session_name", None),
+                instructions=server_config.get("instructions", None),
             )
             self.config_mcp_servers[server_id] = new_server
 
@@ -690,6 +705,7 @@ class MCPServerManager:
             aws_service_name=aws_creds.get("aws_service_name"),
             aws_role_name=aws_creds.get("aws_role_name"),
             aws_session_name=aws_creds.get("aws_session_name"),
+            instructions=mcp_server.instructions,
         )
         return new_server
 
@@ -1119,9 +1135,19 @@ class MCPServerManager:
             # In containers the default (~/.npm or /app/.npm) may not exist
             # or be read-only, causing npx to fail with ENOENT.
             if "NPM_CONFIG_CACHE" not in resolved_env:
-                from litellm.constants import MCP_NPM_CACHE_DIR
-
                 resolved_env["NPM_CONFIG_CACHE"] = MCP_NPM_CACHE_DIR
+            # Defense-in-depth: block commands not in the allowlist.
+            # The Pydantic validator blocks new servers; this catches legacy
+            # config/DB records predating the allowlist.
+            if server.command:
+                base_command = os.path.basename(server.command)
+                if base_command not in MCP_STDIO_ALLOWED_COMMANDS:
+                    raise HTTPException(
+                        status_code=403,
+                        detail=f"MCP stdio command '{server.command}' is not in the allowlist ({sorted(MCP_STDIO_ALLOWED_COMMANDS)}). "
+                        f"Add it to LITELLM_MCP_STDIO_EXTRA_COMMANDS to allow this command.",
+                    )
+
             stdio_config: Optional[MCPStdioConfig] = None
             if server.command and server.args is not None:
                 stdio_config = MCPStdioConfig(
@@ -1234,6 +1260,7 @@ class MCPServerManager:
                 return tools
             else:
                 tools = await self._fetch_tools_with_timeout(client, server.name)
+                self._remember_upstream_initialize_instructions(server, client)
 
             prefixed_or_original_tools = self._create_prefixed_tools(
                 tools, server, add_prefix=add_prefix
@@ -2370,6 +2397,7 @@ class MCPServerManager:
         # If proxy_logging_obj is not None, the tool call result is at index 1 (after the during hook task)
         result_index = 1 if proxy_logging_obj else 0
         result = mcp_responses[result_index]
+        self._remember_upstream_initialize_instructions(mcp_server, client)
 
         return cast(CallToolResult, result)
 
@@ -2441,6 +2469,37 @@ class MCPServerManager:
                 start_time=start_time,
             )
             tasks.append(during_hook_task)
+
+        # For per-user OAuth servers: if the client didn't supply a token in
+        # oauth2_headers, look up the stored token from Redis / DB.  This is the
+        # call_tool equivalent of _get_user_oauth_extra_headers_from_db used in
+        # list_tools.
+        if (
+            mcp_server.needs_user_oauth_token
+            and not oauth2_headers
+            and user_api_key_auth is not None
+        ):
+            user_id = getattr(user_api_key_auth, "user_id", None)
+            if user_id:
+                try:
+                    from litellm.proxy._experimental.mcp_server.server import (  # noqa: PLC0415
+                        _get_user_oauth_extra_headers_from_db,
+                    )
+
+                    stored_headers = await _get_user_oauth_extra_headers_from_db(
+                        server=mcp_server,
+                        user_api_key_auth=user_api_key_auth,
+                    )
+                    if stored_headers:
+                        oauth2_headers = stored_headers
+                except Exception as _lookup_exc:
+                    verbose_logger.debug(
+                        "call_tool: per-user token lookup failed for "
+                        "user=%s server=%s: %s",
+                        user_id,
+                        mcp_server.server_id,
+                        _lookup_exc,
+                    )
 
         # For OpenAPI servers, call the tool handler directly instead of via MCP client
         if mcp_server.spec_path:
@@ -2552,7 +2611,12 @@ class MCPServerManager:
                     return server
 
         # If not found and tool name is prefixed, try extracting server name from prefix
-        if is_tool_name_prefixed(tool_name):
+        known_prefixes = {
+            normalize_server_name(get_server_prefix(s))
+            for s in self.get_registry().values()
+            if get_server_prefix(s)
+        }
+        if is_tool_name_prefixed(tool_name, known_server_prefixes=known_prefixes):
             (
                 original_tool_name,
                 server_name_from_prefix,
@@ -2578,6 +2642,7 @@ class MCPServerManager:
         )
 
         verbose_logger.debug("Loading MCP servers from database into registry...")
+        self._upstream_initialize_instructions_by_server_id.clear()
 
         # perform authz check to filter the mcp servers user has access to
         prisma_client = get_prisma_client_or_throw(
@@ -2861,6 +2926,7 @@ class MCPServerManager:
                 await asyncio.wait_for(
                     client.run_with_session(_noop), timeout=MCP_HEALTH_CHECK_TIMEOUT
                 )
+                self._remember_upstream_initialize_instructions(server, client)
                 status = "healthy"
             except asyncio.TimeoutError:
                 health_check_error = (
@@ -2902,6 +2968,7 @@ class MCPServerManager:
             token_url=server.token_url,
             registration_url=server.registration_url,
             allow_all_keys=server.allow_all_keys,
+            instructions=server.instructions,
         )
 
     async def get_all_mcp_servers_with_health_and_teams(
@@ -2997,6 +3064,7 @@ class MCPServerManager:
             is_byok=server.is_byok,
             byok_description=server.byok_description,
             byok_api_key_help_url=server.byok_api_key_help_url,
+            instructions=server.instructions,
         )
 
     async def get_all_mcp_servers_unfiltered(self) -> List[LiteLLM_MCPServerTable]:

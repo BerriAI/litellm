@@ -444,6 +444,140 @@ def test_reset_budget_for_keys_linked_to_budgets_empty(
     assert len(calls) == 0
 
 
+@pytest.mark.parametrize(
+    "budget_duration, expected_day, expected_month",
+    [
+        ("30d", 1, 7),  # 30d → 1st of next month
+        ("1mo", 1, 7),  # 1mo → 1st of next month
+        ("1d", 16, 6),  # 1d → next midnight (same month)
+    ],
+    ids=["30d-calendar-month", "1mo-calendar-month", "1d-next-midnight"],
+)
+def test_reset_budget_reset_at_date_calendar_aligned(
+    budget_duration, expected_day, expected_month
+):
+    """
+    Verify that _reset_budget_reset_at_date produces calendar-aligned reset
+    times (matching get_budget_reset_time), not sliding-window offsets.
+    """
+    from unittest.mock import patch
+
+    # Fix "now" to 2023-06-15 10:30:00 UTC for deterministic results
+    fixed_now = datetime(2023, 6, 15, 10, 30, 0, tzinfo=timezone.utc)
+
+    test_budget = type(
+        "LiteLLM_BudgetTableFull",
+        (),
+        {
+            "budget_duration": budget_duration,
+            "budget_reset_at": fixed_now - timedelta(hours=1),
+            "budget_id": "test-budget",
+            "created_at": fixed_now - timedelta(days=30),
+        },
+    )
+
+    with patch(
+        "litellm.proxy.common_utils.timezone_utils.datetime"
+    ) as mock_dt:
+        mock_dt.now.return_value = fixed_now
+        mock_dt.side_effect = lambda *args, **kwargs: datetime(*args, **kwargs)
+        asyncio.run(
+            ResetBudgetJob._reset_budget_reset_at_date(test_budget, fixed_now)
+        )
+
+    assert test_budget.budget_reset_at.day == expected_day
+    assert test_budget.budget_reset_at.month == expected_month
+    assert test_budget.budget_reset_at.hour == 0
+    assert test_budget.budget_reset_at.minute == 0
+    assert test_budget.budget_reset_at.second == 0
+
+
+def test_reset_budget_reset_at_date_7d_next_monday():
+    """Verify 7d budget duration resets to next Monday at midnight."""
+    from unittest.mock import patch
+
+    # 2023-06-14 is a Wednesday
+    fixed_now = datetime(2023, 6, 14, 10, 30, 0, tzinfo=timezone.utc)
+
+    test_budget = type(
+        "LiteLLM_BudgetTableFull",
+        (),
+        {
+            "budget_duration": "7d",
+            "budget_reset_at": fixed_now - timedelta(hours=1),
+            "budget_id": "test-budget",
+            "created_at": fixed_now - timedelta(days=7),
+        },
+    )
+
+    with patch(
+        "litellm.proxy.common_utils.timezone_utils.datetime"
+    ) as mock_dt:
+        mock_dt.now.return_value = fixed_now
+        mock_dt.side_effect = lambda *args, **kwargs: datetime(*args, **kwargs)
+        asyncio.run(
+            ResetBudgetJob._reset_budget_reset_at_date(test_budget, fixed_now)
+        )
+
+    # Next Monday after Wednesday June 14 is June 19
+    assert test_budget.budget_reset_at.day == 19
+    assert test_budget.budget_reset_at.month == 6
+    assert test_budget.budget_reset_at.weekday() == 0  # Monday
+    assert test_budget.budget_reset_at.hour == 0
+
+
+def test_reset_budget_reset_at_date_none_duration():
+    """Verify that budget_reset_at is unchanged when budget_duration is None."""
+    original_reset_at = datetime(2023, 6, 20, 0, 0, 0, tzinfo=timezone.utc)
+    now = datetime(2023, 6, 15, 10, 0, 0, tzinfo=timezone.utc)
+
+    test_budget = type(
+        "LiteLLM_BudgetTableFull",
+        (),
+        {
+            "budget_duration": None,
+            "budget_reset_at": original_reset_at,
+            "budget_id": "test-budget",
+            "created_at": now - timedelta(days=30),
+        },
+    )
+
+    asyncio.run(ResetBudgetJob._reset_budget_reset_at_date(test_budget, now))
+    assert test_budget.budget_reset_at == original_reset_at
+
+
+def test_reset_budget_reset_at_date_none_reset_at():
+    """Verify that budget_reset_at is set correctly even when previously None."""
+    from unittest.mock import patch
+
+    fixed_now = datetime(2023, 6, 15, 10, 30, 0, tzinfo=timezone.utc)
+
+    test_budget = type(
+        "LiteLLM_BudgetTableFull",
+        (),
+        {
+            "budget_duration": "30d",
+            "budget_reset_at": None,
+            "budget_id": "test-budget",
+            "created_at": fixed_now - timedelta(days=5),
+        },
+    )
+
+    with patch(
+        "litellm.proxy.common_utils.timezone_utils.datetime"
+    ) as mock_dt:
+        mock_dt.now.return_value = fixed_now
+        mock_dt.side_effect = lambda *args, **kwargs: datetime(*args, **kwargs)
+        asyncio.run(
+            ResetBudgetJob._reset_budget_reset_at_date(test_budget, fixed_now)
+        )
+
+    # Should be set to 1st of next month (July 1)
+    assert test_budget.budget_reset_at is not None
+    assert test_budget.budget_reset_at.day == 1
+    assert test_budget.budget_reset_at.month == 7
+
+
 def test_budget_table_reset_also_resets_linked_keys(
     reset_budget_job, mock_prisma_client
 ):
