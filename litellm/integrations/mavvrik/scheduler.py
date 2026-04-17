@@ -93,17 +93,36 @@ class MavvrikScheduler:
     # ------------------------------------------------------------------
 
     async def _run_export_loop(self) -> None:
-        """Export every complete calendar day since the last marker."""
+        """Export every complete calendar day since the Mavvrik-side marker.
+
+        The marker (cursor) is owned by the Mavvrik API. We call register()
+        at the start of every run to retrieve it — no local DB marker needed.
+        """
+        from litellm.integrations.mavvrik.client import MavvrikClient
         from litellm.integrations.mavvrik.database import MavvrikDatabase
-        from litellm.integrations.mavvrik.settings import MavvrikSettings
 
         db = MavvrikDatabase()
-        settings_data = await MavvrikSettings().load()
-        marker_str: Optional[str] = settings_data.get("marker")
-
         yesterday = self._yesterday
 
-        # Determine start date (one day after the last exported date).
+        # Retrieve the current export marker from Mavvrik (source of truth).
+        # Falls back to _resolve_first_run_start_date if the call fails.
+        marker_str: Optional[str] = None
+        try:
+            client = MavvrikClient(
+                api_key=self._exporter.api_key or "",
+                api_endpoint=self._exporter.api_endpoint or "",
+                connection_id=self._exporter.connection_id or "",
+            )
+            marker_str = await client.register()
+            verbose_logger.debug("MavvrikScheduler: Mavvrik marker = %s", marker_str)
+        except Exception as exc:
+            verbose_logger.warning(
+                "MavvrikScheduler: register() failed (non-fatal), "
+                "falling back to first-run start date: %s",
+                exc,
+            )
+
+        # Determine start date from the Mavvrik marker or first-run logic.
         if marker_str:
             try:
                 last_exported = date.fromisoformat(marker_str[:10])
@@ -155,13 +174,10 @@ class MavvrikScheduler:
                 export_date += timedelta(days=1)
                 continue
 
-            # Advance the remote Mavvrik marker first (best-effort), then local.
-            # Local marker is source of truth; if the remote PATCH fails the next
-            # run will re-send it.  Advancing local last ensures we never skip a
-            # date if the remote call raises.
+            # Advance the marker on the Mavvrik side (source of truth).
+            # No local DB marker is stored — the next run retrieves the
+            # updated marker from Mavvrik via register().
             try:
-                from litellm.integrations.mavvrik.client import MavvrikClient
-
                 export_epoch = int(
                     datetime(
                         export_date.year,
@@ -170,19 +186,12 @@ class MavvrikScheduler:
                         tzinfo=timezone.utc,
                     ).timestamp()
                 )
-                client = MavvrikClient(
-                    api_key=self._exporter.api_key or "",
-                    api_endpoint=self._exporter.api_endpoint or "",
-                    connection_id=self._exporter.connection_id or "",
-                )
                 await client.advance_marker(export_epoch)
             except Exception as exc:
                 verbose_logger.warning(
                     "MavvrikScheduler: advance_marker PATCH failed (non-fatal): %s",
                     exc,
                 )
-
-            await MavvrikSettings().advance_marker(date_str)
 
             export_date += timedelta(days=1)
 

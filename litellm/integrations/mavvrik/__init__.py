@@ -64,45 +64,20 @@ class MavvrikService:
         api_endpoint: str,
         connection_id: str,
     ) -> dict:
-        """Register with Mavvrik, save settings, and schedule the export job.
+        """Save credentials and schedule the export job.
 
-        The register() call is best-effort: if it fails, the marker defaults to
-        the first day of the current UTC month.
+        The export marker (cursor) is owned exclusively by the Mavvrik API —
+        it is retrieved via register() at the start of each scheduled run,
+        not stored locally.
 
         Returns:
             {"message": str, "status": "success"}
         """
-        from litellm.integrations.mavvrik.client import MavvrikClient
-
-        # Step 1 — obtain initial marker from Mavvrik (best-effort).
-        initial_marker: Optional[str] = None
-        try:
-            client = MavvrikClient(
-                api_key=api_key,
-                api_endpoint=api_endpoint,
-                connection_id=connection_id,
-            )
-            initial_marker = await client.register()
-            verbose_proxy_logger.info(
-                "Mavvrik register returned initial marker: %s", initial_marker
-            )
-        except Exception as reg_exc:
-            now = datetime.now(_tz.utc)
-            initial_marker = now.replace(
-                day=1, hour=0, minute=0, second=0, microsecond=0
-            ).isoformat()
-            verbose_proxy_logger.warning(
-                "Mavvrik register call failed (%s) — defaulting marker to first of month: %s",
-                reg_exc,
-                initial_marker,
-            )
-
-        # Step 2 — persist settings.
+        # Step 1 — persist credentials (no marker stored locally).
         await self._settings.save(
             api_key=api_key,
             api_endpoint=api_endpoint,
             connection_id=connection_id,
-            marker=initial_marker,
         )
 
         # Step 3 — schedule the background export job.
@@ -121,7 +96,10 @@ class MavvrikService:
                 "Mavvrik: could not register background job after init (%s)", sched_exc
             )
 
-        return {"message": "Mavvrik settings initialized successfully", "status": "success"}
+        return {
+            "message": "Mavvrik settings initialized successfully",
+            "status": "success",
+        }
 
     # ------------------------------------------------------------------
     # get_settings  →  GET /mavvrik/settings
@@ -131,8 +109,9 @@ class MavvrikService:
         """Load and mask Mavvrik settings.
 
         Returns:
-            A dict with keys: api_key_masked, api_endpoint, connection_id, marker, status.
+            A dict with keys: api_key_masked, api_endpoint, connection_id, status.
             ``status`` is ``"not_configured"`` when no settings exist, otherwise ``"configured"``.
+            The export marker is owned by the Mavvrik API and is not stored locally.
         """
         from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 
@@ -142,7 +121,6 @@ class MavvrikService:
                 "api_key_masked": None,
                 "api_endpoint": None,
                 "connection_id": None,
-                "marker": None,
                 "status": "not_configured",
             }
 
@@ -152,7 +130,6 @@ class MavvrikService:
             "api_key_masked": masked.get("api_key"),
             "api_endpoint": data.get("api_endpoint"),
             "connection_id": data.get("connection_id"),
-            "marker": data.get("marker"),
             "status": "configured",
         }
 
@@ -165,9 +142,10 @@ class MavvrikService:
         api_key: Optional[str] = None,
         api_endpoint: Optional[str] = None,
         connection_id: Optional[str] = None,
-        marker: Optional[str] = None,
     ) -> dict:
-        """Merge new values into existing settings and persist.
+        """Merge new credential values into existing settings and persist.
+
+        The export marker is owned by the Mavvrik API and cannot be set here.
 
         Returns:
             {"message": str, "status": "success"}
@@ -181,7 +159,6 @@ class MavvrikService:
             api_key=_pick(api_key, "api_key"),
             api_endpoint=_pick(api_endpoint, "api_endpoint"),
             connection_id=_pick(connection_id, "connection_id"),
-            marker=marker if marker is not None else current.get("marker"),
         )
         return {"message": "Mavvrik settings updated successfully", "status": "success"}
 
@@ -248,9 +225,7 @@ class MavvrikService:
 
         data = await self._settings.load()
         if not data:
-            raise ValueError(
-                "Mavvrik not configured. Call POST /mavvrik/init first."
-            )
+            raise ValueError("Mavvrik not configured. Call POST /mavvrik/init first.")
 
         date_str = date_str or self._yesterday()
 

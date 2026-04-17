@@ -95,48 +95,34 @@ class MavvrikDryRunResponse(BaseModel):
 
 
 class MavvrikSettingsView(BaseModel):
-    """Response for GET /mavvrik/settings — API key is masked."""
+    """Response for GET /mavvrik/settings — API key is masked.
+
+    The export marker (cursor) is owned by the Mavvrik API and is not
+    stored or exposed locally.
+    """
 
     api_key_masked: Optional[str] = Field(None, description="Masked API key")
     api_endpoint: Optional[str] = None
     connection_id: Optional[str] = None
-    marker: Optional[str] = Field(
-        None, description="Last successfully exported date (YYYY-MM-DD)"
-    )
     status: Optional[str] = None
 
 
 class MavvrikSettingsUpdate(BaseModel):
-    """Request body for PUT /mavvrik/settings — all fields optional."""
+    """Request body for PUT /mavvrik/settings — all fields optional.
+
+    Only credentials can be updated. The export marker is owned by the
+    Mavvrik API and is not settable here.
+    """
 
     api_key: Optional[str] = Field(None, description="New Mavvrik API key")
     api_endpoint: Optional[str] = Field(
         None, description="New Mavvrik API base URL (includes tenant)"
     )
     connection_id: Optional[str] = None
-    marker: Optional[str] = Field(
-        None,
-        description="Reset the export cursor to this date (YYYY-MM-DD). "
-        "Use when Mavvrik asks you to re-export from a specific date. "
-        "The next scheduled run will export from (marker + 1 day) onwards.",
-    )
 
     @field_validator("api_key", "api_endpoint", "connection_id")
     @classmethod
     def must_not_be_empty_if_set(cls, v: Optional[str]) -> Optional[str]:
         if v is not None and not v.strip():
             raise ValueError("must not be empty if provided")
-        return v
-
-    @field_validator("marker")
-    @classmethod
-    def must_be_valid_date(cls, v: Optional[str]) -> Optional[str]:
-        if v is None:
-            return v
-        try:
-            from datetime import date
-
-            date.fromisoformat(v)
-        except ValueError:
-            raise ValueError("marker must be a valid date in YYYY-MM-DD format")
         return v

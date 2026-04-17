@@ -150,7 +150,6 @@ async def update_mavvrik_settings(
             api_key=request.api_key,
             api_endpoint=request.api_endpoint,
             connection_id=request.connection_id,
-            marker=request.marker,
         )
         return MavvrikInitResponse(**result)
 

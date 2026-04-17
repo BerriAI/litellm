@@ -4,10 +4,11 @@ Consolidates all configuration concerns:
   - Config detection (env vars or database)
   - Persistence (load/save/delete via LiteLLM_Config table)
   - Encryption/decryption of the API key
-  - Marker advancement for incremental exports
 
-This replaces the scattered helpers in database.py, register.py, and
-mavvrik_endpoints.py so that all config concerns live in one class.
+The export marker (cursor) is owned exclusively by the Mavvrik API.
+On each scheduled run, MavvrikScheduler calls client.register() to
+retrieve the current metricsMarker from Mavvrik — no local marker
+storage is needed.
 """
 
 import json
@@ -82,9 +83,7 @@ class MavvrikSettings:
             )
             return row is not None and row.param_value is not None
         except Exception as exc:
-            verbose_logger.debug(
-                "MavvrikSettings.is_setup: DB check failed — %s", exc
-            )
+            verbose_logger.debug("MavvrikSettings.is_setup: DB check failed — %s", exc)
             return False
 
     # ------------------------------------------------------------------
@@ -117,9 +116,7 @@ class MavvrikSettings:
 
         encrypted_key: Optional[str] = value.get("api_key")
         if encrypted_key:
-            decrypted = self.decrypt_value_helper(
-                encrypted_key, key="mavvrik_api_key"
-            )
+            decrypted = self.decrypt_value_helper(encrypted_key, key="mavvrik_api_key")
             if decrypted is not None:
                 value["api_key"] = decrypted
 
@@ -130,13 +127,12 @@ class MavvrikSettings:
         api_key: str,
         api_endpoint: str,
         connection_id: str,
-        marker: Optional[str] = None,
     ) -> None:
-        """Encrypt the API key and persist all settings to LiteLLM_Config.
+        """Encrypt the API key and persist credentials to LiteLLM_Config.
 
-        The ``api_key`` is always stored encrypted. The ``marker`` field is
-        included only when provided (so an initial save without a marker leaves
-        the field absent, and advance_marker can set it later).
+        The export marker (cursor) is owned exclusively by the Mavvrik API
+        and is NOT stored locally — it is retrieved via client.register()
+        at the start of each scheduled run.
         """
         encrypted_api_key: str = self.encrypt_value_helper(api_key)
         settings: dict = {
@@ -144,35 +140,6 @@ class MavvrikSettings:
             "api_endpoint": api_endpoint,
             "connection_id": connection_id,
         }
-        if marker is not None:
-            settings["marker"] = marker
-
-        await self._upsert(settings)
-
-    async def advance_marker(self, new_marker: str) -> None:
-        """Advance the upload marker to ``new_marker`` (ISO-8601 UTC string).
-
-        Reads the current settings row, updates only the ``marker`` field,
-        and writes the row back.  All other fields (including the already-
-        encrypted api_key) are preserved as-is.
-        """
-        client = self._ensure_prisma_client()
-
-        row = await client.db.litellm_config.find_first(
-            where={"param_name": _CONFIG_KEY}
-        )
-        if row is None or row.param_value is None:
-            settings: dict = {}
-        else:
-            value = row.param_value
-            if isinstance(value, str):
-                try:
-                    value = json.loads(value)
-                except json.JSONDecodeError:
-                    value = {}
-            settings = value if isinstance(value, dict) else {}
-
-        settings["marker"] = new_marker
         await self._upsert(settings)
 
     async def delete(self) -> None:
@@ -187,13 +154,9 @@ class MavvrikSettings:
             where={"param_name": _CONFIG_KEY}
         )
         if row is None or row.param_value is None:
-            raise LookupError(
-                "Mavvrik settings not found — nothing to delete."
-            )
+            raise LookupError("Mavvrik settings not found — nothing to delete.")
 
-        await client.db.litellm_config.delete(
-            where={"param_name": _CONFIG_KEY}
-        )
+        await client.db.litellm_config.delete(where={"param_name": _CONFIG_KEY})
         verbose_logger.info("MavvrikSettings: settings row deleted")
 
     # ------------------------------------------------------------------
