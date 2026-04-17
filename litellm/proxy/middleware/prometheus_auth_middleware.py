@@ -1,6 +1,7 @@
 """
 Prometheus Auth Middleware - Pure ASGI implementation
 """
+
 import json
 from typing import Any, List, MutableMapping
 
