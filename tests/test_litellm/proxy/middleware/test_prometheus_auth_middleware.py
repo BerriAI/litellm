@@ -26,6 +26,15 @@ async def fake_valid_auth(request, api_key):
     return
 
 
+async def fake_valid_auth_reads_body(request, api_key, **kwargs):
+    """
+    Like real user_api_key_auth, consumes the ASGI body stream. Regression test
+    for successful auth passing a drained receive to the inner app (hang).
+    """
+    await request.body()
+    return
+
+
 async def fake_invalid_auth(request, api_key):
     print("running fake invalid auth", request, api_key)
     # Simulate invalid auth by raising an exception.
@@ -60,6 +69,28 @@ def app_with_middleware():
         return {"msg": "embeddings OK"}
 
     return app
+
+
+def test_valid_auth_metrics_after_body_consumed(app_with_middleware, monkeypatch):
+    """
+    Auth that reads the request body must not cause /metrics to hang on success.
+    """
+    litellm.require_auth_for_metrics_endpoint = True
+    monkeypatch.setattr(
+        "litellm.proxy.middleware.prometheus_auth_middleware.user_api_key_auth",
+        fake_valid_auth_reads_body,
+    )
+
+    client = TestClient(app_with_middleware)
+    headers = {SpecialHeaders.openai_authorization.value: "valid"}
+
+    response = client.get("/metrics", headers=headers)
+    assert response.status_code == 200, response.text
+    assert response.json() == {"msg": "metrics OK"}
+
+    response = client.get("/metrics/", headers=headers)
+    assert response.status_code == 200, response.text
+    assert response.json() == {"msg": "metrics OK"}
 
 
 def test_valid_auth_metrics(app_with_middleware, monkeypatch):
