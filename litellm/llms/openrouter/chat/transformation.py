@@ -159,6 +159,16 @@ class OpenrouterConfig(OpenAIGPTConfig):
         Returns:
             dict: The transformed request. Sent as the body of the API call.
         """
+        # Defensive strip of the "openrouter/" prefix for code paths that
+        # reach this transform without going through get_llm_provider (e.g.
+        # some adapter/bridge invocations). Native IDs like
+        # "openrouter/auto" / "openrouter/free" have no "/" after the prefix
+        # and must be kept intact.
+        if model.startswith("openrouter/"):
+            remainder = model[len("openrouter/") :]
+            if "/" in remainder:
+                model = remainder
+
         if self._supports_cache_control_in_content(model):
             messages = self._move_cache_control_to_content(messages)
 

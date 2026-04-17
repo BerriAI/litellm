@@ -100,3 +100,74 @@ class TestOpenRouterNativeModelRouting:
         )
         assert provider == "openrouter"
         assert result_model == "anthropic/claude-3.5-sonnet"
+
+
+class TestOpenRouterApiKeyResolution:
+    """api_key="os.environ/..." must be resolved even when the model takes the
+    OpenRouter early-return path (native or pre-resolved custom_llm_provider).
+    Regression introduced when the early return was added above the generic
+    os.environ resolution block.
+    """
+
+    def test_os_environ_api_key_resolved_for_native_model(self, monkeypatch):
+        monkeypatch.setenv("OPENROUTER_API_KEY_TEST", "sk-test-native-123")
+
+        _, provider, dynamic_api_key, _ = litellm.get_llm_provider(
+            model="openrouter/auto",
+            custom_llm_provider="openrouter",
+            api_key="os.environ/OPENROUTER_API_KEY_TEST",
+        )
+        assert provider == "openrouter"
+        assert dynamic_api_key == "sk-test-native-123"
+
+    def test_os_environ_api_key_resolved_for_non_native_model(self, monkeypatch):
+        monkeypatch.setenv("OPENROUTER_API_KEY_TEST", "sk-test-nonnative-456")
+
+        _, provider, dynamic_api_key, _ = litellm.get_llm_provider(
+            model="openrouter/anthropic/claude-3.5-sonnet",
+            custom_llm_provider="openrouter",
+            api_key="os.environ/OPENROUTER_API_KEY_TEST",
+        )
+        assert provider == "openrouter"
+        assert dynamic_api_key == "sk-test-nonnative-456"
+
+
+class TestOpenRouterTransformRequestDefensiveStrip:
+    """OpenrouterConfig.transform_request must strip a doubled "openrouter/"
+    prefix as a safety net for code paths that bypass get_llm_provider, while
+    preserving native single-segment IDs like "openrouter/auto".
+    """
+
+    @pytest.mark.parametrize(
+        "input_model,expected_model",
+        [
+            # Non-native: prefix must be stripped
+            (
+                "openrouter/anthropic/claude-3.5-sonnet",
+                "anthropic/claude-3.5-sonnet",
+            ),
+            (
+                "openrouter/meta-llama/llama-3-70b-instruct",
+                "meta-llama/llama-3-70b-instruct",
+            ),
+            # Native: prefix must be preserved
+            ("openrouter/auto", "openrouter/auto"),
+            ("openrouter/free", "openrouter/free"),
+            # No prefix: unchanged
+            ("anthropic/claude-3.5-sonnet", "anthropic/claude-3.5-sonnet"),
+        ],
+    )
+    def test_transform_request_strips_non_native_prefix(
+        self, input_model, expected_model
+    ):
+        from litellm.llms.openrouter.chat.transformation import OpenrouterConfig
+
+        config = OpenrouterConfig()
+        result = config.transform_request(
+            model=input_model,
+            messages=[{"role": "user", "content": "hi"}],
+            optional_params={},
+            litellm_params={},
+            headers={},
+        )
+        assert result["model"] == expected_model

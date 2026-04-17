@@ -158,6 +158,13 @@ def get_llm_provider(  # noqa: PLR0915
         ):  # handle scenario where model="azure/*" and custom_llm_provider="azure"
             model = custom_llm_provider + "/" + model
 
+        # Resolve `os.environ/` api_key placeholders before the OpenRouter
+        # early return below, so callers passing
+        # `api_key="os.environ/OPENROUTER_API_KEY"` still get the secret
+        # resolved when the model routes via the `openrouter/` prefix.
+        if api_key and api_key.startswith("os.environ/"):
+            dynamic_api_key = get_secret_str(api_key)
+
         # OpenRouter: when the router/proxy already set custom_llm_provider,
         # the model may still carry LiteLLM's "openrouter/" routing prefix.
         # Native IDs like "openrouter/auto" must stay intact for the API; IDs
