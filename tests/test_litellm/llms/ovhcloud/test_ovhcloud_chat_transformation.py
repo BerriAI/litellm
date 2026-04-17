@@ -8,6 +8,7 @@ import sys
 import pytest
 
 from litellm.llms.ovhcloud.utils import OVHCloudException
+from litellm.utils import get_optional_params
 
 sys.path.insert(
     0, os.path.abspath("../../../../..")
@@ -160,7 +161,6 @@ class TestOVHCloudConfig:
         through for any model. The server is responsible for rejecting unsupported
         tool calls — LiteLLM must not strip them based on a stale static catalog.
         """
-        from litellm.utils import get_optional_params
 
         params = get_optional_params(
             model=model,
