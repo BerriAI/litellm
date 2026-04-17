@@ -62,9 +62,9 @@ def reset_constants_module():
     # Reload modules before test
     importlib.reload(constants)
     importlib.reload(auth_checks)
-    
+
     yield
-    
+
     # Reload modules after test to clean up
     importlib.reload(constants)
     importlib.reload(auth_checks)
@@ -157,9 +157,9 @@ def test_experimental_ui_token_ignores_litellm_ui_session_duration(
     expires = datetime.fromisoformat(token_data["expires"].replace("Z", "+00:00"))
     now = get_utc_datetime()
     # Must be ~10 min, NOT 24h. If LITELLM_UI_SESSION_DURATION were incorrectly used, this would fail.
-    assert expires <= now + timedelta(minutes=11), (
-        "Experimental UI must use 10-min expiry, not LITELLM_UI_SESSION_DURATION"
-    )
+    assert expires <= now + timedelta(
+        minutes=11
+    ), "Experimental UI must use 10-min expiry, not LITELLM_UI_SESSION_DURATION"
 
 
 def test_get_experimental_ui_login_jwt_auth_token_invalid(
@@ -293,13 +293,15 @@ def test_get_cli_jwt_auth_token_custom_expiration(
 
     # Set custom expiration to 48 hours
     monkeypatch.setenv("LITELLM_CLI_JWT_EXPIRATION_HOURS", "48")
-    
+
     # Reload the constants module to pick up the new env var
     importlib.reload(constants)
     # Also reload auth_checks to pick up the new constant value
     importlib.reload(auth_checks)
-    
-    token = auth_checks.ExperimentalUIJWTToken.get_cli_jwt_auth_token(valid_sso_user_defined_values)
+
+    token = auth_checks.ExperimentalUIJWTToken.get_cli_jwt_auth_token(
+        valid_sso_user_defined_values
+    )
 
     # Decrypt and verify token contents
     decrypted_token = decrypt_value_helper(
@@ -313,7 +315,6 @@ def test_get_cli_jwt_auth_token_custom_expiration(
     expires = datetime.fromisoformat(token_data["expires"].replace("Z", "+00:00"))
     assert expires > get_utc_datetime() + timedelta(hours=47, minutes=59)
     assert expires <= get_utc_datetime() + timedelta(hours=48, minutes=1)
-
 
 
 @pytest.mark.asyncio
@@ -436,7 +437,9 @@ async def test_get_user_object_upsert_includes_user_email():
     mock_prisma_client.db.litellm_usertable.create.assert_called_once()
     creation_args = mock_prisma_client.db.litellm_usertable.create.call_args[1]["data"]
 
-    assert "user_email" in creation_args, "user_email should be included when upserting a new user"
+    assert (
+        "user_email" in creation_args
+    ), "user_email should be included when upserting a new user"
     assert creation_args["user_email"] == "test@example.com"
     assert creation_args["user_id"] == "new_test_user"
 
@@ -463,7 +466,9 @@ def test_log_budget_lookup_failure_skips_user_not_found():
 
 
 @pytest.mark.asyncio
-@patch("litellm.proxy.management_endpoints.team_endpoints.new_team", new_callable=AsyncMock)
+@patch(
+    "litellm.proxy.management_endpoints.team_endpoints.new_team", new_callable=AsyncMock
+)
 async def test_get_team_db_check_calls_new_team_on_upsert(mock_new_team, monkeypatch):
     """
     Test that _get_team_db_check correctly calls the `new_team` function
@@ -497,8 +502,12 @@ async def test_get_team_db_check_calls_new_team_on_upsert(mock_new_team, monkeyp
 
 
 @pytest.mark.asyncio
-@patch("litellm.proxy.management_endpoints.team_endpoints.new_team", new_callable=AsyncMock)
-async def test_get_team_db_check_does_not_call_new_team_if_exists(mock_new_team, monkeypatch):
+@patch(
+    "litellm.proxy.management_endpoints.team_endpoints.new_team", new_callable=AsyncMock
+)
+async def test_get_team_db_check_does_not_call_new_team_if_exists(
+    mock_new_team, monkeypatch
+):
     """
     Test that _get_team_db_check does NOT call the `new_team` function
     if the team already exists in the database.
@@ -541,8 +550,9 @@ async def test_vector_store_access_check_early_returns(
     if vector_store_registry:
         vector_store_registry.get_vector_store_ids_to_run.return_value = None
 
-    with patch("litellm.proxy.proxy_server.prisma_client", prisma_client), patch(
-        "litellm.vector_store_registry", vector_store_registry
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", prisma_client),
+        patch("litellm.vector_store_registry", vector_store_registry),
     ):
         result = await vector_store_access_check(
             request_body=request_body,
@@ -639,8 +649,9 @@ async def test_vector_store_access_check_with_permissions():
     mock_vector_store_registry = MagicMock()
     mock_vector_store_registry.get_vector_store_ids_to_run.return_value = ["store-1"]
 
-    with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client), patch(
-        "litellm.vector_store_registry", mock_vector_store_registry
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client),
+        patch("litellm.vector_store_registry", mock_vector_store_registry),
     ):
         result = await vector_store_access_check(
             request_body=request_body,
@@ -653,8 +664,9 @@ async def test_vector_store_access_check_with_permissions():
     # Test with denied access
     mock_vector_store_registry.get_vector_store_ids_to_run.return_value = ["store-3"]
 
-    with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client), patch(
-        "litellm.vector_store_registry", mock_vector_store_registry
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client),
+        patch("litellm.vector_store_registry", mock_vector_store_registry),
     ):
         with pytest.raises(ProxyException) as exc_info:
             await vector_store_access_check(
@@ -687,8 +699,9 @@ async def test_vector_store_access_check_with_team_permissions():
         "team-store-allowed"
     ]
 
-    with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client), patch(
-        "litellm.vector_store_registry", mock_vector_store_registry
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client),
+        patch("litellm.vector_store_registry", mock_vector_store_registry),
     ):
         result = await vector_store_access_check(
             request_body=request_body,
@@ -702,8 +715,9 @@ async def test_vector_store_access_check_with_team_permissions():
         "team-store-denied"
     ]
 
-    with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client), patch(
-        "litellm.vector_store_registry", mock_vector_store_registry
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client),
+        patch("litellm.vector_store_registry", mock_vector_store_registry),
     ):
         with pytest.raises(ProxyException) as exc_info:
             await vector_store_access_check(
@@ -1598,12 +1612,15 @@ async def test_custom_auth_common_checks_opt_in():
     mock_request = MagicMock()
 
     # Default (no flag) — common_checks should NOT be called
-    with patch(
-        "litellm.proxy.auth.user_api_key_auth.common_checks",
-        new_callable=AsyncMock,
-    ) as mock_common, patch(
-        "litellm.proxy.proxy_server.general_settings",
-        {},
+    with (
+        patch(
+            "litellm.proxy.auth.user_api_key_auth.common_checks",
+            new_callable=AsyncMock,
+        ) as mock_common,
+        patch(
+            "litellm.proxy.proxy_server.general_settings",
+            {},
+        ),
     ):
         mock_common.return_value = True
         result = await _run_post_custom_auth_checks(
@@ -1616,12 +1633,15 @@ async def test_custom_auth_common_checks_opt_in():
         mock_common.assert_not_called()
 
     # With flag=True — common_checks SHOULD be called
-    with patch(
-        "litellm.proxy.auth.user_api_key_auth.common_checks",
-        new_callable=AsyncMock,
-    ) as mock_common, patch(
-        "litellm.proxy.proxy_server.general_settings",
-        {"custom_auth_run_common_checks": True},
+    with (
+        patch(
+            "litellm.proxy.auth.user_api_key_auth.common_checks",
+            new_callable=AsyncMock,
+        ) as mock_common,
+        patch(
+            "litellm.proxy.proxy_server.general_settings",
+            {"custom_auth_run_common_checks": True},
+        ),
     ):
         mock_common.return_value = True
         result = await _run_post_custom_auth_checks(
@@ -1660,9 +1680,7 @@ async def test_virtual_key_budget_check_reads_from_spend_counter():
             return 1.5
         return fallback_spend
 
-    with patch(
-        "litellm.proxy.proxy_server.get_current_spend", mock_get_current_spend
-    ):
+    with patch("litellm.proxy.proxy_server.get_current_spend", mock_get_current_spend):
         with pytest.raises(litellm.BudgetExceededError) as exc_info:
             await _virtual_key_max_budget_check(
                 valid_token=valid_token,
@@ -1692,9 +1710,7 @@ async def test_virtual_key_budget_check_fallback_no_counter():
     async def mock_get_current_spend(counter_key, fallback_spend):
         return fallback_spend
 
-    with patch(
-        "litellm.proxy.proxy_server.get_current_spend", mock_get_current_spend
-    ):
+    with patch("litellm.proxy.proxy_server.get_current_spend", mock_get_current_spend):
         with pytest.raises(litellm.BudgetExceededError) as exc_info:
             await _virtual_key_max_budget_check(
                 valid_token=valid_token,
@@ -1723,9 +1739,7 @@ async def test_team_budget_check_reads_from_spend_counter():
             return 1.5
         return fallback_spend
 
-    with patch(
-        "litellm.proxy.proxy_server.get_current_spend", mock_get_current_spend
-    ):
+    with patch("litellm.proxy.proxy_server.get_current_spend", mock_get_current_spend):
         with pytest.raises(litellm.BudgetExceededError) as exc_info:
             await _team_max_budget_check(
                 team_object=team_object,
@@ -1763,12 +1777,13 @@ async def test_team_member_budget_check_reads_from_spend_counter():
             return 1.5
         return fallback_spend
 
-    with patch(
-        "litellm.proxy.proxy_server.get_current_spend", mock_get_current_spend
-    ), patch(
-        "litellm.proxy.auth.auth_checks.get_team_membership",
-        new_callable=AsyncMock,
-        return_value=team_membership,
+    with (
+        patch("litellm.proxy.proxy_server.get_current_spend", mock_get_current_spend),
+        patch(
+            "litellm.proxy.auth.auth_checks.get_team_membership",
+            new_callable=AsyncMock,
+            return_value=team_membership,
+        ),
     ):
         with pytest.raises(litellm.BudgetExceededError) as exc_info:
             await _check_team_member_budget(

@@ -186,25 +186,39 @@ async def test_multiple_guardrails_mixed_results():
 
 def test_compute_overall_action_blocked_wins():
     results: list[GuardrailTestResultEntry] = [
-        GuardrailTestResultEntry(guardrail_name="a", action="passed", output_text="", details=""),
-        GuardrailTestResultEntry(guardrail_name="b", action="blocked", output_text="", details=""),
-        GuardrailTestResultEntry(guardrail_name="c", action="masked", output_text="", details=""),
+        GuardrailTestResultEntry(
+            guardrail_name="a", action="passed", output_text="", details=""
+        ),
+        GuardrailTestResultEntry(
+            guardrail_name="b", action="blocked", output_text="", details=""
+        ),
+        GuardrailTestResultEntry(
+            guardrail_name="c", action="masked", output_text="", details=""
+        ),
     ]
     assert _compute_overall_action(results) == "blocked"
 
 
 def test_compute_overall_action_masked_wins_over_passed():
     results: list[GuardrailTestResultEntry] = [
-        GuardrailTestResultEntry(guardrail_name="a", action="passed", output_text="", details=""),
-        GuardrailTestResultEntry(guardrail_name="b", action="masked", output_text="", details=""),
+        GuardrailTestResultEntry(
+            guardrail_name="a", action="passed", output_text="", details=""
+        ),
+        GuardrailTestResultEntry(
+            guardrail_name="b", action="masked", output_text="", details=""
+        ),
     ]
     assert _compute_overall_action(results) == "masked"
 
 
 def test_compute_overall_action_all_passed():
     results: list[GuardrailTestResultEntry] = [
-        GuardrailTestResultEntry(guardrail_name="a", action="passed", output_text="", details=""),
-        GuardrailTestResultEntry(guardrail_name="b", action="passed", output_text="", details=""),
+        GuardrailTestResultEntry(
+            guardrail_name="a", action="passed", output_text="", details=""
+        ),
+        GuardrailTestResultEntry(
+            guardrail_name="b", action="passed", output_text="", details=""
+        ),
     ]
     assert _compute_overall_action(results) == "passed"
 

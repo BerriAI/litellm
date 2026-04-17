@@ -15,7 +15,9 @@ from litellm.integrations.focus.destinations.vantage_destination import (
     VANTAGE_MAX_ROWS_PER_UPLOAD,
 )
 
-MOCK_TARGET = "litellm.integrations.focus.destinations.vantage_destination.get_async_httpx_client"
+MOCK_TARGET = (
+    "litellm.integrations.focus.destinations.vantage_destination.get_async_httpx_client"
+)
 
 
 def _window(freq: str = "hourly", hour: int = 5) -> FocusTimeWindow:

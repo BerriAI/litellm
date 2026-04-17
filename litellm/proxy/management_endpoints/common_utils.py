@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Any, Dict, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 from litellm._logging import verbose_proxy_logger
 from litellm.caching import DualCache
@@ -354,6 +354,7 @@ async def _upsert_budget_and_membership(
     user_api_key_dict: UserAPIKeyAuth,
     tpm_limit: Optional[int] = None,
     rpm_limit: Optional[int] = None,
+    allowed_models: Optional[List[str]] = None,
 ):
     """
     Helper function to Create/Update or Delete the budget within the team membership
@@ -366,11 +367,17 @@ async def _upsert_budget_and_membership(
         user_api_key_dict: User API Key dictionary containing user information
         tpm_limit: Tokens per minute limit for the team member
         rpm_limit: Requests per minute limit for the team member
+        allowed_models: Per-member model scope. None = don't change. [] = remove restrictions. Non-empty list = enforce.
 
-    If max_budget, tpm_limit, and rpm_limit are all None, the user's budget is removed from the team membership.
+    If max_budget, tpm_limit, rpm_limit, and allowed_models are all None, the user's budget is removed from the team membership.
     If any of these values exist, a budget is updated or created and linked to the team membership.
     """
-    if max_budget is None and tpm_limit is None and rpm_limit is None:
+    if (
+        max_budget is None
+        and tpm_limit is None
+        and rpm_limit is None
+        and allowed_models is None
+    ):
         # disconnect the budget since all limits are None
         await tx.litellm_teammembership.update(
             where={"user_id_team_id": {"user_id": user_id, "team_id": team_id}},
@@ -378,7 +385,27 @@ async def _upsert_budget_and_membership(
         )
         return
 
-    # create a new budget
+    if existing_budget_id is not None:
+        # Update the existing budget in-place to preserve fields not being changed.
+        # Only write fields that the caller explicitly provided (non-None).
+        update_data: Dict[str, Any] = {
+            "updated_by": user_api_key_dict.user_id or "",
+        }
+        if max_budget is not None:
+            update_data["max_budget"] = max_budget
+        if tpm_limit is not None:
+            update_data["tpm_limit"] = tpm_limit
+        if rpm_limit is not None:
+            update_data["rpm_limit"] = rpm_limit
+        if allowed_models is not None:
+            update_data["allowed_models"] = allowed_models
+        await tx.litellm_budgettable.update(
+            where={"budget_id": existing_budget_id},
+            data=update_data,
+        )
+        return
+
+    # No existing budget — create a new one and link it to the membership.
     create_data: Dict[str, Any] = {
         "created_by": user_api_key_dict.user_id or "",
         "updated_by": user_api_key_dict.user_id or "",
@@ -389,12 +416,13 @@ async def _upsert_budget_and_membership(
         create_data["tpm_limit"] = tpm_limit
     if rpm_limit is not None:
         create_data["rpm_limit"] = rpm_limit
+    if allowed_models is not None:
+        create_data["allowed_models"] = allowed_models
 
     new_budget = await tx.litellm_budgettable.create(
         data=create_data,
         include={"team_membership": True},
     )
-    # upsert the team membership with the new/updated budget
     await tx.litellm_teammembership.upsert(
         where={
             "user_id_team_id": {

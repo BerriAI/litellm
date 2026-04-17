@@ -1,6 +1,8 @@
 # used for /metrics endpoint on LiteLLM Proxy
 #### What this does ####
 #    On success, log events to Prometheus
+from __future__ import annotations
+
 import asyncio
 import os
 import sys
@@ -14,6 +16,7 @@ from typing import (
     List,
     Literal,
     Optional,
+    Sequence,
     Tuple,
     Union,
     cast,
@@ -22,6 +25,10 @@ from typing import (
 import litellm
 from litellm._logging import print_verbose, verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.prometheus_helpers import (
+    PrometheusLabelFactoryContext,
+    _get_cached_end_user_id_for_cost_tracking,
+)
 from litellm.litellm_core_utils.core_helpers import (
     get_litellm_metadata_from_kwargs,
     get_metadata_variable_name_from_kwargs,
@@ -43,25 +50,6 @@ if TYPE_CHECKING:
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
 else:
     AsyncIOScheduler = Any
-
-# Cached lazy import for get_end_user_id_for_cost_tracking
-# Module-level cache to avoid repeated imports while preserving memory benefits
-_get_end_user_id_for_cost_tracking = None
-
-
-def _get_cached_end_user_id_for_cost_tracking():
-    """
-    Get cached get_end_user_id_for_cost_tracking function.
-    Lazy imports on first call to avoid loading utils.py at import time (60MB saved).
-    Subsequent calls use cached function for better performance.
-    """
-    global _get_end_user_id_for_cost_tracking
-    if _get_end_user_id_for_cost_tracking is None:
-        from litellm.utils import get_end_user_id_for_cost_tracking
-
-        _get_end_user_id_for_cost_tracking = get_end_user_id_for_cost_tracking
-    return _get_end_user_id_for_cost_tracking
-
 
 class PrometheusLogger(CustomLogger):
     # Class variables or attributes
@@ -575,7 +563,6 @@ class PrometheusLogger(CustomLogger):
         self.enabled_metrics = set()
 
         for group_config in config:
-            # Validate configuration using Pydantic
             if isinstance(group_config, dict):
                 parsed_config = PrometheusMetricsConfig(**group_config)
             else:
@@ -995,12 +982,28 @@ class PrometheusLogger(CustomLogger):
 
         return filtered_labels
 
+    def _inc_labeled_counter(
+        self,
+        counter: Any,
+        metric_name: DEFINED_PROMETHEUS_METRICS,
+        enum_values: UserAPIKeyLabelValues,
+        label_context: Optional[PrometheusLabelFactoryContext] = None,
+        amount: float = 1.0,
+    ) -> None:
+        _labels = prometheus_label_factory(
+            supported_enum_labels=self.get_labels_for_metric(
+                metric_name=metric_name
+            ),
+            enum_values=enum_values,
+            label_context=label_context,
+        )
+        counter.labels(**_labels).inc(amount)
+
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         # Define prometheus client
-        from litellm.types.utils import StandardLoggingPayload
-
         verbose_logger.debug(
-            f"prometheus Logging - Enters success logging function for kwargs {kwargs}"
+            "prometheus Logging - Enters success logging function (kwargs keys: %s)",
+            list(kwargs.keys()) if isinstance(kwargs, dict) else type(kwargs).__name__,
         )
 
         # unpack kwargs
@@ -1115,6 +1118,8 @@ class PrometheusLogger(CustomLogger):
 
             user_api_key = hash_token(user_api_key)
 
+        label_context = PrometheusLabelFactoryContext(enum_values) #amortized per request.
+
         # increment total LLM requests and spend metric
         self._increment_top_level_request_and_spend_metrics(
             end_user_id=end_user_id,
@@ -1126,6 +1131,7 @@ class PrometheusLogger(CustomLogger):
             user_id=user_id,
             response_cost=response_cost,
             enum_values=enum_values,
+            label_context=label_context,
         )
 
         # input, output, total token metrics
@@ -1142,6 +1148,7 @@ class PrometheusLogger(CustomLogger):
             user_api_team_alias=user_api_team_alias,
             user_id=user_id,
             enum_values=enum_values,
+            label_context=label_context,
         )
 
         # remaining budget metrics
@@ -1177,29 +1184,36 @@ class PrometheusLogger(CustomLogger):
             # 1. We just checked if isinstance(standard_logging_payload, dict). Pyright complains.
             # 2. Pyright does not allow us to run isinstance(standard_logging_payload, StandardLoggingPayload) <- this would be ideal
             enum_values=enum_values,
+            label_context=label_context,
         )
 
         # set x-ratelimit headers
         self.set_llm_deployment_success_metrics(
-            kwargs, start_time, end_time, enum_values, output_tokens
+            kwargs,
+            start_time,
+            end_time,
+            enum_values,
+            output_tokens,
+            label_context=label_context,
         )
 
         # cache metrics
         self._increment_cache_metrics(
             standard_logging_payload=standard_logging_payload,  # type: ignore
             enum_values=enum_values,
+            label_context=label_context,
         )
 
         # increment litellm_proxy_total_requests_metric for all successful requests
         # (both streaming and non-streaming) in this single location to prevent
         # double-counting that occurs when async_post_call_success_hook also increments
-        _labels = prometheus_label_factory(
-            supported_enum_labels=self.get_labels_for_metric(
-                metric_name="litellm_proxy_total_requests_metric"
-            ),
-            enum_values=enum_values,
+        PrometheusLogger._inc_labeled_counter(
+            self,
+            self.litellm_proxy_total_requests_metric,
+            "litellm_proxy_total_requests_metric",
+            enum_values,
+            label_context=label_context,
         )
-        self.litellm_proxy_total_requests_metric.labels(**_labels).inc()
 
     def _increment_token_metrics(
         self,
@@ -1212,6 +1226,7 @@ class PrometheusLogger(CustomLogger):
         user_api_team_alias: Optional[str],
         user_id: Optional[str],
         enum_values: UserAPIKeyLabelValues,
+        label_context: Optional[PrometheusLabelFactoryContext] = None,
     ):
         verbose_logger.debug("prometheus Logging - Enters token metrics function")
         # token metrics
@@ -1221,41 +1236,36 @@ class PrometheusLogger(CustomLogger):
         ):
             _tags = standard_logging_payload["request_tags"]
 
-        _labels = prometheus_label_factory(
-            supported_enum_labels=self.get_labels_for_metric(
-                metric_name="litellm_total_tokens_metric"
-            ),
-            enum_values=enum_values,
+        PrometheusLogger._inc_labeled_counter(
+            self,
+            self.litellm_tokens_metric,
+            "litellm_total_tokens_metric",
+            enum_values,
+            label_context=label_context,
+            amount=float(standard_logging_payload["total_tokens"]),
         )
-        self.litellm_tokens_metric.labels(**_labels).inc(
-            standard_logging_payload["total_tokens"]
+        PrometheusLogger._inc_labeled_counter(
+            self,
+            self.litellm_input_tokens_metric,
+            "litellm_input_tokens_metric",
+            enum_values,
+            label_context=label_context,
+            amount=float(standard_logging_payload["prompt_tokens"]),
         )
-
-        _labels = prometheus_label_factory(
-            supported_enum_labels=self.get_labels_for_metric(
-                metric_name="litellm_input_tokens_metric"
-            ),
-            enum_values=enum_values,
-        )
-        self.litellm_input_tokens_metric.labels(**_labels).inc(
-            standard_logging_payload["prompt_tokens"]
-        )
-
-        _labels = prometheus_label_factory(
-            supported_enum_labels=self.get_labels_for_metric(
-                metric_name="litellm_output_tokens_metric"
-            ),
-            enum_values=enum_values,
-        )
-
-        self.litellm_output_tokens_metric.labels(**_labels).inc(
-            standard_logging_payload["completion_tokens"]
+        PrometheusLogger._inc_labeled_counter(
+            self,
+            self.litellm_output_tokens_metric,
+            "litellm_output_tokens_metric",
+            enum_values,
+            label_context=label_context,
+            amount=float(standard_logging_payload["completion_tokens"]),
         )
 
     def _increment_cache_metrics(
         self,
         standard_logging_payload: StandardLoggingPayload,
         enum_values: UserAPIKeyLabelValues,
+        label_context: Optional[PrometheusLabelFactoryContext] = None,
     ):
         """
         Increment cache-related Prometheus metrics based on cache hit/miss status.
@@ -1272,33 +1282,34 @@ class PrometheusLogger(CustomLogger):
 
         if cache_hit is True:
             # Increment cache hits counter
-            _labels = prometheus_label_factory(
-                supported_enum_labels=self.get_labels_for_metric(
-                    metric_name="litellm_cache_hits_metric"
-                ),
-                enum_values=enum_values,
+            PrometheusLogger._inc_labeled_counter(
+                self,
+                self.litellm_cache_hits_metric,
+                "litellm_cache_hits_metric",
+                enum_values,
+                label_context=label_context,
             )
-            self.litellm_cache_hits_metric.labels(**_labels).inc()
 
             # Increment cached tokens counter
             total_tokens = standard_logging_payload.get("total_tokens", 0)
             if total_tokens > 0:
-                _labels = prometheus_label_factory(
-                    supported_enum_labels=self.get_labels_for_metric(
-                        metric_name="litellm_cached_tokens_metric"
-                    ),
-                    enum_values=enum_values,
+                PrometheusLogger._inc_labeled_counter(
+                    self,
+                    self.litellm_cached_tokens_metric,
+                    "litellm_cached_tokens_metric",
+                    enum_values,
+                    label_context=label_context,
+                    amount=float(total_tokens),
                 )
-                self.litellm_cached_tokens_metric.labels(**_labels).inc(total_tokens)
         else:
             # cache_hit is False - increment cache misses counter
-            _labels = prometheus_label_factory(
-                supported_enum_labels=self.get_labels_for_metric(
-                    metric_name="litellm_cache_misses_metric"
-                ),
-                enum_values=enum_values,
+            PrometheusLogger._inc_labeled_counter(
+                self,
+                self.litellm_cache_misses_metric,
+                "litellm_cache_misses_metric",
+                enum_values,
+                label_context=label_context,
             )
-            self.litellm_cache_misses_metric.labels(**_labels).inc()
 
     async def _increment_remaining_budget_metrics(
         self,
@@ -1365,24 +1376,23 @@ class PrometheusLogger(CustomLogger):
         user_id: Optional[str],
         response_cost: float,
         enum_values: UserAPIKeyLabelValues,
+        label_context: Optional[PrometheusLabelFactoryContext] = None,
     ):
-        _labels = prometheus_label_factory(
-            supported_enum_labels=self.get_labels_for_metric(
-                metric_name="litellm_requests_metric"
-            ),
-            enum_values=enum_values,
+        PrometheusLogger._inc_labeled_counter(
+            self,
+            self.litellm_requests_metric,
+            "litellm_requests_metric",
+            enum_values,
+            label_context=label_context,
         )
-
-        self.litellm_requests_metric.labels(**_labels).inc()
-
-        _labels = prometheus_label_factory(
-            supported_enum_labels=self.get_labels_for_metric(
-                metric_name="litellm_spend_metric"
-            ),
-            enum_values=enum_values,
+        PrometheusLogger._inc_labeled_counter(
+            self,
+            self.litellm_spend_metric,
+            "litellm_spend_metric",
+            enum_values,
+            label_context=label_context,
+            amount=float(response_cost),
         )
-
-        self.litellm_spend_metric.labels(**_labels).inc(response_cost)
 
     def _set_virtual_key_rate_limit_metrics(
         self,
@@ -1434,6 +1444,7 @@ class PrometheusLogger(CustomLogger):
         user_api_team: Optional[str],
         user_api_team_alias: Optional[str],
         enum_values: UserAPIKeyLabelValues,
+        label_context: Optional[PrometheusLabelFactoryContext] = None,
     ):
         # latency metrics
         end_time: datetime = kwargs.get("end_time") or datetime.now()
@@ -1453,6 +1464,7 @@ class PrometheusLogger(CustomLogger):
                     metric_name="litellm_llm_api_time_to_first_token_metric"
                 ),
                 enum_values=enum_values,
+                label_context=label_context,
             )
             self.litellm_llm_api_time_to_first_token_metric.labels(
                 **_ttft_labels
@@ -1472,6 +1484,7 @@ class PrometheusLogger(CustomLogger):
                     metric_name="litellm_llm_api_latency_metric"
                 ),
                 enum_values=enum_values,
+                label_context=label_context,
             )
             self.litellm_llm_api_latency_metric.labels(**_labels).observe(
                 api_call_total_time_seconds
@@ -1488,6 +1501,7 @@ class PrometheusLogger(CustomLogger):
                     metric_name="litellm_request_total_latency_metric"
                 ),
                 enum_values=enum_values,
+                label_context=label_context,
             )
             self.litellm_request_total_latency_metric.labels(**_labels).observe(
                 total_time_seconds
@@ -1504,16 +1518,16 @@ class PrometheusLogger(CustomLogger):
                     metric_name="litellm_request_queue_time_seconds"
                 ),
                 enum_values=enum_values,
+                label_context=label_context,
             )
             self.litellm_request_queue_time_metric.labels(**_labels).observe(
                 queue_time_seconds
             )
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
-        from litellm.types.utils import StandardLoggingPayload
-
         verbose_logger.debug(
-            f"prometheus Logging - Enters failure logging function for kwargs {kwargs}"
+            "prometheus Logging - Enters failure logging function (kwargs keys: %s)",
+            list(kwargs.keys()) if isinstance(kwargs, dict) else type(kwargs).__name__,
         )
 
         standard_logging_payload: StandardLoggingPayload = kwargs.get(
@@ -1781,17 +1795,22 @@ class PrometheusLogger(CustomLogger):
                 supported_enum_labels=self.get_labels_for_metric(
                     metric_name="litellm_proxy_failed_requests_metric"
                 ),
-                enum_values=enum_values,
             )
-            self.litellm_proxy_failed_requests_metric.labels(**_labels).inc()
-
-            _labels = prometheus_label_factory(
-                supported_enum_labels=self.get_labels_for_metric(
-                    metric_name="litellm_proxy_total_requests_metric"
-                ),
-                enum_values=enum_values,
+            _label_ctx = PrometheusLabelFactoryContext(enum_values)
+            PrometheusLogger._inc_labeled_counter(
+                self,
+                self.litellm_proxy_failed_requests_metric,
+                "litellm_proxy_failed_requests_metric",
+                enum_values,
+                label_context=_label_ctx,
             )
-            self.litellm_proxy_total_requests_metric.labels(**_labels).inc()
+            PrometheusLogger._inc_labeled_counter(
+                self,
+                self.litellm_proxy_total_requests_metric,
+                "litellm_proxy_total_requests_metric",
+                enum_values,
+                label_context=_label_ctx,
+            )
 
         except Exception as e:
             verbose_logger.exception(
@@ -2021,22 +2040,23 @@ class PrometheusLogger(CustomLogger):
                 api_base=api_base,
                 api_provider=llm_provider or "",
             )
+            _deployment_label_ctx = PrometheusLabelFactoryContext(enum_values)
             if exception is not None:
-                _labels = prometheus_label_factory(
-                    supported_enum_labels=self.get_labels_for_metric(
-                        metric_name="litellm_deployment_failure_responses"
-                    ),
-                    enum_values=enum_values,
+                PrometheusLogger._inc_labeled_counter(
+                    self,
+                    self.litellm_deployment_failure_responses,
+                    "litellm_deployment_failure_responses",
+                    enum_values,
+                    label_context=_deployment_label_ctx,
                 )
-                self.litellm_deployment_failure_responses.labels(**_labels).inc()
 
-            _labels = prometheus_label_factory(
-                supported_enum_labels=self.get_labels_for_metric(
-                    metric_name="litellm_deployment_total_requests"
-                ),
-                enum_values=enum_values,
+            PrometheusLogger._inc_labeled_counter(
+                self,
+                self.litellm_deployment_total_requests,
+                "litellm_deployment_total_requests",
+                enum_values,
+                label_context=_deployment_label_ctx,
             )
-            self.litellm_deployment_total_requests.labels(**_labels).inc()
 
             pass
         except Exception as e:
@@ -2096,6 +2116,7 @@ class PrometheusLogger(CustomLogger):
         end_time,
         enum_values: UserAPIKeyLabelValues,
         output_tokens: float = 1.0,
+        label_context: Optional[PrometheusLabelFactoryContext] = None,
     ):
         try:
             verbose_logger.debug("setting remaining tokens requests metric")
@@ -2153,6 +2174,7 @@ class PrometheusLogger(CustomLogger):
                         metric_name="litellm_overhead_latency_metric"
                     ),
                     enum_values=enum_values,
+                    label_context=label_context,
                 )
                 self.litellm_overhead_latency_metric.labels(**_labels).observe(
                     litellm_overhead_time_ms / 1000
@@ -2170,6 +2192,7 @@ class PrometheusLogger(CustomLogger):
                         metric_name="litellm_remaining_requests_metric"
                     ),
                     enum_values=enum_values,
+                    label_context=label_context,
                 )
                 self.litellm_remaining_requests_metric.labels(**_labels).set(
                     remaining_requests
@@ -2181,6 +2204,7 @@ class PrometheusLogger(CustomLogger):
                         metric_name="litellm_remaining_tokens_metric"
                     ),
                     enum_values=enum_values,
+                    label_context=label_context,
                 )
                 self.litellm_remaining_tokens_metric.labels(**_labels).set(
                     remaining_tokens
@@ -2197,21 +2221,20 @@ class PrometheusLogger(CustomLogger):
                 api_provider=llm_provider or "",
             )
 
-            _labels = prometheus_label_factory(
-                supported_enum_labels=self.get_labels_for_metric(
-                    metric_name="litellm_deployment_success_responses"
-                ),
-                enum_values=enum_values,
+            PrometheusLogger._inc_labeled_counter(
+                self,
+                self.litellm_deployment_success_responses,
+                "litellm_deployment_success_responses",
+                enum_values,
+                label_context=label_context,
             )
-            self.litellm_deployment_success_responses.labels(**_labels).inc()
-
-            _labels = prometheus_label_factory(
-                supported_enum_labels=self.get_labels_for_metric(
-                    metric_name="litellm_deployment_total_requests"
-                ),
-                enum_values=enum_values,
+            PrometheusLogger._inc_labeled_counter(
+                self,
+                self.litellm_deployment_total_requests,
+                "litellm_deployment_total_requests",
+                enum_values,
+                label_context=label_context,
             )
-            self.litellm_deployment_total_requests.labels(**_labels).inc()
 
             # Track deployment Latency
             response_ms: timedelta = end_time - start_time
@@ -2241,6 +2264,7 @@ class PrometheusLogger(CustomLogger):
                         metric_name="litellm_deployment_latency_per_output_token"
                     ),
                     enum_values=enum_values,
+                    label_context=label_context,
                 )
                 self.litellm_deployment_latency_per_output_token.labels(
                     **_labels
@@ -2474,13 +2498,13 @@ class PrometheusLogger(CustomLogger):
             exception_class=self._get_exception_class_name(original_exception),
             tags=_tags,
         )
-        _labels = prometheus_label_factory(
-            supported_enum_labels=self.get_labels_for_metric(
-                metric_name="litellm_deployment_successful_fallbacks"
-            ),
-            enum_values=enum_values,
+        PrometheusLogger._inc_labeled_counter(
+            self,
+            self.litellm_deployment_successful_fallbacks,
+            "litellm_deployment_successful_fallbacks",
+            enum_values,
+            label_context=PrometheusLabelFactoryContext(enum_values),
         )
-        self.litellm_deployment_successful_fallbacks.labels(**_labels).inc()
 
     async def log_failure_fallback_event(
         self, original_model_group: str, kwargs: dict, original_exception: Exception
@@ -2520,13 +2544,13 @@ class PrometheusLogger(CustomLogger):
             tags=_tags,
         )
 
-        _labels = prometheus_label_factory(
-            supported_enum_labels=self.get_labels_for_metric(
-                metric_name="litellm_deployment_failed_fallbacks"
-            ),
-            enum_values=enum_values,
+        PrometheusLogger._inc_labeled_counter(
+            self,
+            self.litellm_deployment_failed_fallbacks,
+            "litellm_deployment_failed_fallbacks",
+            enum_values,
+            label_context=PrometheusLabelFactoryContext(enum_values),
         )
-        self.litellm_deployment_failed_fallbacks.labels(**_labels).inc()
 
     def set_litellm_deployment_state(
         self,
@@ -2644,7 +2668,7 @@ class PrometheusLogger(CustomLogger):
         self,
         data_fetch_function: Callable[..., Awaitable[Tuple[List[Any], Optional[int]]]],
         set_metrics_function: Callable[[List[Any]], Awaitable[None]],
-        data_type: Literal["teams", "keys", "users"],
+        data_type: Literal["teams", "keys", "users", "orgs"],
     ):
         """
         Generic method to initialize budget metrics for teams or API keys.
@@ -2720,8 +2744,6 @@ class PrometheusLogger(CustomLogger):
         """
         Initialize API key budget metrics by reusing the generic pagination logic.
         """
-        from typing import Union
-
         from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
         from litellm.proxy.management_endpoints.key_management_endpoints import (
             _list_key_helper,
@@ -2766,7 +2788,6 @@ class PrometheusLogger(CustomLogger):
         """
         Initialize user budget metrics by reusing the generic pagination logic.
         """
-        from litellm.proxy._types import LiteLLM_UserTable
         from litellm.proxy.proxy_server import prisma_client
 
         if prisma_client is None:
@@ -3409,7 +3430,6 @@ class PrometheusLogger(CustomLogger):
         It emits the current remaining budget metrics for all Keys and Teams.
         """
         from litellm.constants import PROMETHEUS_BUDGET_METRICS_REFRESH_INTERVAL_MINUTES
-        from litellm.integrations.custom_logger import CustomLogger
 
         prometheus_loggers: List[CustomLogger] = (
             litellm.logging_callback_manager.get_custom_loggers_for_type(
@@ -3464,16 +3484,56 @@ class PrometheusLogger(CustomLogger):
         )
 
 
+def _prometheus_labels_from_context(
+    supported_enum_labels: List[str],
+    ctx: PrometheusLabelFactoryContext,
+) -> Dict[str, Optional[str]]:
+    filtered_labels: Dict[str, Optional[str]] = {
+        label: ctx._sanitized_enum[label]
+        for label in supported_enum_labels
+        if label in ctx._sanitized_enum
+    }
+
+    if UserAPIKeyLabelNames.END_USER.value in filtered_labels:
+        filtered_labels[UserAPIKeyLabelNames.END_USER.value] = ctx.get_resolved_end_user()
+
+    for sk, val in ctx._custom_by_sanitized_key.items():
+        if sk in supported_enum_labels:
+            filtered_labels[sk] = val
+
+    for k, v in ctx._tag_labels.items():
+        if k in supported_enum_labels:
+            filtered_labels[k] = v
+
+    for label in supported_enum_labels:
+        if label not in filtered_labels:
+            filtered_labels[label] = None
+
+    return filtered_labels
+
+
 def prometheus_label_factory(
     supported_enum_labels: List[str],
     enum_values: UserAPIKeyLabelValues,
     tag: Optional[str] = None,
+    *,
+    label_context: Optional[PrometheusLabelFactoryContext] = None,
 ) -> dict:
     """
     Returns a dictionary of label + values for prometheus.
 
     Ensures end_user param is not sent to prometheus if it is not supported.
+
+    When ``label_context`` is provided, it must have been built from the same
+    ``enum_values`` object; work is amortized (single model_dump, tag map, etc.).
     """
+    if label_context is not None:
+        if label_context.enum_values is not enum_values:
+            raise ValueError(
+                "label_context.enum_values must be the same object as enum_values"
+            )
+        return _prometheus_labels_from_context(supported_enum_labels, label_context)
+
     # Extract dictionary from Pydantic object
     enum_dict = enum_values.model_dump()
 
@@ -3547,7 +3607,7 @@ def get_custom_labels_from_metadata(metadata: dict) -> Dict[str, str]:
 
 
 def _tag_matches_wildcard_configured_pattern(
-    tags: List[str], configured_tag: str
+    tags: Sequence[str], configured_tag: str
 ) -> bool:
     """
     Check if any of the request tags matches a wildcard configured pattern
@@ -3579,7 +3639,7 @@ def _tag_matches_wildcard_configured_pattern(
     return any(re.match(pattern=regex_pattern, string=tag) for tag in tags)
 
 
-def get_custom_labels_from_tags(tags: List[str]) -> Dict[str, str]:
+def get_custom_labels_from_tags(tags: Sequence[str]) -> Dict[str, str]:
     """
     Get custom labels from tags based on admin configuration.
 

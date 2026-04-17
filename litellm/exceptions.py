@@ -281,7 +281,7 @@ class Timeout(openai.APITimeoutError):  # type: ignore
         return _message
 
 
-class PermissionDeniedError(openai.PermissionDeniedError):  # type:ignore
+class PermissionDeniedError(openai.PermissionDeniedError):  # type: ignore
     def __init__(
         self,
         message,
@@ -847,6 +847,7 @@ class BudgetExceededError(Exception):
     ):
         self.current_cost = current_cost
         self.max_budget = max_budget
+        self.status_code = 429
         message = (
             message
             or f"Budget has been exceeded! Current cost: {current_cost}, Max budget: {max_budget}"
