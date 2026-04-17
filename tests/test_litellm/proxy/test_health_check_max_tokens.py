@@ -13,7 +13,7 @@ from litellm.proxy.health_check import (
 @pytest.mark.asyncio
 async def test_update_litellm_params_max_tokens_default(monkeypatch):
     """
-    Test that max_tokens defaults to 1 for non-wildcard models.
+    Test that max_tokens defaults to 5 for non-wildcard models.
     """
     monkeypatch.setattr(hc_module, "BACKGROUND_HEALTH_CHECK_MAX_TOKENS", None)
     monkeypatch.setattr(hc_module, "BACKGROUND_HEALTH_CHECK_MAX_TOKENS_REASONING", None)

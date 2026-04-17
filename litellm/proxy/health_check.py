@@ -328,25 +328,19 @@ def _resolve_health_check_max_tokens(model_info: dict, litellm_params: dict) -> 
     deployment_model = _deployment_model_string_for_health_check(litellm_params)
 
     if not is_wildcard:
+        try:
+            is_reasoning = litellm.supports_reasoning(deployment_model)
+        except Exception:
+            is_reasoning = False
         tokens_reasoning = model_info.get("health_check_max_tokens_reasoning", None)
         tokens_non_reasoning = model_info.get(
             "health_check_max_tokens_non_reasoning", None
         )
         if tokens_reasoning is not None or tokens_non_reasoning is not None:
-            try:
-                is_reasoning = litellm.supports_reasoning(deployment_model)
-            except Exception:
-                is_reasoning = False
             if is_reasoning and tokens_reasoning is not None:
                 return int(tokens_reasoning)
             if not is_reasoning and tokens_non_reasoning is not None:
                 return int(tokens_non_reasoning)
-
-    if not is_wildcard:
-        try:
-            is_reasoning = litellm.supports_reasoning(deployment_model)
-        except Exception:
-            is_reasoning = False
         if (
             is_reasoning
             and BACKGROUND_HEALTH_CHECK_MAX_TOKENS_REASONING is not None
