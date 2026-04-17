@@ -190,10 +190,25 @@ const config = {
     [
       '@signalwire/docusaurus-plugin-llms-txt',
       {
-        content: {
-          enableMarkdownFiles: true,
+        markdown: {
+          enableFiles: true,
+          includeDocs: true,
+        },
+        llmsTxt: {
           enableLlmsFullTxt: true,
           includeDocs: true,
+        },
+        ui: {
+          copyPageContent: {
+            buttonLabel: 'Copy Page',
+            actions: {
+              viewMarkdown: true,
+              ai: {
+                chatGPT: true,
+                claude: true,
+              },
+            },
+          },
         },
       },
     ],
