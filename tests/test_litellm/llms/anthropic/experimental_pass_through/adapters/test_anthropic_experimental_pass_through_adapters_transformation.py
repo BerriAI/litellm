@@ -7,6 +7,9 @@ import pytest
 sys.path.insert(0, os.path.abspath("../../../../.."))
 
 
+from litellm.litellm_core_utils.prompt_templates.factory import (
+    THOUGHT_SIGNATURE_SEPARATOR,
+)
 from litellm.llms.anthropic.experimental_pass_through.adapters.transformation import (
     OPENAI_MAX_TOOL_NAME_LENGTH,
     LiteLLMAnthropicMessagesAdapter,
@@ -72,6 +75,50 @@ def test_translate_streaming_openai_chunk_to_anthropic_content_block():
         "name": "get_weather",
         "input": {},
     }
+
+
+def test_translate_streaming_openai_chunk_strips_gemini_thought_from_tool_call_id():
+    """Gemini embeds thought signatures in OpenAI tool ids; Anthropic SSE should expose a clean id."""
+    base = "call_3e9417b7925e49aca9a71dc1885e"
+    sig = "CiIBDDnWx"
+    combined = f"{base}{THOUGHT_SIGNATURE_SEPARATOR}{sig}"
+    choices = [
+        StreamingChoices(
+            finish_reason=None,
+            index=0,
+            delta=Delta(
+                provider_specific_fields=None,
+                content=None,
+                role="assistant",
+                function_call=None,
+                tool_calls=[
+                    ChatCompletionDeltaToolCall(
+                        id=combined,
+                        function=Function(
+                            arguments='{"a": 17, "b": 25}', name="add_numbers"
+                        ),
+                        type="function",
+                        index=0,
+                    )
+                ],
+                audio=None,
+            ),
+            logprobs=None,
+        )
+    ]
+
+    (
+        block_type,
+        content_block_start,
+    ) = LiteLLMAnthropicMessagesAdapter()._translate_streaming_openai_chunk_to_anthropic_content_block(
+        choices=choices
+    )
+
+    assert block_type == "tool_use"
+    assert content_block_start["id"] == base
+    assert content_block_start["name"] == "add_numbers"
+    assert content_block_start["input"] == {}
+    assert content_block_start["provider_specific_fields"]["signature"] == sig
 
 
 def test_translate_streaming_openai_chunk_to_anthropic_thinking_content_block():
