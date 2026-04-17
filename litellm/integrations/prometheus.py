@@ -1014,8 +1014,6 @@ class PrometheusLogger(CustomLogger):
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         # Define prometheus client
-        from litellm.types.utils import StandardLoggingPayload
-
         verbose_logger.debug(
             "prometheus Logging - Enters success logging function (kwargs keys: %s)",
             list(kwargs.keys()) if isinstance(kwargs, dict) else type(kwargs).__name__,
@@ -1538,8 +1536,6 @@ class PrometheusLogger(CustomLogger):
             )
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
-        from litellm.types.utils import StandardLoggingPayload
-
         verbose_logger.debug(
             "prometheus Logging - Enters failure logging function (kwargs keys: %s)",
             list(kwargs.keys()) if isinstance(kwargs, dict) else type(kwargs).__name__,
@@ -2752,8 +2748,6 @@ class PrometheusLogger(CustomLogger):
         """
         Initialize API key budget metrics by reusing the generic pagination logic.
         """
-        from typing import Union
-
         from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
         from litellm.proxy.management_endpoints.key_management_endpoints import (
             _list_key_helper,
@@ -2800,7 +2794,6 @@ class PrometheusLogger(CustomLogger):
         """
         Initialize user budget metrics by reusing the generic pagination logic.
         """
-        from litellm.proxy._types import LiteLLM_UserTable
         from litellm.proxy.proxy_server import prisma_client
 
         if prisma_client is None:
@@ -3441,7 +3434,6 @@ class PrometheusLogger(CustomLogger):
         It emits the current remaining budget metrics for all Keys and Teams.
         """
         from litellm.constants import PROMETHEUS_BUDGET_METRICS_REFRESH_INTERVAL_MINUTES
-        from litellm.integrations.custom_logger import CustomLogger
 
         prometheus_loggers: List[
             CustomLogger
