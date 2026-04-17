@@ -768,9 +768,9 @@ async def _common_key_generation_helper(  # noqa: PLR0915
         request_type="key", **data_json, table_name="key"
     )
 
-    response[
-        "soft_budget"
-    ] = data.soft_budget  # include the user-input soft budget in the response
+    response["soft_budget"] = (
+        data.soft_budget
+    )  # include the user-input soft budget in the response
 
     response = GenerateKeyResponse(**response)
 
@@ -1970,26 +1970,37 @@ async def _validate_update_key_data(
     # Policy:
     # - Key owner (same user_id): may update non-budget fields on their
     #   own key without the admin check.
-    # - Anyone else (non-PROXY_ADMIN, not the owner): must pass
-    #   _check_key_admin_access (PROXY_ADMIN / key-owner / team-admin /
-    #   org-admin of the key).
+    # - Team member with /key/update grant (on a team key): may update
+    #   non-budget fields. Team membership + permission is already
+    #   enforced by can_team_member_execute_key_management_endpoint
+    #   above, which raises 401 for non-members or members without the
+    #   grant — so reaching this point on a team key means the caller
+    #   was authorized via member_permissions. This preserves the
+    #   documented member_permissions feature while still blocking the
+    #   cross-org attack (an outside org admin is not a member of the
+    #   victim team and gets rejected at the earlier check).
+    # - Anyone else (non-PROXY_ADMIN, not the owner, not a team member
+    #   on a team key): must pass _check_key_admin_access (PROXY_ADMIN
+    #   / key-owner / team-admin / org-admin of the key).
     # - max_budget / spend: always require the admin check, even for the
-    #   key owner (matches the existing admin-only budget semantics).
+    #   key owner or a team member (matches the existing admin-only
+    #   budget semantics).
     is_key_owner = (
         user_api_key_dict.user_id is not None
         and existing_key_row.user_id == user_api_key_dict.user_id
     )
     _is_budget_change = (
-        data.max_budget is not None
-        and data.max_budget != existing_key_row.max_budget
+        data.max_budget is not None and data.max_budget != existing_key_row.max_budget
     ) or (
         data.spend is not None
         and data.spend != getattr(existing_key_row, "spend", None)
     )
+    is_team_key = existing_key_row.team_id is not None
+    can_skip_admin_check_for_non_budget = is_key_owner or is_team_key
     if (
         (not _is_proxy_admin)
         and prisma_client is not None
-        and (not is_key_owner or _is_budget_change)
+        and (_is_budget_change or not can_skip_admin_check_for_non_budget)
     ):
         hashed_key = existing_key_row.token
         await _check_key_admin_access(
@@ -1998,9 +2009,7 @@ async def _validate_update_key_data(
             prisma_client=prisma_client,
             user_api_key_cache=user_api_key_cache,
             route=(
-                "/key/update (max_budget/spend)"
-                if _is_budget_change
-                else "/key/update"
+                "/key/update (max_budget/spend)" if _is_budget_change else "/key/update"
             ),
         )
 
@@ -3303,10 +3312,10 @@ async def delete_verification_tokens(
     try:
         if prisma_client:
             tokens = [_hash_token_if_needed(token=key) for key in tokens]
-            _keys_being_deleted: List[
-                LiteLLM_VerificationToken
-            ] = await prisma_client.db.litellm_verificationtoken.find_many(
-                where={"token": {"in": tokens}}
+            _keys_being_deleted: List[LiteLLM_VerificationToken] = (
+                await prisma_client.db.litellm_verificationtoken.find_many(
+                    where={"token": {"in": tokens}}
+                )
             )
 
             if len(_keys_being_deleted) == 0:
@@ -3506,9 +3515,9 @@ async def _rotate_master_key(  # noqa: PLR0915
     from litellm.proxy.proxy_server import proxy_config
 
     try:
-        models: Optional[
-            List
-        ] = await prisma_client.db.litellm_proxymodeltable.find_many()
+        models: Optional[List] = (
+            await prisma_client.db.litellm_proxymodeltable.find_many()
+        )
     except Exception:
         models = None
     # 2. process model table
@@ -4148,11 +4157,11 @@ async def validate_key_list_check(
             param="user_id",
             code=status.HTTP_403_FORBIDDEN,
         )
-    complete_user_info_db_obj: Optional[
-        BaseModel
-    ] = await prisma_client.db.litellm_usertable.find_unique(
-        where={"user_id": user_api_key_dict.user_id},
-        include={"organization_memberships": True},
+    complete_user_info_db_obj: Optional[BaseModel] = (
+        await prisma_client.db.litellm_usertable.find_unique(
+            where={"user_id": user_api_key_dict.user_id},
+            include={"organization_memberships": True},
+        )
     )
 
     if complete_user_info_db_obj is None:
@@ -4235,10 +4244,10 @@ async def _fetch_user_team_objects(
     if complete_user_info is None or not complete_user_info.teams:
         return []
 
-    teams: Optional[
-        List[BaseModel]
-    ] = await prisma_client.db.litellm_teamtable.find_many(
-        where={"team_id": {"in": complete_user_info.teams}}
+    teams: Optional[List[BaseModel]] = (
+        await prisma_client.db.litellm_teamtable.find_many(
+            where={"team_id": {"in": complete_user_info.teams}}
+        )
     )
     if teams is None:
         return []
