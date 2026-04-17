@@ -127,10 +127,11 @@ async def add_team_callbacks(
                     param="callback_name",
                 )
 
-        team_callback_settings.append(data.model_dump())
+        new_entry = data.model_dump()
+        encrypt_logging_callback_vars({"logging": [new_entry]})
+        team_callback_settings.append(new_entry)
 
         team_metadata["logging"] = team_callback_settings
-        encrypt_logging_callback_vars(team_metadata)
         team_metadata_json = json.dumps(team_metadata)  # update team_metadata
 
         new_team_row = await prisma_client.db.litellm_teamtable.update(

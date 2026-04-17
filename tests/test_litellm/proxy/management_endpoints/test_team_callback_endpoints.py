@@ -71,6 +71,62 @@ async def test_add_team_callback_encrypts_callback_vars(mock_prisma, monkeypatch
     assert stored_secret != plaintext_secret, "plaintext secret must be encrypted before DB write"
 
 
+@pytest.mark.asyncio
+@patch("litellm.proxy.proxy_server.prisma_client")
+async def test_add_second_callback_does_not_double_encrypt_first(mock_prisma, monkeypatch):
+    """Adding a second callback must not re-encrypt already-encrypted entries."""
+    monkeypatch.setenv("LITELLM_SALT_KEY", "test-salt-key-1234567890123456")
+    from litellm.proxy.common_utils.callback_utils import encrypt_logging_callback_vars
+    from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper
+
+    # Simulate a team whose first callback was already written (and encrypted)
+    first_entry = {
+        "callback_name": "langfuse",
+        "callback_type": "success",
+        "callback_vars": {"langfuse_secret_key": "sk-lf-firstsecret"},
+    }
+    encrypt_logging_callback_vars({"logging": [first_entry]})
+    encrypted_first = first_entry["callback_vars"]["langfuse_secret_key"]
+
+    existing_team = _make_team({"logging": [first_entry]})
+    mock_prisma.get_data = AsyncMock(return_value=existing_team)
+
+    captured = {}
+
+    async def fake_update(where, data):
+        captured["data"] = data
+        row = MagicMock()
+        row.metadata = data.get("metadata", "{}")
+        return row
+
+    mock_prisma.db = MagicMock()
+    mock_prisma.db.litellm_teamtable = MagicMock()
+    mock_prisma.db.litellm_teamtable.update = fake_update
+
+    data = AddTeamCallback(
+        callback_name="langsmith",
+        callback_type="success",
+        callback_vars={"langsmith_api_key": "ls-secondsecret"},
+    )
+
+    await add_team_callbacks(
+        data=data,
+        http_request=_make_request(),
+        team_id="team-123",
+        user_api_key_dict=UserAPIKeyAuth(),
+    )
+
+    written_metadata = json.loads(captured["data"]["metadata"])
+    # First entry must be unchanged (not re-encrypted)
+    assert written_metadata["logging"][0]["callback_vars"]["langfuse_secret_key"] == encrypted_first
+    # First entry must still decrypt correctly
+    recovered = decrypt_value_helper(value=encrypted_first, key="langfuse_secret_key", return_original_value=True)
+    assert recovered == "sk-lf-firstsecret"
+    # Second entry must be encrypted
+    stored_second = written_metadata["logging"][1]["callback_vars"]["langsmith_api_key"]
+    assert stored_second != "ls-secondsecret"
+
+
 # ---------------------------------------------------------------------------
 # GET /team/{team_id}/callback — redact on read
 # ---------------------------------------------------------------------------
