@@ -183,9 +183,7 @@ def _validate_plugin_source(source: Dict[str, Any]) -> None:
     else:
         raise HTTPException(
             status_code=400,
-            detail={
-                "error": "source.source must be 'github', 'url', or 'git-subdir'"
-            },
+            detail={"error": "source.source must be 'github', 'url', or 'git-subdir'"},
         )
 
 

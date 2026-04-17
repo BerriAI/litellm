@@ -75,4 +75,3 @@ def test_function_call_output_stays_adjacent_to_tool_call():
     # Tool output must be right after tool call, and before the assistant "Done." message.
     assert tool_msg_idx == tool_call_idx + 1
     assert assistant_ok_idx > tool_msg_idx
-

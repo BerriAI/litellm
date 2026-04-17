@@ -66,7 +66,10 @@ def test_transform_includes_tools():
             "type": "function",
             "name": "get_weather",
             "description": "Get weather",
-            "parameters": {"type": "object", "properties": {"city": {"type": "string"}}},
+            "parameters": {
+                "type": "object",
+                "properties": {"city": {"type": "string"}},
+            },
         }
     ]
 
@@ -102,7 +105,9 @@ def test_messages_to_responses_input_basic():
         {"role": "user", "content": "How are you?"},
     ]
 
-    input_items, instructions = OpenAICountTokensConfig.messages_to_responses_input(messages)
+    input_items, instructions = OpenAICountTokensConfig.messages_to_responses_input(
+        messages
+    )
 
     assert len(input_items) == 3
     assert input_items[0] == {"role": "user", "content": "Hello"}
@@ -118,7 +123,9 @@ def test_messages_to_responses_input_with_system():
         {"role": "user", "content": "Hello"},
     ]
 
-    input_items, instructions = OpenAICountTokensConfig.messages_to_responses_input(messages)
+    input_items, instructions = OpenAICountTokensConfig.messages_to_responses_input(
+        messages
+    )
 
     assert len(input_items) == 1
     assert input_items[0] == {"role": "user", "content": "Hello"}
@@ -132,7 +139,9 @@ def test_messages_to_responses_input_with_developer():
         {"role": "user", "content": "Hello"},
     ]
 
-    input_items, instructions = OpenAICountTokensConfig.messages_to_responses_input(messages)
+    input_items, instructions = OpenAICountTokensConfig.messages_to_responses_input(
+        messages
+    )
 
     assert len(input_items) == 1
     assert instructions == "Be concise."
@@ -145,7 +154,9 @@ def test_messages_to_responses_input_with_tool():
         {"role": "tool", "content": "72°F", "tool_call_id": "call_123"},
     ]
 
-    input_items, instructions = OpenAICountTokensConfig.messages_to_responses_input(messages)
+    input_items, instructions = OpenAICountTokensConfig.messages_to_responses_input(
+        messages
+    )
 
     assert len(input_items) == 2
     assert input_items[1] == {
@@ -184,13 +195,19 @@ def test_validate_request_missing_input():
 def test_get_endpoint_default():
     """Test default endpoint URL."""
     config = OpenAICountTokensConfig()
-    assert config.get_openai_count_tokens_endpoint() == "https://api.openai.com/v1/responses/input_tokens"
+    assert (
+        config.get_openai_count_tokens_endpoint()
+        == "https://api.openai.com/v1/responses/input_tokens"
+    )
 
 
 def test_get_endpoint_custom_base():
     """Test custom API base URL."""
     config = OpenAICountTokensConfig()
-    assert config.get_openai_count_tokens_endpoint("https://custom.api.com/v1") == "https://custom.api.com/v1/responses/input_tokens"
+    assert (
+        config.get_openai_count_tokens_endpoint("https://custom.api.com/v1")
+        == "https://custom.api.com/v1/responses/input_tokens"
+    )
 
 
 def test_get_required_headers():

@@ -4,6 +4,7 @@ Test OCR functionality with Azure Document Intelligence API.
 Azure Document Intelligence provides advanced document analysis capabilities
 using the v4.0 (2024-11-30) API.
 """
+
 import os
 
 import pytest
@@ -14,16 +15,16 @@ from base_ocr_unit_tests import BaseOCRTest
 class TestAzureDocumentIntelligenceOCR(BaseOCRTest):
     """
     Test class for Azure Document Intelligence OCR functionality.
-    
+
     Inherits from BaseOCRTest and provides Azure Document Intelligence-specific configuration.
-    
+
     Tests the azure_ai/doc-intelligence/<model> provider route.
     """
 
     def get_base_ocr_call_args(self) -> dict:
         """
         Return the base OCR call args for Azure Document Intelligence.
-        
+
         Uses prebuilt-layout model which is closest to Mistral OCR format.
         """
         # Check for required environment variables
@@ -41,4 +42,3 @@ class TestAzureDocumentIntelligenceOCR(BaseOCRTest):
             "api_key": api_key,
             "api_base": endpoint,
         }
-

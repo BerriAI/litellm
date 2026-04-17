@@ -5,9 +5,7 @@ import sys
 import pytest
 from fastapi import HTTPException
 
-sys.path.insert(
-    0, os.path.abspath("../../../..")
-)
+sys.path.insert(0, os.path.abspath("../../../.."))
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -35,7 +33,7 @@ async def test_set_object_permission():
     mock_prisma_client = MagicMock()
     mock_created_permission = MagicMock()
     mock_created_permission.object_permission_id = "test_perm_id_123"
-    
+
     mock_prisma_client.db.litellm_objectpermissiontable.create = AsyncMock(
         return_value=mock_created_permission
     )
@@ -47,43 +45,40 @@ async def test_set_object_permission():
         "object_permission": {
             "vector_stores": ["store_1", "store_2"],
             "mcp_servers": ["server_a"],
-            "mcp_tool_permissions": {
-                "server_a": ["tool1", "tool2"]
-            },
+            "mcp_tool_permissions": {"server_a": ["tool1", "tool2"]},
             "object_permission_id": "should_be_excluded",
             "mcp_access_groups": None,  # This should be excluded
-        }
+        },
     }
 
     # Call the function
     result = await _set_object_permission(
-        data_json=data_json,
-        prisma_client=mock_prisma_client
+        data_json=data_json, prisma_client=mock_prisma_client
     )
 
     # Verify object_permission_id was added to result
     assert result["object_permission_id"] == "test_perm_id_123"
-    
+
     # Verify object_permission was removed from result
     assert "object_permission" not in result
-    
+
     # Verify create was called
     mock_prisma_client.db.litellm_objectpermissiontable.create.assert_called_once()
-    
+
     # Verify the data passed to create excludes None values and object_permission_id
     call_args = mock_prisma_client.db.litellm_objectpermissiontable.create.call_args
     created_data = call_args.kwargs["data"]
-    
+
     assert "object_permission_id" not in created_data
     assert "mcp_access_groups" not in created_data  # None value should be excluded
     assert created_data["vector_stores"] == ["store_1", "store_2"]
     assert created_data["mcp_servers"] == ["server_a"]
-    
+
     # Verify mcp_tool_permissions was serialized to JSON string
     assert isinstance(created_data["mcp_tool_permissions"], str)
     mcp_tools_parsed = json.loads(created_data["mcp_tool_permissions"])
     assert mcp_tools_parsed == {"server_a": ["tool1", "tool2"]}
-    
+
     # Verify other fields remain in result
     assert result["user_id"] == "test_user"
     assert result["models"] == ["gpt-4"]
@@ -141,7 +136,11 @@ def _make_team_obj(
     mock_team = MagicMock()
     mock_team.team_id = team_id
 
-    if mcp_servers is not None or mcp_access_groups is not None or mcp_tool_permissions is not None:
+    if (
+        mcp_servers is not None
+        or mcp_access_groups is not None
+        or mcp_tool_permissions is not None
+    ):
         mock_team.object_permission = MagicMock(spec=LiteLLM_ObjectPermissionTable)
         mock_team.object_permission.mcp_servers = mcp_servers or []
         mock_team.object_permission.mcp_access_groups = mcp_access_groups or []
@@ -180,7 +179,9 @@ async def test_validate_no_object_permission(mock_access_groups, mock_allow_all)
     new_callable=AsyncMock,
     return_value=[],
 )
-async def test_validate_key_servers_within_team_scope(mock_access_groups, mock_allow_all):
+async def test_validate_key_servers_within_team_scope(
+    mock_access_groups, mock_allow_all
+):
     """Key requests servers that are in the team's scope — should pass."""
     team_obj = _make_team_obj(mcp_servers=["server-1", "server-2", "server-3"])
     await validate_key_mcp_servers_against_team(
@@ -199,7 +200,9 @@ async def test_validate_key_servers_within_team_scope(mock_access_groups, mock_a
     new_callable=AsyncMock,
     return_value=[],
 )
-async def test_validate_key_servers_outside_team_scope_raises(mock_access_groups, mock_allow_all):
+async def test_validate_key_servers_outside_team_scope_raises(
+    mock_access_groups, mock_allow_all
+):
     """Key requests servers NOT in the team's scope — should raise 403."""
     team_obj = _make_team_obj(mcp_servers=["server-1"])
     with pytest.raises(HTTPException) as exc_info:
@@ -221,7 +224,9 @@ async def test_validate_key_servers_outside_team_scope_raises(mock_access_groups
     new_callable=AsyncMock,
     return_value=[],
 )
-async def test_validate_allow_all_keys_servers_always_allowed(mock_access_groups, mock_allow_all):
+async def test_validate_allow_all_keys_servers_always_allowed(
+    mock_access_groups, mock_allow_all
+):
     """allow_all_keys servers should be accessible even if not in team scope."""
     team_obj = _make_team_obj(mcp_servers=["server-1"])
     await validate_key_mcp_servers_against_team(
@@ -259,7 +264,9 @@ async def test_validate_no_team_only_allow_all_keys(mock_access_groups, mock_all
     new_callable=AsyncMock,
     return_value=[],
 )
-async def test_validate_no_team_non_global_server_raises(mock_access_groups, mock_allow_all):
+async def test_validate_no_team_non_global_server_raises(
+    mock_access_groups, mock_allow_all
+):
     """Key without a team requesting a non-global server — should raise 403."""
     with pytest.raises(HTTPException) as exc_info:
         await validate_key_mcp_servers_against_team(
@@ -280,7 +287,9 @@ async def test_validate_no_team_non_global_server_raises(mock_access_groups, moc
     new_callable=AsyncMock,
     return_value=[],
 )
-async def test_validate_team_no_mcp_config_blocks_all(mock_access_groups, mock_allow_all):
+async def test_validate_team_no_mcp_config_blocks_all(
+    mock_access_groups, mock_allow_all
+):
     """Team with no object_permission — key can't use any non-global MCP servers."""
     team_obj = _make_team_obj()  # No object_permission
     with pytest.raises(HTTPException) as exc_info:
@@ -301,14 +310,14 @@ async def test_validate_team_no_mcp_config_blocks_all(mock_access_groups, mock_a
     new_callable=AsyncMock,
     return_value=[],
 )
-async def test_validate_tool_permissions_validated_against_team(mock_access_groups, mock_allow_all):
+async def test_validate_tool_permissions_validated_against_team(
+    mock_access_groups, mock_allow_all
+):
     """Server IDs in mcp_tool_permissions should also be validated."""
     team_obj = _make_team_obj(mcp_servers=["server-1"])
     with pytest.raises(HTTPException) as exc_info:
         await validate_key_mcp_servers_against_team(
-            object_permission={
-                "mcp_tool_permissions": {"server-outside": ["tool1"]}
-            },
+            object_permission={"mcp_tool_permissions": {"server-outside": ["tool1"]}},
             team_obj=team_obj,
         )
     assert exc_info.value.status_code == 403
@@ -325,7 +334,9 @@ async def test_validate_tool_permissions_validated_against_team(mock_access_grou
     new_callable=AsyncMock,
     return_value=[],
 )
-async def test_validate_access_groups_within_team_scope(mock_access_groups, mock_allow_all):
+async def test_validate_access_groups_within_team_scope(
+    mock_access_groups, mock_allow_all
+):
     """Key requests access groups that are in the team's scope — should pass."""
     team_obj = _make_team_obj(mcp_access_groups=["group-a", "group-b"])
     await validate_key_mcp_servers_against_team(
@@ -344,7 +355,9 @@ async def test_validate_access_groups_within_team_scope(mock_access_groups, mock
     new_callable=AsyncMock,
     return_value=[],
 )
-async def test_validate_access_groups_outside_team_scope_raises(mock_access_groups, mock_allow_all):
+async def test_validate_access_groups_outside_team_scope_raises(
+    mock_access_groups, mock_allow_all
+):
     """Key requests access groups NOT in the team's scope — should raise 403."""
     team_obj = _make_team_obj(mcp_access_groups=["group-a"])
     with pytest.raises(HTTPException) as exc_info:
@@ -366,7 +379,9 @@ async def test_validate_access_groups_outside_team_scope_raises(mock_access_grou
     new_callable=AsyncMock,
     return_value=[],
 )
-async def test_validate_access_groups_no_team_raises(mock_access_groups, mock_allow_all):
+async def test_validate_access_groups_no_team_raises(
+    mock_access_groups, mock_allow_all
+):
     """Key without a team requesting access groups — should raise 403."""
     with pytest.raises(HTTPException) as exc_info:
         await validate_key_mcp_servers_against_team(
@@ -387,7 +402,9 @@ async def test_validate_access_groups_no_team_raises(mock_access_groups, mock_al
     new_callable=AsyncMock,
     return_value=["server-from-group"],
 )
-async def test_validate_team_access_groups_resolve_to_servers(mock_access_groups, mock_allow_all):
+async def test_validate_team_access_groups_resolve_to_servers(
+    mock_access_groups, mock_allow_all
+):
     """Team access groups should resolve to server IDs and be included in allowed set."""
     team_obj = _make_team_obj(mcp_access_groups=["group-a"])
     # Key requests a server that comes from the team's access group
@@ -406,7 +423,9 @@ async def test_validate_team_access_groups_resolve_to_servers(mock_access_groups
     new_callable=AsyncMock,
     return_value=[],
 )
-async def test_resolve_team_allowed_mcp_servers_string_tool_permissions(mock_access_groups):
+async def test_resolve_team_allowed_mcp_servers_string_tool_permissions(
+    mock_access_groups,
+):
     """mcp_tool_permissions stored as a JSON string (via safe_dumps) should be deserialized correctly."""
     mock_perm = MagicMock(spec=LiteLLM_ObjectPermissionTable)
     mock_perm.mcp_servers = ["server-1"]
@@ -423,7 +442,9 @@ async def test_resolve_team_allowed_mcp_servers_string_tool_permissions(mock_acc
     new_callable=AsyncMock,
     return_value=[],
 )
-async def test_resolve_team_allowed_mcp_servers_dict_tool_permissions(mock_access_groups):
+async def test_resolve_team_allowed_mcp_servers_dict_tool_permissions(
+    mock_access_groups,
+):
     """mcp_tool_permissions as a dict should work without deserialization."""
     mock_perm = MagicMock(spec=LiteLLM_ObjectPermissionTable)
     mock_perm.mcp_servers = []
@@ -432,4 +453,3 @@ async def test_resolve_team_allowed_mcp_servers_dict_tool_permissions(mock_acces
 
     result = await _resolve_team_allowed_mcp_servers(mock_perm)
     assert result == {"server-a"}
-

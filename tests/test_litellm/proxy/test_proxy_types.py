@@ -50,11 +50,11 @@ def test_audit_log_masking():
 def test_internal_jobs_user_has_proxy_admin_role():
     """
     Test that the internal jobs system user has PROXY_ADMIN role.
-    
+
     This is critical for key rotation to work properly. The system user needs
     PROXY_ADMIN role to bypass team permission checks in
     TeamMemberPermissionChecks.can_team_member_execute_key_management_endpoint()
-    
+
     Regression test for: https://github.com/BerriAI/litellm/pull/21896
     """
     from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
@@ -64,7 +64,7 @@ def test_internal_jobs_user_has_proxy_admin_role():
 
     # Verify the system user has PROXY_ADMIN role
     assert system_user.user_role == LitellmUserRoles.PROXY_ADMIN
-    
+
     # Verify other expected properties
     assert system_user.user_id == "system"
     assert system_user.team_id == "system"

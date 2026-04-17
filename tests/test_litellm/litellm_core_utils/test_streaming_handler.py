@@ -539,15 +539,16 @@ async def test_streaming_with_usage_and_logging(sync_mode: bool):
         cache_read_input_tokens=1796,
     )
 
-    with patch.object(
-        mock_callback, "log_success_event"
-    ) as mock_log_success_event, patch.object(
-        mock_callback, "log_stream_event"
-    ) as mock_log_stream_event, patch.object(
-        mock_callback, "async_log_success_event"
-    ) as mock_async_log_success_event, patch.object(
-        mock_callback, "async_log_stream_event"
-    ) as mock_async_log_stream_event:
+    with (
+        patch.object(mock_callback, "log_success_event") as mock_log_success_event,
+        patch.object(mock_callback, "log_stream_event") as mock_log_stream_event,
+        patch.object(
+            mock_callback, "async_log_success_event"
+        ) as mock_async_log_success_event,
+        patch.object(
+            mock_callback, "async_log_stream_event"
+        ) as mock_async_log_stream_event,
+    ):
         await test_streaming_handler_with_usage(
             sync_mode=sync_mode, final_usage_block=final_usage_block
         )

@@ -735,13 +735,16 @@ async def test_tpm_rpm_routing_model_name_checks():
     async def side_effect_pre_call_check(*args, **kwargs):
         return args[0]
 
-    with patch.object(
-        router.lowesttpm_logger_v2,
-        "async_pre_call_check",
-        side_effect=side_effect_pre_call_check,
-    ) as mock_object, patch.object(
-        router.lowesttpm_logger_v2, "async_log_success_event"
-    ) as mock_logging_event:
+    with (
+        patch.object(
+            router.lowesttpm_logger_v2,
+            "async_pre_call_check",
+            side_effect=side_effect_pre_call_check,
+        ) as mock_object,
+        patch.object(
+            router.lowesttpm_logger_v2, "async_log_success_event"
+        ) as mock_logging_event,
+    ):
         response = await router.acompletion(
             model="gpt-3.5-turbo", messages=[{"role": "user", "content": "Hey!"}]
         )

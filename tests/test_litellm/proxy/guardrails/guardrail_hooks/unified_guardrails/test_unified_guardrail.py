@@ -175,7 +175,8 @@ class TestUnifiedLLMGuardrails:
 
             assert "sys" in captured["inputs"]["texts"]
             roles = {
-                m.get("role") for m in (captured["inputs"].get("structured_messages") or [])
+                m.get("role")
+                for m in (captured["inputs"].get("structured_messages") or [])
             }
             assert "system" in roles
 

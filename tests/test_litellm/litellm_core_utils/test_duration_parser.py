@@ -135,9 +135,7 @@ class TestStandardizedResetTime(unittest.TestCase):
         # Asia/Tokyo (UTC+9): 15:00 UTC = 00:00 JST May 16, exactly on midnight boundary → next day
         tokyo = ZoneInfo("Asia/Tokyo")
         tokyo_expected = datetime(2023, 5, 17, 0, 0, 0, tzinfo=tokyo)
-        tokyo_result = get_next_standardized_reset_time(
-            "1d", base_time, "Asia/Tokyo"
-        )
+        tokyo_result = get_next_standardized_reset_time("1d", base_time, "Asia/Tokyo")
         self.assertEqual(tokyo_result, tokyo_expected)
 
         # Australia/Sydney (UTC+10): 2023-05-16 01:00 AEST

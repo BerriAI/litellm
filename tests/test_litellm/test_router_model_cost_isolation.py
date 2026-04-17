@@ -34,8 +34,12 @@ def test_should_not_pollute_shared_key_with_zero_cost_pricing():
     builtin_output_cost = builtin_info["output_cost_per_token"]
 
     # Sanity: built-in pricing should be non-zero for this model
-    assert builtin_input_cost > 0, "Test requires a model with non-zero built-in pricing"
-    assert builtin_output_cost > 0, "Test requires a model with non-zero built-in pricing"
+    assert (
+        builtin_input_cost > 0
+    ), "Test requires a model with non-zero built-in pricing"
+    assert (
+        builtin_output_cost > 0
+    ), "Test requires a model with non-zero built-in pricing"
 
     router = Router(
         model_list=[

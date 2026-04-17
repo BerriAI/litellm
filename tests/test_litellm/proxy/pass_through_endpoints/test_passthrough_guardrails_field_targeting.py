@@ -30,20 +30,19 @@ def test_no_fields_set_sends_full_body():
         "query": "What is coffee?",
         "documents": [
             {"text": "Paris is the capital of France."},
-            {"text": "Coffee is a brewed drink."}
-        ]
+            {"text": "Coffee is a brewed drink."},
+        ],
     }
-    
+
     # No guardrail settings means full body
     result = PassthroughGuardrailHandler.prepare_input(
-        request_data=request_data, 
-        guardrail_settings=None
+        request_data=request_data, guardrail_settings=None
     )
-    
+
     # Result should be JSON string of full request
     assert isinstance(result, str)
     result_dict = json.loads(result)
-    
+
     # Should contain all fields
     assert "model" in result_dict
     assert "query" in result_dict
@@ -62,24 +61,21 @@ def test_request_fields_query_only():
         "query": "What is coffee?",
         "documents": [
             {"text": "Paris is the capital of France."},
-            {"text": "Coffee is a brewed drink."}
-        ]
+            {"text": "Coffee is a brewed drink."},
+        ],
     }
-    
+
     # Set request_fields to only extract query
-    guardrail_settings = PassThroughGuardrailSettings(
-        request_fields=["query"]
-    )
-    
+    guardrail_settings = PassThroughGuardrailSettings(request_fields=["query"])
+
     result = PassthroughGuardrailHandler.prepare_input(
-        request_data=request_data, 
-        guardrail_settings=guardrail_settings
+        request_data=request_data, guardrail_settings=guardrail_settings
     )
-    
+
     # Result should only contain query
     assert isinstance(result, str)
     assert "What is coffee?" in result
-    
+
     # Should NOT contain documents
     assert "Paris is the capital" not in result
     assert "Coffee is a brewed drink" not in result
@@ -95,25 +91,21 @@ def test_request_fields_documents_wildcard():
         "query": "What is coffee?",
         "documents": [
             {"text": "Paris is the capital of France."},
-            {"text": "Coffee is a brewed drink."}
-        ]
+            {"text": "Coffee is a brewed drink."},
+        ],
     }
-    
+
     # Set request_fields to extract documents array
-    guardrail_settings = PassThroughGuardrailSettings(
-        request_fields=["documents[*]"]
-    )
-    
+    guardrail_settings = PassThroughGuardrailSettings(request_fields=["documents[*]"])
+
     result = PassthroughGuardrailHandler.prepare_input(
-        request_data=request_data, 
-        guardrail_settings=guardrail_settings
+        request_data=request_data, guardrail_settings=guardrail_settings
     )
-    
+
     # Result should contain documents
     assert isinstance(result, str)
     assert "Paris is the capital" in result
     assert "Coffee is a brewed drink" in result
-    
+
     # Should NOT contain query
     assert "What is coffee?" not in result
-

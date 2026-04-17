@@ -5,6 +5,7 @@ This test file specifically tests the edge cases where Vertex AI might return
 functionCall args in unexpected formats that could lead to invalid JSON strings
 like: {"x":"x"}{"a":"a"}
 """
+
 import json
 from typing import List, Optional
 
@@ -37,7 +38,7 @@ class TestFunctionCallArgsSerialization:
         assert tools is not None
         assert len(tools) == 1
         assert tools[0]["function"]["name"] == "get_weather"
-        
+
         # Verify arguments is a valid JSON string
         arguments = tools[0]["function"]["arguments"]
         assert isinstance(arguments, str)
@@ -104,7 +105,7 @@ class TestFunctionCallArgsSerialization:
 
     def test_args_as_string_invalid_json_concatenated(self):
         """Test case: args is a string with concatenated JSON objects (the bug case).
-        
+
         When args is a string like '{"x":"x"}{"a":"a"}', json.dumps() will serialize it
         as a JSON string, resulting in: "{\"x\":\"x\"}{\"a\":\"a\"}"
         This is a valid JSON string (the outer quotes), but the content inside is invalid JSON.
@@ -129,18 +130,18 @@ class TestFunctionCallArgsSerialization:
         assert len(tools) == 1
         arguments = tools[0]["function"]["arguments"]
         assert isinstance(arguments, str)
-        
+
         # json.dumps() on a string will escape it, so we get:
         # arguments = '"{\\"x\\":\\"x\\"}{\\"a\\":\\"a\\"}"'
         # This is a valid JSON string (the outer quotes), but the inner content is invalid
         parsed_outer = json.loads(arguments)
         assert isinstance(parsed_outer, str)
-        
+
         # The inner string is invalid JSON (two objects concatenated)
         # This is the bug: the inner content cannot be parsed as valid JSON
         with pytest.raises(json.JSONDecodeError):
             json.loads(parsed_outer)
-        
+
         # The arguments string would be: "{\"x\":\"x\"}{\"a\":\"a\"}"
         # Which when parsed gives: '{"x":"x"}{"a":"a"}' (invalid JSON)
 
@@ -169,7 +170,7 @@ class TestFunctionCallArgsSerialization:
 
     def test_args_missing_key(self):
         """Test case: args key is missing from functionCall.
-        
+
         This will raise a KeyError because the code directly accesses part["functionCall"]["args"]
         without checking if the key exists. This is a bug that should be fixed.
         """
@@ -213,7 +214,7 @@ class TestFunctionCallArgsSerialization:
         assert len(tools) == 2
         assert tools[0]["function"]["name"] == "get_weather"
         assert tools[1]["function"]["name"] == "get_time"
-        
+
         # Both should have valid JSON arguments
         args1 = json.loads(tools[0]["function"]["arguments"])
         args2 = json.loads(tools[1]["function"]["arguments"])
@@ -352,4 +353,3 @@ class TestFunctionCallArgsSerialization:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
-

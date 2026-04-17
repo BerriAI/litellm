@@ -49,8 +49,12 @@ class RegisterPluginRequest(BaseModel):
     homepage: Optional[str] = Field(None, description="Plugin homepage URL")
     keywords: Optional[List[str]] = Field(None, description="Search keywords")
     category: Optional[str] = Field(None, description="Plugin category")
-    domain: Optional[str] = Field(None, description="Skill domain (e.g., 'Productivity')")
-    namespace: Optional[str] = Field(None, description="Skill namespace within domain (e.g., 'workflows')")
+    domain: Optional[str] = Field(
+        None, description="Skill domain (e.g., 'Productivity')"
+    )
+    namespace: Optional[str] = Field(
+        None, description="Skill namespace within domain (e.g., 'workflows')"
+    )
 
 
 class PluginResponse(BaseModel):

@@ -75,7 +75,9 @@ class TestCheckResponsesCost:
         await check_responses_cost_instance.check_responses_cost()
 
         # Verify find_many was called with pagination params
-        find_many_call = mock_prisma_client.db.litellm_managedobjecttable.find_many.call_args
+        find_many_call = (
+            mock_prisma_client.db.litellm_managedobjecttable.find_many.call_args
+        )
         assert find_many_call[1]["where"] == {
             "status": {"in": ["queued", "in_progress"]},
             "file_purpose": "response",
@@ -143,7 +145,9 @@ class TestCheckResponsesCost:
             await check_responses_cost_instance.check_responses_cost()
 
         # update_many should only contain the job completion call
-        calls = mock_prisma_client.db.litellm_managedobjecttable.update_many.call_args_list
+        calls = (
+            mock_prisma_client.db.litellm_managedobjecttable.update_many.call_args_list
+        )
         assert len(calls) == 1
         completion_call = calls[0]
         assert completion_call[1]["data"]["status"] == "completed"
@@ -186,7 +190,9 @@ class TestCheckResponsesCost:
             await check_responses_cost_instance.check_responses_cost()
 
         # update_many should only contain the job completion call
-        calls = mock_prisma_client.db.litellm_managedobjecttable.update_many.call_args_list
+        calls = (
+            mock_prisma_client.db.litellm_managedobjecttable.update_many.call_args_list
+        )
         assert len(calls) == 1
         assert calls[0][1]["data"]["status"] == "completed"
 
@@ -227,7 +233,9 @@ class TestCheckResponsesCost:
             await check_responses_cost_instance.check_responses_cost()
 
         # update_many should only contain the job completion call
-        calls = mock_prisma_client.db.litellm_managedobjecttable.update_many.call_args_list
+        calls = (
+            mock_prisma_client.db.litellm_managedobjecttable.update_many.call_args_list
+        )
         assert len(calls) == 1
         assert calls[0][1]["data"]["status"] == "completed"
 
@@ -268,7 +276,9 @@ class TestCheckResponsesCost:
             await check_responses_cost_instance.check_responses_cost()
 
         # No job completion update_many — response is still in progress
-        calls = mock_prisma_client.db.litellm_managedobjecttable.update_many.call_args_list
+        calls = (
+            mock_prisma_client.db.litellm_managedobjecttable.update_many.call_args_list
+        )
         assert len(calls) == 0
         # Stale cleanup still ran via _expire_stale_rows
         check_responses_cost_instance._expire_stale_rows.assert_called_once()
@@ -310,7 +320,9 @@ class TestCheckResponsesCost:
             await check_responses_cost_instance.check_responses_cost()
 
         # No job completion update_many — response is still queued
-        calls = mock_prisma_client.db.litellm_managedobjecttable.update_many.call_args_list
+        calls = (
+            mock_prisma_client.db.litellm_managedobjecttable.update_many.call_args_list
+        )
         assert len(calls) == 0
         # Stale cleanup still ran via _expire_stale_rows
         check_responses_cost_instance._expire_stale_rows.assert_called_once()
@@ -345,7 +357,9 @@ class TestCheckResponsesCost:
             await check_responses_cost_instance.check_responses_cost()
 
         # No job completion update_many — exception skipped the job
-        calls = mock_prisma_client.db.litellm_managedobjecttable.update_many.call_args_list
+        calls = (
+            mock_prisma_client.db.litellm_managedobjecttable.update_many.call_args_list
+        )
         assert len(calls) == 0
         # Stale cleanup still ran via _expire_stale_rows
         check_responses_cost_instance._expire_stale_rows.assert_called_once()
@@ -425,7 +439,9 @@ class TestCheckResponsesCost:
             await check_responses_cost_instance.check_responses_cost()
 
         # update_many should only contain the job completion call
-        calls = mock_prisma_client.db.litellm_managedobjecttable.update_many.call_args_list
+        calls = (
+            mock_prisma_client.db.litellm_managedobjecttable.update_many.call_args_list
+        )
         assert len(calls) == 1
         completion_call = calls[0]
         assert len(completion_call[1]["where"]["id"]["in"]) == 2

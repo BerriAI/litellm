@@ -91,9 +91,9 @@ class AktoGuardrail(CustomGuardrail):
                 "akto_api_key is required. Set AKTO_API_KEY or pass it in litellm_params."
             )
 
-        self.unreachable_fallback: Literal[
-            "fail_closed", "fail_open"
-        ] = unreachable_fallback
+        self.unreachable_fallback: Literal["fail_closed", "fail_open"] = (
+            unreachable_fallback
+        )
         self.guardrail_timeout = guardrail_timeout or DEFAULT_GUARDRAIL_TIMEOUT
         self.akto_account_id = akto_account_id or os.environ.get(
             "AKTO_ACCOUNT_ID", "1000000"

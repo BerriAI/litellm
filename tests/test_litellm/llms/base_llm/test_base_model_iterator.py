@@ -26,18 +26,17 @@ class TestBaseModelResponseIterator:
         # Simulate SSE stream with empty lines between events (normal SSE format)
         sse_lines = [
             'data: {"id":"1","choices":[{"delta":{"content":"Hello"}}]}',
-            '',  # Empty line (SSE separator)
+            "",  # Empty line (SSE separator)
             'data: {"id":"1","choices":[{"delta":{"content":" World"}}]}',
-            '',  # Empty line (SSE separator)
+            "",  # Empty line (SSE separator)
             'data: {"id":"1","choices":[],"usage":{"prompt_tokens":10,"completion_tokens":5}}',
-            '',  # Empty line (SSE separator)
-            'data: [DONE]',
-            '',  # Empty line after DONE
+            "",  # Empty line (SSE separator)
+            "data: [DONE]",
+            "",  # Empty line after DONE
         ]
 
         iterator = BaseModelResponseIterator(
-            streaming_response=iter(sse_lines),
-            sync_stream=True
+            streaming_response=iter(sse_lines), sync_stream=True
         )
 
         chunks = list(iterator)
@@ -55,14 +54,13 @@ class TestBaseModelResponseIterator:
         """Test that lines with only whitespace are also filtered"""
         sse_lines = [
             'data: {"id":"1","choices":[{"delta":{"content":"Hi"}}]}',
-            '   ',  # Whitespace only
-            '\t',   # Tab only
-            'data: [DONE]',
+            "   ",  # Whitespace only
+            "\t",  # Tab only
+            "data: [DONE]",
         ]
 
         iterator = BaseModelResponseIterator(
-            streaming_response=iter(sse_lines),
-            sync_stream=True
+            streaming_response=iter(sse_lines), sync_stream=True
         )
 
         chunks = list(iterator)
@@ -76,12 +74,11 @@ class TestBaseModelResponseIterator:
             'data: {"id":"1","choices":[{"delta":{"content":"A"}}]}',
             'data: {"id":"1","choices":[{"delta":{"content":"B"}}]}',
             'data: {"id":"1","choices":[{"delta":{"content":"C"}}]}',
-            'data: [DONE]',
+            "data: [DONE]",
         ]
 
         iterator = BaseModelResponseIterator(
-            streaming_response=iter(sse_lines),
-            sync_stream=True
+            streaming_response=iter(sse_lines), sync_stream=True
         )
 
         chunks = list(iterator)
@@ -95,21 +92,21 @@ async def test_filter_empty_sse_lines_async():
     """
     Test async version: empty SSE lines should be filtered out
     """
+
     async def async_sse_generator():
         lines = [
             'data: {"id":"1","choices":[{"delta":{"content":"Hello"}}]}',
-            '',  # Empty line
+            "",  # Empty line
             'data: {"id":"1","choices":[{"delta":{"content":" World"}}]}',
-            '',  # Empty line
-            'data: [DONE]',
-            '',  # Empty line
+            "",  # Empty line
+            "data: [DONE]",
+            "",  # Empty line
         ]
         for line in lines:
             yield line
 
     iterator = BaseModelResponseIterator(
-        streaming_response=async_sse_generator(),
-        sync_stream=False
+        streaming_response=async_sse_generator(), sync_stream=False
     )
 
     chunks = []
@@ -122,6 +119,7 @@ async def test_filter_empty_sse_lines_async():
 
 class FakeResponseEvent(BaseModel):
     """Simulates a Pydantic BaseModel event like ResponseCreatedEvent from the OpenAI SDK."""
+
     type: str = "response.created"
     data: dict = {}
 
@@ -177,9 +175,9 @@ class TestBaseModelResponseIteratorNonStringChunks:
                 )
 
         items = [
-            "",          # empty string — should be skipped
-            event,       # Pydantic object — must pass through
-            "   ",       # whitespace — should be skipped
+            "",  # empty string — should be skipped
+            event,  # Pydantic object — must pass through
+            "   ",  # whitespace — should be skipped
             "data: [DONE]",  # valid SSE
         ]
 

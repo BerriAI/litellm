@@ -1163,9 +1163,9 @@ def test_managed_files_with_loadbalancing(
     import litellm.proxy.proxy_server as ps
     from litellm.proxy._types import LitellmUserRoles
 
-    proxy_logging_obj.proxy_hook_mapping[
-        "managed_files"
-    ] = ManagedFilesWithLoadbalancing()
+    proxy_logging_obj.proxy_hook_mapping["managed_files"] = (
+        ManagedFilesWithLoadbalancing()
+    )
     monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", llm_router)
     monkeypatch.setattr(
         "litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging_obj

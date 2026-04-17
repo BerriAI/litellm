@@ -22,7 +22,11 @@ class CostLogger(CustomLogger):
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         slp = kwargs.get("standard_logging_object")
         if slp:
-            self.response_cost = slp.get("response_cost") if isinstance(slp, dict) else getattr(slp, "response_cost", None)
+            self.response_cost = (
+                slp.get("response_cost")
+                if isinstance(slp, dict)
+                else getattr(slp, "response_cost", None)
+            )
 
 
 @pytest.mark.asyncio
@@ -44,11 +48,13 @@ async def test_asend_message_uses_cost_per_query():
 
     # Mock response with required fields
     mock_response = MagicMock()
-    mock_response.model_dump = MagicMock(return_value={
-        "id": "test-123",
-        "jsonrpc": "2.0",
-        "result": {"status": "completed"},
-    })
+    mock_response.model_dump = MagicMock(
+        return_value={
+            "id": "test-123",
+            "jsonrpc": "2.0",
+            "result": {"status": "completed"},
+        }
+    )
     mock_client.send_message = AsyncMock(return_value=mock_response)
 
     # Mock request
@@ -79,9 +85,21 @@ class TokenAndCostLogger(CustomLogger):
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         slp = kwargs.get("standard_logging_object")
         if slp:
-            self.response_cost = slp.get("response_cost") if isinstance(slp, dict) else getattr(slp, "response_cost", None)
-            self.prompt_tokens = slp.get("prompt_tokens") if isinstance(slp, dict) else getattr(slp, "prompt_tokens", None)
-            self.completion_tokens = slp.get("completion_tokens") if isinstance(slp, dict) else getattr(slp, "completion_tokens", None)
+            self.response_cost = (
+                slp.get("response_cost")
+                if isinstance(slp, dict)
+                else getattr(slp, "response_cost", None)
+            )
+            self.prompt_tokens = (
+                slp.get("prompt_tokens")
+                if isinstance(slp, dict)
+                else getattr(slp, "prompt_tokens", None)
+            )
+            self.completion_tokens = (
+                slp.get("completion_tokens")
+                if isinstance(slp, dict)
+                else getattr(slp, "completion_tokens", None)
+            )
 
 
 @pytest.mark.asyncio
@@ -104,18 +122,25 @@ async def test_asend_message_uses_input_output_cost_per_token():
 
     # Realistic A2A response with message parts
     mock_response = MagicMock()
-    mock_response.model_dump = MagicMock(return_value={
-        "id": "test-123",
-        "jsonrpc": "2.0",
-        "result": {
-            "status": {"state": "completed"},
-            "message": {
-                "role": "assistant",
-                "parts": [{"kind": "text", "text": "Hello! I am your assistant. How can I help you today?"}],
-                "messageId": "msg-456",
-            }
-        },
-    })
+    mock_response.model_dump = MagicMock(
+        return_value={
+            "id": "test-123",
+            "jsonrpc": "2.0",
+            "result": {
+                "status": {"state": "completed"},
+                "message": {
+                    "role": "assistant",
+                    "parts": [
+                        {
+                            "kind": "text",
+                            "text": "Hello! I am your assistant. How can I help you today?",
+                        }
+                    ],
+                    "messageId": "msg-456",
+                },
+            },
+        }
+    )
     mock_client.send_message = AsyncMock(return_value=mock_response)
 
     # Mock request with message parts
@@ -159,11 +184,15 @@ async def test_asend_message_uses_input_output_cost_per_token():
     assert response_cost is not None, "response_cost should be captured"
 
     # Calculate expected cost
-    expected_cost = (prompt_tokens * input_cost_per_token) + (completion_tokens * output_cost_per_token)
+    expected_cost = (prompt_tokens * input_cost_per_token) + (
+        completion_tokens * output_cost_per_token
+    )
     print(f"expected_cost: {expected_cost}")
 
     # Verify exact cost calculation
-    assert response_cost == expected_cost, f"response_cost {response_cost} should equal expected {expected_cost}"
+    assert (
+        response_cost == expected_cost
+    ), f"response_cost {response_cost} should equal expected {expected_cost}"
 
 
 class AgentIdLogger(CustomLogger):
@@ -198,11 +227,13 @@ async def test_asend_message_passes_agent_id_to_callback():
 
     # Mock response
     mock_response = MagicMock()
-    mock_response.model_dump = MagicMock(return_value={
-        "id": "test-123",
-        "jsonrpc": "2.0",
-        "result": {"status": "completed"},
-    })
+    mock_response.model_dump = MagicMock(
+        return_value={
+            "id": "test-123",
+            "jsonrpc": "2.0",
+            "result": {"status": "completed"},
+        }
+    )
     mock_client.send_message = AsyncMock(return_value=mock_response)
 
     # Mock request
@@ -221,7 +252,9 @@ async def test_asend_message_passes_agent_id_to_callback():
     await asyncio.sleep(0.1)
 
     # Verify agent_id was passed to callback
-    assert agent_id_logger.agent_id == test_agent_id, f"Expected agent_id '{test_agent_id}', got '{agent_id_logger.agent_id}'"
+    assert (
+        agent_id_logger.agent_id == test_agent_id
+    ), f"Expected agent_id '{test_agent_id}', got '{agent_id_logger.agent_id}'"
 
 
 class MetadataLogger(CustomLogger):
@@ -272,7 +305,10 @@ async def test_asend_message_streaming_propagates_metadata():
     mock_request = MagicMock()
     mock_request.id = "test-stream-metadata"
     mock_request.params = MagicMock()
-    mock_request.params.message = {"role": "user", "parts": [{"kind": "text", "text": "Hello"}]}
+    mock_request.params.message = {
+        "role": "user",
+        "parts": [{"kind": "text", "text": "Hello"}],
+    }
 
     # Metadata from proxy (contains user_api_key, user_id, team_id for SpendLogs)
     test_metadata = {
@@ -327,7 +363,10 @@ async def test_asend_message_streaming_triggers_callbacks():
     mock_request = MagicMock()
     mock_request.id = "test-stream-123"
     mock_request.params = MagicMock()
-    mock_request.params.message = {"role": "user", "parts": [{"kind": "text", "text": "Hello"}]}
+    mock_request.params.message = {
+        "role": "user",
+        "parts": [{"kind": "text", "text": "Hello"}],
+    }
 
     test_agent_id = "test-agent-id-streaming"
 
@@ -346,5 +385,9 @@ async def test_asend_message_streaming_triggers_callbacks():
     assert len(chunks) == 2
 
     # Verify callbacks WERE triggered after stream completed
-    assert callback_logger.kwargs is not None, "Streaming should trigger callbacks after completion"
-    assert callback_logger.agent_id == test_agent_id, f"Expected agent_id '{test_agent_id}', got '{callback_logger.agent_id}'"
+    assert (
+        callback_logger.kwargs is not None
+    ), "Streaming should trigger callbacks after completion"
+    assert (
+        callback_logger.agent_id == test_agent_id
+    ), f"Expected agent_id '{test_agent_id}', got '{callback_logger.agent_id}'"

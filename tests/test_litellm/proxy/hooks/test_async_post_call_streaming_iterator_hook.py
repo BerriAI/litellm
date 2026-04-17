@@ -94,9 +94,7 @@ async def test_streaming_hook_is_async_generator():
         assert (
             len(collected_chunks) == 4
         ), f"Expected 4 chunks, got {len(collected_chunks)}"
-        assert (
-            callback.chunks_processed == 4
-        ), "Callback should have processed 4 chunks"
+        assert callback.chunks_processed == 4, "Callback should have processed 4 chunks"
 
 
 @pytest.mark.asyncio

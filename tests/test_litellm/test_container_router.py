@@ -25,24 +25,21 @@ class TestContainerRouter:
             "object": "container",
             "created_at": 1747857508,
             "status": "running",
-            "expires_after": {
-                "anchor": "last_active_at",
-                "minutes": 20
-            },
+            "expires_after": {"anchor": "last_active_at", "minutes": 20},
             "last_active_at": 1747857508,
-            "name": self.container_name
+            "name": self.container_name,
         }
-        
+
         # Configure the mock handler
         mock_handler.container_create_handler.return_value = mock_response
-        
+
         # Call the create_container function with mock response
         result = litellm.create_container(
             name=self.container_name,
             custom_llm_provider="openai",
-            mock_response=mock_response
+            mock_response=mock_response,
         )
-        
+
         # Verify the result is a ContainerObject with the expected data
         assert result.id == mock_response["id"]
         assert result.object == mock_response["object"]
@@ -62,28 +59,27 @@ class TestContainerRouter:
                     "object": "container",
                     "created_at": 1747857508,
                     "status": "running",
-                    "name": "Container 1"
+                    "name": "Container 1",
                 },
                 {
                     "id": "cntr_456",
                     "object": "container",
                     "created_at": 1747857509,
                     "status": "running",
-                    "name": "Container 2"
-                }
+                    "name": "Container 2",
+                },
             ],
-            "has_more": False
+            "has_more": False,
         }
-        
+
         # Configure the mock handler
         mock_handler.container_list_handler.return_value = mock_response
-        
+
         # Call the list_containers function with mock response
         result = litellm.list_containers(
-            custom_llm_provider="openai",
-            mock_response=mock_response
+            custom_llm_provider="openai", mock_response=mock_response
         )
-        
+
         # Verify the result is a ContainerListResponse with the expected data
         assert result.object == "list"
         assert len(result.data) == 2
@@ -100,24 +96,21 @@ class TestContainerRouter:
             "object": "container",
             "created_at": 1747857508,
             "status": "running",
-            "expires_after": {
-                "anchor": "last_active_at",
-                "minutes": 20
-            },
+            "expires_after": {"anchor": "last_active_at", "minutes": 20},
             "last_active_at": 1747857508,
-            "name": self.container_name
+            "name": self.container_name,
         }
-        
+
         # Configure the mock handler
         mock_handler.container_retrieve_handler.return_value = mock_response
-        
+
         # Call the retrieve_container function with mock response
         result = litellm.retrieve_container(
             container_id=self.container_id,
             custom_llm_provider="openai",
-            mock_response=mock_response
+            mock_response=mock_response,
         )
-        
+
         # Verify the result is a ContainerObject with the expected data
         assert result.id == mock_response["id"]
         assert result.object == mock_response["object"]
@@ -131,19 +124,19 @@ class TestContainerRouter:
         mock_response = {
             "id": self.container_id,
             "object": "container.deleted",
-            "deleted": True
+            "deleted": True,
         }
-        
+
         # Configure the mock handler
         mock_handler.container_delete_handler.return_value = mock_response
-        
+
         # Call the delete_container function with mock response
         result = litellm.delete_container(
             container_id=self.container_id,
             custom_llm_provider="openai",
-            mock_response=mock_response
+            mock_response=mock_response,
         )
-        
+
         # Verify the result is a DeleteContainerResult with the expected data
         assert result.id == mock_response["id"]
         assert result.object == mock_response["object"]
@@ -159,19 +152,19 @@ class TestContainerRouter:
             "object": "container",
             "created_at": 1747857508,
             "status": "running",
-            "name": self.container_name
+            "name": self.container_name,
         }
-        
+
         # Configure the mock handler
         mock_handler.container_create_handler.return_value = mock_response
-        
+
         # Call the async create_container function with mock response
         result = await litellm.acreate_container(
             name=self.container_name,
             custom_llm_provider="openai",
-            mock_response=mock_response
+            mock_response=mock_response,
         )
-        
+
         # Verify the result is a ContainerObject with the expected data
         assert result.id == mock_response["id"]
         assert result.object == mock_response["object"]
@@ -191,23 +184,21 @@ class TestContainerRouter:
                     "object": "container",
                     "created_at": 1747857508,
                     "status": "running",
-                    "name": "Container 1"
+                    "name": "Container 1",
                 }
             ],
-            "has_more": False
+            "has_more": False,
         }
-        
+
         # Configure the mock handler
         mock_handler.container_list_handler.return_value = mock_response
-        
+
         # Call the async list_containers function with mock response
         result = await litellm.alist_containers(
-            custom_llm_provider="openai",
-            mock_response=mock_response
+            custom_llm_provider="openai", mock_response=mock_response
         )
-        
+
         # Verify the result is a ContainerListResponse with the expected data
         assert result.object == "list"
         assert len(result.data) == 1
         assert result.data[0].id == "cntr_123"
-

@@ -1,4 +1,3 @@
-
 import sys
 import os
 import pytest
@@ -241,8 +240,10 @@ async def test_bedrock_converse_tool_use_sync_async_parity():
     toolUse blocks."""
     messages = _make_duplicate_tool_use_messages()
     sync_result = _bedrock_converse_messages_pt(messages, MODEL, PROVIDER)
-    async_result = await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
-        messages, MODEL, PROVIDER
+    async_result = (
+        await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+            messages, MODEL, PROVIDER
+        )
     )
     assert sync_result == async_result
 
@@ -310,7 +311,9 @@ def test_deduplicate_bedrock_tool_content_convenience_wrapper():
         {"toolResult": {"toolUseId": "id_1", "content": [{"text": "b"}]}},
     ]
 
-    assert _deduplicate_bedrock_tool_content(blocks) == _deduplicate_bedrock_content_blocks(blocks, "toolResult")
+    assert _deduplicate_bedrock_tool_content(
+        blocks
+    ) == _deduplicate_bedrock_content_blocks(blocks, "toolResult")
 
 
 # ---------------------------------------------------------------------------
@@ -325,8 +328,10 @@ async def test_bedrock_converse_sync_async_parity_with_duplicates():
     messages = _make_duplicate_tool_result_messages()
 
     sync_result = _bedrock_converse_messages_pt(messages, MODEL, PROVIDER)
-    async_result = await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
-        messages, MODEL, PROVIDER
+    async_result = (
+        await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+            messages, MODEL, PROVIDER
+        )
     )
 
     assert sync_result == async_result

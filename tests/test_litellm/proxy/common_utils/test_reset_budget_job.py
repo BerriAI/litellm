@@ -434,9 +434,7 @@ def test_reset_budget_for_keys_linked_to_budgets_empty(
     """
     # Run with empty list
     asyncio.run(
-        reset_budget_job.reset_budget_for_keys_linked_to_budgets(
-            budgets_to_reset=[]
-        )
+        reset_budget_job.reset_budget_for_keys_linked_to_budgets(budgets_to_reset=[])
     )
 
     # Verify no update_many calls were made
@@ -476,14 +474,10 @@ def test_reset_budget_reset_at_date_calendar_aligned(
         },
     )
 
-    with patch(
-        "litellm.proxy.common_utils.timezone_utils.datetime"
-    ) as mock_dt:
+    with patch("litellm.proxy.common_utils.timezone_utils.datetime") as mock_dt:
         mock_dt.now.return_value = fixed_now
         mock_dt.side_effect = lambda *args, **kwargs: datetime(*args, **kwargs)
-        asyncio.run(
-            ResetBudgetJob._reset_budget_reset_at_date(test_budget, fixed_now)
-        )
+        asyncio.run(ResetBudgetJob._reset_budget_reset_at_date(test_budget, fixed_now))
 
     assert test_budget.budget_reset_at.day == expected_day
     assert test_budget.budget_reset_at.month == expected_month
@@ -510,14 +504,10 @@ def test_reset_budget_reset_at_date_7d_next_monday():
         },
     )
 
-    with patch(
-        "litellm.proxy.common_utils.timezone_utils.datetime"
-    ) as mock_dt:
+    with patch("litellm.proxy.common_utils.timezone_utils.datetime") as mock_dt:
         mock_dt.now.return_value = fixed_now
         mock_dt.side_effect = lambda *args, **kwargs: datetime(*args, **kwargs)
-        asyncio.run(
-            ResetBudgetJob._reset_budget_reset_at_date(test_budget, fixed_now)
-        )
+        asyncio.run(ResetBudgetJob._reset_budget_reset_at_date(test_budget, fixed_now))
 
     # Next Monday after Wednesday June 14 is June 19
     assert test_budget.budget_reset_at.day == 19
@@ -563,14 +553,10 @@ def test_reset_budget_reset_at_date_none_reset_at():
         },
     )
 
-    with patch(
-        "litellm.proxy.common_utils.timezone_utils.datetime"
-    ) as mock_dt:
+    with patch("litellm.proxy.common_utils.timezone_utils.datetime") as mock_dt:
         mock_dt.now.return_value = fixed_now
         mock_dt.side_effect = lambda *args, **kwargs: datetime(*args, **kwargs)
-        asyncio.run(
-            ResetBudgetJob._reset_budget_reset_at_date(test_budget, fixed_now)
-        )
+        asyncio.run(ResetBudgetJob._reset_budget_reset_at_date(test_budget, fixed_now))
 
     # Should be set to 1st of next month (July 1)
     assert test_budget.budget_reset_at is not None

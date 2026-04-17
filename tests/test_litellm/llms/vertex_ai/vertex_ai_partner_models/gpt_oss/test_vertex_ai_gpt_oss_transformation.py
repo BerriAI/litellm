@@ -55,24 +55,28 @@ class TestVertexAIGPTOSSTransformation:
     def test_supports_reasoning_effort(self):
         """Test that reasoning_effort parameter is supported for GPT-OSS models."""
         config = VertexAIGPTOSSTransformation()
-        supported_params = config.get_supported_openai_params(model="openai/gpt-oss-20b-maas")
-        
+        supported_params = config.get_supported_openai_params(
+            model="openai/gpt-oss-20b-maas"
+        )
+
         assert "reasoning_effort" in supported_params
 
     def test_removes_tool_calling_params_when_not_supported(self):
         """Test that tool calling parameters are removed when function calling is not supported."""
         config = VertexAIGPTOSSTransformation()
-        
+
         # Mock litellm.supports_function_calling to return False
-        with patch('litellm.supports_function_calling', return_value=False):
-            supported_params = config.get_supported_openai_params(model="openai/gpt-oss-20b-maas")
-            
+        with patch("litellm.supports_function_calling", return_value=False):
+            supported_params = config.get_supported_openai_params(
+                model="openai/gpt-oss-20b-maas"
+            )
+
             # Tool calling params should be removed
             assert "tool" not in supported_params
             assert "tool_choice" not in supported_params
             assert "function_call" not in supported_params
             assert "functions" not in supported_params
-            
+
             # But reasoning_effort should still be there
             assert "reasoning_effort" in supported_params
 
@@ -97,27 +101,32 @@ async def test_vertex_ai_gpt_oss_simple_request():
                 "index": 0,
                 "message": {
                     "role": "assistant",
-                    "content": "Hello! I'm Litellm Bot, a helpful assistant. I don't have access to real-time weather information, but I'd be happy to help you with other questions or tasks!"
+                    "content": "Hello! I'm Litellm Bot, a helpful assistant. I don't have access to real-time weather information, but I'd be happy to help you with other questions or tasks!",
                 },
-                "finish_reason": "stop"
+                "finish_reason": "stop",
             }
         ],
-        "usage": {
-            "prompt_tokens": 42,
-            "completion_tokens": 28,
-            "total_tokens": 70
-        }
+        "usage": {"prompt_tokens": 42, "completion_tokens": 28, "total_tokens": 70},
     }
 
     mock_vertexai = MagicMock()
     mock_vertexai.preview = MagicMock()
     mock_vertexai.preview.language_models = MagicMock()
 
-    with patch("litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler") as mock_http_handler, \
-         patch("litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini.VertexLLM._ensure_access_token",
-               return_value=("fake-token", "pathrise-convert-1606954137718")), \
-         patch.dict("sys.modules", {"vertexai": mock_vertexai, "vertexai.preview": mock_vertexai.preview}), \
-         patch.dict(os.environ, {"VERTEXAI_PROJECT": "pathrise-convert-1606954137718"}):
+    with (
+        patch(
+            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler"
+        ) as mock_http_handler,
+        patch(
+            "litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini.VertexLLM._ensure_access_token",
+            return_value=("fake-token", "pathrise-convert-1606954137718"),
+        ),
+        patch.dict(
+            "sys.modules",
+            {"vertexai": mock_vertexai, "vertexai.preview": mock_vertexai.preview},
+        ),
+        patch.dict(os.environ, {"VERTEXAI_PROJECT": "pathrise-convert-1606954137718"}),
+    ):
         mock_http_handler.return_value.post = AsyncMock(return_value=mock_response)
 
         response = await litellm.acompletion(
@@ -125,12 +134,12 @@ async def test_vertex_ai_gpt_oss_simple_request():
             messages=[
                 {
                     "role": "system",
-                    "content": "Your name is Litellm Bot, you are a helpful assistant"
+                    "content": "Your name is Litellm Bot, you are a helpful assistant",
                 },
                 {
                     "role": "user",
-                    "content": "Hello, what is your name and can you tell me the weather?"
-                }
+                    "content": "Hello, what is your name and can you tell me the weather?",
+                },
             ],
             vertex_ai_location="us-central1",
             vertex_ai_project="pathrise-convert-1606954137718",
@@ -150,18 +159,18 @@ async def test_vertex_ai_gpt_oss_simple_request():
 
         # Verify the request body
         expected_request_body = {
-            'model': 'openai/gpt-oss-20b-maas',
-            'messages': [
+            "model": "openai/gpt-oss-20b-maas",
+            "messages": [
                 {
-                    'role': 'system',
-                    'content': 'Your name is Litellm Bot, you are a helpful assistant'
+                    "role": "system",
+                    "content": "Your name is Litellm Bot, you are a helpful assistant",
                 },
                 {
-                    'role': 'user',
-                    'content': 'Hello, what is your name and can you tell me the weather?'
-                }
+                    "role": "user",
+                    "content": "Hello, what is your name and can you tell me the weather?",
+                },
             ],
-            'stream': False
+            "stream": False,
         }
         assert request_body == expected_request_body
 
@@ -191,27 +200,32 @@ async def test_vertex_ai_gpt_oss_reasoning_effort():
                 "index": 0,
                 "message": {
                     "role": "assistant",
-                    "content": "I need to think about this carefully. The weather varies by location and time, so I would need to know your specific location to provide accurate weather information."
+                    "content": "I need to think about this carefully. The weather varies by location and time, so I would need to know your specific location to provide accurate weather information.",
                 },
-                "finish_reason": "stop"
+                "finish_reason": "stop",
             }
         ],
-        "usage": {
-            "prompt_tokens": 35,
-            "completion_tokens": 32,
-            "total_tokens": 67
-        }
+        "usage": {"prompt_tokens": 35, "completion_tokens": 32, "total_tokens": 67},
     }
 
     mock_vertexai = MagicMock()
     mock_vertexai.preview = MagicMock()
     mock_vertexai.preview.language_models = MagicMock()
 
-    with patch("litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler") as mock_http_handler, \
-         patch("litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini.VertexLLM._ensure_access_token",
-               return_value=("fake-token", "pathrise-convert-1606954137718")), \
-         patch.dict("sys.modules", {"vertexai": mock_vertexai, "vertexai.preview": mock_vertexai.preview}), \
-         patch.dict(os.environ, {"VERTEXAI_PROJECT": "pathrise-convert-1606954137718"}):
+    with (
+        patch(
+            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler"
+        ) as mock_http_handler,
+        patch(
+            "litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini.VertexLLM._ensure_access_token",
+            return_value=("fake-token", "pathrise-convert-1606954137718"),
+        ),
+        patch.dict(
+            "sys.modules",
+            {"vertexai": mock_vertexai, "vertexai.preview": mock_vertexai.preview},
+        ),
+        patch.dict(os.environ, {"VERTEXAI_PROJECT": "pathrise-convert-1606954137718"}),
+    ):
         mock_http_handler.return_value.post = AsyncMock(return_value=mock_response)
 
         response = await litellm.acompletion(
@@ -219,12 +233,12 @@ async def test_vertex_ai_gpt_oss_reasoning_effort():
             messages=[
                 {
                     "role": "system",
-                    "content": "Your name is Litellm Bot, you are a helpful assistant"
+                    "content": "Your name is Litellm Bot, you are a helpful assistant",
                 },
                 {
                     "role": "user",
-                    "content": "Hello, what is your name and can you tell me the weather?"
-                }
+                    "content": "Hello, what is your name and can you tell me the weather?",
+                },
             ],
             reasoning_effort="low",
             vertex_ai_location="us-central1",
@@ -244,19 +258,19 @@ async def test_vertex_ai_gpt_oss_reasoning_effort():
 
         # Verify other expected fields
         expected_request_body = {
-            'model': 'openai/gpt-oss-20b-maas',
-            'messages': [
+            "model": "openai/gpt-oss-20b-maas",
+            "messages": [
                 {
-                    'role': 'system',
-                    'content': 'Your name is Litellm Bot, you are a helpful assistant'
+                    "role": "system",
+                    "content": "Your name is Litellm Bot, you are a helpful assistant",
                 },
                 {
-                    'role': 'user',
-                    'content': 'Hello, what is your name and can you tell me the weather?'
-                }
+                    "role": "user",
+                    "content": "Hello, what is your name and can you tell me the weather?",
+                },
             ],
-            'reasoning_effort': 'low',
-            'stream': False
+            "reasoning_effort": "low",
+            "stream": False,
         }
         assert request_body == expected_request_body
 

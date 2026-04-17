@@ -12,7 +12,7 @@ class TestSoftBudgetAlert:
             token=token_value,
             event_group=Litellm_EntityType.KEY,
         )
-        
+
         result = alert.get_id(user_info)
         assert result == token_value
 
@@ -24,7 +24,7 @@ class TestSoftBudgetAlert:
             token=None,
             event_group=Litellm_EntityType.KEY,
         )
-        
+
         result = alert.get_id(user_info)
         assert result == "default_id"
 
@@ -36,6 +36,6 @@ class TestSoftBudgetAlert:
             token="",
             event_group=Litellm_EntityType.KEY,
         )
-        
+
         result = alert.get_id(user_info)
         assert result == "default_id"

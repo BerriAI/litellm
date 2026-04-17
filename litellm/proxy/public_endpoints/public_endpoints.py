@@ -256,7 +256,10 @@ async def public_skill_hub():
     from litellm.proxy.anthropic_endpoints.claude_code_endpoints.claude_code_marketplace import (
         _get_prisma_client,
     )
-    from litellm.types.proxy.claude_code_endpoints import ListPluginsResponse, PluginListItem
+    from litellm.types.proxy.claude_code_endpoints import (
+        ListPluginsResponse,
+        PluginListItem,
+    )
 
     try:
         prisma_client = await _get_prisma_client()

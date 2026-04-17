@@ -1179,6 +1179,7 @@ async def test_async_increment_tokens_with_ttl_preservation():
     # Test keys - use hash tags to ensure they map to same Redis cluster slot
     # Use a unique suffix per test run to avoid stale state from prior runs
     import uuid
+
     unique_suffix = str(uuid.uuid4())[:8]
     test_key_with_ttl = f"{{test_ttl}}:with_ttl:{unique_suffix}"
     test_key_without_ttl = f"{{test_ttl}}:without_ttl:{unique_suffix}"
@@ -2239,7 +2240,9 @@ async def test_agent_rate_limit_from_metadata_agent_id():
             agent_descriptor = d
             break
 
-    assert agent_descriptor is not None, "Agent descriptor should be created from metadata agent_id"
+    assert (
+        agent_descriptor is not None
+    ), "Agent descriptor should be created from metadata agent_id"
     assert agent_descriptor["value"] == _agent_id
     assert agent_descriptor["rate_limit"]["requests_per_unit"] == 25
 

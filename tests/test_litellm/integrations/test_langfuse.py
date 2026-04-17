@@ -127,7 +127,7 @@ class TestLangfuseUsageDetails(unittest.TestCase):
 
     def tearDown(self):
         # Clean up logger instance to prevent state leakage
-        if hasattr(self, 'logger'):
+        if hasattr(self, "logger"):
             # Reset logger's Langfuse client to break any references
             self.logger.Langfuse = None
             # Delete logger instance to ensure complete cleanup
@@ -284,12 +284,13 @@ class TestLangfuseUsageDetails(unittest.TestCase):
         self.mock_langfuse_client.trace.return_value = self.mock_langfuse_trace
         self.logger.Langfuse = self.mock_langfuse_client
 
-        with patch(
-            "litellm.integrations.langfuse.langfuse._add_prompt_to_generation_params",
-            side_effect=lambda generation_params, **kwargs: generation_params,
-            create=True,
-        ) as mock_add_prompt_params, patch.object(
-            self.logger, "_supports_prompt", return_value=True
+        with (
+            patch(
+                "litellm.integrations.langfuse.langfuse._add_prompt_to_generation_params",
+                side_effect=lambda generation_params, **kwargs: generation_params,
+                create=True,
+            ) as mock_add_prompt_params,
+            patch.object(self.logger, "_supports_prompt", return_value=True),
         ):
             # Create a mock response object with usage information containing None values
             response_obj = MagicMock()
@@ -319,7 +320,7 @@ class TestLangfuseUsageDetails(unittest.TestCase):
 
             # Use fixed timestamps to avoid timing-related flakiness
             fixed_time = datetime.datetime(2024, 1, 1, 12, 0, 0)
-            
+
             # Call the method under test
             try:
                 self.logger._log_langfuse_v2(
@@ -502,7 +503,9 @@ class TestLangfuseUsageDetails(unittest.TestCase):
         # litellm_trace_id should be preferred over litellm_call_id
         assert self.last_trace_kwargs.get("id") == "trace-id-from-kwargs"
 
-    def test_log_langfuse_v2_uses_litellm_trace_id_when_standard_logging_object_none(self):
+    def test_log_langfuse_v2_uses_litellm_trace_id_when_standard_logging_object_none(
+        self,
+    ):
         """
         When standard_logging_object is None (failure case where
         get_standard_logging_object_payload threw), litellm_trace_id from kwargs
@@ -718,23 +721,23 @@ def test_failure_handler_langfuse_kwargs_excludes_original_response():
             )
 
         # Verify log_event_on_langfuse was actually called
-        assert mock_langfuse_logger.log_event_on_langfuse.called, (
-            "log_event_on_langfuse was not called"
-        )
+        assert (
+            mock_langfuse_logger.log_event_on_langfuse.called
+        ), "log_event_on_langfuse was not called"
 
         # Verify original_response is NOT in the kwargs passed to Langfuse
         langfuse_kwargs = captured_kwargs.get("kwargs", {})
-        assert "original_response" not in langfuse_kwargs, (
-            "original_response should be excluded from kwargs passed to Langfuse"
-        )
+        assert (
+            "original_response" not in langfuse_kwargs
+        ), "original_response should be excluded from kwargs passed to Langfuse"
 
         # Verify session_id metadata is preserved in the kwargs
         langfuse_metadata = langfuse_kwargs.get("litellm_params", {}).get(
             "metadata", {}
         )
-        assert langfuse_metadata.get("session_id") == "test-session-failure", (
-            "session_id should be preserved in kwargs passed to Langfuse"
-        )
+        assert (
+            langfuse_metadata.get("session_id") == "test-session-failure"
+        ), "session_id should be preserved in kwargs passed to Langfuse"
 
         # Verify level is ERROR
         assert captured_kwargs.get("level") == "ERROR"
@@ -756,14 +759,17 @@ async def test_async_log_failure_event_logs_to_langfuse():
     mock_langfuse_module = MagicMock()
     mock_langfuse_module.version.__version__ = "3.0.0"
 
-    with patch.dict(
-        "os.environ",
-        {
-            "LANGFUSE_SECRET_KEY": "test-secret",
-            "LANGFUSE_PUBLIC_KEY": "test-public",
-            "LANGFUSE_HOST": "https://test.langfuse.com",
-        },
-    ), patch.dict("sys.modules", {"langfuse": mock_langfuse_module}):
+    with (
+        patch.dict(
+            "os.environ",
+            {
+                "LANGFUSE_SECRET_KEY": "test-secret",
+                "LANGFUSE_PUBLIC_KEY": "test-public",
+                "LANGFUSE_HOST": "https://test.langfuse.com",
+            },
+        ),
+        patch.dict("sys.modules", {"langfuse": mock_langfuse_module}),
+    ):
         prompt_mgmt = LangfusePromptManagement()
 
         # Mock the langfuse logger returned by get_langfuse_logger_for_request
@@ -800,9 +806,9 @@ async def test_async_log_failure_event_logs_to_langfuse():
             )
 
             # Verify log_event_on_langfuse was called
-            assert mock_logger.log_event_on_langfuse.called, (
-                "log_event_on_langfuse was not called for failure event"
-            )
+            assert (
+                mock_logger.log_event_on_langfuse.called
+            ), "log_event_on_langfuse was not called for failure event"
             call_kwargs = mock_logger.log_event_on_langfuse.call_args[1]
             assert call_kwargs["level"] == "ERROR"
             assert call_kwargs["status_message"] == "API error: model not found"
@@ -823,14 +829,17 @@ async def test_async_log_failure_event_works_without_standard_logging_object():
     mock_langfuse_module = MagicMock()
     mock_langfuse_module.version.__version__ = "3.0.0"
 
-    with patch.dict(
-        "os.environ",
-        {
-            "LANGFUSE_SECRET_KEY": "test-secret",
-            "LANGFUSE_PUBLIC_KEY": "test-public",
-            "LANGFUSE_HOST": "https://test.langfuse.com",
-        },
-    ), patch.dict("sys.modules", {"langfuse": mock_langfuse_module}):
+    with (
+        patch.dict(
+            "os.environ",
+            {
+                "LANGFUSE_SECRET_KEY": "test-secret",
+                "LANGFUSE_PUBLIC_KEY": "test-public",
+                "LANGFUSE_HOST": "https://test.langfuse.com",
+            },
+        ),
+        patch.dict("sys.modules", {"langfuse": mock_langfuse_module}),
+    ):
         prompt_mgmt = LangfusePromptManagement()
 
         mock_logger = MagicMock()
@@ -883,8 +892,9 @@ def test_max_langfuse_clients_limit():
     mock_langfuse.version.__version__ = "3.0.0"
     # Set max clients to 2 for testing
     original_initialized_langfuse_clients = litellm.initialized_langfuse_clients
-    with patch.dict("sys.modules", {"langfuse": mock_langfuse}), patch.object(
-        langfuse_module, "MAX_LANGFUSE_INITIALIZED_CLIENTS", 2
+    with (
+        patch.dict("sys.modules", {"langfuse": mock_langfuse}),
+        patch.object(langfuse_module, "MAX_LANGFUSE_INITIALIZED_CLIENTS", 2),
     ):
         # Reset the counter
         litellm.initialized_langfuse_clients = 0
