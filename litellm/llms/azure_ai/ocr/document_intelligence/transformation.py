@@ -11,6 +11,7 @@ import asyncio
 import re
 import time
 from typing import Any, Dict, Optional
+from urllib.parse import quote
 
 import httpx
 
@@ -227,8 +228,6 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
         # `optional_params` has already been normalized in `map_ocr_params`.
         pages = optional_params.get("pages") if optional_params else None
         if pages:
-            from urllib.parse import quote
-
             url += f"&pages={quote(str(pages), safe=',-')}"
 
         return url
