@@ -22,7 +22,7 @@ class BedrockCohereEmbeddingConfig:
     ) -> dict:
         for k, v in non_default_params.items():
             if k == "encoding_format":
-                optional_params["embedding_types"] = v
+                optional_params["embedding_types"] = v if isinstance(v, list) else [v]
             elif k == "dimensions":
                 optional_params["output_dimension"] = v
         return optional_params
@@ -45,3 +45,4 @@ class BedrockCohereEmbeddingConfig:
                 new_transformed_request[k] = transformed_request[k]  # type: ignore
 
         return new_transformed_request
+
