@@ -307,7 +307,7 @@ class AdvisorInterceptionLogger(CustomLogger):
             "response_format": "openai",
         }
 
-    async def async_run_chat_completion_agentic_loop(
+    async def async_run_chat_completion_agentic_loop(  # noqa: PLR0915
         self,
         tools: Dict,
         model: str,
