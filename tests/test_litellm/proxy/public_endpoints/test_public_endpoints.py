@@ -138,6 +138,34 @@ def test_azure_provider_fields_include_entra_id():
     assert fields_by_key["client_secret"]["required"] is False
 
 
+def test_anthropic_provider_fields_support_byok():
+    """
+    The Anthropic provider form must allow BYOK:
+    - api_key is optional (not required) so admins can create models without a key
+    - api_key has a non-null tooltip explaining the BYOK use case
+    """
+    app_instance = FastAPI()
+    app_instance.include_router(router)
+    test_client = TestClient(app_instance)
+
+    response = test_client.get("/public/providers/fields")
+    assert response.status_code == 200
+    providers = response.json()
+
+    anthropic = next((p for p in providers if p["provider"] == "Anthropic"), None)
+    assert anthropic is not None, "Anthropic provider entry not found"
+
+    fields_by_key = {f["key"]: f for f in anthropic["credential_fields"]}
+    assert "api_key" in fields_by_key
+    assert fields_by_key["api_key"]["required"] is False, (
+        "Anthropic api_key must be optional so admins can configure BYOK models "
+        "without entering a key. See BYOK tutorial."
+    )
+    assert fields_by_key["api_key"].get("tooltip"), (
+        "Anthropic api_key must have a tooltip explaining the BYOK use case."
+    )
+
+
 def test_public_model_hub_with_healthy_model():
     """Test that health information is populated for a healthy model"""
     app = FastAPI()

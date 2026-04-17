@@ -218,8 +218,8 @@
         "key": "api_key",
         "label": "API Key",
         "placeholder": "sk-",
-        "tooltip": null,
-        "required": true,
+        "tooltip": "Leave empty for BYOK (bring-your-own-key) flows, where clients forward their own Anthropic key via the x-api-key header. Requires the 'Forward LLM provider auth headers' UI setting to be enabled.",
+        "required": false,
         "field_type": "password",
         "options": null,
         "default_value": null
