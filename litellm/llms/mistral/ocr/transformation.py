@@ -1,6 +1,7 @@
 """
 Mistral OCR transformation implementation.
 """
+
 from typing import Any, Dict, Optional
 
 import httpx

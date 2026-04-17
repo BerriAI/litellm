@@ -39,7 +39,7 @@ class TestContainerRegionalApiBase:
     def test_create_container_uses_regional_api_base(self, mock_post):
         """
         Test that litellm.create_container uses the regional api_base when provided.
-        
+
         This validates the fix for US Data Residency support where requests should
         go to https://us.api.openai.com/v1 instead of https://api.openai.com/v1.
         """
@@ -52,7 +52,7 @@ class TestContainerRegionalApiBase:
             "status": "running",
             "expires_after": {"anchor": "last_active_at", "minutes": 20},
             "last_active_at": 1747857508,
-            "name": "Test Container"
+            "name": "Test Container",
         }
         mock_post.return_value = mock_response
 
@@ -65,8 +65,10 @@ class TestContainerRegionalApiBase:
         mock_post.assert_called_once()
         call_args = mock_post.call_args
         called_url = call_args[1]["url"]
-        
-        assert "us.api.openai.com" in called_url, f"Expected US regional URL, got: {called_url}"
+
+        assert (
+            "us.api.openai.com" in called_url
+        ), f"Expected US regional URL, got: {called_url}"
         assert called_url == "https://us.api.openai.com/v1/containers"
 
     @patch("litellm.llms.custom_httpx.http_handler.HTTPHandler.post")
@@ -75,7 +77,7 @@ class TestContainerRegionalApiBase:
         Test that litellm.create_container uses OPENAI_BASE_URL env var.
         """
         os.environ["OPENAI_BASE_URL"] = "https://us.api.openai.com/v1"
-        
+
         mock_response = MagicMock(spec=httpx.Response)
         mock_response.status_code = 200
         mock_response.json.return_value = {
@@ -85,7 +87,7 @@ class TestContainerRegionalApiBase:
             "status": "running",
             "expires_after": {"anchor": "last_active_at", "minutes": 20},
             "last_active_at": 1747857508,
-            "name": "Test Container"
+            "name": "Test Container",
         }
         mock_post.return_value = mock_response
 
@@ -97,8 +99,10 @@ class TestContainerRegionalApiBase:
         mock_post.assert_called_once()
         call_args = mock_post.call_args
         called_url = call_args[1]["url"]
-        
-        assert "us.api.openai.com" in called_url, f"Expected US regional URL, got: {called_url}"
+
+        assert (
+            "us.api.openai.com" in called_url
+        ), f"Expected US regional URL, got: {called_url}"
 
     @patch("litellm.llms.custom_httpx.http_handler.HTTPHandler.post")
     def test_create_container_defaults_to_standard_openai(self, mock_post):
@@ -115,7 +119,7 @@ class TestContainerRegionalApiBase:
             "status": "running",
             "expires_after": {"anchor": "last_active_at", "minutes": 20},
             "last_active_at": 1747857508,
-            "name": "Test Container"
+            "name": "Test Container",
         }
         mock_post.return_value = mock_response
 
@@ -127,7 +131,7 @@ class TestContainerRegionalApiBase:
         mock_post.assert_called_once()
         call_args = mock_post.call_args
         called_url = call_args[1]["url"]
-        
+
         assert called_url == "https://api.openai.com/v1/containers"
 
     @patch("litellm.llms.custom_httpx.http_handler.HTTPHandler.post")
@@ -157,7 +161,8 @@ class TestContainerRegionalApiBase:
         mock_post.assert_called_once()
         call_args = mock_post.call_args
         called_url = call_args[1]["url"]
-        
-        assert "us.api.openai.com" in called_url, f"Expected US regional URL, got: {called_url}"
-        assert "cntr_123456/files" in called_url
 
+        assert (
+            "us.api.openai.com" in called_url
+        ), f"Expected US regional URL, got: {called_url}"
+        assert "cntr_123456/files" in called_url

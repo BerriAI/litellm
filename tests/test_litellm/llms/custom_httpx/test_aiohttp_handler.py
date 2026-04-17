@@ -339,7 +339,7 @@ class TestBaseLLMAIOHTTPHandler:
 
     def test_get_or_create_transport(self):
         """Test that _get_or_create_transport creates or returns a transport.
-        
+
         When no transport exists, the method should attempt to create one.
         If creation succeeds, it should be stored on the handler.
         If creation fails (e.g. in test environments), None is returned gracefully.

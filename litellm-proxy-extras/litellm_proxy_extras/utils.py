@@ -419,7 +419,10 @@ class ProxyExtrasDBManager:
                                         ProxyExtrasDBManager._roll_back_migration(
                                             failed_migration
                                         )
-                                    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as rollback_err:
+                                    except (
+                                        subprocess.CalledProcessError,
+                                        subprocess.TimeoutExpired,
+                                    ) as rollback_err:
                                         logger.warning(
                                             f"Failed to roll back migration {failed_migration}: {rollback_err}. "
                                             f"It may already be in a rolled-back state."
@@ -431,7 +434,10 @@ class ProxyExtrasDBManager:
                                         logger.info(
                                             f"✅ Migration {failed_migration} resolved, retrying to apply remaining migrations"
                                         )
-                                    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as resolve_err:
+                                    except (
+                                        subprocess.CalledProcessError,
+                                        subprocess.TimeoutExpired,
+                                    ) as resolve_err:
                                         logger.warning(
                                             f"Failed to resolve migration {failed_migration}: {resolve_err}"
                                         )
@@ -531,7 +537,10 @@ class ProxyExtrasDBManager:
                                         ProxyExtrasDBManager._roll_back_migration(
                                             migration_name
                                         )
-                                    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as rollback_err:
+                                    except (
+                                        subprocess.CalledProcessError,
+                                        subprocess.TimeoutExpired,
+                                    ) as rollback_err:
                                         logger.warning(
                                             f"Failed to roll back migration {migration_name}: {rollback_err}. "
                                             f"It may already be in a rolled-back state."
@@ -548,7 +557,10 @@ class ProxyExtrasDBManager:
                                             f"✅ Migration {migration_name} resolved, "
                                             f"retrying to apply remaining migrations"
                                         )
-                                    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as resolve_err:
+                                    except (
+                                        subprocess.CalledProcessError,
+                                        subprocess.TimeoutExpired,
+                                    ) as resolve_err:
                                         logger.warning(
                                             f"Failed to resolve migration {migration_name}: {resolve_err}"
                                         )

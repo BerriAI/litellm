@@ -33,7 +33,9 @@ def mock_request(monkeypatch):
     mock_request = Mock(spec=Request)
     mock_request.query_params = {}  # Set mock query_params to an empty dictionary
     mock_request.headers = {"traceparent": "test_traceparent"}
-    mock_request.state = State()  # Real State so _safe_get_request_headers caching works
+    mock_request.state = (
+        State()
+    )  # Real State so _safe_get_request_headers caching works
     monkeypatch.setattr(
         "litellm.proxy.litellm_pre_call_utils.add_litellm_data_to_request", mock_request
     )
@@ -734,6 +736,7 @@ def test_get_docs_url(env_vars, expected_url):
 
     result = _get_docs_url()
     assert result == expected_url
+
 
 @pytest.mark.parametrize(
     "env_vars, expected_url",
@@ -1516,7 +1519,7 @@ class MockPrismaClientDB:
         mock_key_data,
     ):
         self.db = MockDb(mock_team_data, mock_key_data)
-    
+
     async def get_data(
         self,
         token: Optional[Union[str, list]] = None,
@@ -1534,7 +1537,7 @@ class MockPrismaClientDB:
     ):
         """Mock get_data method to return user info for admin"""
         from litellm.proxy._types import LiteLLM_UserTable
-        
+
         # Return a proper LiteLLM_UserTable object when querying by user_id
         if user_id:
             return LiteLLM_UserTable(
@@ -2072,7 +2075,7 @@ def test_team_alias_stale_bypass_disabled_by_default(monkeypatch):
     monkeypatch.delenv("LITELLM_ENABLE_TEAM_STALE_ALIAS_BYPASS", raising=False)
     import litellm.proxy.litellm_pre_call_utils as pre_call_utils
     from litellm.proxy.litellm_pre_call_utils import _update_model_if_team_alias_exists
-    
+
     # Reset module-level cache to ensure test isolation
     pre_call_utils._ENABLE_TEAM_STALE_ALIAS_BYPASS = None
 
@@ -2097,7 +2100,7 @@ def test_team_alias_stale_bypass_disabled_by_default(monkeypatch):
 def test_team_alias_stale_bypass_enabled_by_flag(monkeypatch):
     import litellm.proxy.litellm_pre_call_utils as pre_call_utils
     from litellm.proxy.litellm_pre_call_utils import _update_model_if_team_alias_exists
-    
+
     # Reset module-level cache to ensure test isolation
     pre_call_utils._ENABLE_TEAM_STALE_ALIAS_BYPASS = None
 
@@ -2394,16 +2397,17 @@ async def test_handle_logging_proxy_only_error_syncs_normalized_call_type(
         captured_logging_obj["logging_obj"] = logging_obj
         return logging_obj, data
 
-    with patch(
-        "litellm.proxy.utils.litellm.utils.function_setup",
-        side_effect=_capture_function_setup,
-    ), patch.object(
-        Logging, "async_failure_handler", new=AsyncMock(return_value=None)
-    ), patch.object(
-        Logging, "failure_handler", return_value=None
-    ), patch(
-        "litellm.proxy.utils.threading.Thread"
-    ) as mock_thread:
+    with (
+        patch(
+            "litellm.proxy.utils.litellm.utils.function_setup",
+            side_effect=_capture_function_setup,
+        ),
+        patch.object(
+            Logging, "async_failure_handler", new=AsyncMock(return_value=None)
+        ),
+        patch.object(Logging, "failure_handler", return_value=None),
+        patch("litellm.proxy.utils.threading.Thread") as mock_thread,
+    ):
         mock_thread.return_value.start = Mock()
 
         await proxy_logging._handle_logging_proxy_only_error(
@@ -2647,7 +2651,9 @@ async def test_handle_logging_proxy_only_error_skips_handlers_for_pass_through()
         "model": "claude-3-5-sonnet",
     }
 
-    with patch.object(logging_obj, "async_failure_handler", new_callable=AsyncMock) as mock_async:
+    with patch.object(
+        logging_obj, "async_failure_handler", new_callable=AsyncMock
+    ) as mock_async:
         with patch.object(logging_obj, "failure_handler") as mock_sync:
             await proxy_logging._handle_logging_proxy_only_error(
                 request_data=request_data,

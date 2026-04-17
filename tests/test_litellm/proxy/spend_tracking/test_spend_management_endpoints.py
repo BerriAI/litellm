@@ -1465,10 +1465,13 @@ class TestSpendLogsPayload:
         litellm.callbacks = [_ProxyDBLogger(message_logging=False)]
         # litellm._turn_on_debug()
 
-        with patch.object(
-            litellm.proxy.db.db_spend_update_writer.DBSpendUpdateWriter,
-            "_insert_spend_log_to_db",
-        ) as mock_client, patch.object(litellm.proxy.proxy_server, "prisma_client"):
+        with (
+            patch.object(
+                litellm.proxy.db.db_spend_update_writer.DBSpendUpdateWriter,
+                "_insert_spend_log_to_db",
+            ) as mock_client,
+            patch.object(litellm.proxy.proxy_server, "prisma_client"),
+        ):
             response = await litellm.acompletion(
                 model="gpt-4o",
                 messages=[{"role": "user", "content": "Hello, world!"}],
@@ -1558,13 +1561,13 @@ class TestSpendLogsPayload:
 
         client = AsyncHTTPHandler()
 
-        with patch.object(
-            litellm.proxy.db.db_spend_update_writer.DBSpendUpdateWriter,
-            "_insert_spend_log_to_db",
-        ) as mock_client, patch.object(
-            litellm.proxy.proxy_server, "prisma_client"
-        ), patch.object(
-            client, "post", side_effect=self.mock_anthropic_response
+        with (
+            patch.object(
+                litellm.proxy.db.db_spend_update_writer.DBSpendUpdateWriter,
+                "_insert_spend_log_to_db",
+            ) as mock_client,
+            patch.object(litellm.proxy.proxy_server, "prisma_client"),
+            patch.object(client, "post", side_effect=self.mock_anthropic_response),
         ):
             response = await litellm.acompletion(
                 model="claude-4-sonnet-20250514",
@@ -1652,13 +1655,13 @@ class TestSpendLogsPayload:
             ]
         )
 
-        with patch.object(
-            litellm.proxy.db.db_spend_update_writer.DBSpendUpdateWriter,
-            "_insert_spend_log_to_db",
-        ) as mock_client, patch.object(
-            litellm.proxy.proxy_server, "prisma_client"
-        ), patch.object(
-            client, "post", side_effect=self.mock_anthropic_response
+        with (
+            patch.object(
+                litellm.proxy.db.db_spend_update_writer.DBSpendUpdateWriter,
+                "_insert_spend_log_to_db",
+            ) as mock_client,
+            patch.object(litellm.proxy.proxy_server, "prisma_client"),
+            patch.object(client, "post", side_effect=self.mock_anthropic_response),
         ):
             response = await router.acompletion(
                 model="my-anthropic-model-group",

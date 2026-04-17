@@ -31,13 +31,17 @@ def _make_admin_user(user_id: str = "admin-1") -> UserAPIKeyAuth:
 # get_agents
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_get_agents_blocked_for_internal_user_when_disabled():
     """get_agents should raise 403 when agents are disabled for internal users."""
     from litellm.proxy.agent_endpoints.endpoints import get_agents
 
     user = _make_internal_user()
-    gs = {"disable_agents_for_internal_users": True, "allow_agents_for_team_admins": False}
+    gs = {
+        "disable_agents_for_internal_users": True,
+        "allow_agents_for_team_admins": False,
+    }
 
     request_mock = MagicMock()
     with patch.dict("litellm.proxy.proxy_server.general_settings", gs, clear=True):
@@ -71,12 +75,16 @@ async def test_get_agents_allowed_when_not_disabled():
 # get_agent_daily_activity
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_get_agent_daily_activity_blocked_when_disabled():
     from litellm.proxy.agent_endpoints.endpoints import get_agent_daily_activity
 
     user = _make_internal_user()
-    gs = {"disable_agents_for_internal_users": True, "allow_agents_for_team_admins": False}
+    gs = {
+        "disable_agents_for_internal_users": True,
+        "allow_agents_for_team_admins": False,
+    }
 
     with patch.dict("litellm.proxy.proxy_server.general_settings", gs, clear=True):
         with pytest.raises(HTTPException) as exc_info:

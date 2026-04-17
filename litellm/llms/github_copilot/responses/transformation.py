@@ -7,6 +7,7 @@ which is required for models like gpt-5.1-codex that only support the /responses
 Implementation based on analysis of the copilot-api project by caozhiyuan:
 https://github.com/caozhiyuan/copilot-api
 """
+
 from typing import TYPE_CHECKING, Any, Dict, Optional, Union
 
 from litellm._logging import verbose_logger

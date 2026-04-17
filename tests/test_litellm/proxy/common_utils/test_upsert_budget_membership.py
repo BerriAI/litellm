@@ -12,6 +12,7 @@ from litellm.proxy.management_endpoints.common_utils import (
 # Fixtures: a fake Prisma transaction and a fake UserAPIKeyAuth object
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture
 def mock_tx():
     """
@@ -41,6 +42,7 @@ def mock_tx():
 def fake_user():
     """Cheap stand-in for UserAPIKeyAuth."""
     return types.SimpleNamespace(user_id="tester@example.com")
+
 
 # TEST: max_budget is None, disconnect only
 @pytest.mark.asyncio
@@ -232,7 +234,7 @@ async def test_upsert_rpm_only_creates_new_budget(mock_tx, fake_user):
     await _upsert_budget_and_membership(
         mock_tx,
         team_id="team-rpm-only",
-        user_id="user-rpm-only", 
+        user_id="user-rpm-only",
         max_budget=None,
         existing_budget_id=None,
         user_api_key_dict=fake_user,
@@ -252,7 +254,9 @@ async def test_upsert_rpm_only_creates_new_budget(mock_tx, fake_user):
     # Should upsert team membership with the new budget ID
     new_budget_id = mock_tx.litellm_budgettable.create.return_value.budget_id
     mock_tx.litellm_teammembership.upsert.assert_awaited_once_with(
-        where={"user_id_team_id": {"user_id": "user-rpm-only", "team_id": "team-rpm-only"}},
+        where={
+            "user_id_team_id": {"user_id": "user-rpm-only", "team_id": "team-rpm-only"}
+        },
         data={
             "create": {
                 "user_id": "user-rpm-only",

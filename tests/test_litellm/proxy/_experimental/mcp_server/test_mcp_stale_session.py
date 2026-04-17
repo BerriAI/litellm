@@ -227,31 +227,37 @@ async def test_stale_mcp_session_id_is_stripped():
         # Capture the scope that was actually passed
         captured_scope.update(s)
 
-    with patch(
-        "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
-        new_callable=AsyncMock,
-        return_value=(MagicMock(), None, None, None, None, None),
-    ), patch(
-        "litellm.proxy._experimental.mcp_server.server.set_auth_context",
-    ), patch(
-        "litellm.proxy._experimental.mcp_server.server._SESSION_MANAGERS_INITIALIZED",
-        True,
-    ), patch.object(
-        session_manager,
-        "handle_request",
-        side_effect=mock_handle_request,
-    ), patch.object(
-        session_manager,
-        "_server_instances",
-        {},  # Empty dict = no active sessions
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
+            new_callable=AsyncMock,
+            return_value=(MagicMock(), None, None, None, None, None),
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.set_auth_context",
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server._SESSION_MANAGERS_INITIALIZED",
+            True,
+        ),
+        patch.object(
+            session_manager,
+            "handle_request",
+            side_effect=mock_handle_request,
+        ),
+        patch.object(
+            session_manager,
+            "_server_instances",
+            {},  # Empty dict = no active sessions
+        ),
     ):
         await handle_streamable_http_mcp(scope, receive, send)
 
     # Verify the mcp-session-id header was stripped
     header_names = [k for k, v in captured_scope.get("headers", [])]
-    assert b"mcp-session-id" not in header_names, (
-        "Stale mcp-session-id header should have been stripped from the scope"
-    )
+    assert (
+        b"mcp-session-id" not in header_names
+    ), "Stale mcp-session-id header should have been stripped from the scope"
 
 
 @pytest.mark.asyncio
@@ -288,30 +294,36 @@ async def test_delete_stale_mcp_session_returns_success():
     # Mock handle_request should NOT be called for stale DELETE
     mock_handle_request = AsyncMock()
 
-    with patch(
-        "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
-        new_callable=AsyncMock,
-        return_value=(MagicMock(), None, None, None, None, None),
-    ), patch(
-        "litellm.proxy._experimental.mcp_server.server.set_auth_context",
-    ), patch(
-        "litellm.proxy._experimental.mcp_server.server._SESSION_MANAGERS_INITIALIZED",
-        True,
-    ), patch.object(
-        session_manager,
-        "handle_request",
-        side_effect=mock_handle_request,
-    ), patch.object(
-        session_manager,
-        "_server_instances",
-        {},  # Empty dict = no active sessions
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
+            new_callable=AsyncMock,
+            return_value=(MagicMock(), None, None, None, None, None),
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.set_auth_context",
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server._SESSION_MANAGERS_INITIALIZED",
+            True,
+        ),
+        patch.object(
+            session_manager,
+            "handle_request",
+            side_effect=mock_handle_request,
+        ),
+        patch.object(
+            session_manager,
+            "_server_instances",
+            {},  # Empty dict = no active sessions
+        ),
     ):
         await handle_streamable_http_mcp(scope, receive, send)
 
     # Verify session manager was NOT called (request was handled early)
-    assert not mock_handle_request.called, (
-        "Session manager should not be called for DELETE on non-existent session"
-    )
+    assert (
+        not mock_handle_request.called
+    ), "Session manager should not be called for DELETE on non-existent session"
 
     # Verify a success response was sent
     assert send.called, "A response should have been sent"
@@ -355,31 +367,37 @@ async def test_valid_mcp_session_id_is_preserved():
     # Session manager HAS this session
     mock_instances = {valid_session_id: MagicMock()}
 
-    with patch(
-        "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
-        new_callable=AsyncMock,
-        return_value=(MagicMock(), None, None, None, None, None),
-    ), patch(
-        "litellm.proxy._experimental.mcp_server.server.set_auth_context",
-    ), patch(
-        "litellm.proxy._experimental.mcp_server.server._SESSION_MANAGERS_INITIALIZED",
-        True,
-    ), patch.object(
-        session_manager,
-        "handle_request",
-        side_effect=mock_handle_request,
-    ), patch.object(
-        session_manager,
-        "_server_instances",
-        mock_instances,
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
+            new_callable=AsyncMock,
+            return_value=(MagicMock(), None, None, None, None, None),
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.set_auth_context",
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server._SESSION_MANAGERS_INITIALIZED",
+            True,
+        ),
+        patch.object(
+            session_manager,
+            "handle_request",
+            side_effect=mock_handle_request,
+        ),
+        patch.object(
+            session_manager,
+            "_server_instances",
+            mock_instances,
+        ),
     ):
         await handle_streamable_http_mcp(scope, receive, send)
 
     # Verify the mcp-session-id header was preserved
     header_names = [k for k, v in captured_scope.get("headers", [])]
-    assert b"mcp-session-id" in header_names, (
-        "Valid mcp-session-id header should have been preserved"
-    )
+    assert (
+        b"mcp-session-id" in header_names
+    ), "Valid mcp-session-id header should have been preserved"
 
 
 @pytest.mark.asyncio
@@ -414,23 +432,29 @@ async def test_no_mcp_session_id_header_works_normally():
     async def mock_handle_request(s, r, se):
         captured_scope.update(s)
 
-    with patch(
-        "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
-        new_callable=AsyncMock,
-        return_value=(MagicMock(), None, None, None, None, None),
-    ), patch(
-        "litellm.proxy._experimental.mcp_server.server.set_auth_context",
-    ), patch(
-        "litellm.proxy._experimental.mcp_server.server._SESSION_MANAGERS_INITIALIZED",
-        True,
-    ), patch.object(
-        session_manager,
-        "handle_request",
-        side_effect=mock_handle_request,
-    ), patch.object(
-        session_manager,
-        "_server_instances",
-        {},
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
+            new_callable=AsyncMock,
+            return_value=(MagicMock(), None, None, None, None, None),
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.set_auth_context",
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server._SESSION_MANAGERS_INITIALIZED",
+            True,
+        ),
+        patch.object(
+            session_manager,
+            "handle_request",
+            side_effect=mock_handle_request,
+        ),
+        patch.object(
+            session_manager,
+            "_server_instances",
+            {},
+        ),
     ):
         await handle_streamable_http_mcp(scope, receive, send)
 

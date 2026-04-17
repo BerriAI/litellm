@@ -171,7 +171,7 @@ def test_oidc_azure_file_success(mock_env, tmp_path):
     mock_env["AZURE_FEDERATED_TOKEN_FILE"] = str(token_file)
 
     secret_name = "oidc/azure/azure-audience"
-    result = get_secret(secret_name)    
+    result = get_secret(secret_name)
 
     assert result == "azure_token"
 

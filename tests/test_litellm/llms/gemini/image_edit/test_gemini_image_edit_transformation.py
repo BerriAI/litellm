@@ -93,7 +93,9 @@ class TestGeminiImageEditTransformation:
                             {
                                 "inlineData": {
                                     "mimeType": "image/png",
-                                    "data": base64.b64encode(b"image-one").decode("utf-8"),
+                                    "data": base64.b64encode(b"image-one").decode(
+                                        "utf-8"
+                                    ),
                                 }
                             }
                         ]
@@ -105,7 +107,9 @@ class TestGeminiImageEditTransformation:
                             {
                                 "inlineData": {
                                     "mimeType": "image/png",
-                                    "data": base64.b64encode(b"image-two").decode("utf-8"),
+                                    "data": base64.b64encode(b"image-two").decode(
+                                        "utf-8"
+                                    ),
                                 }
                             }
                         ]
@@ -157,4 +161,3 @@ class TestGeminiImageEditTransformation:
         Without this, Gemini returns: "Invalid JSON payload received. Unexpected token."
         """
         assert self.config.use_multipart_form_data() is False
-

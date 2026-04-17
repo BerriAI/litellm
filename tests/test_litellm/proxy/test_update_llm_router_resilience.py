@@ -159,9 +159,15 @@ class TestDeleteDeploymentResilience:
                 proxy_config,
                 "get_config",
                 new_callable=AsyncMock,
-                return_value={"model_list": [
-                    {"model_name": "gpt-4", "litellm_params": {"model": "gpt-4"}, "model_info": {"id": "config-id-1"}}
-                ]},
+                return_value={
+                    "model_list": [
+                        {
+                            "model_name": "gpt-4",
+                            "litellm_params": {"model": "gpt-4"},
+                            "model_info": {"id": "config-id-1"},
+                        }
+                    ]
+                },
             ),
             patch("litellm.proxy.proxy_server.llm_router", mock_router),
             patch("litellm.proxy.proxy_server.premium_user", False),
