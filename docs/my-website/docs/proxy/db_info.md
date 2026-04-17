@@ -1,91 +1,91 @@
-# What is stored in the DB
+# 数据库中存储了什么
 
-The LiteLLM Proxy uses a PostgreSQL database to store various information. Here's are the main features the DB is used for:
-- Virtual Keys, Organizations, Teams, Users, Budgets, and more.
-- Per request Usage Tracking
+LiteLLM Proxy 使用 PostgreSQL 数据库存储各种信息。数据库主要用于以下功能：
+- 虚拟密钥、组织、团队、用户、预算等的管理
+- 按请求的用量追踪
 
-## Link to DB Schema
+## 数据库 Schema 链接
 
-You can see the full DB Schema [here](https://github.com/BerriAI/litellm/blob/main/schema.prisma)
+你可以在[这里](https://github.com/BerriAI/litellm/blob/main/schema.prisma)查看完整的数据库 Schema。
 
-## DB Tables
+## 数据库表
 
-### Organizations, Teams, Users, End Users
+### 组织、团队、用户、终端用户
 
-| Table Name | Description | Row Insert Frequency |
+| 表名 | 描述 | 行插入频率 |
 |------------|-------------|---------------------|
-| LiteLLM_OrganizationTable | Manages organization-level configurations. Tracks organization spend, model access, and metadata. Links to budget configurations and teams. | Low |
-| LiteLLM_TeamTable | Handles team-level settings within organizations. Manages team members, admins, and their roles. Controls team-specific budgets, rate limits, and model access. | Low |
-| LiteLLM_UserTable | Stores user information and their settings. Tracks individual user spend, model access, and rate limits. Manages user roles and team memberships. | Low |
-| LiteLLM_EndUserTable | Manages end-user configurations. Controls model access and regional requirements. Tracks end-user spend. | Low |
-| LiteLLM_TeamMembership | Tracks user participation in teams. Manages team-specific user budgets and spend. | Low |
-| LiteLLM_OrganizationMembership | Manages user roles within organizations. Tracks organization-specific user permissions and spend. | Low |
-| LiteLLM_InvitationLink | Handles user invitations. Manages invitation status and expiration. Tracks who created and accepted invitations. | Low |
-| LiteLLM_UserNotifications | Handles model access requests. Tracks user requests for model access. Manages approval status. | Low |
+| LiteLLM_OrganizationTable | 管理组织级别的配置。追踪组织花费、模型访问权限和元数据。关联预算配置和团队。 | 低 |
+| LiteLLM_TeamTable | 处理组织内的团队级别设置。管理团队成员、管理员及其角色。控制团队专属的预算、速率限制和模型访问权限。 | 低 |
+| LiteLLM_UserTable | 存储用户信息及其设置。追踪个人用户的花费、模型访问权限和速率限制。管理用户角色和团队成员关系。 | 低 |
+| LiteLLM_EndUserTable | 管理终端用户配置。控制模型访问权限和区域要求。追踪终端用户花费。 | 低 |
+| LiteLLM_TeamMembership | 追踪用户在团队中的参与关系。管理团队内用户的预算和花费。 | 低 |
+| LiteLLM_OrganizationMembership | 管理用户在组织中的角色。追踪组织级别的用户权限和花费。 | 低 |
+| LiteLLM_InvitationLink | 处理用户邀请。管理邀请状态和过期时间。追踪邀请的创建者和接受者。 | 低 |
+| LiteLLM_UserNotifications | 处理模型访问请求。追踪用户的模型访问申请。管理审批状态。 | 低 |
 
-### Authentication
+### 认证
 
-| Table Name | Description | Row Insert Frequency |
+| 表名 | 描述 | 行插入频率 |
 |------------|-------------|---------------------|
-| LiteLLM_VerificationToken | Manages Virtual Keys and their permissions. Controls token-specific budgets, rate limits, and model access. Tracks key-specific spend and metadata. | **Medium** - stores all Virtual Keys |
+| LiteLLM_VerificationToken | 管理虚拟密钥及其权限。控制密钥专属的预算、速率限制和模型访问权限。追踪密钥的花费和元数据。 | **中** - 存储所有虚拟密钥 |
 
-### Model (LLM) Management
+### 模型（LLM）管理
 
-| Table Name | Description | Row Insert Frequency |
+| 表名 | 描述 | 行插入频率 |
 |------------|-------------|---------------------|
-| LiteLLM_ProxyModelTable | Stores model configurations. Defines available models and their parameters. Contains model-specific information and settings. | Low - Configuration only |
+| LiteLLM_ProxyModelTable | 存储模型配置。定义可用模型及其参数。包含模型特定的信息和设置。 | 低 - 仅配置使用 |
 
-### Budget Management
+### 预算管理
 
-| Table Name | Description | Row Insert Frequency |
+| 表名 | 描述 | 行插入频率 |
 |------------|-------------|---------------------|
-| LiteLLM_BudgetTable | Stores budget and rate limit configurations for organizations, keys, and end users. Tracks max budgets, soft budgets, TPM/RPM limits, and model-specific budgets. Handles budget duration and reset timing. | Low - Configuration only |
+| LiteLLM_BudgetTable | 存储组织、密钥和终端用户的预算及速率限制配置。追踪最大预算、软预算、TPM/RPM 限制和模型级别的预算。处理预算周期和重置时间。 | 低 - 仅配置使用 |
 
 
-### Tracking & Logging
+### 追踪与日志
 
-| Table Name | Description | Row Insert Frequency |
+| 表名 | 描述 | 行插入频率 |
 |------------|-------------|---------------------|
-| LiteLLM_SpendLogs | Detailed logs of all API requests. Records token usage, spend, and timing information. Tracks which models and keys were used. | **Medium - this is a batch process that runs on an interval.** |
-| LiteLLM_AuditLog | Tracks changes to system configuration. Records who made changes and what was modified. Maintains history of updates to teams, users, and models. | **Off by default**, **High - Runs on every change to an entity** |
+| LiteLLM_SpendLogs | 所有 API 请求的详细日志。记录 Token 用量、花费和耗时信息。追踪使用了哪些模型和密钥。 | **中 - 这是一个按时间间隔运行的批处理过程。** |
+| LiteLLM_AuditLog | 追踪系统配置的变更。记录谁进行了修改以及修改了什么内容。维护团队、用户和模型的更新历史。 | **默认关闭**，**高 - 每次实体变更时都会运行** |
 
-## Disable `LiteLLM_SpendLogs`
+## 禁用 `LiteLLM_SpendLogs`
 
-You can disable spend_logs and error_logs by setting `disable_spend_logs` and `disable_error_logs` to `True` on the `general_settings` section of your proxy_config.yaml file.
+你可以通过在 proxy_config.yaml 文件的 `general_settings` 部分将 `disable_spend_logs` 和 `disable_error_logs` 设置为 `True` 来禁用花费日志和错误日志。
 
 ```yaml
 general_settings:
-  disable_spend_logs: True   # Disable writing spend logs to DB
-  disable_error_logs: True   # Only disable writing error logs to DB, regular spend logs will still be written unless `disable_spend_logs: True`
+  disable_spend_logs: True   # 禁止将花费日志写入数据库
+  disable_error_logs: True   # 仅禁止将错误日志写入数据库，常规花费日志仍会写入，除非设置了 `disable_spend_logs: True`
 ```
 
-### What is the impact of disabling these logs?
+### 禁用这些日志有什么影响？
 
-When disabling spend logs (`disable_spend_logs: True`):
-- You **will not** be able to view Usage on the LiteLLM UI
-- You **will** continue seeing cost metrics on s3, Prometheus, Langfuse (any other Logging integration you are using)
+禁用花费日志（`disable_spend_logs: True`）时：
+- 你**将无法**在 LiteLLM UI 上查看用量
+- 你**仍然可以**在 S3、Prometheus、Langfuse（以及你使用的任何其他日志集成）上看到成本指标
 
-When disabling error logs (`disable_error_logs: True`):
-- You **will not** be able to view Errors on the LiteLLM UI
-- You **will** continue seeing error logs in your application logs and any other logging integrations you are using
-
-
-## Migrating Databases 
-
-If you need to migrate Databases the following Tables should be copied to ensure continuation of services and no downtime
+禁用错误日志（`disable_error_logs: True`）时：
+- 你**将无法**在 LiteLLM UI 上查看错误
+- 你**仍然可以**在应用日志和其他日志集成中看到错误日志
 
 
-| Table Name | Description | 
+## 数据库迁移
+
+如果你需要迁移数据库，以下表应被复制以确保服务的连续性和零停机时间：
+
+
+| 表名 | 描述 |
 |------------|-------------|
-| LiteLLM_VerificationToken | **Required** to ensure existing virtual keys continue working |
-| LiteLLM_UserTable | **Required** to ensure existing virtual keys continue working |
-| LiteLLM_TeamTable | **Required** to ensure Teams are migrated |
-| LiteLLM_TeamMembership | **Required** to ensure Teams member budgets are migrated |
-| LiteLLM_BudgetTable | **Required** to migrate existing budgeting settings |
-| LiteLLM_OrganizationTable | **Optional** Only migrate if you use Organizations in DB |
-| LiteLLM_OrganizationMembership | **Optional** Only migrate if you use Organizations in DB | 
-| LiteLLM_ProxyModelTable | **Optional** Only migrate if you store your LLMs in the DB (i.e you set `STORE_MODEL_IN_DB=True`) |
-| LiteLLM_SpendLogs | **Optional** Only migrate if you want historical data on LiteLLM UI |
-| LiteLLM_ErrorLogs | **Optional** Only migrate if you want historical data on LiteLLM UI |
+| LiteLLM_VerificationToken | **必须** 确保现有虚拟密钥继续工作 |
+| LiteLLM_UserTable | **必须** 确保现有虚拟密钥继续工作 |
+| LiteLLM_TeamTable | **必须** 确保团队数据被迁移 |
+| LiteLLM_TeamMembership | **必须** 确保团队成员预算被迁移 |
+| LiteLLM_BudgetTable | **必须** 迁移现有预算设置 |
+| LiteLLM_OrganizationTable | **可选** 仅在数据库中使用了组织功能时才需要迁移 |
+| LiteLLM_OrganizationMembership | **可选** 仅在数据库中使用了组织功能时才需要迁移 |
+| LiteLLM_ProxyModelTable | **可选** 仅在将 LLM 存储在数据库中时才需要迁移（即设置了 `STORE_MODEL_IN_DB=True`） |
+| LiteLLM_SpendLogs | **可选** 仅在需要 LiteLLM UI 上的历史数据时才需要迁移 |
+| LiteLLM_ErrorLogs | **可选** 仅在需要 LiteLLM UI 上的历史数据时才需要迁移 |
 
 

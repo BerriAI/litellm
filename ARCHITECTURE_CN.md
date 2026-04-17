@@ -75,6 +75,149 @@ sequenceDiagram
     ProxyServer-->>Client: ModelResponse + x-litellm-response-cost 响应头
 ```
 
+### 核心函数调用堆栈（以 `/v1/chat/completions` 为例）
+
+以下是请求从进入到返回的**完整函数调用链**，按执行顺序排列：
+
+```
+AsyncHTTPHandler.post()阶段 1: 入站与认证
+┌─────────────────────────────────────────────────────────────┐
+│ ① chat_completion()                                         │
+│   文件: proxy/proxy_server.py:7081                          │
+│   功能: FastAPI 端点入口, 读取 request body                  │
+│   调用: ProxyBaseLLMRequestProcessing.base_process_llm_request() │
+└──────────────────────────┬──────────────────────────────────┘
+                           ▼
+阶段 2: 预处理 (Pre-Call Logic)
+┌─────────────────────────────────────────────────────────────┐
+│ ② common_processing_pre_call_logic()                        │
+│   文件: proxy/common_request_processing.py:574              │
+│   功能: 通用预处理逻辑                                        │
+│                                                             │
+│   ②a function_setup()                                       │
+│       文件: litellm/utils.py                                 │
+│       功能: 初始化 Logging 对象, 记录开始时间                   │
+│                                                             │
+│   ②b pre_call_hook()                                        │
+│       文件: proxy/hooks/proxy_track_cost_callback.py         │
+│       功能: 执行预检钩子                                      │
+│         ├─ max_budget_limiter.check_budget()                 │
+│         │     文件: proxy/hooks/max_budget_limiter.py        │
+│         │     功能: 检查预算是否超限                            │
+│         ├─ parallel_request_limiter_v3.check_limit()         │
+│         │     文件: proxy/hooks/parallel_request_limiter_v3.py│
+│         │     功能: 检查并发请求数限制                          │
+│         ├─ cache_control_check()                             │
+│         │     文件: proxy/hooks/cache_control_check.py       │
+│         │     功能: 缓存验证                                   │
+│         └─ responses_id_security()                           │
+│             文件: proxy/hooks/responses_id_security.py        │
+│             功能: 响应 ID 安全验证                              │
+│                                                             │
+│   ②c _get_hierarchical_router_settings()                    │
+│       文件: proxy/proxy_config.py                            │
+│       功能: 获取 Key > Team 层级的路由设置覆盖                  │
+└──────────────────────────┬──────────────────────────────────┘
+                           ▼
+阶段 3: 路由与 LLM 调用 (并行执行)
+┌─────────────────────────────────────────────────────────────┐
+│ ③ base_process_llm_request()                                │
+│   文件: proxy/common_request_processing.py:831              │
+│   功能: 核心请求处理协调器                                    │
+│                                                             │
+│   ┌─ 并行任务 A ──────────────────────────────────────┐      │
+│   │ ③A during_call_hook()                             │      │
+│   │     功能: 内容审核/安全护栏 (并行于 LLM 调用)      │      │
+│   │     文件: integrations/custom_guardrail.py          │      │
+│   └───────────────────────────────────────────────────┘      │
+│                                                             │
+│   ┌─ 并行任务 B ──────────────────────────────────────┐      │
+│   │ ③B route_request()                                │      │
+│   │     文件: proxy/route_llm_request.py:222           │      │
+│   │     功能: 决定请求路由到哪个 Provider               │      │
+│   │                                                     │      │
+│   │     判断逻辑:                                       │      │
+│   │     ├─ user_config 存在? → 创建临时 Router 调用    │      │
+│   │     ├─ router_settings_override? → 合并覆盖参数      │      │
+│   │     ├─ model 含逗号? → 批量完成                      │      │
+│   │     ├─ model 在 deployment_names 中? → Router 调用  │      │
+│   │     └─ 否则 → litellm 直接调用                       │      │
+│   │                                                     │      │
+│   │     → Router.acompletion() 或 litellm.acompletion() │      │
+│   └──────────────┬──────────────────────────────────────┘      │
+│                  ▼                                          │
+│   ┌──────────────────────────────────────────────┐        │
+│   │ ④ acompletion() / completion()                │        │
+│   │    文件: litellm/main.py                       │        │
+│   │    功能: SDK 主入口点                            │        │
+│   │                                              │        │
+│   │    ④a get_llm_provider()                       │        │
+│   │        文件: litellm/utils.py                 │        │
+│   │        功能: 解析 model 字符串 → provider 类型  │        │
+│   │        例: "gpt-4o" → ("openai", OpenAIConfig)  │        │
+│   │            "claude-3" → ("anthropic", ...)      │        │
+│   │                                              │        │
+│   │    ④b BaseLLMHTTPHandler.completion()          │        │
+│   │        文件: llms/custom_httpx/llm_http_handler.py│       │
+│   │        功能: 核心 HTTP 调度器                     │        │
+│   │                                              │        │
+│   │        → Config.transform_request()           │        │
+│   │          文件: llms/{provider}/chat/transformation.py│    │
+│   │          功能: OpenAI 格式 → 提供商格式          │        │
+│   │                                              │        │
+│   │        → AsyncHTTPHandler.post()              │        │
+│   │          文件: llms/custom_httpx/http_handler.py │       │
+│   │          功能: 发送 HTTP 请求到 LLM Provider API │        │
+│   │                                              │        │
+│   │        → Config.transform_response()          │        │
+│   │          功能: 提供商格式 → OpenAI ModelResponse  │        │
+│   │                                              │        │
+│   │        → streaming_handler (如果是流式)        │        │
+│   │          文件: litellm_core_utils/streaming_handler.py│  │
+│   │          功能: SSE 流式响应处理                   │        │
+│   └──────────────┬──────────────────────────────────┘        │
+│                  ▼                                          │
+│   asyncio.gather([during_call_task, route_task])             │
+│   response = responses[1]  # 取路由结果                      │
+└──────────────────────────┬──────────────────────────────────┘
+                           ▼
+阶段 4: 后处理与费用计算
+┌─────────────────────────────────────────────────────────────┐
+│ ⑤ post-call 处理                                             │
+│                                                             │
+│   ⑤a update_response_metadata()                             │
+│       文件: litellm/llm_response_utils/response_metadata.py │
+│       功能: 更新响应元数据                                    │
+│                                                             │
+│   ⑤b _response_cost_calculator()                             │
+│       文件: litellm/litellm_logging.py                      │
+│       功能: 计算 token 费用                                  │
+│       → completion_cost(tokens × price)                     │
+│       文件: litellm/cost_calculator.py                      │
+│                                                             │
+│   ⑤c 从 hidden_params 提取费用                               │
+│       设置 x-litellm-response-cost 响应头                   │
+│                                                             │
+│   ⑤d async_success_handler()                                │
+│       触发异步日志回调                                       │
+│       → _ProxyDBLogger.async_log_success_event()            │
+│         文件: proxy/hooks/proxy_track_cost_callback.py      │
+│       → DBSpendUpdateWriter.update_database()               │
+│         文件: proxy/db/db_spend_update_writer.py            │
+│         功能: 排入 Redis 消费队列                            │
+└──────────────────────────┬──────────────────────────────────┘
+                           ▼
+阶段 6: 返回响应
+┌─────────────────────────────────────────────────────────────┐
+│ ⑥ select_data_generator()                                   │
+│   文件: proxy/common_request_processing.py                  │
+│   功能: 选择数据生成器 (流式 SSE / JSON)                     │
+│                                                             │
+│   非流式: ModelResponse (JSON)                              │
+│   流式: StreamingResponse (text/event-stream)                │
+└─────────────────────────────────────────────────────────────┘
+```
+
 ### 代理组件
 
 ```mermaid
@@ -119,6 +262,7 @@ graph TD
 ```
 
 **核心代理文件：**
+
 - `proxy/proxy_server.py` - 主 API 端点
 - `proxy/auth/` - 身份验证（API 密钥、JWT、OAuth2）
 - `proxy/hooks/` - 代理层回调钩子
@@ -127,29 +271,31 @@ graph TD
 
 **LLM 专用代理端点：**
 
-| 端点 | 目录 | 用途 |
-|------|------|------|
-| `/v1/messages` | `proxy/anthropic_endpoints/` | Anthropic Messages API |
-| `/vertex-ai/*` | `proxy/vertex_ai_endpoints/` | Vertex AI 直通 |
-| `/gemini/*` | `proxy/google_endpoints/` | Google AI Studio 直通 |
-| `/v1/images/*` | `proxy/image_endpoints/` | 图像生成 |
-| `/v1/batches` | `proxy/batches_endpoints/` | 批量处理 |
-| `/v1/files` | `proxy/openai_files_endpoints/` | 文件上传 |
-| `/v1/fine_tuning` | `proxy/fine_tuning_endpoints/` | 微调任务 |
-| `/v1/rerank` | `proxy/rerank_endpoints/` | 重排序 |
-| `/v1/responses` | `proxy/response_api_endpoints/` | OpenAI Responses API |
-| `/v1/vector_stores` | `proxy/vector_store_endpoints/` | 向量存储 |
-| `/*`（直通） | `proxy/pass_through_endpoints/` | 直接转发到提供商 |
+
+| 端点                | 目录                            | 用途                   |
+| ------------------- | ------------------------------- | ---------------------- |
+| `/v1/messages`      | `proxy/anthropic_endpoints/`    | Anthropic Messages API |
+| `/vertex-ai/*`      | `proxy/vertex_ai_endpoints/`    | Vertex AI 直通         |
+| `/gemini/*`         | `proxy/google_endpoints/`       | Google AI Studio 直通  |
+| `/v1/images/*`      | `proxy/image_endpoints/`        | 图像生成               |
+| `/v1/batches`       | `proxy/batches_endpoints/`      | 批量处理               |
+| `/v1/files`         | `proxy/openai_files_endpoints/` | 文件上传               |
+| `/v1/fine_tuning`   | `proxy/fine_tuning_endpoints/`  | 微调任务               |
+| `/v1/rerank`        | `proxy/rerank_endpoints/`       | 重排序                 |
+| `/v1/responses`     | `proxy/response_api_endpoints/` | OpenAI Responses API   |
+| `/v1/vector_stores` | `proxy/vector_store_endpoints/` | 向量存储               |
+| `/*`（直通）        | `proxy/pass_through_endpoints/` | 直接转发到提供商       |
 
 **代理钩子**（`proxy/hooks/__init__.py`）：
 
-| 钩子 | 文件 | 用途 |
-|------|------|------|
-| `max_budget_limiter` | `proxy/hooks/max_budget_limiter.py` | 强制预算限制 |
+
+| 钩子                       | 文件                                         | 用途            |
+| -------------------------- | -------------------------------------------- | --------------- |
+| `max_budget_limiter`       | `proxy/hooks/max_budget_limiter.py`          | 强制预算限制    |
 | `parallel_request_limiter` | `proxy/hooks/parallel_request_limiter_v3.py` | 按密钥/用户限流 |
-| `cache_control_check` | `proxy/hooks/cache_control_check.py` | 缓存验证 |
-| `responses_id_security` | `proxy/hooks/responses_id_security.py` | 响应 ID 验证 |
-| `litellm_skills` | `proxy/hooks/skills_injection.py` | Skills 注入 |
+| `cache_control_check`      | `proxy/hooks/cache_control_check.py`         | 缓存验证        |
+| `responses_id_security`    | `proxy/hooks/responses_id_security.py`       | 响应 ID 验证    |
+| `litellm_skills`           | `proxy/hooks/skills_injection.py`            | Skills 注入     |
 
 要添加新的代理钩子，请实现 `CustomLogger` 并在 `PROXY_HOOKS` 中注册。
 
@@ -205,32 +351,35 @@ graph LR
     Scheduler --> Keys
 ```
 
-| 组件 | 用途 | 关键文件/类 |
-|------|------|------------|
-| **Redis** | 限流、API 密钥缓存、TPM/RPM 追踪、冷却期管理、LLM 响应缓存、消费数据排队 | `caching/redis_cache.py`（`RedisCache`）、`caching/dual_cache.py`（`DualCache`）|
-| **PostgreSQL** | API 密钥、团队、用户、消费日志 | `proxy/utils.py`（`PrismaClient`）、`proxy/schema.prisma` |
-| **InternalUsageCache** | 代理层缓存，用于限流和 API 密钥（内存 + Redis） | `proxy/utils.py`（`InternalUsageCache`）|
-| **Router.cache** | TPM/RPM 追踪、部署冷却期、客户端缓存（内存 + Redis） | `router.py`（`Router.cache: DualCache`）|
-| **LLMCachingHandler** | SDK 层 LLM 响应/向量缓存 | `caching/caching_handler.py`（`LLMCachingHandler`）、`caching/caching.py`（`Cache`）|
-| **DBSpendUpdateWriter** | 批量消费更新以减少数据库写入次数 | `proxy/db/db_spend_update_writer.py`（`DBSpendUpdateWriter`）|
-| **Cost Tracking** | 计算并记录响应费用 | `proxy/hooks/proxy_track_cost_callback.py`（`_ProxyDBLogger`）|
+
+| 组件                    | 用途                                                                     | 关键文件/类                                                                          |
+| ----------------------- | ------------------------------------------------------------------------ | ------------------------------------------------------------------------------------ |
+| **Redis**               | 限流、API 密钥缓存、TPM/RPM 追踪、冷却期管理、LLM 响应缓存、消费数据排队 | `caching/redis_cache.py`（`RedisCache`）、`caching/dual_cache.py`（`DualCache`）     |
+| **PostgreSQL**          | API 密钥、团队、用户、消费日志                                           | `proxy/utils.py`（`PrismaClient`）、`proxy/schema.prisma`                            |
+| **InternalUsageCache**  | 代理层缓存，用于限流和 API 密钥（内存 + Redis）                          | `proxy/utils.py`（`InternalUsageCache`）                                             |
+| **Router.cache**        | TPM/RPM 追踪、部署冷却期、客户端缓存（内存 + Redis）                     | `router.py`（`Router.cache: DualCache`）                                             |
+| **LLMCachingHandler**   | SDK 层 LLM 响应/向量缓存                                                 | `caching/caching_handler.py`（`LLMCachingHandler`）、`caching/caching.py`（`Cache`） |
+| **DBSpendUpdateWriter** | 批量消费更新以减少数据库写入次数                                         | `proxy/db/db_spend_update_writer.py`（`DBSpendUpdateWriter`）                        |
+| **Cost Tracking**       | 计算并记录响应费用                                                       | `proxy/hooks/proxy_track_cost_callback.py`（`_ProxyDBLogger`）                       |
 
 **后台任务**（APScheduler，在 `proxy/proxy_server.py` → `ProxyStartupEvent.initialize_scheduled_background_jobs()` 中初始化）：
 
-| 任务 | 间隔 | 用途 | 关键文件 |
-|------|------|------|---------|
-| `update_spend` | 60 秒 | 将消费日志批量写入 PostgreSQL | `proxy/db/db_spend_update_writer.py` |
-| `reset_budget` | 10-12 分钟 | 重置密钥/用户/团队的预算 | `proxy/management_helpers/budget_reset_job.py` |
-| `add_deployment` | 10 秒 | 从数据库同步新的模型部署 | `proxy/proxy_server.py`（`ProxyConfig`）|
-| `cleanup_old_spend_logs` | cron/interval | 删除旧的消费日志 | `proxy/management_helpers/spend_log_cleanup.py` |
-| `check_batch_cost` | 30 分钟 | 计算批量任务的费用 | `proxy/management_helpers/check_batch_cost_job.py` |
-| `check_responses_cost` | 30 分钟 | 计算 Responses API 的费用 | `proxy/management_helpers/check_responses_cost_job.py` |
-| `process_rotations` | 1 小时 | 自动轮换 API 密钥 | `proxy/management_helpers/key_rotation_manager.py` |
-| `_run_background_health_check` | 持续 | 对模型部署进行健康检查 | `proxy/proxy_server.py` |
-| `send_weekly_spend_report` | 每周 | Slack 消费告警 | `proxy/utils.py`（`SlackAlerting`）|
-| `send_monthly_spend_report` | 每月 | Slack 消费告警 | `proxy/utils.py`（`SlackAlerting`）|
+
+| 任务                           | 间隔          | 用途                          | 关键文件                                               |
+| ------------------------------ | ------------- | ----------------------------- | ------------------------------------------------------ |
+| `update_spend`                 | 60 秒         | 将消费日志批量写入 PostgreSQL | `proxy/db/db_spend_update_writer.py`                   |
+| `reset_budget`                 | 10-12 分钟    | 重置密钥/用户/团队的预算      | `proxy/management_helpers/budget_reset_job.py`         |
+| `add_deployment`               | 10 秒         | 从数据库同步新的模型部署      | `proxy/proxy_server.py`（`ProxyConfig`）               |
+| `cleanup_old_spend_logs`       | cron/interval | 删除旧的消费日志              | `proxy/management_helpers/spend_log_cleanup.py`        |
+| `check_batch_cost`             | 30 分钟       | 计算批量任务的费用            | `proxy/management_helpers/check_batch_cost_job.py`     |
+| `check_responses_cost`         | 30 分钟       | 计算 Responses API 的费用     | `proxy/management_helpers/check_responses_cost_job.py` |
+| `process_rotations`            | 1 小时        | 自动轮换 API 密钥             | `proxy/management_helpers/key_rotation_manager.py`     |
+| `_run_background_health_check` | 持续          | 对模型部署进行健康检查        | `proxy/proxy_server.py`                                |
+| `send_weekly_spend_report`     | 每周          | Slack 消费告警                | `proxy/utils.py`（`SlackAlerting`）                    |
+| `send_monthly_spend_report`    | 每月          | Slack 消费告警                | `proxy/utils.py`（`SlackAlerting`）                    |
 
 **费用归因流程：**
+
 1. LLM 响应在 `litellm.acompletion()` 完成后返回到 `utils.py` 包装器
 2. 调用 `update_response_metadata()`（`llm_response_utils/response_metadata.py`）
 3. `logging_obj._response_cost_calculator()`（`litellm_logging.py`）通过 `litellm.completion_cost()`（`cost_calculator.py`）计算费用
@@ -294,6 +443,7 @@ graph TD
 ```
 
 **核心 SDK 文件：**
+
 - `main.py` - 入口点：`completion()`、`acompletion()`、`embedding()`
 - `utils.py` - `get_llm_provider()` 解析 model → provider
 - `llms/custom_httpx/llm_http_handler.py` - 核心 HTTP 调度器
@@ -310,18 +460,19 @@ graph TD
 
 ### 转换文件位置
 
-| 入站 API | 提供商 | 转换文件 |
-|---------|--------|---------|
-| `/v1/chat/completions` | Anthropic | `llms/anthropic/chat/transformation.py` |
-| `/v1/chat/completions` | Bedrock Converse | `llms/bedrock/chat/converse_transformation.py` |
-| `/v1/chat/completions` | Bedrock Invoke | `llms/bedrock/chat/invoke_transformations/anthropic_claude3_transformation.py` |
-| `/v1/chat/completions` | Gemini | `llms/gemini/chat/transformation.py` |
-| `/v1/chat/completions` | Vertex AI | `llms/vertex_ai/gemini/transformation.py` |
-| `/v1/chat/completions` | OpenAI | `llms/openai/chat/gpt_transformation.py` |
-| `/v1/messages`（直通） | Anthropic | `llms/anthropic/experimental_pass_through/messages/transformation.py` |
-| `/v1/messages`（直通） | Bedrock | `llms/bedrock/messages/invoke_transformations/anthropic_claude3_transformation.py` |
-| `/v1/messages`（直通） | Vertex AI | `llms/vertex_ai/vertex_ai_partner_models/anthropic/experimental_pass_through/transformation.py` |
-| 直通端点 | 全部 | `proxy/pass_through_endpoints/llm_provider_handlers/` |
+
+| 入站 API               | 提供商           | 转换文件                                                                                        |
+| ---------------------- | ---------------- | ----------------------------------------------------------------------------------------------- |
+| `/v1/chat/completions` | Anthropic        | `llms/anthropic/chat/transformation.py`                                                         |
+| `/v1/chat/completions` | Bedrock Converse | `llms/bedrock/chat/converse_transformation.py`                                                  |
+| `/v1/chat/completions` | Bedrock Invoke   | `llms/bedrock/chat/invoke_transformations/anthropic_claude3_transformation.py`                  |
+| `/v1/chat/completions` | Gemini           | `llms/gemini/chat/transformation.py`                                                            |
+| `/v1/chat/completions` | Vertex AI        | `llms/vertex_ai/gemini/transformation.py`                                                       |
+| `/v1/chat/completions` | OpenAI           | `llms/openai/chat/gpt_transformation.py`                                                        |
+| `/v1/messages`（直通） | Anthropic        | `llms/anthropic/experimental_pass_through/messages/transformation.py`                           |
+| `/v1/messages`（直通） | Bedrock          | `llms/bedrock/messages/invoke_transformations/anthropic_claude3_transformation.py`              |
+| `/v1/messages`（直通） | Vertex AI        | `llms/vertex_ai/vertex_ai_partner_models/anthropic/experimental_pass_through/transformation.py` |
+| 直通端点               | 全部             | `proxy/pass_through_endpoints/llm_provider_handlers/`                                           |
 
 ### 示例：调试 prompt caching
 
@@ -368,14 +519,15 @@ class ProviderConfig(BaseConfig):
 
 添加功能时，请验证所有路径均可正常工作：
 
-| 测试 | 文件规律 |
-|------|---------|
-| OpenAI 直通 | `tests/llm_translation/test_openai*.py` |
-| Anthropic 直接 | `tests/llm_translation/test_anthropic*.py` |
-| Bedrock Invoke | `tests/llm_translation/test_bedrock*.py` |
+
+| 测试             | 文件规律                                          |
+| ---------------- | ------------------------------------------------- |
+| OpenAI 直通      | `tests/llm_translation/test_openai*.py`           |
+| Anthropic 直接   | `tests/llm_translation/test_anthropic*.py`        |
+| Bedrock Invoke   | `tests/llm_translation/test_bedrock*.py`          |
 | Bedrock Converse | `tests/llm_translation/test_bedrock*converse*.py` |
-| Vertex AI | `tests/llm_translation/test_vertex*.py` |
-| Gemini | `tests/llm_translation/test_gemini*.py` |
+| Vertex AI        | `tests/llm_translation/test_vertex*.py`           |
+| Gemini           | `tests/llm_translation/test_gemini*.py`           |
 
 ### 单元测试转换逻辑
 
@@ -395,3 +547,4 @@ def test_prompt_caching_transform():
     )
     assert "cachePoint" in str(result)  # 验证 cache_control 已被正确转换
 
+```
