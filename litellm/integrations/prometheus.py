@@ -16,6 +16,7 @@ from typing import (
     List,
     Literal,
     Optional,
+    Sequence,
     Tuple,
     Union,
     cast,
@@ -38,7 +39,6 @@ from litellm.types.integrations.prometheus import *
 from litellm.types.integrations.prometheus import (
     _sanitize_prometheus_label_name,
     _sanitize_prometheus_label_value,
-    _sanitize_prometheus_label_value_v1,
 )
 from litellm.types.utils import StandardLoggingPayload
 
@@ -2659,7 +2659,7 @@ class PrometheusLogger(CustomLogger):
         self,
         data_fetch_function: Callable[..., Awaitable[Tuple[List[Any], Optional[int]]]],
         set_metrics_function: Callable[[List[Any]], Awaitable[None]],
-        data_type: Literal["teams", "keys", "users"],
+        data_type: Literal["teams", "keys", "users", "orgs"],
     ):
         """
         Generic method to initialize budget metrics for teams or API keys.
@@ -3493,34 +3493,37 @@ class PrometheusLabelFactoryContext:
         "_resolved_end_user",
     )
 
+    _END_USER_NOT_COMPUTED = object()
+
     def __init__(self, enum_values: UserAPIKeyLabelValues) -> None:
         self.enum_values = enum_values
         enum_dict = enum_values.model_dump()
         self._sanitized_enum: Dict[str, Optional[str]] = {
-            k: _sanitize_prometheus_label_value_v1(v)
+            k: _sanitize_prometheus_label_value(v)
             for k, v in enum_dict.items()
         }
         self._custom_by_sanitized_key: Dict[str, Optional[str]] = {}
         if enum_values.custom_metadata_labels is not None:
             for key, value in enum_values.custom_metadata_labels.items():
                 sk = _sanitize_prometheus_label_name(key)
-                self._custom_by_sanitized_key[sk] = _sanitize_prometheus_label_value_v1(
+                self._custom_by_sanitized_key[sk] = _sanitize_prometheus_label_value(
                     value
                 )
         self._tag_labels: Dict[str, Optional[str]] = {}
         if enum_values.tags is not None:
             for k, v in get_custom_labels_from_tags(enum_values.tags).items():
-                self._tag_labels[k] = _sanitize_prometheus_label_value_v1(v)
-        self._resolved_end_user: Optional[str] = None
+                self._tag_labels[k] = _sanitize_prometheus_label_value(v)
+        # Use a dedicated sentinel so `None` can be cached as a computed result.
+        self._resolved_end_user: Any = self._END_USER_NOT_COMPUTED
 
     def get_resolved_end_user(self) -> Optional[str]:
-        if self._resolved_end_user is None:
+        if self._resolved_end_user is self._END_USER_NOT_COMPUTED:
             fn = _get_cached_end_user_id_for_cost_tracking()
             self._resolved_end_user = fn(
                 litellm_params={"user_api_key_end_user_id": self.enum_values.end_user},
                 service_type="prometheus",
             )
-        return self._resolved_end_user
+        return cast(Optional[str], self._resolved_end_user)
 
 
 def _prometheus_labels_from_context(
@@ -3646,7 +3649,7 @@ def get_custom_labels_from_metadata(metadata: dict) -> Dict[str, str]:
 
 
 def _tag_matches_wildcard_configured_pattern(
-    tags: List[str], configured_tag: str
+    tags: Sequence[str], configured_tag: str
 ) -> bool:
     """
     Check if any of the request tags matches a wildcard configured pattern
@@ -3678,7 +3681,7 @@ def _tag_matches_wildcard_configured_pattern(
     return any(re.match(pattern=regex_pattern, string=tag) for tag in tags)
 
 
-def get_custom_labels_from_tags(tags: List[str]) -> Dict[str, str]:
+def get_custom_labels_from_tags(tags: Sequence[str]) -> Dict[str, str]:
     """
     Get custom labels from tags based on admin configuration.
 

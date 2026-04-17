@@ -2,7 +2,7 @@ import re
 from dataclasses import dataclass, field, fields
 from enum import Enum
 from types import MappingProxyType
-from typing import Any, ClassVar, Dict, List, Literal, Mapping, Optional, Tuple
+from typing import Any, ClassVar, Dict, List, Literal, Mapping, Optional, Tuple, Union
 
 from typing_extensions import Annotated
 
@@ -41,42 +41,11 @@ def _sanitize_prometheus_label_name(label: str) -> str:
     return sanitized
 
 
-def _sanitize_prometheus_label_value(value: Optional[Any]) -> Optional[str]:
-    """
-    Sanitize a label value for Prometheus text format compatibility.
-
-    Removes or replaces characters that break the Prometheus exposition format:
-    - U+2028 (Line Separator) and U+2029 (Paragraph Separator) are removed
-    - Carriage returns are removed
-    - Newlines are replaced with spaces
-    - Backslashes and double quotes are escaped per Prometheus spec
-    """
-    if value is None:
-        return None
-
-    # Coerce non-string values (int, bool, etc.) to str before sanitizing
-    str_value: str = value if isinstance(value, str) else str(value)
-
-    # Remove Unicode line/paragraph separators that break text format
-    str_value = str_value.replace("\u2028", "").replace("\u2029", "")
-
-    # Remove carriage returns
-    str_value = str_value.replace("\r", "")
-
-    # Replace newlines with spaces
-    str_value = str_value.replace("\n", " ")
-
-    # Escape backslashes and double quotes per Prometheus exposition format
-    str_value = str_value.replace("\\", "\\\\").replace('"', '\\"')
-
-    return str_value
-
-
 # v1: single translate pass + escape loop (avoids chained str.replace allocations).
 _PROMETHEUS_LABEL_VALUE_TRANSLATE_V1 = str.maketrans("\n", " ", "\r\u2028\u2029")
 
 
-def _sanitize_prometheus_label_value_v1(value: Optional[Any]) -> Optional[str]:
+def _sanitize_prometheus_label_value(value: Optional[Any]) -> Optional[str]:
     """
     Same semantics as :func:`_sanitize_prometheus_label_value`, implemented with
     ``str.translate`` plus a single escape pass instead of chained ``replace``.
@@ -774,7 +743,7 @@ class PrometheusMetricLabels:
         return default_labels + custom_labels
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)
 class UserAPIKeyLabelValues:
     """
     Prometheus metric label inputs (Python field names match historical Pydantic ``model_dump`` keys).
@@ -794,7 +763,8 @@ class UserAPIKeyLabelValues:
     requested_model: Optional[str] = None
     model: Optional[str] = None
     litellm_model_name: Optional[str] = None
-    tags: Tuple[str, ...] = ()
+    # Accept list/tuple at construction time; normalize to tuple in __post_init__.
+    tags: Union[Tuple[str, ...], List[str]] = ()
     custom_metadata_labels: Mapping[str, str] = field(default_factory=dict)
     model_id: Optional[str] = None
     api_base: Optional[str] = None
