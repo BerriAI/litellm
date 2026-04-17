@@ -11,7 +11,7 @@ import litellm
 from fastapi import HTTPException
 
 from litellm._logging import verbose_proxy_logger
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 
 
 async def route_a2a_agent_request(
@@ -50,16 +50,21 @@ async def route_a2a_agent_request(
         route_name = ROUTE_ENDPOINT_MAPPING.get(route_type, route_type)
         raise ProxyModelNotFoundError(route=route_name, model_name=model_name)
 
-    # Verify the caller is permitted to use this agent
-    is_allowed = await AgentRequestHandler.is_agent_allowed(
-        agent_id=agent.agent_id,
-        user_api_key_auth=user_api_key_dict,
+    # Verify the caller is permitted to use this agent (admins bypass the check)
+    is_admin = user_api_key_dict is not None and (
+        user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
+        or user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
     )
-    if not is_allowed:
-        raise HTTPException(
-            status_code=403,
-            detail=f"Agent '{agent_name}' is not allowed for your key/team. Contact proxy admin for access.",
+    if not is_admin:
+        is_allowed = await AgentRequestHandler.is_agent_allowed(
+            agent_id=agent.agent_id,
+            user_api_key_auth=user_api_key_dict,
         )
+        if not is_allowed:
+            raise HTTPException(
+                status_code=403,
+                detail=f"Agent '{agent_name}' is not allowed for your key/team. Contact proxy admin for access.",
+            )
 
     # Get API base URL from agent config
     if not agent.agent_card_params or "url" not in agent.agent_card_params:
