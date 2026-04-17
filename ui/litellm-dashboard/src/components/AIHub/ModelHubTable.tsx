@@ -534,7 +534,7 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
                   accessToken={accessToken}
                   publicPage={publicPage}
                   onPublishSuccess={async () => {
-                    const response = await getClaudeCodePluginsList(accessToken || "", publicPage === true);
+                    const response = await getClaudeCodePluginsList(accessToken || "", publicPage);
                     setSkillHubData(response.plugins);
                   }}
                 />
