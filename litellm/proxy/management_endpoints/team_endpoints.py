@@ -2981,7 +2981,13 @@ def _transform_teams_to_deleted_records(
             if json_field in record and record[json_field] is not None:
                 record[json_field] = json.dumps(record[json_field])
 
-        for rel_key in ("litellm_model_table", "object_permission", "id"):
+        for rel_key in (
+            "litellm_model_table",
+            "object_permission",
+            "id",
+            "budget_limits",  # not in LiteLLM_DeletedTeamTable schema
+            "default_team_member_models",  # not in LiteLLM_DeletedTeamTable schema
+        ):
             record.pop(rel_key, None)
 
         records.append(record)
