@@ -122,9 +122,17 @@ Run all unit tests (uses parallel execution for speed):
 make test-unit
 ```
 
+If you're running broader test suites, proxy tests, or anything that touches PostgreSQL-backed fixtures/plugins, install the full local test environment first:
+
+```bash
+make install-test-deps
+```
+
+This syncs the locked test environment used across the repo, including `psycopg` v3 plus `psycopg-binary` (used by `pytest-postgresql`), `psycopg2-binary` (used by some proxy E2E tests), and a generated Prisma client for DB-backed proxy tests, so pytest startup matches CI without manual package installs.
+
 Run specific test files:
 ```bash
-poetry run pytest tests/test_litellm/test_your_file.py -v
+uv run pytest tests/test_litellm/test_your_file.py -v
 ```
 
 ### Running Linting and Formatting Checks
@@ -185,7 +193,7 @@ Run `make help` to see all available commands:
 make help                       # Show all available commands
 make install-dev               # Install development dependencies
 make install-proxy-dev         # Install proxy development dependencies
-make install-test-deps         # Install test dependencies (for running tests)
+make install-test-deps         # Install the full local test environment
 make format                    # Apply Black code formatting
 make format-check              # Check Black formatting (matches CI)
 make lint                      # Run all linting checks
@@ -247,7 +255,7 @@ To run the proxy server locally:
 make install-proxy-dev
 
 # Start the proxy server
-poetry run litellm --config your_config.yaml
+uv run litellm --config your_config.yaml
 ```
 
 ### Docker Development

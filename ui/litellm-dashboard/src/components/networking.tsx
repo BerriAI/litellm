@@ -69,7 +69,7 @@ export const getInProductNudgesCall = async (accessToken: string) => {
  * Helper file for calls being made to proxy
  */
 import MessageManager from "@/components/molecules/message_manager";
-import { clearTokenCookies } from "@/utils/cookieUtils";
+import { clearTokenCookies, storeLoginToken } from "@/utils/cookieUtils";
 import { TagNewRequest, TagUpdateRequest, TagListResponse, TagInfoResponse } from "./tag_management/types";
 import { Team } from "./key_team_helpers/key_list";
 import { UserInfo } from "./view_users/types";
@@ -9255,14 +9255,14 @@ export const loginCall = async (username: string, password: string, useV3?: bool
 
     const exchangeData: LoginResponse = await exchangeResponse.json();
     if (exchangeData.token) {
-      document.cookie = `token=${exchangeData.token}; path=/; SameSite=Lax`;
+      storeLoginToken(exchangeData.token);
     }
     return exchangeData;
   }
 
   // Backwards compatibility: v2 or old v3 returns token directly
   if (data.token) {
-    document.cookie = `token=${data.token}; path=/; SameSite=Lax`;
+    storeLoginToken(data.token);
   }
 
   return data;

@@ -59,7 +59,7 @@ If no credentials are provided, LiteLLM will use the Databricks SDK for automati
 from litellm import completion
 
 # No environment variables needed - uses Databricks SDK unified auth
-# Requires: pip install databricks-sdk
+# Requires: uv add databricks-sdk
 response = completion(
     model="databricks/databricks-dbrx-instruct",
     messages=[{"role": "user", "content": "Hello!"}],
@@ -220,7 +220,7 @@ response = completion(
 See all litellm.completion supported params [here](../completion/input.md#translated-openai-params)
 
 ```python
-# !pip install litellm
+# !uv add litellm
 from litellm import completion
 import os
 ## set ENV variables
@@ -457,7 +457,7 @@ For embedding models, databricks lets you pass in an additional param 'instructi
 
 
 ```python
-# !pip install litellm
+# !uv add litellm
 from litellm import embedding
 import os
 ## set ENV variables

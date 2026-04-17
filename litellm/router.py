@@ -3864,14 +3864,29 @@ class Router:
             self._add_deployment_model_to_endpoint_for_llm_passthrough_route(
                 kwargs=kwargs, model=model, model_name=model_name
             )
-            ### get custom
-            response = original_generic_function(
-                **{
-                    **data,
-                    "caching": self.cache_responses,
-                    **kwargs,
-                }
-            )
+            
+            # Get custom_llm_provider from deployment params
+            try:
+                custom_llm_provider = data.get("custom_llm_provider")
+                _, inferred_custom_llm_provider, _, _ = get_llm_provider(
+                    model=data["model"],
+                    custom_llm_provider=custom_llm_provider,
+                )
+                custom_llm_provider = custom_llm_provider or inferred_custom_llm_provider
+            except Exception:
+                custom_llm_provider = None
+            
+            # Build response kwargs
+            response_kwargs = {
+                **data,
+                "caching": self.cache_responses,
+                **kwargs,
+            }
+            # Only set custom_llm_provider if it's not None
+            if custom_llm_provider is not None:
+                response_kwargs["custom_llm_provider"] = custom_llm_provider
+            
+            response = original_generic_function(**response_kwargs)
 
             rpm_semaphore = self._get_client(
                 deployment=deployment,
@@ -3961,7 +3976,12 @@ class Router:
             self.routing_strategy_pre_call_checks(deployment=deployment)
 
             try:
-                _, custom_llm_provider, _, _ = get_llm_provider(model=data["model"])
+                custom_llm_provider = data.get("custom_llm_provider")
+                _, inferred_custom_llm_provider, _, _ = get_llm_provider(
+                    model=data["model"],
+                    custom_llm_provider=custom_llm_provider,
+                )
+                custom_llm_provider = custom_llm_provider or inferred_custom_llm_provider
             except Exception:
                 custom_llm_provider = None
 
@@ -4219,9 +4239,14 @@ class Router:
                 self.total_calls[model_name] += 1
 
                 ## REPLACE MODEL IN FILE WITH SELECTED DEPLOYMENT ##
-                stripped_model, custom_llm_provider, _, _ = get_llm_provider(
-                    model=data["model"]
+                # For DB/config deployments, use provider from deployment params
+                custom_llm_provider = data.get("custom_llm_provider")
+                stripped_model, inferred_custom_llm_provider, _, _ = get_llm_provider(
+                    model=data["model"],
+                    custom_llm_provider=custom_llm_provider,
                 )
+                # Preserve explicitly stored provider, fallback to inferred
+                custom_llm_provider = custom_llm_provider or inferred_custom_llm_provider
 
                 ## REPLACE MODEL IN FILE WITH SELECTED DEPLOYMENT ##
                 purpose = cast(Optional[OpenAIFilesPurpose], kwargs.get("purpose"))
@@ -4367,8 +4392,13 @@ class Router:
             )
             self.total_calls[model_name] += 1
 
-            # Get custom provider
-            _, custom_llm_provider, _, _ = get_llm_provider(model=data["model"])
+            # Get custom provider from deployment params
+            custom_llm_provider = data.get("custom_llm_provider")
+            _, inferred_custom_llm_provider, _, _ = get_llm_provider(
+                model=data["model"],
+                custom_llm_provider=custom_llm_provider,
+            )
+            custom_llm_provider = custom_llm_provider or inferred_custom_llm_provider
 
             response = avector_store_create_sdk(
                 **{
@@ -4486,7 +4516,12 @@ class Router:
             self.total_calls[model_name] += 1
 
             ## SET CUSTOM PROVIDER TO SELECTED DEPLOYMENT ##
-            _, custom_llm_provider, _, _ = get_llm_provider(model=data["model"])
+            custom_llm_provider = data.get("custom_llm_provider")
+            _, inferred_custom_llm_provider, _, _ = get_llm_provider(
+                model=data["model"],
+                custom_llm_provider=custom_llm_provider,
+            )
+            custom_llm_provider = custom_llm_provider or inferred_custom_llm_provider
 
             response = litellm.acreate_batch(
                 **{
@@ -4720,7 +4755,12 @@ class Router:
             self.total_calls[model_name] += 1
 
             ## SET CUSTOM PROVIDER TO SELECTED DEPLOYMENT ##
-            _, custom_llm_provider, _, _ = get_llm_provider(model=data["model"])
+            custom_llm_provider = data.get("custom_llm_provider")
+            _, inferred_custom_llm_provider, _, _ = get_llm_provider(
+                model=data["model"],
+                custom_llm_provider=custom_llm_provider,
+            )
+            custom_llm_provider = custom_llm_provider or inferred_custom_llm_provider
 
             response = litellm.acancel_batch(
                 **{
