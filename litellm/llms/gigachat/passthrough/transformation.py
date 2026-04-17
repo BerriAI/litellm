@@ -36,12 +36,8 @@ class GigaChatPassthroughConfig(BasePassthroughConfig):
         if base_target_url is None:
             raise Exception("GigaChat api base not found")
 
-        litellm_metadata = litellm_params.get("litellm_metadata") or {}
-        model_group = litellm_metadata.get("model_group")
-        if model_group and model_group in endpoint:
-            endpoint = endpoint.replace(model_group, model)
+        complete_url = f"{base_target_url}/{endpoint.lstrip('/')}"
 
-        complete_url = f"{base_target_url}/chat/completions"
         return (
             httpx.URL(complete_url),
             base_target_url,

@@ -30,6 +30,5 @@ def convert_usage(usage_data: dict[str, int]) -> Usage:
     )
 
 
-@staticmethod
 def get_api_base(api_base: Optional[str] = None) -> Optional[str]:
     return api_base or get_secret_str("GIGACHAT_API_BASE") or GIGACHAT_BASE_URL

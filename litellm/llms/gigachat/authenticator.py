@@ -130,12 +130,6 @@ async def get_access_token_async(
     litellm_params: Optional[dict] = None,
 ) -> str:
     """Async version of get_access_token."""
-    credentials = credentials or _get_credentials()
-    if not credentials:
-        raise GigaChatAuthError(
-            status_code=401,
-            message="GigaChat credentials not provided. Set GIGACHAT_CREDENTIALS or GIGACHAT_API_KEY environment variable.",
-        )
     if not litellm_params:
         litellm_params = {}
 
