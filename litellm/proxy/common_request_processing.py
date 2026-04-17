@@ -789,6 +789,10 @@ class ProxyBaseLLMRequestProcessing:
             self.data["litellm_call_id_from_client"] = True
         else:
             self.data["litellm_call_id"] = str(uuid.uuid4())
+            # Defensive: explicitly clear the flag so a body-injected
+            # `litellm_call_id_from_client: true` cannot flip precedence
+            # in get_spend_logs_id when no header was actually supplied.
+            self.data["litellm_call_id_from_client"] = False
         DDSpanTagger.tag_call_id(self.data.get("litellm_call_id"))
         DDSpanTagger.tag_request(
             user_api_key_dict=user_api_key_dict,
