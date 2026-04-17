@@ -1654,7 +1654,7 @@ def test_max_effort_rejected_for_opus_45():
     messages = [{"role": "user", "content": "Test"}]
 
     with pytest.raises(
-        ValueError, match="effort='max' is only supported by Claude Opus 4.6"
+        ValueError, match="effort='max' is only supported by Claude Opus 4.6 and 4.7"
     ):
         optional_params = {"output_config": {"effort": "max"}}
         config.transform_request(
@@ -2213,12 +2213,12 @@ def test_reasoning_effort_does_not_set_output_config_for_older_models():
 
 
 def test_max_effort_rejected_for_sonnet_46():
-    """Test that effort='max' is rejected for Sonnet 4.6 (only Opus 4.6 supports max)."""
+    """Test that effort='max' is rejected for Sonnet 4.6 (Sonnet 4.6 doesn't support max)."""
     config = AnthropicConfig()
     messages = [{"role": "user", "content": "Test"}]
 
     with pytest.raises(
-        ValueError, match="effort='max' is only supported by Claude Opus 4.6"
+        ValueError, match="effort='max' is only supported by Claude Opus 4.6 and 4.7"
     ):
         config.transform_request(
             model="claude-sonnet-4-6-20260219",
@@ -2236,6 +2236,27 @@ def test_max_effort_accepted_for_opus_46():
 
     result = config.transform_request(
         model="claude-opus-4-6-20250514",
+        messages=messages,
+        optional_params={"output_config": {"effort": "max"}},
+        litellm_params={},
+        headers={},
+    )
+
+    assert result["output_config"]["effort"] == "max"
+
+
+def test_max_effort_accepted_for_opus_47():
+    """Regression for #25957 - effort='max' must work for Opus 4.7.
+
+    Anthropic's Messages API accepts ``output_config.effort='max'`` on
+    ``claude-opus-4-7-*`` models. The previous hardcoded ``_is_opus_4_6_model``
+    guard rejected the request before it ever reached Anthropic.
+    """
+    config = AnthropicConfig()
+    messages = [{"role": "user", "content": "Test"}]
+
+    result = config.transform_request(
+        model="claude-opus-4-7-20260416",
         messages=messages,
         optional_params={"output_config": {"effort": "max"}},
         litellm_params={},
