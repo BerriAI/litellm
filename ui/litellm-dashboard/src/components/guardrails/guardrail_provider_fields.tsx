@@ -157,10 +157,10 @@ const GuardrailProviderFields: React.FC<GuardrailProviderFieldsProps> = ({
         );
       }
 
-      const percentageInitialValue =
-        field.type === "percentage" && (fieldValue === undefined || fieldValue === null)
-          ? (field.default_value ?? 0.5)
-          : undefined;
+      const resolvedInitialValue =
+        fieldValue !== undefined
+          ? fieldValue
+          : (field.default_value ?? (field.type === "percentage" ? 0.5 : undefined));
 
       return (
         <Form.Item
@@ -169,7 +169,7 @@ const GuardrailProviderFields: React.FC<GuardrailProviderFieldsProps> = ({
           label={fieldKey}
           tooltip={field.description}
           rules={field.required ? [{ required: true, message: `${fieldKey} is required` }] : undefined}
-          initialValue={percentageInitialValue}
+          initialValue={resolvedInitialValue}
         >
           {field.type === "select" && field.options ? (
             <Select placeholder={field.description} defaultValue={fieldValue || field.default_value}>
@@ -188,12 +188,9 @@ const GuardrailProviderFields: React.FC<GuardrailProviderFieldsProps> = ({
               ))}
             </Select>
           ) : field.type === "bool" || field.type === "boolean" ? (
-            <Select
-              placeholder={field.description}
-              defaultValue={fieldValue !== undefined ? String(fieldValue) : field.default_value}
-            >
-              <Select.Option value="true">True</Select.Option>
-              <Select.Option value="false">False</Select.Option>
+            <Select placeholder={field.description}>
+              <Select.Option value={true}>True</Select.Option>
+              <Select.Option value={false}>False</Select.Option>
             </Select>
           ) : field.type === "percentage" && field.min != null && field.max != null ? (
             <Slider

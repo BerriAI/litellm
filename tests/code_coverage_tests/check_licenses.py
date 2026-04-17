@@ -1,14 +1,35 @@
 #!/usr/bin/env python3
-import sys
-
-import requests
-from packaging.requirements import Requirement
-from pathlib import Path
-import json
-from typing import Dict, List, Optional, Set, Tuple
 import configparser
-import re
 from dataclasses import dataclass
+import json
+from pathlib import Path
+import re
+import sys
+import tomllib
+from typing import Dict, List, Optional, Set, Tuple
+
+from packaging.requirements import Requirement
+import requests
+
+DEFAULT_TRANSITIVE_PIN_PACKAGES = (
+    "aiofiles",
+    "anyio",
+    "async-generator",
+    "azure-keyvault",
+    "colorlog",
+    "filelock",
+    "grpc-google-iam-v1",
+    "h11",
+    "hf-xet",
+    "jaraco-context",
+    "redis",
+    "requests-toolbelt",
+    "starlette",
+    "tornado",
+    "tzdata",
+    "urllib3",
+    "wheel",
+)
 
 
 @dataclass
@@ -52,6 +73,11 @@ class LicenseChecker:
         # Track package results
         self.package_results: List[PackageLicense] = []
 
+    @staticmethod
+    def _normalize_package_name(package_name: str) -> str:
+        """Canonicalize package names so '-', '_' and '.' compare equivalently."""
+        return re.sub(r"[-_.]+", "-", package_name).lower()
+
     def _parse_license_list(self, section: str, option: str) -> Set[str]:
         """Parse license list from config, handling comments and whitespace."""
         if not self.config.has_option(section, option):
@@ -70,7 +96,7 @@ class LicenseChecker:
         if self.config.has_section("Authorized Packages"):
             for package, spec in self.config.items("Authorized Packages"):
                 if not package.startswith("#"):
-                    package = package.strip().lower()
+                    package = self._normalize_package_name(package.strip())
                     parts = spec.split("#", 1)
                     version_spec = parts[0].strip()
                     comment = parts[1].strip() if len(parts) > 1 else ""
@@ -127,7 +153,7 @@ class LicenseChecker:
 
     def check_package(self, package_name: str, version: Optional[str] = None) -> bool:
         """Check if a specific package version is compliant."""
-        package_lower = package_name.lower()
+        package_lower = self._normalize_package_name(package_name)
 
         # Check if package is in authorized packages list
         if package_lower in self.authorized_packages:
@@ -207,19 +233,70 @@ class LicenseChecker:
 
         return is_acceptable
 
-    def check_requirements(self, requirements_file: Path) -> bool:
-        """Check all packages in a requirements file."""
-        print(f"\nChecking licenses for packages in {requirements_file}...")
+    def _load_requirements(
+        self, requirements_file: Optional[Path] = None
+    ) -> List[Requirement]:
+        """Load pinned requirements from a file or from the repo defaults."""
+        try:
+            if requirements_file is not None:
+                with open(requirements_file) as f:
+                    requirement_lines = f.readlines()
+            else:
+                with open("pyproject.toml", "rb") as f:
+                    pyproject = tomllib.load(f)
+                with open("uv.lock", "rb") as f:
+                    lock_data = tomllib.load(f)
+
+                requirement_lines = list(pyproject["project"].get("dependencies", []))
+                for extra_reqs in pyproject["project"].get(
+                    "optional-dependencies", {}
+                ).values():
+                    requirement_lines.extend(extra_reqs)
+                for group_reqs in pyproject.get("dependency-groups", {}).values():
+                    requirement_lines.extend(group_reqs)
+
+                lock_versions: Dict[str, List[str]] = {}
+                for package in lock_data.get("package", []):
+                    source = package.get("source", {})
+                    if "registry" not in source:
+                        continue
+
+                    normalized_name = self._normalize_package_name(package["name"])
+                    version = package.get("version")
+                    if not version:
+                        continue
+                    versions = lock_versions.setdefault(normalized_name, [])
+                    if version not in versions:
+                        versions.append(version)
+
+                # Preserve the coverage that used to come from requirements.txt for
+                # explicitly pinned transitives/security fixes without broadening the
+                # default check to every package variant in the lockfile.
+                for package_name in DEFAULT_TRANSITIVE_PIN_PACKAGES:
+                    for version in lock_versions.get(package_name, []):
+                        requirement_lines.append(f"{package_name}=={version}")
+
+                # Preserve declaration order while removing duplicates.
+                requirement_lines = list(dict.fromkeys(requirement_lines))
+
+            return [
+                Requirement(line.split("#")[0].strip())
+                for line in requirement_lines
+                if line.split("#")[0].strip() and not line.startswith("#")
+            ]
+        except Exception as e:
+            source = requirements_file or "pyproject.toml + uv.lock"
+            raise RuntimeError(f"Error parsing requirements from {source}: {str(e)}") from e
+
+    def check_requirements(self, requirements_file: Optional[Path] = None) -> bool:
+        """Check all packages from a requirements file or the default repo deps."""
+        source = requirements_file or "pyproject.toml + uv.lock"
+        print(f"\nChecking licenses for packages in {source}...")
 
         try:
-            with open(requirements_file) as f:
-                requirements = [
-                    Requirement(line.split("#")[0].strip())
-                    for line in f
-                    if line.split("#")[0].strip() and not line.startswith("#")
-                ]
-        except Exception as e:
-            print(f"Error parsing {requirements_file}: {str(e)}")
+            requirements = self._load_requirements(requirements_file)
+        except RuntimeError as e:
+            print(str(e))
             return False
 
         all_compliant = True
@@ -243,12 +320,11 @@ class LicenseChecker:
 
 
 def main():
-    # req_file = "../../requirements.txt" ## LOCAL TESTING
-    req_file = "./requirements.txt"
+    req_file = Path(sys.argv[1]) if len(sys.argv) > 1 else None
     checker = LicenseChecker()
 
     # Check requirements
-    if not checker.check_requirements(Path(req_file)):
+    if not checker.check_requirements(req_file):
         # Get lists of problematic packages
         unverified = [p for p in checker.package_results if not p.license_type]
         invalid = [
@@ -272,7 +348,7 @@ def main():
         unhandled_packages = [
             p
             for p in (unverified + invalid)
-            if p.name.lower() not in checker.authorized_packages
+            if checker._normalize_package_name(p.name) not in checker.authorized_packages
         ]
 
         if unhandled_packages:

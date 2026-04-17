@@ -65,7 +65,7 @@ def test_completion_custom_provider_model_name():
     try:
         litellm.cache = None
         response = completion(
-            model="together_ai/mistralai/Mixtral-8x7B-Instruct-v0.1",
+            model="together_ai/Qwen/Qwen2.5-7B-Instruct-Turbo",
             messages=messages,
             logger_fn=logger_fn,
         )
@@ -2815,7 +2815,7 @@ def test_customprompt_together_ai():
         print(litellm.success_callback)
         print(litellm._async_success_callback)
         response = completion(
-            model="together_ai/mistralai/Mixtral-8x7B-Instruct-v0.1",
+            model="together_ai/Qwen/Qwen2.5-7B-Instruct-Turbo",
             messages=messages,
             roles={
                 "system": {
@@ -3682,7 +3682,7 @@ def test_completion_together_ai_stream():
     messages = [{"content": user_message, "role": "user"}]
     try:
         response = completion(
-            model="together_ai/mistralai/Mixtral-8x7B-Instruct-v0.1",
+            model="together_ai/Qwen/Qwen2.5-7B-Instruct-Turbo",
             messages=messages,
             stream=True,
             max_tokens=5,

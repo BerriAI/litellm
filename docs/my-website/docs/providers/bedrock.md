@@ -16,7 +16,7 @@ ALL Bedrock models (Anthropic, Meta, Deepseek, Mistral, Amazon, etc.) are Suppor
 
 LiteLLM requires `boto3` to be installed on your system for Bedrock requests
 ```shell
-pip install boto3>=1.28.57
+uv add boto3>=1.28.57
 ```
 
 :::info

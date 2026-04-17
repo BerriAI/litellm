@@ -5,7 +5,7 @@ import os
 import time
 import traceback
 from datetime import datetime, timedelta
-from typing import Any, Dict, Literal, Optional, Union, cast
+from typing import Any, Dict, Iterable, Literal, Optional, Union, cast
 
 import fastapi
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
@@ -36,79 +36,43 @@ from litellm.proxy.health_check import (
 from litellm.proxy.middleware.in_flight_requests_middleware import (
     get_in_flight_requests,
 )
-from litellm.secret_managers.main import get_secret
 
 #### Health ENDPOINTS ####
 
 
-def _resolve_os_environ_variables(params: dict) -> dict:
+def _reject_os_environ_references(params: dict) -> None:
     """
-    Resolve ``os.environ/`` environment variables in ``litellm_params``.
-
-    This walks the input dict/list structure iteratively (no Python recursion) to
-    avoid unbounded recursion / stack overflows on deeply nested inputs.
+    Validate that the provided params do not contain any ``os.environ/``
+    references. Values with that prefix are expected to come only from
+    server-side configuration (already resolved before reaching here). If a
+    request-supplied value still carries the prefix, raise ``HTTPException``.
     """
     if not isinstance(params, dict):
-        return params
+        return
 
-    # Use an explicit stack to avoid recursion and handle nested dicts/lists.
-    # We also keep a `seen` set to guard against accidental cycles.
-    resolved_root: dict = {}
-    stack: list[tuple[object, object]] = [(params, resolved_root)]
+    stack: list[object] = [params]
     seen: set[int] = {id(params)}
 
     while stack:
-        src, dst = stack.pop()
+        src = stack.pop()
+        if isinstance(src, dict):
+            values: Iterable[object] = src.values()
+        elif isinstance(src, list):
+            values = src
+        else:
+            continue
 
-        if isinstance(src, dict) and isinstance(dst, dict):
-            for key, value in src.items():
-                # Direct string replacement for os.environ/ references
-                if isinstance(value, str) and value.startswith("os.environ/"):
-                    dst[key] = get_secret(value)
-                elif isinstance(value, dict):
-                    if id(value) in seen:
-                        # Cycle detected – keep a shallow copy reference to prevent infinite loops
-                        dst[key] = {}
-                        continue
-                    seen.add(id(value))
-                    new_dict: dict = {}
-                    dst[key] = new_dict
-                    stack.append((value, new_dict))
-                elif isinstance(value, list):
-                    if id(value) in seen:
-                        dst[key] = []
-                        continue
-                    seen.add(id(value))
-                    new_list: list = []
-                    dst[key] = new_list
-                    stack.append((value, new_list))
-                else:
-                    dst[key] = value
-
-        elif isinstance(src, list) and isinstance(dst, list):
-            for item in src:
-                if isinstance(item, str) and item.startswith("os.environ/"):
-                    dst.append(get_secret(item))
-                elif isinstance(item, dict):
-                    if id(item) in seen:
-                        dst.append({})
-                        continue
-                    seen.add(id(item))
-                    new_dict = {}
-                    dst.append(new_dict)
-                    stack.append((item, new_dict))
-                elif isinstance(item, list):
-                    if id(item) in seen:
-                        dst.append([])
-                        continue
-                    seen.add(id(item))
-                    new_list = []
-                    dst.append(new_list)
-                    stack.append((item, new_list))
-                else:
-                    dst.append(item)
-
-    return resolved_root
+        for value in values:
+            if isinstance(value, str) and value.startswith("os.environ/"):
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": "Environment variable references are not permitted in request parameters."
+                    },
+                )
+            if isinstance(value, (dict, list)) and id(value) not in seen:
+                seen.add(id(value))
+                stack.append(value)
 
 
 def get_callback_identifier(callback):
@@ -1510,6 +1474,10 @@ async def test_model_connection(
 
         # Get model name from litellm_params
         request_litellm_params = litellm_params or {}
+        # Reject request-supplied os.environ/ references. Config values are
+        # already resolved before reaching this endpoint; any remaining
+        # reference must have come from the request body.
+        _reject_os_environ_references(request_litellm_params)
         model_name = request_litellm_params.get("model")
 
         # Look up model configuration from router if model name is provided
@@ -1546,11 +1514,7 @@ async def test_model_connection(
 
         # Merge: config params (from proxy config) as base, request params override
         # This allows users to override specific params while using config for credentials
-        merged_litellm_params = {**config_litellm_params, **request_litellm_params}
-
-        # Resolve os.environ/ environment variables in any remaining request params
-        # This handles cases where user explicitly passes os.environ/ values to override config
-        litellm_params = _resolve_os_environ_variables(merged_litellm_params)
+        litellm_params = {**config_litellm_params, **request_litellm_params}
 
         ## Auth check
         await ModelManagementAuthChecks.can_user_make_model_call(

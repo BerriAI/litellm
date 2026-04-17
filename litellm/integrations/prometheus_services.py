@@ -5,6 +5,7 @@
 
 from typing import Dict, List, Optional, Union
 
+import litellm
 from litellm._logging import print_verbose, verbose_logger
 from litellm.types.integrations.prometheus import LATENCY_BUCKETS
 from litellm.types.services import (
@@ -34,6 +35,11 @@ class PrometheusServicesLogger:
                 raise Exception(
                     "Missing prometheus_client. Run `pip install prometheus-client`"
                 )
+
+            _custom_buckets = litellm.prometheus_latency_buckets
+            self.latency_buckets = (
+                tuple(_custom_buckets) if _custom_buckets is not None else LATENCY_BUCKETS
+            )
 
             self.Histogram = Histogram
             self.Counter = Counter
@@ -130,7 +136,7 @@ class PrometheusServicesLogger:
             metric_name,
             "Latency for {} service".format(service),
             labelnames=[service],
-            buckets=LATENCY_BUCKETS,
+            buckets=self.latency_buckets,
         )
 
     def create_gauge(self, service: str, type_of_request: str):

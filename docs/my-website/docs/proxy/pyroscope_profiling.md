@@ -7,13 +7,13 @@ LiteLLM proxy can send continuous CPU profiles to [Grafana Pyroscope](https://gr
 1. **Install the optional dependency** (required only when enabling Pyroscope):
 
    ```bash
-   pip install pyroscope-io
+   uv add pyroscope-io
    ```
 
    Or install the proxy extra:
 
    ```bash
-   pip install "litellm[proxy]"
+   uv add "litellm[proxy]"
    ```
 
 2. **Set environment variables** before starting the proxy:

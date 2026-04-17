@@ -47,7 +47,7 @@ See the [Docs](https://openai.github.io/openai-agents-python/models/litellm/) fo
 ## Installation
 
 ```bash showLineNumbers title="Install dependencies"
-pip install openai-agents litellm
+uv add openai-agents litellm
 ```
 
 ## 1. Start LiteLLM Proxy

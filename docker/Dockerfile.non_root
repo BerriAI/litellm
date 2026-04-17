@@ -2,51 +2,84 @@
 ARG LITELLM_BUILD_IMAGE=cgr.dev/chainguard/wolfi-base@sha256:a5a619c1793039dcf92f02178f37c94bb3d6001403716da59d6092dfe8d9b502
 ARG LITELLM_RUNTIME_IMAGE=cgr.dev/chainguard/wolfi-base@sha256:a5a619c1793039dcf92f02178f37c94bb3d6001403716da59d6092dfe8d9b502
 ARG PROXY_EXTRAS_SOURCE=published
+ARG UV_IMAGE=ghcr.io/astral-sh/uv:0.10.9@sha256:10902f58a1606787602f303954cea099626a4adb02acbac4c69920fe9d278f82
 
-# -----------------
-# Builder Stage
-# -----------------
+FROM $UV_IMAGE AS uvbin
+
 FROM $LITELLM_BUILD_IMAGE AS builder
 ARG PROXY_EXTRAS_SOURCE
 WORKDIR /app
 USER root
 
-# Install build dependencies with retry logic (includes node for UI build)
+COPY --from=uvbin /uv /usr/local/bin/uv
+COPY --from=uvbin /uvx /usr/local/bin/uvx
+
 RUN for i in 1 2 3; do \
     apk add --no-cache \
-    python3 \
-    python3-dev \
-    py3-pip \
-    clang \
-    llvm \
-    lld \
-    gcc \
-    linux-headers \
-    build-base \
-    bash \
-    nodejs \
-    npm && break || sleep 5; \
-    done \
-  && pip install --no-cache-dir --upgrade pip==26.0.1 build==1.4.2
+      python3 \
+      python3-dev \
+      clang \
+      llvm \
+      lld \
+      gcc \
+      linux-headers \
+      build-base \
+      bash \
+      coreutils \
+      curl \
+      openssl \
+      openssl-dev \
+      nodejs \
+      npm \
+      libsndfile && break || sleep 5; \
+    done
 
-# Cache Python dependencies
-COPY requirements.txt .
-RUN pip wheel --no-cache-dir --wheel-dir=/wheels/ -r requirements.txt \
-  && pip wheel --no-cache-dir --wheel-dir=/wheels/ "semantic_router==0.1.11" "aurelio-sdk==0.0.19" "PyJWT==2.12.0"
+ENV UV_PROJECT_ENVIRONMENT=/app/.venv \
+    UV_LINK_MODE=copy \
+    NVM_DIR=/root/.nvm \
+    PATH="/root/.nvm/versions/node/v20.20.2/bin:/app/.venv/bin:${PATH}" \
+    LITELLM_NON_ROOT=true \
+    PRISMA_BINARY_CACHE_DIR=/app/.cache/prisma-python/binaries \
+    PRISMA_CLI_BINARY_TARGETS="debian-openssl-3.0.x" \
+    XDG_CACHE_HOME=/app/.cache
 
-# Copy source after dependency layers
+# Copy dependency metadata first for layer caching
+COPY pyproject.toml uv.lock ./
+COPY enterprise/pyproject.toml enterprise/
+COPY litellm-proxy-extras/pyproject.toml litellm-proxy-extras/
+
+# Install third-party dependencies (cached unless pyproject.toml/uv.lock change)
+RUN uv sync --frozen --no-install-project --no-install-workspace --no-default-groups --no-editable \
+    --extra proxy \
+    --extra proxy-runtime \
+    --extra extra_proxy \
+    --extra semantic-router \
+    --python python3
+
+# Copy full source tree
 COPY . .
 
 # Set non-root flag for build time consistency
 ENV LITELLM_NON_ROOT=true
 
-# Build Admin UI using the upstream command order while keeping a single RUN layer
+# Build Admin UI once and stage the static output for the runtime image.
 # NOTE: .npmrc files (which may set ignore-scripts=true and min-release-age=3d)
 # are temporarily renamed during npm install/ci so they don't block lifecycle
 # scripts needed by the build. This is safe because npm ci installs from
 # package-lock.json with pinned versions + integrity hashes.
-RUN mkdir -p /var/lib/litellm/ui && \
+RUN mkdir -p /var/lib/litellm/ui /var/lib/litellm/assets && \
     ([ -f /app/.npmrc ] && mv /app/.npmrc /app/.npmrc.bak || true) && \
+    NVM_VERSION="v0.40.4" && \
+    NVM_CHECKSUM="4b7412c49960c7d31e8df72da90c1fb5b8cccb419ac99537b737028d497aba4f" && \
+    NODE_VERSION="v20.20.2" && \
+    NVM_SCRIPT="/tmp/install-nvm.sh" && \
+    curl -fsSL "https://raw.githubusercontent.com/nvm-sh/nvm/${NVM_VERSION}/install.sh" -o "$NVM_SCRIPT" && \
+    echo "${NVM_CHECKSUM}  ${NVM_SCRIPT}" | sha256sum -c - && \
+    bash "$NVM_SCRIPT" && \
+    export NVM_DIR="$HOME/.nvm" && \
+    . "$NVM_DIR/nvm.sh" && \
+    nvm install "${NODE_VERSION}" && \
+    nvm use "${NODE_VERSION}" && \
     npm install -g npm@11.12.1 && \
     npm install -g node-gyp@12.2.0 && \
     ln -sf "$(npm root -g)/node-gyp" "$(npm root -g)/npm/node_modules/node-gyp" && \
@@ -56,12 +89,11 @@ RUN mkdir -p /var/lib/litellm/ui && \
       cp /app/enterprise/enterprise_ui/enterprise_colors.json ./ui_colors.json; \
     fi && \
     ([ -f .npmrc ] && mv .npmrc .npmrc.bak || true) && \
-    npm ci && \
+    npm ci --no-audit --no-fund && \
     ([ -f .npmrc.bak ] && mv .npmrc.bak .npmrc || true) && \
     ([ -f /app/.npmrc.bak ] && mv /app/.npmrc.bak /app/.npmrc || true) && \
     npm run build && \
     cp -r /app/ui/litellm-dashboard/out/* /var/lib/litellm/ui/ && \
-    mkdir -p /var/lib/litellm/assets && \
     cp /app/litellm/proxy/logo.jpg /var/lib/litellm/assets/logo.jpg && \
     ( cd /var/lib/litellm/ui && \
       for html_file in *.html; do \
@@ -74,175 +106,106 @@ RUN mkdir -p /var/lib/litellm/ui && \
       touch .litellm_ui_ready ) && \
     cd /app/ui/litellm-dashboard && rm -rf ./out
 
-# Build litellm wheel and place it in wheels dir (replace any PyPI wheels)
-RUN rm -rf dist/* && python -m build && \
-  rm -f /wheels/litellm-*.whl && \
-  cp dist/*.whl /wheels/
-
-# Optionally build local litellm-proxy-extras wheel
-RUN if [ "$PROXY_EXTRAS_SOURCE" = "local" ]; then \
-      cd /app/litellm-proxy-extras && rm -rf dist && python -m build && \
-      cp dist/*.whl /wheels/; \
+RUN if [ "$PROXY_EXTRAS_SOURCE" = "published" ]; then \
+      uv sync --frozen --no-default-groups --no-editable \
+        --extra proxy \
+        --extra proxy-runtime \
+        --extra extra_proxy \
+        --extra semantic-router \
+        --python python3 \
+        --no-sources-package litellm-proxy-extras; \
+    else \
+      uv sync --frozen --no-default-groups --no-editable \
+        --extra proxy \
+        --extra proxy-runtime \
+        --extra extra_proxy \
+        --extra semantic-router \
+        --python python3; \
     fi
 
-# Pre-cache Prisma binaries in the builder stage
-ENV PRISMA_BINARY_CACHE_DIR=/app/.cache/prisma-python/binaries \
-    PRISMA_CLI_BINARY_TARGETS="debian-openssl-3.0.x" \
-    XDG_CACHE_HOME=/app/.cache \
-    PATH="/usr/lib/python3.13/site-packages/nodejs/bin:${PATH}"
-
-RUN pip install --no-cache-dir prisma==0.11.0 nodejs-wheel-binaries==24.13.1 \
-    && mkdir -p /app/.cache/npm
-
-RUN NPM_CONFIG_CACHE=/app/.cache/npm \
-    python -c "import prisma.cli.prisma as p; p.ensure_cached()"
-
-RUN prisma generate && \
+RUN mkdir -p /app/.cache/npm && \
+    prisma generate --schema=./schema.prisma && \
     prisma --version && \
     prisma migrate diff --from-empty --to-schema-datamodel ./schema.prisma --script > /dev/null 2>&1 || true
 
-# -----------------
-# Runtime Stage
-# -----------------
+RUN sed -i 's/\r$//' docker/entrypoint.sh && chmod +x docker/entrypoint.sh && \
+    sed -i 's/\r$//' docker/prod_entrypoint.sh && chmod +x docker/prod_entrypoint.sh
+
 FROM $LITELLM_RUNTIME_IMAGE AS runtime
 ARG PROXY_EXTRAS_SOURCE
 WORKDIR /app
 USER root
 
-# Install runtime dependencies with retry
 RUN for i in 1 2 3; do \
     apk upgrade --no-cache && break || sleep 5; \
-    done \
-  && for i in 1 2 3; do \
-    apk add --no-cache python3 py3-pip bash openssl tzdata nodejs npm supervisor && break || sleep 5; \
-    done \
-  && apk upgrade --no-cache nodejs \
-  && npm install -g npm@11.12.1 tar@7.5.11 glob@11.1.0 @isaacs/brace-expansion@5.0.1 minimatch@10.2.4 diff@8.0.3 \
-  && GLOBAL="$(npm root -g)" \
-  && find "$GLOBAL/npm" -type d -name "tar" -path "*/node_modules/tar" | while read d; do \
-        rm -rf "$d" && cp -rL "$GLOBAL/tar" "$d"; \
-     done \
-  && find "$GLOBAL/npm" -type d -name "glob" -path "*/node_modules/glob" | while read d; do \
-        rm -rf "$d" && cp -rL "$GLOBAL/glob" "$d"; \
-     done \
-  && find "$GLOBAL/npm" -type d -name "brace-expansion" -path "*/node_modules/@isaacs/brace-expansion" | while read d; do \
-        rm -rf "$d" && cp -rL "$GLOBAL/@isaacs/brace-expansion" "$d"; \
-     done \
-  && find "$GLOBAL/npm" -type d -name "minimatch" -path "*/node_modules/minimatch" | while read d; do \
-        rm -rf "$d" && cp -rL "$GLOBAL/minimatch" "$d"; \
-     done \
-  && find "$GLOBAL/npm" -type d -name "diff" -path "*/node_modules/diff" | while read d; do \
-        rm -rf "$d" && cp -rL "$GLOBAL/diff" "$d"; \
-     done \
-  && find /usr/local/lib /usr/lib -path "*/node_modules/npm/package.json" -exec \
-        sed -i 's/"tar": "\^7\.5\.[0-9]*"/"tar": "^7.5.10"/g; s/"minimatch": "\^10\.[0-9.]*"/"minimatch": "^10.2.4"/g' {} + 2>/dev/null \
-  && npm cache clean --force \
-  && { apk del --no-cache npm 2>/dev/null || true; }
+    done && \
+    for i in 1 2 3; do \
+      apk add --no-cache python3 bash openssl tzdata nodejs npm supervisor libsndfile && break || sleep 5; \
+    done && \
+    apk upgrade --no-cache nodejs && \
+    npm install -g npm@11.12.1 tar@7.5.11 glob@11.1.0 @isaacs/brace-expansion@5.0.1 minimatch@10.2.4 diff@8.0.3 && \
+    GLOBAL="$(npm root -g)" && \
+    find "$GLOBAL/npm" -type d -name "tar" -path "*/node_modules/tar" | while read d; do \
+      rm -rf "$d" && cp -rL "$GLOBAL/tar" "$d"; \
+    done && \
+    find "$GLOBAL/npm" -type d -name "glob" -path "*/node_modules/glob" | while read d; do \
+      rm -rf "$d" && cp -rL "$GLOBAL/glob" "$d"; \
+    done && \
+    find "$GLOBAL/npm" -type d -name "brace-expansion" -path "*/node_modules/@isaacs/brace-expansion" | while read d; do \
+      rm -rf "$d" && cp -rL "$GLOBAL/@isaacs/brace-expansion" "$d"; \
+    done && \
+    find "$GLOBAL/npm" -type d -name "minimatch" -path "*/node_modules/minimatch" | while read d; do \
+      rm -rf "$d" && cp -rL "$GLOBAL/minimatch" "$d"; \
+    done && \
+    find "$GLOBAL/npm" -type d -name "diff" -path "*/node_modules/diff" | while read d; do \
+      rm -rf "$d" && cp -rL "$GLOBAL/diff" "$d"; \
+    done && \
+    find /usr/local/lib /usr/lib -path "*/node_modules/npm/package.json" -exec \
+      sed -i 's/"tar": "\^7\.5\.[0-9]*"/"tar": "^7.5.10"/g; s/"minimatch": "\^10\.[0-9.]*"/"minimatch": "^10.2.4"/g' {} + 2>/dev/null && \
+    npm cache clean --force && \
+    { apk del --no-cache npm 2>/dev/null || true; }
 
-# Copy artifacts from builder
-COPY --from=builder /app/requirements.txt /app/requirements.txt
-COPY --from=builder /app/docker/entrypoint.sh /app/docker/prod_entrypoint.sh /app/docker/
-COPY --from=builder /app/docker/supervisord.conf /etc/supervisord.conf
-COPY --from=builder /app/schema.prisma /app/
-# Keep enterprise bridge module in runtime so `enterprise.enterprise_hooks`
-# can load and register managed enterprise hooks (e.g. managed_files).
-COPY --from=builder /app/enterprise /app/enterprise
-# Copy prisma_migration.py for Helm migrations job compatibility
-COPY --from=builder /app/litellm/proxy/prisma_migration.py /app/litellm/proxy/prisma_migration.py
-COPY --from=builder /wheels/ /wheels/
+COPY --from=builder /app /app
 COPY --from=builder /var/lib/litellm/ui /var/lib/litellm/ui
 COPY --from=builder /var/lib/litellm/assets /var/lib/litellm/assets
-COPY --from=builder /app/.cache /app/.cache
-COPY --from=builder /app/litellm-proxy-extras /app/litellm-proxy-extras
-COPY --from=builder \
-  /usr/lib/python3.13/site-packages/nodejs* \
-  /usr/lib/python3.13/site-packages/prisma* \
-  /usr/lib/python3.13/site-packages/tomlkit* \
-  /usr/lib/python3.13/site-packages/nodeenv* \
-  /usr/lib/python3.13/site-packages/
-COPY --from=builder /usr/bin/prisma /usr/bin/prisma
+COPY --from=builder /app/docker/supervisord.conf /etc/supervisord.conf
 
-# Final runtime environment configuration
-ENV PRISMA_BINARY_CACHE_DIR=/app/.cache/prisma-python/binaries \
+ENV PATH="/app/.venv/bin:${PATH}" \
+    PRISMA_BINARY_CACHE_DIR=/app/.cache/prisma-python/binaries \
     PRISMA_CLI_BINARY_TARGETS="debian-openssl-3.0.x" \
     HOME=/app \
     LITELLM_NON_ROOT=true \
-    XDG_CACHE_HOME=/app/.cache
-
-# Install packages from wheels and optional extras without network
-RUN pip install --no-index --find-links=/wheels/ -r requirements.txt && \
-    pip install --no-index --find-links=/wheels/ /wheels/litellm-*-py3-none-any.whl && \
-    pip install --no-index --find-links=/wheels/ --no-deps semantic_router==0.1.11 && \
-    pip install --no-index --find-links=/wheels/ aurelio-sdk==0.0.19 && \
-    if [ "$PROXY_EXTRAS_SOURCE" = "local" ]; then \
-      if ls /wheels/litellm_proxy_extras-*.whl >/dev/null 2>&1; then \
-        pip install --no-index --find-links=/wheels/ /wheels/litellm_proxy_extras-*.whl; \
-      else \
-        echo "litellm_proxy_extras wheel not found; skipping local install"; \
-      fi; \
-    fi
-
-# SECURITY FIX: nodejs-wheel-binaries (pip package used by Prisma) bundles a complete
-# npm with old vulnerable deps at /usr/lib/python3.*/site-packages/nodejs_wheel/.
-# Patch every copy of tar, glob, and brace-expansion inside that tree.
-RUN GLOBAL="$(npm root -g)" && \
-    [ -n "$GLOBAL" ] || { echo "ERROR: npm root -g returned empty; aborting"; exit 1; } && \
-    find /usr/lib -type d -name "tar" -path "*/node_modules/tar" | while read d; do \
-        rm -rf "$d" && cp -rL "$GLOBAL/tar" "$d"; \
-    done && \
-    find /usr/lib -type d -name "glob" -path "*/node_modules/glob" | while read d; do \
-        rm -rf "$d" && cp -rL "$GLOBAL/glob" "$d"; \
-    done && \
-    find /usr/lib -type d -name "brace-expansion" -path "*/node_modules/@isaacs/brace-expansion" | while read d; do \
-        rm -rf "$d" && cp -rL "$GLOBAL/@isaacs/brace-expansion" "$d"; \
-    done && \
-    find /usr/lib -type d -name "minimatch" -path "*/node_modules/minimatch" | while read d; do \
-        rm -rf "$d" && cp -rL "$GLOBAL/minimatch" "$d"; \
-    done && \
-    find /usr/lib -type d -name "diff" -path "*/node_modules/diff" | while read d; do \
-        rm -rf "$d" && cp -rL "$GLOBAL/diff" "$d"; \
-    done
-
-# Permissions, cleanup, and Prisma prep
-# Convert Windows line endings to Unix for entrypoint scripts
-RUN sed -i 's/\r$//' docker/entrypoint.sh && \
-    sed -i 's/\r$//' docker/prod_entrypoint.sh && \
-    chmod +x docker/entrypoint.sh docker/prod_entrypoint.sh && \
-    mkdir -p /nonexistent /.npm /var/lib/litellm/assets /var/lib/litellm/ui && \
-    chown -R nobody:nogroup /app /var/lib/litellm/ui /var/lib/litellm/assets /nonexistent /.npm && \
-    pip uninstall jwt -y || true && \
-    pip uninstall PyJWT -y || true && \
-    pip install --no-index --find-links=/wheels/ PyJWT==2.12.0 --no-cache-dir && \
-    rm -rf /wheels && \
-    PRISMA_PATH=$(python -c "import os, prisma; print(os.path.dirname(prisma.__file__))") && \
-    chown -R nobody:nogroup $PRISMA_PATH && \
-    LITELLM_PKG_MIGRATIONS_PATH="$(python -c 'import os, litellm_proxy_extras; print(os.path.dirname(litellm_proxy_extras.__file__))' 2>/dev/null || echo '')/migrations" && \
-    [ -n "$LITELLM_PKG_MIGRATIONS_PATH" ] && chown -R nobody:nogroup $LITELLM_PKG_MIGRATIONS_PATH && \
-    LITELLM_PROXY_EXTRAS_PATH=$(python -c "import os, litellm_proxy_extras; print(os.path.dirname(litellm_proxy_extras.__file__))" 2>/dev/null || echo "") && \
-    chgrp -R 0 $PRISMA_PATH /var/lib/litellm/ui /var/lib/litellm/assets && \
-    [ -n "$LITELLM_PROXY_EXTRAS_PATH" ] && chgrp -R 0 $LITELLM_PROXY_EXTRAS_PATH || true && \
-    chmod -R g=u $PRISMA_PATH /var/lib/litellm/ui /var/lib/litellm/assets && \
-    [ -n "$LITELLM_PROXY_EXTRAS_PATH" ] && chmod -R g=u $LITELLM_PROXY_EXTRAS_PATH || true && \
-    chmod -R g+w $PRISMA_PATH /var/lib/litellm/ui /var/lib/litellm/assets && \
-    [ -n "$LITELLM_PROXY_EXTRAS_PATH" ] && chmod -R g+w $LITELLM_PROXY_EXTRAS_PATH || true && \
-    chmod -R g+rX $PRISMA_PATH && \
-    chmod -R g+rX /app/.cache && \
-    mkdir -p /tmp/.npm /nonexistent /.npm
-
-# Switch to non-root user for runtime
-USER nobody
-
-# Generate Prisma client as nobody user to ensure correct file ownership
-RUN prisma generate
-
-# Prisma runtime knobs for offline containers
-ENV PRISMA_SKIP_POSTINSTALL_GENERATE=1 \
+    XDG_CACHE_HOME=/app/.cache \
+    PRISMA_SKIP_POSTINSTALL_GENERATE=1 \
     PRISMA_HIDE_UPDATE_MESSAGE=1 \
     PRISMA_ENGINES_CHECKSUM_IGNORE_MISSING=1 \
     NPM_CONFIG_CACHE=/app/.cache/npm \
     NPM_CONFIG_PREFER_OFFLINE=true \
     PRISMA_OFFLINE_MODE=true
 
+RUN sed -i 's/\r$//' docker/entrypoint.sh && \
+    sed -i 's/\r$//' docker/prod_entrypoint.sh && \
+    chmod +x docker/entrypoint.sh docker/prod_entrypoint.sh && \
+    mkdir -p /nonexistent /.npm /var/lib/litellm/assets /var/lib/litellm/ui /tmp/.npm && \
+    chown -R nobody:nogroup /app /var/lib/litellm/ui /var/lib/litellm/assets /nonexistent /.npm /tmp/.npm && \
+    PRISMA_PATH=$(python -c "import os, prisma; print(os.path.dirname(prisma.__file__))") && \
+    chown -R nobody:nogroup "$PRISMA_PATH" && \
+    LITELLM_PKG_MIGRATIONS_PATH="$(python -c 'import os, litellm_proxy_extras; print(os.path.dirname(litellm_proxy_extras.__file__))' 2>/dev/null || echo '')/migrations" && \
+    [ -n "$LITELLM_PKG_MIGRATIONS_PATH" ] && chown -R nobody:nogroup "$LITELLM_PKG_MIGRATIONS_PATH" || true && \
+    LITELLM_PROXY_EXTRAS_PATH=$(python -c "import os, litellm_proxy_extras; print(os.path.dirname(litellm_proxy_extras.__file__))" 2>/dev/null || echo "") && \
+    chgrp -R 0 "$PRISMA_PATH" /var/lib/litellm/ui /var/lib/litellm/assets && \
+    [ -n "$LITELLM_PROXY_EXTRAS_PATH" ] && chgrp -R 0 "$LITELLM_PROXY_EXTRAS_PATH" || true && \
+    chmod -R g=u "$PRISMA_PATH" /var/lib/litellm/ui /var/lib/litellm/assets && \
+    [ -n "$LITELLM_PROXY_EXTRAS_PATH" ] && chmod -R g=u "$LITELLM_PROXY_EXTRAS_PATH" || true && \
+    chmod -R g+w "$PRISMA_PATH" /var/lib/litellm/ui /var/lib/litellm/assets && \
+    [ -n "$LITELLM_PROXY_EXTRAS_PATH" ] && chmod -R g+w "$LITELLM_PROXY_EXTRAS_PATH" || true && \
+    chmod -R g+rX "$PRISMA_PATH" /var/lib/litellm/ui /var/lib/litellm/assets /app/.cache
+
+USER nobody
+
+RUN prisma generate --schema=./schema.prisma
+
 EXPOSE 4000/tcp
+
 ENTRYPOINT ["/app/docker/prod_entrypoint.sh"]
 CMD ["--port", "4000"]

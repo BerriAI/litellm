@@ -3,78 +3,86 @@ import Layout from '@theme/Layout';
 import Link from '@docusaurus/Link';
 import styles from './styles.module.css';
 
-const TAG_COLORS = {
-  gemini: {bg: '#d2e3fc', text: '#174ea6', darkBg: '#1a3a5c', darkText: '#8ab4f8'},
-  anthropic: {bg: '#fde0c4', text: '#b33d00', darkBg: '#4a2800', darkText: '#ffb74d'},
-  claude: {bg: '#fde0c4', text: '#b33d00', darkBg: '#4a2800', darkText: '#ffb74d'},
-  llms: {bg: '#c8e6c9', text: '#1b5e20', darkBg: '#1b3d1f', darkText: '#81c784'},
-};
+// ── Provider marquee ──────────────────────────────────────────────────────
+const PROVIDERS = [
+  { name: 'OpenAI',        img: 'https://www.google.com/s2/favicons?domain=openai.com&sz=64' },
+  { name: 'Anthropic',     img: 'https://www.google.com/s2/favicons?domain=claude.ai&sz=64' },
+  { name: 'Google Gemini', img: 'https://www.google.com/s2/favicons?domain=ai.google.dev&sz=64' },
+  { name: 'AWS Bedrock',   img: 'https://www.google.com/s2/favicons?domain=aws.amazon.com&sz=64' },
+  { name: 'Azure OpenAI',  img: 'https://www.google.com/s2/favicons?domain=azure.microsoft.com&sz=64' },
+  { name: 'Mistral AI',    img: 'https://www.google.com/s2/favicons?domain=mistral.ai&sz=64' },
+  { name: 'Meta Llama',    img: 'https://www.google.com/s2/favicons?domain=meta.com&sz=64' },
+  { name: 'Groq',          img: 'https://www.google.com/s2/favicons?domain=groq.com&sz=64' },
+  { name: 'Hugging Face',  img: 'https://www.google.com/s2/favicons?domain=huggingface.co&sz=64' },
+  { name: 'Perplexity',    img: 'https://www.google.com/s2/favicons?domain=perplexity.ai&sz=64' },
+  { name: 'DeepSeek',      img: 'https://www.google.com/s2/favicons?domain=deepseek.com&sz=64' },
+  { name: 'Cohere',        img: 'https://www.google.com/s2/favicons?domain=cohere.com&sz=64' },
+  { name: 'Together AI',   img: 'https://www.google.com/s2/favicons?domain=together.ai&sz=64' },
+  { name: 'Vertex AI',     img: 'https://www.google.com/s2/favicons?domain=cloud.google.com&sz=64' },
+];
 
-function hashHue(str) {
-  let hash = 0;
-  for (let i = 0; i < str.length; i++) {
-    hash = str.charCodeAt(i) + ((hash << 5) - hash);
-  }
-  return Math.abs(hash) % 360;
-}
+const DOUBLED = [...PROVIDERS, ...PROVIDERS];
 
-function getTagColor(label) {
-  const key = label.toLowerCase();
-  for (const [k, v] of Object.entries(TAG_COLORS)) {
-    if (key === k) return v;
-  }
-  const hue = hashHue(key);
-  return {
-    bg: `hsl(${hue}, 40%, 90%)`,
-    text: `hsl(${hue}, 60%, 25%)`,
-    darkBg: `hsl(${hue}, 40%, 20%)`,
-    darkText: `hsl(${hue}, 50%, 75%)`,
-  };
-}
-
-function formatDate(dateStr) {
-  const d = new Date(dateStr);
-  const now = new Date();
-  const diffDays = Math.floor((now - d) / (1000 * 60 * 60 * 24));
-  if (diffDays <= 0) return 'Today';
-  if (diffDays === 1) return '1d ago';
-  if (diffDays < 30) return `${diffDays}d ago`;
-  return d.toLocaleDateString('en-US', {month: 'short', day: 'numeric', year: 'numeric'});
-}
-
-function BlogCard({post, featured}) {
-  const {title, permalink, date, description, tags} = post;
-  const visibleTags = (tags || []).slice(0, 3);
-
+function ProviderMarquee() {
   return (
-    <Link to={permalink} className={styles.cardLink} aria-label={title}>
-      <article className={featured ? styles.cardFeatured : styles.card}>
-        <div className={styles.meta}>
-          <time className={styles.time} dateTime={date}>{formatDate(date)}</time>
-          {featured && <span className={styles.badge}>Latest</span>}
+    <div className={styles.marqueeWrap}>
+      <p className={styles.marqueeLabel}>Routing to 100+ providers</p>
+      <div className={styles.marqueeOuter}>
+        <div className={styles.fadeLeft} />
+        <div className={styles.fadeRight} />
+        <div className={styles.marqueeTrack}>
+          {DOUBLED.map((p, i) => (
+            <span key={i} className={styles.marqueeItem}>
+              <img src={p.img} alt={p.name} width={18} height={18} className={styles.marqueeIcon} />
+              <span>{p.name}</span>
+              <span className={styles.marqueeSep}>|</span>
+            </span>
+          ))}
         </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Post row ──────────────────────────────────────────────────────────────
+function formatDate(dateStr) {
+  return new Date(dateStr).toLocaleDateString('en-US', {
+    month: 'long', day: 'numeric', year: 'numeric',
+  });
+}
+
+function AuthorList({authors}) {
+  if (!authors || authors.length === 0) return null;
+  return (
+    <>
+      {authors.map((a, i) => (
+        <React.Fragment key={a.name}>
+          {i > 0 && <span className={styles.authorSep}> </span>}
+          {a.url ? (
+            <a href={a.url} target="_blank" rel="noopener" className={styles.authorLink}>{a.name}</a>
+          ) : (
+            <span className={styles.authorName}>{a.name}</span>
+          )}
+        </React.Fragment>
+      ))}
+    </>
+  );
+}
+
+function PostRow({post}) {
+  const {title, permalink, date, description, authors} = post;
+  return (
+    <article className={styles.post}>
+      <Link to={permalink} className={styles.titleLink}>
         <h2 className={styles.title}>{title}</h2>
-        {description && <p className={styles.desc}>{description}</p>}
-        {visibleTags.length > 0 && (
-          <div className={styles.tags}>
-            {visibleTags.map(tag => {
-              const c = getTagColor(tag.label);
-              return (
-                <span key={tag.label} className={styles.tag} style={{
-                  '--tag-bg': c.bg, '--tag-text': c.text,
-                  '--tag-bg-dark': c.darkBg, '--tag-text-dark': c.darkText,
-                }}>{tag.label}</span>
-              );
-            })}
-          </div>
-        )}
-        <div className={styles.arrow} aria-hidden="true">
-          <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-            <path d="M6 3l5 5-5 5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-          </svg>
-        </div>
-      </article>
-    </Link>
+      </Link>
+      {description && <p className={styles.desc}>{description}</p>}
+      <div className={styles.meta}>
+        <AuthorList authors={authors} />
+        {authors && authors.length > 0 && <span className={styles.metaDash}> — </span>}
+        <time className={styles.date} dateTime={date}>{formatDate(date)}</time>
+      </div>
+    </article>
   );
 }
 
@@ -83,41 +91,47 @@ function Pagination({metadata}) {
   if (!previousPage && !nextPage) return null;
   return (
     <nav className={styles.pagination} aria-label="Blog list pagination">
-      {previousPage ? (
-        <Link to={previousPage} className={styles.paginationLink}>&larr; Newer posts</Link>
-      ) : <span />}
-      {nextPage ? (
-        <Link to={nextPage} className={styles.paginationLink}>Older posts &rarr;</Link>
-      ) : <span />}
+      {previousPage ? <Link to={previousPage} className={styles.pageLink}>&larr; Newer posts</Link> : <span />}
+      {nextPage ? <Link to={nextPage} className={styles.pageLink}>Older posts &rarr;</Link> : <span />}
     </nav>
   );
 }
 
+// ── Page ──────────────────────────────────────────────────────────────────
 export default function BlogListPage(props) {
   const items = props.items || [];
   const metadata = props.metadata || {};
-  const [first, ...rest] = items;
 
   return (
     <Layout
-      title={metadata.blogTitle || 'Blog'}
-      description={metadata.blogDescription || 'Guides, announcements, and best practices from the LiteLLM team.'}
+      title="Engineering Blog"
+      description="How we build the world's most widely used open-source AI Gateway. Routing, reliability, observability, and what we learn along the way."
     >
-      <header className={styles.hero}>
-        <h1 className={styles.heroTitle}>The LiteLLM Blog</h1>
-        <p className={styles.heroSubtitle}>Guides, announcements, and best practices from the LiteLLM team.</p>
-      </header>
+      <div className={styles.page}>
+        {/* Hero */}
+        <header className={styles.hero}>
+          <p className={styles.eyebrow}>AI Gateway</p>
+          <h1 className={styles.heroTitle}>Engineering</h1>
+          <p className={styles.heroSub}>
+            How we build the world's most widely used open-source AI Gateway.
+            Routing, reliability, observability, and what we learn along the way.
+          </p>
+          <a href="https://jobs.ashbyhq.com/litellm" target="_blank" rel="noopener noreferrer" className={styles.hiringBtn}>
+            We're hiring!
+          </a>
+        </header>
 
-      <main className={styles.grid}>
-        {first && (
-          <BlogCard post={first.content.metadata} featured />
-        )}
-        {rest.map(({content}) => (
-          <BlogCard key={content.metadata.permalink} post={content.metadata} />
-        ))}
-      </main>
+        <ProviderMarquee />
 
-      <Pagination metadata={metadata} />
+        {/* Post list */}
+        <main className={styles.list}>
+          {items.map(({content}) => (
+            <PostRow key={content.metadata.permalink} post={content.metadata} />
+          ))}
+        </main>
+
+        <Pagination metadata={metadata} />
+      </div>
     </Layout>
   );
 }

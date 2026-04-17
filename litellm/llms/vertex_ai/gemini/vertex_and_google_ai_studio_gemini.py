@@ -480,6 +480,62 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         else:
             return None
 
+    @staticmethod
+    def _resolve_search_tool_conflict(
+        gtool_func_declarations: list,
+        googleSearch: Optional[dict],
+        googleSearchRetrieval: Optional[dict],
+        enterpriseWebSearch: Optional[dict],
+        urlContext: Optional[dict],
+        optional_params: dict,
+    ) -> tuple:
+        """
+        Resolve Vertex AI constraint: multiple Tool objects in a request must
+        ALL be search tools. When function declarations are mixed with search
+        tools, drop search tools to avoid 400 error.
+
+        Skip when include_server_side_tool_invocations is enabled (Gemini 3+
+        supports tool combination natively).
+
+        Note: code_execution, computerUse, and googleMaps are NOT search tools
+        and CAN coexist with function declarations, so they are preserved.
+
+        Ref: https://github.com/BerriAI/litellm/issues/23337
+
+        Returns:
+            tuple of (googleSearch, googleSearchRetrieval, enterpriseWebSearch, urlContext)
+        """
+        has_search_tools = any(
+            v is not None
+            for v in [
+                googleSearch,
+                googleSearchRetrieval,
+                enterpriseWebSearch,
+                urlContext,
+            ]
+        )
+        server_side_tool_invocations = optional_params.get(
+            "include_server_side_tool_invocations", False
+        )
+        if (
+            gtool_func_declarations
+            and has_search_tools
+            and not server_side_tool_invocations
+        ):
+            verbose_logger.warning(
+                "Vertex AI does not support mixing function declarations with "
+                "search tools (googleSearch, enterpriseWebSearch, urlContext, "
+                "googleSearchRetrieval) in the same request. Dropping search "
+                "tools and keeping function declarations. To use search tools, "
+                "send a request without function calling tools."
+            )
+            googleSearch = None
+            googleSearchRetrieval = None
+            enterpriseWebSearch = None
+            urlContext = None
+
+        return googleSearch, googleSearchRetrieval, enterpriseWebSearch, urlContext
+
     def _map_function(  # noqa: PLR0915
         self, value: List[dict], optional_params: dict
     ) -> List[Tools]:
@@ -512,9 +568,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         value = _remove_strict_from_schema(value)
 
         for tool in value:
-            openai_function_object: Optional[
-                ChatCompletionToolParamFunctionChunk
-            ] = None
+            openai_function_object: Optional[ChatCompletionToolParamFunctionChunk] = (
+                None
+            )
             if "function" in tool:  # tools list
                 _openai_function_object = ChatCompletionToolParamFunctionChunk(  # type: ignore
                     **tool["function"]
@@ -633,6 +689,20 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         # per Vertex AI API spec: "A Tool object should contain exactly one type of Tool"
         _tools_list: List[Tools] = []
 
+        (
+            googleSearch,
+            googleSearchRetrieval,
+            enterpriseWebSearch,
+            urlContext,
+        ) = self._resolve_search_tool_conflict(
+            gtool_func_declarations=gtool_func_declarations,
+            googleSearch=googleSearch,
+            googleSearchRetrieval=googleSearchRetrieval,
+            enterpriseWebSearch=enterpriseWebSearch,
+            urlContext=urlContext,
+            optional_params=optional_params,
+        )
+
         # Function declarations can be grouped together in one Tool
         if gtool_func_declarations:
             func_tool = Tools()
@@ -646,15 +716,15 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             _tools_list.append(search_tool)
         if googleSearchRetrieval is not None:
             retrieval_tool = Tools()
-            retrieval_tool[
-                VertexToolName.GOOGLE_SEARCH_RETRIEVAL.value
-            ] = googleSearchRetrieval
+            retrieval_tool[VertexToolName.GOOGLE_SEARCH_RETRIEVAL.value] = (
+                googleSearchRetrieval
+            )
             _tools_list.append(retrieval_tool)
         if enterpriseWebSearch is not None:
             enterprise_tool = Tools()
-            enterprise_tool[
-                VertexToolName.ENTERPRISE_WEB_SEARCH.value
-            ] = enterpriseWebSearch
+            enterprise_tool[VertexToolName.ENTERPRISE_WEB_SEARCH.value] = (
+                enterpriseWebSearch
+            )
             _tools_list.append(enterprise_tool)
         if code_execution is not None:
             code_tool = Tools()
@@ -1101,16 +1171,16 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                         param_description="thinking_budget",
                     )
                     if VertexGeminiConfig._is_gemini_3_or_newer(model):
-                        optional_params[
-                            "thinkingConfig"
-                        ] = VertexGeminiConfig._map_reasoning_effort_to_thinking_level(
-                            effort_value, model
+                        optional_params["thinkingConfig"] = (
+                            VertexGeminiConfig._map_reasoning_effort_to_thinking_level(
+                                effort_value, model
+                            )
                         )
                     else:
-                        optional_params[
-                            "thinkingConfig"
-                        ] = VertexGeminiConfig._map_reasoning_effort_to_thinking_budget(
-                            effort_value, model
+                        optional_params["thinkingConfig"] = (
+                            VertexGeminiConfig._map_reasoning_effort_to_thinking_budget(
+                                effort_value, model
+                            )
                         )
             elif param == "thinking":
                 # Validate no conflict with thinking_level
@@ -1119,11 +1189,11 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     param_name="thinking",
                     param_description="thinking_budget",
                 )
-                optional_params[
-                    "thinkingConfig"
-                ] = VertexGeminiConfig._map_thinking_param(
-                    cast(AnthropicThinkingParam, value),
-                    model=model,
+                optional_params["thinkingConfig"] = (
+                    VertexGeminiConfig._map_thinking_param(
+                        cast(AnthropicThinkingParam, value),
+                        model=model,
+                    )
                 )
             elif param == "modalities" and isinstance(value, list):
                 response_modalities = self.map_response_modalities(value)
@@ -1547,10 +1617,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                         _tool_response_chunk["provider_specific_fields"] = {  # type: ignore
                             "thought_signature": thought_signature
                         }
-                        _tool_response_chunk[
-                            "id"
-                        ] = _encode_tool_call_id_with_signature(
-                            _tool_response_chunk["id"] or "", thought_signature
+                        _tool_response_chunk["id"] = (
+                            _encode_tool_call_id_with_signature(
+                                _tool_response_chunk["id"] or "", thought_signature
+                            )
                         )
                     _tools.append(_tool_response_chunk)
                 cumulative_tool_call_idx += 1
@@ -2397,28 +2467,28 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             ## ADD METADATA TO RESPONSE ##
 
             setattr(model_response, "vertex_ai_grounding_metadata", grounding_metadata)
-            model_response._hidden_params[
-                "vertex_ai_grounding_metadata"
-            ] = grounding_metadata
+            model_response._hidden_params["vertex_ai_grounding_metadata"] = (
+                grounding_metadata
+            )
 
             setattr(
                 model_response, "vertex_ai_url_context_metadata", url_context_metadata
             )
 
-            model_response._hidden_params[
-                "vertex_ai_url_context_metadata"
-            ] = url_context_metadata
+            model_response._hidden_params["vertex_ai_url_context_metadata"] = (
+                url_context_metadata
+            )
 
             setattr(model_response, "vertex_ai_safety_results", safety_ratings)
-            model_response._hidden_params[
-                "vertex_ai_safety_results"
-            ] = safety_ratings  # older approach - maintaining to prevent regressions
+            model_response._hidden_params["vertex_ai_safety_results"] = (
+                safety_ratings  # older approach - maintaining to prevent regressions
+            )
 
             ## ADD CITATION METADATA ##
             setattr(model_response, "vertex_ai_citation_metadata", citation_metadata)
-            model_response._hidden_params[
-                "vertex_ai_citation_metadata"
-            ] = citation_metadata  # older approach - maintaining to prevent regressions
+            model_response._hidden_params["vertex_ai_citation_metadata"] = (
+                citation_metadata  # older approach - maintaining to prevent regressions
+            )
 
             ## ADD TRAFFIC TYPE ##
             traffic_type = completion_response.get("usageMetadata", {}).get(
@@ -3126,7 +3196,12 @@ class ModelResponseIterator:
         setattr(model_response, "vertex_ai_safety_ratings", safety_ratings)  # type: ignore
         setattr(model_response, "vertex_ai_citation_metadata", citation_metadata)  # type: ignore
 
-        return grounding_metadata, url_context_metadata, safety_ratings, citation_metadata
+        return (
+            grounding_metadata,
+            url_context_metadata,
+            safety_ratings,
+            citation_metadata,
+        )
 
     def _apply_stream_usage_metadata(
         self,
@@ -3151,9 +3226,9 @@ class ModelResponseIterator:
 
         traffic_type = processed_chunk.get("usageMetadata", {}).get("trafficType")
         if traffic_type:
-            model_response._hidden_params.setdefault(
-                "provider_specific_fields", {}
-            )["traffic_type"] = traffic_type
+            model_response._hidden_params.setdefault("provider_specific_fields", {})[
+                "traffic_type"
+            ] = traffic_type
 
         service_tier = self.response_headers.get("x-gemini-service-tier")
         if service_tier:

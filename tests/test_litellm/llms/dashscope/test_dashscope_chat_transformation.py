@@ -144,3 +144,47 @@ class TestDashScopeConfig:
         assert transformed_messages[0]["content"][0]["text"] == "Hello"
         assert transformed_messages[0]["content"][1]["type"] == "text"
         assert transformed_messages[0]["content"][1]["text"] == "World"
+
+    def test_dashscope_preserves_cache_control_in_messages(self):
+        """DashScope should NOT strip cache_control from messages."""
+        config = DashScopeChatConfig()
+
+        messages = [
+            {
+                "role": "system",
+                "content": "You are a helpful assistant.",
+                "cache_control": {"type": "ephemeral"},
+            },
+            {
+                "role": "user",
+                "content": "Hello, world!",
+            },
+        ]
+
+        transformed_messages, _ = config.remove_cache_control_flag_from_messages_and_tools(
+            model="dashscope/qwen-turbo", messages=messages
+        )
+
+        assert transformed_messages[0].get("cache_control") == {"type": "ephemeral"}
+
+    def test_dashscope_preserves_cache_control_in_tools(self):
+        """DashScope should NOT strip cache_control from tools."""
+        config = DashScopeChatConfig()
+
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_weather",
+                    "description": "Get weather information",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+                "cache_control": {"type": "ephemeral"},
+            }
+        ]
+
+        _, transformed_tools = config.remove_cache_control_flag_from_messages_and_tools(
+            model="dashscope/qwen-turbo", messages=[], tools=tools
+        )
+
+        assert transformed_tools[0].get("cache_control") == {"type": "ephemeral"}
