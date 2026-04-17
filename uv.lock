@@ -11,7 +11,7 @@ resolution-markers = [
 ]
 
 [options]
-exclude-newer = "2026-04-14T15:55:52.744146Z"
+exclude-newer = "2026-04-14T16:17:25.66436Z"
 exclude-newer-span = "P3D"
 
 [manifest]
@@ -3602,7 +3602,7 @@ wheels = [
 
 [[package]]
 name = "litellm"
-version = "1.83.8"
+version = "1.83.9"
 source = { editable = "." }
 dependencies = [
     { name = "aiohttp" },
@@ -3662,6 +3662,7 @@ proxy = [
     { name = "pyroscope-io", marker = "sys_platform != 'win32'" },
     { name = "python-multipart" },
     { name = "pyyaml" },
+    { name = "restrictedpython" },
     { name = "rich" },
     { name = "rq" },
     { name = "soundfile" },
@@ -3713,6 +3714,7 @@ ci = [
     { name = "langchain-mcp-adapters", marker = "python_full_version >= '3.10'" },
     { name = "langchain-openai", marker = "python_full_version >= '3.10'" },
     { name = "langgraph", marker = "python_full_version >= '3.10'" },
+    { name = "langgraph-prebuilt", marker = "python_full_version >= '3.10'" },
     { name = "logfire" },
     { name = "lunary", version = "1.0.36", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
     { name = "lunary", version = "1.4.36", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.10.*'" },
@@ -3841,6 +3843,7 @@ requires-dist = [
     { name = "pyyaml", marker = "extra == 'proxy'", specifier = "==6.0.3" },
     { name = "redisvl", marker = "python_full_version >= '3.9' and python_full_version < '3.14' and extra == 'extra-proxy'", specifier = "==0.4.1" },
     { name = "resend", marker = "extra == 'extra-proxy'", specifier = "==2.23.0" },
+    { name = "restrictedpython", marker = "extra == 'proxy'", specifier = "==8.1" },
     { name = "rich", marker = "extra == 'proxy'", specifier = "==13.9.4" },
     { name = "rq", marker = "extra == 'proxy'", specifier = "==2.7.0" },
     { name = "semantic-router", marker = "python_full_version >= '3.9' and python_full_version < '3.14' and extra == 'semantic-router'", specifier = "==0.1.12" },
@@ -3871,6 +3874,7 @@ ci = [
     { name = "langchain-mcp-adapters", marker = "python_full_version >= '3.10'", specifier = "==0.2.1" },
     { name = "langchain-openai", marker = "python_full_version >= '3.10'", specifier = "==1.1.10" },
     { name = "langgraph", marker = "python_full_version >= '3.10'", specifier = "==1.0.10" },
+    { name = "langgraph-prebuilt", marker = "python_full_version >= '3.10'", specifier = "==1.0.8" },
     { name = "logfire", specifier = "==4.6.0" },
     { name = "lunary", marker = "python_full_version < '3.10'", specifier = "==1.0.36" },
     { name = "lunary", marker = "python_full_version == '3.10.*'", specifier = "==1.4.36" },
@@ -3945,7 +3949,7 @@ source = { editable = "enterprise" }
 
 [[package]]
 name = "litellm-proxy-extras"
-version = "0.4.65"
+version = "0.4.66"
 source = { editable = "litellm-proxy-extras" }
 
 [[package]]
@@ -7458,6 +7462,15 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/f4/7c/96bd0bc759cf009675ad1ee1f96535edcb11e9666b985717eb8c87192a95/respx-0.22.0.tar.gz", hash = "sha256:3c8924caa2a50bd71aefc07aa812f2466ff489f1848c96e954a5362d17095d91", size = 28439, upload-time = "2024-12-19T22:33:59.374Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/8e/67/afbb0978d5399bc9ea200f1d4489a23c9a1dad4eee6376242b8182389c79/respx-0.22.0-py2.py3-none-any.whl", hash = "sha256:631128d4c9aba15e56903fb5f66fb1eff412ce28dd387ca3a81339e52dbd3ad0", size = 25127, upload-time = "2024-12-19T22:33:57.837Z" },
+]
+
+[[package]]
+name = "restrictedpython"
+version = "8.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/5f/1c/aec08bcb4ab14a1521579fbe21ceff2a634bb1f737f11cf7f9c8bb96e680/restrictedpython-8.1.tar.gz", hash = "sha256:4a69304aceacf6bee74bdf153c728221d4e3109b39acbfe00b3494927080d898", size = 838331, upload-time = "2025-10-19T14:11:32.531Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/1a/c0/3848f4006f7e164ee20833ca984067e4b3fc99fe7f1dfa88b4927e681299/restrictedpython-8.1-py3-none-any.whl", hash = "sha256:4769449c6cdb10f2071649ba386902befff0eff2a8fd6217989fa7b16aeae926", size = 27651, upload-time = "2025-10-19T14:11:30.201Z" },
 ]
 
 [[package]]
