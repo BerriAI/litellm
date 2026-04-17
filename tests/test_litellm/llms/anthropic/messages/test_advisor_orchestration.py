@@ -44,6 +44,7 @@ def _make_advisor_tool_use_response(
     tool_id: str = "toolu_advisor_01",
     model: str = "openai/gpt-4o-mini",
 ) -> Dict:
+    # Must match ``_SYNTHETIC_ADVISOR_TOOL_NAME`` (consult_advisor) in the handler.
     return {
         "id": "msg_test",
         "type": "message",
@@ -53,7 +54,7 @@ def _make_advisor_tool_use_response(
             {
                 "type": "tool_use",
                 "id": tool_id,
-                "name": "advisor",
+                "name": "consult_advisor",
                 "input": {"question": question},
             }
         ],
@@ -172,21 +173,23 @@ async def test_loop_one_advisor_call():
         "def is_prime(n):\n    import math\n    if n < 2: return False\n    for i in range(2, int(math.sqrt(n))+1):\n        if n % i == 0: return False\n    return True"
     )
 
-    call_count = 0
+    executor_call_count = 0
 
-    async def mock_call(model, messages, tools, stream, max_tokens, **kwargs):
-        nonlocal call_count
-        call_count += 1
-        if call_count == 1:
+    async def mock_messages(model, messages, tools, stream, max_tokens, **kwargs):
+        nonlocal executor_call_count
+        executor_call_count += 1
+        if executor_call_count == 1:
             return advisor_tool_use_resp  # executor: calls advisor
-        if call_count == 2:
-            return advisor_advice_resp  # advisor: returns advice
         return final_resp  # executor: final answer
 
     with patch(
         "litellm.llms.anthropic.experimental_pass_through.messages.interceptors.advisor._call_messages_handler",
-        side_effect=mock_call,
-    ):
+        side_effect=mock_messages,
+    ), patch(
+        "litellm.llms.anthropic.experimental_pass_through.messages.interceptors.advisor._call_advisor_with_router",
+        new_callable=AsyncMock,
+        return_value=advisor_advice_resp,
+    ) as mock_advisor:
         h = AdvisorOrchestrationHandler()
         result = await h.handle(
             model="openai/gpt-4o-mini",
@@ -197,15 +200,18 @@ async def test_loop_one_advisor_call():
             custom_llm_provider="openai",
         )
 
-    assert call_count == 3
+    assert executor_call_count == 2
+    assert mock_advisor.await_count == 1
     content = result.get("content", [])
     texts = [b for b in content if b.get("type") == "text"]
     assert len(texts) == 1
     assert "is_prime" in texts[0]["text"]
 
-    # No advisor tool_use blocks in final response
+    # No synthetic advisor tool_use blocks in final response
     advisor_uses = [
-        b for b in content if b.get("type") == "tool_use" and b.get("name") == "advisor"
+        b
+        for b in content
+        if b.get("type") == "tool_use" and b.get("name") == "consult_advisor"
     ]
     assert len(advisor_uses) == 0
 
@@ -228,19 +234,16 @@ async def test_loop_max_uses_raises():
     advisor_tool_use_resp = _make_advisor_tool_use_response()
     advisor_advice_resp = _make_text_response("Here is my advice.")
 
-    call_count = 0
-
-    async def mock_call(model, messages, tools, stream, max_tokens, **kwargs):
-        nonlocal call_count
-        call_count += 1
-        # Executor calls always return advisor tool_use; advisor always returns text
-        if tools is None:
-            return advisor_advice_resp
+    async def mock_messages(model, messages, tools, stream, max_tokens, **kwargs):
         return advisor_tool_use_resp
 
     with patch(
         "litellm.llms.anthropic.experimental_pass_through.messages.interceptors.advisor._call_messages_handler",
-        side_effect=mock_call,
+        side_effect=mock_messages,
+    ), patch(
+        "litellm.llms.anthropic.experimental_pass_through.messages.interceptors.advisor._call_advisor_with_router",
+        new_callable=AsyncMock,
+        return_value=advisor_advice_resp,
     ):
         h = AdvisorOrchestrationHandler()
         with pytest.raises(AdvisorMaxIterationsError):
@@ -389,14 +392,14 @@ async def test_advisor_tool_translated_for_executor():
 
     captured_tools = []
 
-    async def mock_call(model, messages, tools, stream, max_tokens, **kwargs):
+    async def mock_messages(model, messages, tools, stream, max_tokens, **kwargs):
         if tools:
             captured_tools.extend(tools)
         return _make_text_response("Done.")
 
     with patch(
         "litellm.llms.anthropic.experimental_pass_through.messages.interceptors.advisor._call_messages_handler",
-        side_effect=mock_call,
+        side_effect=mock_messages,
     ):
         h = AdvisorOrchestrationHandler()
         await h.handle(
@@ -409,7 +412,7 @@ async def test_advisor_tool_translated_for_executor():
         )
 
     assert len(captured_tools) > 0
-    advisor_tool = next(t for t in captured_tools if t.get("name") == "advisor")
+    advisor_tool = next(t for t in captured_tools if t.get("name") == "consult_advisor")
     # Must NOT have the advisor_20260301 type (provider won't understand it)
     assert advisor_tool.get("type") != "advisor_20260301"
     # Must have a description and input_schema
@@ -495,14 +498,16 @@ async def test_max_uses_none_falls_back_to_default():
     advisor_tool_use_resp = _make_advisor_tool_use_response()
     advisor_advice_resp = _make_text_response("Here is advice.")
 
-    async def mock_call(model, messages, tools, stream, max_tokens, **kwargs):
-        if tools is None:
-            return advisor_advice_resp
+    async def mock_messages(model, messages, tools, stream, max_tokens, **kwargs):
         return advisor_tool_use_resp
 
     with patch(
         "litellm.llms.anthropic.experimental_pass_through.messages.interceptors.advisor._call_messages_handler",
-        side_effect=mock_call,
+        side_effect=mock_messages,
+    ), patch(
+        "litellm.llms.anthropic.experimental_pass_through.messages.interceptors.advisor._call_advisor_with_router",
+        new_callable=AsyncMock,
+        return_value=advisor_advice_resp,
     ):
         h = AdvisorOrchestrationHandler()
         with pytest.raises(AdvisorMaxIterationsError) as exc_info:
