@@ -4,8 +4,8 @@ import random
 import re
 import shutil
 import subprocess
+import tempfile
 import time
-from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -256,21 +256,11 @@ class ProxyExtrasDBManager:
         if not database_url:
             logger.error("DATABASE_URL not set")
             return
+        # Prefer DIRECT_URL for schema introspection — pooler URLs (e.g. neon -pooler)
+        # do not support the extended query protocol required by prisma migrate diff.
+        diff_url = os.getenv("DIRECT_URL") or database_url
 
-        diff_dir = (
-            Path(migrations_dir)
-            / "migrations"
-            / f"{datetime.now().strftime('%Y%m%d%H%M%S')}_baseline_diff"
-        )
-        try:
-            diff_dir.mkdir(parents=True, exist_ok=True)
-        except Exception as e:
-            if "Permission denied" in str(e):
-                logger.warning(
-                    f"Permission denied - {e}\nunable to baseline db. Set LITELLM_MIGRATION_DIR environment variable to a writable directory to enable migrations."
-                )
-                return
-            raise e
+        diff_dir = Path(tempfile.mkdtemp(prefix="litellm_migration_diff_"))
         diff_sql_path = diff_dir / "migration.sql"
 
         # 1. Generate migration SQL for the diff between DB and schema
@@ -283,7 +273,7 @@ class ProxyExtrasDBManager:
                         "migrate",
                         "diff",
                         "--from-url",
-                        database_url,
+                        diff_url,
                         "--to-schema-datamodel",
                         schema_path,
                         "--script",
