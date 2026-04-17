@@ -21,6 +21,7 @@ from .common_utils import (
     GetDeviceCodeError,
     RefreshAccessTokenError,
 )
+from .pkce import login_pkce as _login_pkce_flow
 
 TOKEN_EXPIRY_SKEW_SECONDS = 60
 DEVICE_CODE_TIMEOUT_SECONDS = 15 * 60
@@ -340,6 +341,9 @@ class Authenticator:
         auth_data = self._build_auth_record(refreshed)
         self._write_auth_file(auth_data)
         return refreshed
+
+    def login_pkce(self, **kwargs: Any) -> Dict[str, str]:
+        return _login_pkce_flow(self, **kwargs)
 
     def _build_auth_record(self, tokens: Dict[str, str]) -> Dict[str, Any]:
         access_token = tokens.get("access_token")

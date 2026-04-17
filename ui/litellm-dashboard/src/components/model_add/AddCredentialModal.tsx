@@ -4,6 +4,8 @@ import type { UploadProps } from "antd/es/upload";
 import React, { useState } from "react";
 import ProviderSpecificFields from "../add_model/provider_specific_fields";
 import { Providers, providerLogoMap } from "../provider_info_helpers";
+import ChatGPTLoginButton from "./ChatGPTLoginButton";
+import CopilotLoginButton from "./CopilotLoginButton";
 const { Link } = Typography;
 
 interface AddCredentialsModalProps {
@@ -16,6 +18,7 @@ interface AddCredentialsModalProps {
 const AddCredentialsModal: React.FC<AddCredentialsModalProps> = ({ open, onCancel, onAddCredential, uploadProps }) => {
   const [form] = Form.useForm();
   const [selectedProvider, setSelectedProvider] = useState<Providers>(Providers.OpenAI);
+  const credentialName = Form.useWatch("credential_name", form);
 
   const handleSubmit = (values: any) => {
     const filteredValues = Object.entries(values).reduce((acc, [key, value]) => {
@@ -89,7 +92,32 @@ const AddCredentialsModal: React.FC<AddCredentialsModalProps> = ({ open, onCance
           </AntdSelect>
         </Form.Item>
 
-        <ProviderSpecificFields selectedProvider={selectedProvider} uploadProps={uploadProps} />
+        {/*
+          `selectedProvider` holds the enum *key* string at runtime
+          (``AntdSelect.Option value={providerEnum}`` binds the key, and the
+          ``as Providers`` cast on setState is not enforced). Compare against
+          the key names, not ``Providers.ChatGPT`` / ``Providers.GITHUB_COPILOT``
+          which resolve to enum *values* and would never match.
+        */}
+        {(selectedProvider as unknown as keyof typeof Providers) === "ChatGPT" ? (
+          <ChatGPTLoginButton
+            credentialName={credentialName}
+            onSuccess={() => {
+              onCancel();
+              form.resetFields();
+            }}
+          />
+        ) : (selectedProvider as unknown as keyof typeof Providers) === "GITHUB_COPILOT" ? (
+          <CopilotLoginButton
+            credentialName={credentialName}
+            onSuccess={() => {
+              onCancel();
+              form.resetFields();
+            }}
+          />
+        ) : (
+          <ProviderSpecificFields selectedProvider={selectedProvider} uploadProps={uploadProps} />
+        )}
 
         {/* Modal Footer */}
         <div className="flex justify-between items-center">
@@ -107,7 +135,10 @@ const AddCredentialsModal: React.FC<AddCredentialsModalProps> = ({ open, onCance
             >
               Cancel
             </Button>
-            <Button htmlType="submit">{"Add Credential"}</Button>
+            {(selectedProvider as unknown as keyof typeof Providers) !== "ChatGPT" &&
+              (selectedProvider as unknown as keyof typeof Providers) !== "GITHUB_COPILOT" && (
+                <Button htmlType="submit">{"Add Credential"}</Button>
+              )}
           </div>
         </div>
       </Form>

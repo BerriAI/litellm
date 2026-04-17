@@ -9966,3 +9966,180 @@ export const listMCPUserCredentials = async (
   if (!response.ok) return [];
   return response.json();
 };
+
+// ---------------------------------------------------------------------------
+// ChatGPT / Codex OAuth
+// ---------------------------------------------------------------------------
+
+export interface ChatGPTOAuthStartResponse {
+  session_id: string;
+  user_code: string;
+  verification_url: string;
+  interval: number;
+}
+
+export interface ChatGPTOAuthStatusResponse {
+  status: "pending" | "success" | "error" | "cancelled";
+  credential_name?: string;
+  message?: string;
+}
+
+export const chatgptOauthStartCall = async (
+  accessToken: string,
+  credentialName: string,
+): Promise<ChatGPTOAuthStartResponse> => {
+  const url = proxyBaseUrl ? `${proxyBaseUrl}/chatgpt/oauth/start` : `/chatgpt/oauth/start`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ credential_name: credentialName }),
+  });
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    const errorMessage = deriveErrorMessage(errorData);
+    handleError(errorMessage);
+    throw new Error(errorMessage);
+  }
+  return response.json();
+};
+
+export const chatgptOauthStatusCall = async (
+  accessToken: string,
+  sessionId: string,
+): Promise<ChatGPTOAuthStatusResponse> => {
+  const url = proxyBaseUrl
+    ? `${proxyBaseUrl}/chatgpt/oauth/status?session_id=${encodeURIComponent(sessionId)}`
+    : `/chatgpt/oauth/status?session_id=${encodeURIComponent(sessionId)}`;
+  const response = await fetch(url, {
+    method: "GET",
+    headers: { [globalLitellmHeaderName]: `Bearer ${accessToken}` },
+  });
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw new Error(deriveErrorMessage(errorData));
+  }
+  return response.json();
+};
+
+export const chatgptOauthCancelCall = async (
+  accessToken: string,
+  sessionId: string,
+): Promise<void> => {
+  const url = proxyBaseUrl
+    ? `${proxyBaseUrl}/chatgpt/oauth/cancel?session_id=${encodeURIComponent(sessionId)}`
+    : `/chatgpt/oauth/cancel?session_id=${encodeURIComponent(sessionId)}`;
+  await fetch(url, {
+    method: "POST",
+    headers: { [globalLitellmHeaderName]: `Bearer ${accessToken}` },
+  });
+};
+
+export interface OAuthRefreshResponse {
+  credential_name: string;
+  expires_at?: number | null;
+  api_key_expires_at?: number | null;
+}
+
+export const chatgptOauthRefreshCall = async (
+  accessToken: string,
+  credentialName: string,
+): Promise<OAuthRefreshResponse> => {
+  const url = proxyBaseUrl ? `${proxyBaseUrl}/chatgpt/oauth/refresh` : `/chatgpt/oauth/refresh`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ credential_name: credentialName }),
+  });
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    const errorMessage = deriveErrorMessage(errorData);
+    handleError(errorMessage);
+    throw new Error(errorMessage);
+  }
+  return response.json();
+};
+
+// ---------------------------------------------------------------------------
+// GitHub Copilot OAuth
+// ---------------------------------------------------------------------------
+
+export const copilotOauthStartCall = async (
+  accessToken: string,
+  credentialName: string,
+): Promise<ChatGPTOAuthStartResponse> => {
+  const url = proxyBaseUrl ? `${proxyBaseUrl}/copilot/oauth/start` : `/copilot/oauth/start`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ credential_name: credentialName }),
+  });
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    const errorMessage = deriveErrorMessage(errorData);
+    handleError(errorMessage);
+    throw new Error(errorMessage);
+  }
+  return response.json();
+};
+
+export const copilotOauthStatusCall = async (
+  accessToken: string,
+  sessionId: string,
+): Promise<ChatGPTOAuthStatusResponse> => {
+  const url = proxyBaseUrl
+    ? `${proxyBaseUrl}/copilot/oauth/status?session_id=${encodeURIComponent(sessionId)}`
+    : `/copilot/oauth/status?session_id=${encodeURIComponent(sessionId)}`;
+  const response = await fetch(url, {
+    method: "GET",
+    headers: { [globalLitellmHeaderName]: `Bearer ${accessToken}` },
+  });
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw new Error(deriveErrorMessage(errorData));
+  }
+  return response.json();
+};
+
+export const copilotOauthCancelCall = async (
+  accessToken: string,
+  sessionId: string,
+): Promise<void> => {
+  const url = proxyBaseUrl
+    ? `${proxyBaseUrl}/copilot/oauth/cancel?session_id=${encodeURIComponent(sessionId)}`
+    : `/copilot/oauth/cancel?session_id=${encodeURIComponent(sessionId)}`;
+  await fetch(url, {
+    method: "POST",
+    headers: { [globalLitellmHeaderName]: `Bearer ${accessToken}` },
+  });
+};
+
+export const copilotOauthRefreshCall = async (
+  accessToken: string,
+  credentialName: string,
+): Promise<OAuthRefreshResponse> => {
+  const url = proxyBaseUrl ? `${proxyBaseUrl}/copilot/oauth/refresh` : `/copilot/oauth/refresh`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ credential_name: credentialName }),
+  });
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    const errorMessage = deriveErrorMessage(errorData);
+    handleError(errorMessage);
+    throw new Error(errorMessage);
+  }
+  return response.json();
+};

@@ -320,6 +320,12 @@ from litellm.proxy.common_utils.proxy_state import ProxyState
 from litellm.proxy.common_utils.reset_budget_job import ResetBudgetJob
 from litellm.proxy.common_utils.swagger_utils import ERROR_RESPONSES
 from litellm.proxy.container_endpoints.endpoints import router as container_router
+from litellm.proxy.chatgpt_oauth_endpoints.endpoints import (
+    router as chatgpt_oauth_router,
+)
+from litellm.proxy.copilot_oauth_endpoints.endpoints import (
+    router as copilot_oauth_router,
+)
 from litellm.proxy.credential_endpoints.endpoints import router as credential_router
 from litellm.proxy.db.db_transaction_queue.spend_log_cleanup import SpendLogCleanup
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
@@ -2161,9 +2167,11 @@ def run_ollama_serve():
         with open(os.devnull, "w") as devnull:
             subprocess.Popen(command, stdout=devnull, stderr=devnull)
     except Exception as e:
-        verbose_proxy_logger.debug(f"""
+        verbose_proxy_logger.debug(
+            f"""
             LiteLLM Warning: proxy started with `ollama` model\n`ollama serve` failed with Exception{e}. \nEnsure you run `ollama serve`
-        """)
+        """
+        )
 
 
 def _get_process_rss_mb() -> Optional[float]:
@@ -13896,6 +13904,8 @@ app.include_router(vector_store_router)
 app.include_router(vector_store_management_router)
 app.include_router(vector_store_files_router)
 app.include_router(credential_router)
+app.include_router(chatgpt_oauth_router)
+app.include_router(copilot_oauth_router)
 app.include_router(llm_passthrough_router)
 app.include_router(webrtc_router)
 app.include_router(mcp_management_router)
