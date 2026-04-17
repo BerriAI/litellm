@@ -155,6 +155,7 @@ async def new_organization(
     - organization_id: *Optional[str]* - The organization id of the team. Default is None. Create via `/organization/new`.
     - model_aliases: Optional[dict] - Model aliases for the team. [Docs](https://docs.litellm.ai/docs/proxy/team_based_routing#create-team-with-model-alias)
     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - organization-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"]}. IF null or {} then no object permission.
+    - allowed_models: Optional[List[str]] - List of models the organization is allowed to access. If not set, defaults to the models field.
     Case 1: Create new org **without** a budget_id
 
     ```bash
