@@ -33,9 +33,15 @@ def make_sync_call(
     json_mode: Optional[bool] = False,
     fake_stream: bool = False,
     stream_chunk_size: int = 1024,
+    timeout: Optional[Union[float, httpx.Timeout]] = None,
 ):
     if client is None:
-        client = _get_httpx_client()  # Create a new client if none provided
+        _params: dict = {}
+        if timeout is not None:
+            _params["timeout"] = timeout
+        client = _get_httpx_client(
+            params=_params if _params else None
+        )
 
     response = client.post(
         api_base,
@@ -43,6 +49,7 @@ def make_sync_call(
         data=data,
         stream=not fake_stream,
         logging_obj=logging_obj,
+        timeout=timeout,
     )
 
     if response.status_code != 200:
@@ -151,6 +158,7 @@ class BedrockConverseLLM(BaseAWSLLM):
             fake_stream=fake_stream,
             json_mode=json_mode,
             stream_chunk_size=stream_chunk_size,
+            timeout=timeout,
         )
         streaming_response = CustomStreamWrapper(
             completion_stream=completion_stream,
@@ -472,6 +480,7 @@ class BedrockConverseLLM(BaseAWSLLM):
                 json_mode=json_mode,
                 fake_stream=fake_stream,
                 stream_chunk_size=stream_chunk_size,
+                timeout=timeout,
             )
             streaming_response = CustomStreamWrapper(
                 completion_stream=completion_stream,
