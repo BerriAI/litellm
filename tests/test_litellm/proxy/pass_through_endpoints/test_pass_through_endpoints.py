@@ -771,13 +771,17 @@ async def test_create_pass_through_route_with_cost_per_request():
     )
 
     # Mock the pass_through_request function to capture its call
-    with patch(
-        "litellm.proxy.pass_through_endpoints.pass_through_endpoints.pass_through_request"
-    ) as mock_pass_through, patch(
-        "litellm.proxy.pass_through_endpoints.pass_through_endpoints.InitPassThroughEndpointHelpers.is_registered_pass_through_route"
-    ) as mock_is_registered, patch(
-        "litellm.proxy.pass_through_endpoints.pass_through_endpoints.InitPassThroughEndpointHelpers.get_registered_pass_through_route"
-    ) as mock_get_registered:
+    with (
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.pass_through_request"
+        ) as mock_pass_through,
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.InitPassThroughEndpointHelpers.is_registered_pass_through_route"
+        ) as mock_is_registered,
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.InitPassThroughEndpointHelpers.get_registered_pass_through_route"
+        ) as mock_get_registered,
+    ):
         mock_pass_through.return_value = MagicMock()
         mock_is_registered.return_value = True
         mock_get_registered.return_value = None
@@ -983,6 +987,86 @@ async def test_pass_through_request_contains_proxy_server_request_in_kwargs():  
                         assert metadata["user_api_key_alias"] == "test-alias"
                         assert metadata["user_api_key_user_email"] == "test@example.com"
                         assert metadata["user_api_key_user_id"] == "test-user-id"
+
+
+@pytest.mark.asyncio
+async def test_pass_through_request_does_not_drop_context_management():
+    """
+    Regression: pass-through should respect additional_drop_params for Anthropic.
+    We expect this to fail until context_management is dropped before forwarding.
+    """
+    with patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging:
+        with patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.HttpPassThroughEndpointHelpers.non_streaming_http_request_handler"
+        ) as mock_http_handler:
+            with patch(
+                "litellm.proxy.pass_through_endpoints.pass_through_endpoints.ProxyBaseLLMRequestProcessing"
+            ) as mock_processing:
+                with patch(
+                    "litellm.proxy.pass_through_endpoints.pass_through_endpoints.pass_through_endpoint_logging.pass_through_async_success_handler"
+                ) as mock_success_handler:
+                    with patch(
+                        "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_response_body"
+                    ) as mock_get_response_body:
+                        request_body = {
+                            "model": "claude-3-haiku-20240307",
+                            "max_tokens": 16,
+                            "messages": [{"role": "user", "content": "hello"}],
+                            "context_management": {"enabled": True},
+                        }
+
+                        mock_proxy_logging.pre_call_hook = AsyncMock(
+                            return_value=request_body
+                        )
+                        mock_proxy_logging.post_call_failure_hook = AsyncMock()
+
+                        mock_response = MagicMock()
+                        mock_response.status_code = 200
+                        mock_response.headers = {"content-type": "application/json"}
+                        mock_response.aread = AsyncMock(return_value=b"{}")
+                        mock_response.text = "{}"
+                        mock_response.raise_for_status = MagicMock()
+
+                        mock_http_handler.return_value = mock_response
+                        mock_get_response_body.return_value = {}
+                        mock_processing.get_custom_headers.return_value = {}
+                        mock_success_handler.return_value = None
+
+                        mock_request = MagicMock(spec=Request)
+                        mock_request.method = "POST"
+                        mock_request.url = "http://localhost:4000/anthropic/v1/messages"
+                        mock_request.headers = Headers(
+                            {"content-type": "application/json"}
+                        )
+                        mock_request.query_params = QueryParams({})
+
+                        mock_user_api_key_dict = MagicMock()
+                        mock_user_api_key_dict.api_key = "sk-test"
+                        mock_user_api_key_dict.key_alias = "test-alias"
+                        mock_user_api_key_dict.user_email = "test@example.com"
+                        mock_user_api_key_dict.user_id = "test-user-id"
+                        mock_user_api_key_dict.team_id = "test-team-id"
+                        mock_user_api_key_dict.org_id = "test-org-id"
+                        mock_user_api_key_dict.team_alias = "test-team-alias"
+                        mock_user_api_key_dict.end_user_id = "test-end-user-id"
+                        mock_user_api_key_dict.request_route = "/anthropic/v1/messages"
+                        mock_user_api_key_dict.additional_drop_params = [
+                            "context_management"
+                        ]
+
+                        await pass_through_request(
+                            request=mock_request,
+                            target="https://api.anthropic.com/v1/messages",
+                            custom_headers={"x-api-key": "sk-anthropic"},
+                            user_api_key_dict=mock_user_api_key_dict,
+                            custom_body=request_body,
+                        )
+
+                        mock_http_handler.assert_called_once()
+                        call_kwargs = mock_http_handler.call_args[1]
+
+                        forwarded_body = call_kwargs["_parsed_body"]
+                        assert "context_management" not in forwarded_body
 
 
 @pytest.mark.asyncio
@@ -2153,15 +2237,20 @@ async def test_create_pass_through_route_custom_body_url_target():
         _forward_headers=True,
     )
 
-    with patch(
-        "litellm.proxy.pass_through_endpoints.pass_through_endpoints.pass_through_request"
-    ) as mock_pass_through, patch(
-        "litellm.proxy.pass_through_endpoints.pass_through_endpoints.InitPassThroughEndpointHelpers.is_registered_pass_through_route"
-    ) as mock_is_registered, patch(
-        "litellm.proxy.pass_through_endpoints.pass_through_endpoints.InitPassThroughEndpointHelpers.get_registered_pass_through_route"
-    ) as mock_get_registered, patch(
-        "litellm.proxy.pass_through_endpoints.pass_through_endpoints._parse_request_data_by_content_type"
-    ) as mock_parse_request:
+    with (
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.pass_through_request"
+        ) as mock_pass_through,
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.InitPassThroughEndpointHelpers.is_registered_pass_through_route"
+        ) as mock_is_registered,
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.InitPassThroughEndpointHelpers.get_registered_pass_through_route"
+        ) as mock_get_registered,
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints._parse_request_data_by_content_type"
+        ) as mock_parse_request,
+    ):
         mock_pass_through.return_value = MagicMock()
         mock_is_registered.return_value = True
         mock_get_registered.return_value = None
@@ -2226,15 +2315,20 @@ async def test_create_pass_through_route_no_custom_body_falls_back():
         custom_headers={},
     )
 
-    with patch(
-        "litellm.proxy.pass_through_endpoints.pass_through_endpoints.pass_through_request"
-    ) as mock_pass_through, patch(
-        "litellm.proxy.pass_through_endpoints.pass_through_endpoints.InitPassThroughEndpointHelpers.is_registered_pass_through_route"
-    ) as mock_is_registered, patch(
-        "litellm.proxy.pass_through_endpoints.pass_through_endpoints.InitPassThroughEndpointHelpers.get_registered_pass_through_route"
-    ) as mock_get_registered, patch(
-        "litellm.proxy.pass_through_endpoints.pass_through_endpoints._parse_request_data_by_content_type"
-    ) as mock_parse_request:
+    with (
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.pass_through_request"
+        ) as mock_pass_through,
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.InitPassThroughEndpointHelpers.is_registered_pass_through_route"
+        ) as mock_is_registered,
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.InitPassThroughEndpointHelpers.get_registered_pass_through_route"
+        ) as mock_get_registered,
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints._parse_request_data_by_content_type"
+        ) as mock_parse_request,
+    ):
         mock_pass_through.return_value = MagicMock()
         mock_is_registered.return_value = True
         mock_get_registered.return_value = None

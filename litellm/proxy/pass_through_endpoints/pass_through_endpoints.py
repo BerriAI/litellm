@@ -36,6 +36,10 @@ from litellm._uuid import uuid
 from litellm.constants import MAXIMUM_TRACEBACK_LINES_TO_LOG
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.dot_notation_indexing import (
+    delete_nested_value,
+    is_nested_path,
+)
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.passthrough import BasePassthroughUtils
@@ -747,6 +751,17 @@ async def pass_through_request(  # noqa: PLR0915
             data=_parsed_body,
             call_type="pass_through_endpoint",
         )
+        additional_drop_params = getattr(
+            user_api_key_dict, "additional_drop_params", None
+        )
+        if additional_drop_params:
+            if _parsed_body is None:
+                _parsed_body = {}
+            for param in additional_drop_params:
+                if is_nested_path(param):
+                    _parsed_body = delete_nested_value(_parsed_body, param)
+                else:
+                    _parsed_body.pop(param, None)
         async_client_obj = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.PassThroughEndpoint,
             params={"timeout": 600},
