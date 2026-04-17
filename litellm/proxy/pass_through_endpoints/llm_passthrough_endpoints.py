@@ -2566,6 +2566,11 @@ async def handle_gigachat_passthrough_router_model(
     data["json"] = request_body
     data["custom_llm_provider"] = "gigachat"
 
+    # Remove sensitive keys from data
+    keys = ["gigachat_auth_url", "gigachat_access_token", "gigachat_scope"]
+    for key in keys:
+        data.pop(key, None)
+
     client = get_async_httpx_client(  # type: ignore
         llm_provider=LlmProviders.GIGACHAT,
         params={
