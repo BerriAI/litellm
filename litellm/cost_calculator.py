@@ -284,6 +284,7 @@ def cost_per_token(  # noqa: PLR0915
     audio_transcription_file_duration: float = 0.0,  # for audio transcription calls - the file time in seconds
     ### SERVICE TIER ###
     service_tier: Optional[str] = None,  # for OpenAI service tier pricing
+    custom_pricing: Optional[bool] = None,  # whether model uses custom pricing from router/config
     response: Optional[Any] = None,
     ### REQUEST MODEL ###
     request_model: Optional[str] = None,  # original request model for router detection
@@ -476,6 +477,13 @@ def cost_per_token(  # noqa: PLR0915
                 else None
             ),
         )
+    elif custom_pricing is True and model in model_cost_ref:
+        return generic_cost_per_token(
+            model=model,
+            usage=usage_block,
+            custom_llm_provider=custom_llm_provider or "",
+            service_tier=service_tier,
+        )
     elif custom_llm_provider == "vertex_ai":
         cost_router = google_cost_router(
             model=model_without_prefix,
@@ -546,8 +554,8 @@ def cost_per_token(  # noqa: PLR0915
         )
 
         if (
-            (model_info.get("input_cost_per_token") or 0.0) > 0
-            or (model_info.get("output_cost_per_token") or 0.0) > 0
+            model_info.get("input_cost_per_token") is not None
+            or model_info.get("output_cost_per_token") is not None
         ):
             return generic_cost_per_token(
                 model=model,
@@ -1523,6 +1531,7 @@ def completion_cost(  # noqa: PLR0915
                     audio_transcription_file_duration=audio_transcription_file_duration,
                     rerank_billed_units=rerank_billed_units,
                     service_tier=service_tier,
+                    custom_pricing=custom_pricing,
                     response=completion_response,
                     request_model=request_model_for_cost,
                 )
