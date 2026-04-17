@@ -120,6 +120,7 @@ def _sanitize_for_log(value: Any) -> str:
         text = repr(value)
     return text.replace("\r", "").replace("\n", "")
 
+
 async def _verify_team_access(
     team_obj: LiteLLM_TeamTable,
     user_api_key_dict: UserAPIKeyAuth,
@@ -314,10 +315,8 @@ class TeamMemberBudgetHandler:
             return
 
         # Batch-fetch existing memberships for this team (avoids N+1 queries)
-        existing_memberships = (
-            await prisma_client.db.litellm_teammembership.find_many(
-                where={"team_id": team_id}
-            )
+        existing_memberships = await prisma_client.db.litellm_teammembership.find_many(
+            where={"team_id": team_id}
         )
         existing_user_ids = {m.user_id for m in existing_memberships}
 
@@ -1441,6 +1440,8 @@ async def update_team(  # noqa: PLR0915
     - access_group_ids: Optional[List[str]] - List of access group IDs to associate with the team. Access groups define which models the team can access. Example - ["access_group_1", "access_group_2"].
     - enforced_file_expires_after: Optional[dict] - Enforced file expiration policy for the team. Keys created under this team will inherit this policy for file uploads. Example - {"anchor": "created_at", "days": 30}.
     - enforced_batch_output_expires_after: Optional[dict] - Enforced batch output file expiration policy for the team. Keys created under this team will inherit this policy for batch output files. Example - {"anchor": "created_at", "days": 30}.
+    - budget_limits: Optional[list] - List of concurrent budget windows for the team. Each window specifies a budget_limit, time_period, and optional budget_duration. Example - [{"budget_limit": 10.0, "time_period": "1d"}, {"budget_limit": 50.0, "time_period": "7d"}].
+    - default_team_member_models: Optional[List[str]] - Default models assigned to new team members when they join this team. Must be a subset of the team's models.
 
     ```
     curl --location 'http://0.0.0.0:4000/team/update' \
@@ -1674,12 +1675,12 @@ async def update_team(  # noqa: PLR0915
             updated_kv["router_settings"] = safe_dumps(updated_kv["router_settings"])
 
         updated_kv = prisma_client.jsonify_team_object(db_data=updated_kv)
-        team_row: Optional[
-            LiteLLM_TeamTable
-        ] = await prisma_client.db.litellm_teamtable.update(
-            where={"team_id": data.team_id},
-            data=updated_kv,
-            include={"litellm_model_table": True},  # type: ignore
+        team_row: Optional[LiteLLM_TeamTable] = (
+            await prisma_client.db.litellm_teamtable.update(
+                where={"team_id": data.team_id},
+                data=updated_kv,
+                include={"litellm_model_table": True},  # type: ignore
+            )
         )
 
         if team_row is None or team_row.team_id is None:
@@ -2445,13 +2446,13 @@ async def team_member_delete(
         )
 
         # Fetch keys before deletion to persist them
-        keys_to_delete: List[
-            LiteLLM_VerificationToken
-        ] = await prisma_client.db.litellm_verificationtoken.find_many(
-            where={
-                "user_id": {"in": list(user_ids_to_delete)},
-                "team_id": data.team_id,
-            }
+        keys_to_delete: List[LiteLLM_VerificationToken] = (
+            await prisma_client.db.litellm_verificationtoken.find_many(
+                where={
+                    "user_id": {"in": list(user_ids_to_delete)},
+                    "team_id": data.team_id,
+                }
+            )
         )
 
         if keys_to_delete:
@@ -2837,10 +2838,10 @@ async def delete_team(
     team_rows: List[LiteLLM_TeamTable] = []
     for team_id in data.team_ids:
         try:
-            team_row_base: Optional[
-                BaseModel
-            ] = await prisma_client.db.litellm_teamtable.find_unique(
-                where={"team_id": team_id}
+            team_row_base: Optional[BaseModel] = (
+                await prisma_client.db.litellm_teamtable.find_unique(
+                    where={"team_id": team_id}
+                )
             )
             if team_row_base is None:
                 raise Exception
@@ -2906,10 +2907,10 @@ async def delete_team(
         _persist_deleted_verification_tokens,
     )
 
-    keys_to_delete: List[
-        LiteLLM_VerificationToken
-    ] = await prisma_client.db.litellm_verificationtoken.find_many(
-        where={"team_id": {"in": data.team_ids}}
+    keys_to_delete: List[LiteLLM_VerificationToken] = (
+        await prisma_client.db.litellm_verificationtoken.find_many(
+            where={"team_id": {"in": data.team_ids}}
+        )
     )
 
     if keys_to_delete:
@@ -3146,11 +3147,11 @@ async def team_info(
             )
 
         try:
-            team_info: Optional[
-                BaseModel
-            ] = await prisma_client.db.litellm_teamtable.find_unique(
-                where={"team_id": team_id},
-                include={"object_permission": True},
+            team_info: Optional[BaseModel] = (
+                await prisma_client.db.litellm_teamtable.find_unique(
+                    where={"team_id": team_id},
+                    include={"object_permission": True},
+                )
             )
             if team_info is None:
                 raise Exception
