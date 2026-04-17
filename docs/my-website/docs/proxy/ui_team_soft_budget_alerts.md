@@ -2,6 +2,16 @@ import Image from '@theme/IdealImage';
 
 # Team Soft Budget Alerts
 
+:::info
+
+✨ This is an Enterprise feature. Email budget alerts require an enterprise license.
+
+[Enterprise Pricing](https://www.litellm.ai/#pricing)
+
+[Get free 7-day trial key](https://www.litellm.ai/enterprise#trial)
+
+:::
+
 Set a soft budget on a team and get email alerts when spending crosses the threshold — without blocking any requests.
 
 ## Overview

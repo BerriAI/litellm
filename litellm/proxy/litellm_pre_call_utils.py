@@ -10,6 +10,7 @@ from starlette.datastructures import Headers
 import litellm
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm._service_logger import ServiceLogging
+from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.proxy._types import (
     AddTeamCallback,
@@ -42,6 +43,8 @@ def _sanitize_for_log(value: Any) -> str:
         text = repr(value)
     # Strip CR/LF characters commonly used for log injection
     return text.replace("\r", "").replace("\n", "")
+
+
 from litellm.router import Router
 from litellm.secret_managers.main import get_secret_bool
 from litellm.types.llms.anthropic import ANTHROPIC_API_HEADERS
@@ -219,12 +222,12 @@ def _get_dynamic_logging_metadata(
     user_api_key_dict: UserAPIKeyAuth, proxy_config: ProxyConfig
 ) -> Optional[TeamCallbackMetadata]:
     callback_settings_obj: Optional[TeamCallbackMetadata] = None
-    key_dynamic_logging_settings: Optional[
-        dict
-    ] = KeyAndTeamLoggingSettings.get_key_dynamic_logging_settings(user_api_key_dict)
-    team_dynamic_logging_settings: Optional[
-        dict
-    ] = KeyAndTeamLoggingSettings.get_team_dynamic_logging_settings(user_api_key_dict)
+    key_dynamic_logging_settings: Optional[dict] = (
+        KeyAndTeamLoggingSettings.get_key_dynamic_logging_settings(user_api_key_dict)
+    )
+    team_dynamic_logging_settings: Optional[dict] = (
+        KeyAndTeamLoggingSettings.get_team_dynamic_logging_settings(user_api_key_dict)
+    )
     #########################################################################################
     # Key-based callbacks
     #########################################################################################
@@ -684,6 +687,7 @@ class LiteLLMProxyRequestSetup:
             user_api_key_project_alias=user_api_key_dict.project_alias,
             user_api_key_user_id=user_api_key_dict.user_id,
             user_api_key_org_id=user_api_key_dict.org_id,
+            user_api_key_org_alias=user_api_key_dict.organization_alias,
             user_api_key_team_alias=user_api_key_dict.team_alias,
             user_api_key_end_user_id=user_api_key_dict.end_user_id,
             user_api_key_user_email=user_api_key_dict.user_email,
@@ -777,11 +781,11 @@ class LiteLLMProxyRequestSetup:
 
         ## KEY-LEVEL SPEND LOGS / TAGS
         if "tags" in key_metadata and key_metadata["tags"] is not None:
-            data[_metadata_variable_name][
-                "tags"
-            ] = LiteLLMProxyRequestSetup._merge_tags(
-                request_tags=data[_metadata_variable_name].get("tags"),
-                tags_to_add=key_metadata["tags"],
+            data[_metadata_variable_name]["tags"] = (
+                LiteLLMProxyRequestSetup._merge_tags(
+                    request_tags=data[_metadata_variable_name].get("tags"),
+                    tags_to_add=key_metadata["tags"],
+                )
             )
         if "disable_global_guardrails" in key_metadata and isinstance(
             key_metadata["disable_global_guardrails"], bool
@@ -915,6 +919,22 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
 
     from litellm.proxy.proxy_server import llm_router, premium_user
     from litellm.types.proxy.litellm_pre_call_utils import RedactedDict, SecretFields
+
+    # Strip internal-only keys from user input before the proxy sets its own.
+    # These keys are injected by the proxy itself below — user-supplied values
+    # must not be trusted.
+    for _internal_key in (
+        "proxy_server_request",
+        "standard_logging_object",
+        "secret_fields",
+    ):
+        data.pop(_internal_key, None)
+    # Strip spoofable auth metadata from user-supplied metadata dict
+    _user_metadata = data.get("metadata")
+    if isinstance(_user_metadata, dict):
+        for _mk in list(_user_metadata.keys()):
+            if _mk.startswith("user_api_key_"):
+                del _user_metadata[_mk]
 
     _raw_headers: Dict[str, str] = RedactedDict(_safe_get_request_headers(request))
 
@@ -1077,9 +1097,9 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
     data[_metadata_variable_name]["litellm_api_version"] = version
 
     if general_settings is not None:
-        data[_metadata_variable_name][
-            "global_max_parallel_requests"
-        ] = general_settings.get("global_max_parallel_requests", None)
+        data[_metadata_variable_name]["global_max_parallel_requests"] = (
+            general_settings.get("global_max_parallel_requests", None)
+        )
 
     ### KEY-LEVEL Controls
     key_metadata = user_api_key_dict.metadata
@@ -1100,6 +1120,12 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
     ):
         data[_metadata_variable_name]["disable_global_guardrails"] = team_metadata[
             "disable_global_guardrails"
+        ]
+    if "opted_out_global_guardrails" in team_metadata and isinstance(
+        team_metadata["opted_out_global_guardrails"], list
+    ):
+        data[_metadata_variable_name]["opted_out_global_guardrails"] = team_metadata[
+            "opted_out_global_guardrails"
         ]
     if "spend_logs_metadata" in team_metadata and isinstance(
         team_metadata["spend_logs_metadata"], dict
@@ -1263,6 +1289,9 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
         user_api_key_dict=user_api_key_dict,
     )
 
+    # Save pre-alias model name for credential override lookup
+    _pre_alias_model = data.get("model")
+
     # Team Model Aliases
     _update_model_if_team_alias_exists(
         data=data,
@@ -1277,6 +1306,14 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
 
     verbose_proxy_logger.debug(
         "[PROXY] returned data from litellm_pre_call_utils: %s", data
+    )
+
+    # Team/Project credential overrides from model_config
+    # Placed after the debug log to avoid leaking credential secrets in logs
+    _apply_credential_overrides_from_model_config(
+        data=data,
+        user_api_key_dict=user_api_key_dict,
+        pre_alias_model_name=_pre_alias_model,
     )
 
     ## ENFORCED PARAMS CHECK
@@ -1404,6 +1441,175 @@ def _update_model_if_key_alias_exists(
     ):
         data["model"] = user_api_key_dict.aliases[_model]
     return
+
+
+def _apply_credential_overrides_from_model_config(
+    data: dict,
+    user_api_key_dict: UserAPIKeyAuth,
+    pre_alias_model_name: Optional[str] = None,
+) -> None:
+    """
+    Walk the model_config precedence chain in team/project metadata.
+    If a matching credential is found, set api_base/api_key/api_version on data
+    so they override deployment defaults in the router.
+
+    Precedence (highest to lowest):
+    1. Clientside credentials (already in data — skip if present)
+    2. Project model-specific override
+    3. Project default override (defaultconfig)
+    4. Team model-specific override
+    5. Team default override (defaultconfig)
+    6. Deployment default (no action needed)
+    """
+    # Feature flag gate — disabled by default, opt in with litellm.enable_model_config_credential_overrides = True
+    if not litellm.enable_model_config_credential_overrides:
+        return
+
+    # Respect clientside credentials — highest precedence
+    if data.get("api_base") is not None or data.get("api_key") is not None:
+        return
+
+    model_name = data.get("model")
+    if not model_name:
+        return
+
+    project_metadata = user_api_key_dict.project_metadata or {}
+    team_metadata = user_api_key_dict.team_metadata or {}
+
+    project_model_config = project_metadata.get("model_config")
+    team_model_config = team_metadata.get("model_config")
+
+    if not project_model_config and not team_model_config:
+        return
+
+    # Extract provider hint from model name (e.g. "azure/gpt-4" -> "azure")
+    provider: Optional[str] = None
+    if "/" in model_name:
+        provider = model_name.split("/", 1)[0]
+
+    credential_name = _resolve_credential_from_model_config(
+        model_name=model_name,
+        project_model_config=project_model_config,
+        team_model_config=team_model_config,
+        pre_alias_model_name=pre_alias_model_name,
+        provider=provider,
+    )
+
+    if not credential_name:
+        return
+
+    credential_values = CredentialAccessor.get_credential_values(credential_name)
+    if not credential_values:
+        _safe_cred = str(credential_name).replace("\n", "").replace("\r", "")
+        verbose_proxy_logger.warning(
+            "model_config references credential '%s' but it was not found or has no values",
+            _safe_cred,
+        )
+        return
+
+    # Apply credential overrides only for keys not already in the request
+    for key in ("api_base", "api_key", "api_version"):
+        if key in credential_values and key not in data:
+            data[key] = credential_values[key]
+
+    _safe_model = str(model_name).replace("\n", "").replace("\r", "")
+    _safe_cred = str(credential_name).replace("\n", "").replace("\r", "")
+    verbose_proxy_logger.debug(
+        "Applied credential override '%s' for model '%s'",
+        _safe_cred,
+        _safe_model,
+    )
+
+
+def _resolve_credential_from_model_config(
+    model_name: str,
+    project_model_config: Optional[dict],
+    team_model_config: Optional[dict],
+    pre_alias_model_name: Optional[str] = None,
+    provider: Optional[str] = None,
+) -> Optional[str]:
+    """
+    Walk the precedence chain and return the first matching credential name.
+
+    Checks (in order):
+    1. project_model_config[model_name][provider] — project model-specific
+    2. project_model_config[pre_alias_model_name][provider] — project pre-alias
+    3. project_model_config["defaultconfig"][provider] — project default
+    4. team_model_config[model_name][provider] — team model-specific
+    5. team_model_config[pre_alias_model_name][provider] — team pre-alias
+    6. team_model_config["defaultconfig"][provider] — team default
+
+    When a model-specific entry exists but contains no litellm_credentials,
+    the function falls through to defaultconfig. This is intentional —
+    an entry without litellm_credentials is treated as incomplete config,
+    not as an explicit "no override" signal.
+    """
+    # Build the list of model names to try (post-alias first, then pre-alias)
+    model_names_to_try = [model_name]
+    if pre_alias_model_name and pre_alias_model_name != model_name:
+        model_names_to_try.append(pre_alias_model_name)
+
+    for model_config in (project_model_config, team_model_config):
+        if not model_config or not isinstance(model_config, dict):
+            continue
+
+        # Model-specific check (try resolved name, then pre-alias name)
+        for name in model_names_to_try:
+            model_entry = model_config.get(name)
+            if model_entry:
+                credential_name = _extract_credential_from_entry(
+                    model_entry, provider=provider
+                )
+                if credential_name:
+                    return credential_name
+                _safe_name = str(name).replace("\n", "").replace("\r", "")
+                verbose_proxy_logger.debug(
+                    "model_config entry '%s' found but has no litellm_credentials, "
+                    "trying next candidate",
+                    _safe_name,
+                )
+
+        # Default check
+        default_entry = model_config.get("defaultconfig")
+        if default_entry:
+            credential_name = _extract_credential_from_entry(
+                default_entry, provider=provider
+            )
+            if credential_name:
+                return credential_name
+
+    return None
+
+
+def _extract_credential_from_entry(
+    entry: dict, provider: Optional[str] = None
+) -> Optional[str]:
+    """
+    Extract litellm_credentials from a model_config entry.
+
+    Entry structure: {"azure": {"litellm_credentials": "name"}, ...}
+
+    When provider is given (e.g. "azure"), tries an exact provider match first.
+    Falls back to the first credential found across all provider keys.
+    """
+    if not isinstance(entry, dict):
+        return None
+
+    # Prefer exact provider match when provider hint is available
+    if provider and provider in entry:
+        provider_config = entry[provider]
+        if isinstance(provider_config, dict):
+            credential_name = provider_config.get("litellm_credentials")
+            if credential_name:
+                return credential_name
+
+    # Fall back to first available provider
+    for provider_config in entry.values():
+        if isinstance(provider_config, dict):
+            credential_name = provider_config.get("litellm_credentials")
+            if credential_name:
+                return credential_name
+    return None
 
 
 def _get_enforced_params(
@@ -1693,7 +1899,9 @@ async def move_guardrails_to_metadata(
     )
 
     # Only check policy engine if no local config (avoid import + registry lookup)
-    if not (has_key_config or has_team_config or has_project_config or has_request_config):
+    if not (
+        has_key_config or has_team_config or has_project_config or has_request_config
+    ):
         from litellm.proxy.policy_engine.policy_registry import get_policy_registry
 
         if not get_policy_registry().is_initialized():

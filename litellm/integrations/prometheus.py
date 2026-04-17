@@ -86,6 +86,11 @@ class PrometheusLogger(CustomLogger):
             # Always initialize label_filters, even for non-premium users
             self.label_filters = self._parse_prometheus_config()
 
+            _custom_buckets = litellm.prometheus_latency_buckets
+            self.latency_buckets = (
+                tuple(_custom_buckets) if _custom_buckets is not None else LATENCY_BUCKETS
+            )
+
             # Create metric factory functions
             self._counter_factory = self._create_metric_factory(Counter)
             self._gauge_factory = self._create_metric_factory(Gauge)
@@ -114,14 +119,14 @@ class PrometheusLogger(CustomLogger):
                 labelnames=self.get_labels_for_metric(
                     "litellm_request_total_latency_metric"
                 ),
-                buckets=LATENCY_BUCKETS,
+                buckets=self.latency_buckets,
             )
 
             self.litellm_llm_api_latency_metric = self._histogram_factory(
                 "litellm_llm_api_latency_metric",
                 "Total latency (seconds) for a models LLM API call",
                 labelnames=self.get_labels_for_metric("litellm_llm_api_latency_metric"),
-                buckets=LATENCY_BUCKETS,
+                buckets=self.latency_buckets,
             )
 
             self.litellm_llm_api_time_to_first_token_metric = self._histogram_factory(
@@ -137,7 +142,7 @@ class PrometheusLogger(CustomLogger):
                 labelnames=self.get_labels_for_metric(
                     "litellm_llm_api_time_to_first_token_metric"
                 ),
-                buckets=LATENCY_BUCKETS,
+                buckets=self.latency_buckets,
             )
 
             # Counter for spend
@@ -314,7 +319,7 @@ class PrometheusLogger(CustomLogger):
                 labelnames=self.get_labels_for_metric(
                     "litellm_overhead_latency_metric"
                 ),
-                buckets=LATENCY_BUCKETS,
+                buckets=self.latency_buckets,
             )
 
             # Request queue time metric
@@ -324,7 +329,7 @@ class PrometheusLogger(CustomLogger):
                 labelnames=self.get_labels_for_metric(
                     "litellm_request_queue_time_seconds"
                 ),
-                buckets=LATENCY_BUCKETS,
+                buckets=self.latency_buckets,
             )
 
             # Guardrail metrics
@@ -332,7 +337,7 @@ class PrometheusLogger(CustomLogger):
                 "litellm_guardrail_latency_seconds",
                 "Latency (seconds) for guardrail execution",
                 labelnames=["guardrail_name", "status", "error_type", "hook_type"],
-                buckets=LATENCY_BUCKETS,
+                buckets=self.latency_buckets,
             )
 
             self.litellm_guardrail_errors_total = self._counter_factory(
@@ -1031,6 +1036,9 @@ class PrometheusLogger(CustomLogger):
         user_api_key_org_id = standard_logging_payload["metadata"].get(
             "user_api_key_org_id"
         )
+        user_api_key_org_alias = standard_logging_payload["metadata"].get(
+            "user_api_key_org_alias"
+        )
         output_tokens = standard_logging_payload["completion_tokens"]
         tokens_used = standard_logging_payload["total_tokens"]
         response_cost = standard_logging_payload["response_cost"]
@@ -1068,6 +1076,8 @@ class PrometheusLogger(CustomLogger):
             model_group=standard_logging_payload["model_group"],
             team=user_api_team,
             team_alias=user_api_team_alias,
+            org_id=user_api_key_org_id,
+            org_alias=user_api_key_org_alias,
             user=user_id,
             user_email=standard_logging_payload["metadata"]["user_api_key_user_email"],
             status_code="200",
@@ -1746,6 +1756,8 @@ class PrometheusLogger(CustomLogger):
                 api_key_alias=user_api_key_dict.key_alias,
                 team=user_api_key_dict.team_id,
                 team_alias=user_api_key_dict.team_alias,
+                org_id=user_api_key_dict.org_id,
+                org_alias=user_api_key_dict.organization_alias,
                 requested_model=request_data.get("model", ""),
                 status_code=str(status_code),
                 exception_status=str(status_code),

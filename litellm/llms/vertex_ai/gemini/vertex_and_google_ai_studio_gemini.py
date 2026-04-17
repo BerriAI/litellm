@@ -318,6 +318,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             "parallel_tool_calls",
             "web_search_options",
             "include_server_side_tool_invocations",
+            "service_tier",
         ]
 
         # Add penalty parameters only for non-preview models
@@ -361,6 +362,17 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         Google doesn't support user_location or search_context_size params
         """
         return Tools(googleSearch={})
+
+    def _map_service_tier_param(self, value: str, optional_params: dict) -> None:
+        """
+        Map OpenAI service_tier (string) to Gemini serviceTier.
+        'auto' maps to 'priority'.
+        Other values are passed lowercased.
+        """
+        if value.lower() == "auto":
+            optional_params["service_tier"] = "priority"
+        else:
+            optional_params["service_tier"] = value.lower()
 
     def _transform_computer_use_config(self, computer_use_config: dict) -> dict:
         """
@@ -468,6 +480,62 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         else:
             return None
 
+    @staticmethod
+    def _resolve_search_tool_conflict(
+        gtool_func_declarations: list,
+        googleSearch: Optional[dict],
+        googleSearchRetrieval: Optional[dict],
+        enterpriseWebSearch: Optional[dict],
+        urlContext: Optional[dict],
+        optional_params: dict,
+    ) -> tuple:
+        """
+        Resolve Vertex AI constraint: multiple Tool objects in a request must
+        ALL be search tools. When function declarations are mixed with search
+        tools, drop search tools to avoid 400 error.
+
+        Skip when include_server_side_tool_invocations is enabled (Gemini 3+
+        supports tool combination natively).
+
+        Note: code_execution, computerUse, and googleMaps are NOT search tools
+        and CAN coexist with function declarations, so they are preserved.
+
+        Ref: https://github.com/BerriAI/litellm/issues/23337
+
+        Returns:
+            tuple of (googleSearch, googleSearchRetrieval, enterpriseWebSearch, urlContext)
+        """
+        has_search_tools = any(
+            v is not None
+            for v in [
+                googleSearch,
+                googleSearchRetrieval,
+                enterpriseWebSearch,
+                urlContext,
+            ]
+        )
+        server_side_tool_invocations = optional_params.get(
+            "include_server_side_tool_invocations", False
+        )
+        if (
+            gtool_func_declarations
+            and has_search_tools
+            and not server_side_tool_invocations
+        ):
+            verbose_logger.warning(
+                "Vertex AI does not support mixing function declarations with "
+                "search tools (googleSearch, enterpriseWebSearch, urlContext, "
+                "googleSearchRetrieval) in the same request. Dropping search "
+                "tools and keeping function declarations. To use search tools, "
+                "send a request without function calling tools."
+            )
+            googleSearch = None
+            googleSearchRetrieval = None
+            enterpriseWebSearch = None
+            urlContext = None
+
+        return googleSearch, googleSearchRetrieval, enterpriseWebSearch, urlContext
+
     def _map_function(  # noqa: PLR0915
         self, value: List[dict], optional_params: dict
     ) -> List[Tools]:
@@ -500,9 +568,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         value = _remove_strict_from_schema(value)
 
         for tool in value:
-            openai_function_object: Optional[
-                ChatCompletionToolParamFunctionChunk
-            ] = None
+            openai_function_object: Optional[ChatCompletionToolParamFunctionChunk] = (
+                None
+            )
             if "function" in tool:  # tools list
                 _openai_function_object = ChatCompletionToolParamFunctionChunk(  # type: ignore
                     **tool["function"]
@@ -621,6 +689,20 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         # per Vertex AI API spec: "A Tool object should contain exactly one type of Tool"
         _tools_list: List[Tools] = []
 
+        (
+            googleSearch,
+            googleSearchRetrieval,
+            enterpriseWebSearch,
+            urlContext,
+        ) = self._resolve_search_tool_conflict(
+            gtool_func_declarations=gtool_func_declarations,
+            googleSearch=googleSearch,
+            googleSearchRetrieval=googleSearchRetrieval,
+            enterpriseWebSearch=enterpriseWebSearch,
+            urlContext=urlContext,
+            optional_params=optional_params,
+        )
+
         # Function declarations can be grouped together in one Tool
         if gtool_func_declarations:
             func_tool = Tools()
@@ -634,15 +716,15 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             _tools_list.append(search_tool)
         if googleSearchRetrieval is not None:
             retrieval_tool = Tools()
-            retrieval_tool[
-                VertexToolName.GOOGLE_SEARCH_RETRIEVAL.value
-            ] = googleSearchRetrieval
+            retrieval_tool[VertexToolName.GOOGLE_SEARCH_RETRIEVAL.value] = (
+                googleSearchRetrieval
+            )
             _tools_list.append(retrieval_tool)
         if enterpriseWebSearch is not None:
             enterprise_tool = Tools()
-            enterprise_tool[
-                VertexToolName.ENTERPRISE_WEB_SEARCH.value
-            ] = enterpriseWebSearch
+            enterprise_tool[VertexToolName.ENTERPRISE_WEB_SEARCH.value] = (
+                enterpriseWebSearch
+            )
             _tools_list.append(enterprise_tool)
         if code_execution is not None:
             code_tool = Tools()
@@ -1089,16 +1171,16 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                         param_description="thinking_budget",
                     )
                     if VertexGeminiConfig._is_gemini_3_or_newer(model):
-                        optional_params[
-                            "thinkingConfig"
-                        ] = VertexGeminiConfig._map_reasoning_effort_to_thinking_level(
-                            effort_value, model
+                        optional_params["thinkingConfig"] = (
+                            VertexGeminiConfig._map_reasoning_effort_to_thinking_level(
+                                effort_value, model
+                            )
                         )
                     else:
-                        optional_params[
-                            "thinkingConfig"
-                        ] = VertexGeminiConfig._map_reasoning_effort_to_thinking_budget(
-                            effort_value, model
+                        optional_params["thinkingConfig"] = (
+                            VertexGeminiConfig._map_reasoning_effort_to_thinking_budget(
+                                effort_value, model
+                            )
                         )
             elif param == "thinking":
                 # Validate no conflict with thinking_level
@@ -1107,11 +1189,11 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     param_name="thinking",
                     param_description="thinking_budget",
                 )
-                optional_params[
-                    "thinkingConfig"
-                ] = VertexGeminiConfig._map_thinking_param(
-                    cast(AnthropicThinkingParam, value),
-                    model=model,
+                optional_params["thinkingConfig"] = (
+                    VertexGeminiConfig._map_thinking_param(
+                        cast(AnthropicThinkingParam, value),
+                        model=model,
+                    )
                 )
             elif param == "modalities" and isinstance(value, list):
                 response_modalities = self.map_response_modalities(value)
@@ -1121,6 +1203,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 optional_params = self._add_tools_to_optional_params(
                     optional_params, [_tools]
                 )
+            elif param == "service_tier" and isinstance(value, str):
+                self._map_service_tier_param(value, optional_params)
             elif param == "include_server_side_tool_invocations" and value is True:
                 optional_params["include_server_side_tool_invocations"] = True
         if litellm.vertex_ai_safety_settings is not None:
@@ -1533,10 +1617,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                         _tool_response_chunk["provider_specific_fields"] = {  # type: ignore
                             "thought_signature": thought_signature
                         }
-                        _tool_response_chunk[
-                            "id"
-                        ] = _encode_tool_call_id_with_signature(
-                            _tool_response_chunk["id"] or "", thought_signature
+                        _tool_response_chunk["id"] = (
+                            _encode_tool_call_id_with_signature(
+                                _tool_response_chunk["id"] or "", thought_signature
+                            )
                         )
                     _tools.append(_tool_response_chunk)
                 cumulative_tool_call_idx += 1
@@ -2383,28 +2467,28 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             ## ADD METADATA TO RESPONSE ##
 
             setattr(model_response, "vertex_ai_grounding_metadata", grounding_metadata)
-            model_response._hidden_params[
-                "vertex_ai_grounding_metadata"
-            ] = grounding_metadata
+            model_response._hidden_params["vertex_ai_grounding_metadata"] = (
+                grounding_metadata
+            )
 
             setattr(
                 model_response, "vertex_ai_url_context_metadata", url_context_metadata
             )
 
-            model_response._hidden_params[
-                "vertex_ai_url_context_metadata"
-            ] = url_context_metadata
+            model_response._hidden_params["vertex_ai_url_context_metadata"] = (
+                url_context_metadata
+            )
 
             setattr(model_response, "vertex_ai_safety_results", safety_ratings)
-            model_response._hidden_params[
-                "vertex_ai_safety_results"
-            ] = safety_ratings  # older approach - maintaining to prevent regressions
+            model_response._hidden_params["vertex_ai_safety_results"] = (
+                safety_ratings  # older approach - maintaining to prevent regressions
+            )
 
             ## ADD CITATION METADATA ##
             setattr(model_response, "vertex_ai_citation_metadata", citation_metadata)
-            model_response._hidden_params[
-                "vertex_ai_citation_metadata"
-            ] = citation_metadata  # older approach - maintaining to prevent regressions
+            model_response._hidden_params["vertex_ai_citation_metadata"] = (
+                citation_metadata  # older approach - maintaining to prevent regressions
+            )
 
             ## ADD TRAFFIC TYPE ##
             traffic_type = completion_response.get("usageMetadata", {}).get(
@@ -2414,6 +2498,14 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 model_response._hidden_params.setdefault(
                     "provider_specific_fields", {}
                 )["traffic_type"] = traffic_type
+
+            ## ADD SERVICE TIER ##
+            if getattr(raw_response, "headers", None):
+                if service_tier := raw_response.headers.get("x-gemini-service-tier"):
+                    if service_tier.lower() == "standard":
+                        setattr(model_response, "service_tier", "default")
+                    else:
+                        setattr(model_response, "service_tier", service_tier.lower())
 
         except Exception as e:
             raise VertexAIError(
@@ -2513,6 +2605,7 @@ async def make_call(
         streaming_response=response.aiter_lines(),
         sync_stream=False,
         logging_obj=logging_obj,
+        response_headers=response.headers,
     )
     # LOGGING
     logging_obj.post_call(
@@ -2555,6 +2648,7 @@ def make_sync_call(
         streaming_response=response.iter_lines(),
         sync_stream=True,
         logging_obj=logging_obj,
+        response_headers=response.headers,
     )
 
     # LOGGING
@@ -3011,7 +3105,11 @@ class VertexLLM(VertexBase):
 
 class ModelResponseIterator:
     def __init__(
-        self, streaming_response, sync_stream: bool, logging_obj: LoggingClass
+        self,
+        streaming_response,
+        sync_stream: bool,
+        logging_obj: LoggingClass,
+        response_headers: Optional[Dict[str, str]] = None,
     ):
         from litellm.litellm_core_utils.prompt_templates.common_utils import (
             check_is_function_call,
@@ -3022,9 +3120,124 @@ class ModelResponseIterator:
         self.accumulated_json = ""
         self.sent_first_chunk = False
         self.logging_obj = logging_obj
+        self.response_headers = response_headers or {}
         self.is_function_call = check_is_function_call(logging_obj)
         self.cumulative_tool_call_index: int = 0
         self.has_seen_tool_calls: bool = False
+
+    def _apply_stream_candidates(
+        self,
+        _candidates: List[Candidates],
+        model_response: Any,
+    ) -> Tuple[List[dict], List[dict], List[dict], List[dict]]:
+        (
+            grounding_metadata,
+            url_context_metadata,
+            safety_ratings,
+            citation_metadata,
+            self.cumulative_tool_call_index,
+        ) = VertexGeminiConfig._process_candidates(
+            _candidates,
+            model_response,
+            self.logging_obj.optional_params,
+            cumulative_tool_call_index=self.cumulative_tool_call_index,
+        )
+
+        # Track whether tool_calls have been seen across streaming chunks.
+        # Gemini sends tool_calls and finishReason in separate chunks,
+        # so we need to remember if earlier chunks contained tool_calls
+        # to correctly set finish_reason="tool_calls" per the OpenAI spec.
+        if not self.has_seen_tool_calls:
+            for choice in model_response.choices:
+                if (
+                    hasattr(choice, "delta")
+                    and choice.delta
+                    and choice.delta.tool_calls
+                ):
+                    self.has_seen_tool_calls = True
+                    break
+
+        # Handle final chunk with finishReason but no content.
+        # _process_candidates skips candidates without "content",
+        # so the finish_reason from the final chunk is lost.
+        if not model_response.choices and _candidates:
+            from litellm.types.utils import Delta, StreamingChoices
+
+            for candidate in _candidates:
+                finish_reason_str = candidate.get("finishReason")
+                if finish_reason_str is not None:
+                    if self.has_seen_tool_calls:
+                        mapped_finish_reason = "tool_calls"
+                    else:
+                        mapped_finish_reason = VertexGeminiConfig._check_finish_reason(
+                            None, finish_reason_str
+                        )
+                    choice = StreamingChoices(
+                        finish_reason=mapped_finish_reason,
+                        index=candidate.get("index", 0),
+                        delta=Delta(content=None, role=None),
+                        logprobs=None,
+                        enhancements=None,
+                    )
+                    model_response.choices.append(choice)
+
+        # Also handle the case where the final chunk has empty
+        # content (e.g. text:"") WITH finishReason. In this case
+        # _process_candidates DOES create a choice, but maps
+        # finishReason="STOP" to "stop" because the current chunk
+        # has no tool_calls. Override if we saw tool_calls earlier.
+        if self.has_seen_tool_calls:
+            for choice in model_response.choices:
+                if choice.finish_reason == "stop":
+                    choice.finish_reason = "tool_calls"
+
+        setattr(model_response, "vertex_ai_grounding_metadata", grounding_metadata)  # type: ignore
+        setattr(model_response, "vertex_ai_url_context_metadata", url_context_metadata)  # type: ignore
+        setattr(model_response, "vertex_ai_safety_ratings", safety_ratings)  # type: ignore
+        setattr(model_response, "vertex_ai_citation_metadata", citation_metadata)  # type: ignore
+
+        return (
+            grounding_metadata,
+            url_context_metadata,
+            safety_ratings,
+            citation_metadata,
+        )
+
+    def _apply_stream_usage_metadata(
+        self,
+        processed_chunk: Any,
+        model_response: Any,
+        grounding_metadata: List[dict],
+    ) -> Optional[Usage]:
+        if "usageMetadata" not in processed_chunk:
+            return None
+
+        usage = VertexGeminiConfig._calculate_usage(
+            completion_response=processed_chunk,
+        )
+
+        web_search_requests = VertexGeminiConfig._calculate_web_search_requests(
+            grounding_metadata
+        )
+        if web_search_requests is not None:
+            cast(
+                PromptTokensDetailsWrapper, usage.prompt_tokens_details
+            ).web_search_requests = web_search_requests
+
+        traffic_type = processed_chunk.get("usageMetadata", {}).get("trafficType")
+        if traffic_type:
+            model_response._hidden_params.setdefault("provider_specific_fields", {})[
+                "traffic_type"
+            ] = traffic_type
+
+        service_tier = self.response_headers.get("x-gemini-service-tier")
+        if service_tier:
+            if service_tier.lower() == "standard":
+                setattr(model_response, "service_tier", "default")
+            else:
+                setattr(model_response, "service_tier", service_tier.lower())
+
+        return usage
 
     def chunk_parser(self, chunk: dict) -> Optional["ModelResponseStream"]:
         try:
@@ -3043,101 +3256,23 @@ class ModelResponseIterator:
             if blocked_response is not None:
                 model_response = blocked_response
 
-            usage: Optional[Usage] = None
-            _candidates: Optional[List[Candidates]] = processed_chunk.get("candidates")
             grounding_metadata: List[dict] = []
             url_context_metadata: List[dict] = []
             safety_ratings: List[dict] = []
             citation_metadata: List[dict] = []
+
+            _candidates: Optional[List[Candidates]] = processed_chunk.get("candidates")
             if _candidates:
                 (
                     grounding_metadata,
                     url_context_metadata,
                     safety_ratings,
                     citation_metadata,
-                    self.cumulative_tool_call_index,
-                ) = VertexGeminiConfig._process_candidates(
-                    _candidates,
-                    model_response,
-                    self.logging_obj.optional_params,
-                    cumulative_tool_call_index=self.cumulative_tool_call_index,
-                )
+                ) = self._apply_stream_candidates(_candidates, model_response)
 
-                # Track whether tool_calls have been seen across streaming chunks.
-                # Gemini sends tool_calls and finishReason in separate chunks,
-                # so we need to remember if earlier chunks contained tool_calls
-                # to correctly set finish_reason="tool_calls" per the OpenAI spec.
-                if not self.has_seen_tool_calls:
-                    for choice in model_response.choices:
-                        if (
-                            hasattr(choice, "delta")
-                            and choice.delta
-                            and choice.delta.tool_calls
-                        ):
-                            self.has_seen_tool_calls = True
-                            break
-
-                # Handle final chunk with finishReason but no content.
-                # _process_candidates skips candidates without "content",
-                # so the finish_reason from the final chunk is lost.
-                if not model_response.choices and _candidates:
-                    from litellm.types.utils import Delta, StreamingChoices
-
-                    for candidate in _candidates:
-                        finish_reason_str = candidate.get("finishReason")
-                        if finish_reason_str is not None:
-                            if self.has_seen_tool_calls:
-                                mapped_finish_reason = "tool_calls"
-                            else:
-                                mapped_finish_reason = (
-                                    VertexGeminiConfig._check_finish_reason(
-                                        None, finish_reason_str
-                                    )
-                                )
-                            choice = StreamingChoices(
-                                finish_reason=mapped_finish_reason,
-                                index=candidate.get("index", 0),
-                                delta=Delta(content=None, role=None),
-                                logprobs=None,
-                                enhancements=None,
-                            )
-                            model_response.choices.append(choice)
-
-                # Also handle the case where the final chunk has empty
-                # content (e.g. text:"") WITH finishReason. In this case
-                # _process_candidates DOES create a choice, but maps
-                # finishReason="STOP" to "stop" because the current chunk
-                # has no tool_calls. Override if we saw tool_calls earlier.
-                if self.has_seen_tool_calls:
-                    for choice in model_response.choices:
-                        if choice.finish_reason == "stop":
-                            choice.finish_reason = "tool_calls"
-
-                setattr(model_response, "vertex_ai_grounding_metadata", grounding_metadata)  # type: ignore
-                setattr(model_response, "vertex_ai_url_context_metadata", url_context_metadata)  # type: ignore
-                setattr(model_response, "vertex_ai_safety_ratings", safety_ratings)  # type: ignore
-                setattr(model_response, "vertex_ai_citation_metadata", citation_metadata)  # type: ignore
-
-            if "usageMetadata" in processed_chunk:
-                usage = VertexGeminiConfig._calculate_usage(
-                    completion_response=processed_chunk,
-                )
-
-                web_search_requests = VertexGeminiConfig._calculate_web_search_requests(
-                    grounding_metadata
-                )
-                if web_search_requests is not None:
-                    cast(
-                        PromptTokensDetailsWrapper, usage.prompt_tokens_details
-                    ).web_search_requests = web_search_requests
-
-                traffic_type = processed_chunk.get("usageMetadata", {}).get(
-                    "trafficType"
-                )
-                if traffic_type:
-                    model_response._hidden_params.setdefault(
-                        "provider_specific_fields", {}
-                    )["traffic_type"] = traffic_type
+            usage = self._apply_stream_usage_metadata(
+                processed_chunk, model_response, grounding_metadata
+            )
 
             setattr(model_response, "usage", usage)  # type: ignore
 
