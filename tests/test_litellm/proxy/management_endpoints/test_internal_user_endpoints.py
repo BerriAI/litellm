@@ -1919,11 +1919,18 @@ async def test_delete_user_rejects_org_admin_deleting_outside_scope(mocker):
 
     async def mock_find_memberships(*args, **kwargs):
         where = kwargs.get("where") or (args[0] if args else {})
-        user_id = where.get("user_id")
-        if user_id == "org_admin_user":
+        user_id_filter = where.get("user_id")
+        # Batched lookup: {"user_id": {"in": [...]}} returns target memberships.
+        # Caller role lookup: {"user_id": "<caller>", "user_role": ...}.
+        if isinstance(user_id_filter, dict) and "in" in user_id_filter:
+            if "victim" in user_id_filter["in"]:
+                # Attach user_id on the mock so the caller can build its
+                # per-user dict from the batch result.
+                target_membership.user_id = "victim"
+                return [target_membership]
+            return []
+        if user_id_filter == "org_admin_user":
             return [caller_membership]
-        if user_id == "victim":
-            return [target_membership]
         return []
 
     mock_prisma_client.db.litellm_organizationmembership.find_many = mocker.AsyncMock(
