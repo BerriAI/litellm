@@ -289,11 +289,10 @@ async def test_increment_remaining_budget_metrics(prometheus_logger):
     future_reset_time_team = datetime.now() + timedelta(hours=10)
     future_reset_time_key = datetime.now() + timedelta(hours=12)
     # Mock the get_team_object and get_key_object functions to return objects with budget reset times
-    with patch(
-        "litellm.proxy.auth.auth_checks.get_team_object"
-    ) as mock_get_team, patch(
-        "litellm.proxy.auth.auth_checks.get_key_object"
-    ) as mock_get_key:
+    with (
+        patch("litellm.proxy.auth.auth_checks.get_team_object") as mock_get_team,
+        patch("litellm.proxy.auth.auth_checks.get_key_object") as mock_get_key,
+    ):
         mock_get_team.return_value = MagicMock(budget_reset_at=future_reset_time_team)
         mock_get_key.return_value = MagicMock(budget_reset_at=future_reset_time_key)
 
@@ -1518,9 +1517,12 @@ async def test_initialize_remaining_budget_metrics(prometheus_logger):
     """
     litellm.prometheus_initialize_budget_metrics = True
     # Mock the prisma client and get_paginated_teams function
-    with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma, patch(
-        "litellm.proxy.management_endpoints.team_endpoints.get_paginated_teams"
-    ) as mock_get_teams:
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma,
+        patch(
+            "litellm.proxy.management_endpoints.team_endpoints.get_paginated_teams"
+        ) as mock_get_teams,
+    ):
         # Create mock team data with proper datetime objects for budget_reset_at
         future_reset = datetime.now() + timedelta(hours=24)  # Reset 24 hours from now
         mock_teams = [
@@ -1613,11 +1615,15 @@ async def test_initialize_remaining_budget_metrics_exception_handling(
     """
     litellm.prometheus_initialize_budget_metrics = True
     # Mock the prisma client and get_paginated_teams function to raise an exception
-    with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma, patch(
-        "litellm.proxy.management_endpoints.team_endpoints.get_paginated_teams"
-    ) as mock_get_teams, patch(
-        "litellm.proxy.management_endpoints.key_management_endpoints._list_key_helper"
-    ) as mock_list_keys:
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma,
+        patch(
+            "litellm.proxy.management_endpoints.team_endpoints.get_paginated_teams"
+        ) as mock_get_teams,
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints._list_key_helper"
+        ) as mock_list_keys,
+    ):
         # Make get_paginated_teams raise an exception
         mock_get_teams.side_effect = Exception("Database error")
         mock_list_keys.side_effect = Exception("Key listing error")
@@ -1636,9 +1642,7 @@ async def test_initialize_remaining_budget_metrics_exception_handling(
 
         # Mock litellm_organizationtable to raise an exception for org budget metrics
         mock_orgtable = MagicMock()
-        mock_orgtable.find_many = MagicMock(
-            side_effect=Exception("Org database error")
-        )
+        mock_orgtable.find_many = MagicMock(side_effect=Exception("Org database error"))
         mock_orgtable.count = MagicMock(side_effect=Exception("Org count error"))
 
         mock_db = MagicMock()
@@ -1699,9 +1703,12 @@ async def test_initialize_api_key_budget_metrics(prometheus_logger):
     """
     litellm.prometheus_initialize_budget_metrics = True
     # Mock the prisma client and _list_key_helper function
-    with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma, patch(
-        "litellm.proxy.management_endpoints.key_management_endpoints._list_key_helper"
-    ) as mock_list_keys:
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma,
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints._list_key_helper"
+        ) as mock_list_keys,
+    ):
         # Create mock key data with proper datetime objects for budget_reset_at
         future_reset = datetime.now() + timedelta(hours=24)  # Reset 24 hours from now
         key1 = UserAPIKeyAuth(

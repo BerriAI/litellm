@@ -110,9 +110,7 @@ class TestAzureDocumentIntelligencePagesParam:
             model="azure_ai/doc-intelligence/prebuilt-layout",
             optional_params={"pages": "1-3,5"},
         )
-        assert (
-            f"api-version={AZURE_DOCUMENT_INTELLIGENCE_API_VERSION}" in url
-        ), url
+        assert f"api-version={AZURE_DOCUMENT_INTELLIGENCE_API_VERSION}" in url, url
         assert "pages=1-3,5" in url, url
         assert "/documentintelligence/documentModels/prebuilt-layout:analyze" in url
 
@@ -168,4 +166,3 @@ class TestAzureDocumentIntelligencePagesParam:
 
         assert "pages=3,4,5,6,7,8,9" in url
         assert req.data == {"urlSource": "https://example.com/x.pdf"}
-
