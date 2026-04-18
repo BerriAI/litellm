@@ -981,6 +981,7 @@ const sidebars = {
         "providers/predibase",
         "providers/pydantic_ai_agent",
         "providers/ragflow",
+        "providers/reducto",
         "providers/recraft",
         "providers/replicate",
         {

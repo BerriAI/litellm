@@ -5887,6 +5887,7 @@ def _get_model_info_helper(  # noqa: PLR0915
                 tpm=_model_info.get("tpm", None),
                 rpm=_model_info.get("rpm", None),
                 ocr_cost_per_page=_model_info.get("ocr_cost_per_page", None),
+                ocr_cost_per_credit=_model_info.get("ocr_cost_per_credit", None),
                 annotation_cost_per_page=_model_info.get(
                     "annotation_cost_per_page", None
                 ),
@@ -9093,6 +9094,18 @@ class ProviderConfigManager:
             from litellm.llms.vertex_ai.ocr.common_utils import get_vertex_ai_ocr_config
 
             return get_vertex_ai_ocr_config(model=model)
+
+        if provider == litellm.LlmProviders.REDUCTO:
+            from litellm.llms.reducto.ocr.transformation import (
+                ReductoParseLegacyConfig,
+                ReductoParseV3Config,
+            )
+
+            if model == "parse-v3":
+                return ReductoParseV3Config()
+            if model == "parse-legacy":
+                return ReductoParseLegacyConfig()
+            return None
 
         MistralOCRConfig = getattr(sys.modules[__name__], "MistralOCRConfig")
         PROVIDER_TO_CONFIG_MAP = {
