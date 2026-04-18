@@ -1696,6 +1696,31 @@ def test_task_budget_rejected_for_non_opus_47():
         )
 
 
+def test_task_budget_rejection_does_not_mutate_headers():
+    """Test that invalid task_budget requests do not leak beta headers."""
+    config = AnthropicConfig()
+    messages = [{"role": "user", "content": "Test"}]
+    headers = {"anthropic-beta": "existing-beta"}
+
+    with pytest.raises(
+        ValueError,
+        match="output_config.task_budget is not supported by this model",
+    ):
+        config.transform_request(
+            model="claude-opus-4-6-20260205",
+            messages=messages,
+            optional_params={
+                "output_config": {
+                    "task_budget": {"type": "tokens", "total": 64000},
+                }
+            },
+            litellm_params={},
+            headers=headers,
+        )
+
+    assert headers == {"anthropic-beta": "existing-beta"}
+
+
 def test_effort_beta_header_injection():
     """Test that effort beta header is automatically added when output_config is detected."""
     from litellm.llms.anthropic.common_utils import AnthropicModelInfo

@@ -1377,14 +1377,6 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             self._ensure_beta_header(
                 headers, ANTHROPIC_BETA_HEADER_VALUES.FAST_MODE_2026_02_01.value
             )
-        output_config = optional_params.get("output_config")
-        if (
-            isinstance(output_config, dict)
-            and output_config.get("task_budget") is not None
-        ):
-            self._ensure_beta_header(
-                headers, ANTHROPIC_BETA_HEADER_VALUES.TASK_BUDGETS_2026_03_13.value
-            )
         for tool in _tools:
             if tool.get("type") == ANTHROPIC_ADVISOR_TOOL_TYPE:
                 self._ensure_beta_header(
@@ -1533,6 +1525,14 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         self._apply_output_config(
             data=data, model=model, optional_params=optional_params
         )
+        output_config = optional_params.get("output_config")
+        if (
+            isinstance(output_config, dict)
+            and output_config.get("task_budget") is not None
+        ):
+            self._ensure_beta_header(
+                headers, ANTHROPIC_BETA_HEADER_VALUES.TASK_BUDGETS_2026_03_13.value
+            )
 
         return data
 
