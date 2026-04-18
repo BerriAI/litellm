@@ -52,11 +52,16 @@ PROVIDERS: List[Dict] = [
     {
         "id": "anthropic",
         "name": "Anthropic",
-        "description": "Claude Opus 4.6, Sonnet 4.6, Haiku 4.5",
+        "description": "Claude Opus 4.7, Opus 4.6, Sonnet 4.6, Haiku 4.5",
         "env_key": "ANTHROPIC_API_KEY",
         "key_hint": "sk-ant-...",
         "test_model": "claude-haiku-4-5-20251001",
-        "models": ["claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5-20251001"],
+        "models": [
+            "claude-opus-4-7",
+            "claude-opus-4-6",
+            "claude-sonnet-4-6",
+            "claude-haiku-4-5-20251001",
+        ],
     },
     {
         "id": "gemini",
