@@ -2969,7 +2969,14 @@ async def _virtual_key_max_budget_alert_check(
         ) or litellm.default_key_max_budget_alert_emails
 
         if isinstance(alert_email_config, dict) and alert_email_config:
-            # New path: pass the map through, let the email handler decide what to fire
+            # New path: only create task if spend has crossed the lowest threshold
+            min_pct = min(
+                (int(k) for k in alert_email_config if k.isdigit()),
+                default=None,
+            )
+            if min_pct is None or valid_token.spend < valid_token.max_budget * (min_pct / 100.0):
+                return
+
             call_info = CallInfo(
                 token=valid_token.token,
                 spend=valid_token.spend,
