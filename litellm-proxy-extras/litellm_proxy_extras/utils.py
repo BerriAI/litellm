@@ -266,29 +266,32 @@ class ProxyExtrasDBManager:
         # 1. Generate migration SQL for the diff between DB and schema
         try:
             logger.info("Generating migration diff between DB and schema.prisma...")
-            with open(diff_sql_path, "w") as f:
-                subprocess.run(
-                    [
-                        _get_prisma_command(),
-                        "migrate",
-                        "diff",
-                        "--from-url",
-                        diff_url,
-                        "--to-schema-datamodel",
-                        schema_path,
-                        "--script",
-                    ],
-                    check=True,
-                    timeout=60,
-                    stdout=f,
-                    env=_get_prisma_env(),
-                )
+            result = subprocess.run(
+                [
+                    _get_prisma_command(),
+                    "migrate",
+                    "diff",
+                    "--from-url",
+                    diff_url,
+                    "--to-schema-datamodel",
+                    schema_path,
+                    "--script",
+                ],
+                check=True,
+                timeout=60,
+                capture_output=True,
+                text=True,
+                env=_get_prisma_env(),
+            )
+            # Only write the file when the diff command succeeds and has output
+            if result.stdout.strip():
+                diff_sql_path.write_text(result.stdout)
         except subprocess.CalledProcessError as e:
             logger.warning(f"Failed to generate migration diff: {e.stderr}")
         except subprocess.TimeoutExpired:
             logger.warning("Migration diff generation timed out.")
 
-        # check if the migration was created
+        # check if the migration was created (file only exists when diff succeeded and had output)
         if not diff_sql_path.exists():
             logger.warning(
                 "Migration diff was not created (prisma migrate diff failed — "
@@ -418,15 +421,10 @@ class ProxyExtrasDBManager:
 
                         logger.info("prisma migrate deploy completed")
 
-                        # Skip sanity check when deploy reports no pending migrations —
-                        # DB already matches schema, no drift to correct.
-                        if "No pending migrations to apply" in result.stdout:
-                            logger.info(
-                                "No pending migrations — skipping post-migration sanity check"
-                            )
-                            return True
-
-                        # Run sanity check to ensure DB matches schema
+                        # Always run the sanity check — even when deploy reports no
+                        # pending migrations. Guards against the "migration marked
+                        # applied but SQL never ran" scenario where the column is
+                        # missing from the DB but _prisma_migrations says it's done.
                         logger.info("Running post-migration sanity check...")
                         ProxyExtrasDBManager._resolve_all_migrations(
                             migrations_dir, schema_path, mark_all_applied=False

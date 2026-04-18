@@ -523,10 +523,28 @@ litellm_settings:
         - "requested_model"
 ```
 
+### Exclude Specific Labels
+
+Use `exclude_labels` to strip specific labels from metrics — useful for privacy (e.g. removing `end_user`) or reducing cardinality. `exclude_labels` applies after `include_labels` when both are specified.
+
+```yaml
+litellm_settings:
+  callbacks: ["prometheus"]
+  prometheus_metrics_config:
+    - group: "privacy_filtered"
+      metrics:
+        - "litellm_proxy_total_requests_metric"
+        - "litellm_requests_metric"
+      exclude_labels:
+        - "end_user"
+        - "api_key_hash"
+```
+
 **Configuration Structure:**
 - `group`: A descriptive name for organizing related metrics
 - `metrics`: List of metric names to include in this group  
 - `include_labels`: (Optional) List of labels to include for these metrics
+- `exclude_labels`: (Optional) List of labels to strip from these metrics (applied after `include_labels`)
 
 **Default Behavior**: If no `prometheus_metrics_config` is specified, all metrics are enabled with their default labels (backward compatible).
 
