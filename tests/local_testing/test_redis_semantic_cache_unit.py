@@ -9,7 +9,7 @@ Verifies that:
 import sys
 import os
 
-sys.path.insert(0, os.path.abspath("../.."))
+sys.path.insert(0, os.path.abspath("../..."))
 
 import pytest
 from unittest.mock import patch, MagicMock
@@ -29,18 +29,12 @@ class TestRedisSemanticCacheInitDegradation:
             ),
             patch("litellm.caching.redis_semantic_cache.SemanticCache"),
         ):
-            with pytest.raises(RuntimeError) as exc_info:
-                cache = RedisSemanticCache.__new__(RedisSemanticCache)
-                # Call only the vectorizer section by patching imports
-                cache.embedding_model = "text-embedding-ada-002"
-                cache.distance_threshold = 0.1
-                cache.similarity_threshold = 0.9
-
-                # Simulate the init path that wraps CustomTextVectorizer
-                from redisvl.utils.vectorize import CustomTextVectorizer  # noqa: F401
-
-        # Verify RuntimeError is raised (the patch above raises ValueError which
-        # gets wrapped). We test the wrapping logic directly below.
+            with pytest.raises(RuntimeError, match="embedding model validation failed"):
+                RedisSemanticCache(
+                    redis_url="redis://localhost:6379",
+                    similarity_threshold=0.9,
+                    embedding_model="text-embedding-ada-002",
+                )
 
     def test_runtime_error_message_contains_original_error(self):
         """RuntimeError message must include the original exception details."""
