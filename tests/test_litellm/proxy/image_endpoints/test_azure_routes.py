@@ -68,13 +68,16 @@ def client_no_auth():
     mock_edit = mock.AsyncMock(return_value=example_image_edit_result)
     mock_edit.__name__ = "aimage_edit"
 
-    with mock.patch(
-        "litellm.aimage_generation",
-        new_callable=lambda: mock_generation,
-    ) as patched_generation, mock.patch(
-        "litellm.aimage_edit",
-        new_callable=lambda: mock_edit,
-    ) as patched_edit:
+    with (
+        mock.patch(
+            "litellm.aimage_generation",
+            new_callable=lambda: mock_generation,
+        ) as patched_generation,
+        mock.patch(
+            "litellm.aimage_edit",
+            new_callable=lambda: mock_edit,
+        ) as patched_edit,
+    ):
         asyncio.run(initialize(config=config_fp, debug=True))
         client = TestClient(app)
         yield client, patched_generation, patched_edit

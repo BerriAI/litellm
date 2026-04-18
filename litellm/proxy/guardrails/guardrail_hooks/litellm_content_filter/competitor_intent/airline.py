@@ -159,9 +159,9 @@ class AirlineCompetitorIntentChecker(BaseCompetitorIntentChecker):
         if not merged.get("explicit_competitor_marker"):
             merged["explicit_competitor_marker"] = AIRLINE_EXPLICIT_COMPETITOR_MARKER
         if not merged.get("explicit_other_meaning_marker"):
-            merged[
-                "explicit_other_meaning_marker"
-            ] = AIRLINE_EXPLICIT_OTHER_MEANING_MARKER
+            merged["explicit_other_meaning_marker"] = (
+                AIRLINE_EXPLICIT_OTHER_MEANING_MARKER
+            )
         if not merged.get("domain_words"):
             merged["domain_words"] = ["airline", "airlines", "carrier"]
         if not merged.get("competitors"):
