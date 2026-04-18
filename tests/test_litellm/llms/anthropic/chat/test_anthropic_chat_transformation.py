@@ -3107,9 +3107,12 @@ def test_fast_mode_cost_calculation():
     base_prompt = 0.005
     base_completion = 0.025
 
-    with patch(
-        "litellm.llms.anthropic.cost_calculation.generic_cost_per_token"
-    ) as mock_cost, patch("litellm.get_model_info") as mock_info:
+    with (
+        patch(
+            "litellm.llms.anthropic.cost_calculation.generic_cost_per_token"
+        ) as mock_cost,
+        patch("litellm.get_model_info") as mock_info,
+    ):
         mock_cost.return_value = (base_prompt, base_completion)
         mock_info.return_value = {"provider_specific_entry": {"fast": 1.1, "us": 1.1}}
 
@@ -3146,9 +3149,12 @@ def test_fast_mode_with_inference_geo():
     base_prompt = 0.005
     base_completion = 0.025
 
-    with patch(
-        "litellm.llms.anthropic.cost_calculation.generic_cost_per_token"
-    ) as mock_cost, patch("litellm.get_model_info") as mock_info:
+    with (
+        patch(
+            "litellm.llms.anthropic.cost_calculation.generic_cost_per_token"
+        ) as mock_cost,
+        patch("litellm.get_model_info") as mock_info,
+    ):
         mock_cost.return_value = (base_prompt, base_completion)
         mock_info.return_value = {"provider_specific_entry": {"fast": 1.1, "us": 1.1}}
 
