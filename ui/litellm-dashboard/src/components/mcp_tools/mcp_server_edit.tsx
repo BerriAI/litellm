@@ -564,7 +564,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
         mcp_access_groups: accessGroups,
         alias: restValues.alias,
         // Include permission management fields
-        extra_headers: restValues.extra_headers?.length ? restValues.extra_headers : undefined,
+        extra_headers: restValues.extra_headers || [],
         allowed_tools: allowedTools.length > 0 ? allowedTools : null,
         tool_name_to_display_name: Object.keys(toolNameToDisplayName).length > 0 ? toolNameToDisplayName : null,
         tool_name_to_description: Object.keys(toolNameToDescription).length > 0 ? toolNameToDescription : null,
