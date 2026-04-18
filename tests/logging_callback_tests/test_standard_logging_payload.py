@@ -158,12 +158,15 @@ def test_get_additional_headers():
     additional_logging_headers = StandardLoggingPayloadSetup.get_additional_headers(
         additional_headers
     )
-    assert additional_logging_headers == {
-        "x_ratelimit_limit_requests": 2000,
-        "x_ratelimit_remaining_requests": 1999,
-        "x_ratelimit_limit_tokens": 160000,
-        "x_ratelimit_remaining_tokens": 160000,
-    }
+    # Typed rate-limit fields are coerced to int
+    assert additional_logging_headers is not None
+    assert additional_logging_headers.get("x_ratelimit_limit_requests") == 2000
+    assert additional_logging_headers.get("x_ratelimit_remaining_requests") == 1999
+    assert additional_logging_headers.get("x_ratelimit_limit_tokens") == 160000
+    assert additional_logging_headers.get("x_ratelimit_remaining_tokens") == 160000
+    # Provider-specific headers are preserved verbatim (not dropped)
+    assert additional_logging_headers.get("llm_provider-request-id") == "req_01F6CycZZPSHKRCCctcS1Vto"
+    assert additional_logging_headers.get("llm_provider-anthropic-ratelimit-requests-reset") == "2024-10-29T23:57:40Z"
 
 
 def all_fields_present(standard_logging_metadata: StandardLoggingMetadata):

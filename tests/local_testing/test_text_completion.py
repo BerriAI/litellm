@@ -4034,7 +4034,7 @@ def test_async_text_completion_together_ai():
     async def test_get_response():
         try:
             response = await litellm.atext_completion(
-                model="together_ai/Qwen/Qwen3.5-9B",
+                model="together_ai/Qwen/Qwen2.5-7B-Instruct-Turbo",
                 prompt="good morning",
                 max_tokens=10,
             )
