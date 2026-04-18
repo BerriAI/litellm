@@ -942,8 +942,8 @@ class VertexBase:
             # Final validation
             if _credentials.token is None or not isinstance(_credentials.token, str):
                 raise ValueError(
-                    "Could not resolve credentials token. Got: {}".format(
-                        _credentials.token
+                    "Could not resolve credentials token. Got None or non-string token (type={})".format(
+                        type(_credentials.token).__name__
                     )
                 )
             if project_id is None:
