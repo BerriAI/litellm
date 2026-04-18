@@ -3308,6 +3308,41 @@ export const keyAliasesCall = async (
   }
 };
 
+export interface keyModelResponse {
+  source: string;
+  models: string[];
+}
+
+export const keyModelCall = async (
+  accessToken: string,
+  key_id: string
+): Promise<keyModelResponse> => {
+
+  try {
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/key/${key_id}/models` : `/key/${key_id}/models`;
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    throw error;
+  }
+};
+
 export const userDailyActivityAggregatedCall = async (accessToken: string, startTime: Date, endTime: Date, userId: string | null = null) => {
   /**
    * Get aggregated daily user activity (no pagination)

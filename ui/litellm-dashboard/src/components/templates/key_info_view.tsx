@@ -23,6 +23,7 @@ import ObjectPermissionsView from "../object_permissions_view";
 import { RegenerateKeyModal } from "../organisms/RegenerateKeyModal";
 import { parseErrorMessage } from "../shared/errorUtils";
 import { KeyEditView } from "./key_edit_view";
+import KeyModelList from "../key_team_helpers/KeyModelList";
 
 interface KeyInfoViewProps {
   keyId: string;
@@ -488,22 +489,16 @@ export default function KeyInfoView({
                   <Text>RPM: {currentKeyData.rpm_limit !== null ? currentKeyData.rpm_limit : "Unlimited"}</Text>
                 </div>
               </Card>
-
-              <Card>
-                <Text>Models</Text>
-                <div className="mt-2 flex flex-wrap gap-2">
-                  {currentKeyData.models && currentKeyData.models.length > 0 ? (
-                    currentKeyData.models.map((model, index) => (
-                      <Badge key={index} color="red">
-                        {model}
-                      </Badge>
-                    ))
-                  ) : (
-                    <Text>No models specified</Text>
-                  )}
-                </div>
-              </Card>
-
+              {currentKeyData.models && currentKeyData.models.length > 0 ? (
+                <KeyModelList key_id={currentKeyData.token}/>
+              ) : (
+                <Card>
+                  <Text>Models</Text>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      <Text>No models specified</Text>
+                    </div>
+                </Card>
+              )}
               <Card>
                 <ObjectPermissionsView
                   objectPermission={currentKeyData.object_permission}

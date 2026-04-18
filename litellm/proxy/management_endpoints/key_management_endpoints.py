@@ -2799,6 +2799,88 @@ async def info_key_fn(
         raise handle_exception_on_proxy(e)
 
 
+@router.get(
+    "/key/{key_id}/models",
+    tags=["key management"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def key_resolved_models_fn(
+    key_id: str,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    
+    """
+    from litellm.proxy.proxy_server import (
+            llm_router,
+            prisma_client,
+        )
+
+    try:
+        if prisma_client is None:
+            raise Exception(
+                "Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
+            )
+
+        hashed_key = _hash_token_if_needed(token=key_id)
+        key_info = await prisma_client.db.litellm_verificationtoken.find_unique(
+            where={"token": hashed_key},  # type: ignore
+        )
+        if key_info is None:
+            raise ProxyException(
+                message="Key not found in database",
+                type=ProxyErrorTypes.not_found_error,
+                param="key",
+                code=status.HTTP_404_NOT_FOUND,
+            )
+
+        if (
+            await _can_user_query_key_info(
+                user_api_key_dict=user_api_key_dict,
+                key=key_id,
+                key_info=key_info,
+            )
+            is not True
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You are not allowed to access this key's info. Your role={}".format(
+                    user_api_key_dict.user_role
+                ),
+            )
+
+        key_models = list[str](key_info.models or [])
+        all_models: List[str] = []
+
+        if llm_router is not None:
+            all_models = llm_router.get_model_names()
+
+        source: str = SpecialModelNames.no_default_models.value
+        resolved: List[str] = key_models
+
+        #Team Models
+        if (SpecialModelNames.all_team_models.value in key_models):
+            if key_info.team_id is not None:
+                source = SpecialModelNames.all_team_models.value
+                team_row = await prisma_client.db.litellm_teamtable.find_unique(
+                    where={"team_id": key_info.team_id},
+                )
+                if team_row is not None and team_row.models is not None:
+                    resolved = list[str](team_row.models)
+            else:
+                source = SpecialModelNames.all_team_models.value
+                resolved = all_models
+        
+        #Proxy Models
+        if SpecialModelNames.all_proxy_models.value in key_models or SpecialModelNames.all_proxy_models.value in resolved:
+            source = SpecialModelNames.all_proxy_models.value
+            resolved = all_models
+
+        return {"models": resolved, "source": source}
+    except Exception as e:
+        raise handle_exception_on_proxy(e)
+
+
 def _check_model_access_group(
     models: Optional[List[str]], llm_router: Optional[Router], premium_user: bool
 ) -> Literal[True]:
