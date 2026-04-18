@@ -8,6 +8,7 @@ The function keeps high-relevance and recent context, replaces low-relevance con
 
 ```python
 import litellm
+from litellm.types.utils import CallTypes
 
 messages = [
     {"role": "system", "content": "You are a coding assistant."},
@@ -19,7 +20,7 @@ messages = [
 compressed = litellm.compress(
     messages=messages,
     model="gpt-4o",
-    input_type="openai_chat_completions",
+    call_type=CallTypes.completion,
     compression_trigger=1000,
     compression_target=500,
 )
@@ -46,7 +47,7 @@ response = litellm.completion(
 
 - `messages` (`List[dict]`, required): input conversation messages
 - `model` (`str`, required): model name used for token counting
-- `input_type` (`Literal["anthropic_messages", "openai_chat_completions"]`, required): input message schema
+- `call_type` (`CallTypes`, default `CallTypes.completion`): the LiteLLM call type whose message schema these messages follow. Supported values: `CallTypes.completion` / `CallTypes.acompletion` (OpenAI chat-completions shape) and `CallTypes.anthropic_messages` (Anthropic Messages shape)
 - `compression_trigger` (`int`, default `200000`): compress only if input token count exceeds this
 - `compression_target` (`Optional[int]`, default `70% of compression_trigger`): desired post-compression token budget
 - `embedding_model` (`Optional[str]`): if set, combines BM25 + embedding relevance scoring

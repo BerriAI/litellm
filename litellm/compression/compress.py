@@ -3,7 +3,7 @@ Main compress() function — normalizes input messages, orchestrates BM25/embedd
 scoring, message stubbing, and retrieval tool injection.
 """
 
-from typing import Any, Dict, List, Optional, Set, Tuple, cast
+from typing import Any, Dict, List, Optional, Set, Tuple, Union, cast
 
 from litellm.caching.dual_cache import DualCache
 from litellm.compression.message_stubbing import (
@@ -14,32 +14,55 @@ from litellm.compression.message_stubbing import (
 from litellm.compression.retrieval_tool import build_retrieval_tool
 from litellm.compression.scoring.bm25 import bm25_score_messages
 from litellm.litellm_core_utils.token_counter import token_counter
-from litellm.types.compression import CompressedResult, CompressionInputType
+from litellm.types.compression import CompressedResult
+from litellm.types.utils import CallTypes
+
+# CallTypes that produce Anthropic-shaped messages (structured content blocks).
+# Everything else is treated as OpenAI chat-completions shape.
+_ANTHROPIC_CALL_TYPES = frozenset({CallTypes.anthropic_messages.value})
+# CallTypes that are valid targets for compression.  Compression operates on
+# message-shaped inputs, so we only accept call types whose payload is a list
+# of role/content messages.
+_SUPPORTED_CALL_TYPES = frozenset(
+    {
+        CallTypes.completion.value,
+        CallTypes.acompletion.value,
+        CallTypes.anthropic_messages.value,
+    }
+)
 
 
-def _build_retrieval_tools(keys: List[str], input_type: CompressionInputType) -> List[dict]:
+def _normalize_call_type(call_type: Union[CallTypes, str]) -> str:
+    """Return the string value for a ``CallTypes`` enum or a raw string."""
+    if isinstance(call_type, CallTypes):
+        return call_type.value
+    return call_type
+
+
+def _is_anthropic_call_type(call_type: str) -> bool:
+    return call_type in _ANTHROPIC_CALL_TYPES
+
+
+def _build_retrieval_tools(keys: List[str], call_type: str) -> List[dict]:
     """
     Build retrieval tool definitions in the target request schema.
 
-    - OpenAI chat completions: keep OpenAI function-tool schema.
-    - Anthropic messages: remap OpenAI function-tool schema to Anthropic custom tool.
+    - Chat-completions call types: keep OpenAI function-tool schema.
+    - Anthropic messages call type: remap to Anthropic's custom tool schema.
     """
     if not keys:
         return []
 
     openai_tools = [build_retrieval_tool(keys)]
-    if input_type == "openai_chat_completions":
+    if not _is_anthropic_call_type(call_type):
         return openai_tools
 
-    if input_type == "anthropic_messages":
-        # Lazy import to avoid introducing provider transformation imports
-        # during module import for non-Anthropic call paths.
-        from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+    # Lazy import to avoid introducing provider transformation imports during
+    # module import for non-Anthropic call paths.
+    from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 
-        anthropic_tools, _mcp_servers = AnthropicConfig()._map_tools(openai_tools)
-        return cast(List[dict], anthropic_tools)
-
-    return openai_tools
+    anthropic_tools, _mcp_servers = AnthropicConfig()._map_tools(openai_tools)
+    return cast(List[dict], anthropic_tools)
 
 
 def _content_to_text(content: Any) -> str:
@@ -74,7 +97,7 @@ def _content_to_text(content: Any) -> str:
 
 def _normalize_messages_for_compression(
     messages: List[dict],
-    input_type: CompressionInputType,
+    call_type: str,
 ) -> Tuple[List[dict], List[dict]]:
     """
     Normalize each original message to a text-surrogate content for scoring.
@@ -82,10 +105,10 @@ def _normalize_messages_for_compression(
     Returns:
         (normalized_messages, original_messages_copy)
     """
-    if input_type not in ("anthropic_messages", "openai_chat_completions"):
+    if call_type not in _SUPPORTED_CALL_TYPES:
         raise ValueError(
-            f"Unsupported input_type={input_type}. "
-            "Expected 'anthropic_messages' or 'openai_chat_completions'."
+            f"Unsupported call_type={call_type!r} for compression. "
+            f"Expected one of: {sorted(_SUPPORTED_CALL_TYPES)}."
         )
 
     original_messages: List[Dict[str, Any]] = [dict(m) for m in messages]
@@ -324,7 +347,7 @@ def _get_dropped_tool_span_indices(
 def compress(
     messages: List[dict],
     model: str,
-    input_type: CompressionInputType = "openai_chat_completions",
+    call_type: Union[CallTypes, str] = CallTypes.completion,
     compression_trigger: int = 200_000,
     compression_target: Optional[int] = None,
     embedding_model: Optional[str] = None,
@@ -343,10 +366,12 @@ def compress(
     Parameters:
         messages: The conversation messages to (potentially) compress.
         model: The LLM model name — used for token counting.
-        input_type: Message format of input messages. Must be either:
-            - "anthropic_messages"
-            - "openai_chat_completions"
-            Defaults to "openai_chat_completions" for backward compatibility.
+        call_type: The LiteLLM call type whose message schema these messages
+            follow.  Supported values:
+            - ``CallTypes.completion`` / ``CallTypes.acompletion`` — OpenAI
+              chat-completions shape (default)
+            - ``CallTypes.anthropic_messages`` — Anthropic Messages shape
+              (structured content blocks + atomic tool exchanges)
         compression_trigger: Only compress if input exceeds this token count.
         compression_target: Target token count after compression.
             Defaults to ``compression_trigger // 2``.
@@ -361,9 +386,10 @@ def compress(
         A ``CompressedResult`` dict containing compressed messages, token
         counts, a cache of original content, and the retrieval tool definition.
     """
+    call_type_str = _normalize_call_type(call_type)
     normalized_messages, original_messages = _normalize_messages_for_compression(
         messages=messages,
-        input_type=input_type,
+        call_type=call_type_str,
     )
 
     if compression_target is None:
@@ -413,9 +439,9 @@ def compress(
     kept_indices: Set[int] = set(protected_indices)
 
     tool_exchange_spans: List[Set[int]] = []
-    if input_type == "anthropic_messages":
-        tool_exchange_spans, tool_sequence_error = _extract_anthropic_tool_exchange_spans(
-            original_messages
+    if _is_anthropic_call_type(call_type_str):
+        tool_exchange_spans, tool_sequence_error = (
+            _extract_anthropic_tool_exchange_spans(original_messages)
         )
         if tool_sequence_error is not None:
             return CompressedResult(
@@ -466,7 +492,7 @@ def compress(
             compressed_messages.append(stub_message(msg, key))
 
     # Build retrieval tool in the target request schema
-    tools = _build_retrieval_tools(list(cache.keys()), input_type=input_type)
+    tools = _build_retrieval_tools(list(cache.keys()), call_type=call_type_str)
 
     compressed_tokens = token_counter(
         model=model,

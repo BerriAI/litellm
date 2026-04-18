@@ -99,7 +99,7 @@ class CompressionInterceptionLogger(CustomLogger):
         compressed = compress(  # type: ignore
             messages=messages,
             model=model,
-            input_type="anthropic_messages",
+            call_type=CallTypes.anthropic_messages,
             compression_trigger=self.compression_trigger,
             compression_target=self.compression_target,
             embedding_model=self.embedding_model,

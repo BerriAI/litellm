@@ -13,9 +13,10 @@ from litellm.compression.scoring.embedding_scorer import embedding_score_message
 from litellm.compression.content_detection import detect_content_type
 from litellm.compression.message_stubbing import extract_key, stub_message
 from litellm.compression.retrieval_tool import build_retrieval_tool
+from litellm.types.utils import CallTypes
 
-INPUT_TYPE = "openai_chat_completions"
-ANTHROPIC_INPUT_TYPE = "anthropic_messages"
+CALL_TYPE = CallTypes.completion
+ANTHROPIC_CALL_TYPE = CallTypes.anthropic_messages
 
 
 # ---------------------------------------------------------------------------
@@ -153,7 +154,7 @@ def test_retrieval_tool_description_lists_keys():
 
 def test_compress_below_trigger_passthrough():
     messages = [{"role": "user", "content": "hello"}]
-    result = litellm.compress(messages, model="gpt-4o", input_type=INPUT_TYPE)
+    result = litellm.compress(messages, model="gpt-4o", call_type=CALL_TYPE)
     assert result["messages"] == messages
     assert result["cache"] == {}
     assert result["tools"] == []
@@ -182,7 +183,7 @@ def test_compress_above_trigger():
     result = litellm.compress(
         big_messages,
         model="gpt-4o",
-        input_type=INPUT_TYPE,
+        call_type=CALL_TYPE,
         compression_trigger=1000,
         compression_target=500,
     )
@@ -226,7 +227,7 @@ def test_compress_anthropic_list_content_is_boundary_stable():
     result = litellm.compress(
         messages=messages,
         model="claude-sonnet-4-20250514",
-        input_type=ANTHROPIC_INPUT_TYPE,
+        call_type=ANTHROPIC_CALL_TYPE,
         compression_trigger=1000,
         compression_target=500,
     )
@@ -248,7 +249,7 @@ def test_compress_preserves_system_message():
         {"role": "user", "content": "Fix the bug"},
     ]
     result = litellm.compress(
-        messages, model="gpt-4o", input_type=INPUT_TYPE, compression_trigger=1000
+        messages, model="gpt-4o", call_type=CALL_TYPE, compression_trigger=1000
     )
     assert result["messages"][0]["role"] == "system"
     assert "System prompt" in result["messages"][0]["content"]
@@ -260,7 +261,7 @@ def test_compress_preserves_last_user_message():
         {"role": "user", "content": "Fix the bug in auth.py"},
     ]
     result = litellm.compress(
-        messages, model="gpt-4o", input_type=INPUT_TYPE, compression_trigger=1000
+        messages, model="gpt-4o", call_type=CALL_TYPE, compression_trigger=1000
     )
     last_user = [m for m in result["messages"] if m["role"] == "user"][-1]
     assert "Fix the bug in auth.py" in last_user["content"]
@@ -273,7 +274,7 @@ def test_compress_preserves_last_assistant_message():
         {"role": "user", "content": "Now fix the bug"},
     ]
     result = litellm.compress(
-        messages, model="gpt-4o", input_type=INPUT_TYPE, compression_trigger=1000
+        messages, model="gpt-4o", call_type=CALL_TYPE, compression_trigger=1000
     )
     assistant_msgs = [m for m in result["messages"] if m["role"] == "assistant"]
     assert len(assistant_msgs) >= 1
@@ -288,7 +289,7 @@ def test_cache_keys_match_stubs():
         {"role": "user", "content": "Fix it"},
     ]
     result = litellm.compress(
-        messages, model="gpt-4o", input_type=INPUT_TYPE, compression_trigger=1000
+        messages, model="gpt-4o", call_type=CALL_TYPE, compression_trigger=1000
     )
     if result["tools"]:
         tool_desc = result["tools"][0]["function"]["description"]
@@ -303,7 +304,7 @@ def test_compress_default_target():
         {"role": "user", "content": "query"},
     ]
     result = litellm.compress(
-        messages, model="gpt-4o", input_type=INPUT_TYPE, compression_trigger=2000
+        messages, model="gpt-4o", call_type=CALL_TYPE, compression_trigger=2000
     )
     # Should have compressed — target = 1000
     assert result["compressed_tokens"] <= result["original_tokens"]
@@ -345,7 +346,7 @@ def test_compress_nested_tool_result_extracts_text_only():
     result = litellm.compress(
         messages=messages,
         model="claude-sonnet-4-20250514",
-        input_type=ANTHROPIC_INPUT_TYPE,
+        call_type=ANTHROPIC_CALL_TYPE,
         compression_trigger=500,
         compression_target=100,
     )
@@ -356,7 +357,7 @@ def test_compress_nested_tool_result_extracts_text_only():
     assert "https://example.com/top.png" not in cached_text
 
 
-def test_compress_default_input_type_is_openai_chat_completions():
+def test_compress_default_call_type_is_completion():
     result = litellm.compress(
         messages=[
             {"role": "user", "content": "Large context " * 4000},
@@ -393,7 +394,7 @@ def test_compress_forwards_embedding_model_params(monkeypatch):
             {"role": "user", "content": "Fix auth"},
         ],
         model="gpt-4o",
-        input_type=INPUT_TYPE,
+        call_type=CALL_TYPE,
         compression_trigger=1000,
         embedding_model="text-embedding-3-small",
         embedding_model_params={"api_base": "https://example-embeddings.test"},
@@ -451,7 +452,7 @@ def test_embedding_scorer():
             {"role": "user", "content": "Fix auth"},
         ],
         model="gpt-4o",
-        input_type=INPUT_TYPE,
+        call_type=CALL_TYPE,
         compression_trigger=1000,
         embedding_model="text-embedding-3-small",
     )
@@ -473,7 +474,7 @@ def test_simple_compression(final_user_message, expected_content):
         {"role": "user", "content": final_user_message},
     ]
     result = litellm.compress(
-        messages, model="gpt-4o", input_type=INPUT_TYPE, compression_trigger=1000
+        messages, model="gpt-4o", call_type=CALL_TYPE, compression_trigger=1000
     )
     if expected_content == "Unrelated cooking recipes ":
         assert "Unrelated cooking recipes " in result["messages"][1]["content"]
@@ -511,7 +512,9 @@ def test_compress_anthropic_drops_irrelevant_tool_exchange_span(monkeypatch):
             return 1
         return 10
 
-    monkeypatch.setattr(compress_module, "bm25_score_messages", fake_bm25_score_messages)
+    monkeypatch.setattr(
+        compress_module, "bm25_score_messages", fake_bm25_score_messages
+    )
     monkeypatch.setattr(compress_module, "token_counter", fake_token_counter)
 
     messages = [
@@ -544,7 +547,7 @@ def test_compress_anthropic_drops_irrelevant_tool_exchange_span(monkeypatch):
     result = litellm.compress(
         messages=messages,
         model="claude-sonnet-4-20250514",
-        input_type=ANTHROPIC_INPUT_TYPE,
+        call_type=ANTHROPIC_CALL_TYPE,
         compression_trigger=100,
         compression_target=280,
     )
@@ -584,7 +587,9 @@ def test_compress_anthropic_keeps_relevant_tool_exchange_span(monkeypatch):
             return 1
         return 10
 
-    monkeypatch.setattr(compress_module, "bm25_score_messages", fake_bm25_score_messages)
+    monkeypatch.setattr(
+        compress_module, "bm25_score_messages", fake_bm25_score_messages
+    )
     monkeypatch.setattr(compress_module, "token_counter", fake_token_counter)
 
     messages = [
@@ -617,7 +622,7 @@ def test_compress_anthropic_keeps_relevant_tool_exchange_span(monkeypatch):
     result = litellm.compress(
         messages=messages,
         model="claude-sonnet-4-20250514",
-        input_type=ANTHROPIC_INPUT_TYPE,
+        call_type=ANTHROPIC_CALL_TYPE,
         compression_trigger=100,
         compression_target=280,
     )
@@ -651,7 +656,7 @@ def test_compress_anthropic_malformed_tool_sequence_passes_through():
     result = litellm.compress(
         messages=messages,
         model="claude-sonnet-4-20250514",
-        input_type=ANTHROPIC_INPUT_TYPE,
+        call_type=ANTHROPIC_CALL_TYPE,
         compression_trigger=100,
         compression_target=280,
     )
