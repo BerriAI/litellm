@@ -451,6 +451,60 @@ def test_forward_headers_from_request_x_pass_prefix():
     assert "x-pass-custom-header" not in result
 
 
+def test_forward_headers_from_request_protected_headers_not_overwritten():
+    """
+    Test that x-pass- headers whose stripped names resolve to credential or
+    protocol-level header names are silently dropped and do not overwrite
+    values already present in the outbound headers dict.
+    """
+    from litellm.passthrough.utils import BasePassthroughUtils
+
+    proxy_headers = {
+        "authorization": "Bearer proxy-upstream-key",
+        "api-key": "proxy-azure-key",
+        "x-api-key": "proxy-anthropic-key",
+        "x-goog-api-key": "proxy-google-key",
+    }
+
+    request_headers = {
+        "x-pass-authorization": "Bearer attacker-key",
+        "x-pass-api-key": "attacker-azure-key",
+        "x-pass-x-api-key": "attacker-anthropic-key",
+        "x-pass-x-goog-api-key": "attacker-google-key",
+        "x-pass-host": "evil.example.com",
+        "x-pass-content-length": "0",
+        "x-pass-x-amz-security-token": "attacker-aws-token",
+        # Legitimate x-pass- header that should still be forwarded
+        "x-pass-anthropic-beta": "context-1m-2025-08-07",
+        "content-type": "application/json",
+    }
+
+    result = BasePassthroughUtils.forward_headers_from_request(
+        request_headers=request_headers,
+        headers=proxy_headers.copy(),
+        forward_headers=False,
+    )
+
+    # Protected headers must retain the proxy-configured values
+    assert result["authorization"] == "Bearer proxy-upstream-key"
+    assert result["api-key"] == "proxy-azure-key"
+    assert result["x-api-key"] == "proxy-anthropic-key"
+    assert result["x-goog-api-key"] == "proxy-google-key"
+
+    # Protocol headers must not be injected
+    assert "host" not in result
+    assert "content-length" not in result
+
+    # AWS SigV4 headers must not be injected
+    assert "x-amz-security-token" not in result
+
+    # Legitimate non-protected x-pass- header still forwarded
+    assert result["anthropic-beta"] == "context-1m-2025-08-07"
+
+    # Header name must be normalized to lowercase in output
+    assert "Anthropic-Beta" not in result
+
+
 @pytest.mark.asyncio
 async def test_vertex_passthrough_custom_model_name_replaced_in_url():
     """
