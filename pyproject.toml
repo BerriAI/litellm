@@ -22,7 +22,6 @@ dependencies = [
     "aiohttp==3.13.3",
     "pydantic==2.12.5",
     "jsonschema==4.23.0",
-    "granian==2.5.7",
 ]
 
 [project.urls]
@@ -36,6 +35,7 @@ Documentation = "https://docs.litellm.ai"
 proxy = [
     "gunicorn==23.0.0",
     "uvicorn==0.33.0",
+    "granian==2.5.7",
     "uvloop==0.21.0; sys_platform != 'win32'",
     "fastapi==0.124.4",
     "backoff==2.2.1",
