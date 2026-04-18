@@ -4,6 +4,7 @@ import time
 from datetime import datetime, timezone
 from typing import Any, List, Literal, Optional, Union
 
+import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import (
     LiteLLM_BudgetTableFull,
@@ -165,15 +166,34 @@ class ResetBudgetJob:
                     table_name="budget",
                 )
 
+                budget_ids_to_reset = [
+                    budget.budget_id
+                    for budget in budgets_to_reset
+                    if budget.budget_id is not None
+                ]
+
                 endusers_to_reset = await self.prisma_client.get_data(
                     table_name="enduser",
                     query_type="find_all",
-                    budget_id_list=[
-                        budget.budget_id
-                        for budget in budgets_to_reset
-                        if budget.budget_id is not None
-                    ],
+                    budget_id_list=budget_ids_to_reset,
                 )
+
+                # Also reset end users with no budget_id (NULL) who use the
+                # default budget via litellm.max_end_user_budget_id.  These
+                # users are enforced in-memory but never had budget_id
+                # persisted, so the query above misses them.
+                if (
+                    litellm.max_end_user_budget_id is not None
+                    and litellm.max_end_user_budget_id in budget_ids_to_reset
+                ):
+                    default_budget_endusers = (
+                        await self._get_endusers_with_no_budget_id()
+                    )
+                    if default_budget_endusers:
+                        if endusers_to_reset is None:
+                            endusers_to_reset = default_budget_endusers
+                        else:
+                            endusers_to_reset.extend(default_budget_endusers)
 
                 await self.reset_budget_for_litellm_team_members(
                     budgets_to_reset=budgets_to_reset
@@ -281,6 +301,23 @@ class ResetBudgetJob:
                 )
             )
             verbose_proxy_logger.exception("Failed to reset budget for endusers: %s", e)
+
+    async def _get_endusers_with_no_budget_id(
+        self,
+    ) -> List[LiteLLM_EndUserTable]:
+        """
+        Fetch end users that have no explicit budget_id set (NULL) and have
+        accumulated spend > 0.  These are implicitly-created end users that
+        rely on the default budget (litellm.max_end_user_budget_id) applied
+        in-memory during auth checks.
+        """
+        rows = await self.prisma_client.db.litellm_endusertable.find_many(
+            where={
+                "budget_id": None,
+                "spend": {"gt": 0},
+            },
+        )
+        return [LiteLLM_EndUserTable(**row.dict()) for row in rows]
 
     async def reset_budget_for_litellm_keys(self):
         """
