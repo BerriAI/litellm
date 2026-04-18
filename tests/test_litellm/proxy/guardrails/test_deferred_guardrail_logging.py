@@ -734,9 +734,12 @@ class TestDeferredStreamingClosure:
             merged["_merged_marker"] = True
             return merged
 
-        with patch("litellm.callbacks", [guardrail]), patch(
-            "litellm.proxy.utils._check_and_merge_model_level_guardrails",
-            side_effect=mock_merge,
+        with (
+            patch("litellm.callbacks", [guardrail]),
+            patch(
+                "litellm.proxy.utils._check_and_merge_model_level_guardrails",
+                side_effect=mock_merge,
+            ),
         ):
             await ProxyBaseLLMRequestProcessing._run_deferred_stream_guardrails(
                 captured_data=captured_data,
@@ -795,9 +798,12 @@ class TestDeferredStreamingClosure:
             merged["_merged_marker"] = True
             return merged
 
-        with patch("litellm.callbacks", [guardrail_a, guardrail_b]), patch(
-            "litellm.proxy.utils._check_and_merge_model_level_guardrails",
-            side_effect=mock_merge,
+        with (
+            patch("litellm.callbacks", [guardrail_a, guardrail_b]),
+            patch(
+                "litellm.proxy.utils._check_and_merge_model_level_guardrails",
+                side_effect=mock_merge,
+            ),
         ):
             await ProxyBaseLLMRequestProcessing._run_deferred_stream_guardrails(
                 captured_data=captured_data,

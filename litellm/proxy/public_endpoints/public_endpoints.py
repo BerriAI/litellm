@@ -248,6 +248,52 @@ async def get_mcp_servers():
 
 
 @router.get(
+    "/public/skill_hub",
+    tags=["public", "Claude Code Marketplace"],
+)
+async def public_skill_hub():
+    """Return enabled (public) Claude Code skills — no auth required."""
+    from litellm.proxy.anthropic_endpoints.claude_code_endpoints.claude_code_marketplace import (
+        _get_prisma_client,
+    )
+    from litellm.types.proxy.claude_code_endpoints import (
+        ListPluginsResponse,
+        PluginListItem,
+    )
+
+    try:
+        prisma_client = await _get_prisma_client()
+        plugins = await prisma_client.db.litellm_claudecodeplugintable.find_many(
+            where={"enabled": True}
+        )
+        items = []
+        for plugin in plugins:
+            raw = plugin.manifest_json or {}
+            manifest = json.loads(raw) if isinstance(raw, str) else raw
+            items.append(
+                PluginListItem(
+                    id=plugin.id,
+                    name=plugin.name,
+                    enabled=plugin.enabled,
+                    created_at=str(plugin.created_at) if plugin.created_at else None,
+                    updated_at=str(plugin.updated_at) if plugin.updated_at else None,
+                    source=manifest.get("source", {}),
+                    description=manifest.get("description"),
+                    version=manifest.get("version"),
+                    category=manifest.get("category"),
+                    keywords=manifest.get("keywords"),
+                    author=manifest.get("author"),
+                    homepage=manifest.get("homepage"),
+                    domain=manifest.get("domain"),
+                    namespace=manifest.get("namespace"),
+                )
+            )
+        return ListPluginsResponse(plugins=items, count=len(items))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get(
     "/public/model_hub/info",
     tags=["public", "model management"],
     response_model=PublicModelHubInfo,

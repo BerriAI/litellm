@@ -149,11 +149,12 @@ async def test_get_prompt_info_by_base_id():
 
     # Mock In-Memory Registry
     # Patch prisma_client to None to avoid leaking state from other tests
-    with patch(
-        "litellm.proxy.proxy_server.prisma_client", None
-    ), patch(
-        "litellm.proxy.prompts.prompt_registry.IN_MEMORY_PROMPT_REGISTRY"
-    ) as mock_registry:
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", None),
+        patch(
+            "litellm.proxy.prompts.prompt_registry.IN_MEMORY_PROMPT_REGISTRY"
+        ) as mock_registry,
+    ):
         # Setup mocks behavior
         prompt_spec_v3 = PromptSpec(
             prompt_id="test_prompt.v3",

@@ -99,10 +99,10 @@ class TestHostedVLLMEmbeddingE2E:
         """Test embedding with API key authentication."""
         api_base = os.getenv("HOSTED_VLLM_API_BASE")
         api_key = os.getenv("HOSTED_VLLM_API_KEY")
-        
+
         if not api_base:
             pytest.skip("HOSTED_VLLM_API_BASE environment variable not set")
-        
+
         if not api_key:
             pytest.skip("HOSTED_VLLM_API_KEY environment variable not set")
 
