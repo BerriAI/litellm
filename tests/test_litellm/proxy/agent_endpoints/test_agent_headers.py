@@ -19,6 +19,7 @@ import pytest
 # Helper: build a minimal mock agent
 # ---------------------------------------------------------------------------
 
+
 def _make_mock_agent(
     static_headers=None,
     extra_headers=None,
@@ -65,6 +66,7 @@ def _make_a2a_types_module():
             SendMessageRequest,
             SendStreamingMessageRequest,
         )
+
         mock_a2a_types = MagicMock()
         mock_a2a_types.MessageSendParams = MessageSendParams
         mock_a2a_types.SendMessageRequest = SendMessageRequest
@@ -112,38 +114,49 @@ async def _invoke(mock_agent, mock_request, mock_asend_message):
         "result": {"status": "success"},
     }
 
-    with patch(
-        "litellm.proxy.agent_endpoints.a2a_endpoints._get_agent",
-        return_value=mock_agent,
-    ), patch(
-        "litellm.proxy.agent_endpoints.auth.agent_permission_handler.AgentRequestHandler.is_agent_allowed",
-        new_callable=AsyncMock,
-        return_value=True,
-    ), patch(
-        "litellm.proxy.common_request_processing.add_litellm_data_to_request",
-        side_effect=lambda data, **kw: data,
-    ), patch(
-        "litellm.a2a_protocol.asend_message",
-        new_callable=AsyncMock,
-        return_value=mock_response,
-    ) as mock_asend, patch(
-        "litellm.a2a_protocol.create_a2a_client",
-        new_callable=AsyncMock,
-    ), patch(
-        "litellm.proxy.proxy_server.general_settings",
-        {},
-    ), patch(
-        "litellm.proxy.proxy_server.proxy_config",
-        MagicMock(),
-    ), patch(
-        "litellm.proxy.proxy_server.version",
-        "1.0.0",
-    ), patch.dict(
-        sys.modules,
-        {"a2a": MagicMock(), "a2a.types": mock_a2a_types},
-    ), patch(
-        "litellm.a2a_protocol.main.A2A_SDK_AVAILABLE",
-        True,
+    with (
+        patch(
+            "litellm.proxy.agent_endpoints.a2a_endpoints._get_agent",
+            return_value=mock_agent,
+        ),
+        patch(
+            "litellm.proxy.agent_endpoints.auth.agent_permission_handler.AgentRequestHandler.is_agent_allowed",
+            new_callable=AsyncMock,
+            return_value=True,
+        ),
+        patch(
+            "litellm.proxy.common_request_processing.add_litellm_data_to_request",
+            side_effect=lambda data, **kw: data,
+        ),
+        patch(
+            "litellm.a2a_protocol.asend_message",
+            new_callable=AsyncMock,
+            return_value=mock_response,
+        ) as mock_asend,
+        patch(
+            "litellm.a2a_protocol.create_a2a_client",
+            new_callable=AsyncMock,
+        ),
+        patch(
+            "litellm.proxy.proxy_server.general_settings",
+            {},
+        ),
+        patch(
+            "litellm.proxy.proxy_server.proxy_config",
+            MagicMock(),
+        ),
+        patch(
+            "litellm.proxy.proxy_server.version",
+            "1.0.0",
+        ),
+        patch.dict(
+            sys.modules,
+            {"a2a": MagicMock(), "a2a.types": mock_a2a_types},
+        ),
+        patch(
+            "litellm.a2a_protocol.main.A2A_SDK_AVAILABLE",
+            True,
+        ),
     ):
         from litellm.proxy.agent_endpoints.a2a_endpoints import invoke_agent_a2a
 
@@ -164,9 +177,7 @@ async def _invoke(mock_agent, mock_request, mock_asend_message):
 @pytest.mark.asyncio
 async def test_static_headers_forwarded():
     """Static headers configured on the agent are passed to asend_message."""
-    mock_agent = _make_mock_agent(
-        static_headers={"Authorization": "Bearer token123"}
-    )
+    mock_agent = _make_mock_agent(static_headers={"Authorization": "Bearer token123"})
     mock_request = _make_mock_request()
 
     mock_asend = await _invoke(mock_agent, mock_request, None)
