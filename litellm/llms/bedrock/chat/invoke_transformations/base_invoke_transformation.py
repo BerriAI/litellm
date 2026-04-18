@@ -182,9 +182,9 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
                 config = litellm.AmazonCohereConfig.get_config()
                 self._apply_config_to_params(config, inference_params)
                 if stream is True:
-                    inference_params[
-                        "stream"
-                    ] = True  # cohere requires stream = True in inference params
+                    inference_params["stream"] = (
+                        True  # cohere requires stream = True in inference params
+                    )
                 request_data = {"prompt": prompt, **inference_params}
         elif provider == "anthropic":
             transformed_request = (
