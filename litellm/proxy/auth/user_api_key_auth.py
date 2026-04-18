@@ -1537,6 +1537,9 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
             valid_token_dict = valid_token.model_dump(exclude_none=True)
             valid_token_dict.pop("token", None)
 
+            if _team_obj is not None and _team_obj.budget_reset_at is not None:
+                valid_token_dict["team_budget_reset_at"] = _team_obj.budget_reset_at
+
             if _end_user_object is not None:
                 valid_token_dict.update(end_user_params)
                 valid_token_dict[
@@ -1660,6 +1663,7 @@ async def _return_user_api_key_auth_obj(
             user_email=user_obj.user_email,
             user_spend=getattr(user_obj, "spend", None),
             user_max_budget=getattr(user_obj, "max_budget", None),
+            user_budget_reset_at=getattr(user_obj, "budget_reset_at", None),
         )
     if user_obj is not None and _is_user_proxy_admin(user_obj=user_obj):
         user_api_key_kwargs.update(
@@ -2011,5 +2015,10 @@ async def _run_post_custom_auth_checks(
             skip_budget_checks=False,
             project_object=_project_obj,
         )
+
+    if _team_obj is not None and _team_obj.budget_reset_at is not None:
+        valid_token.team_budget_reset_at = _team_obj.budget_reset_at
+    if user_object is not None and user_object.budget_reset_at is not None:
+        valid_token.user_budget_reset_at = user_object.budget_reset_at
 
     return valid_token
