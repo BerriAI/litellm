@@ -32,6 +32,7 @@ def decode_managed_container_id_for_request(
 
     return original_container_id, custom_llm_provider, litellm_params
 
+
 T = TypeVar("T")
 
 
@@ -129,14 +130,14 @@ class ContainerRequestUtils:
         litellm_metadata = litellm_metadata or {}
         model_info: Dict[str, Any] = litellm_metadata.get("model_info", {}) or {}
         model_id = model_info.get("id")
-        
+
         # Check if we should encode based on routing metadata
         should_encode = False
-        
+
         # Case 1: Router/proxy usage (model_id from router)
         if model_id is not None:
             should_encode = True
-        
+
         # Case 2: target_model_names in extra_body (model-specific routing)
         if extra_body and "target_model_names" in extra_body:
             should_encode = True
@@ -148,7 +149,7 @@ class ContainerRequestUtils:
                     model_id = target_models.split(",")[0].strip()
                 elif isinstance(target_models, list) and len(target_models) > 0:
                     model_id = str(target_models[0]).strip()
-        
+
         # Only encode if we have routing metadata
         if should_encode and response_obj and hasattr(response_obj, "id"):
             encoded_id = ResponsesAPIRequestUtils._build_container_id(

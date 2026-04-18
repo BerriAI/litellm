@@ -22,7 +22,7 @@ import litellm
 import litellm.litellm_core_utils
 import litellm.types
 import litellm.types.utils
-from litellm._logging import verbose_logger
+from litellm._logging import _redact_string, verbose_logger
 from litellm.anthropic_beta_headers_manager import update_headers_with_filtered_beta
 from litellm.constants import REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
 from litellm.litellm_core_utils.realtime_streaming import RealTimeStreaming
@@ -1816,6 +1816,73 @@ class BaseLLMHTTPHandler:
             logging_obj=logging_obj,
         )
 
+    async def _async_post_anthropic_messages_with_http_error_retry(
+        self,
+        async_httpx_client: AsyncHTTPHandler,
+        request_url: str,
+        headers: dict,
+        signed_json_body: Optional[bytes],
+        request_body: dict,
+        stream: bool,
+        logging_obj: LiteLLMLoggingObj,
+        provider_config: BaseAnthropicMessagesConfig,
+        litellm_params: GenericLiteLLMParams,
+        api_key: Optional[str],
+        model: str,
+    ) -> httpx.Response:
+        max_attempts = max(
+            provider_config.max_retry_on_anthropic_messages_http_error, 1
+        )
+        litellm_params_dict = dict(litellm_params)
+        optional_params_dict = dict(litellm_params)
+        for attempt_idx in range(max_attempts):
+            try:
+                response = await async_httpx_client.post(
+                    url=request_url,
+                    headers=headers,
+                    data=signed_json_body or json.dumps(request_body),
+                    stream=stream or False,
+                    logging_obj=logging_obj,
+                )
+                response.raise_for_status()
+                return response
+            except httpx.HTTPStatusError as e:
+                hit_max_attempt = attempt_idx + 1 == max_attempts
+                should_retry = (
+                    provider_config.should_retry_anthropic_messages_on_http_error(
+                        e=e, litellm_params=litellm_params_dict
+                    )
+                )
+                if should_retry and not hit_max_attempt:
+                    verbose_logger.debug(
+                        "Anthropic /v1/messages: invalid thinking signature; "
+                        "stripping thinking blocks and retrying (attempt %s/%s).",
+                        attempt_idx + 2,
+                        max_attempts,
+                    )
+                    provider_config.transform_anthropic_messages_request_on_http_error(
+                        e=e, request_data=request_body
+                    )
+                    headers, signed_json_body = provider_config.sign_request(
+                        headers=headers,
+                        optional_params=optional_params_dict,
+                        request_data=request_body,
+                        api_base=request_url,
+                        api_key=api_key,
+                        stream=stream,
+                        fake_stream=False,
+                        model=model,
+                    )
+                    logging_obj.model_call_details.update(request_body)
+                    continue
+                raise self._handle_error(e=e, provider_config=provider_config)
+            except Exception as e:
+                raise self._handle_error(e=e, provider_config=provider_config)
+
+        raise RuntimeError(
+            "unreachable: anthropic messages HTTP retry loop exited without return"
+        )
+
     async def async_anthropic_messages_handler(
         self,
         model: str,
@@ -1955,19 +2022,19 @@ class BaseLLMHTTPHandler:
             },
         )
 
-        try:
-            response = await async_httpx_client.post(
-                url=request_url,
-                headers=headers,
-                data=signed_json_body or json.dumps(request_body),
-                stream=stream or False,
-                logging_obj=logging_obj,
-            )
-            response.raise_for_status()
-        except Exception as e:
-            raise self._handle_error(
-                e=e, provider_config=anthropic_messages_provider_config
-            )
+        response = await self._async_post_anthropic_messages_with_http_error_retry(
+            async_httpx_client=async_httpx_client,
+            request_url=request_url,
+            headers=headers,
+            signed_json_body=signed_json_body,
+            request_body=request_body,
+            stream=stream or False,
+            logging_obj=logging_obj,
+            provider_config=anthropic_messages_provider_config,
+            litellm_params=litellm_params,
+            api_key=api_key,
+            model=model,
+        )
 
         # used for logging + cost tracking
         logging_obj.model_call_details["httpx_response"] = response
@@ -4496,9 +4563,9 @@ class BaseLLMHTTPHandler:
                         # Second: Execute agentic loop
                         # Add custom_llm_provider to kwargs so the agentic loop can reconstruct the full model name
                         kwargs_with_provider = kwargs.copy() if kwargs else {}
-                        kwargs_with_provider[
-                            "custom_llm_provider"
-                        ] = custom_llm_provider
+                        kwargs_with_provider["custom_llm_provider"] = (
+                            custom_llm_provider
+                        )
                         agentic_response = await callback.async_run_agentic_loop(
                             tools=tool_calls,
                             model=model,
@@ -4614,9 +4681,9 @@ class BaseLLMHTTPHandler:
                         # Second: Execute agentic loop
                         # Add custom_llm_provider to kwargs so the agentic loop can reconstruct the full model name
                         kwargs_with_provider = kwargs.copy() if kwargs else {}
-                        kwargs_with_provider[
-                            "custom_llm_provider"
-                        ] = custom_llm_provider
+                        kwargs_with_provider["custom_llm_provider"] = (
+                            custom_llm_provider
+                        )
                         agentic_response = (
                             await callback.async_run_chat_completion_agentic_loop(
                                 tools=tool_calls,
@@ -4789,12 +4856,12 @@ class BaseLLMHTTPHandler:
 
         except websockets.exceptions.InvalidStatusCode as e:  # type: ignore
             verbose_logger.exception(f"Error connecting to backend: {e}")
-            await websocket.close(code=e.status_code, reason=str(e))
+            await websocket.close(code=e.status_code, reason=_redact_string(str(e)))
         except Exception as e:
             verbose_logger.exception(f"Error connecting to backend: {e}")
             try:
                 await websocket.close(
-                    code=1011, reason=f"Internal server error: {str(e)}"
+                    code=1011, reason=_redact_string(f"Internal server error: {str(e)}")
                 )
             except RuntimeError as close_error:
                 if "already completed" in str(close_error) or "websocket.close" in str(
@@ -5076,12 +5143,12 @@ class BaseLLMHTTPHandler:
 
         except websockets.exceptions.InvalidStatusCode as e:  # type: ignore
             verbose_logger.exception(f"Error connecting to responses WS backend: {e}")
-            await websocket.close(code=e.status_code, reason=str(e))
+            await websocket.close(code=e.status_code, reason=_redact_string(str(e)))
         except Exception as e:
             verbose_logger.exception(f"Error in responses WS: {e}")
             try:
                 await websocket.close(
-                    code=1011, reason=f"Internal server error: {str(e)}"
+                    code=1011, reason=_redact_string(f"Internal server error: {str(e)}")
                 )
             except RuntimeError as close_error:
                 if "already completed" in str(close_error) or "websocket.close" in str(
@@ -5110,7 +5177,10 @@ class BaseLLMHTTPHandler:
         _is_async: bool = False,
         fake_stream: bool = False,
         litellm_metadata: Optional[Dict[str, Any]] = None,
-    ) -> Union[ImageResponse, Coroutine[Any, Any, ImageResponse],]:
+    ) -> Union[
+        ImageResponse,
+        Coroutine[Any, Any, ImageResponse],
+    ]:
         """
 
         Handles image edit requests.
@@ -5322,7 +5392,10 @@ class BaseLLMHTTPHandler:
         fake_stream: bool = False,
         litellm_metadata: Optional[Dict[str, Any]] = None,
         api_key: Optional[str] = None,
-    ) -> Union[ImageResponse, Coroutine[Any, Any, ImageResponse],]:
+    ) -> Union[
+        ImageResponse,
+        Coroutine[Any, Any, ImageResponse],
+    ]:
         """
         Handles image generation requests.
         When _is_async=True, returns a coroutine instead of making the call directly.
@@ -5562,7 +5635,10 @@ class BaseLLMHTTPHandler:
         fake_stream: bool = False,
         litellm_metadata: Optional[Dict[str, Any]] = None,
         api_key: Optional[str] = None,
-    ) -> Union[VideoObject, Coroutine[Any, Any, VideoObject],]:
+    ) -> Union[
+        VideoObject,
+        Coroutine[Any, Any, VideoObject],
+    ]:
         """
         Handles video generation requests.
         When _is_async=True, returns a coroutine instead of making the call directly.

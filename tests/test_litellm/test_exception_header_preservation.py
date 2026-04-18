@@ -217,7 +217,9 @@ class TestExceptionAttributes:
         MidStreamFallbackError should preserve the original status code and keep
         message/request/response fields consistent after super().__init__().
         """
-        original_req = httpx.Request("POST", "https://api.openai.com/v1/chat/completions")
+        original_req = httpx.Request(
+            "POST", "https://api.openai.com/v1/chat/completions"
+        )
         original_resp = httpx.Response(status_code=429, request=original_req)
 
         rate_limit_error = RateLimitError(
