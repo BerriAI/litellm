@@ -378,45 +378,60 @@ async def _upsert_budget_and_membership(
         )
         return
 
-    # create a new budget
-    create_data: Dict[str, Any] = {
-        "created_by": user_api_key_dict.user_id or "",
-        "updated_by": user_api_key_dict.user_id or "",
-    }
-    if max_budget is not None:
-        create_data["max_budget"] = max_budget
-    if tpm_limit is not None:
-        create_data["tpm_limit"] = tpm_limit
-    if rpm_limit is not None:
-        create_data["rpm_limit"] = rpm_limit
+    if existing_budget_id is not None:
+        # update the existing budget row in-place to avoid orphaning it
+        update_data: Dict[str, Any] = {
+            "updated_by": user_api_key_dict.user_id or "",
+        }
+        if max_budget is not None:
+            update_data["max_budget"] = max_budget
+        if tpm_limit is not None:
+            update_data["tpm_limit"] = tpm_limit
+        if rpm_limit is not None:
+            update_data["rpm_limit"] = rpm_limit
+        await tx.litellm_budgettable.update(
+            where={"budget_id": existing_budget_id},
+            data=update_data,
+        )
+    else:
+        # create a new budget and link it to the team membership
+        create_data: Dict[str, Any] = {
+            "created_by": user_api_key_dict.user_id or "",
+            "updated_by": user_api_key_dict.user_id or "",
+        }
+        if max_budget is not None:
+            create_data["max_budget"] = max_budget
+        if tpm_limit is not None:
+            create_data["tpm_limit"] = tpm_limit
+        if rpm_limit is not None:
+            create_data["rpm_limit"] = rpm_limit
 
-    new_budget = await tx.litellm_budgettable.create(
-        data=create_data,
-        include={"team_membership": True},
-    )
-    # upsert the team membership with the new/updated budget
-    await tx.litellm_teammembership.upsert(
-        where={
-            "user_id_team_id": {
-                "user_id": user_id,
-                "team_id": team_id,
-            }
-        },
-        data={
-            "create": {
-                "user_id": user_id,
-                "team_id": team_id,
-                "litellm_budget_table": {
-                    "connect": {"budget_id": new_budget.budget_id},
+        new_budget = await tx.litellm_budgettable.create(
+            data=create_data,
+            include={"team_membership": True},
+        )
+        await tx.litellm_teammembership.upsert(
+            where={
+                "user_id_team_id": {
+                    "user_id": user_id,
+                    "team_id": team_id,
+                }
+            },
+            data={
+                "create": {
+                    "user_id": user_id,
+                    "team_id": team_id,
+                    "litellm_budget_table": {
+                        "connect": {"budget_id": new_budget.budget_id},
+                    },
+                },
+                "update": {
+                    "litellm_budget_table": {
+                        "connect": {"budget_id": new_budget.budget_id},
+                    },
                 },
             },
-            "update": {
-                "litellm_budget_table": {
-                    "connect": {"budget_id": new_budget.budget_id},
-                },
-            },
-        },
-    )
+        )
 
 
 def _update_metadata_field(updated_kv: dict, field_name: str) -> None:
