@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import Request
+from starlette.datastructures import Headers
 
 import litellm
 from litellm.proxy._types import TeamCallbackMetadata, UserAPIKeyAuth
@@ -23,6 +24,7 @@ from litellm.proxy.litellm_pre_call_utils import (
     add_guardrails_from_policy_engine,
     add_litellm_data_to_request,
     check_if_token_is_service_account,
+    clean_headers,
 )
 from litellm.types.utils import CredentialItem
 
@@ -3063,3 +3065,79 @@ def test_resolve_provider_hint_from_model_name():
         "azure/gpt-4", config, None, pre_alias_model_name="gpt-4", provider="azure"
     )
     assert result == "azure-cred"
+
+
+def test_clean_headers_preserves_x_api_key_when_byok_enabled():
+    """
+    Regression test: when forward_llm_provider_auth_headers=True,
+    clean_headers() must preserve the client-supplied x-api-key header
+    so it can be forwarded to the upstream Anthropic API (BYOK flow).
+    """
+    headers = Headers(
+        {
+            "x-api-key": "sk-ant-api03-client-key",
+            "x-litellm-api-key": "sk-proxy-virtual-key",
+            "content-type": "application/json",
+        }
+    )
+
+    result = clean_headers(
+        headers=headers,
+        litellm_key_header_name="x-litellm-api-key",
+        forward_llm_provider_auth_headers=True,
+        authenticated_with_header="x-litellm-api-key",
+    )
+
+    # x-api-key must be preserved for BYOK
+    assert result.get("x-api-key") == "sk-ant-api03-client-key"
+    # x-litellm-api-key must NOT leak to the upstream
+    assert "x-litellm-api-key" not in result
+
+
+def test_clean_headers_strips_x_api_key_when_byok_disabled():
+    """
+    Regression test: with forward_llm_provider_auth_headers=False (default),
+    x-api-key must be stripped so proxy-configured keys are not overridden
+    by a client-supplied one.
+    """
+    headers = Headers(
+        {
+            "x-api-key": "sk-ant-api03-client-key",
+            "x-litellm-api-key": "sk-proxy-virtual-key",
+        }
+    )
+
+    result = clean_headers(
+        headers=headers,
+        litellm_key_header_name="x-litellm-api-key",
+        forward_llm_provider_auth_headers=False,
+        authenticated_with_header="x-litellm-api-key",
+    )
+
+    assert "x-api-key" not in result
+
+
+def test_clean_headers_strips_x_api_key_when_byok_enabled_but_x_api_key_was_auth_header():
+    """
+    Anti-replay regression: even when forward_llm_provider_auth_headers=True,
+    if the client authenticated TO the proxy using x-api-key (i.e., the proxy
+    key arrived as x-api-key), clean_headers() must NOT forward that header
+    upstream. Otherwise a proxy-auth key would leak to the LLM provider.
+    """
+    headers = Headers(
+        {
+            "x-api-key": "sk-proxy-auth-key-masquerading-as-anthropic-key",
+            "content-type": "application/json",
+        }
+    )
+
+    result = clean_headers(
+        headers=headers,
+        litellm_key_header_name="x-litellm-api-key",
+        forward_llm_provider_auth_headers=True,
+        authenticated_with_header="x-api-key",
+    )
+
+    # Even with BYOK enabled, x-api-key must be stripped when it was used
+    # as the LiteLLM auth header (anti-replay guard).
+    assert "x-api-key" not in result
