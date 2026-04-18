@@ -61,12 +61,11 @@ class ContextCachingEndpoints(VertexBase):
         Returns
             token, url
         """
+        auth_header: Optional[str]
         if custom_llm_provider == "gemini":
-            auth_header = None
+            auth_header = {"x-goog-api-key": gemini_api_key}  # type: ignore[assignment]
             endpoint = "cachedContents"
-            url = "https://generativelanguage.googleapis.com/v1beta/{}?key={}".format(
-                endpoint, gemini_api_key
-            )
+            url = "https://generativelanguage.googleapis.com/v1beta/{}".format(endpoint)
         elif custom_llm_provider == "vertex_ai":
             auth_header = vertex_auth_header
             endpoint = "cachedContents"
@@ -93,9 +92,9 @@ class ContextCachingEndpoints(VertexBase):
             model=model,
             vertex_project=vertex_project,
             vertex_location=vertex_location,
-            vertex_api_version="v1beta1"
-            if custom_llm_provider == "vertex_ai_beta"
-            else "v1",
+            vertex_api_version=(
+                "v1beta1" if custom_llm_provider == "vertex_ai_beta" else "v1"
+            ),
         )
 
     def check_cache(
@@ -353,7 +352,9 @@ class ContextCachingEndpoints(VertexBase):
         headers = {
             "Content-Type": "application/json",
         }
-        if token is not None:
+        if isinstance(token, dict):
+            headers.update(token)
+        elif token is not None:
             headers["Authorization"] = f"Bearer {token}"
         if extra_headers is not None:
             headers.update(extra_headers)
@@ -501,7 +502,9 @@ class ContextCachingEndpoints(VertexBase):
         headers = {
             "Content-Type": "application/json",
         }
-        if token is not None:
+        if isinstance(token, dict):
+            headers.update(token)
+        elif token is not None:
             headers["Authorization"] = f"Bearer {token}"
         if extra_headers is not None:
             headers.update(extra_headers)
