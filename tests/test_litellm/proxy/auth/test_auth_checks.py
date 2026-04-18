@@ -1545,6 +1545,114 @@ async def test_virtual_key_max_budget_alert_check_scenarios(
 
 
 @pytest.mark.asyncio
+async def test_virtual_key_max_budget_alert_check_with_multi_threshold_map():
+    """Test that max_budget_alert_emails map from metadata is attached to CallInfo on the new path"""
+    alert_triggered = False
+    captured_call_info = None
+
+    class MockProxyLogging:
+        async def budget_alerts(self, type, user_info):
+            nonlocal alert_triggered, captured_call_info
+            alert_triggered = True
+            captured_call_info = user_info
+
+    alert_config = {
+        "50": ["finance@co.com"],
+        "75": ["finance@co.com", "bu_lead@co.com"],
+    }
+    valid_token = UserAPIKeyAuth(
+        token="test-token",
+        spend=30.0,
+        max_budget=100.0,
+        user_id="test-user",
+        key_alias="test-key",
+        metadata={"max_budget_alert_emails": alert_config},
+    )
+    user_obj = LiteLLM_UserTable(
+        user_id="test-user",
+        user_email="owner@co.com",
+        max_budget=None,
+    )
+
+    await _virtual_key_max_budget_alert_check(
+        valid_token=valid_token,
+        proxy_logging_obj=MockProxyLogging(),
+        user_obj=user_obj,
+    )
+    await asyncio.sleep(0.1)
+
+    assert alert_triggered is True
+    assert captured_call_info is not None
+    assert captured_call_info.max_budget_alert_emails == alert_config
+    assert captured_call_info.user_email == "owner@co.com"
+    assert captured_call_info.event_group == Litellm_EntityType.KEY
+
+
+@pytest.mark.asyncio
+async def test_virtual_key_max_budget_alert_check_old_path_no_map():
+    """Test that old single-threshold path is used when no max_budget_alert_emails in metadata"""
+    alert_triggered = False
+    captured_call_info = None
+
+    class MockProxyLogging:
+        async def budget_alerts(self, type, user_info):
+            nonlocal alert_triggered, captured_call_info
+            alert_triggered = True
+            captured_call_info = user_info
+
+    # spend=90 is above 80% of 100 → old path should fire
+    valid_token = UserAPIKeyAuth(
+        token="test-token",
+        spend=90.0,
+        max_budget=100.0,
+        user_id="test-user",
+        key_alias="test-key",
+        metadata={},
+    )
+
+    await _virtual_key_max_budget_alert_check(
+        valid_token=valid_token,
+        proxy_logging_obj=MockProxyLogging(),
+        user_obj=None,
+    )
+    await asyncio.sleep(0.1)
+
+    assert alert_triggered is True
+    assert captured_call_info is not None
+    assert captured_call_info.max_budget_alert_emails is None
+
+
+@pytest.mark.asyncio
+async def test_virtual_key_max_budget_alert_check_old_path_below_threshold_no_alert():
+    """Test that old path does NOT fire when spend is below 80% and no map is set"""
+    alert_triggered = False
+
+    class MockProxyLogging:
+        async def budget_alerts(self, type, user_info):
+            nonlocal alert_triggered
+            alert_triggered = True
+
+    # spend=50 is below 80% of 100 → should NOT fire
+    valid_token = UserAPIKeyAuth(
+        token="test-token",
+        spend=50.0,
+        max_budget=100.0,
+        user_id="test-user",
+        key_alias="test-key",
+        metadata={},
+    )
+
+    await _virtual_key_max_budget_alert_check(
+        valid_token=valid_token,
+        proxy_logging_obj=MockProxyLogging(),
+        user_obj=None,
+    )
+    await asyncio.sleep(0.1)
+
+    assert alert_triggered is False
+
+
+@pytest.mark.asyncio
 async def test_get_fuzzy_user_object_case_insensitive_email():
     """Test that _get_fuzzy_user_object uses case-insensitive email lookup"""
     # Setup mock Prisma client
