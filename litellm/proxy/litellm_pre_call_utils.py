@@ -930,6 +930,22 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
     from litellm.proxy.proxy_server import llm_router, premium_user
     from litellm.types.proxy.litellm_pre_call_utils import RedactedDict, SecretFields
 
+    # Strip internal-only keys from user input before the proxy sets its own.
+    # These keys are injected by the proxy itself below — user-supplied values
+    # must not be trusted.
+    for _internal_key in (
+        "proxy_server_request",
+        "standard_logging_object",
+        "secret_fields",
+    ):
+        data.pop(_internal_key, None)
+    # Strip spoofable auth metadata from user-supplied metadata dict
+    _user_metadata = data.get("metadata")
+    if isinstance(_user_metadata, dict):
+        for _mk in list(_user_metadata.keys()):
+            if _mk.startswith("user_api_key_"):
+                del _user_metadata[_mk]
+
     _raw_headers: Dict[str, str] = RedactedDict(_safe_get_request_headers(request))
 
     forward_llm_auth = False

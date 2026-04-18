@@ -834,6 +834,8 @@ async def new_team(  # noqa: PLR0915
     - access_group_ids: Optional[List[str]] - List of access group IDs to associate with the team. Access groups define which models the team can access. Example - ["access_group_1", "access_group_2"].
     - enforced_file_expires_after: Optional[dict] - Enforced file expiration policy for the team. Keys created under this team will inherit this policy for file uploads. Example - {"anchor": "created_at", "days": 30}.
     - enforced_batch_output_expires_after: Optional[dict] - Enforced batch output file expiration policy for the team. Keys created under this team will inherit this policy for batch output files. Example - {"anchor": "created_at", "days": 30}.
+    - budget_limits: Optional[list] - List of concurrent budget windows for the team. Each window specifies a budget_limit, time_period, and optional budget_duration. Example - [{"budget_limit": 10.0, "time_period": "1d"}, {"budget_limit": 50.0, "time_period": "7d"}].
+    - default_team_member_models: Optional[List[str]] - Default models assigned to new team members when they join this team. Must be a subset of the team's models.
 
     Returns:
     - team_id: (str) Unique team id - used for tracking spend across multiple keys for same team id.
@@ -1076,6 +1078,19 @@ async def new_team(  # noqa: PLR0915
             complete_team_data.budget_reset_at = get_budget_reset_time(
                 budget_duration=complete_team_data.budget_duration,
             )
+
+        # If budget_limits is set, initialize reset_at for each window
+        if complete_team_data.budget_limits:
+            from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
+
+            initialized_windows = []
+            for window in complete_team_data.budget_limits:
+                w = window if isinstance(window, dict) else window.model_dump()
+                w["reset_at"] = get_budget_reset_time(
+                    budget_duration=w["budget_duration"]
+                ).isoformat()
+                initialized_windows.append(w)
+            complete_team_data.budget_limits = initialized_windows  # type: ignore[assignment]
 
         ## Add Team Member Budget Table
         members_with_roles: List[Member] = []
@@ -1430,6 +1445,8 @@ async def update_team(  # noqa: PLR0915
     - access_group_ids: Optional[List[str]] - List of access group IDs to associate with the team. Access groups define which models the team can access. Example - ["access_group_1", "access_group_2"].
     - enforced_file_expires_after: Optional[dict] - Enforced file expiration policy for the team. Keys created under this team will inherit this policy for file uploads. Example - {"anchor": "created_at", "days": 30}.
     - enforced_batch_output_expires_after: Optional[dict] - Enforced batch output file expiration policy for the team. Keys created under this team will inherit this policy for batch output files. Example - {"anchor": "created_at", "days": 30}.
+    - budget_limits: Optional[list] - List of concurrent budget windows for the team. Each window specifies a budget_limit, time_period, and optional budget_duration. Example - [{"budget_limit": 10.0, "time_period": "1d"}, {"budget_limit": 50.0, "time_period": "7d"}].
+    - default_team_member_models: Optional[List[str]] - Default models assigned to new team members when they join this team. Must be a subset of the team's models.
 
     ```
     curl --location 'http://0.0.0.0:4000/team/update' \
@@ -1712,6 +1729,18 @@ def _set_budget_reset_at(data: UpdateTeamRequest, updated_kv: dict) -> None:
         reset_at = get_budget_reset_time(budget_duration=data.budget_duration)
         updated_kv["budget_reset_at"] = reset_at
 
+    if data.budget_limits is not None and len(data.budget_limits) > 0:
+        from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
+
+        initialized_windows = []
+        for window in data.budget_limits:
+            w = window if isinstance(window, dict) else window.model_dump()
+            w["reset_at"] = get_budget_reset_time(
+                budget_duration=w["budget_duration"]
+            ).isoformat()
+            initialized_windows.append(w)
+        updated_kv["budget_limits"] = json.dumps(initialized_windows)
+
 
 async def handle_update_object_permission(
     data_json: dict, existing_team_row: LiteLLM_TeamTable
@@ -1883,6 +1912,11 @@ async def _process_team_members(
         else None
     )
 
+    # Resolve allowed_models: explicit request value, or fall back to team's default_team_member_models
+    member_allowed_models = data.allowed_models
+    if member_allowed_models is None and complete_team_data.default_team_member_models:
+        member_allowed_models = complete_team_data.default_team_member_models
+
     if isinstance(data.member, Member):
         try:
             updated_user, updated_tm = await add_new_member(
@@ -1893,6 +1927,7 @@ async def _process_team_members(
                 litellm_proxy_admin_name=litellm_proxy_admin_name,
                 team_id=data.team_id,
                 default_team_budget_id=default_team_budget_id,
+                allowed_models=member_allowed_models,
             )
         except Exception as e:
             raise HTTPException(
@@ -1917,6 +1952,7 @@ async def _process_team_members(
                     litellm_proxy_admin_name=litellm_proxy_admin_name,
                     team_id=data.team_id,
                     default_team_budget_id=default_team_budget_id,
+                    allowed_models=member_allowed_models,
                 )
             except Exception as e:
                 raise HTTPException(
@@ -2554,6 +2590,7 @@ async def team_member_update(
             user_api_key_dict=user_api_key_dict,
             tpm_limit=data.tpm_limit,
             rpm_limit=data.rpm_limit,
+            allowed_models=data.allowed_models,
         )
 
     ### update team member role
@@ -2586,6 +2623,7 @@ async def team_member_update(
         max_budget_in_team=data.max_budget_in_team,
         tpm_limit=data.tpm_limit,
         rpm_limit=data.rpm_limit,
+        allowed_models=data.allowed_models,
     )
 
 
@@ -2949,7 +2987,13 @@ def _transform_teams_to_deleted_records(
             if json_field in record and record[json_field] is not None:
                 record[json_field] = json.dumps(record[json_field])
 
-        for rel_key in ("litellm_model_table", "object_permission", "id"):
+        for rel_key in (
+            "litellm_model_table",
+            "object_permission",
+            "id",
+            "budget_limits",  # not in LiteLLM_DeletedTeamTable schema
+            "default_team_member_models",  # not in LiteLLM_DeletedTeamTable schema
+        ):
             record.pop(rel_key, None)
 
         records.append(record)
@@ -3463,7 +3507,7 @@ async def _build_team_list_where_conditions(
             user_object_correct_type = await get_user_object(
                 user_id=user_id,
                 prisma_client=prisma_client,
-                user_api_key_cache=user_api_key_cache,
+                user_api_key_cache=user_api_key_cache,  # type: ignore[arg-type]
                 user_id_upsert=False,
                 proxy_logging_obj=proxy_logging_obj,
             )

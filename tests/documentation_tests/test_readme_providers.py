@@ -20,6 +20,7 @@ EXCLUDED_PROVIDERS = {
     "vertex_ai_beta",  # beta variant, not needed in main table
 }
 
+
 def get_enum_providers():
     """
     Get all provider values from LlmProviders enum, excluding internal variants.
@@ -35,7 +36,7 @@ def get_enum_providers():
 def get_readme_providers():
     """
     Extract provider slugs from README.md provider table.
-    
+
     Looks for provider slugs in backticks within parentheses, e.g.:
     [OpenAI (`openai`)](url) -> extracts "openai"
     """
@@ -72,7 +73,7 @@ def get_readme_providers():
 def get_readme_provider_names():
     """
     Extract provider display names from README.md provider table in order.
-    
+
     Returns a list of provider names as they appear in the table.
     """
     provider_names = []
@@ -91,15 +92,18 @@ def get_readme_provider_names():
             table_content = providers_section.group(1)
             # Extract provider names from table rows that start with |
             # Split by lines and process each line
-            for line in table_content.split('\n'):
+            for line in table_content.split("\n"):
                 # Only process lines that are table rows (start with |)
-                if line.strip().startswith('|') and '[' in line:
+                if line.strip().startswith("|") and "[" in line:
                     # Extract provider name from: | [Provider Name (...)](...) |
-                    match = re.search(r'\|\s*\[([^\]]+)\]\(', line)
+                    match = re.search(r"\|\s*\[([^\]]+)\]\(", line)
                     if match:
                         provider_name = match.group(1)
                         # Skip header row and separator row
-                        if provider_name != "Provider" and not provider_name.startswith('-'):
+                        if (
+                            provider_name != "Provider"
+                            and not provider_name.startswith("-")
+                        ):
                             provider_names.append(provider_name)
         else:
             raise Exception("Could not find 'Supported Providers' section in README.md")
@@ -115,7 +119,7 @@ def get_readme_provider_names():
 def test_all_providers_documented():
     """
     Test that all providers in LlmProviders enum are documented in README.md.
-    
+
     Verifies that provider slugs in the enum match the slugs shown in backticks
     in the README provider table.
     """
@@ -135,7 +139,9 @@ def test_all_providers_documented():
             f"Example: [Provider Name (`slug`)](url)"
         )
     else:
-        print(f"\n✓ All {len(enum_providers)} provider slugs are documented in README.md")
+        print(
+            f"\n✓ All {len(enum_providers)} provider slugs are documented in README.md"
+        )
 
 
 def test_providers_alphabetically_ordered():
@@ -143,25 +149,23 @@ def test_providers_alphabetically_ordered():
     Test that providers in README.md are listed in alphabetical order.
     """
     provider_names = get_readme_provider_names()
-    
+
     if not provider_names:
         raise AssertionError("No provider names found in README.md")
-    
+
     # Create a sorted version for comparison
     sorted_names = sorted(provider_names, key=str.lower)
-    
+
     print(f"\nFound {len(provider_names)} providers in README.md")
-    
+
     # Check if the list is alphabetically ordered
     out_of_order = []
     for i, (actual, expected) in enumerate(zip(provider_names, sorted_names)):
         if actual != expected:
-            out_of_order.append({
-                "position": i + 1,
-                "actual": actual,
-                "expected": expected
-            })
-    
+            out_of_order.append(
+                {"position": i + 1, "actual": actual, "expected": expected}
+            )
+
     if out_of_order:
         error_msg = "\nProviders are not in alphabetical order:\n"
         for item in out_of_order[:10]:  # Show first 10 issues
@@ -176,4 +180,3 @@ def test_providers_alphabetically_ordered():
 if __name__ == "__main__":
     test_all_providers_documented()
     test_providers_alphabetically_ordered()
-

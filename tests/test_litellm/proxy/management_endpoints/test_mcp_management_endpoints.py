@@ -679,12 +679,15 @@ class TestListMCPServers:
             return_value=[server_1, server_2]
         )
 
-        with patch(
-            "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager",
-            mock_manager,
-        ), patch(
-            "litellm.proxy.management_endpoints.mcp_management_endpoints.build_effective_auth_contexts",
-            AsyncMock(return_value=[mock_user_auth]),
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager",
+                mock_manager,
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.build_effective_auth_contexts",
+                AsyncMock(return_value=[mock_user_auth]),
+            ),
         ):
             from litellm.proxy.management_endpoints.mcp_management_endpoints import (
                 fetch_all_mcp_servers,
@@ -831,7 +834,9 @@ class TestListMCPServers:
 
         mock_manager = MagicMock()
         mock_manager.get_mcp_server_by_id = MagicMock(
-            side_effect=lambda sid: config_server if sid == "serper_custom_dev" else None
+            side_effect=lambda sid: (
+                config_server if sid == "serper_custom_dev" else None
+            )
         )
         mock_manager.get_mcp_server_by_name = MagicMock(return_value=None)
         mock_manager._build_mcp_server_table = MagicMock(
@@ -969,7 +974,9 @@ class TestListMCPServers:
 
         mock_manager = MagicMock()
         mock_manager.get_mcp_server_by_id = MagicMock(
-            side_effect=lambda sid: config_server if sid == "restricted_server" else None
+            side_effect=lambda sid: (
+                config_server if sid == "restricted_server" else None
+            )
         )
         mock_manager.get_mcp_server_by_name = MagicMock(return_value=None)
         mock_manager._build_mcp_server_table = MagicMock(
@@ -1041,7 +1048,9 @@ class TestListMCPServers:
 
         mock_manager = MagicMock()
         mock_manager.get_mcp_server_by_id = MagicMock(
-            side_effect=lambda sid: config_server if sid == "allowed_config_server" else None
+            side_effect=lambda sid: (
+                config_server if sid == "allowed_config_server" else None
+            )
         )
         mock_manager.get_mcp_server_by_name = MagicMock(return_value=None)
         mock_manager._build_mcp_server_table = MagicMock(
@@ -2418,7 +2427,9 @@ async def test_store_mcp_oauth_user_credential_returns_status():
         ),
         patch(
             "litellm.proxy.management_endpoints.mcp_management_endpoints.get_mcp_server",
-            new=AsyncMock(return_value=generate_mock_mcp_server_db_record(server_id=server_id)),
+            new=AsyncMock(
+                return_value=generate_mock_mcp_server_db_record(server_id=server_id)
+            ),
         ),
         patch(
             "litellm.proxy.management_endpoints.mcp_management_endpoints.store_user_oauth_credential",
@@ -2509,7 +2520,9 @@ async def test_list_mcp_user_credentials_batch_server_fetch():
             "server_id": server_id,
         }
     ]
-    mock_server = generate_mock_mcp_server_db_record(server_id=server_id, alias="My Server")
+    mock_server = generate_mock_mcp_server_db_record(
+        server_id=server_id, alias="My Server"
+    )
     # get_mcp_servers (batch) should be called once; get_mcp_server (single) must not be called.
     batch_mock = AsyncMock(return_value=[mock_server])
     single_mock = AsyncMock(return_value=mock_server)
