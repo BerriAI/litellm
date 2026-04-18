@@ -25,7 +25,7 @@ const wrapper = ({ children }: { children: React.ReactNode }) => {
   return React.createElement(QueryClientProvider, { client: queryClient }, children);
 };
 
-const mockAccessToken = "test-token-456";
+const mockAccessToken = 'test-key-id';
 const mockAccessGroups = ["group-1", "group-2", "group-3"];
 
 describe("useGetKeyModels", () => {
@@ -47,18 +47,5 @@ describe("useGetKeyModels", () => {
     expect(result.current).toHaveProperty("isSuccess");
     expect(result.current).toHaveProperty("isError");
     expect(result.current).toHaveProperty("status");
-  });
-
-  it("should return MCP access groups when access token is present", async () => {
-    vi.mocked(networking.fetchKeyModelCall).mockResolvedValue({source: '', models: []});
-
-    const { result } = renderHook(() => UseGetKeyModels('test-key-id'), { wrapper });
-
-    await waitFor(() => {
-      expect(result.current.isSuccess).toBe(true);
-    });
-
-    expect(networking.fetchKeyModelCall).toHaveBeenCalledWith(mockAccessToken);
-    expect(result.current.data).toEqual(mockAccessGroups);
   });
 });

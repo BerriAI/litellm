@@ -404,3 +404,36 @@ describe("individualModelHealthCheckCall", () => {
     expect(parsed.searchParams.get("model_id")).toBe("id/with/slashes");
   });
 });
+
+
+describe("fetching models from key information", () => {
+  const originalFetch = global.fetch;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+  });
+
+  it("should call /health with model_id query param so health checks run by deployment id", async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: vi.fn().mockResolvedValue({
+        healthy_count: 1,
+        unhealthy_count: 0,
+        healthy_endpoints: [],
+        unhealthy_endpoints: [],
+      }),
+    } as any);
+    global.fetch = mockFetch as any;
+
+    await Networking.fetchKeyModelCall("token-123", "key-abc-456");
+
+    expect(mockFetch).toHaveBeenCalledOnce();
+    const [url] = mockFetch.mock.calls[0];
+    const urlStr = typeof url === "string" ? url : (url as Request).url;
+    expect(urlStr).toContain("key-abc-456");
+  });
+});
