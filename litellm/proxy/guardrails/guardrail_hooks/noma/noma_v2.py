@@ -173,6 +173,10 @@ class NomaV2Guardrail(CustomGuardrail):
         payload_request_data = self._json_safe_copy(request_data)
         if not isinstance(payload_request_data, dict):
             payload_request_data = {}
+        if not payload_request_data and request_data:
+            verbose_proxy_logger.warning(
+                "Noma v2 guardrail: request_data serialization failed in _build_scan_payload, proceeding with empty request_data"
+            )
         if logging_obj is not None:
             payload_request_data["litellm_logging_obj"] = getattr(
                 logging_obj, "model_call_details", None
