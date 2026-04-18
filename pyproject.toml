@@ -3,7 +3,7 @@ name = "litellm"
 version = "1.83.9"
 description = "Library to easily interface with LLM API providers"
 readme = "README.md"
-requires-python = ">=3.11, <3.14"
+requires-python = ">=3.10, <3.14"
 license = "MIT"
 license-files = ["LICENSE"]
 authors = [
@@ -173,7 +173,8 @@ ci = [
     "pytest-retry==1.7.0",
     "pyarrow==22.0.0",
     "langchain==1.2.10",
-    "lunary==1.4.37",
+    "lunary==1.4.36; python_version == '3.10'",
+    "lunary==1.4.37; python_version >= '3.11'",
     "logfire==4.6.0",
     "traceloop-sdk==0.33.12",
     "detect-secrets==1.5.0",
