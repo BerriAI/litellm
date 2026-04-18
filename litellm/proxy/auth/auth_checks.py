@@ -2946,24 +2946,41 @@ async def _virtual_key_soft_budget_check(
         )
 
 
+def _normalize_alert_emails(
+    cfg: Optional[Dict[str, Any]],
+) -> Dict[str, List[str]]:
+    """Coerce user-supplied threshold→recipients mapping to Dict[str, List[str]].
+
+    Values may legitimately arrive as list, comma-separated string, or None
+    from YAML/metadata; _parse_email_list tolerates all three.
+    """
+    if not cfg:
+        return {}
+    from litellm_enterprise.enterprise_callbacks.send_emails.base_email import (
+        _parse_email_list,
+    )
+
+    return {k: _parse_email_list(v) for k, v in cfg.items()}
+
+
 def _merge_budget_alert_email_configs(
-    global_cfg: Optional[Dict[str, List[str]]],
-    per_key_cfg: Optional[Dict[str, List[str]]],
+    global_cfg: Optional[Dict[str, Any]],
+    per_key_cfg: Optional[Dict[str, Any]],
 ) -> Optional[Dict[str, List[str]]]:
     """
     Per-threshold additive merge: each threshold's recipient list is the union
     of global + per-key entries (deduped, global-first ordering). Missing
     thresholds on one side are inherited from the other.
     """
-    global_cfg = global_cfg or {}
-    per_key_cfg = per_key_cfg or {}
-    if not global_cfg and not per_key_cfg:
+    global_cfg_normalized = _normalize_alert_emails(global_cfg)
+    per_key_cfg_normalized = _normalize_alert_emails(per_key_cfg)
+    if not global_cfg_normalized and not per_key_cfg_normalized:
         return None
-    thresholds = set(global_cfg) | set(per_key_cfg)
+    thresholds = set(global_cfg_normalized) | set(per_key_cfg_normalized)
     return {
         t: list(
             dict.fromkeys(
-                list(global_cfg.get(t, [])) + list(per_key_cfg.get(t, []))
+                global_cfg_normalized.get(t, []) + per_key_cfg_normalized.get(t, [])
             )
         )
         for t in thresholds
