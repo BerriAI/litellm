@@ -1,6 +1,7 @@
 import json
 import time
 from litellm._uuid import uuid
+from litellm._logging import verbose_logger
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -272,7 +273,18 @@ class OllamaChatConfig(BaseConfig):
                     if typed_tool["type"] == "function":
                         arguments = {}
                         if "arguments" in typed_tool["function"]:
-                            arguments = json.loads(typed_tool["function"]["arguments"])
+                            raw_args = typed_tool["function"]["arguments"]
+                            try:
+                                arguments = json.loads(raw_args)
+                            except json.JSONDecodeError as e:
+                                verbose_logger.error(
+                                    f"Failed to parse tool call arguments as JSON: {raw_args!r}. Error: {e}"
+                                )
+                                raise litellm.BadRequestError(
+                                    message=f"Tool call arguments contain malformed JSON: {e.msg}. Raw arguments: {raw_args!r}",
+                                    model="ollama",
+                                    llm_provider="ollama",
+                                )
                         ollama_tool_call = OllamaToolCall(
                             function=OllamaToolCallFunction(
                                 name=typed_tool["function"].get("name") or "",
