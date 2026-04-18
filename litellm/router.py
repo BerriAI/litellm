@@ -5889,7 +5889,7 @@ class Router:
             response = await response
         ## PROCESS RESPONSE HEADERS
         response = await self.set_response_headers(
-            response=response, model_group=model_group
+            response=response, model_group=model_group, request_kwargs=kwargs
         )
 
         return response
@@ -8208,7 +8208,10 @@ class Router:
         return returned_dict
 
     async def set_response_headers(
-        self, response: Any, model_group: Optional[str] = None
+        self,
+        response: Any,
+        model_group: Optional[str] = None,
+        request_kwargs: Optional[dict] = None,
     ) -> Any:
         """
         Add the most accurate rate limit headers for a given model response.
@@ -8228,6 +8231,33 @@ class Router:
             ] = model_group
 
             additional_headers = response._hidden_params["additional_headers"]  # type: ignore
+
+            # Lift QualityRouter routing decision into response headers for
+            # transparency. The decision is stashed in request_kwargs.metadata
+            # by QualityRouter.async_pre_routing_hook.
+            metadata = (
+                (request_kwargs.get("metadata") or {})
+                if isinstance(request_kwargs, dict)
+                else {}
+            )
+            decision = (
+                metadata.get("quality_router_decision")
+                if isinstance(metadata, dict)
+                else None
+            )
+            if isinstance(decision, dict):
+                if "routed_model" in decision:
+                    additional_headers["x-litellm-quality-router-model"] = str(
+                        decision["routed_model"]
+                    )
+                if "quality_tier" in decision:
+                    additional_headers["x-litellm-quality-router-tier"] = str(
+                        decision["quality_tier"]
+                    )
+                if "complexity_tier" in decision:
+                    additional_headers["x-litellm-quality-router-complexity"] = str(
+                        decision["complexity_tier"]
+                    )
 
             if (
                 "x-ratelimit-remaining-tokens" not in additional_headers

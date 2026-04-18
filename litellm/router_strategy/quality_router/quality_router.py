@@ -319,6 +319,23 @@ class QualityRouter(CustomLogger):
             f"routed_model={routed_model}"
         )
 
+        # Stash the decision in request_kwargs.metadata so the Router can lift
+        # it into response headers (`x-litellm-quality-router-*`) for
+        # transparency. The same dict object flows from here through to
+        # `make_call.set_response_headers`.
+        if request_kwargs is not None:
+            metadata = request_kwargs.setdefault("metadata", {})
+            if isinstance(metadata, dict):
+                metadata["quality_router_decision"] = {
+                    "router_model_name": self.model_name,
+                    "routed_model": routed_model,
+                    "quality_tier": int(quality_tier),
+                    "complexity_tier": complexity_name,
+                    "required_capabilities": (
+                        sorted(required_capabilities) if required_capabilities else []
+                    ),
+                }
+
         return PreRoutingHookResponse(
             model=routed_model,
             messages=messages,

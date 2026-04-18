@@ -365,3 +365,171 @@ class TestCapabilities:
         assert resp is not None
         # tier 1, no caps required → first registered model at tier 1.
         assert resp.model == "haiku-text"
+
+
+# ─── Routing-decision metadata (powers x-litellm-quality-router-* headers) ──
+
+
+class TestDecisionMetadata:
+    @pytest.mark.asyncio
+    async def test_hook_stashes_decision_in_request_kwargs_metadata(
+        self, quality_router
+    ):
+        # Reasoning prompt → REASONING → quality tier 4 → opus-next.
+        messages = [
+            {
+                "role": "user",
+                "content": (
+                    "Think step by step and reason through this problem. "
+                    "Analyze this carefully and break down each component."
+                ),
+            }
+        ]
+        request_kwargs: Dict[str, Any] = {}
+
+        resp = await quality_router.async_pre_routing_hook(
+            model="quality-router-test",
+            request_kwargs=request_kwargs,
+            messages=messages,
+        )
+        assert resp is not None and resp.model == "opus-next"
+
+        decision = request_kwargs["metadata"]["quality_router_decision"]
+        assert decision["routed_model"] == "opus-next"
+        assert decision["quality_tier"] == 4
+        assert decision["complexity_tier"] == "REASONING"
+        assert decision["router_model_name"] == "quality-router-test"
+        assert decision["required_capabilities"] == []
+
+    @pytest.mark.asyncio
+    async def test_decision_metadata_preserves_existing_metadata(self, quality_router):
+        request_kwargs: Dict[str, Any] = {
+            "metadata": {"trace_id": "abc-123", "user_id": "u-1"}
+        }
+
+        await quality_router.async_pre_routing_hook(
+            model="quality-router-test",
+            request_kwargs=request_kwargs,
+            messages=[{"role": "user", "content": "hi"}],
+        )
+
+        # Existing metadata keys are intact and the decision is added alongside.
+        assert request_kwargs["metadata"]["trace_id"] == "abc-123"
+        assert request_kwargs["metadata"]["user_id"] == "u-1"
+        assert "quality_router_decision" in request_kwargs["metadata"]
+
+    @pytest.mark.asyncio
+    async def test_decision_metadata_includes_required_capabilities(
+        self, capability_router
+    ):
+        request_kwargs: Dict[str, Any] = {
+            "litellm_capabilities": ["vision"],
+        }
+
+        await capability_router.async_pre_routing_hook(
+            model="qr",
+            request_kwargs=request_kwargs,
+            messages=[{"role": "user", "content": "hi"}],
+        )
+
+        decision = request_kwargs["metadata"]["quality_router_decision"]
+        assert decision["routed_model"] == "haiku-vision"
+        assert decision["required_capabilities"] == ["vision"]
+
+
+# ─── Router.set_response_headers lifts decision into x-litellm-quality-* ────
+
+
+class TestSetResponseHeadersLiftsDecision:
+    """
+    Verify the Router.set_response_headers helper turns a stashed quality-router
+    decision into x-litellm-quality-router-* headers on the response.
+    """
+
+    @pytest.mark.asyncio
+    async def test_lifts_decision_into_additional_headers(self):
+        from pydantic import BaseModel
+
+        from litellm.router import Router
+
+        class FakeResponse(BaseModel):
+            model_config = {"arbitrary_types_allowed": True}
+            _hidden_params: Dict[str, Any] = {}
+
+        # Build a real Router with a tiny model_list — enough to satisfy
+        # set_response_headers without needing the rest of the router stack.
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "haiku",
+                    "litellm_params": {
+                        "model": "openai/gpt-4o-mini",
+                        "api_key": "sk-test",
+                    },
+                }
+            ]
+        )
+
+        response = FakeResponse()
+        response._hidden_params = {}
+
+        request_kwargs = {
+            "metadata": {
+                "quality_router_decision": {
+                    "router_model_name": "qr",
+                    "routed_model": "haiku-vision",
+                    "quality_tier": 1,
+                    "complexity_tier": "SIMPLE",
+                    "required_capabilities": ["vision"],
+                }
+            }
+        }
+
+        await router.set_response_headers(
+            response=response,
+            model_group="qr",
+            request_kwargs=request_kwargs,
+        )
+
+        headers = response._hidden_params["additional_headers"]
+        assert headers["x-litellm-quality-router-model"] == "haiku-vision"
+        assert headers["x-litellm-quality-router-tier"] == "1"
+        assert headers["x-litellm-quality-router-complexity"] == "SIMPLE"
+        # Existing x-litellm-model-group behavior is unchanged.
+        assert headers["x-litellm-model-group"] == "qr"
+
+    @pytest.mark.asyncio
+    async def test_no_decision_leaves_quality_router_headers_unset(self):
+        from pydantic import BaseModel
+
+        from litellm.router import Router
+
+        class FakeResponse(BaseModel):
+            model_config = {"arbitrary_types_allowed": True}
+            _hidden_params: Dict[str, Any] = {}
+
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "haiku",
+                    "litellm_params": {
+                        "model": "openai/gpt-4o-mini",
+                        "api_key": "sk-test",
+                    },
+                }
+            ]
+        )
+
+        response = FakeResponse()
+        response._hidden_params = {}
+
+        await router.set_response_headers(
+            response=response,
+            model_group="haiku",
+            request_kwargs={},  # no quality_router_decision
+        )
+
+        headers = response._hidden_params["additional_headers"]
+        assert "x-litellm-quality-router-model" not in headers
+        assert "x-litellm-quality-router-tier" not in headers
+        assert "x-litellm-quality-router-complexity" not in headers
