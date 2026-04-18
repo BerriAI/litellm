@@ -10,6 +10,9 @@ they may send a stale `mcp-session-id` header. This test verifies that:
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from fastapi import HTTPException
+from litellm.types.mcp import MCPAuth
+
 
 class TestHandleStaleMcpSession:
     """Unit tests for the _handle_stale_mcp_session helper."""
@@ -462,3 +465,129 @@ async def test_no_mcp_session_id_header_works_normally():
     header_names = [k for k, v in captured_scope.get("headers", [])]
     assert b"mcp-session-id" not in header_names
     assert b"content-type" in header_names
+
+
+@pytest.mark.asyncio
+async def test_per_user_oauth_missing_stored_token_returns_preemptive_401():
+    """
+    Per-user OAuth server with no stored token should fail fast with 401 +
+    WWW-Authenticate so PKCE can start.
+    """
+    try:
+        from litellm.proxy._experimental.mcp_server.server import (
+            handle_streamable_http_mcp,
+            session_manager,
+        )
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/mcp",
+        "headers": [
+            (b"content-type", b"application/json"),
+        ],
+    }
+    receive = AsyncMock()
+    send = AsyncMock()
+    user_auth = MagicMock()
+    user_auth.user_id = "test-user-id"
+    oauth_server = MagicMock()
+    oauth_server.auth_type = MCPAuth.oauth2
+    oauth_server.needs_user_oauth_token = True
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
+        new_callable=AsyncMock,
+        return_value=(user_auth, None, ["repro_oauth_server"], None, None, None),
+    ), patch(
+        "litellm.proxy._experimental.mcp_server.server.set_auth_context",
+    ), patch(
+        "litellm.proxy._experimental.mcp_server.server._SESSION_MANAGERS_INITIALIZED",
+        True,
+    ), patch(
+        "litellm.proxy._experimental.mcp_server.server._handle_stale_mcp_session",
+        new_callable=AsyncMock,
+        return_value=False,
+    ), patch(
+        "litellm.proxy._experimental.mcp_server.server._get_user_oauth_extra_headers_from_db",
+        new_callable=AsyncMock,
+        return_value=None,
+    ) as mock_get_stored_token, patch(
+        "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager.get_mcp_server_by_name",
+        return_value=oauth_server,
+    ), patch.object(
+        session_manager,
+        "handle_request",
+        new_callable=AsyncMock,
+    ) as mock_handle_request:
+        with pytest.raises(HTTPException) as exc_info:
+            await handle_streamable_http_mcp(scope, receive, send)
+
+    exc = exc_info.value
+    assert exc.status_code == 401
+    assert "www-authenticate" in exc.headers
+    assert mock_get_stored_token.await_count == 1
+    assert mock_handle_request.await_count == 0
+
+
+@pytest.mark.asyncio
+async def test_per_user_oauth_with_stored_token_skips_preemptive_401():
+    """
+    Per-user OAuth server with an existing stored token should skip pre-emptive
+    401 and continue to session manager request handling.
+    """
+    try:
+        from litellm.proxy._experimental.mcp_server.server import (
+            handle_streamable_http_mcp,
+            session_manager,
+        )
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/mcp",
+        "headers": [
+            (b"content-type", b"application/json"),
+        ],
+    }
+    receive = AsyncMock()
+    send = AsyncMock()
+    user_auth = MagicMock()
+    user_auth.user_id = "test-user-id"
+    oauth_server = MagicMock()
+    oauth_server.auth_type = MCPAuth.oauth2
+    oauth_server.needs_user_oauth_token = True
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
+        new_callable=AsyncMock,
+        return_value=(user_auth, None, ["repro_oauth_server"], None, None, None),
+    ), patch(
+        "litellm.proxy._experimental.mcp_server.server.set_auth_context",
+    ), patch(
+        "litellm.proxy._experimental.mcp_server.server._SESSION_MANAGERS_INITIALIZED",
+        True,
+    ), patch(
+        "litellm.proxy._experimental.mcp_server.server._handle_stale_mcp_session",
+        new_callable=AsyncMock,
+        return_value=False,
+    ), patch(
+        "litellm.proxy._experimental.mcp_server.server._get_user_oauth_extra_headers_from_db",
+        new_callable=AsyncMock,
+        return_value={"Authorization": "Bearer cached-token"},
+    ) as mock_get_stored_token, patch(
+        "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager.get_mcp_server_by_name",
+        return_value=oauth_server,
+    ), patch.object(
+        session_manager,
+        "handle_request",
+        new_callable=AsyncMock,
+    ) as mock_handle_request:
+        await handle_streamable_http_mcp(scope, receive, send)
+
+    assert mock_get_stored_token.await_count == 1
+    assert mock_handle_request.await_count == 1
