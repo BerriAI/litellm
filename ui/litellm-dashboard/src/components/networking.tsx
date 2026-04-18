@@ -3308,18 +3308,48 @@ export const keyAliasesCall = async (
   }
 };
 
-export interface keyModelResponse {
-  source: string;
+export type KeyModelDisplaySectionKind =
+  | "all_proxy_models"
+  | "all_team_models"
+  | "access_group"
+  | "ungrouped";
+
+export interface KeyModelDisplaySection {
+  title: string;
+  section_kind: KeyModelDisplaySectionKind;
   models: string[];
 }
 
+export interface KeyModelResponse {
+  model_display_sections: KeyModelDisplaySection[];
+  source: string;
+  resolved_total_count: number;
+  matched_count: number;
+  models_truncated: boolean;
+  all_team_models_without_team: boolean;
+}
+
+export type FetchKeyModelCallOptions = {
+  search?: string;
+  compact?: boolean;
+};
+
 export const fetchKeyModelCall = async (
   accessToken: string,
-  key_id: string
-): Promise<keyModelResponse> => {
-
+  key_id: string,
+  options?: FetchKeyModelCallOptions
+): Promise<KeyModelResponse> => {
   try {
-    let url = proxyBaseUrl ? `${proxyBaseUrl}/key/${key_id}/models` : `/key/${key_id}/models`;
+    const params = new URLSearchParams();
+    if (options?.search !== undefined && options.search.trim() !== "") {
+      params.set("search", options.search.trim());
+    }
+    if (options?.compact === true) {
+      params.set("compact", "true");
+    }
+    const qs = params.toString();
+    const base = proxyBaseUrl ? `${proxyBaseUrl}/key/${key_id}/models` : `/key/${key_id}/models`;
+    let url = qs ? `${base}?${qs}` : base;
 
     const response = await fetch(url, {
       method: "GET",

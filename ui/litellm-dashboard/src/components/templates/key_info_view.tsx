@@ -369,7 +369,7 @@ export default function KeyInfoView({
   };
 
   return (
-    <div className="w-full h-screen p-4">
+    <div className="w-full p-4">
       <KeyInfoHeader
         data={{
           keyName: currentKeyData.key_alias || "Virtual Key",

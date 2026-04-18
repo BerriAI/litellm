@@ -3,7 +3,7 @@ import React from "react";
 import { renderHook, waitFor } from "@testing-library/react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { UseGetKeyModels } from "./useGetKeyModels";
+import { useGetKeyModels } from "./useGetKeyModels";
 import * as networking from "@/components/networking";
 
 vi.mock("@/components/networking", () => ({
@@ -16,8 +16,20 @@ vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
   })),
 }));
 
+const emptyKeyModelResponse = {
+  model_display_sections: [],
+  source: "no-default-models",
+  resolved_total_count: 0,
+  matched_count: 0,
+  models_truncated: false,
+  all_team_models_without_team: false,
+};
+
 const createQueryClient = () =>
   new QueryClient({
+    defaultOptions: {
+      queries: { retry: false },
+    },
   });
 
 const wrapper = ({ children }: { children: React.ReactNode }) => {
@@ -25,27 +37,31 @@ const wrapper = ({ children }: { children: React.ReactNode }) => {
   return React.createElement(QueryClientProvider, { client: queryClient }, children);
 };
 
-const mockAccessToken = 'test-key-id';
-const mockAccessGroups = ["group-1", "group-2", "group-3"];
-
 describe("useGetKeyModels", () => {
   beforeEach(async () => {
     vi.clearAllMocks();
     const useAuthorizedModule = await import("@/app/(dashboard)/hooks/useAuthorized");
     vi.mocked(useAuthorizedModule.default).mockReturnValue({
-      accessToken: mockAccessToken,
+      accessToken: "test-token-456",
     } as any);
   });
 
-  it("should return hook result without errors", () => {
-    vi.mocked(networking.fetchKeyModelCall).mockResolvedValue({source: '', models: []});
+  it("should load default full model list without compact", async () => {
+    vi.mocked(networking.fetchKeyModelCall).mockResolvedValue({
+      ...emptyKeyModelResponse,
+      resolved_total_count: 3,
+      model_display_sections: [
+        { title: "Other models", section_kind: "ungrouped", models: ["a", "b", "c"] },
+      ],
+    });
 
-    const { result } = renderHook(() => UseGetKeyModels('test-key-id'), { wrapper });
+    const { result } = renderHook(() => useGetKeyModels("test-key-id"), { wrapper });
 
-    expect(result.current).toBeDefined();
-    expect(result.current).toHaveProperty("data");
-    expect(result.current).toHaveProperty("isSuccess");
-    expect(result.current).toHaveProperty("isError");
-    expect(result.current).toHaveProperty("status");
+    expect(result.current).toHaveProperty("defaultModelsQuery");
+    expect(result.current).toHaveProperty("searchQuery");
+
+    await waitFor(() => expect(result.current.defaultModelsQuery.isSuccess).toBe(true));
+    expect(networking.fetchKeyModelCall).toHaveBeenCalledWith("test-token-456", "test-key-id");
+    expect(result.current.defaultModelsQuery.data?.resolved_total_count).toBe(3);
   });
 });

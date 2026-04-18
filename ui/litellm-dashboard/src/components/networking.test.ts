@@ -406,7 +406,7 @@ describe("individualModelHealthCheckCall", () => {
 });
 
 
-describe("fetching models from key information", () => {
+describe("fetchKeyModelCall", () => {
   const originalFetch = global.fetch;
 
   beforeEach(() => {
@@ -417,23 +417,32 @@ describe("fetching models from key information", () => {
     global.fetch = originalFetch;
   });
 
-  it("should call /health with model_id query param so health checks run by deployment id", async () => {
+  it("should request /key/{id}/models with optional compact and search query params", async () => {
     const mockFetch = vi.fn().mockResolvedValue({
       ok: true,
       json: vi.fn().mockResolvedValue({
-        healthy_count: 1,
-        unhealthy_count: 0,
-        healthy_endpoints: [],
-        unhealthy_endpoints: [],
+        model_display_sections: [],
+        source: "no-default-models",
+        resolved_total_count: 0,
+        matched_count: 0,
+        models_truncated: false,
+        all_team_models_without_team: false,
       }),
     } as any);
     global.fetch = mockFetch as any;
 
-    await Networking.fetchKeyModelCall("token-123", "key-abc-456");
-
-    expect(mockFetch).toHaveBeenCalledOnce();
-    const [url] = mockFetch.mock.calls[0];
-    const urlStr = typeof url === "string" ? url : (url as Request).url;
+    await Networking.fetchKeyModelCall("token-123", "key-abc-456", { compact: true });
+    let [url] = mockFetch.mock.calls[0];
+    let urlStr = typeof url === "string" ? url : (url as Request).url;
     expect(urlStr).toContain("key-abc-456");
+    expect(urlStr).toContain("compact=true");
+
+    vi.clearAllMocks();
+    global.fetch = mockFetch as any;
+    await Networking.fetchKeyModelCall("token-123", "key-abc-456", { search: "gpt-4" });
+    [url] = mockFetch.mock.calls[0];
+    urlStr = typeof url === "string" ? url : (url as Request).url;
+    const parsed = new URL(urlStr, "http://example.com");
+    expect(parsed.searchParams.get("search")).toBe("gpt-4");
   });
 });
