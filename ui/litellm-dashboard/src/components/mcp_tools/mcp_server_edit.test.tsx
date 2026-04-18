@@ -7,7 +7,7 @@ import NotificationsManager from "../molecules/notifications_manager";
 
 vi.mock("../networking", () => ({
   updateMCPServer: vi.fn(),
-  testMCPToolsListRequest: vi.fn().mockResolvedValue({ tools: [], error: null }),
+  listMCPTools: vi.fn().mockResolvedValue({ tools: [], error: null }),
 }));
 
 vi.mock("../molecules/notifications_manager", () => ({
@@ -48,7 +48,8 @@ const interactiveOAuthServer = {
   transport: "http",
   url: "https://example.com/mcp",
   auth_type: "oauth2",
-  // No token_url → edit form defaults to INTERACTIVE flow
+  oauth2_flow: "authorization_code",
+  // No token_url → interactive flow; oauth2_flow disambiguates from inferred M2M
   token_url: null,
   authorization_url: null,
   registration_url: null,

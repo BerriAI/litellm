@@ -476,9 +476,24 @@ if MCP_AVAILABLE:
         payload: NewMCPServerRequest,
         created_by: Optional[str],
     ) -> LiteLLM_MCPServerTable:
+        from litellm.proxy._experimental.mcp_server.oauth2_flow_utils import (
+            infer_oauth2_flow_for_storage,
+        )
+
         now = datetime.utcnow()
         server_id = payload.server_id or str(uuid.uuid4())
         server_name = payload.server_name or payload.alias or server_id
+        _creds = (
+            payload.credentials
+            if isinstance(payload.credentials, dict)
+            else None
+        )
+        _oauth2_flow = infer_oauth2_flow_for_storage(
+            auth_type=payload.auth_type,
+            oauth2_flow=payload.oauth2_flow,
+            token_url=payload.token_url,
+            credentials_plain=_creds,
+        )
         return LiteLLM_MCPServerTable(
             server_id=server_id,
             server_name=server_name,
@@ -504,6 +519,7 @@ if MCP_AVAILABLE:
             authorization_url=payload.authorization_url,
             token_url=payload.token_url,
             registration_url=payload.registration_url,
+            oauth2_flow=_oauth2_flow,
             allow_all_keys=payload.allow_all_keys,
             available_on_public_internet=payload.available_on_public_internet,
         )

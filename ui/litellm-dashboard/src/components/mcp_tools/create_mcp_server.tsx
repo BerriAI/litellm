@@ -3,7 +3,15 @@ import { Modal, Tooltip, Form, Select, Input, Switch, Collapse } from "antd";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { Button, TextInput } from "@tremor/react";
 import { createMCPServer, registerMCPServer } from "../networking";
-import { AUTH_TYPE, DiscoverableMCPServer, OAUTH_FLOW, MCPServer, MCPServerCostInfo, TRANSPORT } from "./types";
+import {
+  AUTH_TYPE,
+  DiscoverableMCPServer,
+  OAUTH_FLOW,
+  mapUiOAuthFlowToApi,
+  MCPServer,
+  MCPServerCostInfo,
+  TRANSPORT,
+} from "./types";
 import OAuthFormFields from "./OAuthFormFields";
 import MCPServerCostConfig from "./mcp_server_cost_config";
 import MCPConnectionStatus from "./mcp_connection_status";
@@ -87,7 +95,11 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
   const shouldShowAuthValueField = authType ? AUTH_TYPES_REQUIRING_AUTH_VALUE.includes(authType) : false;
   const isOAuthAuthType = authType === AUTH_TYPE.OAUTH2;
   const isAwsSigV4AuthType = authType === AUTH_TYPE.AWS_SIGV4;
-  const isM2MFlow = isOAuthAuthType && formValues.oauth_flow_type === OAUTH_FLOW.M2M;
+  // Use Form.useWatch — formValues from onValuesChange does not update on initialValue mount, so the
+  // grant-type Select could show M2M while formValues.oauth_flow_type was still undefined (PKCE fields shown).
+  const oauthFlowTypeWatched = Form.useWatch("oauth_flow_type", form) as string | undefined;
+  const isM2MFlow =
+    isOAuthAuthType && (oauthFlowTypeWatched ?? OAUTH_FLOW.M2M) === OAUTH_FLOW.M2M;
 
   const persistCreateUiState = () => {
     if (typeof window === "undefined") {
@@ -146,6 +158,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
         authorization_url: values.authorization_url,
         token_url: values.token_url,
         registration_url: values.registration_url,
+        oauth2_flow: mapUiOAuthFlowToApi(values.oauth_flow_type),
         mcp_access_groups: values.mcp_access_groups,
         static_headers: staticHeaders,
         command: values.command,
@@ -285,6 +298,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
         allow_all_keys: allowAllKeysRaw,
         available_on_public_internet: availableOnPublicInternetRaw,
         token_validation_json: rawTokenValidationJson,
+        oauth_flow_type: oauthFlowType,
         ...restValues
       } = values;
 
@@ -390,6 +404,9 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
         available_on_public_internet: Boolean(availableOnPublicInternetRaw),
         static_headers: staticHeaders,
         ...(tokenValidation !== null && { token_validation: tokenValidation }),
+        ...(restValues.auth_type === AUTH_TYPE.OAUTH2 && mapUiOAuthFlowToApi(oauthFlowType)
+          ? { oauth2_flow: mapUiOAuthFlowToApi(oauthFlowType) }
+          : {}),
       };
 
       payload.static_headers = staticHeaders;
@@ -818,7 +835,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                         {isOAuthAuthType && (
                           <OAuthFormFields
                             isM2M={isM2MFlow}
-                            initialFlowType={OAUTH_FLOW.INTERACTIVE}
+                            initialFlowType={OAUTH_FLOW.M2M}
                             docsUrl={oauthDocsUrl}
                             oauthFlow={{
                               startOAuthFlow,

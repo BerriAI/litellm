@@ -997,6 +997,37 @@ class TestMCPServerManager:
         assert result.last_health_check is not None
 
     @pytest.mark.asyncio
+    async def test_health_check_server_oauth2_m2m_runs_check(self):
+        """OAuth2 M2M uses client credentials — health check should run (not stay unknown)."""
+        manager = MCPServerManager()
+
+        server = MCPServer(
+            server_id="oauth2-m2m",
+            name="oauth2-m2m",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2,
+            oauth2_flow="client_credentials",
+            client_id="cid",
+            client_secret="sec",
+            token_url="https://idp.example.com/token",
+            url="http://mcp.example.com",
+        )
+
+        manager.get_mcp_server_by_id = MagicMock(return_value=server)
+
+        mock_client = AsyncMock()
+        mock_client.run_with_session = AsyncMock(return_value="ok")
+        manager._create_mcp_client = AsyncMock(return_value=mock_client)
+
+        result = await manager.health_check_server("oauth2-m2m")
+
+        manager._create_mcp_client.assert_called_once()
+        assert isinstance(result, LiteLLM_MCPServerTable)
+        assert result.server_id == "oauth2-m2m"
+        assert result.status == "healthy"
+        assert result.health_check_error is None
+
+    @pytest.mark.asyncio
     async def test_health_check_server_no_token_skips_check(self):
         """Test that health check is skipped when auth_type is set but authentication_token is missing"""
         manager = MCPServerManager()

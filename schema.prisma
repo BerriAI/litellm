@@ -317,6 +317,8 @@ model LiteLLM_MCPServerTable {
   authorization_url  String?
   token_url          String?
   registration_url   String?
+  // OAuth2: "client_credentials" (M2M) | "authorization_code" (interactive); null = infer on read/write when safe
+  oauth2_flow        String?
   allow_all_keys Boolean @default(false)
   available_on_public_internet Boolean @default(true)
   is_byok               Boolean  @default(false)

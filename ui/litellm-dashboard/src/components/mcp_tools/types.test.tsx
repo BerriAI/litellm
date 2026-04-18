@@ -1,5 +1,14 @@
 import { describe, it, expect } from "vitest";
-import { AUTH_TYPE, OAUTH_FLOW, TRANSPORT, handleTransport, handleAuth } from "./types";
+import {
+  AUTH_TYPE,
+  OAUTH_FLOW,
+  TRANSPORT,
+  handleTransport,
+  handleAuth,
+  mapUiOAuthFlowToApi,
+  mapApiOAuthFlowToUi,
+  formatOAuth2FlowForDisplay,
+} from "./types";
 
 describe("handleTransport", () => {
   it("should default to SSE when transport is null", () => {
@@ -55,5 +64,24 @@ describe("constants", () => {
   it("should define OAuth flow types", () => {
     expect(OAUTH_FLOW.INTERACTIVE).toBe("interactive");
     expect(OAUTH_FLOW.M2M).toBe("m2m");
+  });
+});
+
+describe("OAuth2 flow API mapping", () => {
+  it("maps UI M2M to client_credentials", () => {
+    expect(mapUiOAuthFlowToApi(OAUTH_FLOW.M2M)).toBe("client_credentials");
+  });
+  it("maps UI interactive to authorization_code", () => {
+    expect(mapUiOAuthFlowToApi(OAUTH_FLOW.INTERACTIVE)).toBe("authorization_code");
+  });
+  it("maps API values back to UI constants", () => {
+    expect(mapApiOAuthFlowToUi("client_credentials")).toBe(OAUTH_FLOW.M2M);
+    expect(mapApiOAuthFlowToUi("authorization_code")).toBe(OAUTH_FLOW.INTERACTIVE);
+    expect(mapApiOAuthFlowToUi(null)).toBeUndefined();
+  });
+  it("formats display strings", () => {
+    expect(formatOAuth2FlowForDisplay("client_credentials")).toContain("Machine-to-machine");
+    expect(formatOAuth2FlowForDisplay("authorization_code")).toContain("Interactive");
+    expect(formatOAuth2FlowForDisplay(null)).toContain("infer");
   });
 });

@@ -2,14 +2,23 @@ import React, { useState, useEffect } from "react";
 import { Form, Select, Button as AntdButton, Tooltip, Input, InputNumber } from "antd";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { Button, TabGroup, TabList, Tab, TabPanels, TabPanel } from "@tremor/react";
-import { AUTH_TYPE, OAUTH_FLOW, MCPServer, MCPServerCostInfo, TRANSPORT } from "./types";
-import { updateMCPServer, testMCPToolsListRequest } from "../networking";
+import {
+  AUTH_TYPE,
+  OAUTH_FLOW,
+  mapApiOAuthFlowToUi,
+  mapUiOAuthFlowToApi,
+  MCPServer,
+  MCPServerCostInfo,
+  TRANSPORT,
+} from "./types";
+import { updateMCPServer, listMCPTools } from "../networking";
 import MCPServerCostConfig from "./mcp_server_cost_config";
 import MCPPermissionManagement from "./MCPPermissionManagement";
 import MCPToolConfiguration from "./mcp_tool_configuration";
 import StdioConfiguration from "./StdioConfiguration";
 import MCPLogoSelector from "./MCPLogoSelector";
 import { validateMCPServerUrl, validateMCPServerName } from "./utils";
+import OAuthFormFields from "./OAuthFormFields";
 import NotificationsManager from "../molecules/notifications_manager";
 import { useMcpOAuthFlow } from "@/hooks/useMcpOAuthFlow";
 import { getSecureItem, setSecureItem } from "@/utils/secureStorage";
@@ -37,6 +46,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
   const [costConfig, setCostConfig] = useState<MCPServerCostInfo>({});
   const [tools, setTools] = useState<any[]>([]);
   const [isLoadingTools, setIsLoadingTools] = useState(false);
+  const [toolsListError, setToolsListError] = useState<string | null>(null);
   const [searchValue, setSearchValue] = useState<string>("");
   const [aliasManuallyEdited, setAliasManuallyEdited] = useState(false);
   const [allowedTools, setAllowedTools] = useState<string[]>([]);
@@ -125,6 +135,10 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
         transport,
         auth_type: AUTH_TYPE.OAUTH2,
         credentials: values.credentials,
+        authorization_url: values.authorization_url ?? mcpServer.authorization_url,
+        token_url: values.token_url ?? mcpServer.token_url,
+        registration_url: values.registration_url ?? mcpServer.registration_url,
+        oauth2_flow: mapUiOAuthFlowToApi(values.oauth_flow_type),
         mcp_access_groups: values.mcp_access_groups || mcpServer.mcp_access_groups,
         static_headers: staticHeaders,
         command: values.command,
@@ -189,7 +203,9 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
       ...mcpServer,
       transport: effectiveTransport,
       static_headers: initialStaticHeaders,
-      oauth_flow_type: mcpServer.token_url ? OAUTH_FLOW.M2M : OAUTH_FLOW.INTERACTIVE,
+      oauth_flow_type:
+        mapApiOAuthFlowToUi(mcpServer.oauth2_flow) ??
+        (mcpServer.token_url ? OAUTH_FLOW.M2M : OAUTH_FLOW.INTERACTIVE),
       token_validation_json: mcpServer.token_validation
         ? JSON.stringify(mcpServer.token_validation, null, 2)
         : undefined,
@@ -271,57 +287,37 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
     }
   }, [mcpServer]);
 
-  // Fetch tools when component mounts or when OAuth token is received
-  // But only if the server has been properly saved (has a permanent server_id)
+  // Load tools from the registry (same path as MCP Tools tab) so OAuth M2M and other
+  // secrets stored only in the DB work — /test/tools/list only sees the request body.
   useEffect(() => {
-    // Don't fetch if server hasn't been saved yet (no permanent server_id)
     if (!mcpServer.server_id || mcpServer.server_id.trim() === "") {
       return;
     }
     fetchTools();
-  }, [mcpServer, accessToken, oauthAccessToken]);
+  }, [mcpServer.server_id, accessToken]);
 
   const fetchTools = async () => {
     if (!accessToken) return;
 
-    // HTTP/SSE requires a URL (unless spec_path is set); stdio does not.
-    if (mcpServer.transport !== "stdio" && !mcpServer.url && !mcpServer.spec_path) return;
-
-    const isM2M = mcpServer.auth_type === AUTH_TYPE.OAUTH2 && !!mcpServer.token_url;
-    if (mcpServer.auth_type === AUTH_TYPE.OAUTH2 && !isM2M && !oauthAccessToken) {
-      return;
-    }
-
     setIsLoadingTools(true);
+    setToolsListError(null);
 
     try {
-      // Prepare the MCP server config from existing server data
-      const mcpServerConfig = {
-        server_id: mcpServer.server_id,
-        server_name: mcpServer.server_name,
-        url: mcpServer.url,
-        transport: mcpServer.transport,
-        auth_type: mcpServer.auth_type,
-        mcp_info: mcpServer.mcp_info,
-        authorization_url: mcpServer.authorization_url,
-        token_url: mcpServer.token_url,
-        registration_url: mcpServer.registration_url,
-        command: mcpServer.command,
-        args: mcpServer.args,
-        env: mcpServer.env,
-      };
-
-      const toolsResponse = await testMCPToolsListRequest(accessToken, mcpServerConfig, oauthAccessToken);
+      const toolsResponse = await listMCPTools(accessToken, mcpServer.server_id);
 
       if (toolsResponse.tools && !toolsResponse.error) {
         setTools(toolsResponse.tools);
+        setToolsListError(null);
       } else {
-        console.error("Failed to fetch tools:", toolsResponse.message);
+        const msg = toolsResponse.message || "Failed to fetch MCP tools";
+        console.error("Failed to fetch tools:", msg);
         setTools([]);
+        setToolsListError(msg);
       }
     } catch (error) {
       console.error("Tools fetch error:", error);
       setTools([]);
+      setToolsListError(error instanceof Error ? error.message : String(error));
     } finally {
       setIsLoadingTools(false);
     }
@@ -404,6 +400,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
         allow_all_keys: allowAllKeysRaw,
         available_on_public_internet: availableOnPublicInternetRaw,
         token_validation_json: rawTokenValidationJson,
+        oauth_flow_type: oauthFlowType,
         ...restValues
       } = values;
 
@@ -574,6 +571,9 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
         // Include token_validation when it is set (non-null) or when clearing an existing value
         ...(tokenValidation !== null || mcpServer.token_validation
           ? { token_validation: tokenValidation }
+          : {}),
+        ...(restValues.auth_type === AUTH_TYPE.OAUTH2 && mapUiOAuthFlowToApi(oauthFlowType)
+          ? { oauth2_flow: mapUiOAuthFlowToApi(oauthFlowType) }
           : {}),
       };
 
@@ -782,179 +782,16 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
             )}
 
             {!isStdioTransport && isOAuthAuthType && (
-              <>
-                <Form.Item
-                  label={
-                    <span className="text-sm font-medium text-gray-700 flex items-center">
-                      OAuth Client ID (optional)
-                      <Tooltip title="Provide only if your MCP server cannot handle dynamic client registration.">
-                        <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
-                      </Tooltip>
-                    </span>
-                  }
-                  name={["credentials", "client_id"]}
-                >
-                  <Input.Password
-                    placeholder="Enter OAuth client ID (leave blank to keep existing)"
-                    className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
-                  />
-                </Form.Item>
-                <Form.Item
-                  label={
-                    <span className="text-sm font-medium text-gray-700 flex items-center">
-                      OAuth Client Secret (optional)
-                      <Tooltip title="Provide only if your MCP server cannot handle dynamic client registration.">
-                        <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
-                      </Tooltip>
-                    </span>
-                  }
-                  name={["credentials", "client_secret"]}
-                >
-                  <Input.Password
-                    placeholder="Enter OAuth client secret (leave blank to keep existing)"
-                    className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
-                  />
-                </Form.Item>
-                <Form.Item
-                  label={
-                    <span className="text-sm font-medium text-gray-700 flex items-center">
-                      OAuth Scopes (optional)
-                      <Tooltip title="Add scopes to override the default scope list used for this MCP server.">
-                        <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
-                      </Tooltip>
-                    </span>
-                  }
-                  name={["credentials", "scopes"]}
-                >
-                  <Select
-                    mode="tags"
-                    tokenSeparators={[","]}
-                    placeholder="Add scopes"
-                    className="rounded-lg"
-                    size="large"
-                  />
-                </Form.Item>
-                <Form.Item
-                  label={
-                    <span className="text-sm font-medium text-gray-700 flex items-center">
-                      Authorization URL Override (optional)
-                      <Tooltip title="Optional override for the authorization endpoint.">
-                        <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
-                      </Tooltip>
-                    </span>
-                  }
-                  name="authorization_url"
-                >
-                  <Input
-                    placeholder="https://example.com/oauth/authorize"
-                    className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
-                  />
-                </Form.Item>
-                <Form.Item
-                  label={
-                    <span className="text-sm font-medium text-gray-700 flex items-center">
-                      Token URL Override (optional)
-                      <Tooltip title="Optional override for the token endpoint.">
-                        <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
-                      </Tooltip>
-                    </span>
-                  }
-                  name="token_url"
-                >
-                  <Input
-                    placeholder="https://example.com/oauth/token"
-                    className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
-                  />
-                </Form.Item>
-                <Form.Item
-                  label={
-                    <span className="text-sm font-medium text-gray-700 flex items-center">
-                      Registration URL Override (optional)
-                      <Tooltip title="Optional override for the dynamic client registration endpoint.">
-                        <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
-                      </Tooltip>
-                    </span>
-                  }
-                  name="registration_url"
-                >
-                  <Input
-                    placeholder="https://example.com/oauth/register"
-                    className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
-                  />
-                </Form.Item>
-                {!isM2MFlow && (
-                  <>
-                    <Form.Item
-                      label={
-                        <span className="text-sm font-medium text-gray-700 flex items-center">
-                          Token Validation Rules (optional)
-                          <Tooltip title='JSON object of key-value rules checked against the OAuth token response before storing. Supports dot-notation for nested fields (e.g. {"organization": "my-org", "team.id": "123"}). Tokens that fail validation are rejected with HTTP 403.'>
-                            <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
-                          </Tooltip>
-                        </span>
-                      }
-                      name="token_validation_json"
-                      rules={[
-                        {
-                          validator: (_: any, value: string) => {
-                            if (!value || value.trim() === "") return Promise.resolve();
-                            try {
-                              JSON.parse(value);
-                              return Promise.resolve();
-                            } catch {
-                              return Promise.reject(new Error("Must be valid JSON"));
-                            }
-                          },
-                        },
-                      ]}
-                    >
-                      <Input.TextArea
-                        placeholder={'{\n  "organization": "my-org",\n  "team.id": "123"\n}'}
-                        rows={4}
-                        className="font-mono text-sm rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
-                      />
-                    </Form.Item>
-                    <Form.Item
-                      label={
-                        <span className="text-sm font-medium text-gray-700 flex items-center">
-                          Token Storage TTL (seconds, optional)
-                          <Tooltip title="How long to cache each user's OAuth access token in Redis before evicting it (regardless of the token's own expires_in). Leave blank to derive the TTL from the token's expires_in, or fall back to the 12-hour default.">
-                            <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
-                          </Tooltip>
-                        </span>
-                      }
-                      name="token_storage_ttl_seconds"
-                    >
-                      <InputNumber
-                        min={1}
-                        placeholder="e.g. 3600"
-                        style={{ width: "100%" }}
-                        className="rounded-lg"
-                      />
-                    </Form.Item>
-                  </>
-                )}
-                <div className="rounded-lg border border-dashed border-gray-300 p-4 space-y-2">
-                  <p className="text-sm text-gray-600">Use OAuth to fetch a fresh access token and temporarily save it in the session as the authentication value.</p>
-                  <Button
-                    variant="secondary"
-                    onClick={startOAuthFlow}
-                    disabled={oauthStatus === "authorizing" || oauthStatus === "exchanging"}
-                  >
-                    {oauthStatus === "authorizing"
-                      ? "Waiting for authorization..."
-                      : oauthStatus === "exchanging"
-                        ? "Exchanging authorization code..."
-                        : "Authorize & Fetch Token"}
-                  </Button>
-                  {oauthError && <p className="text-sm text-red-500">{oauthError}</p>}
-                  {oauthStatus === "success" && oauthTokenResponse?.access_token && (
-                    <p className="text-sm text-green-600">
-                      Token fetched. Expires in {oauthTokenResponse.expires_in ?? "?"} seconds.
-                    </p>
-                  )}
-                </div>
-              </>
+              <OAuthFormFields
+                isM2M={isM2MFlow}
+                isEditing
+                oauthFlow={{
+                  startOAuthFlow,
+                  status: oauthStatus,
+                  error: oauthError,
+                  tokenResponse: oauthTokenResponse,
+                }}
+              />
             )}
 
             {!isStdioTransport && isAwsSigV4AuthType && (
@@ -1099,6 +936,10 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
               <MCPToolConfiguration
                 accessToken={accessToken}
                 oauthAccessToken={oauthAccessToken}
+                externalTools={tools}
+                externalIsLoading={isLoadingTools}
+                externalError={toolsListError}
+                externalCanFetch={!!accessToken && !!mcpServer.server_id}
                 formValues={{
                   server_id: mcpServer.server_id,
                   server_name: currentServerName ?? mcpServer.server_name,
@@ -1107,7 +948,10 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                   transport: transportType ?? mcpServer.transport,
                   auth_type: currentAuthType ?? mcpServer.auth_type,
                   mcp_info: mcpServer.mcp_info,
-                  oauth_flow_type: (currentTokenUrl ?? mcpServer.token_url) ? OAUTH_FLOW.M2M : OAUTH_FLOW.INTERACTIVE,
+                  oauth_flow_type:
+                    oauthFlowTypeValue ??
+                    mapApiOAuthFlowToUi(mcpServer.oauth2_flow) ??
+                    ((currentTokenUrl ?? mcpServer.token_url) ? OAUTH_FLOW.M2M : OAUTH_FLOW.INTERACTIVE),
                   static_headers: currentStaticHeaders ?? mcpServer.static_headers,
                   credentials: currentCredentials,
                   authorization_url: currentAuthorizationUrl ?? mcpServer.authorization_url,

@@ -45,8 +45,8 @@ const OAuthFormFields: React.FC<OAuthFormFieldsProps> = ({
       <Form.Item
         label={
           <FieldLabel
-            label="OAuth Flow Type"
-            tooltip="Choose how the proxy authenticates with this MCP server. M2M is for server-to-server communication using client credentials. Interactive (PKCE) is for user-facing flows that require browser-based authorization."
+            label="OAuth grant type"
+            tooltip="Stored as oauth2_flow on the server: client_credentials (M2M) or authorization_code (interactive). This controls how LiteLLM obtains tokens for this MCP."
           />
         }
         name="oauth_flow_type"
@@ -55,14 +55,14 @@ const OAuthFormFields: React.FC<OAuthFormFieldsProps> = ({
         <Select className="rounded-lg" size="large">
           <Select.Option value={OAUTH_FLOW.M2M}>
             <div>
-              <span className="font-medium">Machine-to-Machine (M2M)</span>
-              <span className="text-gray-400 text-xs ml-2">server-to-server, no user interaction</span>
+              <span className="font-medium">Machine-to-machine (client credentials)</span>
+              <span className="text-gray-400 text-xs ml-2">no browser — proxy fetches token with client id/secret</span>
             </div>
           </Select.Option>
           <Select.Option value={OAUTH_FLOW.INTERACTIVE}>
             <div>
-              <span className="font-medium">Interactive (PKCE)</span>
-              <span className="text-gray-400 text-xs ml-2">browser-based user authorization</span>
+              <span className="font-medium">Interactive (authorization code / PKCE)</span>
+              <span className="text-gray-400 text-xs ml-2">users authorize in a browser; per-user tokens</span>
             </div>
           </Select.Option>
         </Select>
@@ -73,21 +73,33 @@ const OAuthFormFields: React.FC<OAuthFormFieldsProps> = ({
           <Form.Item
             label={<FieldLabel label="Client ID" tooltip="OAuth2 client ID for the client_credentials grant." />}
             name={["credentials", "client_id"]}
-            rules={[{ required: true, message: "Client ID is required for M2M OAuth" }]}
+            rules={
+              isEditing
+                ? []
+                : [{ required: true, message: "Client ID is required for M2M OAuth" }]
+            }
           >
             <TextInput type="password" placeholder={`Enter OAuth client ID${placeholderSuffix}`} className={fieldClassName} />
           </Form.Item>
           <Form.Item
             label={<FieldLabel label="Client Secret" tooltip="OAuth2 client secret for the client_credentials grant." />}
             name={["credentials", "client_secret"]}
-            rules={[{ required: true, message: "Client Secret is required for M2M OAuth" }]}
+            rules={
+              isEditing
+                ? []
+                : [{ required: true, message: "Client Secret is required for M2M OAuth" }]
+            }
           >
             <TextInput type="password" placeholder={`Enter OAuth client secret${placeholderSuffix}`} className={fieldClassName} />
           </Form.Item>
           <Form.Item
             label={<FieldLabel label="Token URL" tooltip="Token endpoint URL for the client_credentials grant." />}
             name="token_url"
-            rules={[{ required: true, message: "Token URL is required for M2M OAuth" }]}
+            rules={
+              isEditing
+                ? []
+                : [{ required: true, message: "Token URL is required for M2M OAuth" }]
+            }
           >
             <TextInput placeholder="https://auth.example.com/oauth/token" className={fieldClassName} />
           </Form.Item>

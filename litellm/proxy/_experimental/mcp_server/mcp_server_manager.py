@@ -46,6 +46,9 @@ from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
     MCPRequestHandler,
 )
+from litellm.proxy._experimental.mcp_server.oauth2_flow_utils import (
+    resolve_oauth2_flow_for_runtime,
+)
 from litellm.proxy._experimental.mcp_server.oauth2_token_cache import resolve_mcp_auth
 from litellm.proxy._experimental.mcp_server.utils import (
     MCP_TOOL_PREFIX_SEPARATOR,
@@ -652,6 +655,18 @@ class MCPServerManager:
             mcp_oauth_metadata.scopes if mcp_oauth_metadata else None
         )
 
+        token_url_for_oauth_flow = mcp_server.token_url or (
+            getattr(mcp_oauth_metadata, "token_url", None) if mcp_oauth_metadata else None
+        )
+        oauth2_flow_effective = resolve_oauth2_flow_for_runtime(
+            auth_type=auth_type,
+            stored_oauth2_flow=getattr(mcp_server, "oauth2_flow", None),
+            token_url=token_url_for_oauth_flow,
+            client_id=client_id_value or getattr(mcp_server, "client_id", None),
+            client_secret=client_secret_value
+            or getattr(mcp_server, "client_secret", None),
+        )
+
         new_server = MCPServer(
             server_id=mcp_server.server_id,
             name=name_for_prefix,
@@ -668,12 +683,11 @@ class MCPServerManager:
             client_id=client_id_value or getattr(mcp_server, "client_id", None),
             client_secret=client_secret_value
             or getattr(mcp_server, "client_secret", None),
-            oauth2_flow=getattr(mcp_server, "oauth2_flow", None),
+            oauth2_flow=oauth2_flow_effective,
             scopes=resolved_scopes,
             authorization_url=mcp_server.authorization_url
             or getattr(mcp_oauth_metadata, "authorization_url", None),
-            token_url=mcp_server.token_url
-            or getattr(mcp_oauth_metadata, "token_url", None),
+            token_url=token_url_for_oauth_flow,
             registration_url=mcp_server.registration_url
             or getattr(mcp_oauth_metadata, "registration_url", None),
             command=getattr(mcp_server, "command", None),
@@ -2896,12 +2910,15 @@ class MCPServerManager:
         if server.requires_per_user_auth:
             should_skip_health_check = True
         # Skip if auth_type is not none and authentication_token is missing
-        # (except aws_sigv4 which uses its own credential fields)
+        # (except aws_sigv4 which uses its own credential fields).
+        # OAuth2 M2M (client_credentials) uses client_id/client_secret — no static
+        # authentication_token; _create_mcp_client can still obtain a token, so do not skip.
         elif (
             server.auth_type
             and server.auth_type != MCPAuth.none
             and server.auth_type != MCPAuth.aws_sigv4
             and not server.authentication_token
+            and not server.has_client_credentials
         ):
             should_skip_health_check = True
 
@@ -2967,6 +2984,7 @@ class MCPServerManager:
             authorization_url=server.authorization_url,
             token_url=server.token_url,
             registration_url=server.registration_url,
+            oauth2_flow=getattr(server, "oauth2_flow", None),
             allow_all_keys=server.allow_all_keys,
             instructions=server.instructions,
         )

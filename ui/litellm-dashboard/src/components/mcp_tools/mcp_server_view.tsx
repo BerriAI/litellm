@@ -2,7 +2,7 @@ import React, { useState } from "react";
 import { ArrowLeftIcon, EyeIcon, EyeOffIcon } from "@heroicons/react/outline";
 import { Title, Card, Button, Text, Grid, TabGroup, TabList, TabPanel, TabPanels, Tab, Icon } from "@tremor/react";
 
-import { MCPServer, handleTransport, handleAuth } from "./types";
+import { MCPServer, formatOAuth2FlowForDisplay, handleTransport, handleAuth, AUTH_TYPE } from "./types";
 // TODO: Move Tools viewer from index file
 import { MCPToolsViewer } from ".";
 import MCPServerEdit from "./mcp_server_edit";
@@ -140,6 +140,15 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
                   {getAuthBadge(handleAuth(mcpServer.auth_type ?? undefined))}
                 </div>
               </Card>
+
+              {mcpServer.auth_type === AUTH_TYPE.OAUTH2 && (
+                <Card className="p-4">
+                  <Text className="text-xs font-medium text-gray-500 uppercase tracking-wide">OAuth grant (stored)</Text>
+                  <div className="mt-3">
+                    <Text className="text-sm text-gray-800 leading-snug">{formatOAuth2FlowForDisplay(mcpServer.oauth2_flow)}</Text>
+                  </div>
+                </Card>
+              )}
 
               <Card className="p-4">
                 <Text className="text-xs font-medium text-gray-500 uppercase tracking-wide">Host URL</Text>

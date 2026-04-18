@@ -349,12 +349,14 @@ describe("CreateMCPServer", () => {
 
       await selectAntOption("Authentication", "OAuth");
 
-      // Wait for OAuthFormFields to render (OAuth Flow Type selector is the sentinel)
+      // Wait for OAuthFormFields to render (OAuth grant type selector is the sentinel)
       await waitFor(() => {
-        expect(screen.getByText("OAuth Flow Type")).toBeInTheDocument();
+        expect(screen.getByText("OAuth grant type")).toBeInTheDocument();
       });
 
-      // OAuthFormFields defaults to INTERACTIVE, so the new fields should appear
+      // Default grant is M2M; switch to interactive so token validation / PKCE fields appear (tests target this path)
+      await selectAntOption("OAuth grant type", "Interactive");
+
       await waitFor(() => {
         expect(screen.getByText("Token Validation Rules (optional)")).toBeInTheDocument();
         expect(screen.getByText("Token Storage TTL (seconds, optional)")).toBeInTheDocument();

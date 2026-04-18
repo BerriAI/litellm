@@ -41,12 +41,30 @@ def _prepare_mcp_server_data(
         Dict with properly serialized JSON fields
     """
     from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+    from litellm.proxy._experimental.mcp_server.oauth2_flow_utils import (
+        infer_oauth2_flow_for_storage,
+    )
 
     # Convert model to dict
     data_dict = data.model_dump(exclude_none=True)
     # Ensure alias is always present in the dict (even if None)
     if "alias" not in data_dict:
         data_dict["alias"] = getattr(data, "alias", None)
+
+    # Persist oauth2_flow for OAuth2 M2M when the UI omits it (same rule as test MCP client).
+    _creds_plain = (
+        data_dict["credentials"]
+        if isinstance(data_dict.get("credentials"), dict)
+        else None
+    )
+    _inferred_flow = infer_oauth2_flow_for_storage(
+        auth_type=data_dict.get("auth_type") or getattr(data, "auth_type", None),
+        oauth2_flow=data_dict.get("oauth2_flow") or getattr(data, "oauth2_flow", None),
+        token_url=data_dict.get("token_url") or getattr(data, "token_url", None),
+        credentials_plain=_creds_plain,
+    )
+    if _inferred_flow is not None:
+        data_dict["oauth2_flow"] = _inferred_flow
 
     # Handle credentials serialization
     credentials = data_dict.get("credentials")

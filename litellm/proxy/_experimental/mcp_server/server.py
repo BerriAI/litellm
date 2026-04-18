@@ -2666,17 +2666,15 @@ if MCP_AVAILABLE:
                 f"MCP server auth headers: {list(mcp_server_auth_headers.keys()) if mcp_server_auth_headers else None}"
             )
             # https://datatracker.ietf.org/doc/html/rfc9728#name-www-authenticate-response
+            # Pre-emptive www-authenticate 401 is only for OAuth2 servers that are neither
+            # M2M (proxy fetches client_credentials tokens) nor interactive-without-headers
+            # (those skip 401 here so list_tools/call_tool can return a proper protocol error).
             for server_name in mcp_servers or []:
                 server = global_mcp_server_manager.get_mcp_server_by_name(
                     server_name, client_ip=_client_ip
                 )
                 if server and server.auth_type == MCPAuth.oauth2 and not oauth2_headers:
-                    # For servers that store per-user tokens server-side, skip the
-                    # pre-emptive 401 — the call_tool / list_tools dispatch will look
-                    # up the stored token from Redis / DB and only fail at the MCP
-                    # protocol level if none is found, giving the client a proper
-                    # tool-execution error rather than an HTTP 401.
-                    if server.needs_user_oauth_token:
+                    if server.has_client_credentials or server.needs_user_oauth_token:
                         continue
 
                     request = StarletteRequest(scope)
