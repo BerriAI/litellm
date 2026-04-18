@@ -3,6 +3,7 @@ Base class for sending emails to user after creating keys or invite links
 
 """
 
+import html
 import json
 import os
 from typing import List, Literal, Optional
@@ -366,7 +367,9 @@ class BaseEmailLogger(CustomLogger):
                 user_email=event.user_email or recipient_emails[0],
                 event_message=event.event_message,
             )
-            greeting = event.user_email or event.key_alias or event.token or ""
+            greeting = html.escape(
+                event.user_email or event.key_alias or event.token or ""
+            )
             email_html_content = MAX_BUDGET_ALERT_EMAIL_TEMPLATE.format(
                 email_logo_url=email_params.logo_url,
                 recipient_email=greeting,
