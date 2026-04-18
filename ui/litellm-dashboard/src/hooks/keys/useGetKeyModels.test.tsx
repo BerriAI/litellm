@@ -13,13 +13,14 @@ vi.mock("@/components/networking", () => ({
 vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
   default: vi.fn(() => ({
     accessToken: "test-token-456",
+    userId: "test-user-id",
   })),
 }));
 
 const emptyKeyModelResponse = {
   model_display_sections: [],
   source: "no-default-models",
-  resolved_total_count: 0,
+  resolved_config_entry_count: 0,
   matched_count: 0,
   models_truncated: false,
   all_team_models_without_team: false,
@@ -43,13 +44,14 @@ describe("useGetKeyModels", () => {
     const useAuthorizedModule = await import("@/app/(dashboard)/hooks/useAuthorized");
     vi.mocked(useAuthorizedModule.default).mockReturnValue({
       accessToken: "test-token-456",
+      userId: "test-user-id",
     } as any);
   });
 
   it("should load default full model list without compact", async () => {
     vi.mocked(networking.fetchKeyModelCall).mockResolvedValue({
       ...emptyKeyModelResponse,
-      resolved_total_count: 3,
+      resolved_config_entry_count: 3,
       model_display_sections: [
         { title: "Other models", section_kind: "ungrouped", models: ["a", "b", "c"] },
       ],
@@ -62,6 +64,6 @@ describe("useGetKeyModels", () => {
 
     await waitFor(() => expect(result.current.defaultModelsQuery.isSuccess).toBe(true));
     expect(networking.fetchKeyModelCall).toHaveBeenCalledWith("test-token-456", "test-key-id");
-    expect(result.current.defaultModelsQuery.data?.resolved_total_count).toBe(3);
+    expect(result.current.defaultModelsQuery.data?.resolved_config_entry_count).toBe(3);
   });
 });

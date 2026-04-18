@@ -534,7 +534,8 @@ def build_key_resolved_model_display_sections(
     only to avoid repeating the full flat list as "Other models".
     """
     sections: List[KeyResolvedModelDisplaySection] = []
-    empty_models: List[str] = [] if compact else []
+    # Always [] — compact still toggles each section's `models=` via `empty_models if compact else ...` below.
+    empty_models: List[str] = []
 
     display_set = set(display_models)
 
@@ -603,6 +604,9 @@ def prepare_key_models_response_payload(
 
     Access-group sections list concrete model names: wildcards in router group metadata
     are expanded against models allowed for this key (resolved ∩ router names).
+
+    ``resolved_config_entry_count`` is len(resolved) (pattern/sentinel entries); ``matched_count`` is
+    the number of concrete router names after expansion and search; they differ when wildcards are used.
     """
     base_concrete = _concrete_models_allowed_by_resolved(resolved, all_router_model_names)
 
@@ -638,7 +642,7 @@ def prepare_key_models_response_payload(
     return {
         "model_display_sections": model_display_sections,
         "source": source,
-        "resolved_total_count": len(resolved),
+        "resolved_config_entry_count": len(resolved),
         "matched_count": matched_count,
         "models_truncated": models_truncated,
         "all_team_models_without_team": all_team_models_without_team,

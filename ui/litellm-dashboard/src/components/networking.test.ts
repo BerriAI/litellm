@@ -423,7 +423,7 @@ describe("fetchKeyModelCall", () => {
       json: vi.fn().mockResolvedValue({
         model_display_sections: [],
         source: "no-default-models",
-        resolved_total_count: 0,
+        resolved_config_entry_count: 0,
         matched_count: 0,
         models_truncated: false,
         all_team_models_without_team: false,

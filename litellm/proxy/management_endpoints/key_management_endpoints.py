@@ -2828,6 +2828,8 @@ async def key_resolved_models_fn(
     - **search**: Filters the resolved list before truncation and sectioning.
     - **compact**: Metadata-only payload (empty `models` arrays in each section) for fast initial load.
     - **all_team_models_without_team**: True when the key uses `all-team-models` but has no `team_id` (assign a team in key settings).
+    - **resolved_config_entry_count**: Length of the post-sentinel-resolution pattern list (not the same as concrete `matched_count` when wildcards are present).
+    - **matched_count**: Number of concrete router model names after expansion and optional search (before display truncation).
     """
     from litellm.proxy.proxy_server import llm_router, prisma_client
 

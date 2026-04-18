@@ -8,7 +8,8 @@ import useAuthorized from '@/app/(dashboard)/hooks/useAuthorized';
 const SEARCH_DEBOUNCE_MS = 450;
 
 export const useGetKeyModels = (key_id: string) => {
-  const { accessToken } = useAuthorized();
+  const { accessToken, userId } = useAuthorized();
+  const cachePrincipal = userId ?? accessToken ?? '';
   const [searchInput, setSearchInputState] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useDebouncedState('', {
     wait: SEARCH_DEBOUNCE_MS,
@@ -28,7 +29,7 @@ export const useGetKeyModels = (key_id: string) => {
   const isSearchDebouncing = searchInput.trim() !== trimmedDebounced;
 
   const defaultModelsQuery = useQuery({
-    queryKey: ['keyModelsDefault', key_id],
+    queryKey: ['keyModelsDefault', key_id, cachePrincipal],
     queryFn: () => {
       if (!accessToken) throw new Error('Access Token required');
       return fetchKeyModelCall(accessToken, key_id);
@@ -37,7 +38,7 @@ export const useGetKeyModels = (key_id: string) => {
   });
 
   const searchQuery = useQuery({
-    queryKey: ['keyModelsSearch', key_id, trimmedDebounced],
+    queryKey: ['keyModelsSearch', key_id, trimmedDebounced, cachePrincipal],
     queryFn: () => {
       if (!accessToken) throw new Error('Access Token required');
       return fetchKeyModelCall(accessToken, key_id, { search: trimmedDebounced });

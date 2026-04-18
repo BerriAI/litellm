@@ -36,7 +36,7 @@ vi.mock("../networking", () => ({
       },
     ],
     source: "default",
-    resolved_total_count: 1,
+    resolved_config_entry_count: 1,
     matched_count: 1,
     models_truncated: false,
     all_team_models_without_team: false,

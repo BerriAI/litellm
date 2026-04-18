@@ -254,7 +254,7 @@ def test_prepare_payload_search_and_truncation():
         compact=False,
         all_router_model_names=big,
     )
-    assert out["resolved_total_count"] == len(big)
+    assert out["resolved_config_entry_count"] == len(big)
     assert out["matched_count"] == len(big)
     assert out["models_truncated"] is True
     ung = out["model_display_sections"][0]

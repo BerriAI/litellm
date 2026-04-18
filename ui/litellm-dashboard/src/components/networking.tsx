@@ -3323,7 +3323,8 @@ export interface KeyModelDisplaySection {
 export interface KeyModelResponse {
   model_display_sections: KeyModelDisplaySection[];
   source: string;
-  resolved_total_count: number;
+  /** Number of entries in the post–sentinel-resolution list (`resolved`), not concrete model cardinality. */
+  resolved_config_entry_count: number;
   matched_count: number;
   models_truncated: boolean;
   all_team_models_without_team: boolean;
@@ -3339,38 +3340,34 @@ export const fetchKeyModelCall = async (
   key_id: string,
   options?: FetchKeyModelCallOptions
 ): Promise<KeyModelResponse> => {
-  try {
-    const params = new URLSearchParams();
-    if (options?.search !== undefined && options.search.trim() !== "") {
-      params.set("search", options.search.trim());
-    }
-    if (options?.compact === true) {
-      params.set("compact", "true");
-    }
-    const qs = params.toString();
-    const base = proxyBaseUrl ? `${proxyBaseUrl}/key/${key_id}/models` : `/key/${key_id}/models`;
-    let url = qs ? `${base}?${qs}` : base;
-
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
-    return data;
-  } catch (error) {
-    throw error;
+  const params = new URLSearchParams();
+  if (options?.search !== undefined && options.search.trim() !== "") {
+    params.set("search", options.search.trim());
   }
+  if (options?.compact === true) {
+    params.set("compact", "true");
+  }
+  const qs = params.toString();
+  const base = proxyBaseUrl ? `${proxyBaseUrl}/key/${key_id}/models` : `/key/${key_id}/models`;
+  const url = qs ? `${base}?${qs}` : base;
+
+  const response = await fetch(url, {
+    method: "GET",
+    headers: {
+      [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json();
+    const errorMessage = deriveErrorMessage(errorData);
+    handleError(errorMessage);
+    throw new Error(errorMessage);
+  }
+
+  const data = await response.json();
+  return data;
 };
 
 export const userDailyActivityAggregatedCall = async (accessToken: string, startTime: Date, endTime: Date, userId: string | null = null) => {
