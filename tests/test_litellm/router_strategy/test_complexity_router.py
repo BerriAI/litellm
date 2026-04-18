@@ -3,6 +3,7 @@ Tests for the ComplexityRouter.
 
 Tests the rule-based complexity scoring and tier assignment logic.
 """
+
 import os
 import sys
 from typing import Dict, List
@@ -10,9 +11,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../.."))  # Adds the parent directory to the system path
 
 from litellm import Router
 from litellm.router_strategy.complexity_router.complexity_router import (
@@ -321,12 +320,15 @@ class TestPreRoutingHook:
     async def test_pre_routing_hook_complex_message(self, complexity_router):
         """Test pre-routing hook with a message containing technical content."""
         messages = [
-            {"role": "user", "content": (
-                "Design a distributed microservice architecture with Kubernetes "
-                "orchestration, implementing proper authentication, encryption, "
-                "and database optimization for high throughput. Think step by step "
-                "about the performance implications and scalability requirements."
-            )}
+            {
+                "role": "user",
+                "content": (
+                    "Design a distributed microservice architecture with Kubernetes "
+                    "orchestration, implementing proper authentication, encryption, "
+                    "and database optimization for high throughput. Think step by step "
+                    "about the performance implications and scalability requirements."
+                ),
+            }
         ]
         result = await complexity_router.async_pre_routing_hook(
             model="test-model",
@@ -376,9 +378,7 @@ class TestPreRoutingHook:
     @pytest.mark.asyncio
     async def test_pre_routing_hook_reasoning_message(self, complexity_router):
         """Test pre-routing hook with reasoning markers."""
-        messages = [
-            {"role": "user", "content": "Let's think step by step and reason through this problem carefully."}
-        ]
+        messages = [{"role": "user", "content": "Let's think step by step and reason through this problem carefully."}]
         result = await complexity_router.async_pre_routing_hook(
             model="test-model",
             request_kwargs={},
@@ -386,6 +386,55 @@ class TestPreRoutingHook:
         )
         assert result is not None
         assert result.model == "o1-preview"  # REASONING tier model
+
+    @pytest.mark.asyncio
+    async def test_pre_routing_hook_strips_thinking_blocks_on_provider_switch(self, complexity_router):
+        """Test thinking blocks are stripped when switching from vertex_ai to anthropic."""
+        messages = [
+            {"role": "user", "content": "Hello!"},
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "text", "text": "Sure!"},
+                    {"type": "thinking", "thinking": "User said hello", "signature": "abc123"},
+                ],
+            },
+        ]
+        result = await complexity_router.async_pre_routing_hook(
+            model="vertex_ai/test-model",
+            request_kwargs={},
+            messages=messages,
+        )
+        assert result is not None
+        # Should strip thinking blocks from assistant message
+        content = result.messages[1]["content"]
+        assert isinstance(content, list)
+        assert all(block["type"] == "text" for block in content)
+
+    @pytest.mark.asyncio
+    async def test_pre_routing_hook_preserves_thinking_blocks_on_same_provider(self, complexity_router):
+        """Test thinking blocks are preserved when staying within same provider."""
+        messages = [
+            {"role": "user", "content": "Hello!"},
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "text", "text": "Sure!"},
+                    {"type": "thinking", "thinking": "User said hello", "signature": "abc123"},
+                ],
+            },
+        ]
+        # Using model without provider prefix for both - should preserve thinking blocks
+        result = await complexity_router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs={},
+            messages=messages,
+        )
+        assert result is not None
+        # Should preserve thinking blocks since no provider switch
+        content = result.messages[1]["content"]
+        assert isinstance(content, list)
+        assert len(content) == 2  # Both text and thinking preserved
 
 
 class TestConfigOverrides:
@@ -412,9 +461,7 @@ class TestConfigOverrides:
             complexity_router_config=config,
         )
         # With very low thresholds, even neutral prompts should be COMPLEX or higher
-        tier, score, signals = router.classify(
-            "Explain how HTTP works with REST APIs and distributed systems"
-        )
+        tier, score, signals = router.classify("Explain how HTTP works with REST APIs and distributed systems")
         # With boundaries this low, should be at least MEDIUM (anything above -0.5)
         assert tier != ComplexityTier.SIMPLE, f"Expected non-SIMPLE tier, got {tier} with score {score}"
 
@@ -575,7 +622,7 @@ class TestSingletonMutation:
 
         # Get original default
         original_default = ComplexityRouterConfig().default_model
-        
+
         # Create router with empty config and custom default_model
         router1 = ComplexityRouter(
             model_name="test-router-1",
@@ -583,14 +630,14 @@ class TestSingletonMutation:
             complexity_router_config=None,
             default_model="custom-fallback",
         )
-        
+
         # Create another router without config
         router2 = ComplexityRouter(
             model_name="test-router-2",
             litellm_router_instance=mock_router_instance,
             complexity_router_config=None,
         )
-        
+
         # Router2 should have fresh defaults, not router1's custom default_model
         # Create a fresh config to check
         fresh_config = ComplexityRouterConfig()

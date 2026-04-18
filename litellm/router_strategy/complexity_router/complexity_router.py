@@ -8,6 +8,7 @@ No external API calls - all scoring is local and <1ms.
 
 Inspired by ClawRouter: https://github.com/BlockRunAI/ClawRouter
 """
+
 import re
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
@@ -331,6 +332,57 @@ class ComplexityRouter(CustomLogger):
             f"No model configured for tier {tier_key} and no default_model set"
         )
 
+    def _get_provider_prefix(self, model: str) -> str:
+        """Extract provider prefix from model name."""
+        if "/" in model:
+            return model.split("/")[0]
+        for prefix in ("vertex_ai", "anthropic", "bedrock", "openai", "azure", "aws"):
+            if model.startswith(prefix):
+                return prefix
+        return model
+
+    def _should_strip_thinking_blocks(
+        self, original_model: str, new_model: str
+    ) -> bool:
+        """Determine if thinking blocks should be stripped when switching models."""
+        original_provider = self._get_provider_prefix(original_model)
+        new_provider = self._get_provider_prefix(new_model)
+        if original_provider == new_provider:
+            return False
+        providers_with_incompatible_thinking = ("vertex_ai", "anthropic")
+        return (
+            original_provider in providers_with_incompatible_thinking
+            or new_provider in providers_with_incompatible_thinking
+        )
+
+    def _strip_thinking_blocks_from_messages(
+        self, messages: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """Strip thinking/redacted_thinking blocks from messages."""
+        import copy
+
+        cleaned: List[Dict[str, Any]] = []
+        for msg in messages:
+            if not isinstance(msg, dict):
+                cleaned.append(msg)
+                continue
+            msg_copy = copy.deepcopy(msg)
+            content = msg_copy.get("content")
+            if isinstance(content, list):
+                filtered = [
+                    block
+                    for block in content
+                    if not (
+                        isinstance(block, dict)
+                        and block.get("type") in ("thinking", "redacted_thinking")
+                    )
+                ]
+                if not filtered:
+                    continue
+                msg_copy["content"] = filtered
+            cleaned.append(msg_copy)
+        return cleaned
+
     async def async_pre_routing_hook(
         self,
         model: str,
@@ -400,11 +452,19 @@ class ComplexityRouter(CustomLogger):
         routed_model = self.get_model_for_tier(tier)
 
         verbose_router_logger.info(
-            f"ComplexityRouter: tier={tier.value}, score={score:.3f}, "
-            f"signals={signals}, routed_model={routed_model}"
+            f"ComplexityRouter: tier={tier.value}, score={score:.3f}, signals={signals}, routed_model={routed_model}"
         )
+
+        # Strip thinking blocks when switching between providers with incompatible thinking formats
+        cleaned_messages = messages
+        if self._should_strip_thinking_blocks(model, routed_model):
+            cleaned_messages = self._strip_thinking_blocks_from_messages(messages)
+            if cleaned_messages != messages:
+                verbose_router_logger.debug(
+                    f"ComplexityRouter: stripped thinking blocks when switching from {model} to {routed_model}"
+                )
 
         return PreRoutingHookResponse(
             model=routed_model,
-            messages=messages,
+            messages=cleaned_messages,
         )
