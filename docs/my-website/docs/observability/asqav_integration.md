@@ -40,11 +40,20 @@ The integration is a single LiteLLM `CustomLogger` subclass. Drop it into your p
 
 ```python
 import os
-import time
 import uuid
 import httpx
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
+
+
+def _latency_ms(start, end):
+    """LiteLLM passes datetime objects; older paths may pass floats."""
+    if not start or not end:
+        return None
+    delta = end - start
+    if hasattr(delta, "total_seconds"):
+        return int(delta.total_seconds() * 1000)
+    return int(delta * 1000)
 
 
 class AsqavLogger(CustomLogger):
@@ -73,7 +82,7 @@ class AsqavLogger(CustomLogger):
         self._sign("llm:call", {
             "model": kwargs.get("model"),
             "message_count": len(kwargs.get("messages") or []),
-            "latency_ms": int((end_time - start_time) * 1000) if start_time and end_time else None,
+            "latency_ms": _latency_ms(start_time, end_time),
             "prompt_tokens": getattr(usage, "prompt_tokens", None),
             "completion_tokens": getattr(usage, "completion_tokens", None),
         })
@@ -110,6 +119,15 @@ import httpx
 from litellm.integrations.custom_logger import CustomLogger
 
 
+def _latency_ms(start, end):
+    if not start or not end:
+        return None
+    delta = end - start
+    if hasattr(delta, "total_seconds"):
+        return int(delta.total_seconds() * 1000)
+    return int(delta * 1000)
+
+
 class AsqavLogger(CustomLogger):
     def __init__(self) -> None:
         self.api_key = os.environ["ASQAV_API_KEY"]
@@ -133,7 +151,7 @@ class AsqavLogger(CustomLogger):
         self._sign("llm:call", {
             "model": kwargs.get("model"),
             "message_count": len(kwargs.get("messages") or []),
-            "latency_ms": int((end_time - start_time) * 1000) if start_time and end_time else None,
+            "latency_ms": _latency_ms(start_time, end_time),
             "prompt_tokens": getattr(usage, "prompt_tokens", None),
             "completion_tokens": getattr(usage, "completion_tokens", None),
         })
