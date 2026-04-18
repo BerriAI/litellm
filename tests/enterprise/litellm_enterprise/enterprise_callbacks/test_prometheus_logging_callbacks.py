@@ -289,11 +289,10 @@ async def test_increment_remaining_budget_metrics(prometheus_logger):
     future_reset_time_team = datetime.now() + timedelta(hours=10)
     future_reset_time_key = datetime.now() + timedelta(hours=12)
     # Mock the get_team_object and get_key_object functions to return objects with budget reset times
-    with patch(
-        "litellm.proxy.auth.auth_checks.get_team_object"
-    ) as mock_get_team, patch(
-        "litellm.proxy.auth.auth_checks.get_key_object"
-    ) as mock_get_key:
+    with (
+        patch("litellm.proxy.auth.auth_checks.get_team_object") as mock_get_team,
+        patch("litellm.proxy.auth.auth_checks.get_key_object") as mock_get_key,
+    ):
         mock_get_team.return_value = MagicMock(budget_reset_at=future_reset_time_team)
         mock_get_key.return_value = MagicMock(budget_reset_at=future_reset_time_key)
 
@@ -660,7 +659,7 @@ async def test_async_log_failure_event(prometheus_logger):
     )
 
     # litellm_llm_api_failed_requests_metric incremented
-    # Labels: end_user, api_key_hash, api_key_alias, model, team, team_alias, user, model_id
+    # Labels: end_user, hashed_api_key, api_key_alias, model, team, team_alias, user, model_id
     prometheus_logger.litellm_llm_api_failed_requests_metric.labels.assert_called_once_with(
         None,  # end_user_id
         "test_hash",
@@ -1150,10 +1149,10 @@ def test_prometheus_factory(monkeypatch, enable_end_user_cost_tracking_prometheu
 
     enum_values = UserAPIKeyLabelValues(
         end_user="test_end_user",
-        api_key_hash="test_hash",
+        hashed_api_key="test_hash",
         api_key_alias="test_alias",
     )
-    supported_labels = ["end_user", "api_key_hash", "api_key_alias"]
+    supported_labels = ["end_user", "hashed_api_key", "api_key_alias"]
     returned_dict = prometheus_label_factory(
         supported_enum_labels=supported_labels, enum_values=enum_values
     )
@@ -1162,6 +1161,8 @@ def test_prometheus_factory(monkeypatch, enable_end_user_cost_tracking_prometheu
         assert returned_dict["end_user"] == "test_end_user"
     else:
         assert returned_dict["end_user"] == None
+    assert returned_dict["hashed_api_key"] == "test_hash"
+    assert returned_dict["api_key_alias"] == "test_alias"
 
 
 def test_get_custom_labels_from_metadata(monkeypatch):
@@ -1516,9 +1517,12 @@ async def test_initialize_remaining_budget_metrics(prometheus_logger):
     """
     litellm.prometheus_initialize_budget_metrics = True
     # Mock the prisma client and get_paginated_teams function
-    with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma, patch(
-        "litellm.proxy.management_endpoints.team_endpoints.get_paginated_teams"
-    ) as mock_get_teams:
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma,
+        patch(
+            "litellm.proxy.management_endpoints.team_endpoints.get_paginated_teams"
+        ) as mock_get_teams,
+    ):
         # Create mock team data with proper datetime objects for budget_reset_at
         future_reset = datetime.now() + timedelta(hours=24)  # Reset 24 hours from now
         mock_teams = [
@@ -1611,11 +1615,15 @@ async def test_initialize_remaining_budget_metrics_exception_handling(
     """
     litellm.prometheus_initialize_budget_metrics = True
     # Mock the prisma client and get_paginated_teams function to raise an exception
-    with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma, patch(
-        "litellm.proxy.management_endpoints.team_endpoints.get_paginated_teams"
-    ) as mock_get_teams, patch(
-        "litellm.proxy.management_endpoints.key_management_endpoints._list_key_helper"
-    ) as mock_list_keys:
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma,
+        patch(
+            "litellm.proxy.management_endpoints.team_endpoints.get_paginated_teams"
+        ) as mock_get_teams,
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints._list_key_helper"
+        ) as mock_list_keys,
+    ):
         # Make get_paginated_teams raise an exception
         mock_get_teams.side_effect = Exception("Database error")
         mock_list_keys.side_effect = Exception("Key listing error")
@@ -1634,9 +1642,7 @@ async def test_initialize_remaining_budget_metrics_exception_handling(
 
         # Mock litellm_organizationtable to raise an exception for org budget metrics
         mock_orgtable = MagicMock()
-        mock_orgtable.find_many = MagicMock(
-            side_effect=Exception("Org database error")
-        )
+        mock_orgtable.find_many = MagicMock(side_effect=Exception("Org database error"))
         mock_orgtable.count = MagicMock(side_effect=Exception("Org count error"))
 
         mock_db = MagicMock()
@@ -1697,9 +1703,12 @@ async def test_initialize_api_key_budget_metrics(prometheus_logger):
     """
     litellm.prometheus_initialize_budget_metrics = True
     # Mock the prisma client and _list_key_helper function
-    with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma, patch(
-        "litellm.proxy.management_endpoints.key_management_endpoints._list_key_helper"
-    ) as mock_list_keys:
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma,
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints._list_key_helper"
+        ) as mock_list_keys,
+    ):
         # Create mock key data with proper datetime objects for budget_reset_at
         future_reset = datetime.now() + timedelta(hours=24)  # Reset 24 hours from now
         key1 = UserAPIKeyAuth(

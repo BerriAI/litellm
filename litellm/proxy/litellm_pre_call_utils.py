@@ -697,6 +697,8 @@ class LiteLLMProxyRequestSetup:
                 if user_api_key_dict.budget_reset_at
                 else None
             ),
+            user_api_key_team_budget_reset_at=None,
+            user_api_key_user_budget_reset_at=None,
             user_api_key_auth_metadata=user_api_key_dict.metadata,
         )
         return user_api_key_logged_metadata
@@ -1191,6 +1193,16 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
     data[_metadata_variable_name][
         "user_api_key_user_max_budget"
     ] = user_api_key_dict.user_max_budget
+    data[_metadata_variable_name]["user_api_key_team_budget_reset_at"] = (
+        user_api_key_dict.team_budget_reset_at.isoformat()
+        if user_api_key_dict.team_budget_reset_at
+        else None
+    )
+    data[_metadata_variable_name]["user_api_key_user_budget_reset_at"] = (
+        user_api_key_dict.user_budget_reset_at.isoformat()
+        if user_api_key_dict.user_budget_reset_at
+        else None
+    )
 
     data[_metadata_variable_name]["user_api_key_metadata"] = user_api_key_dict.metadata
     data[_metadata_variable_name][

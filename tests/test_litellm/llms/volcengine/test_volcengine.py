@@ -4,7 +4,9 @@ from unittest.mock import MagicMock, patch
 
 from pydantic import BaseModel
 
-from litellm.llms.volcengine.chat.transformation import VolcEngineChatConfig as VolcEngineConfig
+from litellm.llms.volcengine.chat.transformation import (
+    VolcEngineChatConfig as VolcEngineConfig,
+)
 from litellm.utils import get_optional_params
 
 
@@ -25,9 +27,7 @@ class TestVolcEngineConfig:
         )
 
         # Fixed: thinking disabled should appear in extra_body
-        assert mapped_params == {
-            "extra_body": {"thinking": {"type": "disabled"}}
-        }
+        assert mapped_params == {"extra_body": {"thinking": {"type": "disabled"}}}
 
         e2e_mapped_params = get_optional_params(
             model="doubao-seed-1.6",
@@ -53,9 +53,7 @@ class TestVolcEngineConfig:
             model="doubao-seed-1.6",
             drop_params=False,
         )
-        assert result_enabled == {
-            "extra_body": {"thinking": {"type": "enabled"}}
-        }
+        assert result_enabled == {"extra_body": {"thinking": {"type": "enabled"}}}
 
         # Test 2: thinking None - should NOT appear in extra_body
         result_none = config.map_openai_params(
@@ -82,9 +80,7 @@ class TestVolcEngineConfig:
             model="doubao-seed-1.6",
             drop_params=False,
         )
-        assert result_disabled == {
-            "extra_body": {"thinking": {"type": "disabled"}}
-        }
+        assert result_disabled == {"extra_body": {"thinking": {"type": "disabled"}}}
 
         # Test 5: No thinking parameter - should return empty dict
         result_no_thinking = config.map_openai_params(
@@ -150,4 +146,9 @@ class TestVolcEngineConfig:
             mock_create.assert_called_once()
             print(mock_create.call_args.kwargs)
             # Fixed: thinking disabled should appear in extra_body with original structure
-            assert "extra_body" in mock_create.call_args.kwargs and "thinking" in mock_create.call_args.kwargs.get("extra_body", {}) and mock_create.call_args.kwargs.get("extra_body", {})["thinking"] == {"type": "disabled"}
+            assert (
+                "extra_body" in mock_create.call_args.kwargs
+                and "thinking" in mock_create.call_args.kwargs.get("extra_body", {})
+                and mock_create.call_args.kwargs.get("extra_body", {})["thinking"]
+                == {"type": "disabled"}
+            )

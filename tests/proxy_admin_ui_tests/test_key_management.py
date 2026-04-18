@@ -91,7 +91,9 @@ from litellm.proxy._types import (
     UpdateUserRequest,
     UserAPIKeyAuth,
 )
-from litellm.types.proxy.management_endpoints.ui_sso import LiteLLM_UpperboundKeyGenerateParams
+from litellm.types.proxy.management_endpoints.ui_sso import (
+    LiteLLM_UpperboundKeyGenerateParams,
+)
 
 proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
 
@@ -508,7 +510,9 @@ async def test_get_users_key_count(prisma_client):
     test_user = initial_users["users"][0]
     assert test_user.user_id == test_user_id
     initial_key_count = test_user.key_count
-    assert initial_key_count == 0, f"Expected initial key count to be 0, but got {initial_key_count}"
+    assert (
+        initial_key_count == 0
+    ), f"Expected initial key count to be 0, but got {initial_key_count}"
 
     # Create a new key for the test user
     new_key = await generate_key_fn(
@@ -541,9 +545,7 @@ async def test_get_users_key_count(prisma_client):
     ), f"Expected key count to increase by 1, but got {updated_key_count} (was {initial_key_count})"
 
     # Clean up test user and keys
-    await prisma_client.db.litellm_usertable.delete(
-        where={"user_id": test_user_id}
-    )
+    await prisma_client.db.litellm_usertable.delete(where={"user_id": test_user_id})
 
 
 async def cleanup_existing_teams(prisma_client):

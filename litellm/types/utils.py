@@ -2509,6 +2509,8 @@ class StandardLoggingUserAPIKeyMetadata(TypedDict):
     user_api_key_spend: Optional[float]
     user_api_key_max_budget: Optional[float]
     user_api_key_budget_reset_at: Optional[str]
+    user_api_key_team_budget_reset_at: Optional[str]
+    user_api_key_user_budget_reset_at: Optional[str]
     user_api_key_org_id: Optional[str]
     user_api_key_org_alias: Optional[str]
     user_api_key_team_id: Optional[str]

@@ -468,9 +468,9 @@ class AmazonAnthropicClaudeMessagesConfig(
 
         # 1. anthropic_version is required for all claude models
         if "anthropic_version" not in anthropic_messages_request:
-            anthropic_messages_request[
-                "anthropic_version"
-            ] = self.DEFAULT_BEDROCK_ANTHROPIC_API_VERSION
+            anthropic_messages_request["anthropic_version"] = (
+                self.DEFAULT_BEDROCK_ANTHROPIC_API_VERSION
+            )
 
         # 2. `stream` is not allowed in request body for bedrock invoke
         if "stream" in anthropic_messages_request:
@@ -657,7 +657,9 @@ class AmazonAnthropicClaudeMessagesConfig(
 
                 raw_input = stop_usage.get("input_tokens")
                 if raw_input is not None:
-                    delta_usage["input_tokens"] = raw_input if isinstance(raw_input, int) else 0
+                    delta_usage["input_tokens"] = (
+                        raw_input if isinstance(raw_input, int) else 0
+                    )
 
                 if delta_usage:
                     pending_delta["usage"] = delta_usage  # type: ignore[arg-type]

@@ -144,6 +144,7 @@ async def test_check_batch_cost_should_call_afile_content_directly_with_credenti
 
     # Mock the batch response (completed, with output file)
     from litellm.types.utils import LiteLLMBatch
+
     batch_response = LiteLLMBatch(
         id="batch-123",
         completion_window="24h",
@@ -201,9 +202,11 @@ async def test_check_batch_cost_should_call_afile_content_directly_with_credenti
 
         # Verify the DB update writes batch_processed, status, and file_object
         mock_prisma.db.litellm_managedobjecttable.update.assert_called_once()
-        update_call_kwargs = mock_prisma.db.litellm_managedobjecttable.update.call_args.kwargs
+        update_call_kwargs = (
+            mock_prisma.db.litellm_managedobjecttable.update.call_args.kwargs
+        )
         assert update_call_kwargs["data"]["batch_processed"] is True
         assert update_call_kwargs["data"]["status"] == "complete"
-        assert "file_object" in update_call_kwargs["data"], (
-            "file_object must be written to DB so list_batches reads updated status"
-        )
+        assert (
+            "file_object" in update_call_kwargs["data"]
+        ), "file_object must be written to DB so list_batches reads updated status"
