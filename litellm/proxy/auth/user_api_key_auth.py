@@ -1368,20 +1368,22 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
 
             if not skip_budget_checks:
                 with tracer.trace("litellm.proxy.auth.budget_checks"):
-                    # Check 4. Token Spend is under budget
+                    # Check 4. Max Budget Alert Check (runs before budget enforcement
+                    # so multi-threshold 100% alerts fire on the request that crosses
+                    # max_budget, before BudgetExceededError is raised below)
+                    await _virtual_key_max_budget_alert_check(
+                        valid_token=valid_token,
+                        proxy_logging_obj=proxy_logging_obj,
+                        user_obj=user_obj,
+                    )
+
+                    # Check 5. Token Spend is under budget
                     if RouteChecks.is_llm_api_route(route=route):
                         await _virtual_key_max_budget_check(
                             valid_token=valid_token,
                             proxy_logging_obj=proxy_logging_obj,
                             user_obj=user_obj,
                         )
-
-                    # Check 5. Max Budget Alert Check
-                    await _virtual_key_max_budget_alert_check(
-                        valid_token=valid_token,
-                        proxy_logging_obj=proxy_logging_obj,
-                        user_obj=user_obj,
-                    )
 
                     # Check 6. Soft Budget Check
                     await _virtual_key_soft_budget_check(
