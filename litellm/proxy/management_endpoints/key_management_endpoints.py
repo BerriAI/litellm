@@ -2864,7 +2864,7 @@ async def key_resolved_models_fn(
                 ),
             )
 
-        key_models = list[str](key_info.models or [])
+        key_models = list(key_info.models or [])
         model_access_groups: Dict[str, List[str]] = {}
         if llm_router is not None:
             model_access_groups = llm_router.get_model_access_groups()
