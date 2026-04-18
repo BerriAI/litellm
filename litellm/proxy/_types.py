@@ -3095,6 +3095,10 @@ class CallInfo(LiteLLMPydanticObjectBase):
         default=None,
         description="Additional email addresses to send alerts to (e.g., from team metadata)",
     )
+    max_budget_alert_emails: Optional[Dict[str, List[str]]] = Field(
+        default=None,
+        description="Map of threshold percentage to email recipients (e.g., {'50': ['a@co.com'], '75': ['a@co.com', 'b@co.com']})",
+    )
 
 
 class WebhookEvent(CallInfo):
