@@ -489,14 +489,14 @@ export default function KeyInfoView({
                   <Text>RPM: {currentKeyData.rpm_limit !== null ? currentKeyData.rpm_limit : "Unlimited"}</Text>
                 </div>
               </Card>
-              {currentKeyData.models && currentKeyData.models.length > 0 ? (
-                <KeyModelList key_id={currentKeyData.token}/>
+              {currentKeyData.token ? (
+                <KeyModelList key_id={currentKeyData.token} />
               ) : (
                 <Card>
                   <Text>Models</Text>
-                    <div className="mt-2 flex flex-wrap gap-2">
-                      <Text>No models specified</Text>
-                    </div>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    <Text>Key token unavailable</Text>
+                  </div>
                 </Card>
               )}
               <Card>
@@ -765,7 +765,10 @@ export default function KeyInfoView({
                           </span>
                         ))
                       ) : (
-                        <Text>No models specified</Text>
+                        <Text>
+                          No explicit list — this key can use all models available on the proxy. See the Models
+                          section on the Overview tab for the resolved list.
+                        </Text>
                       )}
                     </div>
                   </div>

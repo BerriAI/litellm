@@ -27,6 +27,20 @@ vi.mock("../networking", () => ({
   getPolicyInfoWithGuardrails: vi.fn().mockResolvedValue({
     resolved_guardrails: ["guardrail-1", "guardrail-2"],
   }),
+  fetchKeyModelCall: vi.fn().mockResolvedValue({
+    model_display_sections: [
+      {
+        section_kind: "all_proxy_models",
+        title: "All proxy models",
+        models: ["gpt-4o"],
+      },
+    ],
+    source: "default",
+    resolved_total_count: 1,
+    matched_count: 1,
+    models_truncated: false,
+    all_team_models_without_team: false,
+  }),
 }));
 
 const mockResetKeySpendMutate = vi.fn();
@@ -148,6 +162,24 @@ describe("KeyInfoView", () => {
     );
     await waitFor(() => {
       expect(screen.getByText("test-tag")).toBeInTheDocument();
+    });
+  });
+
+  it("should render KeyModelList when models is empty but the key has a token", async () => {
+    vi.mocked(useAuthorized).mockReturnValue(baseUseAuthorizedMock);
+
+    renderWithProviders(
+      <KeyInfoView
+        keyData={{ ...MOCK_KEY_DATA, models: [] }}
+        onClose={() => {}}
+        keyId="test-key-id"
+        onKeyDataUpdate={() => {}}
+        teams={[]}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("key-model-list-scroll")).toBeInTheDocument();
     });
   });
 
