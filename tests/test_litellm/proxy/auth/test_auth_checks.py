@@ -1695,8 +1695,8 @@ async def test_virtual_key_max_budget_alert_check_global_fallback():
 
 
 @pytest.mark.asyncio
-async def test_virtual_key_max_budget_alert_check_per_key_overrides_global():
-    """Test that per-key metadata takes priority over global fallback"""
+async def test_virtual_key_max_budget_alert_check_per_key_merges_with_global():
+    """Test that per-key and global configs are additively merged"""
     captured_call_info = None
 
     class MockProxyLogging:
@@ -1727,7 +1727,11 @@ async def test_virtual_key_max_budget_alert_check_per_key_overrides_global():
         )
         await asyncio.sleep(0.1)
 
-        assert captured_call_info.max_budget_alert_emails == per_key_config
+        # Additive merge: both thresholds present, recipients merged per threshold
+        assert captured_call_info.max_budget_alert_emails == {
+            "50": ["per-key@co.com"],
+            "75": ["global@co.com"],
+        }
     finally:
         litellm.default_key_max_budget_alert_emails = original
 
