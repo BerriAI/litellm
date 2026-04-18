@@ -34,13 +34,8 @@ def test_govcloud_cross_region_inference_prefix():
     base_model = bedrock_model_info.get_base_model(
         model="bedrock/us-gov.anthropic.claude-haiku-4-5-20251001-v1:0"
     )
-<<<<<<< worktree-rustling-wishing-kite
-    assert base_model == "anthropic.claude-3-5-sonnet-20240620-v1:0"
-
-=======
     assert base_model == "anthropic.claude-haiku-4-5-20251001-v1:0"
-    
->>>>>>> main
+
     # Test us-gov prefix is stripped correctly for different Claude versions
     base_model = bedrock_model_info.get_base_model(
         model="bedrock/us-gov.anthropic.claude-sonnet-4-5-20250929-v1:0"

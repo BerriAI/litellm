@@ -2738,6 +2738,15 @@ def supports_reasoning(model: str, custom_llm_provider: Optional[str] = None) ->
     )
 
 
+def supports_task_budget(model: str, custom_llm_provider: Optional[str] = None) -> bool:
+    """
+    Check if the given model supports Anthropic task budgets and return a boolean value.
+    """
+    return _supports_factory(
+        model=model, custom_llm_provider=custom_llm_provider, key="supports_task_budget"
+    )
+
+
 def supports_native_structured_output(
     model: str, custom_llm_provider: Optional[str] = None
 ) -> bool:
@@ -4804,6 +4813,14 @@ def add_provider_specific_params_to_optional_params(
                     k=k, additional_drop_params=additional_drop_params
                 ):
                     continue
+                if isinstance(optional_params.get(k), dict) and isinstance(
+                    passed_params[k], dict
+                ):
+                    optional_params[k] = {
+                        **optional_params[k],
+                        **passed_params[k],
+                    }
+                    continue
                 optional_params[k] = passed_params[k]
     return optional_params
 
@@ -5890,6 +5907,7 @@ def _get_model_info_helper(  # noqa: PLR0915
                 supports_web_search=_model_info.get("supports_web_search", None),
                 supports_url_context=_model_info.get("supports_url_context", None),
                 supports_reasoning=_model_info.get("supports_reasoning", None),
+                supports_task_budget=_model_info.get("supports_task_budget", None),
                 supports_none_reasoning_effort=_model_info.get(
                     "supports_none_reasoning_effort", None
                 ),

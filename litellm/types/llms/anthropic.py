@@ -36,10 +36,18 @@ class AnthropicOutputSchema(TypedDict, total=False):
     schema: Required[dict]
 
 
+class AnthropicTaskBudget(TypedDict, total=False):
+    """Soft token budget for an entire Claude agentic loop."""
+
+    type: Required[Literal["tokens"]]
+    total: Required[int]
+
+
 class AnthropicOutputConfig(TypedDict, total=False):
     """Configuration for controlling Claude's output behavior."""
 
-    effort: Literal["high", "medium", "low"]
+    effort: Literal["high", "medium", "low", "xhigh", "max"]
+    task_budget: AnthropicTaskBudget
 
 
 class AnthropicMessagesTool(TypedDict, total=False):
@@ -669,6 +677,7 @@ class ANTHROPIC_BETA_HEADER_VALUES(str, Enum):
     ADVANCED_TOOL_USE_2025_11_20 = "advanced-tool-use-2025-11-20"
     FAST_MODE_2026_02_01 = "fast-mode-2026-02-01"
     ADVISOR_TOOL_2026_03_01 = "advisor-tool-2026-03-01"
+    TASK_BUDGETS_2026_03_13 = "task-budgets-2026-03-13"
 
 
 # Tool search beta header constant (for Anthropic direct API and Microsoft Foundry)
@@ -676,6 +685,9 @@ ANTHROPIC_TOOL_SEARCH_BETA_HEADER = "advanced-tool-use-2025-11-20"
 
 # Effort beta header constant
 ANTHROPIC_EFFORT_BETA_HEADER = "effort-2025-11-24"
+
+# Task budget beta header constant
+ANTHROPIC_TASK_BUDGETS_BETA_HEADER = "task-budgets-2026-03-13"
 
 # OAuth constants
 ANTHROPIC_OAUTH_TOKEN_PREFIX = "sk-ant-oat"

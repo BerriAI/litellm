@@ -768,6 +768,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "supports_multimodal": {"type": "boolean"},
                 "uses_embed_content": {"type": "boolean"},
                 "supports_reasoning": {"type": "boolean"},
+                "supports_task_budget": {"type": "boolean"},
                 "supports_minimal_reasoning_effort": {"type": "boolean"},
                 "supports_none_reasoning_effort": {"type": "boolean"},
                 "supports_xhigh_reasoning_effort": {"type": "boolean"},

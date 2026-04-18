@@ -74,6 +74,7 @@ from litellm.utils import (
     has_tool_call_blocks,
     last_assistant_with_tool_calls_has_no_thinking_blocks,
     supports_reasoning,
+    supports_task_budget,
     token_counter,
 )
 
@@ -191,14 +192,6 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         )
 
     @staticmethod
-    def _is_opus_4_7_model(model: str) -> bool:
-        """Check if the model is specifically Claude Opus 4.7."""
-        model_lower = model.lower()
-        return any(
-            v in model_lower for v in ("opus-4-7", "opus_4_7", "opus-4.7", "opus_4.7")
-        )
-
-    @staticmethod
     def _supports_effort_level(model: str, level: str) -> bool:
         """Check ``supports_{level}_reasoning_effort`` in the model map.
 
@@ -233,6 +226,12 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             "context_management",
             "cache_control",
         ]
+
+        if supports_task_budget(
+            model=model,
+            custom_llm_provider=self.custom_llm_provider,
+        ):
+            params.append("output_config")
 
         if (
             "claude-3-7-sonnet" in model
@@ -1105,7 +1104,18 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                         "max": "max",
                     }
                     mapped_effort = effort_map.get(value, value)
-                    optional_params["output_config"] = {"effort": mapped_effort}
+                    output_config = optional_params.get("output_config")
+                    if not isinstance(output_config, dict):
+                        output_config = {}
+                    output_config["effort"] = mapped_effort
+                    optional_params["output_config"] = output_config
+            elif param == "output_config" and isinstance(value, dict):
+                output_config = optional_params.get("output_config")
+                if isinstance(output_config, dict):
+                    output_config.update(value)
+                    optional_params["output_config"] = output_config
+                else:
+                    optional_params["output_config"] = value
             elif param == "web_search_options" and isinstance(value, dict):
                 hosted_web_search_tool = self.map_web_search_tool(
                     cast(OpenAIWebSearchOptions, value)
@@ -1515,6 +1525,14 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         self._apply_output_config(
             data=data, model=model, optional_params=optional_params
         )
+        output_config = optional_params.get("output_config")
+        if (
+            isinstance(output_config, dict)
+            and output_config.get("task_budget") is not None
+        ):
+            self._ensure_beta_header(
+                headers, ANTHROPIC_BETA_HEADER_VALUES.TASK_BUDGETS_2026_03_13.value
+            )
 
         return data
 
@@ -1528,6 +1546,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         if not output_config or not isinstance(output_config, dict):
             return
         effort = output_config.get("effort")
+        task_budget = output_config.get("task_budget")
         valid_efforts = ["high", "medium", "low", "xhigh", "max"]
         if effort and effort not in valid_efforts:
             raise ValueError(
@@ -1547,6 +1566,24 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             raise ValueError(
                 f"effort='xhigh' is not supported by this model. Got model: {model}"
             )
+        if task_budget is not None:
+            if not supports_task_budget(
+                model=model,
+                custom_llm_provider=self.custom_llm_provider,
+            ):
+                raise ValueError(
+                    f"output_config.task_budget is not supported by this model. "
+                    f"Got model: {model}"
+                )
+            if not isinstance(task_budget, dict):
+                raise ValueError("output_config.task_budget must be a dictionary")
+            if task_budget.get("type") != "tokens":
+                raise ValueError("output_config.task_budget.type must be 'tokens'")
+            total = task_budget.get("total")
+            if not isinstance(total, int) or total <= 0:
+                raise ValueError(
+                    "output_config.task_budget.total must be a positive integer"
+                )
         data["output_config"] = output_config
 
     def _transform_response_for_json_mode(
