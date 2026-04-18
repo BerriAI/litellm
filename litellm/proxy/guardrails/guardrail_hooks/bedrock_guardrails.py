@@ -946,9 +946,9 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         #########################################################
         ########## 1. Make the Bedrock API request ##########
         #########################################################
-        bedrock_guardrail_response: Optional[
-            Union[BedrockGuardrailResponse, str]
-        ] = None
+        bedrock_guardrail_response: Optional[Union[BedrockGuardrailResponse, str]] = (
+            None
+        )
         try:
             bedrock_guardrail_response = await self.make_bedrock_api_request(
                 source="INPUT", messages=filtered_messages, request_data=data
@@ -1018,9 +1018,9 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         #########################################################
         ########## 1. Make the Bedrock API request ##########
         #########################################################
-        bedrock_guardrail_response: Optional[
-            Union[BedrockGuardrailResponse, str]
-        ] = None
+        bedrock_guardrail_response: Optional[Union[BedrockGuardrailResponse, str]] = (
+            None
+        )
         try:
             bedrock_guardrail_response = await self.make_bedrock_api_request(
                 source="INPUT", messages=filtered_messages, request_data=data
