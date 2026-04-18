@@ -275,7 +275,12 @@ class LiteLLMSkillsHandler:
             take=limit,
             skip=offset,
             order={"created_at": "desc"},
-            include={},
+            select={
+                "skill_id": True,
+                "display_title": True,
+                "description": True,
+                "metadata": True,
+            },
         )
 
         result = []

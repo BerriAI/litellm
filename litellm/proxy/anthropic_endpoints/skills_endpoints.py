@@ -14,10 +14,12 @@ from litellm.proxy.common_utils.http_parsing_utils import (
     convert_upload_files_to_file_data,
     get_form_data,
 )
+from litellm.llms.litellm_proxy.skills.handler import LiteLLMSkillsHandler
 from litellm.types.llms.anthropic_skills import (
     DeleteSkillResponse,
     ListSkillsResponse,
     Skill,
+    SkillRegistryItem,
     SkillRegistryResponse,
     TestGitHubConnectionRequest,
     TestGitHubConnectionResponse,
@@ -248,7 +250,6 @@ async def list_skills(
 )
 async def test_github_connection(
     body: TestGitHubConnectionRequest,
-    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
     Verify a GitHub PAT can access the given repo without storing anything.
@@ -263,8 +264,6 @@ async def test_github_connection(
       -d '{"repo_url": "https://github.com/org/my-skill", "github_pat": "ghp_xxx"}'
     ```
     """
-    from litellm.llms.litellm_proxy.skills.handler import LiteLLMSkillsHandler
-
     result = await LiteLLMSkillsHandler.test_github_connection(
         repo_url=body.repo_url,
         pat=body.github_pat,
@@ -281,7 +280,6 @@ async def test_github_connection(
 async def list_skills_registry(
     limit: int = 20,
     offset: int = 0,
-    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
     Agent skill discovery endpoint. Returns lightweight skill metadata for agents
@@ -296,9 +294,6 @@ async def list_skills_registry(
       -H "Authorization: Bearer your-key"
     ```
     """
-    from litellm.llms.litellm_proxy.skills.handler import LiteLLMSkillsHandler
-    from litellm.types.llms.anthropic_skills import SkillRegistryItem
-
     registry_items = await LiteLLMSkillsHandler.list_skills_for_registry(
         limit=min(limit, 100),
         offset=offset,
