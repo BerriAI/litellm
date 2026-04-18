@@ -1213,15 +1213,8 @@ def test_add_litellm_metadata_from_request_headers_both_headers_trace_id_precede
     assert data["litellm_trace_id"] == "trace-value"
 
 
-def test_add_litellm_metadata_from_request_headers_generic_session_id_header(
-    monkeypatch,
-):
-    """
-    A generic x-<vendor>-session-id header is used when no explicit litellm
-    header is set — only when the opt-in env var is enabled.
-    """
-    monkeypatch.setenv("LITELLM_CAPTURE_VENDOR_SESSION_HEADERS", "true")
-
+def test_add_litellm_metadata_from_request_headers_generic_session_id_header():
+    """A generic x-<vendor>-session-id header is used when no explicit litellm header is set."""
     headers = {"x-claude-code-session-id": "e96634a3-fa28-4083-b354-55542e2dca01"}
     data = {"metadata": {}}
     LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
@@ -1232,31 +1225,8 @@ def test_add_litellm_metadata_from_request_headers_generic_session_id_header(
     assert data["litellm_trace_id"] == "e96634a3-fa28-4083-b354-55542e2dca01"
 
 
-def test_add_litellm_metadata_from_request_headers_generic_session_id_header_ignored_by_default(
-    monkeypatch,
-):
-    """
-    Default (flag off): a generic x-<vendor>-session-id header must NOT be
-    treated as a litellm chain id — prior users who sent such headers for
-    non-LiteLLM purposes continue to work unchanged.
-    """
-    monkeypatch.delenv("LITELLM_CAPTURE_VENDOR_SESSION_HEADERS", raising=False)
-
-    headers = {"x-claude-code-session-id": "e96634a3-fa28-4083-b354-55542e2dca01"}
-    data = {"metadata": {}}
-    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
-        headers=headers, data=data, _metadata_variable_name="metadata"
-    )
-    assert "litellm_session_id" not in data
-    assert "litellm_trace_id" not in data
-
-
-def test_add_litellm_metadata_from_request_headers_explicit_header_beats_generic(
-    monkeypatch,
-):
+def test_add_litellm_metadata_from_request_headers_explicit_header_beats_generic():
     """Explicit x-litellm-trace-id wins over a generic x-*-session-id header."""
-    monkeypatch.setenv("LITELLM_CAPTURE_VENDOR_SESSION_HEADERS", "true")
-
     headers = {
         "x-litellm-trace-id": "explicit-trace-id-value",
         "x-claude-code-session-id": "e96634a3-fa28-4083-b354-55542e2dca01",
@@ -1269,15 +1239,9 @@ def test_add_litellm_metadata_from_request_headers_explicit_header_beats_generic
     assert data["litellm_trace_id"] == "explicit-trace-id-value"
 
 
-def test_get_chain_id_from_headers_generic_vendor_session_id(monkeypatch):
-    """
-    Generic ``x-<vendor>-session-id`` capture is opt-in via
-    ``LITELLM_CAPTURE_VENDOR_SESSION_HEADERS``; when enabled, valid values are
-    picked up and explicit headers still take precedence.
-    """
+def test_get_chain_id_from_headers_generic_vendor_session_id():
+    """get_chain_id_from_headers picks up any x-<vendor>-session-id with a valid value."""
     from litellm.proxy.litellm_pre_call_utils import get_chain_id_from_headers
-
-    monkeypatch.setenv("LITELLM_CAPTURE_VENDOR_SESSION_HEADERS", "true")
 
     assert (
         get_chain_id_from_headers(
@@ -1296,33 +1260,6 @@ def test_get_chain_id_from_headers_generic_vendor_session_id(monkeypatch):
                 "x-claude-code-session-id": "e96634a3-fa28-4083-b354-55542e2dca01",
             }
         )
-        == "explicit-id-value"
-    )
-
-
-def test_get_chain_id_from_headers_generic_vendor_session_id_disabled_by_default(
-    monkeypatch,
-):
-    """
-    Generic vendor session-id capture must stay OFF by default — otherwise
-    existing deployments that send such headers for non-LiteLLM purposes would
-    have their spend logs / traces silently regrouped under those IDs.
-    """
-    from litellm.proxy.litellm_pre_call_utils import get_chain_id_from_headers
-
-    monkeypatch.delenv("LITELLM_CAPTURE_VENDOR_SESSION_HEADERS", raising=False)
-
-    # Without the opt-in env var, generic vendor session headers are ignored.
-    assert (
-        get_chain_id_from_headers(
-            {"x-claude-code-session-id": "e96634a3-fa28-4083-b354-55542e2dca01"}
-        )
-        is None
-    )
-
-    # Explicit litellm headers still work (unchanged behavior).
-    assert (
-        get_chain_id_from_headers({"x-litellm-trace-id": "explicit-id-value"})
         == "explicit-id-value"
     )
 

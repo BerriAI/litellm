@@ -149,23 +149,6 @@ def _extract_generic_session_id_from_headers(
     return None
 
 
-def _is_generic_session_header_capture_enabled() -> bool:
-    """
-    Check whether capturing generic ``x-<vendor>-session-id`` headers as the
-    LiteLLM trace/session id is opted-in via env var.
-
-    Defaults to False to preserve backwards compatibility — existing deployments
-    that send vendor session-id headers for non-LiteLLM purposes must not have
-    those values silently re-used as the call's ``litellm_trace_id`` /
-    ``litellm_session_id`` (which would regroup their spend logs and traces).
-
-    Set ``LITELLM_CAPTURE_VENDOR_SESSION_HEADERS=true`` to enable.
-    """
-    from litellm.secret_managers.main import get_secret_bool
-
-    return bool(get_secret_bool("LITELLM_CAPTURE_VENDOR_SESSION_HEADERS", False))
-
-
 def get_chain_id_from_headers(headers: Optional[Dict[str, str]]) -> Optional[str]:
     """
     Extract chain id for call chaining from request headers.
@@ -173,10 +156,8 @@ def get_chain_id_from_headers(headers: Optional[Dict[str, str]]) -> Optional[str
     Priority order:
     1. ``x-litellm-trace-id`` (explicit, highest priority)
     2. ``x-litellm-session-id`` (explicit)
-    3. (OPT-IN) Any ``x-<vendor>-session-id`` header whose value looks like a
-       session id.  E.g. ``x-claude-code-session-id``.  Only consulted when the
-       ``LITELLM_CAPTURE_VENDOR_SESSION_HEADERS`` env var is truthy — keeping
-       the default behavior backwards-compatible.
+    3. Any ``x-<vendor>-session-id`` header whose value looks like a session id
+       (alphanumeric / UUID, at least 8 chars).  E.g. ``x-claude-code-session-id``.
 
     Header keys are matched case-insensitively so this works with raw header
     dicts from any transport.
@@ -187,14 +168,11 @@ def get_chain_id_from_headers(headers: Optional[Dict[str, str]]) -> Optional[str
     if not headers:
         return None
     normalized = {k.lower(): v for k, v in headers.items() if isinstance(k, str)}
-    explicit = normalized.get("x-litellm-trace-id") or normalized.get(
-        "x-litellm-session-id"
+    return (
+        normalized.get("x-litellm-trace-id")
+        or normalized.get("x-litellm-session-id")
+        or _extract_generic_session_id_from_headers(normalized)
     )
-    if explicit:
-        return explicit
-    if _is_generic_session_header_capture_enabled():
-        return _extract_generic_session_id_from_headers(normalized)
-    return None
 
 
 def safe_add_api_version_from_query_params(data: dict, request: Request):
