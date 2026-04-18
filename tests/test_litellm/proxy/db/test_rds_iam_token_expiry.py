@@ -57,9 +57,9 @@ class TestPrismaWrapperTokenRefresh:
     def _set_database_url_with_token(self, expires_in_seconds: int = 900):
         """Set DATABASE_URL with a mock token."""
         token = self._generate_mock_token(expires_in_seconds)
-        os.environ[
-            "DATABASE_URL"
-        ] = f"postgresql://test_user:{token}@test-host:5432/test_db"
+        os.environ["DATABASE_URL"] = (
+            f"postgresql://test_user:{token}@test-host:5432/test_db"
+        )
 
     @pytest.mark.asyncio
     async def test_is_token_expired_fresh(self, setup_env):
@@ -232,9 +232,9 @@ async def demonstrate_fix():
     date_str = now.strftime("%Y%m%dT%H%M%SZ")
     token = f"mock-token?X-Amz-Date={date_str}&X-Amz-Expires=10&X-Amz-Signature=abc123"
     encoded_token = urllib.parse.quote(token, safe="")
-    os.environ[
-        "DATABASE_URL"
-    ] = f"postgresql://iam_user:{encoded_token}@mock-rds:5432/litellm"
+    os.environ["DATABASE_URL"] = (
+        f"postgresql://iam_user:{encoded_token}@mock-rds:5432/litellm"
+    )
 
     # Create mock prisma client
     mock_prisma = MagicMock()

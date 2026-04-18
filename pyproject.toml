@@ -1,6 +1,6 @@
 [project]
 name = "litellm"
-version = "1.83.7"
+version = "1.83.9"
 description = "Library to easily interface with LLM API providers"
 readme = "README.md"
 requires-python = ">=3.9, <3.14"
@@ -52,8 +52,9 @@ proxy = [
     "azure-identity==1.25.2; python_version >= '3.9'",
     "azure-storage-blob==12.28.0",
     "mcp==1.26.0; python_version >= '3.10'",
-    "litellm-proxy-extras==0.4.65",
+    "litellm-proxy-extras==0.4.66",
     "litellm-enterprise==0.1.37",
+    "RestrictedPython==8.1",
     "rich==13.9.4",
     "polars==1.38.1; python_version >= '3.10'",
     "soundfile==0.12.1",
@@ -197,6 +198,10 @@ ci = [
     "langchain-mcp-adapters==0.2.1; python_version >= '3.10'",
     "langchain-openai==1.1.10; python_version >= '3.10'",
     "langgraph==1.0.10; python_version >= '3.10'",
+    # langgraph-prebuilt 1.0.9 imports ExecutionInfo/ServerInfo from
+    # langgraph.runtime, which is not exported until langgraph 1.1.0.
+    # Pin to 1.0.8 so it pairs correctly with langgraph==1.0.10.
+    "langgraph-prebuilt==1.0.8; python_version >= '3.10'",
     "claude-agent-sdk==0.1.44; python_version >= '3.10'",
 ]
 healthcheck = [
@@ -238,7 +243,7 @@ source-exclude = [
 profile = "black"
 
 [tool.commitizen]
-version = "1.83.7"
+version = "1.83.9"
 version_files = [
     "pyproject.toml:^version",
 ]
