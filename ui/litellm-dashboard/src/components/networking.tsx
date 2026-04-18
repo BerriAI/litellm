@@ -10014,15 +10014,24 @@ export const testGitHubSkillConnection = async (
   pat: string,
 ): Promise<{ status: string; message?: string }> => {
   const base = proxyBaseUrl ?? "";
-  const response = await fetch(`${base}/v1/skills/test-github-connection`, {
-    method: "POST",
-    headers: {
-      [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ repo_url: repoUrl, github_pat: pat }),
-  });
-  return response.json();
+  try {
+    const response = await fetch(`${base}/v1/skills/test-github-connection`, {
+      method: "POST",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ repo_url: repoUrl, github_pat: pat }),
+    });
+    const text = await response.text();
+    try {
+      return JSON.parse(text);
+    } catch {
+      return { status: "error", message: text || `HTTP ${response.status}` };
+    }
+  } catch (e: any) {
+    return { status: "error", message: e?.message ?? "Network error" };
+  }
 };
 
 export const createSkillFromGitHub = async (
@@ -10045,9 +10054,18 @@ export const createSkillFromGitHub = async (
       display_title: displayTitle || undefined,
     }),
   });
+  const text = await response.text();
   if (!response.ok) {
-    const err = await response.text();
-    throw new Error(err);
+    let message = text;
+    try {
+      const parsed = JSON.parse(text);
+      message = parsed?.detail ?? parsed?.message ?? text;
+    } catch { /* use raw text */ }
+    throw new Error(message || `HTTP ${response.status}`);
   }
-  return response.json();
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new Error(`Unexpected response: ${text}`);
+  }
 };
