@@ -1,5 +1,6 @@
 import os
 import sys
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import fastapi
@@ -141,6 +142,63 @@ class TestProxyInitializationHelpers:
         ProxyInitializationHelpers._init_hypercorn_server(
             mock_app, "localhost", 8000, "cert.pem", "key.pem", "ECDHE"
         )
+
+    @pytest.mark.skipif(
+        sys.version_info < (3, 10),
+        reason="Granian is only bundled for Python 3.10+ in litellm[proxy]",
+    )
+    @patch("granian.Granian")
+    @patch("builtins.print")
+    def test_init_granian_server(self, mock_print, mock_granian_cls):
+        pytest.importorskip("granian")
+        mock_server = MagicMock()
+        mock_granian_cls.return_value = mock_server
+        fake_interfaces = SimpleNamespace(ASGI="asgi")
+        with patch("granian.constants.Interfaces", fake_interfaces):
+            ProxyInitializationHelpers._init_granian_server(
+                host="0.0.0.0",
+                port=4000,
+                num_workers=2,
+                ssl_certfile_path=None,
+                ssl_keyfile_path=None,
+                max_requests_before_restart=None,
+                ciphers=None,
+                granian_runtime_threads=None,
+            )
+        mock_granian_cls.assert_called_once()
+        call_kwargs = mock_granian_cls.call_args.kwargs
+        assert call_kwargs["target"] == "litellm.proxy.proxy_server:app"
+        assert call_kwargs["address"] == "0.0.0.0"
+        assert call_kwargs["port"] == 4000
+        assert call_kwargs["workers"] == 2
+        assert call_kwargs["interface"] == "asgi"
+        assert call_kwargs["websockets"] is True
+        assert "runtime_threads" not in call_kwargs
+        mock_server.serve.assert_called_once()
+
+    @pytest.mark.skipif(
+        sys.version_info < (3, 10),
+        reason="Granian is only bundled for Python 3.10+ in litellm[proxy]",
+    )
+    @patch("granian.Granian")
+    @patch("builtins.print")
+    def test_init_granian_server_runtime_threads(self, mock_print, mock_granian_cls):
+        pytest.importorskip("granian")
+        mock_server = MagicMock()
+        mock_granian_cls.return_value = mock_server
+        fake_interfaces = SimpleNamespace(ASGI="asgi")
+        with patch("granian.constants.Interfaces", fake_interfaces):
+            ProxyInitializationHelpers._init_granian_server(
+                host="0.0.0.0",
+                port=4000,
+                num_workers=1,
+                ssl_certfile_path=None,
+                ssl_keyfile_path=None,
+                max_requests_before_restart=None,
+                ciphers=None,
+                granian_runtime_threads=4,
+            )
+        assert mock_granian_cls.call_args.kwargs["runtime_threads"] == 4
 
     @patch("subprocess.Popen")
     def test_run_ollama_serve(self, mock_popen):

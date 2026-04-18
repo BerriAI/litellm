@@ -22,6 +22,7 @@ dependencies = [
     "aiohttp==3.13.3",
     "pydantic==2.12.5",
     "jsonschema==4.23.0",
+    "granian==2.5.7",
 ]
 
 [project.urls]

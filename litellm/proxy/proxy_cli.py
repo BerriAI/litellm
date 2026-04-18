@@ -6,6 +6,7 @@ import random
 import subprocess
 import sys
 import urllib.parse as urlparse
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional, Union
 
 import click
@@ -186,6 +187,62 @@ class ProxyInitializationHelpers:
 
         # hypercorn serve raises a type warning when passing a fast api app - even though fast API is a valid type
         asyncio.run(serve(app, config))  # type: ignore
+
+    @staticmethod
+    def _init_granian_server(
+        host: str,
+        port: int,
+        num_workers: int,
+        ssl_certfile_path: Optional[str],
+        ssl_keyfile_path: Optional[str],
+        max_requests_before_restart: Optional[int],
+        ciphers: Optional[str],
+        granian_runtime_threads: Optional[int] = None,
+    ) -> None:
+        """
+        Run the proxy with Granian (Rust-backed ASGI server, HTTP/1 + HTTP/2).
+
+        Uses a string import path so workers load ``litellm.proxy.proxy_server:app``
+        the same way as uvicorn's ``app=`` string target.
+        """
+        from granian import Granian
+        from granian.constants import Interfaces
+
+        print(  # noqa
+            f"\033[1;32mLiteLLM Proxy: Starting server on {host}:{port} using Granian\033[0m\n"
+        )
+        if max_requests_before_restart is not None:
+            print(  # noqa
+                "\033[1;33mLiteLLM: --max_requests_before_restart is not supported by Granian "
+                "(Granian uses workers_lifetime in seconds, not a per-request limit).\033[0m\n"
+            )
+        if ciphers is not None:
+            print(  # noqa
+                "\033[1;33mLiteLLM: --ciphers is not applied when using --run_granian.\033[0m\n"
+            )
+
+        kwargs: dict[str, Any] = {
+            "target": "litellm.proxy.proxy_server:app",
+            "address": host,
+            "port": port,
+            "workers": max(1, num_workers),
+            "interface": Interfaces.ASGI,
+            "websockets": True,
+        }
+        if granian_runtime_threads is not None:
+            kwargs["runtime_threads"] = granian_runtime_threads
+        if ssl_certfile_path is not None and ssl_keyfile_path is not None:
+            print(  # noqa
+                f"\033[1;32mLiteLLM Proxy: Using SSL with certfile: {ssl_certfile_path} and keyfile: {ssl_keyfile_path}\033[0m\n"
+            )
+            kwargs["ssl_cert"] = Path(ssl_certfile_path)
+            kwargs["ssl_key"] = Path(ssl_keyfile_path)
+        elif ssl_certfile_path is not None or ssl_keyfile_path is not None:
+            raise click.ClickException(
+                "Both --ssl_certfile_path and --ssl_keyfile_path are required for SSL."
+            )
+
+        Granian(**kwargs).serve()
 
     @staticmethod
     def _run_gunicorn_server(
@@ -382,8 +439,22 @@ class ProxyInitializationHelpers:
 @click.option(
     "--num_workers",
     default=DEFAULT_NUM_WORKERS_LITELLM_PROXY,
-    help="Number of uvicorn / gunicorn workers to spin up. Default is 1 (from DEFAULT_NUM_WORKERS_LITELLM_PROXY)",
+    help=(
+        "Number of worker processes for uvicorn / gunicorn, or Granian worker processes "
+        "(--workers). Default is 1 (from DEFAULT_NUM_WORKERS_LITELLM_PROXY). "
+        "With --run_granian, use --granian_threads for runtime threads per worker."
+    ),
     envvar="NUM_WORKERS",
+)
+@click.option(
+    "--granian_threads",
+    default=None,
+    type=click.IntRange(min=1),
+    help=(
+        "Only with --run_granian: runtime threads per worker process "
+        "(Granian --runtime-threads / GRANIAN_RUNTIME_THREADS). Omit to use Granian's default (1)."
+    ),
+    envvar="GRANIAN_RUNTIME_THREADS",
 )
 @click.option("--api_base", default=None, help="API base URL.")
 @click.option(
@@ -524,6 +595,15 @@ class ProxyInitializationHelpers:
     help="Starts proxy via hypercorn, instead of uvicorn (supports HTTP/2)",
 )
 @click.option(
+    "--run_granian",
+    default=False,
+    is_flag=True,
+    help=(
+        "Starts proxy via Granian (Rust ASGI server) instead of uvicorn. "
+        "Requires Python 3.10+ and the `granian` package."
+    ),
+)
+@click.option(
     "--ssl_keyfile_path",
     default=None,
     type=str,
@@ -600,6 +680,7 @@ def run_server(  # noqa: PLR0915
     test,
     local,
     num_workers,
+    granian_threads,
     test_async,
     iam_token_db_auth,
     num_requests,
@@ -609,6 +690,7 @@ def run_server(  # noqa: PLR0915
     version,
     run_gunicorn,
     run_hypercorn,
+    run_granian,
     ssl_keyfile_path,
     ssl_certfile_path,
     ciphers,
@@ -690,12 +772,22 @@ def run_server(  # noqa: PLR0915
             config=config,
             use_queue=use_queue,
         )
-        try:
-            import uvicorn
-        except Exception:
-            raise ImportError(
-                "uvicorn, gunicorn needs to be imported. Run - `pip install 'litellm[proxy]'`"
-            )
+        if run_granian:
+            try:
+                import granian  # noqa: F401
+            except ImportError as e:
+                raise ImportError(
+                    "granian must be installed to use --run_granian. "
+                    "Run `pip install granian` or `pip install 'litellm[proxy]'` "
+                    "(Granian requires Python 3.10+)."
+                ) from e
+        else:
+            try:
+                import uvicorn
+            except Exception:
+                raise ImportError(
+                    "uvicorn, gunicorn needs to be imported. Run - `pip install 'litellm[proxy]'`"
+                )
 
         db_connection_pool_limit = 100
         db_connection_timeout = 60
@@ -942,7 +1034,7 @@ def run_server(  # noqa: PLR0915
         # Optional: recycle uvicorn workers after N requests
         if max_requests_before_restart is not None:
             uvicorn_args["limit_max_requests"] = max_requests_before_restart
-        if run_gunicorn is False and run_hypercorn is False:
+        if run_gunicorn is False and run_hypercorn is False and run_granian is False:
             if ssl_certfile_path is not None and ssl_keyfile_path is not None:
                 print(  # noqa
                     f"\033[1;32mLiteLLM Proxy: Using SSL with certfile: {ssl_certfile_path} and keyfile: {ssl_keyfile_path}\033[0m\n"  # noqa
@@ -976,6 +1068,17 @@ def run_server(  # noqa: PLR0915
                 ssl_certfile_path=ssl_certfile_path,
                 ssl_keyfile_path=ssl_keyfile_path,
                 ciphers=ciphers,
+            )
+        elif run_granian is True:
+            ProxyInitializationHelpers._init_granian_server(
+                host=host,
+                port=port,
+                num_workers=num_workers,
+                ssl_certfile_path=ssl_certfile_path,
+                ssl_keyfile_path=ssl_keyfile_path,
+                max_requests_before_restart=max_requests_before_restart,
+                ciphers=ciphers,
+                granian_runtime_threads=granian_threads,
             )
 
 
