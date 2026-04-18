@@ -93,6 +93,7 @@ def test_completion_pydantic_obj_2():
                 model="gemini/gemini-2.5-flash",
                 messages=messages,
                 response_format=EventsList,
+                api_key="test-api-key",
                 client=client,
             )
             # print(response)
@@ -285,6 +286,7 @@ def test_function_calling_with_gemini():
                         },
                     },
                 ],
+                api_key="test-api-key",
                 client=client,
             )
         except Exception as e:
@@ -372,7 +374,10 @@ def test_multiple_function_call():
 
     with patch.object(client, "post", return_value=mock_response) as mock_post:
         r = litellm.completion(
-            messages=messages, model="gemini/gemini-1.5-flash-002", client=client
+            messages=messages,
+            model="gemini/gemini-1.5-flash-002",
+            api_key="test-api-key",
+            client=client,
         )
         assert len(r.choices) > 0
 
@@ -478,7 +483,10 @@ def test_multiple_function_call_changed_text_pos():
 
     with patch.object(client, "post", return_value=mock_response) as mock_post:
         resp = litellm.completion(
-            messages=messages, model="gemini/gemini-1.5-flash-002", client=client
+            messages=messages,
+            model="gemini/gemini-1.5-flash-002",
+            api_key="test-api-key",
+            client=client,
         )
         assert len(resp.choices) > 0
         mock_post.assert_called_once()
@@ -599,6 +607,7 @@ def test_function_calling_with_gemini_multiple_results():
             messages=messages,
             tools=tools,
             tool_choice="required",
+            api_key="test-api-key",
             client=client,
         )
         print("Response\n", response)
@@ -1182,6 +1191,7 @@ def test_logprobs():
                 {"role": "user", "content": "What's the weather like in San Francisco?"}
             ],
             logprobs=True,
+            api_key="test-api-key",
             client=client,
         )
         print(resp)
