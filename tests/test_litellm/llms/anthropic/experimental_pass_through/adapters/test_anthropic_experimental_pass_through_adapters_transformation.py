@@ -2129,3 +2129,63 @@ class TestTranslateAnthropicOutputFormatToOpenAI:
         assert self.adapter.translate_anthropic_output_format_to_openai("invalid") is None
         assert self.adapter.translate_anthropic_output_format_to_openai({"type": "text"}) is None
         assert self.adapter.translate_anthropic_output_format_to_openai({"type": "json_schema"}) is None
+
+
+class TestTranslateAnthropicToolsToOpenAI:
+    """Tests for translate_anthropic_tools_to_openai tool format preservation."""
+
+    def setup_method(self):
+        self.adapter = LiteLLMAnthropicMessagesAdapter()
+
+    def test_custom_tool_type_not_leaked_into_parameters(self):
+        """
+        Regression: the 'type' field from a custom Anthropic tool must NOT
+        leak into function.parameters. Previously, the extra-params loop
+        copied every unmapped key into parameters, overwriting
+        input_schema.type from 'object' to 'custom'.
+        """
+        tools = [
+            {
+                "type": "custom",
+                "name": "Write",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "file_path": {"type": "string"},
+                        "content": {"type": "string"},
+                    },
+                    "required": ["file_path", "content"],
+                },
+            }
+        ]
+        result, _ = self.adapter.translate_anthropic_tools_to_openai(tools=tools)
+        assert len(result) == 1
+        params = result[0]["function"]["parameters"]
+        assert params["type"] == "object", (
+            f"Expected parameters.type='object', got '{params.get('type')}'. "
+            "The tool-level 'type' field leaked into parameters."
+        )
+
+    def test_input_schema_not_mutated_by_translation(self):
+        """
+        The original input_schema dict must not be mutated when
+        translating to OpenAI format (prevents shallow-copy corruption).
+        """
+        original_schema = {
+            "type": "object",
+            "properties": {"q": {"type": "string"}},
+        }
+        tools = [
+            {
+                "type": "custom",
+                "name": "Search",
+                "input_schema": original_schema,
+            }
+        ]
+        self.adapter.translate_anthropic_tools_to_openai(tools=tools)
+        assert original_schema["type"] == "object", (
+            "Original input_schema was mutated by translation"
+        )
+        assert "name" not in original_schema, (
+            "Extra keys leaked into the original input_schema"
+        )
