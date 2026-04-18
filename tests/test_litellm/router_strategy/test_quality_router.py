@@ -411,13 +411,12 @@ class TestKeywordOverride:
         assert decision["matched_keyword"] == "code"
         assert decision["complexity_tier"] is None  # short-circuited
 
-    def test_explicit_order_overrides_quality_tier(self):
-        # Both models declare "code". By implicit rules (quality DESC), the
-        # tier-3 model would win. With an explicit `order=1` on the tier-2
-        # model, it must win regardless.
+    def test_quality_wins_over_explicit_order(self):
+        # Quality always beats order. A tier-3 model with no `order` wins over
+        # a tier-2 model with `order=1`.
         spec = [
             {
-                "model_name": "preferred-tier2",
+                "model_name": "ordered-tier2",
                 "quality_tier": 2,
                 "keywords": ["code"],
                 "order": 1,
@@ -435,13 +434,41 @@ class TestKeywordOverride:
         qr = QualityRouter(
             model_name="qr",
             litellm_router_instance=router,
-            default_model="preferred-tier2",
+            default_model="ordered-tier2",
             quality_router_config={
-                "available_models": ["preferred-tier2", "implicit-tier3"]
+                "available_models": ["ordered-tier2", "implicit-tier3"]
             },
         )
         match = qr._keyword_override("write some code")
-        assert match == ("preferred-tier2", "code")
+        assert match == ("implicit-tier3", "code")
+
+    def test_order_breaks_tie_within_same_quality_tier(self):
+        # Two tier-3 models, both match "code". Lower `order` wins.
+        spec = [
+            {
+                "model_name": "preferred",
+                "quality_tier": 3,
+                "keywords": ["code"],
+                "order": 1,
+                "input_cost_per_token": 0.000050,  # more expensive
+            },
+            {
+                "model_name": "default-tier3",
+                "quality_tier": 3,
+                "keywords": ["code"],
+                "input_cost_per_token": 0.000005,  # cheaper
+            },
+        ]
+        router = MagicMock()
+        router.model_list = _make_model_list(spec)
+        qr = QualityRouter(
+            model_name="qr",
+            litellm_router_instance=router,
+            default_model="default-tier3",
+            quality_router_config={"available_models": ["preferred", "default-tier3"]},
+        )
+        match = qr._keyword_override("write some code")
+        assert match == ("preferred", "code")
 
     def test_explicit_order_overrides_price(self):
         # Same tier, but the more expensive one has a lower `order` and wins.

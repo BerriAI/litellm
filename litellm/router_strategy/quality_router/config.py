@@ -61,12 +61,13 @@ class RoutingPreferences(BaseModel):
     order: Optional[int] = Field(
         default=None,
         description=(
-            "Explicit priority used to break ties between deployments. Lower "
-            "values win. Applies both to keyword collisions and to picking "
-            "between multiple deployments at the same quality tier. A "
-            "deployment with `order` set always wins over one without; among "
-            "deployments sharing the same `order` (or both unset), ties fall "
-            "back to (quality_tier DESC, input_cost_per_token ASC, model_name)."
+            "Explicit priority used to break ties between deployments at the "
+            "same quality tier. Lower values win. Applies both to keyword "
+            "collisions and to picking between multiple deployments at the "
+            "same quality_tier. Tiebreak order is "
+            "(quality_tier DESC, order ASC, input_cost_per_token ASC, "
+            "model_name ASC) — quality always wins first, then explicit "
+            "order, then price."
         ),
     )
 

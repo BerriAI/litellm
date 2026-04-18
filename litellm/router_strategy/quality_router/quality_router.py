@@ -197,12 +197,12 @@ class QualityRouter(CustomLogger):
                 f"the router's model_list (or are missing routing preferences): {missing}"
             )
 
-        # Sort each tier's model list by (order ASC, model_name ASC) so that
-        # `_resolve_model_for_quality_tier` (which picks index [0]) honors the
-        # admin's explicit priority. Unset order treated as +inf so explicit
-        # always wins over implicit.
+        # Sort each tier's model list so `_resolve_model_for_quality_tier`
+        # (which picks index [0]) honors (order ASC, cost ASC, name ASC).
+        # Quality is moot within a single tier; keep parity with the keyword
+        # tiebreak by ordering on (order, cost, name) here.
         for models in tier_to_models.values():
-            models.sort(key=lambda n: (self._order_key(n), n))
+            models.sort(key=lambda n: (self._order_key(n), self._cost_key(n), n))
 
         return tier_to_models
 
@@ -211,15 +211,21 @@ class QualityRouter(CustomLogger):
         order = self._model_order.get(model_name)
         return float(order) if order is not None else math.inf
 
+    def _cost_key(self, model_name: str) -> float:
+        """`input_cost_per_token` as a float — unset becomes +inf."""
+        cost = self._model_cost.get(model_name)
+        return float(cost) if cost is not None else math.inf
+
     def _keyword_override(self, user_message: str) -> Optional[Tuple[str, str]]:
         """
         Find a deployment whose declared keywords appear in `user_message`.
 
         Returns (model_name, matched_keyword) or None when no keyword matches.
         When multiple deployments match, sorts by:
-            1. `order` ASC (explicit priority — unset = +inf so explicit wins)
-            2. quality_tier DESC
-            3. input_cost_per_token ASC (unpriced = +inf)
+            1. quality_tier DESC (best quality always wins first)
+            2. `order` ASC (explicit priority — unset = +inf so explicit wins
+               within the same tier)
+            3. input_cost_per_token ASC (unpriced = +inf so priced wins)
             4. model_name ASC (deterministic stability)
         """
         text = user_message.lower()
@@ -234,14 +240,14 @@ class QualityRouter(CustomLogger):
         if not matches:
             return None
 
-        def sort_key(match: Tuple[str, str]) -> Tuple[float, int, float, str]:
+        def sort_key(match: Tuple[str, str]) -> Tuple[int, float, float, str]:
             name = match[0]
-            order_val = self._order_key(name)
             quality = self._model_quality.get(name, 0)
+            order_val = self._order_key(name)
             cost = self._model_cost.get(name)
             cost_val = cost if cost is not None else math.inf
             # Negate quality so higher tier sorts first under ASC sort.
-            return (order_val, -quality, cost_val, name)
+            return (-quality, order_val, cost_val, name)
 
         matches.sort(key=sort_key)
         return matches[0]
