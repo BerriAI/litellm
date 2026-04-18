@@ -1175,6 +1175,59 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     )
                 )
 
+    def _add_project_model_rate_limit_descriptor_from_metadata(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        requested_model: Optional[str],
+        descriptors: List[RateLimitDescriptor],
+    ) -> None:
+        """Add project model rate limit descriptor from project_metadata if applicable."""
+        if (
+            get_model_rate_limit_from_metadata(
+                user_api_key_dict, "project_metadata", "model_rpm_limit"
+            )
+            is not None
+            or get_model_rate_limit_from_metadata(
+                user_api_key_dict, "project_metadata", "model_tpm_limit"
+            )
+            is not None
+        ):
+            _tpm_limit_for_project_model = (
+                get_model_rate_limit_from_metadata(
+                    user_api_key_dict, "project_metadata", "model_tpm_limit"
+                )
+                or {}
+            )
+            _rpm_limit_for_project_model = (
+                get_model_rate_limit_from_metadata(
+                    user_api_key_dict, "project_metadata", "model_rpm_limit"
+                )
+                or {}
+            )
+            should_check_rate_limit = (
+                requested_model in _tpm_limit_for_project_model
+                or requested_model in _rpm_limit_for_project_model
+            )
+
+            if should_check_rate_limit and requested_model is not None:
+                model_specific_tpm_limit = _tpm_limit_for_project_model.get(
+                    requested_model
+                )
+                model_specific_rpm_limit = _rpm_limit_for_project_model.get(
+                    requested_model
+                )
+                descriptors.append(
+                    RateLimitDescriptor(
+                        key="model_per_project",
+                        value=f"{user_api_key_dict.project_id}:{requested_model}",
+                        rate_limit={
+                            "requests_per_unit": model_specific_rpm_limit,
+                            "tokens_per_unit": model_specific_tpm_limit,
+                            "window_size": self.window_size,
+                        },
+                    )
+                )
+
     def _handle_rate_limit_error(
         self,
         response: RateLimitResponse,
@@ -1281,6 +1334,13 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
         # Add team model rate limits from team_metadata
         self._add_team_model_rate_limit_descriptor_from_metadata(
+            user_api_key_dict=user_api_key_dict,
+            requested_model=requested_model,
+            descriptors=descriptors,
+        )
+
+        # Project Level Rate Limits
+        self._add_project_model_rate_limit_descriptor_from_metadata(
             user_api_key_dict=user_api_key_dict,
             requested_model=requested_model,
             descriptors=descriptors,
