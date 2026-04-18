@@ -4047,6 +4047,11 @@ LiteLLM_ManagementEndpoint_MetadataFields_Premium = [
     "allowed_passthrough_routes",
 ]
 
+# Metadata keys preserved from existing rows when an update omits them.
+LiteLLM_Reserved_Metadata_Fields = [
+    "service_account_id",
+]
+
 
 class ProviderBudgetResponseObject(LiteLLMPydanticObjectBase):
     """
