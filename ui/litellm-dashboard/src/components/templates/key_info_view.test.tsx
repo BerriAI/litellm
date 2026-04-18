@@ -757,5 +757,24 @@ describe("KeyInfoView", () => {
         expect.objectContaining({ policies: [] }),
       );
     });
+
+    it("should keep an empty policies field when the previous value lives only at the top level of keyData", async () => {
+      // Defensive: some premium fields may be present at the top level but not
+      // mirrored into metadata. A genuine clear must still be forwarded.
+      const keyData: KeyResponse = {
+        ...MOCK_KEY_DATA,
+        user_id: "proxy-admin-user",
+        metadata: {},
+        policies: ["existing-policy"],
+      } as KeyResponse;
+
+      await enterEditMode(keyData);
+      await editViewMocks.onSubmit!({ key: keyData.token, token: keyData.token, policies: [] });
+
+      expect(keyUpdateCall).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ policies: [] }),
+      );
+    });
   });
 });
