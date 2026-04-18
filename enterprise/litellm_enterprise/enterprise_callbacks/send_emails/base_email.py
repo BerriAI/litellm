@@ -595,6 +595,9 @@ class BaseEmailLogger(CustomLogger):
         Loop over configured thresholds in max_budget_alert_emails,
         check cache per threshold, and send to configured recipients.
         """
+        if not user_info.max_budget_alert_emails or user_info.max_budget is None:
+            return
+
         for threshold_str, raw_emails in user_info.max_budget_alert_emails.items():
             try:
                 threshold_pct = int(threshold_str)
