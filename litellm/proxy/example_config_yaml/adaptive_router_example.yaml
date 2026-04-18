@@ -1,34 +1,3 @@
-# model_list:
-#   - model_name: claude-sonnet-4-6
-#     litellm_params: {model: anthropic/claude-sonnet-4-6}
-#     model_info:
-#       litellm_routing_preferences:
-#         quality_tier: 1
-#         keywords: [tin]
-#   - model_name: gpt-4o-mini
-#     litellm_params: {model: openai/gpt-4o-mini}
-#     model_info:
-#       litellm_routing_preferences:
-#         quality_tier: 1
-#         keywords: []
-#   - model_name: gpt-4o
-#     litellm_params: {model: openai/gpt-4o}
-#     model_info:
-#       litellm_routing_preferences:
-#         quality_tier: 2
-#         keywords: [vision, function_calling]
-#   - model_name: opus
-#     litellm_params: {model: anthropic/claude-opus-4-7}
-#     model_info:
-#       litellm_routing_preferences:
-#         quality_tier: 3
-#         keywords: ["architecture", "design"]
-#   - model_name: my-quality-router
-#     litellm_params:
-#       model: auto_router/adaptive_router
-#       adaptive_router_default_model: gpt-4o-mini
-#       adaptive_router_config:
-#         available_models: [gpt-4o-mini, gpt-4o, opus, claude-sonnet-4-6]
 # Example proxy config for the adaptive router (v0).
 #
 # Wires one logical router ("smart-cheap-router") that adaptively picks between
@@ -48,7 +17,7 @@ model_list:
   # entries in this list).
   - model_name: smart-cheap-router
     litellm_params:
-      model: auto_router/adaptive_router
+      model: openai/gpt-4o-mini # placeholder; never actually called -- router picks from available_models
       adaptive_router_config:
         available_models: ["fast", "smart"]
         weights:
@@ -58,8 +27,8 @@ model_list:
   # ---- Underlying deployments the router picks from ---------------------
   - model_name: fast
     litellm_params:
-      model: anthropic/claude-sonnet-4-6
-      api_key: os.environ/ANTHROPIC_API_KEY
+      model: openai/gpt-4o-mini
+      api_key: os.environ/OPENAI_API_KEY
       input_cost_per_token: 0.00000015
     model_info:
       adaptive_router_preferences:
@@ -68,8 +37,8 @@ model_list:
 
   - model_name: smart
     litellm_params:
-      model: anthropic/claude-opus-4-7
-      api_key: os.environ/ANTHROPIC_API_KEY
+      model: openai/gpt-4o
+      api_key: os.environ/OPENAI_API_KEY
       input_cost_per_token: 0.0000050
     model_info:
       adaptive_router_preferences:

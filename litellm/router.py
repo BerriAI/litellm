@@ -200,12 +200,16 @@ if TYPE_CHECKING:
     from litellm.router_strategy.complexity_router.complexity_router import (
         ComplexityRouter,
     )
+    from litellm.router_strategy.adaptive_router.adaptive_router import (
+        AdaptiveRouter,
+    )
 
     Span = Union[_Span, Any]
 else:
     Span = Any
     AutoRouter = Any
     ComplexityRouter = Any
+    AdaptiveRouter = Any
     PreRoutingHookResponse = Any
 
 
@@ -464,6 +468,7 @@ class Router:
         )  # {"TEAM_ID": PatternMatchRouter}
         self.auto_routers: Dict[str, "AutoRouter"] = {}
         self.complexity_routers: Dict[str, "ComplexityRouter"] = {}
+        self.adaptive_routers: Dict[str, "AdaptiveRouter"] = {}
 
         # Initialize model_group_alias early since it's used in set_model_list
         self.model_group_alias: Dict[str, Union[str, RouterModelGroupAliasItem]] = (
@@ -3864,7 +3869,7 @@ class Router:
             self._add_deployment_model_to_endpoint_for_llm_passthrough_route(
                 kwargs=kwargs, model=model, model_name=model_name
             )
-            
+
             # Get custom_llm_provider from deployment params
             try:
                 custom_llm_provider = data.get("custom_llm_provider")
@@ -3872,10 +3877,12 @@ class Router:
                     model=data["model"],
                     custom_llm_provider=custom_llm_provider,
                 )
-                custom_llm_provider = custom_llm_provider or inferred_custom_llm_provider
+                custom_llm_provider = (
+                    custom_llm_provider or inferred_custom_llm_provider
+                )
             except Exception:
                 custom_llm_provider = None
-            
+
             # Build response kwargs
             response_kwargs = {
                 **data,
@@ -3885,7 +3892,7 @@ class Router:
             # Only set custom_llm_provider if it's not None
             if custom_llm_provider is not None:
                 response_kwargs["custom_llm_provider"] = custom_llm_provider
-            
+
             response = original_generic_function(**response_kwargs)
 
             rpm_semaphore = self._get_client(
@@ -3981,7 +3988,9 @@ class Router:
                     model=data["model"],
                     custom_llm_provider=custom_llm_provider,
                 )
-                custom_llm_provider = custom_llm_provider or inferred_custom_llm_provider
+                custom_llm_provider = (
+                    custom_llm_provider or inferred_custom_llm_provider
+                )
             except Exception:
                 custom_llm_provider = None
 
@@ -4246,7 +4255,9 @@ class Router:
                     custom_llm_provider=custom_llm_provider,
                 )
                 # Preserve explicitly stored provider, fallback to inferred
-                custom_llm_provider = custom_llm_provider or inferred_custom_llm_provider
+                custom_llm_provider = (
+                    custom_llm_provider or inferred_custom_llm_provider
+                )
 
                 ## REPLACE MODEL IN FILE WITH SELECTED DEPLOYMENT ##
                 purpose = cast(Optional[OpenAIFilesPurpose], kwargs.get("purpose"))
@@ -5355,9 +5366,9 @@ class Router:
             e,
             (litellm.ContextWindowExceededError, litellm.ContentPolicyViolationError),
         )
-        _request_team_id: Optional[str] = (
-            kwargs.get("metadata", {}) or {}
-        ).get("user_api_key_team_id")
+        _request_team_id: Optional[str] = (kwargs.get("metadata", {}) or {}).get(
+            "user_api_key_team_id"
+        )
         all_deployments = self._get_all_deployments(
             model_name=original_model_group, team_id=_request_team_id
         )
@@ -6804,10 +6815,13 @@ class Router:
         Check if the deployment is an auto-router deployment (semantic router).
 
         Returns True if the litellm_params model starts with "auto_router/"
-        but NOT "auto_router/complexity_router" (which uses complexity routing).
+        but NOT "auto_router/complexity_router" or "auto_router/adaptive_router"
+        (which use the complexity-router and adaptive-router strategies).
         """
         if litellm_params.model.startswith("auto_router/complexity_router"):
             return False  # This is handled by complexity_router
+        if litellm_params.model.startswith("auto_router/adaptive_router"):
+            return False  # This is handled by adaptive_router
         if litellm_params.model.startswith("auto_router/"):
             return True
         return False
@@ -6914,6 +6928,121 @@ class Router:
             )
         self.complexity_routers[deployment.model_name] = complexity_router
 
+    def _is_adaptive_router_deployment(self, litellm_params: LiteLLM_Params) -> bool:
+        """True when this deployment opts in via the `auto_router/adaptive_router` model prefix."""
+        return litellm_params.model.startswith("auto_router/adaptive_router")
+
+    def _finalize_adaptive_router_if_configured(self) -> None:
+        """Locate every adaptive-router deployment in the finalized model_list and
+        build an AdaptiveRouter for each. Safe no-op when none are configured.
+        Idempotent: skips any deployment whose model_name is already initialized."""
+        for entry in self.model_list or []:
+            lp = (
+                entry.get("litellm_params")
+                if isinstance(entry, dict)
+                else entry.litellm_params
+            )
+            lp_model = (
+                (lp.get("model") if isinstance(lp, dict) else lp.model) if lp else None
+            )
+            if not (lp_model and lp_model.startswith("auto_router/adaptive_router")):
+                continue
+            model_name = (
+                entry.get("model_name") if isinstance(entry, dict) else entry.model_name
+            )
+            if not model_name or not lp:
+                continue
+            if model_name in self.adaptive_routers:
+                continue
+            deployment = Deployment(
+                model_name=model_name,
+                litellm_params=(
+                    lp if not isinstance(lp, dict) else LiteLLM_Params(**lp)
+                ),
+                model_info=(
+                    entry.get("model_info")
+                    if isinstance(entry, dict)
+                    else entry.model_info
+                ),
+            )
+            self.init_adaptive_router_deployment(deployment=deployment)
+
+    def init_adaptive_router_deployment(self, deployment: Deployment) -> None:
+        """
+        Build an AdaptiveRouter instance for this deployment and register its
+        post-call hook. Multiple adaptive routers can coexist on a single Router,
+        keyed by `deployment.model_name`.
+
+        `model_to_prefs` and `model_to_cost` are derived from the OTHER models
+        already registered in `self.model_list` whose `model_name` appears in
+        `available_models`. Models not yet registered fall back to defaults.
+        """
+        # Local import: AdaptiveRouter -> hooks -> classifier all import litellm
+        # internals which transitively import this module. (AGENTS.md exception clause.)
+        from litellm.router_strategy.adaptive_router.adaptive_router import (
+            AdaptiveRouter,
+        )
+        from litellm.router_strategy.adaptive_router.hooks import (
+            AdaptiveRouterPostCallHook,
+        )
+        from litellm.types.router import (
+            AdaptiveRouterConfig,
+            AdaptiveRouterPreferences,
+        )
+
+        raw_config = deployment.litellm_params.adaptive_router_config
+        if raw_config is None:
+            raise ValueError(
+                "adaptive_router_config is required for adaptive-router deployments."
+            )
+
+        config = AdaptiveRouterConfig(**raw_config)
+
+        model_to_prefs: Dict[str, AdaptiveRouterPreferences] = {}
+        model_to_cost: Dict[str, float] = {}
+        for d in self.model_list or []:
+            name = d.get("model_name") if isinstance(d, dict) else d.model_name
+            if name not in config.available_models:
+                continue
+            mi = d.get("model_info") if isinstance(d, dict) else d.model_info
+            mi_dict: Dict[str, Any] = (
+                mi if isinstance(mi, dict) else (mi.model_dump() if mi else {})
+            )
+            prefs_raw = mi_dict.get("adaptive_router_preferences")
+            if prefs_raw is not None:
+                model_to_prefs[name] = AdaptiveRouterPreferences(**prefs_raw)
+
+            # `input_cost_per_token` is a LiteLLM_Params field per types/router.py.
+            lp = d.get("litellm_params") if isinstance(d, dict) else d.litellm_params
+            lp_dict: Dict[str, Any] = (
+                lp if isinstance(lp, dict) else (lp.model_dump() if lp else {})
+            )
+            cost = lp_dict.get("input_cost_per_token")
+            if cost is not None:
+                model_to_cost[name] = float(cost)
+
+        if deployment.model_name in self.adaptive_routers:
+            raise ValueError(
+                f"Adaptive-router deployment {deployment.model_name} already exists. "
+                "Please use a different model name."
+            )
+
+        adaptive_router = AdaptiveRouter(
+            router_name=deployment.model_name,
+            config=config,
+            model_to_prefs=model_to_prefs,
+            model_to_cost=model_to_cost,
+        )
+        self.adaptive_routers[deployment.model_name] = adaptive_router
+        litellm.callbacks.append(
+            AdaptiveRouterPostCallHook(adaptive_router=adaptive_router)
+        )
+        verbose_router_logger.info(
+            "AdaptiveRouter[%s] initialized with %d models",
+            deployment.model_name,
+            len(config.available_models),
+        )
+
     def deployment_is_active_for_environment(self, deployment: Deployment) -> bool:
         """
         Function to check if a llm deployment is active for a given environment. Allows using the same config.yaml across multople environments
@@ -7006,6 +7135,10 @@ class Router:
 
         # Note: model_name_to_deployment_indices is already built incrementally
         # by _create_deployment -> _add_model_to_list_and_index_map
+
+        # Deferred: build the AdaptiveRouter strategy now that all underlying
+        # deployments are visible in self.model_list.
+        self._finalize_adaptive_router_if_configured()
 
     def _add_deployment(self, deployment: Deployment) -> Deployment:
         import os
@@ -7133,6 +7266,11 @@ class Router:
             litellm_params=deployment.litellm_params
         ):
             self.init_complexity_router_deployment(deployment=deployment)
+
+        # NOTE: adaptive-router deployments are deferred to the end of
+        # set_model_list() because their init needs visibility into the OTHER
+        # deployments listed in `available_models` (which may not yet have
+        # been processed when this one is created).
 
         return deployment
 
@@ -9638,6 +9776,19 @@ class Router:
         #########################################################
         if model in self.complexity_routers:
             return await self.complexity_routers[model].async_pre_routing_hook(
+                model=model,
+                request_kwargs=request_kwargs,
+                messages=messages,
+                input=input,
+                specific_deployment=specific_deployment,
+            )
+
+        #########################################################
+        # Check if an adaptive-router should be used
+        #########################################################
+        adaptive_router = self.adaptive_routers.get(model)
+        if adaptive_router is not None:
+            return await adaptive_router.async_pre_routing_hook(
                 model=model,
                 request_kwargs=request_kwargs,
                 messages=messages,
