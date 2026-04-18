@@ -24,7 +24,7 @@ from litellm.router_strategy.complexity_router.complexity_router import (
     ComplexityRouter,
 )
 
-from .config import QualityRouterConfig
+from .config import QualityRouterConfig, RoutingPreferences
 
 if TYPE_CHECKING:
     from litellm.router import Router
@@ -75,15 +75,26 @@ class QualityRouter(CustomLogger):
         self._model_cost: Dict[str, Optional[float]] = {}
         self._model_order: Dict[str, Optional[int]] = {}
 
-        # Pre-built tier → models index for O(1) tier resolution.
-        self._tier_to_models: Dict[int, List[str]] = self._build_tier_index()
+        # Tier → models index. Built lazily on first access so the QualityRouter
+        # deployment does NOT need to appear after all its referenced models in
+        # the config — when `_build_tier_index` runs eagerly in `__init__`, the
+        # router instance's `model_list` is still being assembled incrementally
+        # by `_create_deployment`, and any `available_models` defined AFTER the
+        # router entry in config.yaml would silently be reported as missing.
+        self._tier_to_models_cache: Optional[Dict[int, List[str]]] = None
 
         verbose_router_logger.debug(
             f"QualityRouter initialized for {model_name} with "
             f"available_models={self.config.available_models}, "
-            f"default_model={self.config.default_model}, "
-            f"tier_index={self._tier_to_models}"
+            f"default_model={self.config.default_model}"
         )
+
+    @property
+    def _tier_to_models(self) -> Dict[int, List[str]]:
+        """Lazy tier→models index; built on first access."""
+        if self._tier_to_models_cache is None:
+            self._tier_to_models_cache = self._build_tier_index()
+        return self._tier_to_models_cache
 
     def _get_routing_preferences(self, deployment: Any) -> Optional[Dict[str, Any]]:
         """
@@ -156,38 +167,43 @@ class QualityRouter(CustomLogger):
             if name is None or name not in available:
                 continue
 
-            prefs = self._get_routing_preferences(deployment)
-            if prefs is None:
+            raw_prefs = self._get_routing_preferences(deployment)
+            if raw_prefs is None:
                 raise ValueError(
                     f"QualityRouter: model '{name}' is listed in available_models "
                     f"but has no model_info.litellm_routing_preferences"
                 )
 
-            # Accept dict or Pydantic-shaped prefs.
-            if isinstance(prefs, dict):
-                tier = prefs.get("quality_tier")
-                keywords = prefs.get("keywords") or []
-                order = prefs.get("order")
-            else:
-                tier = getattr(prefs, "quality_tier", None)
-                keywords = getattr(prefs, "keywords", None) or []
-                order = getattr(prefs, "order", None)
-
-            if tier is None:
+            # Validate via the Pydantic model so we get a clear error for
+            # missing quality_tier, wrong types, etc. This also means
+            # `RoutingPreferences` is the single source of truth for the
+            # accepted shape — readers relied on raw dicts before.
+            try:
+                if isinstance(raw_prefs, RoutingPreferences):
+                    prefs = raw_prefs
+                elif isinstance(raw_prefs, dict):
+                    prefs = RoutingPreferences(**raw_prefs)
+                else:
+                    # A Pydantic object of some other shape — coerce via its dict.
+                    prefs = RoutingPreferences(
+                        **(
+                            raw_prefs.model_dump()
+                            if hasattr(raw_prefs, "model_dump")
+                            else dict(raw_prefs)
+                        )
+                    )
+            except Exception as e:
                 raise ValueError(
-                    f"QualityRouter: model '{name}' has litellm_routing_preferences "
-                    f"but no quality_tier field"
-                )
+                    f"QualityRouter: model '{name}' has invalid "
+                    f"litellm_routing_preferences: {e}"
+                ) from e
 
-            tier_int = int(tier)
+            tier_int = int(prefs.quality_tier)
             tier_to_models.setdefault(tier_int, []).append(name)
-            self._model_keywords[name] = [str(k).lower() for k in keywords if k]
+            self._model_keywords[name] = [str(k).lower() for k in prefs.keywords if k]
             self._model_quality[name] = tier_int
             self._model_cost[name] = self._get_deployment_input_cost(deployment)
-            try:
-                self._model_order[name] = int(order) if order is not None else None
-            except (TypeError, ValueError):
-                self._model_order[name] = None
+            self._model_order[name] = prefs.order
             seen[name] = True
 
         missing = [name for name, found in seen.items() if not found]
@@ -228,6 +244,10 @@ class QualityRouter(CustomLogger):
             3. input_cost_per_token ASC (unpriced = +inf so priced wins)
             4. model_name ASC (deterministic stability)
         """
+        # Touch the lazy index so `_model_keywords` / `_model_quality` /
+        # `_model_cost` / `_model_order` are populated.
+        _ = self._tier_to_models
+
         text = user_message.lower()
 
         matches: List[Tuple[str, str]] = []  # (model_name, matched_keyword)
@@ -258,16 +278,29 @@ class QualityRouter(CustomLogger):
 
         Strategy:
             1. Exact tier match → first model registered at that tier.
-            2. Otherwise round up to the next higher tier that has a model.
-            3. Otherwise fall back to `config.default_model`.
+            2. Round UP to the next higher tier that has a model (closer to a
+               request we might lack capacity for).
+            3. Round DOWN to the closest lower tier that has a model (degrade
+               gracefully instead of jumping straight to `default_model`,
+               which may be off-tier).
+            4. Fall back to `config.default_model`.
+            5. Otherwise raise.
         """
-        if tier in self._tier_to_models and self._tier_to_models[tier]:
-            return self._tier_to_models[tier][0]
+        tier_index = self._tier_to_models
+        if tier in tier_index and tier_index[tier]:
+            return tier_index[tier][0]
 
-        higher_tiers = sorted(t for t in self._tier_to_models if t > tier)
+        # Round up.
+        higher_tiers = sorted(t for t in tier_index if t > tier)
         for t in higher_tiers:
-            if self._tier_to_models[t]:
-                return self._tier_to_models[t][0]
+            if tier_index[t]:
+                return tier_index[t][0]
+
+        # Round down — closest lower tier first.
+        lower_tiers = sorted((t for t in tier_index if t < tier), reverse=True)
+        for t in lower_tiers:
+            if tier_index[t]:
+                return tier_index[t][0]
 
         if self.config.default_model:
             return self.config.default_model

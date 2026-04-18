@@ -137,13 +137,17 @@ class TestTierIndex:
         router = MagicMock()
         router.model_list = ml
 
+        # Construction succeeds (tier index is lazy); the error surfaces on
+        # first use so the router entry doesn't have to appear after all of
+        # its referenced models in config.yaml.
+        qr = QualityRouter(
+            model_name="qr",
+            litellm_router_instance=router,
+            default_model="haiku",
+            quality_router_config={"available_models": ["haiku", "sonnet"]},
+        )
         with pytest.raises(ValueError, match="sonnet"):
-            QualityRouter(
-                model_name="qr",
-                litellm_router_instance=router,
-                default_model="haiku",
-                quality_router_config={"available_models": ["haiku", "sonnet"]},
-            )
+            _ = qr._tier_to_models
 
 
 # ─── Resolve model for quality tier ─────────────────────────────────────────
@@ -173,8 +177,9 @@ class TestResolveModelForQualityTier:
 
         assert qr._resolve_model_for_quality_tier(2) == "opus"
 
-    def test_falls_back_to_default_when_nothing_higher_exists(self):
-        # Only tier 1 available. Asking for tier 4 should fall back to default.
+    def test_rounds_down_when_no_higher_tier_exists(self):
+        # Only tier 1 available. Asking for tier 4 rounds up (nothing), then
+        # rounds DOWN to the closest lower tier — tier 1.
         spec = [{"model_name": "haiku", "quality_tier": 1}]
         router = MagicMock()
         router.model_list = _make_model_list(spec)
@@ -186,7 +191,156 @@ class TestResolveModelForQualityTier:
             quality_router_config={"available_models": ["haiku"]},
         )
 
-        assert qr._resolve_model_for_quality_tier(4) == "emergency-default"
+        assert qr._resolve_model_for_quality_tier(4) == "haiku"
+
+    def test_rounds_down_prefers_closest_lower_tier(self):
+        # Available: 1, 2. Asking for 4 rounds down to tier 2 (not tier 1).
+        spec = [
+            {"model_name": "haiku", "quality_tier": 1},
+            {"model_name": "sonnet", "quality_tier": 2},
+        ]
+        router = MagicMock()
+        router.model_list = _make_model_list(spec)
+
+        qr = QualityRouter(
+            model_name="qr",
+            litellm_router_instance=router,
+            default_model="emergency-default",
+            quality_router_config={"available_models": ["haiku", "sonnet"]},
+        )
+
+        assert qr._resolve_model_for_quality_tier(4) == "sonnet"
+
+    def test_prefers_round_up_over_round_down(self):
+        # Available: 1, 3. Asking for 2 rounds UP to 3, not DOWN to 1.
+        spec = [
+            {"model_name": "haiku", "quality_tier": 1},
+            {"model_name": "opus", "quality_tier": 3},
+        ]
+        router = MagicMock()
+        router.model_list = _make_model_list(spec)
+
+        qr = QualityRouter(
+            model_name="qr",
+            litellm_router_instance=router,
+            default_model="emergency-default",
+            quality_router_config={"available_models": ["haiku", "opus"]},
+        )
+
+        assert qr._resolve_model_for_quality_tier(2) == "opus"
+
+
+# ─── RoutingPreferences validation ─────────────────────────────────────────
+
+
+class TestRoutingPreferencesValidation:
+    def test_invalid_quality_tier_type_raises_clear_error(self):
+        # quality_tier must be an int — pass a non-coercible string.
+        ml = [
+            {
+                "model_name": "haiku",
+                "litellm_params": {"model": "openai/gpt-4o-mini"},
+                "model_info": {
+                    "id": "id-haiku",
+                    "litellm_routing_preferences": {"quality_tier": "not-an-int"},
+                },
+            }
+        ]
+        router = MagicMock()
+        router.model_list = ml
+
+        qr = QualityRouter(
+            model_name="qr",
+            litellm_router_instance=router,
+            default_model="haiku",
+            quality_router_config={"available_models": ["haiku"]},
+        )
+        with pytest.raises(ValueError, match="invalid litellm_routing_preferences"):
+            _ = qr._tier_to_models
+
+
+# ─── Config-ordering independence (lazy index build) ───────────────────────
+
+
+class TestConfigOrderingIndependence:
+    def test_router_can_be_instantiated_before_its_targets_exist(self):
+        # Build a router instance whose referenced model_list is EMPTY at
+        # construction time (simulating a config where the router entry
+        # appears before its target deployments). The tier index must not be
+        # built eagerly — it's deferred until first use.
+        router = MagicMock()
+        router.model_list = []  # <- targets haven't been added yet
+
+        qr = QualityRouter(
+            model_name="qr",
+            litellm_router_instance=router,
+            default_model="haiku",
+            quality_router_config={"available_models": ["haiku", "sonnet", "opus"]},
+        )
+
+        # Now the targets come online. This mirrors the incremental add by
+        # `Router._create_deployment`.
+        router.model_list = _make_model_list(
+            [
+                {"model_name": "haiku", "quality_tier": 1},
+                {"model_name": "sonnet", "quality_tier": 2},
+                {"model_name": "opus", "quality_tier": 3},
+            ]
+        )
+
+        # First access triggers the index build and sees the full list.
+        assert qr._tier_to_models == {
+            1: ["haiku"],
+            2: ["sonnet"],
+            3: ["opus"],
+        }
+
+
+# ─── Router.set_model_list resets quality_routers (hot reload) ─────────────
+
+
+class TestSetModelListResetsQualityRouters:
+    def test_set_model_list_clears_quality_routers_registry(self):
+        from litellm.router import Router
+
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "haiku",
+                    "litellm_params": {
+                        "model": "openai/gpt-4o-mini",
+                        "api_key": "sk-test",
+                    },
+                    "model_info": {"litellm_routing_preferences": {"quality_tier": 1}},
+                },
+                {
+                    "model_name": "my-qr",
+                    "litellm_params": {
+                        "model": "auto_router/quality_router",
+                        "quality_router_default_model": "haiku",
+                        "quality_router_config": {"available_models": ["haiku"]},
+                    },
+                },
+            ]
+        )
+
+        assert "my-qr" in router.quality_routers
+
+        # Hot-reload with a new model_list that doesn't define the router.
+        router.set_model_list(
+            [
+                {
+                    "model_name": "haiku",
+                    "litellm_params": {
+                        "model": "openai/gpt-4o-mini",
+                        "api_key": "sk-test",
+                    },
+                }
+            ]
+        )
+
+        # Stale router from before must be cleared.
+        assert "my-qr" not in router.quality_routers
 
 
 # ─── Pre-routing hook ───────────────────────────────────────────────────────
