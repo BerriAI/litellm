@@ -437,9 +437,7 @@ class VertexBase:
             verbose_logger.exception("Failed to load vertex credentials: %s", str(e))
             raise
         if _credentials is None:
-            raise ValueError(
-                "Could not resolve credentials for project_id: {}".format(project_id)
-            )
+            raise ValueError("Could not resolve credentials")
         self._credentials_project_mapping[credential_cache_key] = (
             _credentials,
             credential_project_id,
@@ -459,10 +457,7 @@ class VertexBase:
         Errors are logged but not raised — the current token is still usable.
         """
         try:
-            verbose_logger.debug(
-                "Background proactive credential refresh for project_id: %s",
-                credential_project_id,
-            )
+            verbose_logger.debug("Background proactive credential refresh")
             await asyncify(self.refresh_auth)(credentials)
             self._credentials_project_mapping[credential_cache_key] = (
                 credentials,
@@ -915,10 +910,7 @@ class VertexBase:
             if token_state == TokenState.INVALID:
                 # Token is expired or missing — must block until refresh completes.
                 try:
-                    verbose_logger.debug(
-                        "Credentials expired, refreshing for project_id: %s",
-                        project_id,
-                    )
+                    verbose_logger.debug("Credentials expired, refreshing")
                     await asyncify(self.refresh_auth)(_credentials)
                     self._credentials_project_mapping[credential_cache_key] = (
                         _credentials,
