@@ -147,9 +147,29 @@ class CloudflareChatConfig(BaseConfig):
     ) -> ModelResponse:
         completion_response = raw_response.json()
 
-        model_response.choices[0].message.content = completion_response["result"][  # type: ignore
-            "response"
-        ]
+        if not completion_response.get("success", True):
+            errors = completion_response.get("errors", [])
+            raise CloudflareError(
+                status_code=raw_response.status_code,
+                message=f"Cloudflare Error: {errors}",
+            )
+
+        result = completion_response.get("result", {})
+        if result is None:
+            raise CloudflareError(
+                status_code=raw_response.status_code,
+                message=f"Cloudflare Error: result is None. Response: {completion_response}",
+            )
+
+        if "response" in result:
+            model_response.choices[0].message.content = result["response"]
+        elif isinstance(result, str):
+            model_response.choices[0].message.content = result
+        else:
+            raise CloudflareError(
+                status_code=raw_response.status_code,
+                message=f"Cloudflare Error: 'response' key missing from result. Response: {completion_response}",
+            )
 
         prompt_tokens = litellm.utils.get_token_count(messages=messages, model=model)
         completion_tokens = len(
