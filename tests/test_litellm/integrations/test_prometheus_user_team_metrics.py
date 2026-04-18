@@ -262,98 +262,74 @@ class TestPrometheusUserTeamCountMetrics:
 
 
 # ---------------------------------------------------------------------------
-# Regression tests: team budget showing +Inf when user_api_key_team_max_budget
-# is None in request metadata but the team has a real budget in the DB.
+# Tests: team/user budget metrics use values from request metadata (no DB calls).
+# budget_reset_at and max_budget now flow through auth → metadata → prometheus.
 # ---------------------------------------------------------------------------
 
 
-async def test_assemble_team_object_uses_db_max_budget_when_metadata_is_none(
+async def test_assemble_team_object_uses_metadata_budget_reset_at(
     prometheus_logger,
 ):
     """
-    When max_budget is None in request metadata (e.g. stale key cache),
-    _assemble_team_object must fall back to the value returned by get_team_object
-    so that _safe_get_remaining_budget does not return +Inf.
+    _assemble_team_object uses budget_reset_at passed from request metadata.
+    No DB call is made.
     """
-    db_team = MagicMock()
-    db_team.max_budget = 3000.0
-    db_team.budget_reset_at = datetime(2026, 3, 1, tzinfo=timezone.utc)
-
-    with patch("litellm.proxy.auth.auth_checks.get_team_object") as mock_get_team:
-        mock_get_team.return_value = db_team
-        team_object = await prometheus_logger._assemble_team_object(
-            team_id="c5c33858-4379-4c90-8733-d9c58c312c10",
-            team_alias="ai-ml-local_dev",
-            spend=1617.02,
-            max_budget=None,  # simulates None coming from request metadata
-            response_cost=0.5,
-        )
-
-    assert team_object.max_budget == 3000.0, (
-        "max_budget should be populated from DB when metadata value is None"
-    )
-    assert team_object.budget_reset_at == datetime(2026, 3, 1, tzinfo=timezone.utc)
-
-
-async def test_assemble_team_object_does_not_override_metadata_max_budget(
-    prometheus_logger,
-):
-    """
-    When max_budget IS present in request metadata, it must not be overridden
-    by the DB value.
-    """
-    db_team = MagicMock()
-    db_team.max_budget = 9999.0
-    db_team.budget_reset_at = None
-
-    with patch("litellm.proxy.auth.auth_checks.get_team_object") as mock_get_team:
-        mock_get_team.return_value = db_team
-        team_object = await prometheus_logger._assemble_team_object(
-            team_id="team-1",
-            team_alias="my-team",
-            spend=50.0,
-            max_budget=100.0,  # metadata has a real value
-            response_cost=1.0,
-        )
-
-    assert team_object.max_budget == 100.0, (
-        "max_budget from metadata must not be replaced by the DB value"
+    reset_at = datetime(2026, 3, 1, tzinfo=timezone.utc)
+    team_object = await prometheus_logger._assemble_team_object(
+        team_id="c5c33858-4379-4c90-8733-d9c58c312c10",
+        team_alias="ai-ml-local_dev",
+        spend=1617.02,
+        max_budget=3000.0,
+        response_cost=0.5,
+        budget_reset_at=reset_at,
     )
 
+    assert team_object.max_budget == 3000.0
+    assert team_object.budget_reset_at == reset_at
 
-async def test_set_team_budget_metrics_after_api_request_no_inf_when_metadata_budget_none(
+
+async def test_assemble_team_object_uses_metadata_max_budget(
     prometheus_logger,
 ):
     """
-    End-to-end: when user_api_key_team_max_budget is None in request metadata
-    but the team has a real budget in the DB, the metric must NOT be set to +Inf.
+    _assemble_team_object uses max_budget passed from request metadata.
+    """
+    team_object = await prometheus_logger._assemble_team_object(
+        team_id="team-1",
+        team_alias="my-team",
+        spend=50.0,
+        max_budget=100.0,
+        response_cost=1.0,
+    )
+
+    assert team_object.max_budget == 100.0
+
+
+async def test_set_team_budget_metrics_after_api_request_uses_metadata_budget(
+    prometheus_logger,
+):
+    """
+    End-to-end: budget values come from metadata parameters, no DB call needed.
     """
     prometheus_logger.litellm_remaining_team_budget_metric = MagicMock()
     prometheus_logger.litellm_team_max_budget_metric = MagicMock()
     prometheus_logger.litellm_team_budget_remaining_hours_metric = MagicMock()
 
-    db_team = MagicMock()
-    db_team.max_budget = 3000.0
-    db_team.budget_reset_at = datetime(2026, 3, 1, tzinfo=timezone.utc)
-
-    with patch("litellm.proxy.auth.auth_checks.get_team_object") as mock_get_team:
-        mock_get_team.return_value = db_team
-        await prometheus_logger._set_team_budget_metrics_after_api_request(
-            user_api_team="c5c33858-4379-4c90-8733-d9c58c312c10",
-            user_api_team_alias="ai-ml-local_dev",
-            team_spend=1617.02,
-            team_max_budget=None,  # simulates stale key cache
-            response_cost=0.5,
-        )
+    reset_at = datetime(2026, 3, 1, tzinfo=timezone.utc)
+    await prometheus_logger._set_team_budget_metrics_after_api_request(
+        user_api_team="c5c33858-4379-4c90-8733-d9c58c312c10",
+        user_api_team_alias="ai-ml-local_dev",
+        team_spend=1617.02,
+        team_max_budget=3000.0,
+        response_cost=0.5,
+        budget_reset_at=reset_at,
+    )
 
     set_call_args = (
         prometheus_logger.litellm_remaining_team_budget_metric.labels().set.call_args
     )
     assert set_call_args is not None, "remaining_team_budget_metric.labels().set was not called"
     actual_value = set_call_args[0][0]
-    assert actual_value != float("inf"), (
-        f"remaining_team_budget_metric must not be +Inf when team has a real budget; got {actual_value}"
-    )
     expected = 3000.0 - 1617.02 - 0.5
     assert abs(actual_value - expected) < 0.01, (
         f"Expected remaining budget ~{expected}, got {actual_value}"
@@ -364,26 +340,19 @@ async def test_set_team_budget_metrics_after_api_request_inf_when_genuinely_no_b
     prometheus_logger,
 ):
     """
-    When the team genuinely has no budget (max_budget=None in both metadata and
-    DB), +Inf is the correct value and must be preserved.
+    When the team genuinely has no budget (max_budget=None), +Inf is correct.
     """
     prometheus_logger.litellm_remaining_team_budget_metric = MagicMock()
     prometheus_logger.litellm_team_max_budget_metric = MagicMock()
     prometheus_logger.litellm_team_budget_remaining_hours_metric = MagicMock()
 
-    db_team = MagicMock()
-    db_team.max_budget = None
-    db_team.budget_reset_at = None
-
-    with patch("litellm.proxy.auth.auth_checks.get_team_object") as mock_get_team:
-        mock_get_team.return_value = db_team
-        await prometheus_logger._set_team_budget_metrics_after_api_request(
-            user_api_team="team-no-budget",
-            user_api_team_alias="no-budget-team",
-            team_spend=10.0,
-            team_max_budget=None,
-            response_cost=1.0,
-        )
+    await prometheus_logger._set_team_budget_metrics_after_api_request(
+        user_api_team="team-no-budget",
+        user_api_team_alias="no-budget-team",
+        team_spend=10.0,
+        team_max_budget=None,
+        response_cost=1.0,
+    )
 
     set_call_args = (
         prometheus_logger.litellm_remaining_team_budget_metric.labels().set.call_args
@@ -396,95 +365,70 @@ async def test_set_team_budget_metrics_after_api_request_inf_when_genuinely_no_b
 
 
 # ---------------------------------------------------------------------------
-# Regression tests: user budget showing +Inf when user_api_key_user_max_budget
-# is None in request metadata but the user has a real budget in the DB.
+# Tests: user budget metrics use values from request metadata (no DB calls).
 # ---------------------------------------------------------------------------
 
 
-async def test_assemble_user_object_uses_db_max_budget_when_metadata_is_none(
+async def test_assemble_user_object_uses_metadata_budget_reset_at(
     prometheus_logger,
 ):
     """
-    When max_budget is None in request metadata (e.g. stale key cache),
-    _assemble_user_object must fall back to the value returned by get_user_object
-    so that _safe_get_remaining_budget does not return +Inf.
+    _assemble_user_object uses budget_reset_at passed from request metadata.
+    No DB call is made.
     """
-    db_user = MagicMock()
-    db_user.max_budget = 500.0
-    db_user.budget_reset_at = datetime(2026, 3, 1, tzinfo=timezone.utc)
-
-    with patch("litellm.proxy.auth.auth_checks.get_user_object") as mock_get_user:
-        mock_get_user.return_value = db_user
-        user_object = await prometheus_logger._assemble_user_object(
-            user_id="user-abc-123",
-            spend=120.0,
-            max_budget=None,  # simulates None coming from request metadata
-            response_cost=0.5,
-        )
-
-    assert user_object.max_budget == 500.0, (
-        "max_budget should be populated from DB when metadata value is None"
-    )
-    assert user_object.budget_reset_at == datetime(2026, 3, 1, tzinfo=timezone.utc)
-
-
-async def test_assemble_user_object_does_not_override_metadata_max_budget(
-    prometheus_logger,
-):
-    """
-    When max_budget IS present in request metadata, it must not be overridden
-    by the DB value.
-    """
-    db_user = MagicMock()
-    db_user.max_budget = 9999.0
-    db_user.budget_reset_at = None
-
-    with patch("litellm.proxy.auth.auth_checks.get_user_object") as mock_get_user:
-        mock_get_user.return_value = db_user
-        user_object = await prometheus_logger._assemble_user_object(
-            user_id="user-abc-123",
-            spend=50.0,
-            max_budget=100.0,  # metadata has a real value
-            response_cost=1.0,
-        )
-
-    assert user_object.max_budget == 100.0, (
-        "max_budget from metadata must not be replaced by the DB value"
+    reset_at = datetime(2026, 3, 1, tzinfo=timezone.utc)
+    user_object = await prometheus_logger._assemble_user_object(
+        user_id="user-abc-123",
+        spend=120.0,
+        max_budget=500.0,
+        response_cost=0.5,
+        budget_reset_at=reset_at,
     )
 
+    assert user_object.max_budget == 500.0
+    assert user_object.budget_reset_at == reset_at
 
-async def test_set_user_budget_metrics_after_api_request_no_inf_when_metadata_budget_none(
+
+async def test_assemble_user_object_uses_metadata_max_budget(
     prometheus_logger,
 ):
     """
-    End-to-end: when user_max_budget is None in request metadata but the user
-    has a real budget in the DB, the metric must NOT be set to +Inf.
+    _assemble_user_object uses max_budget passed from request metadata.
+    """
+    user_object = await prometheus_logger._assemble_user_object(
+        user_id="user-abc-123",
+        spend=50.0,
+        max_budget=100.0,
+        response_cost=1.0,
+    )
+
+    assert user_object.max_budget == 100.0
+
+
+async def test_set_user_budget_metrics_after_api_request_uses_metadata_budget(
+    prometheus_logger,
+):
+    """
+    End-to-end: budget values come from metadata parameters, no DB call needed.
     """
     prometheus_logger.litellm_remaining_user_budget_metric = MagicMock()
     prometheus_logger.litellm_user_max_budget_metric = MagicMock()
     prometheus_logger.litellm_user_budget_remaining_hours_metric = MagicMock()
 
-    db_user = MagicMock()
-    db_user.max_budget = 500.0
-    db_user.budget_reset_at = datetime(2026, 3, 1, tzinfo=timezone.utc)
-
-    with patch("litellm.proxy.auth.auth_checks.get_user_object") as mock_get_user:
-        mock_get_user.return_value = db_user
-        await prometheus_logger._set_user_budget_metrics_after_api_request(
-            user_id="user-abc-123",
-            user_spend=120.0,
-            user_max_budget=None,  # simulates stale key cache
-            response_cost=0.5,
-        )
+    reset_at = datetime(2026, 3, 1, tzinfo=timezone.utc)
+    await prometheus_logger._set_user_budget_metrics_after_api_request(
+        user_id="user-abc-123",
+        user_spend=120.0,
+        user_max_budget=500.0,
+        response_cost=0.5,
+        budget_reset_at=reset_at,
+    )
 
     set_call_args = (
         prometheus_logger.litellm_remaining_user_budget_metric.labels().set.call_args
     )
     assert set_call_args is not None, "remaining_user_budget_metric.labels().set was not called"
     actual_value = set_call_args[0][0]
-    assert actual_value != float("inf"), (
-        f"remaining_user_budget_metric must not be +Inf when user has a real budget; got {actual_value}"
-    )
     expected = 500.0 - 120.0 - 0.5
     assert abs(actual_value - expected) < 0.01, (
         f"Expected remaining budget ~{expected}, got {actual_value}"
@@ -495,25 +439,18 @@ async def test_set_user_budget_metrics_after_api_request_inf_when_genuinely_no_b
     prometheus_logger,
 ):
     """
-    When the user genuinely has no budget (max_budget=None in both metadata and
-    DB), +Inf is the correct value and must be preserved.
+    When the user genuinely has no budget (max_budget=None), +Inf is correct.
     """
     prometheus_logger.litellm_remaining_user_budget_metric = MagicMock()
     prometheus_logger.litellm_user_max_budget_metric = MagicMock()
     prometheus_logger.litellm_user_budget_remaining_hours_metric = MagicMock()
 
-    db_user = MagicMock()
-    db_user.max_budget = None
-    db_user.budget_reset_at = None
-
-    with patch("litellm.proxy.auth.auth_checks.get_user_object") as mock_get_user:
-        mock_get_user.return_value = db_user
-        await prometheus_logger._set_user_budget_metrics_after_api_request(
-            user_id="user-no-budget",
-            user_spend=10.0,
-            user_max_budget=None,
-            response_cost=1.0,
-        )
+    await prometheus_logger._set_user_budget_metrics_after_api_request(
+        user_id="user-no-budget",
+        user_spend=10.0,
+        user_max_budget=None,
+        response_cost=1.0,
+    )
 
     set_call_args = (
         prometheus_logger.litellm_remaining_user_budget_metric.labels().set.call_args

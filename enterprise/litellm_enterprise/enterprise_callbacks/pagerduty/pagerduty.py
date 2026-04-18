@@ -124,6 +124,12 @@ class PagerDutyAlerting(SlackAlerting):
                 user_api_key_user_email=_meta.get("user_api_key_user_email"),
                 user_api_key_request_route=_meta.get("user_api_key_request_route"),
                 user_api_key_auth_metadata=_meta.get("user_api_key_auth_metadata"),
+                user_api_key_team_budget_reset_at=_meta.get(
+                    "user_api_key_team_budget_reset_at"
+                ),
+                user_api_key_user_budget_reset_at=_meta.get(
+                    "user_api_key_user_budget_reset_at"
+                ),
             )
         )
 
@@ -207,6 +213,8 @@ class PagerDutyAlerting(SlackAlerting):
                 user_api_key_user_email=user_api_key_dict.user_email,
                 user_api_key_request_route=user_api_key_dict.request_route,
                 user_api_key_auth_metadata=user_api_key_dict.metadata,
+                user_api_key_team_budget_reset_at=None,
+                user_api_key_user_budget_reset_at=None,
             )
         )
 

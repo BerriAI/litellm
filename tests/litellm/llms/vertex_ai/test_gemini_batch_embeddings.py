@@ -22,6 +22,7 @@ from litellm.llms.vertex_ai.gemini_embeddings.batch_embed_content_transformation
     _is_multimodal_input,
     _parse_data_url,
     process_embed_content_response,
+    process_response,
     transform_openai_input_gemini_content,
     transform_openai_input_gemini_embed_content,
 )
@@ -309,7 +310,7 @@ def test_gemini_multimodal_embedding_e2e():
     ) as mock_get_token:
         mock_get_token.return_value = (
             {"x-goog-api-key": "test-key"},
-            "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-2-preview:embedContent?key=test-key"
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-2-preview:embedContent"
         )
         
         mock_response = MagicMock()
@@ -562,4 +563,33 @@ def test_vertex_ai_text_only_embedding_uses_embed_content():
         assert len(data["content"]["parts"]) == 1
         assert data["content"]["parts"][0]["text"] == "Hello, world!"
         assert len(response.data) == 1
+
+
+def test_batch_embeddings_response_has_correct_indices_and_order():
+    """Test that process_response assigns sequential indices and preserves order."""
+    response_json = {
+        "embeddings": [
+            {"values": [0.1, 0.2, 0.3]},
+            {"values": [0.4, 0.5, 0.6]},
+            {"values": [0.7, 0.8, 0.9]},
+        ]
+    }
+    expected_values = [[0.1, 0.2, 0.3], [0.4, 0.5, 0.6], [0.7, 0.8, 0.9]]
+
+    model_response = EmbeddingResponse()
+    result = process_response(
+        input=["first", "second", "third"],
+        model_response=model_response,
+        model="text-embedding-004",
+        _predictions=response_json,
+    )
+
+    assert len(result.data) == 3
+    for i, embedding in enumerate(result.data):
+        assert (
+            embedding.index == i
+        ), f"embedding {i} has index={embedding.index}, expected {i}"
+        assert (
+            embedding.embedding == expected_values[i]
+        ), f"embedding {i} has wrong values: {embedding.embedding}"
 

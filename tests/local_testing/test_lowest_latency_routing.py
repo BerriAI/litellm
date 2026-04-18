@@ -964,3 +964,390 @@ async def test_lowest_latency_routing_time_to_first_token(sync_mode):
 
     assert len(selected_deployments.keys()) == 1
     assert "1" in list(selected_deployments.keys())
+
+
+def test_latency_list_trimming_discards_oldest_entry():
+    """
+    When the latency list reaches max_latency_list_size, the oldest entry is
+    discarded to make room for new entries. The newest entry is appended at
+    the end of the list.
+    """
+    max_size = 3
+    test_cache = DualCache()
+    lowest_latency_logger = LowestLatencyLoggingHandler(
+        router_cache=test_cache, routing_args={"max_latency_list_size": max_size}
+    )
+
+    model_group = "gpt-3.5-turbo"
+    deployment_id = "test-deployment"
+    kwargs = {
+        "litellm_params": {
+            "metadata": {
+                "model_group": model_group,
+                "deployment": "azure/gpt-4.1-mini",
+            },
+            "model_info": {"id": deployment_id},
+        }
+    }
+
+    # With 1 completion token, the logged latency value equals the raw
+    # response time, so we can use distinct, identifiable values.
+    latencies_to_add = []
+    for i in range(max_size + 1):  # One more than max to trigger trimming
+        start_time = time.time()
+        response_obj = {"usage": {"total_tokens": 1, "completion_tokens": 1}}
+        expected_latency = float(i + 1)  # 1.0, 2.0, 3.0, 4.0
+        end_time = start_time + expected_latency
+        latencies_to_add.append(expected_latency)
+
+        lowest_latency_logger.log_success_event(
+            response_obj=response_obj,
+            kwargs=kwargs,
+            start_time=start_time,
+            end_time=end_time,
+        )
+
+    latency_key = f"{model_group}_map"
+    cached_data = test_cache.get_cache(key=latency_key)
+    latency_list = cached_data[deployment_id]["latency"]
+
+    assert (
+        len(latency_list) == max_size
+    ), f"Expected {max_size} entries, got {len(latency_list)}"
+
+    newest_latency = latencies_to_add[-1]  # 4.0
+    oldest_latency = latencies_to_add[0]  # 1.0
+    tolerance = 0.1
+
+    # Newest entry is at the end of the list.
+    assert (
+        abs(latency_list[-1] - newest_latency) < tolerance
+    ), f"Newest latency {newest_latency} should be at end, got {latency_list[-1]}"
+
+    # Oldest entry is no longer in the list.
+    for latency in latency_list:
+        assert (
+            abs(latency - oldest_latency) > tolerance
+        ), f"Oldest latency {oldest_latency} should have been discarded, found {latency}"
+
+
+@pytest.mark.asyncio
+async def test_latency_list_trimming_discards_oldest_entry_async():
+    """
+    Async counterpart: the oldest entry is discarded when the latency list is
+    trimmed.
+    """
+    max_size = 3
+    test_cache = DualCache()
+    lowest_latency_logger = LowestLatencyLoggingHandler(
+        router_cache=test_cache, routing_args={"max_latency_list_size": max_size}
+    )
+
+    model_group = "gpt-3.5-turbo"
+    deployment_id = "test-deployment"
+    kwargs = {
+        "litellm_params": {
+            "metadata": {
+                "model_group": model_group,
+                "deployment": "azure/gpt-4.1-mini",
+            },
+            "model_info": {"id": deployment_id},
+        }
+    }
+
+    latencies_to_add = []
+    for i in range(max_size + 1):
+        start_time = time.time()
+        response_obj = {"usage": {"total_tokens": 1, "completion_tokens": 1}}
+        expected_latency = float(i + 1)
+        end_time = start_time + expected_latency
+        latencies_to_add.append(expected_latency)
+
+        await lowest_latency_logger.async_log_success_event(
+            response_obj=response_obj,
+            kwargs=kwargs,
+            start_time=start_time,
+            end_time=end_time,
+        )
+
+    latency_key = f"{model_group}_map"
+    cached_data = await test_cache.async_get_cache(key=latency_key)
+    latency_list = cached_data[deployment_id]["latency"]
+
+    assert len(latency_list) == max_size
+
+    newest_latency = latencies_to_add[-1]
+    oldest_latency = latencies_to_add[0]
+    tolerance = 0.1
+
+    assert (
+        abs(latency_list[-1] - newest_latency) < tolerance
+    ), f"Newest latency {newest_latency} should be at end of list"
+
+    for latency in latency_list:
+        assert (
+            abs(latency - oldest_latency) > tolerance
+        ), f"Oldest latency {oldest_latency} should have been discarded"
+
+
+def test_ttft_list_trimming_discards_oldest_entry():
+    """
+    The time_to_first_token list trims the oldest entry when full, matching
+    the behavior of the latency list.
+    """
+    max_size = 3
+    test_cache = DualCache()
+    lowest_latency_logger = LowestLatencyLoggingHandler(
+        router_cache=test_cache, routing_args={"max_latency_list_size": max_size}
+    )
+
+    model_group = "gpt-3.5-turbo"
+    deployment_id = "test-deployment"
+
+    ttft_values = []
+    for i in range(max_size + 1):
+        start_time = time.time()
+        expected_ttft = float(i + 1) * 0.1  # 0.1, 0.2, 0.3, 0.4
+        completion_start_time = start_time + expected_ttft
+        end_time = start_time + float(i + 1)
+        ttft_values.append(expected_ttft)
+
+        kwargs = {
+            "litellm_params": {
+                "metadata": {
+                    "model_group": model_group,
+                    "deployment": "azure/gpt-4.1-mini",
+                },
+                "model_info": {"id": deployment_id},
+            },
+            "stream": True,
+            "completion_start_time": completion_start_time,
+        }
+        # TTFT is only recorded when response_obj is a ModelResponse.
+        response_obj = litellm.ModelResponse(
+            usage=litellm.Usage(completion_tokens=1, total_tokens=1)
+        )
+
+        lowest_latency_logger.log_success_event(
+            response_obj=response_obj,
+            kwargs=kwargs,
+            start_time=start_time,
+            end_time=end_time,
+        )
+
+    latency_key = f"{model_group}_map"
+    cached_data = test_cache.get_cache(key=latency_key)
+    ttft_list = cached_data[deployment_id].get("time_to_first_token", [])
+
+    assert (
+        len(ttft_list) == max_size
+    ), f"Expected {max_size} entries, got {len(ttft_list)}"
+
+    newest_ttft = ttft_values[-1]
+    oldest_ttft = ttft_values[0]
+    tolerance = 0.05
+
+    assert (
+        abs(ttft_list[-1] - newest_ttft) < tolerance
+    ), f"Newest TTFT {newest_ttft} should be at end of list"
+
+    for ttft in ttft_list:
+        assert (
+            abs(ttft - oldest_ttft) > tolerance
+        ), f"Oldest TTFT {oldest_ttft} should have been discarded"
+
+
+@pytest.mark.asyncio
+async def test_timeout_penalty_discards_oldest_entry():
+    """
+    Timeout penalties (1000.0) are appended to the latency list and, when the
+    list is full, the oldest entry is discarded.
+    """
+    max_size = 3
+    test_cache = DualCache()
+    lowest_latency_logger = LowestLatencyLoggingHandler(
+        router_cache=test_cache, routing_args={"max_latency_list_size": max_size}
+    )
+
+    model_group = "gpt-3.5-turbo"
+    deployment_id = "test-deployment"
+    kwargs = {
+        "litellm_params": {
+            "metadata": {
+                "model_group": model_group,
+                "deployment": "azure/gpt-4.1-mini",
+            },
+            "model_info": {"id": deployment_id},
+        }
+    }
+
+    # Fill the list with max_size normal latency entries first.
+    for i in range(max_size):
+        start_time = time.time()
+        response_obj = {"usage": {"total_tokens": 1, "completion_tokens": 1}}
+        end_time = start_time + float(i + 1)
+
+        await lowest_latency_logger.async_log_success_event(
+            response_obj=response_obj,
+            kwargs=kwargs,
+            start_time=start_time,
+            end_time=end_time,
+        )
+
+    # Trigger a timeout failure: this appends 1000.0 and should discard the
+    # oldest normal entry (1.0).
+    timeout_kwargs = {
+        **kwargs,
+        "exception": litellm.Timeout(
+            message="Request timed out", model="test-model", llm_provider="test"
+        ),
+    }
+
+    await lowest_latency_logger.async_log_failure_event(
+        kwargs=timeout_kwargs,
+        response_obj=None,
+        start_time=time.time(),
+        end_time=time.time() + 30,
+    )
+
+    latency_key = f"{model_group}_map"
+    cached_data = await test_cache.async_get_cache(key=latency_key)
+    latency_list = cached_data[deployment_id]["latency"]
+
+    assert len(latency_list) == max_size
+
+    # Timeout penalty is the newest entry.
+    assert (
+        latency_list[-1] == 1000.0
+    ), f"Timeout penalty should be at end of list, got {latency_list[-1]}"
+
+    # Oldest normal entry (1.0) has been discarded.
+    tolerance = 0.1
+    for latency in latency_list[:-1]:
+        assert (
+            abs(latency - 1.0) > tolerance
+        ), f"Oldest latency 1.0 should have been discarded, found {latency}"
+
+
+def test_list_order_preserved_after_multiple_trims():
+    """
+    After many trims, the list still holds the most recent `max_size` entries
+    in insertion order (oldest at index 0, newest at index -1).
+    """
+    max_size = 3
+    test_cache = DualCache()
+    lowest_latency_logger = LowestLatencyLoggingHandler(
+        router_cache=test_cache, routing_args={"max_latency_list_size": max_size}
+    )
+
+    model_group = "gpt-3.5-turbo"
+    deployment_id = "test-deployment"
+    kwargs = {
+        "litellm_params": {
+            "metadata": {
+                "model_group": model_group,
+                "deployment": "azure/gpt-4.1-mini",
+            },
+            "model_info": {"id": deployment_id},
+        }
+    }
+
+    # Add 10 entries (7 more than max) to trigger multiple trims.
+    all_latencies = []
+    for i in range(10):
+        start_time = time.time()
+        response_obj = {"usage": {"total_tokens": 1, "completion_tokens": 1}}
+        expected_latency = float(i + 1)
+        end_time = start_time + expected_latency
+        all_latencies.append(expected_latency)
+
+        lowest_latency_logger.log_success_event(
+            response_obj=response_obj,
+            kwargs=kwargs,
+            start_time=start_time,
+            end_time=end_time,
+        )
+
+    latency_key = f"{model_group}_map"
+    cached_data = test_cache.get_cache(key=latency_key)
+    latency_list = cached_data[deployment_id]["latency"]
+
+    assert len(latency_list) == max_size
+
+    # After inserting 1..10 with max_size=3, the list should be [8, 9, 10].
+    expected_remaining = all_latencies[-max_size:]
+    tolerance = 0.1
+
+    for i, expected in enumerate(expected_remaining):
+        assert (
+            abs(latency_list[i] - expected) < tolerance
+        ), f"At index {i}, expected ~{expected}, got {latency_list[i]}"
+
+
+@pytest.mark.asyncio
+async def test_ttft_list_trimming_discards_oldest_entry_async():
+    """
+    Async counterpart: the time_to_first_token list trims the oldest entry
+    when full. Exercises the async_log_success_event TTFT path, which only
+    runs when response_obj is a ModelResponse and the call is marked as
+    streaming with a completion_start_time.
+    """
+    max_size = 3
+    test_cache = DualCache()
+    lowest_latency_logger = LowestLatencyLoggingHandler(
+        router_cache=test_cache, routing_args={"max_latency_list_size": max_size}
+    )
+
+    model_group = "gpt-3.5-turbo"
+    deployment_id = "test-deployment"
+
+    ttft_values = []
+    for i in range(max_size + 1):
+        start_time = time.time()
+        expected_ttft = float(i + 1) * 0.1  # 0.1, 0.2, 0.3, 0.4
+        completion_start_time = start_time + expected_ttft
+        end_time = start_time + float(i + 1)
+        ttft_values.append(expected_ttft)
+
+        kwargs = {
+            "litellm_params": {
+                "metadata": {
+                    "model_group": model_group,
+                    "deployment": "azure/gpt-4.1-mini",
+                },
+                "model_info": {"id": deployment_id},
+            },
+            "stream": True,
+            "completion_start_time": completion_start_time,
+        }
+        response_obj = litellm.ModelResponse(
+            usage=litellm.Usage(completion_tokens=1, total_tokens=1)
+        )
+
+        await lowest_latency_logger.async_log_success_event(
+            response_obj=response_obj,
+            kwargs=kwargs,
+            start_time=start_time,
+            end_time=end_time,
+        )
+
+    latency_key = f"{model_group}_map"
+    cached_data = await test_cache.async_get_cache(key=latency_key)
+    ttft_list = cached_data[deployment_id].get("time_to_first_token", [])
+
+    assert (
+        len(ttft_list) == max_size
+    ), f"Expected {max_size} entries, got {len(ttft_list)}"
+
+    newest_ttft = ttft_values[-1]
+    oldest_ttft = ttft_values[0]
+    tolerance = 0.05
+
+    assert (
+        abs(ttft_list[-1] - newest_ttft) < tolerance
+    ), f"Newest TTFT {newest_ttft} should be at end of list"
+
+    for ttft in ttft_list:
+        assert (
+            abs(ttft - oldest_ttft) > tolerance
+        ), f"Oldest TTFT {oldest_ttft} should have been discarded"

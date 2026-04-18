@@ -2509,6 +2509,8 @@ class StandardLoggingUserAPIKeyMetadata(TypedDict):
     user_api_key_spend: Optional[float]
     user_api_key_max_budget: Optional[float]
     user_api_key_budget_reset_at: Optional[str]
+    user_api_key_team_budget_reset_at: Optional[str]
+    user_api_key_user_budget_reset_at: Optional[str]
     user_api_key_org_id: Optional[str]
     user_api_key_org_alias: Optional[str]
     user_api_key_team_id: Optional[str]
@@ -2647,6 +2649,8 @@ class StandardLoggingAdditionalHeaders(TypedDict, total=False):
     x_ratelimit_limit_tokens: int
     x_ratelimit_remaining_requests: int
     x_ratelimit_remaining_tokens: int
+    x_ratelimit_reset_requests: str
+    x_ratelimit_reset_tokens: str
 
 
 class StandardLoggingHiddenParams(TypedDict):
@@ -2798,7 +2802,9 @@ class CostBreakdown(TypedDict, total=False):
     Detailed cost breakdown for a request
     """
 
-    input_cost: float  # Cost of input/prompt tokens
+    input_cost: float  # Cost of raw (non-cached) input tokens only
+    cache_read_cost: float  # Cost of cache-read tokens (discounted rate)
+    cache_creation_cost: float  # Cost of cache-write tokens (premium rate)
     output_cost: (
         float  # Cost of output/completion tokens (includes reasoning if applicable)
     )

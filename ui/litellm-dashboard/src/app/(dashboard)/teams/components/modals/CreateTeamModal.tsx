@@ -13,9 +13,11 @@ import AgentSelector from "@/components/agent_management/AgentSelector";
 import PremiumLoggingSettings from "@/components/common_components/PremiumLoggingSettings";
 import ModelAliasManager from "@/components/common_components/ModelAliasManager";
 import React, { useEffect, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import NotificationsManager from "@/components/molecules/notifications_manager";
 import { fetchMCPAccessGroups, getGuardrailsList, getPoliciesList, Organization, Team, teamCreateCall } from "@/components/networking";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
+import { organizationKeys } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 import MCPToolPermissions from "@/components/mcp_server_management/MCPToolPermissions";
 
 interface ModelAliases {
@@ -71,6 +73,7 @@ const CreateTeamModal = ({
   setIsTeamModalVisible,
 }: CreateTeamModalProps) => {
   const { userId: userID, userRole, accessToken, premiumUser } = useAuthorized();
+  const queryClient = useQueryClient();
   const [form] = Form.useForm();
   const [userModels, setUserModels] = useState<string[]>([]);
   const [currentOrgForCreateTeam, setCurrentOrgForCreateTeam] = useState<Organization | null>(null);
@@ -273,6 +276,7 @@ const CreateTeamModal = ({
         }
 
         const response: any = await teamCreateCall(accessToken, formValues);
+        queryClient.invalidateQueries({ queryKey: organizationKeys.all });
         if (teams !== null) {
           setTeams([...teams, response]);
         } else {
