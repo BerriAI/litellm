@@ -1,4 +1,10 @@
+import copy
 from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Literal, Optional
+
+from litellm.proxy.common_utils.encrypt_decrypt_utils import (
+    decrypt_value_helper,
+    encrypt_value_helper,
+)
 
 import litellm
 from litellm import get_secret
@@ -524,3 +530,89 @@ def normalize_callback_names(callbacks: Iterable[Any]) -> List[Any]:
     if callbacks is None:
         return []
     return [c.lower() if isinstance(c, str) else c for c in callbacks]
+
+
+def encrypt_logging_callback_vars(metadata: Optional[Dict]) -> Optional[Dict]:
+    """
+    Encrypt credential values inside ``metadata["logging"][*]["callback_vars"]``
+    before persisting to the database.
+
+    Values that are environment-variable references (``os.environ/…``) are
+    left untouched — they are pointers, not secrets, and do not need
+    to be stored encrypted.
+
+    Returns the *same* dict (mutated in-place) so the caller can assign the
+    result back to ``metadata`` if convenient.
+    """
+    if not metadata:
+        return metadata
+
+    logging_configs = metadata.get("logging")
+    if not isinstance(logging_configs, list):
+        return metadata
+
+    for entry in logging_configs:
+        if not isinstance(entry, dict):
+            continue
+        callback_vars = entry.get("callback_vars")
+        if not isinstance(callback_vars, dict):
+            continue
+        for key, value in callback_vars.items():
+            if not isinstance(value, str):
+                continue
+            # Leave env-var pointers as-is; encrypt everything else
+            if value.startswith("os.environ/"):
+                continue
+            callback_vars[key] = encrypt_value_helper(value)
+
+    return metadata
+
+
+def redact_sensitive_logging_metadata(metadata: Optional[Dict]) -> Optional[Dict]:
+    """
+    Return a copy of `metadata` with credential values inside
+    `metadata["logging"][*]["callback_vars"]` partially masked.
+
+    Each value is replaced with "...XYZ" where XYZ is the last 3 characters
+    of the plaintext (decrypting first if the value is encrypted), giving
+    admins a visual hint without exposing the full secret.
+
+    Values that are environment-variable references
+    (e.g. "os.environ/LANGFUSE_SECRET_KEY") are left as-is.
+    """
+    if not metadata:
+        return metadata
+
+    metadata = copy.deepcopy(metadata)
+
+    logging_configs = metadata.get("logging")
+    if not isinstance(logging_configs, list):
+        return metadata
+
+    for entry in logging_configs:
+        if not isinstance(entry, dict):
+            continue
+        callback_vars = entry.get("callback_vars")
+        if not isinstance(callback_vars, dict):
+            continue
+        for key, value in callback_vars.items():
+            if not isinstance(value, str):
+                callback_vars[key] = "***"
+                continue
+            # Keep env-var pointers as-is
+            if value.startswith("os.environ/"):
+                continue
+            # Decrypt to get plaintext (no-op for already-plaintext rows)
+            plaintext = str(
+                decrypt_value_helper(
+                    value=value,
+                    key=key,
+                    exception_type="debug",
+                    return_original_value=True,
+                )
+                or value
+            )
+            suffix = plaintext[-3:] if len(plaintext) >= 3 else plaintext
+            callback_vars[key] = f"...{suffix}"
+
+    return metadata

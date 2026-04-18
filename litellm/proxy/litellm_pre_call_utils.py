@@ -21,6 +21,7 @@ from litellm.proxy._types import (
     TeamCallbackMetadata,
     UserAPIKeyAuth,
 )
+from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper
 from litellm.proxy.common_utils.http_parsing_utils import _safe_get_request_headers
 
 # Cache special headers as a frozenset for O(1) lookup performance
@@ -187,9 +188,18 @@ def convert_key_logging_metadata_to_callback(
     for var, value in data.callback_vars.items():
         if team_callback_settings_obj.callback_vars is None:
             team_callback_settings_obj.callback_vars = {}
-        team_callback_settings_obj.callback_vars[var] = str(
-            litellm.utils.get_secret(value, default_value=value) or value
-        )
+        resolved = str(litellm.utils.get_secret(value, default_value=value) or value)
+        # If not an env-var pointer the stored value may be encrypted — decrypt it
+        if not value.startswith("os.environ/"):
+            resolved = str(
+                decrypt_value_helper(
+                    value=resolved,
+                    key=var,
+                    exception_type="debug",
+                    return_original_value=True,
+                )
+            )
+        team_callback_settings_obj.callback_vars[var] = resolved
 
     return team_callback_settings_obj
 

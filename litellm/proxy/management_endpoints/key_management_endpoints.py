@@ -49,6 +49,10 @@ from litellm.proxy.auth.auth_checks import (
 )
 from litellm.proxy.auth.auth_utils import abbreviate_api_key
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.callback_utils import (
+    encrypt_logging_callback_vars,
+    redact_sensitive_logging_metadata,
+)
 from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 from litellm.proxy.hooks.key_management_event_hooks import KeyManagementEventHooks
 from litellm.proxy.management_endpoints.common_utils import (
@@ -1513,6 +1517,7 @@ def prepare_metadata_fields(
     """
     Check LiteLLM_ManagementEndpoint_MetadataFields (proxy/_types.py) for fields that are allowed to be updated
     """
+    metadata_provided_in_update = "metadata" in non_default_values
     if "metadata" not in non_default_values:  # allow user to set metadata to none
         non_default_values["metadata"] = existing_metadata.copy()
 
@@ -1541,6 +1546,8 @@ def prepare_metadata_fields(
         )
 
     non_default_values["metadata"] = casted_metadata
+    if metadata_provided_in_update and "logging" in casted_metadata:
+        encrypt_logging_callback_vars(non_default_values["metadata"])
     return non_default_values
 
 
@@ -2723,6 +2730,9 @@ async def info_key_fn_v2(
             except Exception:
                 k_dict = k.dict()
             k_dict.pop("token", None)
+            k_dict["metadata"] = redact_sensitive_logging_metadata(
+                k_dict.get("metadata")
+            )
             filtered_key_info.append(k_dict)
         return {"key": data.keys, "info": filtered_key_info}
 
@@ -2805,6 +2815,12 @@ async def info_key_fn(
             # if using pydantic v1
             key_info = key_info.dict()
         key_info.pop("token")
+
+        # Scrub credentials stored in metadata.logging[].callback_vars so
+        # Langfuse / other integration secrets are never returned in plaintext.
+        key_info["metadata"] = redact_sensitive_logging_metadata(
+            key_info.get("metadata")
+        )
 
         # Attach object_permission if object_permission_id is set
         key_info = await attach_object_permission_to_dict(key_info, prisma_client)
@@ -2970,6 +2986,7 @@ async def generate_key_helper_fn(  # noqa: PLR0915
         metadata = metadata or {}
         metadata["prompts"] = prompts
 
+    encrypt_logging_callback_vars(metadata)
     metadata_json = json.dumps(metadata)
     validate_model_max_budget(model_max_budget)
     model_max_budget_json = json.dumps(model_max_budget)
@@ -4964,6 +4981,9 @@ async def _list_key_helper(
                 }
 
         if return_full_object is True or (expand and "user" in expand):
+            key_dict["metadata"] = redact_sensitive_logging_metadata(
+                key_dict.get("metadata")
+            )
             if use_deleted_table:
                 # Use deleted key type to preserve deleted_at, deleted_by, etc.
                 key_list.append(LiteLLM_DeletedVerificationToken(**key_dict))

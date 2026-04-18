@@ -6,8 +6,10 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 from litellm.proxy.common_utils.callback_utils import (
+    encrypt_logging_callback_vars,
     get_remaining_tokens_and_requests_from_request_data,
     normalize_callback_names,
+    redact_sensitive_logging_metadata,
 )
 
 from unittest.mock import patch
@@ -84,3 +86,171 @@ def test_normalize_callback_names_lowercases_strings():
         "s3",
         "custom_callback",
     ]
+
+
+# ---------------------------------------------------------------------------
+# redact_sensitive_logging_metadata tests
+# ---------------------------------------------------------------------------
+
+
+def test_redact_scrubs_real_secret_values():
+    """Real credential values must be partially masked showing last 3 chars."""
+    metadata = {
+        "logging": [
+            {
+                "callback_name": "langfuse",
+                "callback_type": "success_and_failure",
+                "callback_vars": {
+                    "langfuse_public_key": "pk-lf-abc123",
+                    "langfuse_secret_key": "sk-lf-supersecret",
+                    "langfuse_host": "https://us.cloud.langfuse.com",
+                },
+            }
+        ]
+    }
+    result = redact_sensitive_logging_metadata(metadata)
+    vars_ = result["logging"][0]["callback_vars"]
+    assert vars_["langfuse_public_key"] == "...123"
+    assert vars_["langfuse_secret_key"] == "...ret"
+    assert vars_["langfuse_host"] == "...com"
+
+
+def test_redact_keeps_env_var_references():
+    """os.environ/ pointers are not secrets — they must be preserved."""
+    metadata = {
+        "logging": [
+            {
+                "callback_name": "langfuse",
+                "callback_vars": {
+                    "langfuse_public_key": "os.environ/LANGFUSE_PUBLIC_KEY",
+                    "langfuse_secret_key": "os.environ/LANGFUSE_SECRET_KEY",
+                },
+            }
+        ]
+    }
+    result = redact_sensitive_logging_metadata(metadata)
+    vars_ = result["logging"][0]["callback_vars"]
+    assert vars_["langfuse_public_key"] == "os.environ/LANGFUSE_PUBLIC_KEY"
+    assert vars_["langfuse_secret_key"] == "os.environ/LANGFUSE_SECRET_KEY"
+
+
+def test_redact_does_not_mutate_original():
+    """The original metadata dict must not be modified."""
+    metadata = {
+        "logging": [
+            {
+                "callback_name": "langfuse",
+                "callback_vars": {"langfuse_secret_key": "sk-real-secret"},
+            }
+        ]
+    }
+    original_value = metadata["logging"][0]["callback_vars"]["langfuse_secret_key"]
+    redact_sensitive_logging_metadata(metadata)
+    assert (
+        metadata["logging"][0]["callback_vars"]["langfuse_secret_key"] == original_value
+    )
+
+
+def test_redact_returns_none_for_none_input():
+    assert redact_sensitive_logging_metadata(None) is None
+
+
+def test_redact_returns_unchanged_when_no_logging_key():
+    """Metadata without a 'logging' key passes through untouched."""
+    metadata = {"some_other_key": "value"}
+    result = redact_sensitive_logging_metadata(metadata)
+    assert result == {"some_other_key": "value"}
+
+
+def test_redact_mixed_env_and_real_values():
+    """Only real values are scrubbed; env-var pointers in the same dict survive."""
+    metadata = {
+        "logging": [
+            {
+                "callback_name": "langfuse",
+                "callback_vars": {
+                    "langfuse_public_key": "os.environ/LANGFUSE_PUBLIC_KEY",
+                    "langfuse_secret_key": "sk-real-secret",
+                },
+            }
+        ]
+    }
+    result = redact_sensitive_logging_metadata(metadata)
+    vars_ = result["logging"][0]["callback_vars"]
+    assert vars_["langfuse_public_key"] == "os.environ/LANGFUSE_PUBLIC_KEY"
+    assert vars_["langfuse_secret_key"] == "...ret"
+
+
+# ---------------------------------------------------------------------------
+# encrypt_logging_callback_vars tests
+# ---------------------------------------------------------------------------
+
+
+def _make_metadata(callback_vars: dict) -> dict:
+    return {
+        "logging": [
+            {
+                "callback_name": "langfuse",
+                "callback_type": "success_and_failure",
+                "callback_vars": callback_vars,
+            }
+        ]
+    }
+
+
+def test_encrypt_returns_none_for_none():
+    assert encrypt_logging_callback_vars(None) is None
+
+
+def test_encrypt_returns_unchanged_when_no_logging_key():
+    metadata = {"other_key": "value"}
+    result = encrypt_logging_callback_vars(metadata)
+    assert result == {"other_key": "value"}
+
+
+def test_encrypt_leaves_env_var_pointers_unchanged(monkeypatch):
+    monkeypatch.setenv("LITELLM_SALT_KEY", "test-salt-key-1234567890123456")
+    metadata = _make_metadata({"langfuse_secret_key": "os.environ/LANGFUSE_SECRET_KEY"})
+    result = encrypt_logging_callback_vars(metadata)
+    assert (
+        result["logging"][0]["callback_vars"]["langfuse_secret_key"]
+        == "os.environ/LANGFUSE_SECRET_KEY"
+    )
+
+
+def test_encrypt_real_values_are_changed(monkeypatch):
+    monkeypatch.setenv("LITELLM_SALT_KEY", "test-salt-key-1234567890123456")
+    plaintext = "sk-lf-supersecret"
+    metadata = _make_metadata({"langfuse_secret_key": plaintext})
+    result = encrypt_logging_callback_vars(metadata)
+    encrypted = result["logging"][0]["callback_vars"]["langfuse_secret_key"]
+    assert encrypted != plaintext
+    assert isinstance(encrypted, str)
+
+
+def test_encrypt_then_decrypt_roundtrip(monkeypatch):
+    """Encrypt a value and confirm decrypt_value_helper returns the original."""
+    monkeypatch.setenv("LITELLM_SALT_KEY", "test-salt-key-1234567890123456")
+    from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper
+
+    plaintext = "pk-lf-abc123"
+    metadata = _make_metadata({"langfuse_public_key": plaintext})
+    encrypt_logging_callback_vars(metadata)
+    encrypted = metadata["logging"][0]["callback_vars"]["langfuse_public_key"]
+    assert encrypted != plaintext
+
+    recovered = decrypt_value_helper(
+        value=encrypted, key="langfuse_public_key", return_original_value=True
+    )
+    assert recovered == plaintext
+
+
+def test_encrypt_mutates_in_place(monkeypatch):
+    """encrypt_logging_callback_vars modifies the dict in-place."""
+    monkeypatch.setenv("LITELLM_SALT_KEY", "test-salt-key-1234567890123456")
+    metadata = _make_metadata({"langfuse_secret_key": "sk-lf-real"})
+    returned = encrypt_logging_callback_vars(metadata)
+    assert returned is metadata
+    assert (
+        metadata["logging"][0]["callback_vars"]["langfuse_secret_key"] != "sk-lf-real"
+    )

@@ -69,6 +69,10 @@ from litellm.proxy.auth.auth_checks import (
     get_user_object,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.callback_utils import (
+    encrypt_logging_callback_vars,
+    redact_sensitive_logging_metadata,
+)
 from litellm.proxy.management_endpoints.common_utils import (
     _is_user_org_admin_for_team,
     _is_user_team_admin,
@@ -1095,6 +1099,7 @@ async def new_team(  # noqa: PLR0915
             complete_team_data.members_with_roles = []
 
         complete_team_data_dict = complete_team_data.model_dump(exclude_none=True)
+        encrypt_logging_callback_vars(complete_team_data_dict.get("metadata"))
 
         # Serialize router_settings to JSON (matching key creation pattern)
         router_settings_value = getattr(data, "router_settings", None)
@@ -1654,6 +1659,7 @@ async def update_team(  # noqa: PLR0915
 
         # update team metadata fields
         _update_metadata_fields(updated_kv=updated_kv)
+        encrypt_logging_callback_vars(updated_kv.get("metadata"))
 
         if "model_aliases" in updated_kv:
             updated_kv.pop("model_aliases")
@@ -3197,6 +3203,7 @@ async def team_info(
                 # if using pydantic v1
                 key = key.dict()
             key.pop("token", None)
+            key["metadata"] = redact_sensitive_logging_metadata(key.get("metadata"))
 
         ## GET ALL MEMBERSHIPS ##
         returned_tm = await get_all_team_memberships(
@@ -3225,6 +3232,10 @@ async def team_info(
 
         # Resolve resources inherited from access groups
         await _resolve_team_access_group_resources(_team_info)
+
+        # Scrub credentials from team-level logging config before returning
+        if _team_info.metadata is not None:
+            _team_info.metadata = redact_sensitive_logging_metadata(_team_info.metadata)
 
         response_object = TeamInfoResponseObject(
             team_id=team_id,
@@ -3578,6 +3589,9 @@ def _convert_teams_to_response_models(
         except Exception:
             team_dict = team.dict()
 
+        team_dict["metadata"] = redact_sensitive_logging_metadata(
+            team_dict.get("metadata")
+        )
         if use_deleted_table:
             team_list.append(LiteLLM_DeletedTeamTable(**team_dict))
         else:
@@ -4002,9 +4016,13 @@ async def list_team(
         )
 
         try:
+            _team_dict = team.model_dump()
+            _team_dict["metadata"] = redact_sensitive_logging_metadata(
+                _team_dict.get("metadata")
+            )
             returned_responses.append(
                 TeamListResponseObject(
-                    **team.model_dump(),
+                    **_team_dict,
                     team_memberships=_team_memberships,
                     keys=keys,
                 )
@@ -4012,9 +4030,7 @@ async def list_team(
         except Exception as e:
             team_exception = """Invalid team object for team_id: {}. team_object={}.
             Error: {}
-            """.format(
-                team.team_id, team.model_dump(), str(e)
-            )
+            """.format(team.team_id, team.model_dump(), str(e))
             verbose_proxy_logger.exception(team_exception)
             continue
     # Sort the responses by team_alias

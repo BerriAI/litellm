@@ -9007,3 +9007,80 @@ async def test_execute_virtual_key_regeneration_cache_invalidation_with_token_ha
         call_kwargs = mock_delete_cache.call_args.kwargs
         # The token hash should be passed as-is, NOT double-hashed
         assert call_kwargs["hashed_token"] == token_hash
+
+
+# ---------------------------------------------------------------------------
+# prepare_metadata_fields double-encryption guard tests
+# ---------------------------------------------------------------------------
+
+
+def test_prepare_metadata_fields_no_double_encrypt_when_metadata_not_in_update(
+    monkeypatch,
+):
+    """
+    When metadata is NOT in the update request, existing_metadata (which may
+    already have encrypted callback_vars) must be copied as-is.
+    encrypt_logging_callback_vars must NOT be called.
+    """
+    monkeypatch.setenv("LITELLM_SALT_KEY", "test-salt-key-1234567890123456")
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        prepare_metadata_fields,
+    )
+
+    already_encrypted = "someencryptedblob=="
+    existing_metadata = {
+        "logging": [
+            {
+                "callback_name": "langfuse",
+                "callback_vars": {"langfuse_secret_key": already_encrypted},
+            }
+        ]
+    }
+
+    data = UpdateKeyRequest(key="sk-test")
+    non_default_values: dict = {}  # metadata NOT provided in update
+
+    result = prepare_metadata_fields(
+        data=data,
+        non_default_values=non_default_values,
+        existing_metadata=existing_metadata,
+    )
+
+    # Value must be unchanged — no second encryption pass
+    assert (
+        result["metadata"]["logging"][0]["callback_vars"]["langfuse_secret_key"]
+        == already_encrypted
+    )
+
+
+def test_prepare_metadata_fields_encrypts_when_metadata_in_update(monkeypatch):
+    """
+    When metadata IS in the update request with fresh callback_vars, they must
+    be encrypted.
+    """
+    monkeypatch.setenv("LITELLM_SALT_KEY", "test-salt-key-1234567890123456")
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        prepare_metadata_fields,
+    )
+
+    plaintext = "sk-lf-supersecret"
+    fresh_metadata = {
+        "logging": [
+            {
+                "callback_name": "langfuse",
+                "callback_vars": {"langfuse_secret_key": plaintext},
+            }
+        ]
+    }
+
+    data = UpdateKeyRequest(key="sk-test", metadata=fresh_metadata)
+    non_default_values: dict = {"metadata": fresh_metadata}  # metadata WAS provided
+
+    result = prepare_metadata_fields(
+        data=data,
+        non_default_values=non_default_values,
+        existing_metadata={},
+    )
+
+    encrypted = result["metadata"]["logging"][0]["callback_vars"]["langfuse_secret_key"]
+    assert encrypted != plaintext, "plaintext credential must be encrypted on write"
