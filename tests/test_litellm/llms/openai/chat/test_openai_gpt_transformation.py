@@ -39,7 +39,9 @@ class TestOpenAIGPTConfig:
         be included in supported params so it reaches OpenAI and SpendLogs.
         """
         # responses/gpt-4.1-mini should support 'user' just like gpt-4.1-mini
-        supported_params = self.config.get_supported_openai_params("responses/gpt-4.1-mini")
+        supported_params = self.config.get_supported_openai_params(
+            "responses/gpt-4.1-mini"
+        )
         assert "user" in supported_params
 
         supported_params = self.config.get_supported_openai_params("responses/gpt-4o")
@@ -56,7 +58,9 @@ class TestOpenAIGPTConfig:
         """
         # Both should have the same supported params
         regular_params = self.config.get_supported_openai_params("gpt-4.1-mini")
-        responses_params = self.config.get_supported_openai_params("responses/gpt-4.1-mini")
+        responses_params = self.config.get_supported_openai_params(
+            "responses/gpt-4.1-mini"
+        )
 
         # 'user' should be in both
         assert "user" in regular_params
@@ -74,7 +78,9 @@ class TestOpenAIGPTConfig:
             "tool_choice",
         ]
 
-        supported_params = self.config.get_supported_openai_params("responses/gpt-4.1-mini")
+        supported_params = self.config.get_supported_openai_params(
+            "responses/gpt-4.1-mini"
+        )
 
         for param in base_expected_params:
             assert param in supported_params, f"Expected '{param}' in supported params"
@@ -242,7 +248,9 @@ class TestOpenAIChatCompletionStreamingHandler:
         parsed_chunk = handler.chunk_parser(chunk)
 
         # Verify that reasoning was mapped to reasoning_content
-        assert parsed_chunk.choices[0].delta.reasoning_content == "The capital of France"
+        assert (
+            parsed_chunk.choices[0].delta.reasoning_content == "The capital of France"
+        )
         # Verify that the original 'reasoning' field was removed
         assert not hasattr(parsed_chunk.choices[0].delta, "reasoning")
 
@@ -377,14 +385,14 @@ class TestGPT5ReasoningEffortPreservation:
         """Test that reasoning_effort as string is preserved."""
         non_default_params = {"reasoning_effort": "high"}
         optional_params = {}
-        
+
         self.config.map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
             model="gpt-5.4",
             drop_params=False,
         )
-        
+
         # String format should be preserved
         assert non_default_params.get("reasoning_effort") == "high"
 
@@ -392,48 +400,52 @@ class TestGPT5ReasoningEffortPreservation:
         """Test that reasoning_effort dict with only 'effort' key is normalized to string."""
         non_default_params = {"reasoning_effort": {"effort": "high"}}
         optional_params = {}
-        
+
         self.config.map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
             model="gpt-5.4",
             drop_params=False,
         )
-        
+
         # Dict with only 'effort' should be normalized to string
         assert non_default_params.get("reasoning_effort") == "high"
 
     def test_reasoning_effort_dict_with_summary_normalized(self):
         """Test that reasoning_effort dict with 'summary' is normalized for Chat Completions API.
-        
+
         map_openai_params normalizes all dicts to string. Full dict is restored in main.py
         when routing to Responses API (test_gpt_5_4_responses_bridge_preserves_reasoning_summary_dict).
         """
-        non_default_params = {"reasoning_effort": {"effort": "high", "summary": "detailed"}}
+        non_default_params = {
+            "reasoning_effort": {"effort": "high", "summary": "detailed"}
+        }
         optional_params = {}
-        
+
         self.config.map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
             model="gpt-5.4",
             drop_params=False,
         )
-        
+
         # Dict is normalized to string for Chat Completions API
         assert non_default_params.get("reasoning_effort") == "high"
 
     def test_reasoning_effort_dict_with_generate_summary_normalized(self):
         """Test that reasoning_effort dict with 'generate_summary' is normalized for Chat Completions API."""
-        non_default_params = {"reasoning_effort": {"effort": "medium", "generate_summary": "auto"}}
+        non_default_params = {
+            "reasoning_effort": {"effort": "medium", "generate_summary": "auto"}
+        }
         optional_params = {}
-        
+
         self.config.map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
             model="gpt-5.4",
             drop_params=False,
         )
-        
+
         # Dict is normalized to string for Chat Completions API
         assert non_default_params.get("reasoning_effort") == "medium"
 
@@ -443,30 +455,32 @@ class TestGPT5ReasoningEffortPreservation:
             "reasoning_effort": {
                 "effort": "high",
                 "summary": "detailed",
-                "generate_summary": "concise"
+                "generate_summary": "concise",
             }
         }
         optional_params = {}
-        
+
         self.config.map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
             model="gpt-5.4",
             drop_params=False,
         )
-        
+
         # Dict is normalized to string for Chat Completions API
         assert non_default_params.get("reasoning_effort") == "high"
 
     def test_reasoning_effort_dict_xhigh_triggers_validation(self):
         """xhigh-dict: effective effort is extracted for model-support validation.
-        
+
         When reasoning_effort={"effort": "xhigh", "summary": "detailed"} is passed to a model
         that doesn't support xhigh (e.g. gpt-5.1), the xhigh guard must fire.
         """
         import litellm
 
-        non_default_params = {"reasoning_effort": {"effort": "xhigh", "summary": "detailed"}}
+        non_default_params = {
+            "reasoning_effort": {"effort": "xhigh", "summary": "detailed"}
+        }
         optional_params = {}
 
         with pytest.raises(litellm.utils.UnsupportedParamsError):
@@ -479,7 +493,9 @@ class TestGPT5ReasoningEffortPreservation:
 
     def test_reasoning_effort_dict_xhigh_dropped_when_requested(self):
         """xhigh-dict with drop_params=True: reasoning_effort is dropped."""
-        non_default_params = {"reasoning_effort": {"effort": "xhigh", "summary": "detailed"}}
+        non_default_params = {
+            "reasoning_effort": {"effort": "xhigh", "summary": "detailed"}
+        }
         optional_params = {}
 
         self.config.map_openai_params(
@@ -493,8 +509,13 @@ class TestGPT5ReasoningEffortPreservation:
 
     def test_reasoning_effort_dict_none_passed_through_for_gpt5_4_with_tools(self):
         """none-dict with tools on gpt-5.4: reasoning_effort is passed through (routing to Responses at completion level)."""
-        tools = [{"type": "function", "function": {"name": "test", "description": "test"}}]
-        non_default_params = {"reasoning_effort": {"effort": "none", "summary": "detailed"}, "tools": tools}
+        tools = [
+            {"type": "function", "function": {"name": "test", "description": "test"}}
+        ]
+        non_default_params = {
+            "reasoning_effort": {"effort": "none", "summary": "detailed"},
+            "tools": tools,
+        }
         optional_params = {}
 
         self.config.map_openai_params(
@@ -510,7 +531,7 @@ class TestGPT5ReasoningEffortPreservation:
 
     def test_reasoning_effort_dict_none_treated_as_none_for_sampling(self):
         """none-dict: {"effort": "none", "summary": "detailed"} allows logprobs/top_p.
-        
+
         effective_effort='none' is used for sampling guard; logprobs should be kept.
         Dict is normalized to "none" for Chat Completions API.
         """
@@ -532,7 +553,7 @@ class TestGPT5ReasoningEffortPreservation:
 
     def test_reasoning_effort_dict_none_allows_temperature(self):
         """none-dict: {"effort": "none", "summary": "detailed"} allows non-default temperature.
-        
+
         effective_effort='none' is used for temperature guard. Dict is normalized to "none".
         """
         non_default_params = {

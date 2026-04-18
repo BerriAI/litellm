@@ -1043,6 +1043,7 @@ async def test_process_team_members_single_member():
     mock_prisma_client = MagicMock()
     mock_team = MagicMock(spec=LiteLLM_TeamTable)
     mock_team.metadata = {"team_member_budget_id": "budget-123"}
+    mock_team.default_team_member_models = None
 
     # Mock user and membership objects
     mock_user = MagicMock(spec=LiteLLM_UserTable)
@@ -1084,6 +1085,7 @@ async def test_process_team_members_single_member():
             litellm_proxy_admin_name="admin",
             team_id="test-team-123",
             default_team_budget_id="budget-123",
+            allowed_models=None,
         )
 
 
@@ -1099,6 +1101,7 @@ async def test_process_team_members_multiple_members():
     mock_prisma_client = MagicMock()
     mock_team = MagicMock(spec=LiteLLM_TeamTable)
     mock_team.metadata = None
+    mock_team.default_team_member_models = None
 
     # Create multiple members as dictionaries (they will be converted to Member objects)
     members = [
@@ -3039,6 +3042,7 @@ async def test_new_team_max_budget_within_user_limit():
         mock_created_team.max_budget = 50.0
         mock_created_team.members_with_roles = []
         mock_created_team.metadata = None
+        mock_created_team.default_team_member_models = None
         mock_created_team.model_dump.return_value = {
             "team_id": "team-within-budget-789",
             "team_alias": "within-budget-team",
@@ -3178,6 +3182,7 @@ async def test_new_team_org_scoped_budget_bypasses_user_limit():
         mock_created_team.organization_id = "test-org-123"
         mock_created_team.members_with_roles = []
         mock_created_team.metadata = None
+        mock_created_team.default_team_member_models = None
         mock_created_team.model_dump.return_value = {
             "team_id": "team-org-scoped-789",
             "team_alias": "org-scoped-team",
@@ -3322,6 +3327,7 @@ async def test_new_team_org_scoped_models_bypasses_user_limit():
         mock_created_team.models = ["gpt-4"]
         mock_created_team.members_with_roles = []
         mock_created_team.metadata = None
+        mock_created_team.default_team_member_models = None
         mock_created_team.model_dump.return_value = {
             "team_id": "team-org-scoped-models-789",
             "team_alias": "org-scoped-models-team",
@@ -5691,6 +5697,7 @@ async def test_new_team_soft_budget_validation(
         mock_created_team.max_budget = expected_max_budget
         mock_created_team.members_with_roles = []
         mock_created_team.metadata = None
+        mock_created_team.default_team_member_models = None
         mock_created_team.model_dump.return_value = {
             "team_id": "test-team-123",
             "team_alias": "test-soft-budget-team",

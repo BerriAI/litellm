@@ -72,12 +72,10 @@ class TestUpdateMetadataFieldsEmptyCollections:
         }
         _update_metadata_fields(updated_kv=updated_kv)
         # The fields should have been moved into metadata
-        assert "guardrails" not in updated_kv, (
-            "guardrails should be popped from top-level"
-        )
-        assert "policies" not in updated_kv, (
-            "policies should be popped from top-level"
-        )
+        assert (
+            "guardrails" not in updated_kv
+        ), "guardrails should be popped from top-level"
+        assert "policies" not in updated_kv, "policies should be popped from top-level"
         assert updated_kv["metadata"]["guardrails"] == []
         assert updated_kv["metadata"]["policies"] == []
 
@@ -102,9 +100,9 @@ class TestUpdateMetadataFieldsEmptyCollections:
             "secret_manager_settings": {},
         }
         _update_metadata_fields(updated_kv=updated_kv)
-        assert "secret_manager_settings" not in updated_kv, (
-            "secret_manager_settings should be popped from top-level"
-        )
+        assert (
+            "secret_manager_settings" not in updated_kv
+        ), "secret_manager_settings should be popped from top-level"
         assert updated_kv["metadata"]["secret_manager_settings"] == {}
 
     @patch("litellm.proxy.management_endpoints.common_utils._premium_user_check")
@@ -160,7 +158,9 @@ class TestUpdateMetadataFieldsEmptyCollections:
         assert updated_kv["metadata"]["guardrails"] == ["my-guardrail"]
 
     @patch("litellm.proxy.management_endpoints.common_utils._premium_user_check")
-    def test_ui_typical_payload_does_not_trigger_premium_check(self, mock_premium_check):
+    def test_ui_typical_payload_does_not_trigger_premium_check(
+        self, mock_premium_check
+    ):
         """
         Simulate the exact payload the UI sends when no enterprise features
         are configured.  This must NOT trigger the premium check.
@@ -231,7 +231,10 @@ class TestIsUserTeamAdmin:
                 False,
             ),
             (
-                [Member(user_id="u2", role="admin"), Member(user_id="u1", role="admin")],
+                [
+                    Member(user_id="u2", role="admin"),
+                    Member(user_id="u1", role="admin"),
+                ],
                 "u1",
                 True,
             ),
@@ -344,22 +347,14 @@ class TestTeamAdminCanInviteUser:
         target_user = LiteLLM_UserTable(user_id="target", teams=target_teams)
 
         def make_team(tid, is_admin):
-            m = (
-                [{"user_id": "admin", "role": "admin"}]
-                if is_admin
-                else []
-            )
+            m = [{"user_id": "admin", "role": "admin"}] if is_admin else []
             obj = MagicMock()
             obj.team_id = tid
             obj.model_dump = lambda: {"team_id": tid, "members_with_roles": m}
             return obj
 
-        teams = [
-            make_team(tid, tid in user_is_admin_in) for tid in admin_teams
-        ]
-        mock_prisma.db.litellm_teamtable.find_many = AsyncMock(
-            return_value=teams
-        )
+        teams = [make_team(tid, tid in user_is_admin_in) for tid in admin_teams]
+        mock_prisma.db.litellm_teamtable.find_many = AsyncMock(return_value=teams)
 
         result = await _team_admin_can_invite_user(
             user_api_key_dict=mock_auth,

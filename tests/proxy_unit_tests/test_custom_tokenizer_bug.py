@@ -177,9 +177,9 @@ async def test_custom_tokenizer_embedding_model():
         f"Embedding model test - Tokenizer: {response.tokenizer_type}, Tokens: {response.total_tokens}"
     )
 
-    assert response.tokenizer_type == "huggingface_tokenizer", (
-        f"Custom tokenizer from model_info was not used! Got: {response.tokenizer_type}"
-    )
+    assert (
+        response.tokenizer_type == "huggingface_tokenizer"
+    ), f"Custom tokenizer from model_info was not used! Got: {response.tokenizer_type}"
     assert response.total_tokens > 0
 
 
