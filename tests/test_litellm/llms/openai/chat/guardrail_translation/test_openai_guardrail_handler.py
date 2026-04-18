@@ -891,6 +891,250 @@ class TestOpenAIChatCompletionsHandlerStreamingOutput:
         assert result == responses_so_far
 
 
+class TestPostCallStructuredMessages:
+    """
+    Tests that post-call guardrails receive structured_messages containing the
+    full conversation history with the assistant response appended.
+    """
+
+    def _make_text_response(self, content: str) -> ModelResponse:
+        return ModelResponse(
+            id="resp-1",
+            choices=[
+                Choices(
+                    index=0,
+                    message=Message(role="assistant", content=content),
+                    finish_reason="stop",
+                )
+            ],
+            model="gpt-4o",
+        )
+
+    def _make_tool_call_response(self) -> ModelResponse:
+        tool_call = ChatCompletionMessageToolCall(
+            id="call_123",
+            type="function",
+            function=Function(
+                name="get_weather",
+                arguments='{"city": "Boston"}',
+            ),
+        )
+        return ModelResponse(
+            id="resp-2",
+            choices=[
+                Choices(
+                    index=0,
+                    message=Message(role="assistant", content=None, tool_calls=[tool_call]),
+                    finish_reason="tool_calls",
+                )
+            ],
+            model="gpt-4o",
+        )
+
+    @pytest.mark.asyncio
+    async def test_text_response_appends_assistant_turn(self):
+        """Text response — structured_messages ends with the assistant content turn."""
+        handler = OpenAIChatCompletionsHandler()
+        guardrail = MockGuardrail()
+
+        request_data = {
+            "messages": [{"role": "user", "content": "What is the weather in Boston?"}]
+        }
+        response = self._make_text_response("The current temperature is 5°C.")
+
+        await handler.process_output_response(
+            response=response,
+            guardrail_to_apply=guardrail,
+            request_data=request_data,
+        )
+
+        assert guardrail.last_inputs is not None
+        structured = guardrail.last_inputs.get("structured_messages", [])
+        assert len(structured) == 2
+        assert structured[0] == {"role": "user", "content": "What is the weather in Boston?"}
+        assert structured[1]["role"] == "assistant"
+        assert structured[1]["content"] == "The current temperature is 5°C."
+
+    @pytest.mark.asyncio
+    async def test_tool_call_response_appends_assistant_tool_call_turn(self):
+        """Tool-call response — structured_messages ends with the assistant tool_calls turn."""
+        handler = OpenAIChatCompletionsHandler()
+        guardrail = MockGuardrail()
+
+        request_data = {
+            "messages": [{"role": "user", "content": "What is the weather in Boston?"}]
+        }
+        response = self._make_tool_call_response()
+
+        await handler.process_output_response(
+            response=response,
+            guardrail_to_apply=guardrail,
+            request_data=request_data,
+        )
+
+        assert guardrail.last_inputs is not None
+        structured = guardrail.last_inputs.get("structured_messages", [])
+        assert len(structured) == 2
+        assert structured[0] == {"role": "user", "content": "What is the weather in Boston?"}
+        assistant_turn = structured[1]
+        assert assistant_turn["role"] == "assistant"
+        assert "tool_calls" in assistant_turn
+        assert assistant_turn["tool_calls"][0]["function"]["name"] == "get_weather"
+        assert assistant_turn["tool_calls"][0]["id"] == "call_123"
+
+    @pytest.mark.asyncio
+    async def test_multi_turn_history_preserved(self):
+        """Multi-turn input — all prior messages are preserved and assistant turn is appended."""
+        handler = OpenAIChatCompletionsHandler()
+        guardrail = MockGuardrail()
+
+        tool_call_msg = {
+            "role": "assistant",
+            "tool_calls": [
+                {
+                    "id": "call_123",
+                    "type": "function",
+                    "function": {"name": "get_weather", "arguments": '{"city": "Boston"}'},
+                }
+            ],
+        }
+        request_data = {
+            "messages": [
+                {"role": "user", "content": "What is the weather in Boston?"},
+                tool_call_msg,
+                {
+                    "role": "tool",
+                    "tool_call_id": "call_123",
+                    "content": '{"temperature": 5, "condition": "snow"}',
+                },
+            ]
+        }
+        response = self._make_text_response("The current temperature is 5°C and it is snowing.")
+
+        await handler.process_output_response(
+            response=response,
+            guardrail_to_apply=guardrail,
+            request_data=request_data,
+        )
+
+        assert guardrail.last_inputs is not None
+        structured = guardrail.last_inputs.get("structured_messages", [])
+        assert len(structured) == 4
+        assert structured[0]["role"] == "user"
+        assert structured[1]["role"] == "assistant"
+        assert "tool_calls" in structured[1]
+        assert structured[2]["role"] == "tool"
+        assert structured[3]["role"] == "assistant"
+        assert "5°C" in structured[3]["content"]
+
+    @pytest.mark.asyncio
+    async def test_original_messages_not_mutated(self):
+        """process_output_response must not mutate the original messages list."""
+        handler = OpenAIChatCompletionsHandler()
+        guardrail = MockGuardrail()
+
+        original = [{"role": "user", "content": "Hello"}]
+        request_data = {"messages": original}
+        response = self._make_text_response("Hi there!")
+
+        await handler.process_output_response(
+            response=response,
+            guardrail_to_apply=guardrail,
+            request_data=request_data,
+        )
+
+        assert len(original) == 1, "original messages list was mutated"
+
+    @pytest.mark.asyncio
+    async def test_both_content_and_tool_calls_included(self):
+        """When assistant turn has both content and tool_calls, both are present."""
+        handler = OpenAIChatCompletionsHandler()
+        guardrail = MockGuardrail()
+
+        tool_call = ChatCompletionMessageToolCall(
+            id="call_456",
+            type="function",
+            function=Function(name="get_weather", arguments='{"city": "Boston"}'),
+        )
+        response = ModelResponse(
+            id="resp-3",
+            choices=[
+                Choices(
+                    index=0,
+                    message=Message(
+                        role="assistant",
+                        content="Let me check that.",
+                        tool_calls=[tool_call],
+                    ),
+                    finish_reason="tool_calls",
+                )
+            ],
+            model="gpt-4o",
+        )
+        request_data = {
+            "messages": [{"role": "user", "content": "What's the weather?"}]
+        }
+
+        await handler.process_output_response(
+            response=response,
+            guardrail_to_apply=guardrail,
+            request_data=request_data,
+        )
+
+        structured = guardrail.last_inputs.get("structured_messages", [])
+        assert len(structured) == 2
+        assistant_turn = structured[1]
+        assert assistant_turn["role"] == "assistant"
+        assert assistant_turn["content"] == "Let me check that."
+        assert "tool_calls" in assistant_turn
+        assert assistant_turn["tool_calls"][0]["function"]["name"] == "get_weather"
+
+    @pytest.mark.asyncio
+    async def test_no_messages_in_request_data(self):
+        """request_data without 'messages' key — structured_messages is just the assistant turn."""
+        handler = OpenAIChatCompletionsHandler()
+        guardrail = MockGuardrail()
+
+        response = self._make_text_response("Hello!")
+        request_data = {}  # no "messages" key
+
+        await handler.process_output_response(
+            response=response,
+            guardrail_to_apply=guardrail,
+            request_data=request_data,
+        )
+
+        structured = guardrail.last_inputs.get("structured_messages", [])
+        assert len(structured) == 1
+        assert structured[0]["role"] == "assistant"
+        assert structured[0]["content"] == "Hello!"
+
+    @pytest.mark.asyncio
+    async def test_empty_choices_no_assistant_turn(self):
+        """Response with no choices produces structured_messages equal to original messages."""
+        handler = OpenAIChatCompletionsHandler()
+        guardrail = MockGuardrail()
+
+        # Build a response that has text content so _has_text_content passes,
+        # then clear choices after construction to test the empty-choices path.
+        response = self._make_text_response("something")
+        response.choices = []  # type: ignore
+
+        request_data = {
+            "messages": [{"role": "user", "content": "Hi"}]
+        }
+
+        # With no choices, _has_text_content returns False → early return, guardrail
+        # never called. Verify the handler returns cleanly without error.
+        result = await handler.process_output_response(
+            response=response,
+            guardrail_to_apply=guardrail,
+            request_data=request_data,
+        )
+        # guardrail was not called (early return path)
+        assert guardrail.last_inputs is None
+
+
 if __name__ == "__main__":
     # Run the tests
     pytest.main([__file__, "-v"])
