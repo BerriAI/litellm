@@ -1577,6 +1577,9 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             user_api_key_organization_id = standard_logging_metadata.get(
                 "user_api_key_org_id"
             )
+            user_api_key_project_id = standard_logging_metadata.get(
+                "user_api_key_project_id"
+            )
             user_api_key_end_user_id = kwargs.get(
                 "user"
             ) or standard_logging_metadata.get("user_api_key_end_user_id")
@@ -1689,6 +1692,16 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     self._create_pipeline_operations(
                         key="model_per_organization",
                         value=f"{user_api_key_organization_id}:{model_group}",
+                        rate_limit_type="tokens",
+                        total_tokens=total_tokens,
+                    )
+                )
+
+            if model_group and user_api_key_project_id:
+                pipeline_operations.extend(
+                    self._create_pipeline_operations(
+                        key="model_per_project",
+                        value=f"{user_api_key_project_id}:{model_group}",
                         rate_limit_type="tokens",
                         total_tokens=total_tokens,
                     )
