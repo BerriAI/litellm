@@ -577,7 +577,7 @@ class AmazonAnthropicClaudeMessagesConfig(
             chunk_type = chunk.get("type")
 
             if chunk_type == "message_start":
-                msg = chunk.get("message") or {}
+                msg: Dict[str, Any] = cast(Dict[str, Any], chunk.get("message") or {})
                 u = msg.get("usage")
                 if isinstance(u, dict):
                     start_usage_snapshot = dict(u)
@@ -588,7 +588,7 @@ class AmazonAnthropicClaudeMessagesConfig(
                 continue
 
             if chunk_type == "message_delta":
-                pending_delta = chunk
+                pending_delta = cast(Dict[str, Any], chunk)
                 continue
 
             if chunk_type == "message_stop" and pending_delta is not None:
