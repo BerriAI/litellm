@@ -216,9 +216,9 @@
     "credential_fields": [
       {
         "key": "api_base",
-        "label": "API Base",
-        "placeholder": null,
-        "tooltip": "Optional. Override the upstream Anthropic API URL. Defaults to https://api.anthropic.com.",
+        "label": "Upstream API Base",
+        "placeholder": "https://api.anthropic.com",
+        "tooltip": "Optional. Where the proxy forwards requests upstream. Leave blank to use Anthropic's public API. Set this only for private Anthropic deployments or reverse proxies. Do NOT set this to your LiteLLM proxy URL — that causes a recursive loop.",
         "required": false,
         "field_type": "text",
         "options": null,
