@@ -2966,7 +2966,7 @@ async def _virtual_key_max_budget_alert_check(
         owner_email = user_obj.user_email if user_obj else None
         alert_email_config = (valid_token.metadata or {}).get(
             "max_budget_alert_emails"
-        )
+        ) or litellm.default_key_max_budget_alert_emails
 
         if isinstance(alert_email_config, dict) and alert_email_config:
             # New path: pass the map through, let the email handler decide what to fire

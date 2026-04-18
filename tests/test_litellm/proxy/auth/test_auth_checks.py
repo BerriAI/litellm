@@ -1653,6 +1653,86 @@ async def test_virtual_key_max_budget_alert_check_old_path_below_threshold_no_al
 
 
 @pytest.mark.asyncio
+async def test_virtual_key_max_budget_alert_check_global_fallback():
+    """Test that litellm.default_key_max_budget_alert_emails is used when key metadata has no map"""
+    alert_triggered = False
+    captured_call_info = None
+
+    class MockProxyLogging:
+        async def budget_alerts(self, type, user_info):
+            nonlocal alert_triggered, captured_call_info
+            alert_triggered = True
+            captured_call_info = user_info
+
+    global_config = {
+        "50": ["global-finance@co.com"],
+        "75": ["global-finance@co.com", "global-lead@co.com"],
+    }
+    valid_token = UserAPIKeyAuth(
+        token="test-token",
+        spend=30.0,
+        max_budget=100.0,
+        user_id="test-user",
+        key_alias="test-key",
+        metadata={},  # no per-key config
+    )
+
+    import litellm
+    original = litellm.default_key_max_budget_alert_emails
+    try:
+        litellm.default_key_max_budget_alert_emails = global_config
+        await _virtual_key_max_budget_alert_check(
+            valid_token=valid_token,
+            proxy_logging_obj=MockProxyLogging(),
+            user_obj=None,
+        )
+        await asyncio.sleep(0.1)
+
+        assert alert_triggered is True
+        assert captured_call_info.max_budget_alert_emails == global_config
+    finally:
+        litellm.default_key_max_budget_alert_emails = original
+
+
+@pytest.mark.asyncio
+async def test_virtual_key_max_budget_alert_check_per_key_overrides_global():
+    """Test that per-key metadata takes priority over global fallback"""
+    captured_call_info = None
+
+    class MockProxyLogging:
+        async def budget_alerts(self, type, user_info):
+            nonlocal captured_call_info
+            captured_call_info = user_info
+
+    per_key_config = {"50": ["per-key@co.com"]}
+    global_config = {"75": ["global@co.com"]}
+
+    valid_token = UserAPIKeyAuth(
+        token="test-token",
+        spend=30.0,
+        max_budget=100.0,
+        user_id="test-user",
+        key_alias="test-key",
+        metadata={"max_budget_alert_emails": per_key_config},
+    )
+
+    import litellm
+    original = litellm.default_key_max_budget_alert_emails
+    try:
+        litellm.default_key_max_budget_alert_emails = global_config
+        await _virtual_key_max_budget_alert_check(
+            valid_token=valid_token,
+            proxy_logging_obj=MockProxyLogging(),
+            user_obj=None,
+        )
+        await asyncio.sleep(0.1)
+
+        assert captured_call_info.max_budget_alert_emails == per_key_config
+    finally:
+        litellm.default_key_max_budget_alert_emails = original
+
+
+@pytest.mark.asyncio
 async def test_get_fuzzy_user_object_case_insensitive_email():
     """Test that _get_fuzzy_user_object uses case-insensitive email lookup"""
     # Setup mock Prisma client
