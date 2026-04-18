@@ -166,7 +166,9 @@ export default function KeyInfoView({
       // state; without this, the next save resends `[]` and trips the premium
       // gate in prepare_metadata_fields for non-premium users.
       for (const field of PREMIUM_METADATA_FIELDS) {
-        const previousValue = (currentKeyData.metadata as Record<string, unknown> | undefined)?.[field];
+        const previousValue =
+          (currentKeyData.metadata as Record<string, unknown> | undefined)?.[field] ??
+          (currentKeyData as unknown as Record<string, unknown>)[field];
         if (isEmptyValue(formValues[field]) && isEmptyValue(previousValue)) {
           delete formValues[field];
         }
