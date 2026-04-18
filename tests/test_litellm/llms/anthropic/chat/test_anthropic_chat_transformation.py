@@ -1559,6 +1559,128 @@ def test_effort_output_config_preservation():
     assert result["output_config"]["effort"] == "medium"
 
 
+def test_task_budget_output_config_preservation():
+    """Test that output_config with task_budget is preserved for Claude Opus 4.7."""
+    config = AnthropicConfig()
+
+    messages = [{"role": "user", "content": "Run this agentic task"}]
+    optional_params = {
+        "output_config": {
+            "effort": "high",
+            "task_budget": {"type": "tokens", "total": 64000},
+        }
+    }
+
+    result = config.transform_request(
+        model="claude-opus-4-7-20260416",
+        messages=messages,
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+
+    assert result["output_config"]["effort"] == "high"
+    assert result["output_config"]["task_budget"] == {
+        "type": "tokens",
+        "total": 64000,
+    }
+
+
+def test_task_budget_beta_header_injection():
+    """Test that task budget beta header is added when task_budget is detected."""
+    from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+    from litellm.types.llms.anthropic import ANTHROPIC_TASK_BUDGETS_BETA_HEADER
+
+    model_info = AnthropicModelInfo()
+    optional_params = {
+        "output_config": {"task_budget": {"type": "tokens", "total": 64000}}
+    }
+
+    task_budget_used = model_info.is_task_budget_used(optional_params=optional_params)
+    assert task_budget_used is True
+
+    headers = model_info.get_anthropic_headers(
+        api_key="test-key", task_budget_used=task_budget_used
+    )
+
+    assert "anthropic-beta" in headers
+    assert ANTHROPIC_TASK_BUDGETS_BETA_HEADER in headers["anthropic-beta"]
+
+
+def test_output_config_supported_for_claude_opus_47():
+    """Test that output_config is accepted as a direct param for Claude Opus 4.7."""
+    config = AnthropicConfig()
+
+    supported_params = config.get_supported_openai_params(
+        model="claude-opus-4-7-20260416"
+    )
+
+    assert "output_config" in supported_params
+
+
+def test_output_config_maps_direct_param():
+    """Test that output_config maps from non-default params."""
+    config = AnthropicConfig()
+
+    result = config.map_openai_params(
+        non_default_params={
+            "reasoning_effort": "high",
+            "output_config": {"task_budget": {"type": "tokens", "total": 64000}},
+        },
+        optional_params={},
+        model="claude-opus-4-7-20260416",
+        drop_params=False,
+    )
+
+    assert result["output_config"]["effort"] == "high"
+    assert result["output_config"]["task_budget"] == {
+        "type": "tokens",
+        "total": 64000,
+    }
+
+
+def test_output_config_maps_from_completion_optional_params():
+    """Test that output_config is accepted through the public optional params path."""
+    from litellm.utils import get_optional_params
+
+    result = get_optional_params(
+        model="claude-opus-4-7-20260416",
+        custom_llm_provider="anthropic",
+        messages=[{"role": "user", "content": "Run this agentic task"}],
+        reasoning_effort="high",
+        output_config={"task_budget": {"type": "tokens", "total": 64000}},
+    )
+
+    assert result["output_config"]["effort"] == "high"
+    assert result["output_config"]["task_budget"] == {
+        "type": "tokens",
+        "total": 64000,
+    }
+
+
+def test_task_budget_rejected_for_non_opus_47():
+    """Test that task_budget is rejected for models other than Claude Opus 4.7."""
+    config = AnthropicConfig()
+    messages = [{"role": "user", "content": "Test"}]
+
+    with pytest.raises(
+        ValueError,
+        match="output_config.task_budget is only supported by Claude Opus 4.7",
+    ):
+        config.transform_request(
+            model="claude-opus-4-6-20260205",
+            messages=messages,
+            optional_params={
+                "output_config": {
+                    "effort": "high",
+                    "task_budget": {"type": "tokens", "total": 64000},
+                }
+            },
+            litellm_params={},
+            headers={},
+        )
+
+
 def test_effort_beta_header_injection():
     """Test that effort beta header is automatically added when output_config is detected."""
     from litellm.llms.anthropic.common_utils import AnthropicModelInfo

@@ -234,6 +234,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             "cache_control",
         ]
 
+        if AnthropicConfig._is_claude_4_7_model(model):
+            params.append("output_config")
+
         if (
             "claude-3-7-sonnet" in model
             or AnthropicConfig._is_claude_4_6_model(model)
@@ -1105,7 +1108,18 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                         "max": "max",
                     }
                     mapped_effort = effort_map.get(value, value)
-                    optional_params["output_config"] = {"effort": mapped_effort}
+                    output_config = optional_params.get("output_config")
+                    if not isinstance(output_config, dict):
+                        output_config = {}
+                    output_config["effort"] = mapped_effort
+                    optional_params["output_config"] = output_config
+            elif param == "output_config" and isinstance(value, dict):
+                output_config = optional_params.get("output_config")
+                if isinstance(output_config, dict):
+                    output_config.update(value)
+                    optional_params["output_config"] = output_config
+                else:
+                    optional_params["output_config"] = value
             elif param == "web_search_options" and isinstance(value, dict):
                 hosted_web_search_tool = self.map_web_search_tool(
                     cast(OpenAIWebSearchOptions, value)
@@ -1528,6 +1542,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         if not output_config or not isinstance(output_config, dict):
             return
         effort = output_config.get("effort")
+        task_budget = output_config.get("task_budget")
         valid_efforts = ["high", "medium", "low", "xhigh", "max"]
         if effort and effort not in valid_efforts:
             raise ValueError(
@@ -1547,6 +1562,21 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             raise ValueError(
                 f"effort='xhigh' is not supported by this model. Got model: {model}"
             )
+        if task_budget is not None:
+            if not self._is_opus_4_7_model(model):
+                raise ValueError(
+                    f"output_config.task_budget is only supported by Claude Opus 4.7. "
+                    f"Got model: {model}"
+                )
+            if not isinstance(task_budget, dict):
+                raise ValueError("output_config.task_budget must be a dictionary")
+            if task_budget.get("type") != "tokens":
+                raise ValueError("output_config.task_budget.type must be 'tokens'")
+            total = task_budget.get("total")
+            if not isinstance(total, int) or total <= 0:
+                raise ValueError(
+                    "output_config.task_budget.total must be a positive integer"
+                )
         data["output_config"] = output_config
 
     def _transform_response_for_json_mode(
