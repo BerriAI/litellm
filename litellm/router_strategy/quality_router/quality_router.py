@@ -67,11 +67,13 @@ class QualityRouter(CustomLogger):
 
         # Per-model indices populated alongside the tier index. `_model_keywords`
         # stores keywords lowercased so we can substring-match against the
-        # lowercased user message in O(total-keyword-count). `_model_quality`
-        # and `_model_cost` are needed for keyword-match tiebreaking.
+        # lowercased user message in O(total-keyword-count). `_model_quality`,
+        # `_model_cost`, and `_model_order` drive tiebreaking — `_model_order`
+        # is the explicit priority (lower wins, unset = +inf).
         self._model_keywords: Dict[str, List[str]] = {}
         self._model_quality: Dict[str, int] = {}
         self._model_cost: Dict[str, Optional[float]] = {}
+        self._model_order: Dict[str, Optional[int]] = {}
 
         # Pre-built tier → models index for O(1) tier resolution.
         self._tier_to_models: Dict[int, List[str]] = self._build_tier_index()
@@ -165,9 +167,11 @@ class QualityRouter(CustomLogger):
             if isinstance(prefs, dict):
                 tier = prefs.get("quality_tier")
                 keywords = prefs.get("keywords") or []
+                order = prefs.get("order")
             else:
                 tier = getattr(prefs, "quality_tier", None)
                 keywords = getattr(prefs, "keywords", None) or []
+                order = getattr(prefs, "order", None)
 
             if tier is None:
                 raise ValueError(
@@ -180,6 +184,10 @@ class QualityRouter(CustomLogger):
             self._model_keywords[name] = [str(k).lower() for k in keywords if k]
             self._model_quality[name] = tier_int
             self._model_cost[name] = self._get_deployment_input_cost(deployment)
+            try:
+                self._model_order[name] = int(order) if order is not None else None
+            except (TypeError, ValueError):
+                self._model_order[name] = None
             seen[name] = True
 
         missing = [name for name, found in seen.items() if not found]
@@ -189,16 +197,30 @@ class QualityRouter(CustomLogger):
                 f"the router's model_list (or are missing routing preferences): {missing}"
             )
 
+        # Sort each tier's model list by (order ASC, model_name ASC) so that
+        # `_resolve_model_for_quality_tier` (which picks index [0]) honors the
+        # admin's explicit priority. Unset order treated as +inf so explicit
+        # always wins over implicit.
+        for models in tier_to_models.values():
+            models.sort(key=lambda n: (self._order_key(n), n))
+
         return tier_to_models
+
+    def _order_key(self, model_name: str) -> float:
+        """`order` lookup as a float — unset becomes +inf so explicit wins."""
+        order = self._model_order.get(model_name)
+        return float(order) if order is not None else math.inf
 
     def _keyword_override(self, user_message: str) -> Optional[Tuple[str, str]]:
         """
         Find a deployment whose declared keywords appear in `user_message`.
 
         Returns (model_name, matched_keyword) or None when no keyword matches.
-        When multiple deployments match, sorts by (quality_tier DESC,
-        input_cost_per_token ASC, model_name ASC) and returns the winner.
-        Unpriced models are treated as `+inf` so priced models win on price.
+        When multiple deployments match, sorts by:
+            1. `order` ASC (explicit priority — unset = +inf so explicit wins)
+            2. quality_tier DESC
+            3. input_cost_per_token ASC (unpriced = +inf)
+            4. model_name ASC (deterministic stability)
         """
         text = user_message.lower()
 
@@ -212,13 +234,14 @@ class QualityRouter(CustomLogger):
         if not matches:
             return None
 
-        def sort_key(match: Tuple[str, str]) -> Tuple[int, float, str]:
+        def sort_key(match: Tuple[str, str]) -> Tuple[float, int, float, str]:
             name = match[0]
+            order_val = self._order_key(name)
             quality = self._model_quality.get(name, 0)
             cost = self._model_cost.get(name)
             cost_val = cost if cost is not None else math.inf
             # Negate quality so higher tier sorts first under ASC sort.
-            return (-quality, cost_val, name)
+            return (order_val, -quality, cost_val, name)
 
         matches.sort(key=sort_key)
         return matches[0]

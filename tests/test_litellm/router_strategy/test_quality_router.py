@@ -32,6 +32,7 @@ def _make_model_list(spec: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         "model_name": str,
         "quality_tier": Optional[int],
         "keywords": Optional[List[str]],
+        "order": Optional[int],
         "input_cost_per_token": Optional[float],
     }
     If quality_tier is None, the deployment is created without
@@ -44,6 +45,8 @@ def _make_model_list(spec: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             prefs: Dict[str, Any] = {"quality_tier": entry["quality_tier"]}
             if "keywords" in entry:
                 prefs["keywords"] = entry["keywords"]
+            if "order" in entry:
+                prefs["order"] = entry["order"]
             model_info["litellm_routing_preferences"] = prefs
         if "input_cost_per_token" in entry:
             model_info["input_cost_per_token"] = entry["input_cost_per_token"]
@@ -407,6 +410,163 @@ class TestKeywordOverride:
         assert decision["routed_via"] == "keyword"
         assert decision["matched_keyword"] == "code"
         assert decision["complexity_tier"] is None  # short-circuited
+
+    def test_explicit_order_overrides_quality_tier(self):
+        # Both models declare "code". By implicit rules (quality DESC), the
+        # tier-3 model would win. With an explicit `order=1` on the tier-2
+        # model, it must win regardless.
+        spec = [
+            {
+                "model_name": "preferred-tier2",
+                "quality_tier": 2,
+                "keywords": ["code"],
+                "order": 1,
+                "input_cost_per_token": 0.000010,
+            },
+            {
+                "model_name": "implicit-tier3",
+                "quality_tier": 3,
+                "keywords": ["code"],
+                "input_cost_per_token": 0.000005,
+            },
+        ]
+        router = MagicMock()
+        router.model_list = _make_model_list(spec)
+        qr = QualityRouter(
+            model_name="qr",
+            litellm_router_instance=router,
+            default_model="preferred-tier2",
+            quality_router_config={
+                "available_models": ["preferred-tier2", "implicit-tier3"]
+            },
+        )
+        match = qr._keyword_override("write some code")
+        assert match == ("preferred-tier2", "code")
+
+    def test_explicit_order_overrides_price(self):
+        # Same tier, but the more expensive one has a lower `order` and wins.
+        spec = [
+            {
+                "model_name": "expensive-but-preferred",
+                "quality_tier": 2,
+                "keywords": ["data"],
+                "order": 1,
+                "input_cost_per_token": 0.000050,
+            },
+            {
+                "model_name": "cheap-default",
+                "quality_tier": 2,
+                "keywords": ["data"],
+                "input_cost_per_token": 0.000005,
+            },
+        ]
+        router = MagicMock()
+        router.model_list = _make_model_list(spec)
+        qr = QualityRouter(
+            model_name="qr",
+            litellm_router_instance=router,
+            default_model="cheap-default",
+            quality_router_config={
+                "available_models": ["expensive-but-preferred", "cheap-default"]
+            },
+        )
+        match = qr._keyword_override("show me the data")
+        assert match == ("expensive-but-preferred", "data")
+
+    def test_lower_order_wins_between_two_explicitly_ordered(self):
+        spec = [
+            {
+                "model_name": "second",
+                "quality_tier": 2,
+                "keywords": ["data"],
+                "order": 5,
+            },
+            {
+                "model_name": "first",
+                "quality_tier": 2,
+                "keywords": ["data"],
+                "order": 1,
+            },
+        ]
+        router = MagicMock()
+        router.model_list = _make_model_list(spec)
+        qr = QualityRouter(
+            model_name="qr",
+            litellm_router_instance=router,
+            default_model="first",
+            quality_router_config={"available_models": ["first", "second"]},
+        )
+        match = qr._keyword_override("show me the data")
+        assert match == ("first", "data")
+
+    def test_same_order_falls_through_to_quality_then_price(self):
+        # All three models share order=1 → tiebreak falls through to
+        # (quality DESC, cost ASC).
+        spec = [
+            {
+                "model_name": "low-tier",
+                "quality_tier": 1,
+                "keywords": ["data"],
+                "order": 1,
+                "input_cost_per_token": 0.000001,
+            },
+            {
+                "model_name": "high-tier-cheap",
+                "quality_tier": 3,
+                "keywords": ["data"],
+                "order": 1,
+                "input_cost_per_token": 0.000005,
+            },
+            {
+                "model_name": "high-tier-expensive",
+                "quality_tier": 3,
+                "keywords": ["data"],
+                "order": 1,
+                "input_cost_per_token": 0.000050,
+            },
+        ]
+        router = MagicMock()
+        router.model_list = _make_model_list(spec)
+        qr = QualityRouter(
+            model_name="qr",
+            litellm_router_instance=router,
+            default_model="low-tier",
+            quality_router_config={
+                "available_models": [
+                    "low-tier",
+                    "high-tier-cheap",
+                    "high-tier-expensive",
+                ]
+            },
+        )
+        match = qr._keyword_override("show me the data")
+        assert match == ("high-tier-cheap", "data")
+
+    def test_order_is_used_in_tier_resolution_too(self):
+        # Two models at the same tier. Explicit `order=1` on the second one
+        # should make _resolve_model_for_quality_tier(2) pick it.
+        spec = [
+            {
+                "model_name": "default-pick",
+                "quality_tier": 2,
+            },
+            {
+                "model_name": "preferred-pick",
+                "quality_tier": 2,
+                "order": 1,
+            },
+        ]
+        router = MagicMock()
+        router.model_list = _make_model_list(spec)
+        qr = QualityRouter(
+            model_name="qr",
+            litellm_router_instance=router,
+            default_model="default-pick",
+            quality_router_config={
+                "available_models": ["default-pick", "preferred-pick"]
+            },
+        )
+        assert qr._resolve_model_for_quality_tier(2) == "preferred-pick"
 
     @pytest.mark.asyncio
     async def test_hook_falls_back_to_complexity_when_no_keyword(self, keyword_router):

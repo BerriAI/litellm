@@ -52,9 +52,21 @@ class RoutingPreferences(BaseModel):
         default_factory=list,
         description=(
             "Substring keywords (case-insensitive) that, when present in the "
-            "user message, route the request to this deployment. When multiple "
-            "deployments match, ties are broken by (highest quality_tier, "
-            "then cheapest model_info.input_cost_per_token)."
+            "user message, route the request to this deployment. See `order` "
+            "for explicit collision handling, otherwise ties fall through to "
+            "(highest quality_tier, then cheapest model_info.input_cost_per_token)."
+        ),
+    )
+
+    order: Optional[int] = Field(
+        default=None,
+        description=(
+            "Explicit priority used to break ties between deployments. Lower "
+            "values win. Applies both to keyword collisions and to picking "
+            "between multiple deployments at the same quality tier. A "
+            "deployment with `order` set always wins over one without; among "
+            "deployments sharing the same `order` (or both unset), ties fall "
+            "back to (quality_tier DESC, input_cost_per_token ASC, model_name)."
         ),
     )
 
