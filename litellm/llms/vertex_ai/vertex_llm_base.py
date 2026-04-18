@@ -54,6 +54,8 @@ class VertexBase:
         # Per-credential-key asyncio.Lock for single-flight async refresh.
         # Prevents thundering herd when token expires under high concurrency.
         self._async_refresh_locks: Dict[tuple, asyncio.Lock] = {}
+        # Tracks in-flight background refresh tasks to avoid duplicate refreshes.
+        self._background_refresh_tasks: Dict[tuple, asyncio.Task] = {}
         # Protects the sync get_access_token refresh path.
         self._sync_refresh_lock = threading.Lock()
 
@@ -882,15 +884,26 @@ class VertexBase:
                 if resolved_project is None:
                     raise ValueError("Could not resolve project_id")
                 current_token = _credentials.token
-
-                asyncio.get_event_loop().create_task(
-                    self._background_refresh_credentials(
-                        _credentials,
-                        credential_cache_key,
-                        credential_project_id,
+                if current_token is None or not isinstance(current_token, str):
+                    # Token is malformed despite STALE state — fall through
+                    # to INVALID path which will block on a full refresh.
+                    pass
+                else:
+                    # Schedule a single background refresh — skip if one is
+                    # already in flight for this credential key.
+                    existing = self._background_refresh_tasks.get(
+                        credential_cache_key
                     )
-                )
-                return current_token, resolved_project
+                    if existing is None or existing.done():
+                        task = asyncio.create_task(
+                            self._background_refresh_credentials(
+                                _credentials,
+                                credential_cache_key,
+                                credential_project_id,
+                            )
+                        )
+                        self._background_refresh_tasks[credential_cache_key] = task
+                    return current_token, resolved_project
 
             if token_state == TokenState.INVALID:
                 # Token is expired or missing — must block until refresh completes.
