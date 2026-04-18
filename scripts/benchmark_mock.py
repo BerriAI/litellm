@@ -45,11 +45,15 @@ async def run_benchmark(url, n_requests, max_concurrent):
     )
     async with aiohttp.ClientSession(connector=connector) as session:
         # warmup
-        await asyncio.gather(*[send_request(session, url, semaphore) for _ in range(min(50, n_requests))])
+        await asyncio.gather(
+            *[send_request(session, url, semaphore) for _ in range(min(50, n_requests))]
+        )
 
         # timed run
         wall_start = time.perf_counter()
-        results = await asyncio.gather(*[send_request(session, url, semaphore) for _ in range(n_requests)])
+        results = await asyncio.gather(
+            *[send_request(session, url, semaphore) for _ in range(n_requests)]
+        )
         wall_elapsed = time.perf_counter() - wall_start
 
     latencies = [r for r in results if r is not None]
@@ -57,10 +61,16 @@ async def run_benchmark(url, n_requests, max_concurrent):
 
     if not latencies:
         return {
-            "mean": 0, "p50": 0, "p95": 0, "p99": 0,
-            "throughput": 0, "failures": n_requests,
-            "wall_time": wall_elapsed, "n_requests": n_requests,
-            "max_concurrent": max_concurrent, "latencies": [],
+            "mean": 0,
+            "p50": 0,
+            "p95": 0,
+            "p99": 0,
+            "throughput": 0,
+            "failures": n_requests,
+            "wall_time": wall_elapsed,
+            "n_requests": n_requests,
+            "max_concurrent": max_concurrent,
+            "latencies": [],
         }
 
     latencies.sort()
@@ -72,10 +82,16 @@ async def run_benchmark(url, n_requests, max_concurrent):
     throughput = n_requests / wall_elapsed
 
     return {
-        "mean": mean, "p50": p50, "p95": p95, "p99": p99,
-        "throughput": throughput, "failures": failures,
-        "wall_time": wall_elapsed, "n_requests": n_requests,
-        "max_concurrent": max_concurrent, "latencies": latencies,
+        "mean": mean,
+        "p50": p50,
+        "p95": p95,
+        "p99": p99,
+        "throughput": throughput,
+        "failures": failures,
+        "wall_time": wall_elapsed,
+        "n_requests": n_requests,
+        "max_concurrent": max_concurrent,
+        "latencies": latencies,
     }
 
 
@@ -105,7 +121,9 @@ def print_aggregate(results):
     n = len(all_latencies)
 
     if not all_latencies:
-        print(f"\n  Aggregate: all {total_requests} requests failed across {len(results)} runs")
+        print(
+            f"\n  Aggregate: all {total_requests} requests failed across {len(results)} runs"
+        )
         return
 
     mean = statistics.mean(all_latencies) * 1000
@@ -129,7 +147,9 @@ def print_aggregate(results):
     run_throughputs = [r["throughput"] for r in results]
     if len(run_means) > 1:
         cov_latency = statistics.stdev(run_means) / statistics.mean(run_means) * 100
-        cov_throughput = statistics.stdev(run_throughputs) / statistics.mean(run_throughputs) * 100
+        cov_throughput = (
+            statistics.stdev(run_throughputs) / statistics.mean(run_throughputs) * 100
+        )
         print(f"\n  Run-to-run variance:")
         print(f"    Latency CoV:    {cov_latency:.1f}%")
         print(f"    Throughput CoV: {cov_throughput:.1f}%")
@@ -144,7 +164,9 @@ async def main():
     args = parser.parse_args()
 
     print(f"Benchmarking {args.url}")
-    print(f"  {args.requests} requests, {args.max_concurrent} concurrency, {args.runs} run(s)")
+    print(
+        f"  {args.requests} requests, {args.max_concurrent} concurrency, {args.runs} run(s)"
+    )
 
     results = []
     for run_num in range(1, args.runs + 1):

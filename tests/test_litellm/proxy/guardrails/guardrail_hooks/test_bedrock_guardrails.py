@@ -1,6 +1,7 @@
 """
 Unit tests for Bedrock Guardrails
 """
+
 import json
 import os
 import sys
@@ -230,15 +231,20 @@ async def test_bedrock_guardrail_logging_uses_redacted_response():
     mock_credentials.token = None
 
     # Mock AWS-related methods to ensure test runs without external dependencies
-    with patch.object(
-        guardrail.async_handler, "post", new_callable=AsyncMock
-    ) as mock_post, patch(
-        "litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails.verbose_proxy_logger.debug"
-    ) as mock_debug, patch.object(
-        guardrail, "_load_credentials", return_value=(mock_credentials, "us-east-1")
-    ) as mock_load_creds, patch.object(
-        guardrail, "_prepare_request", return_value=MagicMock()
-    ) as mock_prepare_request:
+    with (
+        patch.object(
+            guardrail.async_handler, "post", new_callable=AsyncMock
+        ) as mock_post,
+        patch(
+            "litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails.verbose_proxy_logger.debug"
+        ) as mock_debug,
+        patch.object(
+            guardrail, "_load_credentials", return_value=(mock_credentials, "us-east-1")
+        ) as mock_load_creds,
+        patch.object(
+            guardrail, "_prepare_request", return_value=MagicMock()
+        ) as mock_prepare_request,
+    ):
 
         mock_post.return_value = mock_bedrock_response
 
@@ -339,13 +345,17 @@ async def test_bedrock_guardrail_original_response_not_modified():
     mock_credentials.token = None
 
     # Mock AWS-related methods to ensure test runs without external dependencies
-    with patch.object(
-        guardrail.async_handler, "post", new_callable=AsyncMock
-    ) as mock_post, patch.object(
-        guardrail, "_load_credentials", return_value=(mock_credentials, "us-east-1")
-    ) as mock_load_creds, patch.object(
-        guardrail, "_prepare_request", return_value=MagicMock()
-    ) as mock_prepare_request:
+    with (
+        patch.object(
+            guardrail.async_handler, "post", new_callable=AsyncMock
+        ) as mock_post,
+        patch.object(
+            guardrail, "_load_credentials", return_value=(mock_credentials, "us-east-1")
+        ) as mock_load_creds,
+        patch.object(
+            guardrail, "_prepare_request", return_value=MagicMock()
+        ) as mock_prepare_request,
+    ):
 
         mock_post.return_value = mock_bedrock_response
 
@@ -861,6 +871,7 @@ async def test__redact_pii_matches_comprehensive_coverage():
 
     print("Comprehensive coverage redaction test passed")
 
+
 @pytest.mark.asyncio
 async def test_bedrock_guardrail_respects_custom_runtime_endpoint(monkeypatch):
     """Test that BedrockGuardrail respects aws_bedrock_runtime_endpoint when set"""
@@ -1090,8 +1101,7 @@ async def test_bedrock_apply_guardrail_with_only_tool_calls_response():
         assert "tool_calls" in guardrailed_inputs
         assert len(guardrailed_inputs["tool_calls"]) == 1
         assert (
-            guardrailed_inputs["tool_calls"][0]["id"]
-            == "call_eFSCWFsyL7MclHYnzKrcQnMK"
+            guardrailed_inputs["tool_calls"][0]["id"] == "call_eFSCWFsyL7MclHYnzKrcQnMK"
         )
         assert guardrailed_inputs["tool_calls"][0]["function"]["name"] == "get_weather"
         assert (
@@ -1106,12 +1116,12 @@ async def test_bedrock_apply_guardrail_with_only_tool_calls_response():
 @pytest.mark.asyncio
 async def test_bedrock_guardrail_blocked_content_with_masking_enabled():
     """Test that BLOCKED content raises exception even when masking is enabled
-    
+
     This test verifies the bug fix where previously mask_request_content=True or
     mask_response_content=True would bypass all BLOCKED content checks. Now it
     properly distinguishes between BLOCKED (raise exception) and ANONYMIZED (apply masking).
     """
-    
+
     # Create guardrail with masking enabled
     guardrail = BedrockGuardrail(
         guardrailIdentifier="test-guardrail",
@@ -1119,7 +1129,7 @@ async def test_bedrock_guardrail_blocked_content_with_masking_enabled():
         mask_request_content=True,  # Masking enabled
         mask_response_content=True,  # Masking enabled
     )
-    
+
     # Mock Bedrock response with BLOCKED content (hate speech)
     blocked_response = {
         "action": "GUARDRAIL_INTERVENED",
@@ -1147,34 +1157,36 @@ async def test_bedrock_guardrail_blocked_content_with_masking_enabled():
         ],
         "outputs": [{"text": "Content blocked due to policy violation"}],
     }
-    
+
     mock_bedrock_response = MagicMock()
     mock_bedrock_response.status_code = 200
     mock_bedrock_response.json.return_value = blocked_response
-    
+
     # Mock credentials
     mock_credentials = MagicMock()
     mock_credentials.access_key = "test-access-key"
     mock_credentials.secret_key = "test-secret-key"
     mock_credentials.token = None
-    
+
     request_data = {
         "model": "gpt-4o",
         "messages": [
             {"role": "user", "content": "Test message with PII and hate speech"},
         ],
     }
-    
+
     # Mock AWS-related methods
-    with patch.object(
-        guardrail.async_handler, "post", new_callable=AsyncMock
-    ) as mock_post, patch.object(
-        guardrail, "_load_credentials", return_value=(mock_credentials, "us-east-1")
-    ), patch.object(
-        guardrail, "_prepare_request", return_value=MagicMock()
+    with (
+        patch.object(
+            guardrail.async_handler, "post", new_callable=AsyncMock
+        ) as mock_post,
+        patch.object(
+            guardrail, "_load_credentials", return_value=(mock_credentials, "us-east-1")
+        ),
+        patch.object(guardrail, "_prepare_request", return_value=MagicMock()),
     ):
         mock_post.return_value = mock_bedrock_response
-        
+
         # Should raise HTTPException for BLOCKED content
         with pytest.raises(HTTPException) as exc_info:
             await guardrail.make_bedrock_api_request(
@@ -1182,7 +1194,7 @@ async def test_bedrock_guardrail_blocked_content_with_masking_enabled():
                 messages=request_data.get("messages"),
                 request_data=request_data,
             )
-        
+
         # Verify exception details
         assert exc_info.value.status_code == 400
         assert "Violated guardrail policy" in str(exc_info.value.detail)
@@ -1281,8 +1293,8 @@ class TestRedactPiiMatchesNullSafety:
             "assessments": [
                 {
                     "wordPolicy": {
-                        "customWords": None,       # null from Bedrock API
-                        "managedWordLists": None,   # null from Bedrock API
+                        "customWords": None,  # null from Bedrock API
+                        "managedWordLists": None,  # null from Bedrock API
                     },
                 }
             ],
@@ -1352,21 +1364,21 @@ class TestShouldRaiseGuardrailBlockedExceptionNullSafety:
             "assessments": [
                 {
                     "topicPolicy": {
-                        "topics": None,           # null from Bedrock API
+                        "topics": None,  # null from Bedrock API
                     },
                     "contentPolicy": {
-                        "filters": None,          # null
+                        "filters": None,  # null
                     },
                     "wordPolicy": {
-                        "customWords": None,      # null
+                        "customWords": None,  # null
                         "managedWordLists": None,  # null
                     },
                     "sensitiveInformationPolicy": {
-                        "piiEntities": None,      # null
-                        "regexes": None,           # null
+                        "piiEntities": None,  # null
+                        "regexes": None,  # null
                     },
                     "contextualGroundingPolicy": {
-                        "filters": None,          # null
+                        "filters": None,  # null
                     },
                 }
             ],
@@ -1386,7 +1398,7 @@ class TestShouldRaiseGuardrailBlockedExceptionNullSafety:
             "assessments": [
                 {
                     "topicPolicy": {
-                        "topics": None,            # null — should not crash
+                        "topics": None,  # null — should not crash
                     },
                     "contentPolicy": {
                         "filters": [
@@ -1398,12 +1410,12 @@ class TestShouldRaiseGuardrailBlockedExceptionNullSafety:
                         ],
                     },
                     "wordPolicy": {
-                        "customWords": None,       # null
-                        "managedWordLists": None,   # null
+                        "customWords": None,  # null
+                        "managedWordLists": None,  # null
                     },
                     "sensitiveInformationPolicy": {
-                        "piiEntities": None,       # null
-                        "regexes": None,            # null
+                        "piiEntities": None,  # null
+                        "regexes": None,  # null
                     },
                     "contextualGroundingPolicy": None,  # entire policy is null
                 }
@@ -1440,9 +1452,7 @@ class TestShouldRaiseGuardrailBlockedExceptionNullSafety:
                         "topics": None,
                     },
                     "wordPolicy": {
-                        "customWords": [
-                            {"match": "badword", "action": "BLOCKED"}
-                        ],
+                        "customWords": [{"match": "badword", "action": "BLOCKED"}],
                         "managedWordLists": None,
                     },
                 }
@@ -1528,12 +1538,16 @@ class TestApplyGuardrailNullSafety:
 
         mock_credentials = MagicMock()
 
-        with patch.object(
-            guardrail.async_handler, "post", new_callable=AsyncMock
-        ) as mock_post, patch.object(
-            guardrail, "_load_credentials", return_value=(mock_credentials, "us-east-1")
-        ), patch.object(
-            guardrail, "_prepare_request", return_value=MagicMock()
+        with (
+            patch.object(
+                guardrail.async_handler, "post", new_callable=AsyncMock
+            ) as mock_post,
+            patch.object(
+                guardrail,
+                "_load_credentials",
+                return_value=(mock_credentials, "us-east-1"),
+            ),
+            patch.object(guardrail, "_prepare_request", return_value=MagicMock()),
         ):
             # With empty texts (from None → []), no Bedrock API call should be made
             result = await guardrail.apply_guardrail(
@@ -1558,12 +1572,16 @@ class TestApplyGuardrailNullSafety:
 
         mock_credentials = MagicMock()
 
-        with patch.object(
-            guardrail.async_handler, "post", new_callable=AsyncMock
-        ) as mock_post, patch.object(
-            guardrail, "_load_credentials", return_value=(mock_credentials, "us-east-1")
-        ), patch.object(
-            guardrail, "_prepare_request", return_value=MagicMock()
+        with (
+            patch.object(
+                guardrail.async_handler, "post", new_callable=AsyncMock
+            ) as mock_post,
+            patch.object(
+                guardrail,
+                "_load_credentials",
+                return_value=(mock_credentials, "us-east-1"),
+            ),
+            patch.object(guardrail, "_prepare_request", return_value=MagicMock()),
         ):
             result = await guardrail.apply_guardrail(
                 inputs=inputs,
@@ -1573,7 +1591,6 @@ class TestApplyGuardrailNullSafety:
 
             assert result.get("texts") == []
             mock_post.assert_not_called()
-
 
 
 @pytest.mark.asyncio

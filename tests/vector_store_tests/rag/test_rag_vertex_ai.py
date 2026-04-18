@@ -46,7 +46,7 @@ class TestRAGVertexAI(BaseRAGTest):
 
         Chunking is configured via chunking_strategy (unified interface),
         not inside vector_store.
-        
+
         If VERTEX_CORPUS_ID is not set, a new corpus will be created automatically.
         """
         vertex_project = os.environ.get("VERTEX_PROJECT")
@@ -64,7 +64,7 @@ class TestRAGVertexAI(BaseRAGTest):
                 "vertex_location": vertex_location,
             },
         }
-        
+
         # Add corpus ID if provided (otherwise will create new corpus)
         if corpus_id:
             options["vector_store"]["vector_store_id"] = corpus_id
@@ -78,11 +78,11 @@ class TestRAGVertexAI(BaseRAGTest):
     ) -> Optional[Dict[str, Any]]:
         """
         Query Vertex AI RAG corpus using LiteLLM's vector store search.
-        
+
         Args:
             vector_store_id: The RAG corpus ID (can be full path or just the ID)
             query: The search query
-            
+
         Returns:
             Search results dict or None if no results found
         """
@@ -110,13 +110,15 @@ class TestRAGVertexAI(BaseRAGTest):
                         for content_item in item["content"]:
                             if content_item.get("text"):
                                 text += content_item["text"]
-                    
-                    results.append({
-                        "text": text,
-                        "score": item.get("score", 0.0),
-                        "file_id": item.get("file_id", ""),
-                        "filename": item.get("filename", ""),
-                    })
+
+                    results.append(
+                        {
+                            "text": text,
+                            "score": item.get("score", 0.0),
+                            "file_id": item.get("file_id", ""),
+                            "filename": item.get("filename", ""),
+                        }
+                    )
 
                 # Check if query terms appear in results
                 for result in results:
@@ -136,7 +138,7 @@ class TestRAGVertexAI(BaseRAGTest):
     async def test_create_corpus_and_ingest(self):
         """
         Test creating a new RAG corpus and ingesting a file.
-        
+
         This test specifically validates:
         - Automatic corpus creation when vector_store_id is not provided
         - Long-running operation polling for corpus creation
@@ -149,7 +151,9 @@ class TestRAGVertexAI(BaseRAGTest):
         Test document {unique_id} for Vertex AI RAG corpus creation.
         This tests the automatic corpus creation feature.
         The corpus should be created and the file should be uploaded successfully.
-        """.encode("utf-8")
+        """.encode(
+            "utf-8"
+        )
         file_data = (filename, text_content, "text/plain")
 
         # Get base options WITHOUT corpus_id to trigger creation
@@ -157,7 +161,7 @@ class TestRAGVertexAI(BaseRAGTest):
         # Remove corpus_id if it was set from env var
         if "vector_store_id" in ingest_options.get("vector_store", {}):
             del ingest_options["vector_store"]["vector_store_id"]
-        
+
         ingest_options["name"] = f"test-create-corpus-{unique_id}"
 
         try:
@@ -172,15 +176,17 @@ class TestRAGVertexAI(BaseRAGTest):
             assert "id" in response
             assert response["id"].startswith("ingest_")
             assert "status" in response
-            assert response["status"] == "completed", f"Expected completed, got {response['status']}"
+            assert (
+                response["status"] == "completed"
+            ), f"Expected completed, got {response['status']}"
             assert "vector_store_id" in response
             assert response["vector_store_id"], "vector_store_id should not be empty"
-            
+
             # The vector_store_id should be a full corpus path
             corpus_id = response["vector_store_id"]
             assert "projects/" in corpus_id, "Corpus ID should be a full resource path"
             assert "ragCorpora/" in corpus_id, "Corpus ID should contain ragCorpora"
-            
+
             print(f"✓ Successfully created corpus: {corpus_id}")
             print(f"✓ Successfully uploaded file: {response.get('file_id')}")
 
@@ -194,7 +200,7 @@ class TestRAGVertexAI(BaseRAGTest):
     async def test_ingest_with_existing_corpus(self):
         """
         Test ingesting a file to an existing RAG corpus.
-        
+
         This test validates:
         - Using an existing corpus_id from environment variable
         - Direct file upload without corpus creation
@@ -209,7 +215,9 @@ class TestRAGVertexAI(BaseRAGTest):
         text_content = f"""
         Test document {unique_id} for existing Vertex AI RAG corpus.
         This tests file upload to a pre-existing corpus.
-        """.encode("utf-8")
+        """.encode(
+            "utf-8"
+        )
         file_data = (filename, text_content, "text/plain")
 
         ingest_options = self.get_base_ingest_options()
@@ -224,12 +232,14 @@ class TestRAGVertexAI(BaseRAGTest):
             print(f"Existing Corpus Ingest Response: {response}")
 
             assert response["status"] == "completed"
-            assert response["vector_store_id"] == corpus_id or corpus_id in response["vector_store_id"]
+            assert (
+                response["vector_store_id"] == corpus_id
+                or corpus_id in response["vector_store_id"]
+            )
             assert response.get("file_id"), "file_id should be present"
-            
+
             print(f"✓ Successfully uploaded to existing corpus: {corpus_id}")
             print(f"✓ File ID: {response.get('file_id')}")
 
         except litellm.InternalServerError as e:
             pytest.skip(f"Skipping test due to litellm.InternalServerError: {e}")
-

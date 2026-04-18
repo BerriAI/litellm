@@ -1,6 +1,7 @@
 """
 Tests for Vertex AI (Veo) video generation transformation.
 """
+
 import base64
 import json
 import os
@@ -35,20 +36,20 @@ class TestVertexAIVideoConfig:
         assert "seconds" in params
         assert "size" in params
 
-    @patch.object(VertexAIVideoConfig, 'get_access_token')
+    @patch.object(VertexAIVideoConfig, "get_access_token")
     def test_validate_environment(self, mock_get_access_token):
         """Test environment validation for Vertex AI."""
         # Mock the authentication
         mock_get_access_token.return_value = ("mock-access-token", "test-project")
-        
+
         headers = {}
         litellm_params = {"vertex_project": "test-project"}
-        
+
         result = self.config.validate_environment(
             headers=headers,
             model="veo-002",
             api_key=None,
-            litellm_params=litellm_params
+            litellm_params=litellm_params,
         )
 
         # Should add Authorization header
@@ -285,7 +286,7 @@ class TestVertexAIVideoConfig:
     def test_transform_video_status_retrieve_request(self):
         """Test transformation of video status retrieve request."""
         operation_name = "projects/test-project/locations/us-central1/publishers/google/models/veo-002/operations/12345"
-        
+
         # Provide an api_base that would be returned from get_complete_url
         api_base = "https://us-central1-aiplatform.googleapis.com/v1/projects/test-project/locations/us-central1/publishers/google/models/veo-002"
 
@@ -436,9 +437,7 @@ class TestVertexAIVideoConfig:
             "done": False,
         }
 
-        with pytest.raises(
-            ValueError, match="Video generation is not complete yet"
-        ):
+        with pytest.raises(ValueError, match="Video generation is not complete yet"):
             self.config.transform_video_content_response(
                 raw_response=mock_response, logging_obj=self.mock_logging_obj
             )
@@ -459,9 +458,7 @@ class TestVertexAIVideoConfig:
 
     def test_transform_video_remix_request_not_supported(self):
         """Test that video remix raises NotImplementedError."""
-        with pytest.raises(
-            NotImplementedError, match="Video remix is not supported"
-        ):
+        with pytest.raises(NotImplementedError, match="Video remix is not supported"):
             self.config.transform_video_remix_request(
                 video_id="test-video-id",
                 prompt="new prompt",
@@ -481,9 +478,7 @@ class TestVertexAIVideoConfig:
 
     def test_transform_video_delete_request_not_supported(self):
         """Test that video delete raises NotImplementedError."""
-        with pytest.raises(
-            NotImplementedError, match="Video delete is not supported"
-        ):
+        with pytest.raises(NotImplementedError, match="Video delete is not supported"):
             self.config.transform_video_delete_request(
                 video_id="test-video-id",
                 api_base="https://example.com",
@@ -707,7 +702,10 @@ class TestImageAndParametersPassthrough:
         # instances contains prompt + image
         assert len(data["instances"]) == 1
         instance = data["instances"][0]
-        assert instance["prompt"] == "Cinematic drone shot moving forward along the beach boardwalk"
+        assert (
+            instance["prompt"]
+            == "Cinematic drone shot moving forward along the beach boardwalk"
+        )
         assert instance["image"] == image
 
         # parameters block is correct and not double-nested
@@ -715,4 +713,3 @@ class TestImageAndParametersPassthrough:
         assert "parameters" not in data["parameters"]
 
         assert url.endswith(":predictLongRunning")
-
