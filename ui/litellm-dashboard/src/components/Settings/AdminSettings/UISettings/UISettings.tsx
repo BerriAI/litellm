@@ -295,7 +295,7 @@ export default function UISettings() {
               <Typography.Text strong>Forward client headers to LLM API</Typography.Text>
               <Typography.Text type="secondary">
                 {forwardClientHeadersProperty?.description ??
-                  "If enabled, forwards client headers (e.g. Authorization) to the LLM API. Required for Claude Code with Max subscription."}
+                  "Forwards client headers (Authorization, anthropic-beta, and x-* custom headers) to the upstream LLM. Enable for Claude Code with a Max subscription (forwards the OAuth token) or to pass custom/tracing headers through to the provider. Independent of the BYOK toggle — enable only the one(s) you need."}
               </Typography.Text>
             </Space>
           </Space>
@@ -315,7 +315,7 @@ export default function UISettings() {
               <Typography.Text strong>Forward LLM provider auth headers</Typography.Text>
               <Typography.Text type="secondary">
                 {forwardLLMProviderAuthHeadersProperty?.description ??
-                  "If enabled, forwards provider auth headers (x-api-key, x-goog-api-key, api-key) to the LLM provider. Required for Claude Code BYOK."}
+                  "Forwards provider auth headers (x-api-key, x-goog-api-key, api-key, ocp-apim-subscription-key) to the upstream LLM, overriding any deployment-configured key for that request. Enable for Claude Code BYOK (clients bring their own API key). Independent of the client-headers toggle — enable only the one(s) you need."}
               </Typography.Text>
             </Space>
           </Space>
