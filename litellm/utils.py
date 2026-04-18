@@ -4804,6 +4804,14 @@ def add_provider_specific_params_to_optional_params(
                     k=k, additional_drop_params=additional_drop_params
                 ):
                     continue
+                if isinstance(optional_params.get(k), dict) and isinstance(
+                    passed_params[k], dict
+                ):
+                    optional_params[k] = {
+                        **optional_params[k],
+                        **passed_params[k],
+                    }
+                    continue
                 optional_params[k] = passed_params[k]
     return optional_params
 

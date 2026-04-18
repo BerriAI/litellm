@@ -310,6 +310,20 @@ class AnthropicModelInfo(BaseLLMModelInfo):
 
         return False
 
+    def is_task_budget_used(self, optional_params: Optional[dict]) -> bool:
+        """
+        Check if output_config.task_budget is being used.
+        """
+        if not optional_params:
+            return False
+
+        output_config = optional_params.get("output_config")
+        if not output_config or not isinstance(output_config, dict):
+            return False
+
+        task_budget = output_config.get("task_budget")
+        return bool(task_budget and isinstance(task_budget, dict))
+
     def is_code_execution_tool_used(self, tools: Optional[List]) -> bool:
         """
         Check if code execution tool is being used.
@@ -382,14 +396,19 @@ class AnthropicModelInfo(BaseLLMModelInfo):
             List of beta header strings
         """
         from litellm.types.llms.anthropic import ANTHROPIC_EFFORT_BETA_HEADER
+        from litellm.types.llms.anthropic import ANTHROPIC_TASK_BUDGETS_BETA_HEADER
 
         betas = []
 
         # Detect features
         effort_used = self.is_effort_used(optional_params, model)
+        task_budget_used = self.is_task_budget_used(optional_params)
 
         if effort_used:
             betas.append(ANTHROPIC_EFFORT_BETA_HEADER)  # effort-2025-11-24
+
+        if task_budget_used:
+            betas.append(ANTHROPIC_TASK_BUDGETS_BETA_HEADER)
 
         if computer_tool_used:
             beta_header = self.get_computer_tool_beta_header(computer_tool_used)
@@ -423,6 +442,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         programmatic_tool_calling_used: bool = False,
         input_examples_used: bool = False,
         effort_used: bool = False,
+        task_budget_used: bool = False,
         is_vertex_request: bool = False,
         user_anthropic_beta_headers: Optional[List[str]] = None,
         code_execution_tool_used: bool = False,
@@ -453,6 +473,13 @@ class AnthropicModelInfo(BaseLLMModelInfo):
             from litellm.types.llms.anthropic import ANTHROPIC_EFFORT_BETA_HEADER
 
             betas.add(ANTHROPIC_EFFORT_BETA_HEADER)
+
+        if task_budget_used:
+            from litellm.types.llms.anthropic import (
+                ANTHROPIC_TASK_BUDGETS_BETA_HEADER,
+            )
+
+            betas.add(ANTHROPIC_TASK_BUDGETS_BETA_HEADER)
 
         # Code execution tool uses a separate beta header
         if code_execution_tool_used:
@@ -535,6 +562,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         )
         input_examples_used = self.is_input_examples_used(tools=tools)
         effort_used = self.is_effort_used(optional_params=optional_params, model=model)
+        task_budget_used = self.is_task_budget_used(optional_params=optional_params)
         code_execution_tool_used = self.is_code_execution_tool_used(tools=tools)
         container_with_skills_used = self.is_container_with_skills_used(
             optional_params=optional_params
@@ -557,6 +585,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
             programmatic_tool_calling_used=programmatic_tool_calling_used,
             input_examples_used=input_examples_used,
             effort_used=effort_used,
+            task_budget_used=task_budget_used,
             code_execution_tool_used=code_execution_tool_used,
             container_with_skills_used=container_with_skills_used,
         )
