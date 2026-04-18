@@ -49,7 +49,7 @@ def test_package_dependencies():
         import pathlib
         import litellm
         from packaging.requirements import Requirement
-        
+
         # Try to import tomllib (Python 3.11+) or tomli (older versions)
         try:
             import tomllib as tomli
@@ -104,14 +104,26 @@ def test_litellm_proxy_server_config_no_general_settings():
     # Sync the local litellm packages into the project environment
     server_process = None
     try:
-        _run_uv("sync", "--frozen", "--group", "proxy-dev", "--extra", "proxy", "--extra", "extra_proxy")
-        
+        _run_uv(
+            "sync",
+            "--frozen",
+            "--group",
+            "proxy-dev",
+            "--extra",
+            "proxy",
+            "--extra",
+            "extra_proxy",
+        )
+
         # Ensure Prisma client is generated
         try:
             print(f"Running prisma generate from: {PROJECT_ROOT}")
-            
+
             result = _run_uv(
-                "run", "--no-sync", "prisma", "generate",
+                "run",
+                "--no-sync",
+                "prisma",
+                "generate",
                 capture_output=True,
                 text=True,
             )
@@ -123,7 +135,16 @@ def test_litellm_proxy_server_config_no_general_settings():
         filepath = os.path.dirname(os.path.abspath(__file__))
         config_fp = f"{filepath}/test_configs/test_config_no_auth.yaml"
         server_process = subprocess.Popen(
-            ["uv", "run", "--no-sync", "python", "-m", "litellm.proxy.proxy_cli", "--config", config_fp],
+            [
+                "uv",
+                "run",
+                "--no-sync",
+                "python",
+                "-m",
+                "litellm.proxy.proxy_cli",
+                "--config",
+                config_fp,
+            ],
             cwd=PROJECT_ROOT,
         )
 
