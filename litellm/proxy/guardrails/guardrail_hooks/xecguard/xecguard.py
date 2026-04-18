@@ -308,9 +308,6 @@ class XecGuardGuardrail(CustomGuardrail):
             "model": self.xecguard_model,
             "scan_type": scan_type,
             "messages": messages,
-            # XecGuard rejects requests without policy_names; "*" asks the
-            # server to apply every policy bound to this Service Token.
-            # "policy_names": self.policy_names if self.policy_names else ["*"],
             "policy_names": (
                 self.policy_names if self.policy_names else _DEFAULT_POLICIES
             ),
