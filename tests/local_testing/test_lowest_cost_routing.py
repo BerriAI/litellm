@@ -202,3 +202,53 @@ async def test_get_available_endpoints_tpm_rpm_check_async(ans_rpm):
     assert (d_ans and d_ans["model_info"]["id"]) == ans
 
     print("selected deployment:", d_ans)
+
+
+@pytest.mark.asyncio
+async def test_lowest_cost_routing_randomization():
+    """
+    Test that when models have the exact same cost, the router randomizes the selection.
+    """
+    test_cache = DualCache()
+    model_list = [
+        {
+            "model_name": "gpt-3.5-turbo",
+            "litellm_params": {
+                "model": "azure/gpt-3.5-turbo-1",
+                "input_cost_per_token": 0.001,
+                "output_cost_per_token": 0.002,
+            },
+            "model_info": {"id": "model-1"},
+        },
+        {
+            "model_name": "gpt-3.5-turbo",
+            "litellm_params": {
+                "model": "azure/gpt-3.5-turbo-2",
+                "input_cost_per_token": 0.001,
+                "output_cost_per_token": 0.002,
+            },
+            "model_info": {"id": "model-2"},
+        },
+    ]
+
+    lowest_cost_logger = LowestCostLoggingHandler(
+        router_cache=test_cache,
+    )
+    model_group = "gpt-3.5-turbo"
+
+    selected_counts = {"model-1": 0, "model-2": 0}
+
+    # Run multiple times to observe randomization
+    for _ in range(50):
+        selected_model = await lowest_cost_logger.async_get_available_deployments(
+            model_group=model_group, healthy_deployments=model_list
+        )
+        selected_id = selected_model["model_info"]["id"]
+        selected_counts[selected_id] += 1
+
+    print("selected counts:", selected_counts)
+
+    # Both models should roughly be selected since they have the exact same cost.
+    # To avoid flakiness, just check that > 0 for both (or at least > 5 in 50 tries).
+    assert selected_counts["model-1"] > 0
+    assert selected_counts["model-2"] > 0

@@ -1,6 +1,7 @@
 #### What this does ####
 #   picks based on response time (for streaming, this is time to first token)
 from datetime import datetime, timedelta
+import random
 from typing import Dict, List, Optional, Union
 
 import litellm
@@ -232,12 +233,14 @@ class LowestCostLoggingHandler(CustomLogger):
             input_tokens = 0
 
         # randomly sample from all_deployments, incase all deployments have latency=0.0
-        _items = all_deployments.items()
+        _items = random.sample(
+            list(all_deployments.items()), len(all_deployments.items())
+        )
 
         ### GET AVAILABLE DEPLOYMENTS ### filter out any deployments > tpm/rpm limits
         potential_deployments = []
         _cost_per_deployment = {}
-        for item, item_map in all_deployments.items():
+        for item, item_map in _items:
             ## get the item from model list
             _deployment = None
             for m in healthy_deployments:
