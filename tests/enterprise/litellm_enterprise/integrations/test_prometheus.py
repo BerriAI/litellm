@@ -1061,3 +1061,94 @@ async def test_langfuse_otel_callback_failure_metric(prometheus_logger):
 # ==============================================================================
 # END CALLBACK FAILURE METRICS TESTS
 # ==============================================================================
+
+
+# ==============================================================================
+# EXCLUDE LABELS TESTS
+# ==============================================================================
+
+
+def test_exclude_labels_removes_specified_labels():
+    """exclude_labels removes specified labels from a metric's label set"""
+    clear_prometheus_registry()
+
+    test_config = [
+        {
+            "group": "service_metrics",
+            "metrics": ["litellm_deployment_failure_responses"],
+            "exclude_labels": ["team", "api_provider"],
+        }
+    ]
+    litellm.prometheus_metrics_config = test_config
+
+    logger = PrometheusLogger()
+    labels = logger.get_labels_for_metric("litellm_deployment_failure_responses")
+
+    assert "team" not in labels
+    assert "api_provider" not in labels
+    # Other labels should still be present
+    assert len(labels) > 0
+
+    litellm.prometheus_metrics_config = None
+
+
+def test_exclude_labels_config_type():
+    """PrometheusMetricsConfig accepts exclude_labels field"""
+    config = PrometheusMetricsConfig(
+        group="service_metrics",
+        metrics=["litellm_deployment_failure_responses"],
+        exclude_labels=["team"],
+    )
+    assert config.exclude_labels == ["team"]
+    assert config.include_labels is None
+
+
+def test_exclude_labels_and_include_labels_together():
+    """include_labels applies first, then exclude_labels removes from the result"""
+    clear_prometheus_registry()
+
+    default_labels = PrometheusMetricLabels.get_labels(
+        "litellm_deployment_failure_responses"
+    )
+    # Pick two labels that are in the default set
+    include = default_labels[:3]
+    exclude = [include[0]]
+
+    test_config = [
+        {
+            "group": "service_metrics",
+            "metrics": ["litellm_deployment_failure_responses"],
+            "include_labels": include,
+            "exclude_labels": exclude,
+        }
+    ]
+    litellm.prometheus_metrics_config = test_config
+
+    logger = PrometheusLogger()
+    labels = logger.get_labels_for_metric("litellm_deployment_failure_responses")
+
+    assert exclude[0] not in labels
+    for label in include[1:]:
+        assert label in labels
+
+    litellm.prometheus_metrics_config = None
+
+
+def test_no_exclude_labels_returns_all_defaults():
+    """When exclude_labels is not set the full default label set is returned"""
+    clear_prometheus_registry()
+
+    litellm.prometheus_metrics_config = None
+    logger = PrometheusLogger()
+
+    default_labels = PrometheusMetricLabels.get_labels(
+        "litellm_deployment_failure_responses"
+    )
+    labels = logger.get_labels_for_metric("litellm_deployment_failure_responses")
+
+    assert labels == default_labels
+
+
+# ==============================================================================
+# END EXCLUDE LABELS TESTS
+# ==============================================================================
