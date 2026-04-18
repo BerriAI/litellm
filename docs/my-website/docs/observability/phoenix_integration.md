@@ -22,7 +22,7 @@ Use just 2 lines of code, to instantly log your responses **across all providers
 You can also use the instrumentor option instead of the callback, which you can find [here](https://docs.arize.com/phoenix/tracing/integrations-tracing/litellm).
 
 ```bash
-pip install opentelemetry-api opentelemetry-sdk opentelemetry-exporter-otlp litellm[proxy]
+uv add opentelemetry-api opentelemetry-sdk opentelemetry-exporter-otlp litellm[proxy]
 ```
 ```python
 litellm.callbacks = ["arize_phoenix"]
@@ -73,7 +73,7 @@ environment_variables:
     PHOENIX_COLLECTOR_HTTP_ENDPOINT: "https://app.phoenix.arize.com/s/<space-name>/v1/traces" # OPTIONAL - For setting the HTTP endpoint
 ```
 
-> Note: If you set the gRPC endpoint, install `grpcio` via `pip install "litellm[grpc]"` (or `grpcio`).
+> Note: If you set the gRPC endpoint, install `grpcio` via `uv add "litellm[grpc]"` (or `grpcio`).
 
 2. Start the proxy
 

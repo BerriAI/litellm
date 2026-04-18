@@ -1220,6 +1220,7 @@ async def generate_key_fn(
     - allowed_vector_store_indexes: Optional[List[dict]] - List of allowed vector store indexes for the key. Example - [{"index_name": "my-index", "index_permissions": ["write", "read"]}]. If specified, the key will only be able to use these specific vector store indexes. Create index, using `/v1/indexes` endpoint.
     - router_settings: Optional[UpdateRouterConfig] - key-specific router settings. Example - {"model_group_retry_policy": {"max_retries": 5}}. IF null or {} then no router settings.
     - access_group_ids: Optional[List[str]] - List of access group IDs to associate with the key. Access groups define which models a key can access. Example - ["access_group_1", "access_group_2"].
+    - budget_limits: Optional[list] - List of concurrent budget windows for the key. Each window specifies a budget_limit, time_period, and optional budget_duration. Example - [{"budget_limit": 10.0, "time_period": "1d"}, {"budget_limit": 50.0, "time_period": "7d"}].
 
     Examples:
 
@@ -1601,6 +1602,19 @@ async def prepare_key_update_data(
             non_default_values["budget_reset_at"] = key_reset_at
             non_default_values["budget_duration"] = budget_duration
 
+    if "budget_limits" in non_default_values and non_default_values["budget_limits"]:
+        from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
+
+        raw_windows = non_default_values["budget_limits"]
+        initialized_windows = []
+        for window in raw_windows:
+            w = window if isinstance(window, dict) else window.model_dump()
+            w["reset_at"] = get_budget_reset_time(
+                budget_duration=w["budget_duration"]
+            ).isoformat()
+            initialized_windows.append(w)
+        non_default_values["budget_limits"] = json.dumps(initialized_windows)
+
     if "object_permission" in non_default_values:
         non_default_values = await _handle_update_object_permission(
             data_json=non_default_values,
@@ -1849,7 +1863,7 @@ async def _process_single_key_update(
 
     # Delete cache
     await _delete_cache_key_object(
-        hashed_token=hash_token(key_update_item.key),
+        hashed_token=_hash_token_if_needed(key_update_item.key),
         user_api_key_cache=user_api_key_cache,
         proxy_logging_obj=proxy_logging_obj,
     )
@@ -1961,8 +1975,13 @@ async def _validate_update_key_data(
         user_api_key_cache=user_api_key_cache,
     )
 
-    # Admin-only: only proxy admins, team admins, or org admins can modify max_budget
-    if data.max_budget is not None and data.max_budget != existing_key_row.max_budget:
+    # Admin-only: only proxy admins, team admins, or org admins can modify max_budget or spend
+    if (
+        data.max_budget is not None and data.max_budget != existing_key_row.max_budget
+    ) or (
+        data.spend is not None
+        and data.spend != getattr(existing_key_row, "spend", None)
+    ):
         if prisma_client is not None:
             hashed_key = existing_key_row.token
             await _check_key_admin_access(
@@ -1970,7 +1989,7 @@ async def _validate_update_key_data(
                 hashed_token=hashed_key,
                 prisma_client=prisma_client,
                 user_api_key_cache=user_api_key_cache,
-                route="/key/update (max_budget)",
+                route="/key/update (max_budget/spend)",
             )
 
     # Check team limits if key has a team_id (from request or existing key)
@@ -2135,6 +2154,7 @@ async def update_key_fn(  # noqa: PLR0915
     - allowed_vector_store_indexes: Optional[List[dict]] - List of allowed vector store indexes for the key. Example - [{"index_name": "my-index", "index_permissions": ["write", "read"]}]. If specified, the key will only be able to use these specific vector store indexes. Create index, using `/v1/indexes` endpoint.
     - router_settings: Optional[UpdateRouterConfig] - key-specific router settings. Example - {"model_group_retry_policy": {"max_retries": 5}}. IF null or {} then no router settings.
     - access_group_ids: Optional[List[str]] - List of access group IDs to associate with the key. Access groups define which models a key can access. Example - ["access_group_1", "access_group_2"].
+    - budget_limits: Optional[list] - List of concurrent budget windows for the key. Each window specifies a budget_limit, time_period, and optional budget_duration. Example - [{"budget_limit": 10.0, "time_period": "1d"}, {"budget_limit": 50.0, "time_period": "7d"}].
 
     Example:
     ```bash
@@ -2882,6 +2902,7 @@ async def generate_key_helper_fn(  # noqa: PLR0915
     rotation_interval: Optional[str] = None,
     router_settings: Optional[dict] = None,
     access_group_ids: Optional[list] = None,
+    budget_limits: Optional[list] = None,  # multiple concurrent budget windows
 ):
     from litellm.proxy.proxy_server import premium_user, prisma_client
 
@@ -2912,6 +2933,18 @@ async def generate_key_helper_fn(  # noqa: PLR0915
         reset_at = None
     else:
         reset_at = get_budget_reset_time(budget_duration=budget_duration)
+
+    # Initialize reset_at for each budget window
+    budget_limits_json: Optional[str] = None
+    if budget_limits:
+        initialized_windows = []
+        for window in budget_limits:
+            w = dict(window) if not isinstance(window, dict) else {**window}
+            w["reset_at"] = get_budget_reset_time(
+                budget_duration=w["budget_duration"]
+            ).isoformat()
+            initialized_windows.append(w)
+        budget_limits_json = json.dumps(initialized_windows)
 
     aliases_json = json.dumps(aliases)
     config_json = json.dumps(config)
@@ -2995,6 +3028,7 @@ async def generate_key_helper_fn(  # noqa: PLR0915
             "organization_id": organization_id,
             "budget_id": budget_id,
             "blocked": blocked,
+            "budget_limits": budget_limits_json,
             "created_by": created_by,
             "updated_by": updated_by,
             "allowed_routes": allowed_routes or [],
@@ -3395,6 +3429,7 @@ def _transform_verification_tokens_to_deleted_records(
             "litellm_organization_table",
             "object_permission",
             "id",
+            "budget_limits",
         ):
             record.pop(rel_key, None)
 
@@ -3721,7 +3756,7 @@ async def _execute_virtual_key_regeneration(
 
     if hashed_api_key or key:
         await _delete_cache_key_object(
-            hashed_token=hash_token(key),
+            hashed_token=_hash_token_if_needed(key),
             user_api_key_cache=user_api_key_cache,
             proxy_logging_obj=proxy_logging_obj,
         )

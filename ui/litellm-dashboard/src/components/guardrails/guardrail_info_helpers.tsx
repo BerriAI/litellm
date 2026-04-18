@@ -48,6 +48,7 @@ export const guardrail_provider_map: Record<string, string> = {
   LitellmContentFilter: "litellm_content_filter",
   ToolPermission: "tool_permission",
   BlockCodeExecution: "block_code_execution",
+  Promptguard: "promptguard",
 };
 
 // Function to populate provider map from API response - updates the original map
@@ -124,6 +125,7 @@ export const guardrailLogoMap: Record<string, string> = {
   "OpenAI Moderation": `${asset_logos_folder}openai_small.svg`,
   EnkryptAI: `${asset_logos_folder}enkrypt_ai.avif`,
   "Prompt Security": `${asset_logos_folder}prompt_security.png`,
+  PromptGuard: `${asset_logos_folder}promptguard.svg`,
   "LiteLLM Content Filter": `${asset_logos_folder}litellm_logo.jpg`,
   "Akto": `${asset_logos_folder}akto.svg`,
 };

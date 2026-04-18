@@ -197,7 +197,7 @@ class TestCustomGuardrailShouldRunGuardrail:
         data_with_disable_root = {
             "model": "gpt-3.5-turbo",
             "messages": [{"role": "user", "content": "test"}],
-            "disable_global_guardrail": True,
+            "disable_global_guardrails": True,
         }
         result = custom_guardrail.should_run_guardrail(
             data=data_with_disable_root, event_type=GuardrailEventHooks.pre_call
@@ -210,7 +210,7 @@ class TestCustomGuardrailShouldRunGuardrail:
         data_with_disable_litellm = {
             "model": "gpt-3.5-turbo",
             "messages": [{"role": "user", "content": "test"}],
-            "litellm_metadata": {"disable_global_guardrail": True},
+            "litellm_metadata": {"disable_global_guardrails": True},
         }
         result = custom_guardrail.should_run_guardrail(
             data=data_with_disable_litellm, event_type=GuardrailEventHooks.pre_call
@@ -223,7 +223,7 @@ class TestCustomGuardrailShouldRunGuardrail:
         data_with_disable_metadata = {
             "model": "gpt-3.5-turbo",
             "messages": [{"role": "user", "content": "test"}],
-            "metadata": {"disable_global_guardrail": True},
+            "metadata": {"disable_global_guardrails": True},
         }
         result = custom_guardrail.should_run_guardrail(
             data=data_with_disable_metadata, event_type=GuardrailEventHooks.pre_call
@@ -236,7 +236,7 @@ class TestCustomGuardrailShouldRunGuardrail:
         data_with_disable_false = {
             "model": "gpt-3.5-turbo",
             "messages": [{"role": "user", "content": "test"}],
-            "disable_global_guardrail": False,
+            "disable_global_guardrails": False,
         }
         result = custom_guardrail.should_run_guardrail(
             data=data_with_disable_false, event_type=GuardrailEventHooks.pre_call
@@ -244,6 +244,121 @@ class TestCustomGuardrailShouldRunGuardrail:
         assert (
             result is True
         ), "Global guardrail should still run when disable_global_guardrail=False"
+
+    def test_should_run_guardrail_with_opted_out_global_guardrails(self):
+        """Test the per-guardrail opt-out list for global (default_on=True) guardrails"""
+        from litellm.types.guardrails import GuardrailEventHooks
+
+        custom_guardrail = CustomGuardrail(
+            guardrail_name="global_guardrail",
+            default_on=True,
+            event_hook=GuardrailEventHooks.pre_call,
+        )
+
+        # Test 1: guardrail in the opt-out list at root level → skipped
+        data_root = {
+            "model": "gpt-3.5-turbo",
+            "messages": [{"role": "user", "content": "test"}],
+            "opted_out_global_guardrails": ["global_guardrail"],
+        }
+        assert (
+            custom_guardrail.should_run_guardrail(
+                data=data_root, event_type=GuardrailEventHooks.pre_call
+            )
+            is False
+        )
+
+        # Test 2: guardrail in the opt-out list inside litellm_metadata → skipped
+        data_litellm = {
+            "model": "gpt-3.5-turbo",
+            "messages": [{"role": "user", "content": "test"}],
+            "litellm_metadata": {"opted_out_global_guardrails": ["global_guardrail"]},
+        }
+        assert (
+            custom_guardrail.should_run_guardrail(
+                data=data_litellm, event_type=GuardrailEventHooks.pre_call
+            )
+            is False
+        )
+
+        # Test 3: guardrail in the opt-out list inside metadata → skipped
+        data_metadata = {
+            "model": "gpt-3.5-turbo",
+            "messages": [{"role": "user", "content": "test"}],
+            "metadata": {"opted_out_global_guardrails": ["global_guardrail"]},
+        }
+        assert (
+            custom_guardrail.should_run_guardrail(
+                data=data_metadata, event_type=GuardrailEventHooks.pre_call
+            )
+            is False
+        )
+
+        # Test 4: a different guardrail in the opt-out list → still runs
+        data_other = {
+            "model": "gpt-3.5-turbo",
+            "messages": [{"role": "user", "content": "test"}],
+            "metadata": {"opted_out_global_guardrails": ["some_other_guardrail"]},
+        }
+        assert (
+            custom_guardrail.should_run_guardrail(
+                data=data_other, event_type=GuardrailEventHooks.pre_call
+            )
+            is True
+        )
+
+        # Test 5: empty opt-out list → still runs
+        data_empty = {
+            "model": "gpt-3.5-turbo",
+            "messages": [{"role": "user", "content": "test"}],
+            "metadata": {"opted_out_global_guardrails": []},
+        }
+        assert (
+            custom_guardrail.should_run_guardrail(
+                data=data_empty, event_type=GuardrailEventHooks.pre_call
+            )
+            is True
+        )
+
+        # Test 6: malformed value (bool instead of list) → safely ignored, guardrail runs
+        data_malformed = {
+            "model": "gpt-3.5-turbo",
+            "messages": [{"role": "user", "content": "test"}],
+            "metadata": {"opted_out_global_guardrails": True},
+        }
+        assert (
+            custom_guardrail.should_run_guardrail(
+                data=data_malformed, event_type=GuardrailEventHooks.pre_call
+            )
+            is True
+        )
+
+    def test_should_run_guardrail_opt_out_does_not_affect_non_global(self):
+        """Opt-out list only matters for default_on=True guardrails"""
+        from litellm.types.guardrails import GuardrailEventHooks
+
+        non_global = CustomGuardrail(
+            guardrail_name="opt_in_guardrail",
+            default_on=False,
+            event_hook=GuardrailEventHooks.pre_call,
+        )
+
+        # An opt-in guardrail named in opted_out_global_guardrails is still controlled
+        # by the explicit `guardrails` request list, not by the global opt-out list.
+        data = {
+            "model": "gpt-3.5-turbo",
+            "messages": [{"role": "user", "content": "test"}],
+            "metadata": {
+                "opted_out_global_guardrails": ["opt_in_guardrail"],
+                "guardrails": ["opt_in_guardrail"],
+            },
+        }
+        assert (
+            non_global.should_run_guardrail(
+                data=data, event_type=GuardrailEventHooks.pre_call
+            )
+            is True
+        )
 
 
 class TestApplyGuardrailCheck:
@@ -473,7 +588,9 @@ class TestGuardrailSensitiveFieldStripping:
             duration=1.0,
         )
 
-        logged_response = request_data["metadata"]["standard_logging_guardrail_information"][0]["guardrail_response"]
+        logged_response = request_data["metadata"][
+            "standard_logging_guardrail_information"
+        ][0]["guardrail_response"]
         assert "secret_fields" not in logged_response
         assert "sk-live-SHOULD-NOT-APPEAR" not in json.dumps(logged_response)
 
@@ -484,7 +601,12 @@ class TestGuardrailSensitiveFieldStripping:
 
         guardrail.add_standard_logging_guardrail_information_to_request_data(
             guardrail_json_response=[
-                {"result": "ok", "secret_fields": {"raw_headers": {"authorization": "Bearer sk-secret"}}},
+                {
+                    "result": "ok",
+                    "secret_fields": {
+                        "raw_headers": {"authorization": "Bearer sk-secret"}
+                    },
+                },
                 {"result": "also_ok"},
             ],
             request_data=request_data,
@@ -493,6 +615,7 @@ class TestGuardrailSensitiveFieldStripping:
         )
 
         import json
+
         serialized = json.dumps(request_data)
         assert "secret_fields" not in serialized
         assert "sk-secret" not in serialized
@@ -506,21 +629,21 @@ class TestCustomGuardrailPassthroughSupport:
         """
         Test that async_post_call_success_deployment_hook handles raw httpx.Response objects
         from passthrough endpoints without crashing with TypeError.
-        
+
         This tests Fix #3: TypeError: TypedDict does not support instance and class checks
         """
         import httpx
 
         custom_guardrail = CustomGuardrail()
-        
+
         # Mock the async_post_call_success_hook to return None (guardrail didn't modify response)
         custom_guardrail.async_post_call_success_hook = AsyncMock(return_value=None)
-        
+
         # Create a mock httpx.Response object (typical passthrough response)
         mock_response = AsyncMock(spec=httpx.Response)
         mock_response.status_code = 200
         mock_response.text = "Mock response"
-        
+
         request_data = {
             "guardrails": ["test_guardrail"],
             "user_api_key_user_id": "test_user",
@@ -529,14 +652,14 @@ class TestCustomGuardrailPassthroughSupport:
             "user_api_key_hash": "test_hash",
             "user_api_key_request_route": "passthrough_route",
         }
-        
+
         # This should not raise TypeError: TypedDict does not support instance and class checks
         result = await custom_guardrail.async_post_call_success_deployment_hook(
             request_data=request_data,
             response=mock_response,
             call_type=CallTypes.allm_passthrough_route,
         )
-        
+
         # When result is None, should return the original response
         assert result == mock_response
 
@@ -544,53 +667,53 @@ class TestCustomGuardrailPassthroughSupport:
     async def test_async_post_call_success_deployment_hook_with_none_call_type(self):
         """
         Test that async_post_call_success_deployment_hook handles None call_type gracefully.
-        
+
         This ensures that even if call_type is None (before fix #1), the guardrail doesn't crash.
         """
         custom_guardrail = CustomGuardrail()
-        
+
         # Mock the async_post_call_success_hook to return None
         custom_guardrail.async_post_call_success_hook = AsyncMock(return_value=None)
-        
+
         mock_response = AsyncMock()
-        
+
         request_data = {
             "guardrails": ["test_guardrail"],
             "user_api_key_user_id": "test_user",
         }
-        
+
         # Call with None call_type - should not crash
         result = await custom_guardrail.async_post_call_success_deployment_hook(
             request_data=request_data,
             response=mock_response,
             call_type=None,
         )
-        
+
         # Should return the original response when result is None
         assert result == mock_response
 
     def test_is_valid_response_type_with_none(self):
         """
         Test _is_valid_response_type helper method correctly identifies None as invalid.
-        
+
         This is part of Fix #3: Safely handling TypedDict types that don't support isinstance checks.
         """
         custom_guardrail = CustomGuardrail()
-        
+
         # None should be invalid
         assert custom_guardrail._is_valid_response_type(None) is False
 
     def test_is_valid_response_type_with_typeddict_error(self):
         """
         Test _is_valid_response_type gracefully handles TypeError from TypedDict.
-        
+
         This tests Fix #3: When isinstance() is called with TypedDict types, it raises TypeError.
         The method should catch this and allow the response through.
         """
         from litellm.types.utils import ModelResponse
-        
+
         custom_guardrail = CustomGuardrail()
-        
+
         # Create a valid LiteLLM response object
         response = ModelResponse(
             id="test-id",
@@ -599,11 +722,10 @@ class TestCustomGuardrailPassthroughSupport:
             model="test-model",
             object="chat.completion",
         )
-        
+
         # This should return True (it's a valid response type or TypeError is caught)
         result = custom_guardrail._is_valid_response_type(response)
         assert result is True
-
 
 
 class TestEventTypeLogging:
@@ -899,7 +1021,9 @@ class TestTracingFieldsPopulation:
             guardrail_json_response="blocked",
             request_data=request_data,
             guardrail_status="guardrail_intervened",
-            tracing_detail=GuardrailTracingDetail(policy_template="EU AI Act Article 5"),
+            tracing_detail=GuardrailTracingDetail(
+                policy_template="EU AI Act Article 5"
+            ),
         )
 
         slg_list = request_data["metadata"]["standard_logging_guardrail_information"]

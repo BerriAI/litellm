@@ -645,13 +645,14 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                 )
             if response is not None and isinstance(response, UserAPIKeyAuth):
                 validated = UserAPIKeyAuth.model_validate(response)
-                validated = await _run_post_custom_auth_checks(
-                    valid_token=validated,
-                    request=request,
-                    request_data=request_data,
-                    route=route,
-                    parent_otel_span=parent_otel_span,
-                )
+                if getattr(litellm, "enable_post_custom_auth_checks", False):
+                    validated = await _run_post_custom_auth_checks(
+                        valid_token=validated,
+                        request=request,
+                        request_data=request_data,
+                        route=route,
+                        parent_otel_span=parent_otel_span,
+                    )
                 return validated
             elif response is not None and isinstance(response, str):
                 api_key = response
@@ -659,13 +660,14 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
         elif user_custom_auth is not None:
             response = await user_custom_auth(request=request, api_key=api_key)  # type: ignore
             validated = UserAPIKeyAuth.model_validate(response)
-            validated = await _run_post_custom_auth_checks(
-                valid_token=validated,
-                request=request,
-                request_data=request_data,
-                route=route,
-                parent_otel_span=parent_otel_span,
-            )
+            if getattr(litellm, "enable_post_custom_auth_checks", False):
+                validated = await _run_post_custom_auth_checks(
+                    valid_token=validated,
+                    request=request,
+                    request_data=request_data,
+                    route=route,
+                    parent_otel_span=parent_otel_span,
+                )
             return validated
 
         ### LITELLM-DEFINED AUTH FUNCTION ###
@@ -696,11 +698,8 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
 
         # Routing uses unverified JWT claims only to choose auth path.
         # Final authentication is enforced by the selected validator.
-        route_jwt_to_oauth2 = (
-            is_jwt
-            and _should_route_jwt_to_oauth2_override(
-                token=api_key, jwt_handler=jwt_handler
-            )
+        route_jwt_to_oauth2 = is_jwt and _should_route_jwt_to_oauth2_override(
+            token=api_key, jwt_handler=jwt_handler
         )
 
         # OAuth2 applies for:
@@ -716,6 +715,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
         )
         if (should_apply_global_oauth2 and not is_jwt) or should_apply_override_oauth2:
             from litellm.proxy.proxy_server import premium_user
+
             if premium_user is not True:
                 raise ValueError(
                     "Oauth2 token validation is only available for premium users"
@@ -743,10 +743,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                 if jwt_handler.litellm_jwtauth.virtual_key_claim_field is not None:
                     # Decode JWT to get claims without running full auth_builder
                     jwt_claims: Optional[dict]
-                    if (
-                        jwt_handler.litellm_jwtauth.oidc_userinfo_enabled
-                        and not is_jwt
-                    ):
+                    if jwt_handler.litellm_jwtauth.oidc_userinfo_enabled and not is_jwt:
                         jwt_claims = await jwt_handler.get_oidc_userinfo(token=api_key)
                     else:
                         jwt_claims = await jwt_handler.auth_jwt(token=api_key)
@@ -1806,12 +1803,9 @@ async def _enforce_key_and_fallback_model_access(
     if config != {}:
         model_list = config.get("model_list", [])
         new_model_list = model_list
-        verbose_proxy_logger.debug(
-            f"\n new llm router model list {new_model_list}"
-        )
+        verbose_proxy_logger.debug(f"\n new llm router model list {new_model_list}")
     elif (
-        isinstance(valid_token.models, list)
-        and "all-team-models" in valid_token.models
+        isinstance(valid_token.models, list) and "all-team-models" in valid_token.models
     ):
         pass
     else:

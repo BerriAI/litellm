@@ -32,10 +32,10 @@ docker pull docker.litellm.ai/berriai/litellm:main-latest
 
 </TabItem>
 
-<TabItem value="pip" label="LiteLLM CLI (pip package)">
+<TabItem value="cli" label="LiteLLM CLI">
 
 ```shell
-$ pip install 'litellm[proxy]'
+$ uv tool install 'litellm[proxy]'
 ```
 
 </TabItem>
@@ -191,33 +191,32 @@ EXPOSE 4000/tcp
 CMD ["--port", "4000", "--config", "config.yaml", "--detailed_debug"]
 ```
 
-### Build from litellm `pip` package
+### Build from published LiteLLM packages
 
-Follow these instructions to build a docker container from the litellm pip package. If your company has a strict requirement around security / building images you can follow these steps.
+Follow these instructions to build a Docker container from published LiteLLM packages. If your company has a strict requirement around security or image provenance, you can follow these steps.
 
-**Note:** You'll need to copy the `schema.prisma` file from the [litellm repository](https://github.com/BerriAI/litellm/blob/main/schema.prisma) to your build directory alongside the Dockerfile and requirements.txt.
+**Note:** Copy the `schema.prisma` file from the [LiteLLM repository](https://github.com/BerriAI/litellm/blob/main/schema.prisma) into your build directory alongside this Dockerfile.
 
 Dockerfile 
 
 ```shell
 FROM cgr.dev/chainguard/python:latest-dev
+ARG UV_IMAGE=ghcr.io/astral-sh/uv:0.10.9
 
 USER root
 WORKDIR /app
 
-ENV HOME=/home/litellm
-ENV PATH="${HOME}/venv/bin:$PATH"
+ENV UV_TOOL_BIN_DIR=/usr/local/bin
 
 # Install runtime dependencies
 RUN apk update && \
     apk add --no-cache gcc python3-dev openssl openssl-dev
 
-RUN python -m venv ${HOME}/venv
-RUN ${HOME}/venv/bin/pip install --no-cache-dir --upgrade pip
+COPY --from=$UV_IMAGE /uv /usr/local/bin/uv
+COPY --from=$UV_IMAGE /uvx /usr/local/bin/uvx
 
-COPY requirements.txt .
-RUN --mount=type=cache,target=${HOME}/.cache/pip \
-    ${HOME}/venv/bin/pip install -r requirements.txt
+RUN uv tool install 'litellm[proxy,proxy-runtime,extra_proxy]==1.57.3' \
+    --python python
 
 # Copy Prisma schema file
 COPY schema.prisma .
@@ -232,22 +231,12 @@ CMD ["--port", "4000"]
 ```
 
 
-Example `requirements.txt`
-
-```shell
-litellm[proxy]==1.57.3 # Specify the litellm version you want to use
-litellm-enterprise
-prometheus_client
-langfuse
-prisma
-```
-
 Build the docker image
 
 ```shell
 docker build \
-  -f Dockerfile.build_from_pip \
-  -t litellm-proxy-with-pip-5 .
+  -f Dockerfile \
+  -t litellm-proxy-from-package-5 .
 ```
 
 Run the docker image
@@ -258,7 +247,7 @@ docker run \
     -e OPENAI_API_KEY="sk-1222" \
     -e DATABASE_URL="postgresql://xxxxxxxxx \
     -p 4000:4000 \
-    litellm-proxy-with-pip-5 \
+    litellm-proxy-from-package-5 \
     --config /app/config.yaml --detailed_debug
 ```
 
@@ -760,7 +749,7 @@ RUN chmod +x ./docker/entrypoint.sh
 EXPOSE 4000/tcp
 
 # 👉 Key Change: Install hypercorn
-RUN pip install hypercorn
+RUN uv add hypercorn
 
 # Override the CMD instruction with your desired command and arguments
 # WARNING: FOR PROD DO NOT USE `--detailed_debug` it slows down response times, instead use the following CMD
