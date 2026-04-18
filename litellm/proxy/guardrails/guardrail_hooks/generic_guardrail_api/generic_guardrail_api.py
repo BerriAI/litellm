@@ -219,9 +219,9 @@ class GenericGuardrailAPI(CustomGuardrail):
             additional_provider_specific_params or {}
         )
 
-        self.unreachable_fallback: Literal[
-            "fail_closed", "fail_open"
-        ] = unreachable_fallback
+        self.unreachable_fallback: Literal["fail_closed", "fail_open"] = (
+            unreachable_fallback
+        )
 
         # Set supported event hooks
         if "supported_event_hooks" not in kwargs:

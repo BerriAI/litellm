@@ -446,7 +446,7 @@ def test_get_request_body_nova_canvas_inference_profile_arn():
     # Since we can't mock the actual model lookup, we'll test a simpler nova model instead
     # that we know the current logic can handle
     nova_model = "us.amazon.nova-canvas-v1:0"
-    
+
     # Get the provider using the method from the handler
     bedrock_provider = handler.get_bedrock_invoke_provider(model=nova_model)
 
@@ -501,7 +501,7 @@ def test_get_request_body_cross_region_inference_profile():
     optional_params = {}
     # Cross-region inference profile format
     model = "us.amazon.nova-canvas-v1:0"
-    
+
     # This should work after the fix - cross-region format should be detected as 'nova'
     result = handler._get_request_body(
         model=model, prompt=prompt, optional_params=optional_params
@@ -548,23 +548,23 @@ def test_amazon_titan_image_gen():
 def test_extract_headers_from_optional_params_with_guardrails():
     """Test that guardrail parameters are correctly extracted from optional_params and converted to headers"""
     handler = BedrockImageGeneration()
-    
+
     # Test with both guardrail parameters
     optional_params = {
         "guardrailIdentifier": "4cf5knqaeq15",
         "guardrailVersion": "1",
         "someOtherParam": "value",
     }
-    
+
     headers = handler._extract_headers_from_optional_params(optional_params)
-    
+
     # Verify headers are correctly set
     assert headers["x-amz-bedrock-guardrail-identifier"] == "4cf5knqaeq15"
     assert headers["x-amz-bedrock-guardrail-version"] == "1"
-    
+
     # Verify guardrail params are removed from optional_params
     assert "guardrailIdentifier" not in optional_params
     assert "guardrailVersion" not in optional_params
-    
+
     # Verify other params remain in optional_params
     assert optional_params["someOtherParam"] == "value"

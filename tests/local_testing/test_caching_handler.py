@@ -158,14 +158,20 @@ async def test_async_log_cache_hit_on_callbacks():
 
     # Assertions
     mock_logging_obj.async_success_handler.assert_called_once_with(
-        result=cached_result, start_time=start_time, end_time=end_time, cache_hit=cache_hit
+        result=cached_result,
+        start_time=start_time,
+        end_time=end_time,
+        cache_hit=cache_hit,
     )
 
     # Wait for the thread to complete
     await asyncio.sleep(0.5)
 
     mock_logging_obj.handle_sync_success_callbacks_for_async_calls.assert_called_once_with(
-        result=cached_result, start_time=start_time, end_time=end_time, cache_hit=cache_hit
+        result=cached_result,
+        start_time=start_time,
+        end_time=end_time,
+        cache_hit=cache_hit,
     )
 
 
@@ -346,7 +352,7 @@ async def test_embedding_cache_model_field_consistency():
     """
     # Setup cache
     setup_cache()
-    
+
     caching_handler = LLMCachingHandler(
         original_function=aembedding, request_kwargs={}, start_time=datetime.now()
     )
@@ -358,7 +364,7 @@ async def test_embedding_cache_model_field_consistency():
         data=[
             Embedding(embedding=[0.1, 0.2, 0.3], index=0, object="embedding"),
             Embedding(embedding=[0.4, 0.5, 0.6], index=1, object="embedding"),
-        ]
+        ],
     )
 
     # Mock logging object
@@ -376,14 +382,12 @@ async def test_embedding_cache_model_field_consistency():
     kwargs = {
         "model": original_model,
         "input": ["test input 1", "test input 2"],
-        "caching": True
+        "caching": True,
     }
 
     # Step 1: Cache the embedding response
     await caching_handler.async_set_cache(
-        result=embedding_response,
-        original_function=aembedding,
-        kwargs=kwargs
+        result=embedding_response, original_function=aembedding, kwargs=kwargs
     )
 
     # Step 2: Retrieve from cache
@@ -400,13 +404,24 @@ async def test_embedding_cache_model_field_consistency():
     assert cached_response.final_embedding_cached_response is not None
     assert cached_response.final_embedding_cached_response.model == original_model
     assert len(cached_response.final_embedding_cached_response.data) == 2
-    assert cached_response.final_embedding_cached_response.data[0].embedding == [0.1, 0.2, 0.3]
+    assert cached_response.final_embedding_cached_response.data[0].embedding == [
+        0.1,
+        0.2,
+        0.3,
+    ]
     assert cached_response.final_embedding_cached_response.data[0].index == 0
-    assert cached_response.final_embedding_cached_response.data[1].embedding == [0.4, 0.5, 0.6]
+    assert cached_response.final_embedding_cached_response.data[1].embedding == [
+        0.4,
+        0.5,
+        0.6,
+    ]
     assert cached_response.final_embedding_cached_response.data[1].index == 1
-    
+
     # Verify cache hit flag is set
-    assert cached_response.final_embedding_cached_response._hidden_params["cache_hit"] == True
+    assert (
+        cached_response.final_embedding_cached_response._hidden_params["cache_hit"]
+        == True
+    )
 
 
 @pytest.mark.asyncio
@@ -417,7 +432,7 @@ async def test_embedding_cache_model_field_with_vendor_prefix():
     """
     # Setup cache
     setup_cache()
-    
+
     caching_handler = LLMCachingHandler(
         original_function=aembedding, request_kwargs={}, start_time=datetime.now()
     )
@@ -425,13 +440,13 @@ async def test_embedding_cache_model_field_with_vendor_prefix():
     # Test with vendor-prefixed model name (like vertex_ai/text-embedding-005)
     vendor_model = "vertex_ai/text-embedding-005"
     actual_model = "text-embedding-005"  # What the provider actually returns
-    
+
     # Create embedding response with the actual model name (as returned by provider)
     embedding_response = EmbeddingResponse(
         model=actual_model,  # Provider returns this
         data=[
             Embedding(embedding=[0.1, 0.2, 0.3], index=0, object="embedding"),
-        ]
+        ],
     )
 
     # Mock logging object
@@ -449,14 +464,12 @@ async def test_embedding_cache_model_field_with_vendor_prefix():
     kwargs = {
         "model": vendor_model,  # Request uses vendor prefix
         "input": ["test input"],
-        "caching": True
+        "caching": True,
     }
 
     # Cache the response
     await caching_handler.async_set_cache(
-        result=embedding_response,
-        original_function=aembedding,
-        kwargs=kwargs
+        result=embedding_response, original_function=aembedding, kwargs=kwargs
     )
 
     # Retrieve from cache
@@ -471,8 +484,12 @@ async def test_embedding_cache_model_field_with_vendor_prefix():
 
     # Verify the model field matches the original provider response, not the request
     assert cached_response.final_embedding_cached_response is not None
-    assert cached_response.final_embedding_cached_response.model == actual_model  # Should be the provider's model name
-    assert cached_response.final_embedding_cached_response.model != vendor_model  # Should NOT be the vendor-prefixed name
+    assert (
+        cached_response.final_embedding_cached_response.model == actual_model
+    )  # Should be the provider's model name
+    assert (
+        cached_response.final_embedding_cached_response.model != vendor_model
+    )  # Should NOT be the vendor-prefixed name
 
 
 def test_extract_model_from_cached_results():
@@ -485,10 +502,26 @@ def test_extract_model_from_cached_results():
 
     # Test with valid cached results
     non_null_list = [
-        (0, {"embedding": [0.1, 0.2], "index": 0, "object": "embedding", "model": "text-embedding-005"}),
-        (1, {"embedding": [0.3, 0.4], "index": 1, "object": "embedding", "model": "text-embedding-005"}),
+        (
+            0,
+            {
+                "embedding": [0.1, 0.2],
+                "index": 0,
+                "object": "embedding",
+                "model": "text-embedding-005",
+            },
+        ),
+        (
+            1,
+            {
+                "embedding": [0.3, 0.4],
+                "index": 1,
+                "object": "embedding",
+                "model": "text-embedding-005",
+            },
+        ),
     ]
-    
+
     model_name = caching_handler._extract_model_from_cached_results(non_null_list)
     assert model_name == "text-embedding-005"
 
@@ -497,8 +530,10 @@ def test_extract_model_from_cached_results():
         (0, {"embedding": [0.1, 0.2], "index": 0, "object": "embedding"}),
         (1, {"embedding": [0.3, 0.4], "index": 1, "object": "embedding"}),
     ]
-    
-    model_name = caching_handler._extract_model_from_cached_results(non_null_list_no_model)
+
+    model_name = caching_handler._extract_model_from_cached_results(
+        non_null_list_no_model
+    )
     assert model_name is None
 
     # Test with empty list
@@ -514,7 +549,7 @@ async def test_async_responses_api_caching():
     """
     # Setup cache
     setup_cache()
-    
+
     caching_handler = LLMCachingHandler(
         original_function=aresponses, request_kwargs={}, start_time=datetime.now()
     )
@@ -537,11 +572,11 @@ async def test_async_responses_api_caching():
                     {
                         "type": "output_text",
                         "text": "This is a test response from the responses API.",
-                        "annotations": []
+                        "annotations": [],
                     }
-                ]
+                ],
             }
-        ]
+        ],
     )
 
     # Mock logging object
@@ -560,14 +595,12 @@ async def test_async_responses_api_caching():
         "model": original_model,
         "input": "Tell me a short story",
         "max_output_tokens": 100,
-        "caching": True
+        "caching": True,
     }
 
     # Step 1: Cache the responses API response
     await caching_handler.async_set_cache(
-        result=responses_api_response,
-        original_function=aresponses,
-        kwargs=kwargs
+        result=responses_api_response, original_function=aresponses, kwargs=kwargs
     )
 
     await asyncio.sleep(0.5)
@@ -589,7 +622,7 @@ async def test_async_responses_api_caching():
     assert cached_response.cached_result.model == original_model
     assert cached_response.cached_result.status == "completed"
     assert len(cached_response.cached_result.output) == 1
-    
+
     # Verify cache hit flag is set
     assert cached_response.cached_result._hidden_params["cache_hit"] == True
 
@@ -600,7 +633,7 @@ def test_sync_responses_api_caching():
     """
     # Setup cache
     setup_cache()
-    
+
     caching_handler = LLMCachingHandler(
         original_function=responses, request_kwargs={}, start_time=datetime.now()
     )
@@ -623,11 +656,11 @@ def test_sync_responses_api_caching():
                     {
                         "type": "output_text",
                         "text": "Sync response test.",
-                        "annotations": []
+                        "annotations": [],
                     }
-                ]
+                ],
             }
-        ]
+        ],
     )
 
     # Mock logging object
@@ -646,14 +679,11 @@ def test_sync_responses_api_caching():
         "model": original_model,
         "input": "Tell me another story",
         "max_output_tokens": 100,
-        "caching": True
+        "caching": True,
     }
 
     # Step 1: Cache the responses API response
-    caching_handler.sync_set_cache(
-        result=responses_api_response,
-        kwargs=kwargs
-    )
+    caching_handler.sync_set_cache(result=responses_api_response, kwargs=kwargs)
 
     time.sleep(0.5)
 
@@ -673,7 +703,7 @@ def test_sync_responses_api_caching():
     assert cached_response.cached_result.id == responses_api_response.id
     assert cached_response.cached_result.model == original_model
     assert cached_response.cached_result.status == "completed"
-    
+
     # Verify cache hit flag is set
     assert cached_response.cached_result._hidden_params["cache_hit"] == True
 
@@ -686,7 +716,7 @@ def test_convert_cached_responses_api_result_to_model_response():
     caching_handler = LLMCachingHandler(
         original_function=responses, request_kwargs={}, start_time=datetime.now()
     )
-    
+
     logging_obj = LiteLLMLogging(
         litellm_call_id=str(datetime.now()),
         call_type=CallTypes.responses.value,
@@ -714,11 +744,11 @@ def test_convert_cached_responses_api_result_to_model_response():
                     {
                         "type": "output_text",
                         "text": "Conversion test response.",
-                        "annotations": []
+                        "annotations": [],
                     }
-                ]
+                ],
             }
-        ]
+        ],
     }
 
     # Convert cached result to ResponsesAPIResponse
@@ -747,7 +777,7 @@ async def test_responses_api_cache_with_different_inputs():
     """
     # Setup cache
     setup_cache()
-    
+
     caching_handler = LLMCachingHandler(
         original_function=aresponses, request_kwargs={}, start_time=datetime.now()
     )
@@ -767,21 +797,17 @@ async def test_responses_api_cache_with_different_inputs():
                 "id": "msg_1",
                 "status": "completed",
                 "role": "assistant",
-                "content": [{"type": "output_text", "text": "Response 1", "annotations": []}]
+                "content": [
+                    {"type": "output_text", "text": "Response 1", "annotations": []}
+                ],
             }
-        ]
+        ],
     )
 
-    kwargs_1 = {
-        "model": original_model,
-        "input": "First unique input",
-        "caching": True
-    }
+    kwargs_1 = {"model": original_model, "input": "First unique input", "caching": True}
 
     await caching_handler.async_set_cache(
-        result=response_1,
-        original_function=aresponses,
-        kwargs=kwargs_1
+        result=response_1, original_function=aresponses, kwargs=kwargs_1
     )
 
     # Second request with different input
@@ -797,21 +823,21 @@ async def test_responses_api_cache_with_different_inputs():
                 "id": "msg_2",
                 "status": "completed",
                 "role": "assistant",
-                "content": [{"type": "output_text", "text": "Response 2", "annotations": []}]
+                "content": [
+                    {"type": "output_text", "text": "Response 2", "annotations": []}
+                ],
             }
-        ]
+        ],
     )
 
     kwargs_2 = {
         "model": original_model,
         "input": "Second unique input",
-        "caching": True
+        "caching": True,
     }
 
     await caching_handler.async_set_cache(
-        result=response_2,
-        original_function=aresponses,
-        kwargs=kwargs_2
+        result=response_2, original_function=aresponses, kwargs=kwargs_2
     )
 
     await asyncio.sleep(0.5)
@@ -860,20 +886,28 @@ async def test_responses_api_cache_with_different_inputs():
     assert cached_2.cached_result is not None
     assert cached_1.cached_result.id == "resp_1"
     assert cached_2.cached_result.id == "resp_2"
-    
+
     # Access output content properly (could be dict or object)
     output_1 = cached_1.cached_result.output[0]
     if isinstance(output_1, dict):
         text_1 = output_1["content"][0]["text"]
     else:
-        text_1 = output_1.content[0].text if hasattr(output_1.content[0], 'text') else output_1.content[0]["text"]
-    
+        text_1 = (
+            output_1.content[0].text
+            if hasattr(output_1.content[0], "text")
+            else output_1.content[0]["text"]
+        )
+
     output_2 = cached_2.cached_result.output[0]
     if isinstance(output_2, dict):
         text_2 = output_2["content"][0]["text"]
     else:
-        text_2 = output_2.content[0].text if hasattr(output_2.content[0], 'text') else output_2.content[0]["text"]
-    
+        text_2 = (
+            output_2.content[0].text
+            if hasattr(output_2.content[0], "text")
+            else output_2.content[0]["text"]
+        )
+
     assert text_1 == "Response 1"
     assert text_2 == "Response 2"
 
@@ -897,9 +931,9 @@ async def test_responses_api_cache_with_different_inputs():
                         "role": "assistant",
                         "content": [
                             {"type": "output_text", "text": "Test", "annotations": []}
-                        ]
+                        ],
                     }
-                ]
+                ],
             },
             ResponsesAPIResponse,
         ),
@@ -918,10 +952,14 @@ async def test_responses_api_cache_with_different_inputs():
                         "status": "completed",
                         "role": "assistant",
                         "content": [
-                            {"type": "output_text", "text": "Async Test", "annotations": []}
-                        ]
+                            {
+                                "type": "output_text",
+                                "text": "Async Test",
+                                "annotations": [],
+                            }
+                        ],
                     }
-                ]
+                ],
             },
             ResponsesAPIResponse,
         ),

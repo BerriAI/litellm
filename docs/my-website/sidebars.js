@@ -339,6 +339,13 @@ const sidebars = {
                 },
               ],
             },
+            {
+              type: "category",
+              label: "Skills Gateway",
+              items: [
+                "skills_gateway",
+              ],
+            },
           ],
         },
         {
