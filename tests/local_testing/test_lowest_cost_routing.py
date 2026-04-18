@@ -249,6 +249,6 @@ async def test_lowest_cost_routing_randomization():
     print("selected counts:", selected_counts)
 
     # Both models should roughly be selected since they have the exact same cost.
-    # To avoid flakiness, just check that > 0 for both (or at least > 5 in 50 tries).
+    # To avoid flakiness, just check that > 0 for both.
     assert selected_counts["model-1"] > 0
     assert selected_counts["model-2"] > 0
