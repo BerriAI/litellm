@@ -236,6 +236,78 @@ async def list_skills(
         )
 
 
+# Static sub-paths must be registered before the /{skill_id} parameterized route
+# so FastAPI matches them correctly.
+
+
+@router.post(
+    "/v1/skills/test-github-connection",
+    tags=["[beta] Anthropic Skills API"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=TestGitHubConnectionResponse,
+)
+async def test_github_connection(
+    body: TestGitHubConnectionRequest,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Verify a GitHub PAT can access the given repo without storing anything.
+
+    Returns {"status": "ok"} on success or {"status": "error", "message": "..."} on failure.
+
+    Example:
+    ```bash
+    curl -X POST "http://localhost:4000/v1/skills/test-github-connection" \\
+      -H "Authorization: Bearer your-key" \\
+      -H "Content-Type: application/json" \\
+      -d '{"repo_url": "https://github.com/org/my-skill", "github_pat": "ghp_xxx"}'
+    ```
+    """
+    from litellm.llms.litellm_proxy.skills.handler import LiteLLMSkillsHandler
+
+    result = await LiteLLMSkillsHandler.test_github_connection(
+        repo_url=body.repo_url,
+        pat=body.github_pat,
+    )
+    return TestGitHubConnectionResponse(**result)
+
+
+@router.get(
+    "/v1/skills/registry",
+    tags=["[beta] Anthropic Skills API"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=SkillRegistryResponse,
+)
+async def list_skills_registry(
+    limit: int = 20,
+    offset: int = 0,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Agent skill discovery endpoint. Returns lightweight skill metadata for agents
+    to browse available skills and decide which to use.
+
+    Each entry includes skill_id (prefixed with 'litellm:'), description, examples,
+    and tags. Use the skill_id in container.skills when making LLM requests.
+
+    Example:
+    ```bash
+    curl "http://localhost:4000/v1/skills/registry?limit=20" \\
+      -H "Authorization: Bearer your-key"
+    ```
+    """
+    from litellm.llms.litellm_proxy.skills.handler import LiteLLMSkillsHandler
+    from litellm.types.llms.anthropic_skills import SkillRegistryItem
+
+    registry_items = await LiteLLMSkillsHandler.list_skills_for_registry(
+        limit=min(limit, 100),
+        offset=offset,
+    )
+    return SkillRegistryResponse(
+        data=[SkillRegistryItem(**item) for item in registry_items]
+    )
+
+
 @router.get(
     "/v1/skills/{skill_id}",
     tags=["[beta] Anthropic Skills API"],
@@ -438,71 +510,3 @@ async def delete_skill(
             proxy_logging_obj=proxy_logging_obj,
             version=version,
         )
-
-
-@router.post(
-    "/v1/skills/test-github-connection",
-    tags=["[beta] Anthropic Skills API"],
-    dependencies=[Depends(user_api_key_auth)],
-    response_model=TestGitHubConnectionResponse,
-)
-async def test_github_connection(
-    body: TestGitHubConnectionRequest,
-    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-):
-    """
-    Verify a GitHub PAT can access the given repo without storing anything.
-
-    Returns {"status": "ok"} on success or {"status": "error", "message": "..."} on failure.
-
-    Example:
-    ```bash
-    curl -X POST "http://localhost:4000/v1/skills/test-github-connection" \\
-      -H "Authorization: Bearer your-key" \\
-      -H "Content-Type: application/json" \\
-      -d '{"repo_url": "https://github.com/org/my-skill", "github_pat": "ghp_xxx"}'
-    ```
-    """
-    from litellm.llms.litellm_proxy.skills.handler import LiteLLMSkillsHandler
-
-    result = await LiteLLMSkillsHandler.test_github_connection(
-        repo_url=body.repo_url,
-        pat=body.github_pat,
-    )
-    return TestGitHubConnectionResponse(**result)
-
-
-@router.get(
-    "/v1/skills/registry",
-    tags=["[beta] Anthropic Skills API"],
-    dependencies=[Depends(user_api_key_auth)],
-    response_model=SkillRegistryResponse,
-)
-async def list_skills_registry(
-    limit: int = 20,
-    offset: int = 0,
-    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-):
-    """
-    Agent skill discovery endpoint. Returns lightweight skill metadata for agents
-    to browse available skills and decide which to use.
-
-    Each entry includes skill_id (prefixed with 'litellm:'), description, examples,
-    and tags. Use the skill_id in container.skills when making LLM requests.
-
-    Example:
-    ```bash
-    curl "http://localhost:4000/v1/skills/registry?limit=20" \\
-      -H "Authorization: Bearer your-key"
-    ```
-    """
-    from litellm.llms.litellm_proxy.skills.handler import LiteLLMSkillsHandler
-    from litellm.types.llms.anthropic_skills import SkillRegistryItem
-
-    registry_items = await LiteLLMSkillsHandler.list_skills_for_registry(
-        limit=min(limit, 100),
-        offset=offset,
-    )
-    return SkillRegistryResponse(
-        data=[SkillRegistryItem(**item) for item in registry_items]
-    )
