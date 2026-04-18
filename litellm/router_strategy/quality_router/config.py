@@ -48,4 +48,14 @@ class RoutingPreferences(BaseModel):
         description="The quality tier this deployment satisfies.",
     )
 
+    capabilities: List[str] = Field(
+        default_factory=list,
+        description=(
+            "Capability tags this deployment supports (e.g. 'vision', "
+            "'function_calling', 'json_mode'). The QualityRouter will only "
+            "route to deployments whose capabilities are a superset of any "
+            "capabilities required by the request."
+        ),
+    )
+
     model_config = ConfigDict(extra="allow")

@@ -26,7 +26,11 @@ def _make_model_list(spec: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """
     Build a router model_list from a compact spec.
 
-    spec entry shape: {"model_name": str, "quality_tier": Optional[int]}
+    spec entry shape: {
+        "model_name": str,
+        "quality_tier": Optional[int],
+        "capabilities": Optional[List[str]],   # default: omitted
+    }
     If quality_tier is None, the deployment is created without
     `litellm_routing_preferences`.
     """
@@ -34,9 +38,10 @@ def _make_model_list(spec: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     for entry in spec:
         model_info: Dict[str, Any] = {"id": f"id-{entry['model_name']}"}
         if entry.get("quality_tier") is not None:
-            model_info["litellm_routing_preferences"] = {
-                "quality_tier": entry["quality_tier"]
-            }
+            prefs: Dict[str, Any] = {"quality_tier": entry["quality_tier"]}
+            if "capabilities" in entry:
+                prefs["capabilities"] = entry["capabilities"]
+            model_info["litellm_routing_preferences"] = prefs
         out.append(
             {
                 "model_name": entry["model_name"],
@@ -230,3 +235,133 @@ class TestPreRoutingHook:
         )
         assert resp is not None
         assert resp.model == "haiku"  # the configured default_model
+
+
+# ─── Capabilities ───────────────────────────────────────────────────────────
+
+
+@pytest.fixture
+def capability_router():
+    """
+    Router with mixed capabilities at each tier:
+      tier 1: haiku-text (no caps), haiku-vision (vision)
+      tier 2: sonnet-text (no caps), sonnet-vision (vision, function_calling)
+      tier 3: opus-vision (vision, function_calling, json_mode)
+    """
+    spec = [
+        {"model_name": "haiku-text", "quality_tier": 1, "capabilities": []},
+        {"model_name": "haiku-vision", "quality_tier": 1, "capabilities": ["vision"]},
+        {"model_name": "sonnet-text", "quality_tier": 2, "capabilities": []},
+        {
+            "model_name": "sonnet-vision",
+            "quality_tier": 2,
+            "capabilities": ["vision", "function_calling"],
+        },
+        {
+            "model_name": "opus-vision",
+            "quality_tier": 3,
+            "capabilities": ["vision", "function_calling", "json_mode"],
+        },
+    ]
+    router = MagicMock()
+    router.model_list = _make_model_list(spec)
+    return QualityRouter(
+        model_name="qr",
+        litellm_router_instance=router,
+        default_model="haiku-text",
+        quality_router_config={
+            "available_models": [
+                "haiku-text",
+                "haiku-vision",
+                "sonnet-text",
+                "sonnet-vision",
+                "opus-vision",
+            ],
+        },
+    )
+
+
+class TestCapabilities:
+    def test_index_records_capabilities(self, capability_router):
+        assert capability_router._model_capabilities["haiku-text"] == frozenset()
+        assert capability_router._model_capabilities["haiku-vision"] == frozenset(
+            {"vision"}
+        )
+        assert capability_router._model_capabilities["opus-vision"] == frozenset(
+            {"vision", "function_calling", "json_mode"}
+        )
+
+    def test_no_required_capabilities_picks_first_in_tier(self, capability_router):
+        # tier 2, no required caps → first registered model at tier 2.
+        assert capability_router._resolve_model_for_quality_tier(2) == "sonnet-text"
+
+    def test_required_capabilities_filter_within_tier(self, capability_router):
+        # tier 2 with vision → must pick sonnet-vision over sonnet-text.
+        assert (
+            capability_router._resolve_model_for_quality_tier(
+                2, required_capabilities={"vision"}
+            )
+            == "sonnet-vision"
+        )
+
+    def test_round_up_when_no_capable_model_at_tier(self, capability_router):
+        # tier 1 with function_calling: nothing at tier 1 has it → round up to
+        # tier 2 (sonnet-vision).
+        assert (
+            capability_router._resolve_model_for_quality_tier(
+                1, required_capabilities={"function_calling"}
+            )
+            == "sonnet-vision"
+        )
+
+    def test_raises_when_no_model_satisfies_capabilities(self, capability_router):
+        # No model anywhere has "audio".
+        with pytest.raises(ValueError, match="audio"):
+            capability_router._resolve_model_for_quality_tier(
+                1, required_capabilities={"audio"}
+            )
+
+    def test_default_model_used_only_if_it_satisfies_caps(self):
+        # Build a router whose default model has NO capabilities, then ask for
+        # a capability that nothing satisfies. Must raise rather than silently
+        # routing to the default.
+        spec = [{"model_name": "only-tier-1", "quality_tier": 1, "capabilities": []}]
+        router = MagicMock()
+        router.model_list = _make_model_list(spec)
+        qr = QualityRouter(
+            model_name="qr",
+            litellm_router_instance=router,
+            default_model="only-tier-1",
+            quality_router_config={"available_models": ["only-tier-1"]},
+        )
+        with pytest.raises(ValueError, match="vision"):
+            qr._resolve_model_for_quality_tier(1, required_capabilities={"vision"})
+
+    @pytest.mark.asyncio
+    async def test_hook_reads_litellm_capabilities_from_request_kwargs(
+        self, capability_router
+    ):
+        # Simple "hi" → tier 1 by complexity; with vision required, must pick
+        # haiku-vision (the tier-1 model that has vision).
+        messages = [{"role": "user", "content": "hi"}]
+        resp = await capability_router.async_pre_routing_hook(
+            model="qr",
+            request_kwargs={"litellm_capabilities": ["vision"]},
+            messages=messages,
+        )
+        assert resp is not None
+        assert resp.model == "haiku-vision"
+
+    @pytest.mark.asyncio
+    async def test_hook_with_no_capabilities_kwarg_behaves_as_before(
+        self, capability_router
+    ):
+        messages = [{"role": "user", "content": "hi"}]
+        resp = await capability_router.async_pre_routing_hook(
+            model="qr",
+            request_kwargs={},
+            messages=messages,
+        )
+        assert resp is not None
+        # tier 1, no caps required → first registered model at tier 1.
+        assert resp.model == "haiku-text"

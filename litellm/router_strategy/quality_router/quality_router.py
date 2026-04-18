@@ -8,7 +8,7 @@ candidate model declares its own `quality_tier` in
 `model_info.litellm_routing_preferences`.
 """
 
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, FrozenSet, List, Optional, Set, Union
 
 from litellm._logging import verbose_router_logger
 from litellm.integrations.custom_logger import CustomLogger
@@ -64,7 +64,10 @@ class QualityRouter(CustomLogger):
             litellm_router_instance=litellm_router_instance,
         )
 
-        # Pre-built tier → models index for O(1) resolution.
+        # Pre-built tier → models index for O(1) resolution. Capabilities are
+        # tracked separately so resolution can filter by required capabilities
+        # without complicating the tier-walk loop.
+        self._model_capabilities: Dict[str, FrozenSet[str]] = {}
         self._tier_to_models: Dict[int, List[str]] = self._build_tier_index()
 
         verbose_router_logger.debug(
@@ -129,8 +132,10 @@ class QualityRouter(CustomLogger):
             # Accept dict or Pydantic-shaped prefs.
             if isinstance(prefs, dict):
                 tier = prefs.get("quality_tier")
+                capabilities = prefs.get("capabilities") or []
             else:
                 tier = getattr(prefs, "quality_tier", None)
+                capabilities = getattr(prefs, "capabilities", None) or []
 
             if tier is None:
                 raise ValueError(
@@ -140,6 +145,7 @@ class QualityRouter(CustomLogger):
 
             tier_int = int(tier)
             tier_to_models.setdefault(tier_int, []).append(name)
+            self._model_capabilities[name] = frozenset(capabilities)
             seen[name] = True
 
         missing = [name for name, found in seen.items() if not found]
@@ -151,22 +157,63 @@ class QualityRouter(CustomLogger):
 
         return tier_to_models
 
-    def _resolve_model_for_quality_tier(self, tier: int) -> str:
+    def _model_supports_capabilities(
+        self, model_name: str, required: FrozenSet[str]
+    ) -> bool:
+        """True if the model's declared capabilities are a superset of required."""
+        if not required:
+            return True
+        return required.issubset(self._model_capabilities.get(model_name, frozenset()))
+
+    def _first_capable_model_at_tier(
+        self, tier: int, required: FrozenSet[str]
+    ) -> Optional[str]:
+        """First model at `tier` that supports all `required` capabilities, or None."""
+        for name in self._tier_to_models.get(tier, []):
+            if self._model_supports_capabilities(name, required):
+                return name
+        return None
+
+    def _resolve_model_for_quality_tier(
+        self,
+        tier: int,
+        required_capabilities: Optional[Set[str]] = None,
+    ) -> str:
         """
         Resolve a quality tier to a concrete model name.
 
         Strategy:
-            1. Exact tier match → first model registered at that tier.
-            2. Otherwise round up to the next higher tier that has a model.
-            3. Otherwise fall back to `config.default_model`.
+            1. Exact tier match → first capability-matching model at that tier.
+            2. Otherwise round up to the next higher tier that has a
+               capability-matching model.
+            3. Otherwise fall back to `config.default_model` — but only if it
+               also satisfies required capabilities. Routing to a model that
+               lacks a required capability would silently produce wrong results.
         """
-        if tier in self._tier_to_models and self._tier_to_models[tier]:
-            return self._tier_to_models[tier][0]
+        required: FrozenSet[str] = (
+            frozenset(required_capabilities) if required_capabilities else frozenset()
+        )
+
+        match = self._first_capable_model_at_tier(tier, required)
+        if match is not None:
+            return match
 
         higher_tiers = sorted(t for t in self._tier_to_models if t > tier)
         for t in higher_tiers:
-            if self._tier_to_models[t]:
-                return self._tier_to_models[t][0]
+            match = self._first_capable_model_at_tier(t, required)
+            if match is not None:
+                return match
+
+        if self.config.default_model and self._model_supports_capabilities(
+            self.config.default_model, required
+        ):
+            return self.config.default_model
+
+        if required:
+            raise ValueError(
+                f"QualityRouter: no model satisfies quality tier {tier} with "
+                f"required capabilities {sorted(required)}"
+            )
 
         if self.config.default_model:
             return self.config.default_model
@@ -214,6 +261,16 @@ class QualityRouter(CustomLogger):
                 elif role == "system" and system_prompt is None:
                     system_prompt = content
 
+        # Required capabilities are an optional client-side override.
+        # Accept either an iterable of strings or None. Anything else is ignored
+        # rather than raising — matches the lenient style of other router params.
+        raw_caps = (request_kwargs or {}).get("litellm_capabilities")
+        required_capabilities: Optional[Set[str]] = (
+            {str(c) for c in raw_caps}
+            if isinstance(raw_caps, (list, tuple, set, frozenset)) and raw_caps
+            else None
+        )
+
         if user_message is None:
             verbose_router_logger.debug(
                 "QualityRouter: No user message found, routing to default model"
@@ -221,6 +278,14 @@ class QualityRouter(CustomLogger):
             if not self.config.default_model:
                 raise ValueError(
                     "QualityRouter: no user message and no default_model configured"
+                )
+            if required_capabilities and not self._model_supports_capabilities(
+                self.config.default_model, frozenset(required_capabilities)
+            ):
+                raise ValueError(
+                    f"QualityRouter: no user message and default_model "
+                    f"'{self.config.default_model}' does not satisfy required "
+                    f"capabilities {sorted(required_capabilities)}"
                 )
             return PreRoutingHookResponse(
                 model=self.config.default_model,
@@ -243,11 +308,14 @@ class QualityRouter(CustomLogger):
                 f"in complexity_to_quality mapping {self.config.complexity_to_quality}"
             )
 
-        routed_model = self._resolve_model_for_quality_tier(int(quality_tier))
+        routed_model = self._resolve_model_for_quality_tier(
+            int(quality_tier), required_capabilities=required_capabilities
+        )
 
         verbose_router_logger.info(
             f"QualityRouter: complexity={complexity_name}, score={score:.3f}, "
             f"signals={signals}, quality_tier={quality_tier}, "
+            f"required_capabilities={sorted(required_capabilities) if required_capabilities else []}, "
             f"routed_model={routed_model}"
         )
 
