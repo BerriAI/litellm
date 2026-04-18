@@ -56,7 +56,7 @@ from litellm.proxy.management_endpoints.common_utils import (
     _is_user_team_admin,
     _set_object_metadata_field,
 )
-from litellm.proxy.management_endpoints.key_resolved_models_helpers import (
+from litellm.proxy.auth.model_checks import (
     prepare_key_models_response_payload,
     resolve_key_models_for_display,
 )

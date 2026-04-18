@@ -1,5 +1,5 @@
 """
-Unit tests for key_resolved_models_helpers.
+Unit tests for GET /key/{id}/models payload helpers (litellm.proxy.auth.model_checks).
 """
 
 from unittest.mock import AsyncMock, MagicMock
@@ -7,20 +7,20 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from litellm.proxy._types import SpecialModelNames
-from litellm.proxy.management_endpoints.key_resolved_models_helpers import (
+from litellm.proxy.auth.model_checks import (
     KEY_RESOLVED_MODELS_DISPLAY_LIMIT,
     prepare_key_models_response_payload,
     resolve_key_models_for_display,
-    _filter_models_by_search,
+    _filter_key_models_by_search,
 )
 
 
 def test_filter_models_by_search():
     models = ["GPT-4", "claude-3", "embed-small"]
-    assert _filter_models_by_search(models, None) == models
-    assert _filter_models_by_search(models, "   ") == models
-    assert _filter_models_by_search(models, "gpt") == ["GPT-4"]
-    assert _filter_models_by_search(models, "CLAUDE") == ["claude-3"]
+    assert _filter_key_models_by_search(models, None) == models
+    assert _filter_key_models_by_search(models, "   ") == models
+    assert _filter_key_models_by_search(models, "gpt") == ["GPT-4"]
+    assert _filter_key_models_by_search(models, "CLAUDE") == ["claude-3"]
 
 
 @pytest.mark.asyncio
