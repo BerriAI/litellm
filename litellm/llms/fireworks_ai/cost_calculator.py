@@ -77,10 +77,32 @@ def cost_per_token(model: str, usage: Usage) -> Tuple[float, float]:
         )
 
     ## CALCULATE INPUT COST
+    # Extract cached and cache-creation tokens from usage details
+    cached_tokens = 0
+    cache_creation_tokens = 0
+    if getattr(usage, "prompt_tokens_details", None) is not None:
+        cached_tokens = (
+            getattr(usage.prompt_tokens_details, "cached_tokens", 0) or 0
+        )
+        cache_creation_tokens = (
+            getattr(usage.prompt_tokens_details, "cache_creation_tokens", 0) or 0
+        )
 
-    prompt_cost: float = usage["prompt_tokens"] * model_info["input_cost_per_token"]
+    cache_read_cost: float = model_info.get("cache_read_input_token_cost") or 0.0
+    cache_creation_cost: float = (
+        model_info.get("cache_creation_input_token_cost") or 0.0
+    )
+    # Non-cached tokens are billed at the standard input rate
+    non_cached_tokens = usage["prompt_tokens"] - cached_tokens - cache_creation_tokens
+
+    prompt_cost: float = (
+        non_cached_tokens * model_info["input_cost_per_token"]
+        + cached_tokens * cache_read_cost
+        + cache_creation_tokens * cache_creation_cost
+    )
 
     ## CALCULATE OUTPUT COST
     completion_cost = usage["completion_tokens"] * model_info["output_cost_per_token"]
 
     return prompt_cost, completion_cost
+
