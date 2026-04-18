@@ -82,7 +82,45 @@ export default function TeamMemberTab({
   const isUserTeamAdmin = isUserTeamAdminForSingleTeam(teamData.team_info.members_with_roles, userId || "");
   const isProxyAdmin = isProxyAdminRole(userRole || "");
 
+  const getUserAllowedModels = (userId: string | null): string[] | null => {
+    if (!userId) return null;
+    const membership = teamData.team_memberships.find((tm) => tm.user_id === userId);
+    const models = membership?.litellm_budget_table?.allowed_models;
+    return models && models.length > 0 ? models : null;
+  };
+
   const extraColumns: ColumnsType<Member> = [
+    {
+      title: (
+        <Space direction="horizontal">
+          Model Scope
+          <Tooltip title="Models this member can access. Empty means they inherit all team models.">
+            <InfoCircleOutlined />
+          </Tooltip>
+        </Space>
+      ),
+      key: "model_scope",
+      render: (_: unknown, record: Member) => {
+        const models = getUserAllowedModels(record.user_id);
+        if (!models) {
+          return <Typography.Text type="secondary">(all team models)</Typography.Text>;
+        }
+        const displayed = models.slice(0, 2);
+        const remaining = models.length - displayed.length;
+        return (
+          <Space wrap>
+            {displayed.map((m) => (
+              <Typography.Text key={m} code style={{ fontSize: "12px" }}>{m}</Typography.Text>
+            ))}
+            {remaining > 0 && (
+              <Tooltip title={models.slice(2).join(", ")}>
+                <Typography.Text type="secondary">+{remaining} more</Typography.Text>
+              </Tooltip>
+            )}
+          </Space>
+        );
+      },
+    },
     {
       title: (
         <Space direction="horizontal">
@@ -138,6 +176,7 @@ export default function TeamMemberTab({
           max_budget_in_team: membership?.litellm_budget_table?.max_budget || null,
           tpm_limit: membership?.litellm_budget_table?.tpm_limit || null,
           rpm_limit: membership?.litellm_budget_table?.rpm_limit || null,
+          allowed_models: membership?.litellm_budget_table?.allowed_models || [],
         };
         setSelectedEditMember(enhancedMember);
         setIsEditMemberModalVisible(true);

@@ -81,7 +81,5 @@ class TestMCPMetadataPreservation:
         assert prefixed_tool.inputSchema == {"type": "object", "properties": {}}
 
 
-
 if __name__ == "__main__":
     pytest.main([__file__])
-
