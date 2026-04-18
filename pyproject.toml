@@ -3,7 +3,7 @@ name = "litellm"
 version = "1.83.9"
 description = "Library to easily interface with LLM API providers"
 readme = "README.md"
-requires-python = ">=3.9, <3.14"
+requires-python = ">=3.11, <3.14"
 license = "MIT"
 license-files = ["LICENSE"]
 authors = [
@@ -40,11 +40,11 @@ proxy = [
     "backoff==2.2.1",
     "pyyaml==6.0.3",
     "rq==2.7.0",
-    "orjson==3.10.15",
+    "orjson==3.11.5",
     "apscheduler==3.11.2",
-    "fastapi-sso==0.16.0",
+    "fastapi-sso==0.19.0",
     "PyJWT==2.11.0; python_version >= '3.9'",
-    "python-multipart==0.0.20",
+    "python-multipart==0.0.26",
     "cryptography==46.0.7",
     "pynacl==1.6.2",
     "websockets==15.0.1",
