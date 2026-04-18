@@ -310,7 +310,7 @@ def test_gemini_multimodal_embedding_e2e():
     ) as mock_get_token:
         mock_get_token.return_value = (
             {"x-goog-api-key": "test-key"},
-            "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-2-preview:embedContent?key=test-key"
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-2-preview:embedContent"
         )
         
         mock_response = MagicMock()

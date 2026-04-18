@@ -1746,10 +1746,12 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 ),
             )
 
+        raw_input_tokens = usage_object.get("input_tokens", 0) or 0
         prompt_tokens_details = PromptTokensDetailsWrapper(
             cached_tokens=cache_read_input_tokens,
             cache_creation_tokens=cache_creation_input_tokens,
             cache_creation_token_details=cache_creation_token_details,
+            text_tokens=raw_input_tokens,
         )
         # Always populate completion_token_details, not just when there's reasoning_content
         reasoning_tokens = (

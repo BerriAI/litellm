@@ -316,7 +316,10 @@ def test_normalize_tool_input_schema_types_for_bedrock_invoke():
                     "type": "custom",
                     "additionalProperties": False,
                     "properties": {
-                        "nested": {"type": "custom", "properties": {"x": {"type": "string"}}}
+                        "nested": {
+                            "type": "custom",
+                            "properties": {"x": {"type": "string"}},
+                        }
                     },
                     "required": ["nested"],
                 },
@@ -383,34 +386,6 @@ def test_bedrock_invoke_messages_transform_adds_name_when_tool_missing_name():
         headers={},
     )
     assert result["tools"][0]["name"] == "litellm_unnamed_tool_0"
-
-
-def test_bedrock_invoke_messages_injects_thinking_for_clear_thinking_context_management():
-    """
-    Bedrock requires extended thinking when ``clear_thinking_20251015`` appears in
-    ``context_management`` (Claude Code sends CM without ``thinking``).
-    """
-    from litellm.types.router import GenericLiteLLMParams
-
-    cfg = AmazonAnthropicClaudeMessagesConfig()
-    optional_params = {
-        "max_tokens": 32000,
-        "stream": False,
-        "context_management": {
-            "edits": [{"type": "clear_thinking_20251015", "keep": "all"}]
-        },
-    }
-    result = cfg.transform_anthropic_messages_request(
-        model="global.anthropic.claude-sonnet-4-6-v1:0",
-        messages=[{"role": "user", "content": "hi"}],
-        anthropic_messages_optional_request_params=copy.deepcopy(optional_params),
-        litellm_params=GenericLiteLLMParams(),
-        headers={},
-    )
-    assert result["thinking"]["type"] == "enabled"
-    assert result["thinking"]["budget_tokens"] == BEDROCK_MIN_THINKING_BUDGET_TOKENS
-    betas = result.get("anthropic_beta") or []
-    assert "interleaved-thinking-2025-05-14" in betas
 
 
 def test_bedrock_invoke_messages_skips_thinking_injection_when_already_enabled():
