@@ -15,11 +15,20 @@ from litellm._logging import verbose_logger
 from litellm.proxy._types import LiteLLM_SkillsTable, NewSkillRequest
 
 
+def _redact_sensitive_metadata(
+    metadata: Optional[Dict[str, Any]]
+) -> Optional[Dict[str, Any]]:
+    """Strip secrets that must never leave the server from a skill metadata dict."""
+    if not metadata:
+        return metadata
+    return {k: v for k, v in metadata.items() if k != "github_pat"}
+
+
 def _prisma_skill_to_litellm(prisma_skill) -> LiteLLM_SkillsTable:
     """
     Convert a Prisma skill record to LiteLLM_SkillsTable.
 
-    Handles Base64 decoding of file_content field.
+    Handles Base64 decoding of file_content and redacts the encrypted PAT.
     """
     import base64
 
@@ -31,8 +40,11 @@ def _prisma_skill_to_litellm(prisma_skill) -> LiteLLM_SkillsTable:
         if isinstance(data["file_content"], str):
             data["file_content"] = base64.b64decode(data["file_content"])
         elif isinstance(data["file_content"], bytes):
-            # Already bytes, no conversion needed
             pass
+
+    # Never expose the encrypted PAT ciphertext in API responses.
+    if data.get("metadata"):
+        data["metadata"] = _redact_sensitive_metadata(data["metadata"])
 
     return LiteLLM_SkillsTable(**data)
 
