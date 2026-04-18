@@ -7199,7 +7199,10 @@ async def chat_completion(  # noqa: PLR0915
     global user_temperature, user_request_timeout, user_max_tokens, user_api_base
     data = await _read_request_body(request=request)
     if user_api_key_dict is not None:
-        if data.get("metadata") is None:
+        if not isinstance(data.get("metadata"), dict):
+            # Covers both missing and JSON-string metadata (multipart /
+            # extra_body); otherwise `data["metadata"][k] = v` below raises
+            # TypeError on a string value and 500s the request.
             data["metadata"] = {}
         if (
             hasattr(user_api_key_dict, "user_id")
@@ -11443,7 +11446,9 @@ async def async_queue_request(
             # if users are using user_api_key_auth, set `user` in `data`
             data["user"] = user_api_key_dict.user_id
 
-        if "metadata" not in data:
+        if not isinstance(data.get("metadata"), dict):
+            # Covers both missing and JSON-string metadata (multipart /
+            # extra_body); see above for the same guard upstream.
             data["metadata"] = {}
         data["metadata"]["user_api_key"] = user_api_key_dict.api_key
         data["metadata"]["user_api_key_metadata"] = user_api_key_dict.metadata

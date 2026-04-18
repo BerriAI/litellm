@@ -5,9 +5,20 @@ from httpx import Request, Response
 
 import litellm
 from litellm import constants
+from litellm.litellm_core_utils.prompt_templates import image_handling
 from litellm.litellm_core_utils.prompt_templates.image_handling import (
     convert_url_to_base64,
 )
+
+
+@pytest.fixture(autouse=True)
+def _bypass_ssrf(monkeypatch):
+    """Bypass SSRF validation in image handling tests — tests use fake URLs."""
+    monkeypatch.setattr(
+        image_handling,
+        "safe_get",
+        lambda client, url, **kw: client.get(url, follow_redirects=True),
+    )
 
 
 class DummyClient:

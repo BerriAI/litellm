@@ -1795,3 +1795,142 @@ async def test_team_member_budget_check_reads_from_spend_counter():
                 proxy_logging_obj=proxy_logging_obj,
             )
         assert exc_info.value.current_cost == 1.5
+
+
+class TestGuardrailModificationCheck:
+    """Defense-in-depth: `_guardrail_modification_check` must 403 when the
+    caller's metadata attempts to modify any guardrail-related key and the
+    team lacks the `modify_guardrails` permission. Checks both the
+    historically-covered `guardrails` list and the bypass toggles that
+    `_get_admin_metadata` silently ignores at read time.
+    """
+
+    def _call(self, request_body):
+        from litellm.proxy.auth.auth_checks import _guardrail_modification_check
+
+        team_object = MagicMock()
+        team_object.metadata = {}  # no permission
+        return _guardrail_modification_check(
+            request_body=request_body, team_object=team_object
+        )
+
+    def test_noop_when_no_guardrail_keys_present(self):
+        # no-op — should return silently
+        self._call({"metadata": {"unrelated": "value"}})
+
+    def test_rejects_guardrails_list(self):
+        from fastapi import HTTPException
+
+        with patch(
+            "litellm.proxy.guardrails.guardrail_helpers.can_modify_guardrails",
+            return_value=False,
+        ):
+            with pytest.raises(HTTPException) as exc:
+                self._call({"metadata": {"guardrails": ["custom"]}})
+            assert exc.value.status_code == 403
+
+    def test_rejects_disable_global_guardrails_plural(self):
+        from fastapi import HTTPException
+
+        with patch(
+            "litellm.proxy.guardrails.guardrail_helpers.can_modify_guardrails",
+            return_value=False,
+        ):
+            with pytest.raises(HTTPException) as exc:
+                self._call({"metadata": {"disable_global_guardrails": True}})
+            assert exc.value.status_code == 403
+
+    def test_rejects_disable_global_guardrail_singular(self):
+        """VERIA-28's originally-reported singular-key typo variant."""
+        from fastapi import HTTPException
+
+        with patch(
+            "litellm.proxy.guardrails.guardrail_helpers.can_modify_guardrails",
+            return_value=False,
+        ):
+            with pytest.raises(HTTPException) as exc:
+                self._call({"metadata": {"disable_global_guardrail": True}})
+            assert exc.value.status_code == 403
+
+    def test_rejects_opted_out_global_guardrails(self):
+        from fastapi import HTTPException
+
+        with patch(
+            "litellm.proxy.guardrails.guardrail_helpers.can_modify_guardrails",
+            return_value=False,
+        ):
+            with pytest.raises(HTTPException) as exc:
+                self._call(
+                    {"metadata": {"opted_out_global_guardrails": ["some_guardrail"]}}
+                )
+            assert exc.value.status_code == 403
+
+    def test_rejects_injection_via_litellm_metadata_key(self):
+        """Caller can populate the OTHER metadata key; that must also 403."""
+        from fastapi import HTTPException
+
+        with patch(
+            "litellm.proxy.guardrails.guardrail_helpers.can_modify_guardrails",
+            return_value=False,
+        ):
+            with pytest.raises(HTTPException) as exc:
+                self._call({"litellm_metadata": {"disable_global_guardrails": True}})
+            assert exc.value.status_code == 403
+
+    def test_rejects_root_level_injection(self):
+        """Top-level injection (`request_body["disable_global_guardrails"]`)
+        was VERIA-28's easiest variant to hit — keep it rejected."""
+        from fastapi import HTTPException
+
+        with patch(
+            "litellm.proxy.guardrails.guardrail_helpers.can_modify_guardrails",
+            return_value=False,
+        ):
+            with pytest.raises(HTTPException) as exc:
+                self._call({"disable_global_guardrails": True})
+            assert exc.value.status_code == 403
+
+    def test_allows_when_team_has_permission(self):
+        with patch(
+            "litellm.proxy.guardrails.guardrail_helpers.can_modify_guardrails",
+            return_value=True,
+        ):
+            # no-op, should not raise
+            self._call({"metadata": {"disable_global_guardrails": True}})
+
+    def test_rejects_string_encoded_metadata_bypass(self):
+        """Regression: attacker sends metadata as JSON string to bypass the
+        isinstance(dict) guard. The check must coerce the string to dict
+        and evaluate guardrail modification keys inside it."""
+        import json as _json
+
+        from fastapi import HTTPException
+
+        attacker_payload = {"disable_global_guardrails": True}
+        with patch(
+            "litellm.proxy.guardrails.guardrail_helpers.can_modify_guardrails",
+            return_value=False,
+        ):
+            with pytest.raises(HTTPException) as exc:
+                self._call({"metadata": _json.dumps(attacker_payload)})
+            assert exc.value.status_code == 403
+
+    def test_rejects_string_encoded_litellm_metadata_bypass(self):
+        """Same bypass via the litellm_metadata key."""
+        import json as _json
+
+        from fastapi import HTTPException
+
+        attacker_payload = {"guardrails": ["evaded"]}
+        with patch(
+            "litellm.proxy.guardrails.guardrail_helpers.can_modify_guardrails",
+            return_value=False,
+        ):
+            with pytest.raises(HTTPException) as exc:
+                self._call({"litellm_metadata": _json.dumps(attacker_payload)})
+            assert exc.value.status_code == 403
+
+    def test_noop_when_string_is_not_json_object(self):
+        """Unparseable strings should not trigger a 403 — they have no keys."""
+        self._call({"metadata": "not-json"})
+        self._call({"metadata": '"just a string"'})

@@ -2742,10 +2742,10 @@ async def test_list_team_v2_org_admin_with_user_id_returns_user_teams():
 
         assert result["total"] == 1
 
-        # Verify the where clause filters by user's teams, not org scope
+        # Verify the where clause filters by user's teams AND org scope
         where = mock_db.litellm_teamtable.find_many.call_args.kwargs["where"]
         assert where["team_id"] == {"in": ["team_X", "team_Y"]}
-        assert "organization_id" not in where
+        assert where["organization_id"] == {"in": ["org_A"]}
 
 
 @pytest.mark.asyncio
@@ -5132,6 +5132,16 @@ async def test_update_team_guardrails_with_org_id():
         # The fix ensures 'teams: True' is in the include clause
         mock_prisma.db.litellm_organizationtable.find_unique = AsyncMock(
             return_value=mock_org
+        )
+
+        # Destination-org guard in update_team queries for the caller's
+        # ORG_ADMIN membership on the destination org. Return a match so
+        # the guardrails-update path (the subject under test) proceeds.
+        mock_org_admin_membership = MagicMock()
+        mock_org_admin_membership.user_id = "org-admin-guardrails-test"
+        mock_org_admin_membership.organization_id = "test-org-guardrails"
+        mock_prisma.db.litellm_organizationmembership.find_many = AsyncMock(
+            return_value=[mock_org_admin_membership]
         )
 
         # Mock team update
