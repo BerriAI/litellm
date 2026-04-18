@@ -168,7 +168,9 @@ async def test_route_request_with_router_settings_override():
     assert call_kwargs["fallbacks"] == [{"gpt-3.5-turbo": ["gpt-4"]}]
     assert call_kwargs["num_retries"] == 5
     assert call_kwargs["timeout"] == 30
-    assert call_kwargs["model_group_retry_policy"] == {"gpt-3.5-turbo": {"RateLimitErrorRetries": 3}}
+    assert call_kwargs["model_group_retry_policy"] == {
+        "gpt-3.5-turbo": {"RateLimitErrorRetries": 3}
+    }
     # Verify unsupported settings were NOT merged
     assert "routing_strategy" not in call_kwargs
     assert "model_group_alias" not in call_kwargs
