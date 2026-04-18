@@ -189,6 +189,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
       ...mcpServer,
       transport: effectiveTransport,
       static_headers: initialStaticHeaders,
+      extra_headers: mcpServer.extra_headers || [],
       oauth_flow_type: mcpServer.token_url ? OAUTH_FLOW.M2M : OAUTH_FLOW.INTERACTIVE,
       token_validation_json: mcpServer.token_validation
         ? JSON.stringify(mcpServer.token_validation, null, 2)
@@ -563,7 +564,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
         mcp_access_groups: accessGroups,
         alias: restValues.alias,
         // Include permission management fields
-        extra_headers: restValues.extra_headers || [],
+        extra_headers: restValues.extra_headers?.length ? restValues.extra_headers : undefined,
         allowed_tools: allowedTools.length > 0 ? allowedTools : null,
         tool_name_to_display_name: Object.keys(toolNameToDisplayName).length > 0 ? toolNameToDisplayName : null,
         tool_name_to_description: Object.keys(toolNameToDescription).length > 0 ? toolNameToDescription : null,
