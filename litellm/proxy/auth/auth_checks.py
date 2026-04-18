@@ -2946,6 +2946,30 @@ async def _virtual_key_soft_budget_check(
         )
 
 
+def _merge_budget_alert_email_configs(
+    global_cfg: Optional[Dict[str, List[str]]],
+    per_key_cfg: Optional[Dict[str, List[str]]],
+) -> Optional[Dict[str, List[str]]]:
+    """
+    Per-threshold additive merge: each threshold's recipient list is the union
+    of global + per-key entries (deduped, global-first ordering). Missing
+    thresholds on one side are inherited from the other.
+    """
+    global_cfg = global_cfg or {}
+    per_key_cfg = per_key_cfg or {}
+    if not global_cfg and not per_key_cfg:
+        return None
+    thresholds = set(global_cfg) | set(per_key_cfg)
+    return {
+        t: list(
+            dict.fromkeys(
+                list(global_cfg.get(t, [])) + list(per_key_cfg.get(t, []))
+            )
+        )
+        for t in thresholds
+    }
+
+
 async def _virtual_key_max_budget_alert_check(
     valid_token: UserAPIKeyAuth,
     proxy_logging_obj: ProxyLogging,
@@ -2964,9 +2988,14 @@ async def _virtual_key_max_budget_alert_check(
         and valid_token.spend > 0
     ):
         owner_email = user_obj.user_email if user_obj else None
-        alert_email_config = (valid_token.metadata or {}).get(
-            "max_budget_alert_emails"
-        ) or litellm.default_key_max_budget_alert_emails
+        alert_email_config: Optional[Dict[str, List[str]]] = (
+            _merge_budget_alert_email_configs(
+                global_cfg=litellm.default_key_max_budget_alert_emails,
+                per_key_cfg=(valid_token.metadata or {}).get(
+                    "max_budget_alert_emails"
+                ),
+            )
+        )
 
         if isinstance(alert_email_config, dict) and alert_email_config:
             # New path: only create task if spend has crossed the lowest threshold
