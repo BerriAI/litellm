@@ -3,6 +3,7 @@ Calls Linkup's /search endpoint to search the web.
 
 Linkup API Reference: https://docs.linkup.so/pages/documentation/api-reference/endpoint/post-search
 """
+
 from typing import Dict, List, Literal, Optional, TypedDict, Union
 
 import httpx
