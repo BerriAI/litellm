@@ -1523,7 +1523,7 @@ def prepare_metadata_fields(
         existing_value = existing_metadata.get(reserved_field)
         if existing_value is None:
             continue
-        if (
+        if casted_metadata is None or (
             reserved_field in casted_metadata
             and casted_metadata[reserved_field] != existing_value
         ):
