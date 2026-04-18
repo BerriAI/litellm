@@ -359,7 +359,7 @@ class BaseEmailLogger(CustomLogger):
             else "N/A"
         )
 
-        if recipient_emails is not None:
+        if recipient_emails:
             # Multi-threshold path: batch send with generic key-based greeting
             email_params = await self._get_email_params(
                 email_event=EmailEvent.max_budget_alert,
