@@ -7,6 +7,7 @@ import httpx
 import pytest
 
 from litellm import acompletion, completion
+from litellm.exceptions import APIConnectionError
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 
 FAKE_API_BASE = (
@@ -162,10 +163,8 @@ def test_completion_cloudflare_api_error():
     # Setting to a 200 HTTP code because Cloudflare returns standard HTTP OK even when it wraps error JSONs.
     mock_resp.status_code = 200
 
-    import litellm
-
     with patch.object(HTTPHandler, "post", return_value=mock_resp) as mock_post:
-        with pytest.raises(litellm.exceptions.APIConnectionError) as exc_info:
+        with pytest.raises(APIConnectionError) as exc_info:
             completion(
                 model="cloudflare/@cf/meta/llama-2-7b-chat-int8",
                 messages=messages,
@@ -173,6 +172,6 @@ def test_completion_cloudflare_api_error():
                 api_base=FAKE_API_BASE,
                 api_key=FAKE_API_KEY,
             )
-        
+
         mock_post.assert_called_once()
         assert "7003" in str(exc_info.value)
