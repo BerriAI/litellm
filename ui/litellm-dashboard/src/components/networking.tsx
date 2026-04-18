@@ -3313,7 +3313,7 @@ export interface keyModelResponse {
   models: string[];
 }
 
-export const keyModelCall = async (
+export const fetchKeyModelCall = async (
   accessToken: string,
   key_id: string
 ): Promise<keyModelResponse> => {

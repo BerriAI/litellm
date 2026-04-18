@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
-import { keyModelCall } from '@/components/networking';
+import { fetchKeyModelCall } from '@/components/networking';
 import useAuthorized from '@/app/(dashboard)/hooks/useAuthorized';
 
 export const UseGetKeyModels = (key_id: string) => {
@@ -9,7 +9,7 @@ export const UseGetKeyModels = (key_id: string) => {
     queryKey: ['keyModels', key_id],
     queryFn: () => {
         if (!accessToken) throw new Error("Access Token required");
-        return keyModelCall(accessToken, key_id);
+        return fetchKeyModelCall(accessToken, key_id);
     },
   });
 };
