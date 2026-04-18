@@ -15,7 +15,12 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 import litellm
 from litellm.llms.custom_httpx.aiohttp_transport import LiteLLMAiohttpTransport
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, get_ssl_configuration
+from litellm.llms.custom_httpx.http_handler import (
+    AsyncHTTPHandler,
+    HTTPHandler,
+    _get_httpx_client,
+    get_ssl_configuration,
+)
 
 
 @pytest.mark.asyncio
@@ -658,3 +663,26 @@ async def test_httpx_handler_uses_env_user_agent(monkeypatch):
         assert req.headers.get("User-Agent") == "Claude Code"
     finally:
         await handler.close()
+
+
+def test_get_httpx_client_applies_float_timeout_without_mocking_handler():
+    """
+    Exercise real _get_httpx_client + HTTPHandler: params={'timeout': x} must reach httpx.Client(timeout=...).
+    Uses an uncommon timeout value to avoid colliding with other cached clients in-process.
+    """
+    timeout = 3847.291
+    handler = _get_httpx_client(params={"timeout": timeout})
+    try:
+        assert isinstance(handler, HTTPHandler)
+        assert handler.client.timeout == httpx.Timeout(timeout)
+    finally:
+        handler.close()
+
+
+def test_get_httpx_client_applies_httpx_timeout_object_without_mocking_handler():
+    t = httpx.Timeout(40.0, connect=5.0)
+    handler = _get_httpx_client(params={"timeout": t})
+    try:
+        assert handler.client.timeout == t
+    finally:
+        handler.close()
