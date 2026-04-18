@@ -22,9 +22,9 @@ class TestSpendCalculateOpenAPISchema:
             if hasattr(route, "path") and route.path == "/spend/calculate":
                 responses = route.responses or {}
                 response_200 = responses.get(200, {})
-                assert "description" in response_200, (
-                    "/spend/calculate 200 response must have a 'description' field"
-                )
+                assert (
+                    "description" in response_200
+                ), "/spend/calculate 200 response must have a 'description' field"
                 break
         else:
             pytest.fail("/spend/calculate route not found in router")
@@ -43,9 +43,9 @@ class TestSpendCalculateOpenAPISchema:
                     "top-level property - use 'content' wrapper instead"
                 )
                 # Must have 'content' wrapper
-                assert "content" in response_200, (
-                    "/spend/calculate 200 response must have a 'content' field"
-                )
+                assert (
+                    "content" in response_200
+                ), "/spend/calculate 200 response must have a 'content' field"
                 content = response_200["content"]
                 assert "application/json" in content
                 assert "schema" in content["application/json"]
@@ -97,9 +97,9 @@ class TestCredentialEndpointsOpenAPISchema:
 
         sig = inspect.signature(get_credential_by_model)
         param_names = list(sig.parameters.keys())
-        assert "credential_name" not in param_names, (
-            "get_credential_by_model must not have a credential_name parameter"
-        )
+        assert (
+            "credential_name" not in param_names
+        ), "get_credential_by_model must not have a credential_name parameter"
 
     def test_by_name_route_does_not_require_model_id(self):
         """
@@ -113,9 +113,9 @@ class TestCredentialEndpointsOpenAPISchema:
 
         sig = inspect.signature(get_credential_by_name)
         param_names = list(sig.parameters.keys())
-        assert "model_id" not in param_names, (
-            "get_credential_by_name must not have a model_id parameter"
-        )
+        assert (
+            "model_id" not in param_names
+        ), "get_credential_by_name must not have a model_id parameter"
 
     def test_by_model_has_model_id_path_param(self):
         """The by_model handler must accept model_id as a path parameter."""
@@ -125,9 +125,9 @@ class TestCredentialEndpointsOpenAPISchema:
         )
 
         sig = inspect.signature(get_credential_by_model)
-        assert "model_id" in sig.parameters, (
-            "get_credential_by_model must have a model_id parameter"
-        )
+        assert (
+            "model_id" in sig.parameters
+        ), "get_credential_by_model must have a model_id parameter"
 
     def test_by_name_has_credential_name_path_param(self):
         """The by_name handler must accept credential_name as a path parameter."""
@@ -137,6 +137,6 @@ class TestCredentialEndpointsOpenAPISchema:
         )
 
         sig = inspect.signature(get_credential_by_name)
-        assert "credential_name" in sig.parameters, (
-            "get_credential_by_name must have a credential_name parameter"
-        )
+        assert (
+            "credential_name" in sig.parameters
+        ), "get_credential_by_name must have a credential_name parameter"

@@ -83,7 +83,7 @@ def test_onyx_guard_with_custom_timeout_from_kwargs():
 
 def test_onyx_guard_with_timeout_none_uses_env_var():
     """Test Onyx guard with timeout=None uses ONYX_TIMEOUT env var.
-    
+
     When timeout=None is passed (as it would be from config model with default None),
     the ONYX_TIMEOUT environment variable should be used.
     """
@@ -256,7 +256,7 @@ class TestOnyxGuardrail:
 
     def test_initialization_with_timeout_from_env_var(self):
         """Test initialization with timeout from ONYX_TIMEOUT environment variable.
-        
+
         Note: The env var is only used when timeout=None is explicitly passed,
         since the default parameter value is 10.0 (not None).
         """
@@ -269,7 +269,10 @@ class TestOnyxGuardrail:
             mock_get_client.return_value = MagicMock()
             # Must pass timeout=None explicitly to trigger env var lookup
             guardrail = OnyxGuardrail(
-                guardrail_name="test-guard", event_hook="pre_call", default_on=True, timeout=None
+                guardrail_name="test-guard",
+                event_hook="pre_call",
+                default_on=True,
+                timeout=None,
             )
 
             # Verify the client was initialized with timeout from env var
@@ -594,7 +597,10 @@ class TestOnyxGuardrail:
         os.environ["ONYX_API_KEY"] = "test-api-key"
 
         guardrail = OnyxGuardrail(
-            guardrail_name="test-guard", event_hook="pre_call", default_on=True, timeout=1.0
+            guardrail_name="test-guard",
+            event_hook="pre_call",
+            default_on=True,
+            timeout=1.0,
         )
 
         inputs = GenericGuardrailAPIInputs()
@@ -608,7 +614,9 @@ class TestOnyxGuardrail:
 
         # Test httpx timeout error
         with patch.object(
-            guardrail.async_handler, "post", side_effect=httpx.TimeoutException("Request timed out")
+            guardrail.async_handler,
+            "post",
+            side_effect=httpx.TimeoutException("Request timed out"),
         ):
             # Should return original inputs on timeout (graceful degradation)
             result = await guardrail.apply_guardrail(
@@ -627,7 +635,10 @@ class TestOnyxGuardrail:
         os.environ["ONYX_API_KEY"] = "test-api-key"
 
         guardrail = OnyxGuardrail(
-            guardrail_name="test-guard", event_hook="pre_call", default_on=True, timeout=5.0
+            guardrail_name="test-guard",
+            event_hook="pre_call",
+            default_on=True,
+            timeout=5.0,
         )
 
         inputs = GenericGuardrailAPIInputs()
@@ -641,7 +652,9 @@ class TestOnyxGuardrail:
 
         # Test httpx ReadTimeout error
         with patch.object(
-            guardrail.async_handler, "post", side_effect=httpx.ReadTimeout("Read timed out")
+            guardrail.async_handler,
+            "post",
+            side_effect=httpx.ReadTimeout("Read timed out"),
         ):
             # Should return original inputs on timeout (graceful degradation)
             result = await guardrail.apply_guardrail(
@@ -660,7 +673,10 @@ class TestOnyxGuardrail:
         os.environ["ONYX_API_KEY"] = "test-api-key"
 
         guardrail = OnyxGuardrail(
-            guardrail_name="test-guard", event_hook="pre_call", default_on=True, timeout=5.0
+            guardrail_name="test-guard",
+            event_hook="pre_call",
+            default_on=True,
+            timeout=5.0,
         )
 
         inputs = GenericGuardrailAPIInputs()
@@ -674,7 +690,9 @@ class TestOnyxGuardrail:
 
         # Test httpx ConnectTimeout error
         with patch.object(
-            guardrail.async_handler, "post", side_effect=httpx.ConnectTimeout("Connect timed out")
+            guardrail.async_handler,
+            "post",
+            side_effect=httpx.ConnectTimeout("Connect timed out"),
         ):
             # Should return original inputs on timeout (graceful degradation)
             result = await guardrail.apply_guardrail(
@@ -710,9 +728,12 @@ class TestOnyxGuardrail:
         mock_response.raise_for_status = MagicMock()
 
         # Mock uuid.uuid4 to verify it's called when logging_obj is None
-        with patch.object(
-            guardrail.async_handler, "post", return_value=mock_response
-        ) as mock_post, patch("uuid.uuid4", return_value="test-uuid"):
+        with (
+            patch.object(
+                guardrail.async_handler, "post", return_value=mock_response
+            ) as mock_post,
+            patch("uuid.uuid4", return_value="test-uuid"),
+        ):
             result = await guardrail.apply_guardrail(
                 inputs=inputs,
                 request_data=request_data,

@@ -73,6 +73,8 @@ def does_mcp_server_exist(
         if mcp_server_record.server_id == mcp_server_id:
             return True
     return False
+
+
 DEFAULT_MCP_REGISTRY_VERSION = "1.0.0"
 LITELLM_MCP_SERVER_NAME = "litellm-mcp-server"
 LITELLM_MCP_SERVER_DESCRIPTION = "MCP Server for LiteLLM"

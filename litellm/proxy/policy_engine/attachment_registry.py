@@ -464,13 +464,15 @@ class AttachmentRegistry:
                 attachment = PolicyAttachment(
                     policy=attachment_response.policy_name,
                     scope=attachment_response.scope,
-                    teams=attachment_response.teams
-                    if attachment_response.teams
-                    else None,
+                    teams=(
+                        attachment_response.teams if attachment_response.teams else None
+                    ),
                     keys=attachment_response.keys if attachment_response.keys else None,
-                    models=attachment_response.models
-                    if attachment_response.models
-                    else None,
+                    models=(
+                        attachment_response.models
+                        if attachment_response.models
+                        else None
+                    ),
                     tags=attachment_response.tags if attachment_response.tags else None,
                 )
                 self._attachments.append(attachment)

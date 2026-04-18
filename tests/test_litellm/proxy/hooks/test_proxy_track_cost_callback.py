@@ -272,14 +272,17 @@ async def test_enrich_failure_metadata_with_full_key_lookup():
     mock_team_obj = MagicMock()
     mock_team_obj.team_alias = "fetched-team-alias"
 
-    with patch(
-        "litellm.proxy.hooks.proxy_track_cost_callback.get_key_object",
-        new_callable=AsyncMock,
-        return_value=mock_key_obj,
-    ), patch(
-        "litellm.proxy.hooks.proxy_track_cost_callback.get_team_object",
-        new_callable=AsyncMock,
-        return_value=mock_team_obj,
+    with (
+        patch(
+            "litellm.proxy.hooks.proxy_track_cost_callback.get_key_object",
+            new_callable=AsyncMock,
+            return_value=mock_key_obj,
+        ),
+        patch(
+            "litellm.proxy.hooks.proxy_track_cost_callback.get_team_object",
+            new_callable=AsyncMock,
+            return_value=mock_team_obj,
+        ),
     ):
         metadata = {
             "user_api_key": "hashed_key",
@@ -303,13 +306,16 @@ async def test_enrich_failure_metadata_skips_when_team_alias_present():
     When team_alias is already populated, _enrich_failure_metadata_with_key_info
     should not perform a team cache lookup.
     """
-    with patch(
-        "litellm.proxy.hooks.proxy_track_cost_callback.get_key_object",
-        new_callable=AsyncMock,
-    ) as mock_get_key, patch(
-        "litellm.proxy.hooks.proxy_track_cost_callback.get_team_object",
-        new_callable=AsyncMock,
-    ) as mock_get_team:
+    with (
+        patch(
+            "litellm.proxy.hooks.proxy_track_cost_callback.get_key_object",
+            new_callable=AsyncMock,
+        ) as mock_get_key,
+        patch(
+            "litellm.proxy.hooks.proxy_track_cost_callback.get_team_object",
+            new_callable=AsyncMock,
+        ) as mock_get_team,
+    ):
         metadata = {
             "user_api_key": "hashed_key",
             "user_api_key_alias": "existing-alias",
@@ -373,17 +379,21 @@ async def test_async_post_call_failure_hook_enriches_auth_error_metadata():
     mock_team_obj = MagicMock()
     mock_team_obj.team_alias = "my-team-alias"
 
-    with patch(
-        "litellm.proxy.db.db_spend_update_writer.DBSpendUpdateWriter.update_database",
-        new_callable=AsyncMock,
-    ) as mock_update_database, patch(
-        "litellm.proxy.hooks.proxy_track_cost_callback.get_key_object",
-        new_callable=AsyncMock,
-        return_value=mock_key_obj,
-    ), patch(
-        "litellm.proxy.hooks.proxy_track_cost_callback.get_team_object",
-        new_callable=AsyncMock,
-        return_value=mock_team_obj,
+    with (
+        patch(
+            "litellm.proxy.db.db_spend_update_writer.DBSpendUpdateWriter.update_database",
+            new_callable=AsyncMock,
+        ) as mock_update_database,
+        patch(
+            "litellm.proxy.hooks.proxy_track_cost_callback.get_key_object",
+            new_callable=AsyncMock,
+            return_value=mock_key_obj,
+        ),
+        patch(
+            "litellm.proxy.hooks.proxy_track_cost_callback.get_team_object",
+            new_callable=AsyncMock,
+            return_value=mock_team_obj,
+        ),
     ):
         await logger.async_post_call_failure_hook(
             request_data=request_data,
@@ -427,13 +437,16 @@ async def test_async_post_call_failure_hook_enriches_missing_team_alias():
     mock_team_obj = MagicMock()
     mock_team_obj.team_alias = "enriched-team-alias"
 
-    with patch(
-        "litellm.proxy.db.db_spend_update_writer.DBSpendUpdateWriter.update_database",
-        new_callable=AsyncMock,
-    ) as mock_update_database, patch(
-        "litellm.proxy.hooks.proxy_track_cost_callback.get_team_object",
-        new_callable=AsyncMock,
-        return_value=mock_team_obj,
+    with (
+        patch(
+            "litellm.proxy.db.db_spend_update_writer.DBSpendUpdateWriter.update_database",
+            new_callable=AsyncMock,
+        ) as mock_update_database,
+        patch(
+            "litellm.proxy.hooks.proxy_track_cost_callback.get_team_object",
+            new_callable=AsyncMock,
+            return_value=mock_team_obj,
+        ),
     ):
         await logger.async_post_call_failure_hook(
             request_data=request_data,

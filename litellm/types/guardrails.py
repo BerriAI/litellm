@@ -33,7 +33,7 @@ from litellm.types.proxy.guardrails.guardrail_hooks.tool_permission import (
     ToolPermissionGuardrailConfigModel,
 )
 from litellm.types.proxy.guardrails.guardrail_hooks.hiddenlayer import (
-    HiddenlayerGuardrailConfigModel
+    HiddenlayerGuardrailConfigModel,
 )
 
 """
@@ -766,7 +766,7 @@ class LitellmParams(
     IBMGuardrailsBaseConfigModel,
     QualifireGuardrailConfigModel,
     BlockCodeExecutionGuardrailConfigModel,
-    HiddenlayerGuardrailConfigModel
+    HiddenlayerGuardrailConfigModel,
 ):
     guardrail: str = Field(description="The type of guardrail integration to use")
     mode: Union[str, List[str], Mode] = Field(

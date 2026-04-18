@@ -8,7 +8,9 @@ from litellm.integrations.focus.serializers.csv import FocusCsvSerializer
 
 
 def test_should_serialize_dataframe_to_csv():
-    frame = pl.DataFrame({"BilledCost": [1.5, 2.0], "ServiceName": ["openai", "anthropic"]})
+    frame = pl.DataFrame(
+        {"BilledCost": [1.5, 2.0], "ServiceName": ["openai", "anthropic"]}
+    )
     serializer = FocusCsvSerializer()
     result = serializer.serialize(frame)
 
@@ -19,9 +21,7 @@ def test_should_serialize_dataframe_to_csv():
 
 
 def test_should_return_header_only_for_empty_frame():
-    frame = pl.DataFrame(
-        schema={"BilledCost": pl.Float64, "ServiceName": pl.Utf8}
-    )
+    frame = pl.DataFrame(schema={"BilledCost": pl.Float64, "ServiceName": pl.Utf8})
     serializer = FocusCsvSerializer()
     result = serializer.serialize(frame)
 

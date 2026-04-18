@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, patch, MagicMock
 import litellm
 from tests.search_tests.base_search_unit_tests import BaseSearchTest
 
+
 @pytest.mark.skip(reason="Not yet implemented")
 class TestBraveSearch(BaseSearchTest):
     """
