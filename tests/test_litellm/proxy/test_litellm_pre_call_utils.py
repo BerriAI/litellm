@@ -221,7 +221,10 @@ async def test_add_litellm_data_to_request_user_spend_and_budget():
     request_mock.client = MagicMock()
     request_mock.client.host = "127.0.0.1"
 
-    data = {"model": "gpt-3.5-turbo", "messages": [{"role": "user", "content": "Hello"}]}
+    data = {
+        "model": "gpt-3.5-turbo",
+        "messages": [{"role": "user", "content": "Hello"}],
+    }
 
     user_api_key_dict = UserAPIKeyAuth(
         api_key="hashed-key",
@@ -1023,6 +1026,7 @@ def test_add_headers_to_llm_call_by_model_group_existing_headers_in_data():
         # Restore original model_group_settings
         litellm.model_group_settings = original_model_group_settings
 
+
 import json
 import time
 from typing import Optional
@@ -1040,14 +1044,15 @@ class TestCustomLogger(CustomLogger):
     def __init__(self):
         self.standard_logging_object: Optional[StandardLoggingPayload] = None
         super().__init__()
-        
+
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         print(f"SUCCESS CALLBACK CALLED! kwargs keys: {list(kwargs.keys())}")
         self.standard_logging_object = kwargs.get("standard_logging_object")
         print(f"Captured standard_logging_object: {self.standard_logging_object}")
-        
+
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
         print(f"FAILURE CALLBACK CALLED! kwargs keys: {list(kwargs.keys())}")
+
 
 @pytest.mark.asyncio
 async def test_add_litellm_metadata_from_request_headers():
@@ -1065,8 +1070,16 @@ async def test_add_litellm_metadata_from_request_headers():
 
     try:
         # Prepare test data (ensure no streaming, add mock_response and api_key to route to litellm.acompletion)
-        headers = {"x-litellm-spend-logs-metadata": '{"user_id": "12345", "project_id": "proj_abc", "request_type": "chat_completion", "timestamp": "2025-09-02T10:30:00Z"}'}
-        data = {"model": "gpt-4", "messages": [{"role": "user", "content": "Hello"}], "stream": False, "mock_response": "Hi", "api_key": "fake-key"}
+        headers = {
+            "x-litellm-spend-logs-metadata": '{"user_id": "12345", "project_id": "proj_abc", "request_type": "chat_completion", "timestamp": "2025-09-02T10:30:00Z"}'
+        }
+        data = {
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "Hello"}],
+            "stream": False,
+            "mock_response": "Hi",
+            "api_key": "fake-key",
+        }
 
         # Create mock request with headers
         mock_request = MagicMock(spec=Request)
@@ -1078,9 +1091,7 @@ async def test_add_litellm_metadata_from_request_headers():
 
         # Create mock user API key dict
         mock_user_api_key_dict = UserAPIKeyAuth(
-            api_key="test-key",
-            user_id="test-user",
-            org_id="test-org"
+            api_key="test-key", user_id="test-user", org_id="test-org"
         )
 
         # Create mock proxy logging object
@@ -1095,7 +1106,7 @@ async def test_add_litellm_metadata_from_request_headers():
 
         async def mock_post_call_success_hook(*args, **kwargs):
             # Return the response unchanged
-            return kwargs.get('response', args[2] if len(args) > 2 else None)
+            return kwargs.get("response", args[2] if len(args) > 2 else None)
 
         mock_proxy_logging_obj.during_call_hook = mock_during_call_hook
         mock_proxy_logging_obj.pre_call_hook = mock_pre_call_hook
@@ -1108,10 +1119,15 @@ async def test_add_litellm_metadata_from_request_headers():
         general_settings = {}
 
         # Create mock select_data_generator with correct signature
-        def mock_select_data_generator(response=None, user_api_key_dict=None, request_data=None):
+        def mock_select_data_generator(
+            response=None, user_api_key_dict=None, request_data=None
+        ):
             async def mock_generator():
-                yield "data: " + json.dumps({"choices": [{"delta": {"content": "Hello"}}]}) + "\n\n"
+                yield "data: " + json.dumps(
+                    {"choices": [{"delta": {"content": "Hello"}}]}
+                ) + "\n\n"
                 yield "data: [DONE]\n\n"
+
             return mock_generator()
 
         # Create the processor
@@ -1129,22 +1145,28 @@ async def test_add_litellm_metadata_from_request_headers():
             select_data_generator=mock_select_data_generator,
             llm_router=None,
             model="gpt-4",
-            is_streaming_request=False
+            is_streaming_request=False,
         )
 
         # Sleep for 3 seconds to allow logging to complete
         await asyncio.sleep(3)
 
         # Check if standard_logging_object was set
-        assert test_logger.standard_logging_object is not None, "standard_logging_object should be populated after LLM request"
+        assert (
+            test_logger.standard_logging_object is not None
+        ), "standard_logging_object should be populated after LLM request"
 
         # Verify the logging object contains expected metadata
         standard_logging_obj = test_logger.standard_logging_object
 
-        print(f"Standard logging object captured: {json.dumps(standard_logging_obj, indent=4, default=str)}")
+        print(
+            f"Standard logging object captured: {json.dumps(standard_logging_obj, indent=4, default=str)}"
+        )
 
         SPEND_LOGS_METADATA = standard_logging_obj["metadata"]["spend_logs_metadata"]
-        assert SPEND_LOGS_METADATA == dict(json.loads(headers["x-litellm-spend-logs-metadata"])), "spend_logs_metadata should be the same as the headers"
+        assert SPEND_LOGS_METADATA == dict(
+            json.loads(headers["x-litellm-spend-logs-metadata"])
+        ), "spend_logs_metadata should be the same as the headers"
     finally:
         litellm.callbacks = original_callbacks
 
@@ -1191,8 +1213,15 @@ def test_add_litellm_metadata_from_request_headers_both_headers_trace_id_precede
     assert data["litellm_trace_id"] == "trace-value"
 
 
-def test_add_litellm_metadata_from_request_headers_generic_session_id_header():
-    """A generic x-<vendor>-session-id header is used when no explicit litellm header is set."""
+def test_add_litellm_metadata_from_request_headers_generic_session_id_header(
+    monkeypatch,
+):
+    """
+    A generic x-<vendor>-session-id header is used when no explicit litellm
+    header is set — only when the opt-in env var is enabled.
+    """
+    monkeypatch.setenv("LITELLM_CAPTURE_VENDOR_SESSION_HEADERS", "true")
+
     headers = {"x-claude-code-session-id": "e96634a3-fa28-4083-b354-55542e2dca01"}
     data = {"metadata": {}}
     LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
@@ -1203,8 +1232,31 @@ def test_add_litellm_metadata_from_request_headers_generic_session_id_header():
     assert data["litellm_trace_id"] == "e96634a3-fa28-4083-b354-55542e2dca01"
 
 
-def test_add_litellm_metadata_from_request_headers_explicit_header_beats_generic():
+def test_add_litellm_metadata_from_request_headers_generic_session_id_header_ignored_by_default(
+    monkeypatch,
+):
+    """
+    Default (flag off): a generic x-<vendor>-session-id header must NOT be
+    treated as a litellm chain id — prior users who sent such headers for
+    non-LiteLLM purposes continue to work unchanged.
+    """
+    monkeypatch.delenv("LITELLM_CAPTURE_VENDOR_SESSION_HEADERS", raising=False)
+
+    headers = {"x-claude-code-session-id": "e96634a3-fa28-4083-b354-55542e2dca01"}
+    data = {"metadata": {}}
+    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+        headers=headers, data=data, _metadata_variable_name="metadata"
+    )
+    assert "litellm_session_id" not in data
+    assert "litellm_trace_id" not in data
+
+
+def test_add_litellm_metadata_from_request_headers_explicit_header_beats_generic(
+    monkeypatch,
+):
     """Explicit x-litellm-trace-id wins over a generic x-*-session-id header."""
+    monkeypatch.setenv("LITELLM_CAPTURE_VENDOR_SESSION_HEADERS", "true")
+
     headers = {
         "x-litellm-trace-id": "explicit-trace-id-value",
         "x-claude-code-session-id": "e96634a3-fa28-4083-b354-55542e2dca01",
@@ -1217,9 +1269,15 @@ def test_add_litellm_metadata_from_request_headers_explicit_header_beats_generic
     assert data["litellm_trace_id"] == "explicit-trace-id-value"
 
 
-def test_get_chain_id_from_headers_generic_vendor_session_id():
-    """get_chain_id_from_headers picks up any x-<vendor>-session-id with a valid value."""
+def test_get_chain_id_from_headers_generic_vendor_session_id(monkeypatch):
+    """
+    Generic ``x-<vendor>-session-id`` capture is opt-in via
+    ``LITELLM_CAPTURE_VENDOR_SESSION_HEADERS``; when enabled, valid values are
+    picked up and explicit headers still take precedence.
+    """
     from litellm.proxy.litellm_pre_call_utils import get_chain_id_from_headers
+
+    monkeypatch.setenv("LITELLM_CAPTURE_VENDOR_SESSION_HEADERS", "true")
 
     assert (
         get_chain_id_from_headers(
@@ -1242,13 +1300,42 @@ def test_get_chain_id_from_headers_generic_vendor_session_id():
     )
 
 
+def test_get_chain_id_from_headers_generic_vendor_session_id_disabled_by_default(
+    monkeypatch,
+):
+    """
+    Generic vendor session-id capture must stay OFF by default — otherwise
+    existing deployments that send such headers for non-LiteLLM purposes would
+    have their spend logs / traces silently regrouped under those IDs.
+    """
+    from litellm.proxy.litellm_pre_call_utils import get_chain_id_from_headers
+
+    monkeypatch.delenv("LITELLM_CAPTURE_VENDOR_SESSION_HEADERS", raising=False)
+
+    # Without the opt-in env var, generic vendor session headers are ignored.
+    assert (
+        get_chain_id_from_headers(
+            {"x-claude-code-session-id": "e96634a3-fa28-4083-b354-55542e2dca01"}
+        )
+        is None
+    )
+
+    # Explicit litellm headers still work (unchanged behavior).
+    assert (
+        get_chain_id_from_headers({"x-litellm-trace-id": "explicit-id-value"})
+        == "explicit-id-value"
+    )
+
+
 def test_get_internal_user_header_from_mapping_returns_expected_header():
     mappings = [
         {"header_name": "X-OpenWebUI-User-Id", "litellm_user_role": "internal_user"},
         {"header_name": "X-OpenWebUI-User-Email", "litellm_user_role": "customer"},
     ]
 
-    header_name = LiteLLMProxyRequestSetup.get_internal_user_header_from_mapping(mappings)
+    header_name = LiteLLMProxyRequestSetup.get_internal_user_header_from_mapping(
+        mappings
+    )
     assert header_name == "X-OpenWebUI-User-Id"
 
 
@@ -1256,7 +1343,9 @@ def test_get_internal_user_header_from_mapping_none_when_absent():
     mappings = [
         {"header_name": "X-OpenWebUI-User-Email", "litellm_user_role": "customer"}
     ]
-    header_name = LiteLLMProxyRequestSetup.get_internal_user_header_from_mapping(mappings)
+    header_name = LiteLLMProxyRequestSetup.get_internal_user_header_from_mapping(
+        mappings
+    )
     assert header_name is None
 
     single = {"header_name": "X-Only-Customer", "litellm_user_role": "customer"}
@@ -1269,7 +1358,10 @@ def test_add_internal_user_from_user_mapping_sets_user_id_when_header_present():
     headers = {"X-OpenWebUI-User-Id": "internal-user-123"}
     general_settings = {
         "user_header_mappings": [
-            {"header_name": "X-OpenWebUI-User-Id", "litellm_user_role": "internal_user"},
+            {
+                "header_name": "X-OpenWebUI-User-Id",
+                "litellm_user_role": "internal_user",
+            },
             {"header_name": "X-OpenWebUI-User-Email", "litellm_user_role": "customer"},
         ]
     }
@@ -1363,7 +1455,7 @@ async def test_team_guardrails_append_to_key_guardrails():
 
     metadata = updated_data.get("metadata", {})
     guardrails = metadata.get("guardrails", [])
-    
+
     assert "key-guardrail-1" in guardrails
     assert "key-guardrail-2" in guardrails
     assert "team-guardrail-1" in guardrails
@@ -1392,7 +1484,7 @@ async def test_request_guardrails_do_not_override_key_guardrails():
         metadata={"guardrails": ["key-guardrail-1"]},
         team_metadata={},
     )
-    
+
     # Test case: Request with empty guardrails should not result in empty guardrails
     data_with_empty = {
         "model": "gpt-3.5-turbo",
@@ -1412,7 +1504,7 @@ async def test_request_guardrails_do_not_override_key_guardrails():
 
     _metadata = updated_data_empty.get("metadata", {})
     requested_guardrails = _metadata.get("guardrails", [])
-    
+
     assert "guardrails" not in updated_data_empty
     assert "key-guardrail-1" in requested_guardrails
     assert len(requested_guardrails) == 1
@@ -1527,7 +1619,10 @@ def test_update_model_if_key_alias_exists():
     assert data["model"] == "xai/grok-4-fast-non-reasoning"
 
     # Test case 2: Key alias doesn't exist
-    data = {"model": "unknown-model", "messages": [{"role": "user", "content": "Hello"}]}
+    data = {
+        "model": "unknown-model",
+        "messages": [{"role": "user", "content": "Hello"}],
+    }
     user_api_key_dict = UserAPIKeyAuth(
         api_key="test-key",
         aliases={"modelAlias": "xai/grok-4-fast-non-reasoning"},
@@ -1645,16 +1740,22 @@ async def test_embedding_header_forwarding_with_model_group():
 
         # Verify that only x- prefixed headers (except x-stainless) were forwarded
         forwarded_headers = updated_data["headers"]
-        assert "X-Custom-Header" in forwarded_headers, "X-Custom-Header should be forwarded"
+        assert (
+            "X-Custom-Header" in forwarded_headers
+        ), "X-Custom-Header should be forwarded"
         assert forwarded_headers["X-Custom-Header"] == "custom-value"
         assert "X-Request-ID" in forwarded_headers, "X-Request-ID should be forwarded"
         assert forwarded_headers["X-Request-ID"] == "test-request-123"
 
         # Verify that authorization header was NOT forwarded (sensitive header)
-        assert "Authorization" not in forwarded_headers, "Authorization header should not be forwarded"
+        assert (
+            "Authorization" not in forwarded_headers
+        ), "Authorization header should not be forwarded"
 
         # Verify that Content-Type was NOT forwarded (doesn't start with x-)
-        assert "Content-Type" not in forwarded_headers, "Content-Type should not be forwarded"
+        assert (
+            "Content-Type" not in forwarded_headers
+        ), "Content-Type should not be forwarded"
 
         # Verify original data fields are preserved
         assert updated_data["model"] == "local-openai/text-embedding-3-small"
@@ -1710,8 +1811,9 @@ async def test_embedding_header_forwarding_without_model_group_config():
         )
 
         # Verify that headers were NOT added since model is not in forward list
-        assert "headers" not in updated_data or updated_data.get("headers") is None, \
-            "Headers should not be forwarded for models not in forward_client_headers_to_llm_api list"
+        assert (
+            "headers" not in updated_data or updated_data.get("headers") is None
+        ), "Headers should not be forwarded for models not in forward_client_headers_to_llm_api list"
 
         # Verify original data fields are preserved
         assert updated_data["model"] == "text-embedding-ada-002"
@@ -1765,7 +1867,9 @@ async def test_add_guardrails_from_policy_engine():
     attachment_registry = get_attachment_registry()
     attachment_registry._attachments = [
         PolicyAttachment(policy="global-baseline", scope="*"),  # applies to all
-        PolicyAttachment(policy="healthcare", teams=["healthcare-team"]),  # applies to healthcare team
+        PolicyAttachment(
+            policy="healthcare", teams=["healthcare-team"]
+        ),  # applies to healthcare team
     ]
     attachment_registry._initialized = True
 
@@ -1808,7 +1912,10 @@ async def test_add_guardrails_from_policy_engine_accepts_dynamic_policies_and_po
     data = {
         "model": "gpt-4",
         "messages": [{"role": "user", "content": "Hello"}],
-        "policies": ["PII-POLICY-GLOBAL", "HIPAA-POLICY"],  # Dynamic policies - should be accepted and removed
+        "policies": [
+            "PII-POLICY-GLOBAL",
+            "HIPAA-POLICY",
+        ],  # Dynamic policies - should be accepted and removed
         "metadata": {},
     }
 
@@ -1831,7 +1938,9 @@ async def test_add_guardrails_from_policy_engine_accepts_dynamic_policies_and_po
     )
 
     # Verify that 'policies' was removed from the request body
-    assert "policies" not in data, "'policies' should be removed from request body to prevent forwarding to LLM provider"
+    assert (
+        "policies" not in data
+    ), "'policies' should be removed from request body to prevent forwarding to LLM provider"
 
     # Verify that other fields are preserved
     assert "model" in data
@@ -1920,7 +2029,9 @@ async def test_bearer_token_not_in_debug_logs():
     from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
     from litellm.proxy.proxy_server import ProxyConfig
 
-    secret_token = "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.fakesignature"
+    secret_token = (
+        "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.fakesignature"
+    )
 
     mock_request = MagicMock(spec=Request)
     mock_request.headers = {
@@ -1949,8 +2060,10 @@ async def test_bearer_token_not_in_debug_logs():
     logger.setLevel(logging.DEBUG)
 
     try:
-        with patch("litellm.proxy.proxy_server.llm_router", None), \
-             patch("litellm.proxy.proxy_server.premium_user", True):
+        with (
+            patch("litellm.proxy.proxy_server.llm_router", None),
+            patch("litellm.proxy.proxy_server.premium_user", True),
+        ):
             await add_litellm_data_to_request(
                 data=data,
                 request=mock_request,
@@ -2071,9 +2184,7 @@ def test_resolve_project_model_specific_wins():
         "gpt-4": {"azure": {"litellm_credentials": "team-gpt4"}},
         "defaultconfig": {"azure": {"litellm_credentials": "team-default"}},
     }
-    result = _resolve_credential_from_model_config(
-        "gpt-4", project_config, team_config
-    )
+    result = _resolve_credential_from_model_config("gpt-4", project_config, team_config)
     assert result == "proj-gpt4"
 
 
@@ -2085,9 +2196,7 @@ def test_resolve_project_default_wins_over_team():
         "gpt-4": {"azure": {"litellm_credentials": "team-gpt4"}},
         "defaultconfig": {"azure": {"litellm_credentials": "team-default"}},
     }
-    result = _resolve_credential_from_model_config(
-        "gpt-4", project_config, team_config
-    )
+    result = _resolve_credential_from_model_config("gpt-4", project_config, team_config)
     assert result == "proj-default"
 
 
@@ -2142,12 +2251,8 @@ def test_apply_overrides_project_model_specific(setup_test_credentials):
         },
         project_metadata={
             "model_config": {
-                "defaultconfig": {
-                    "azure": {"litellm_credentials": "hotel-rec-azure"}
-                },
-                "gpt-4-vision": {
-                    "azure": {"litellm_credentials": "hotel-rec-vision"}
-                },
+                "defaultconfig": {"azure": {"litellm_credentials": "hotel-rec-azure"}},
+                "gpt-4-vision": {"azure": {"litellm_credentials": "hotel-rec-vision"}},
             }
         },
     )
@@ -2174,12 +2279,8 @@ def test_apply_overrides_project_default(setup_test_credentials):
         },
         project_metadata={
             "model_config": {
-                "defaultconfig": {
-                    "azure": {"litellm_credentials": "hotel-rec-azure"}
-                },
-                "gpt-4-vision": {
-                    "azure": {"litellm_credentials": "hotel-rec-vision"}
-                },
+                "defaultconfig": {"azure": {"litellm_credentials": "hotel-rec-azure"}},
+                "gpt-4-vision": {"azure": {"litellm_credentials": "hotel-rec-vision"}},
             }
         },
     )
@@ -2282,9 +2383,7 @@ def test_apply_overrides_missing_credential_name(setup_test_credentials):
         api_key="test-key",
         team_metadata={
             "model_config": {
-                "gpt-4": {
-                    "azure": {"litellm_credentials": "nonexistent-credential"}
-                }
+                "gpt-4": {"azure": {"litellm_credentials": "nonexistent-credential"}}
             }
         },
     )
@@ -2323,9 +2422,7 @@ def test_apply_overrides_no_model_in_data(setup_test_credentials):
         api_key="test-key",
         team_metadata={
             "model_config": {
-                "defaultconfig": {
-                    "azure": {"litellm_credentials": "some-cred"}
-                }
+                "defaultconfig": {"azure": {"litellm_credentials": "some-cred"}}
             }
         },
     )
@@ -2356,9 +2453,7 @@ def test_apply_overrides_clientside_api_version_preserved(setup_test_credentials
         api_key="test-key",
         team_metadata={
             "model_config": {
-                "gpt-4-vision": {
-                    "azure": {"litellm_credentials": "hotel-rec-vision"}
-                }
+                "gpt-4-vision": {"azure": {"litellm_credentials": "hotel-rec-vision"}}
             }
         },
     )

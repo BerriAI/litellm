@@ -59,7 +59,13 @@ async def test_pre_call_hook_compresses_messages_and_injects_tool(monkeypatch):
     def _fake_compress(**kwargs):
         return compressed_result
 
-    monkeypatch.setattr("litellm.compress", _fake_compress)
+    # The handler does ``from litellm.compression import compress`` at module
+    # scope, so we must patch the binding on the handler module — patching
+    # ``litellm.compress`` has no effect on the already-bound reference.
+    monkeypatch.setattr(
+        "litellm.integrations.compression_interception.handler.compress",
+        _fake_compress,
+    )
 
     kwargs = {
         "model": "bedrock/us.anthropic.claude-sonnet-4-5",
@@ -82,6 +88,49 @@ async def test_pre_call_hook_compresses_messages_and_injects_tool(monkeypatch):
     assert "existing_tool" in tool_names
     assert "litellm_content_retrieve" in tool_names
     assert result["litellm_call_id"] in logger._compression_cache_by_call_id
+
+
+@pytest.mark.asyncio
+async def test_pre_call_hook_below_trigger_does_not_inject_empty_tools(monkeypatch):
+    """
+    When compression is a no-op (below trigger / invalid tool sequence), the
+    hook must NOT replace ``messages`` or inject an empty ``tools: []`` onto
+    a request that originally had no tools — Anthropic Messages rejects
+    ``tools: []``.
+    """
+    logger = CompressionInterceptionLogger()
+    original_messages = [{"role": "user", "content": "short prompt"}]
+
+    def _fake_compress_noop(**kwargs):
+        return {
+            "messages": original_messages,
+            "original_tokens": 42,
+            "compressed_tokens": 42,
+            "compression_ratio": 0.0,
+            "cache": {},
+            "tools": [],
+            "compression_skipped_reason": "below_trigger",
+        }
+
+    monkeypatch.setattr(
+        "litellm.integrations.compression_interception.handler.compress",
+        _fake_compress_noop,
+    )
+
+    kwargs = {
+        "model": "bedrock/us.anthropic.claude-sonnet-4-5",
+        "messages": original_messages,
+    }
+
+    result = await logger.async_pre_call_deployment_hook(
+        kwargs=kwargs, call_type=CallTypes.anthropic_messages
+    )
+
+    assert result is not None
+    # Original request had no ``tools`` — skipped compression must leave it that way.
+    assert "tools" not in result
+    # Cache must not be populated for a no-op.
+    assert result.get("litellm_call_id") not in logger._compression_cache_by_call_id
 
 
 @pytest.mark.asyncio
@@ -237,7 +286,12 @@ async def test_should_run_agentic_loop_with_custom_type_tools():
                     "key": {
                         "type": "string",
                         "description": "The identifier of the content to retrieve",
-                        "enum": ["message_0", "HA_UPTIME_ROUTER_SPEC.md", "message_159", "message_160"],
+                        "enum": [
+                            "message_0",
+                            "HA_UPTIME_ROUTER_SPEC.md",
+                            "message_159",
+                            "message_160",
+                        ],
                     }
                 },
                 "required": ["key"],

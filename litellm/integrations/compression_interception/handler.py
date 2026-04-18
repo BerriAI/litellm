@@ -106,15 +106,24 @@ class CompressionInterceptionLogger(CustomLogger):
             embedding_model_params=self.embedding_model_params,
         )
 
-        kwargs["messages"] = compressed["messages"]
-        kwargs["tools"] = self._merge_tools(
-            existing_tools=cast(Optional[List[Dict[str, Any]]], kwargs.get("tools")),
-            compressed_tools=cast(List[Dict[str, Any]], compressed.get("tools", [])),
-        )
-
         cache = cast(Dict[str, str], compressed.get("cache", {}))
         skip_reason = cast(Optional[str], compressed.get("compression_skipped_reason"))
+        compressed_tools = cast(List[Dict[str, Any]], compressed.get("tools", []))
+
+        # Only mutate kwargs when compression actually produced a result.
+        # If compression was a no-op (below trigger, invalid tool sequence, etc.),
+        # leave ``messages`` and ``tools`` untouched — injecting an empty
+        # ``tools: []`` onto a request that originally had no tools breaks
+        # Anthropic Messages requests.
         if cache:
+            kwargs["messages"] = compressed["messages"]
+            if compressed_tools:
+                kwargs["tools"] = self._merge_tools(
+                    existing_tools=cast(
+                        Optional[List[Dict[str, Any]]], kwargs.get("tools")
+                    ),
+                    compressed_tools=compressed_tools,
+                )
             call_id = cast(Optional[str], kwargs.get("litellm_call_id"))
             if not call_id:
                 call_id = str(uuid.uuid4())

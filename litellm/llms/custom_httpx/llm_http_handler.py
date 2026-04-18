@@ -4477,6 +4477,34 @@ class BaseLLMHTTPHandler:
         return depth, max(max_loops, 1), fingerprints
 
     @staticmethod
+    def _check_agentic_loop_safety(
+        tool_calls: Any,
+        fingerprints: List[str],
+        depth: int,
+        max_loops: int,
+        model: str,
+    ) -> str:
+        """
+        Evaluate agentic-loop safety guards (fingerprint cycle / max depth).
+
+        Raises ValueError on abort.  Returns the current fingerprint on success.
+
+        These checks must not be swallowed by the per-callback ``except Exception``
+        block that wraps callback dispatch — they are bounded-loop / cycle-break
+        safety rails and must abort the agentic dispatch when they trip.
+        """
+        fingerprint = BaseLLMHTTPHandler._fingerprint_agentic_tools(tool_calls)
+        if fingerprint in fingerprints:
+            raise ValueError(
+                "Agentic loop detected repeated tool-call fingerprint; aborting rerun"
+            )
+        if depth >= max_loops:
+            raise ValueError(
+                f"Exceeded max_agentic_loops={max_loops} for model={model}"
+            )
+        return fingerprint
+
+    @staticmethod
     def _fingerprint_agentic_tools(tools: Dict) -> str:
         try:
             return json.dumps(tools, sort_keys=True, default=str)
@@ -4629,95 +4657,109 @@ class BaseLLMHTTPHandler:
         tools = anthropic_messages_optional_request_params.get("tools", [])
         depth, max_loops, fingerprints = self._get_agentic_loop_settings(kwargs=kwargs)
 
-
         for callback in callbacks:
+            if not isinstance(callback, CustomLogger):
+                continue
+
+            should_run: bool = False
+            tool_calls: Any = None
             try:
-                if isinstance(callback, CustomLogger):
-                    # First: Check if agentic loop should run
-                    (
-                        should_run,
-                        tool_calls,
-                    ) = await callback.async_should_run_agentic_loop(
-                        response=response,
+                # First: Check if agentic loop should run.  Wrap in try/except
+                # to shield from buggy user callbacks — a callback crash should
+                # not abort the whole request.
+                (
+                    should_run,
+                    tool_calls,
+                ) = await callback.async_should_run_agentic_loop(
+                    response=response,
+                    model=model,
+                    messages=messages,
+                    tools=tools,
+                    stream=stream,
+                    custom_llm_provider=custom_llm_provider,
+                    kwargs=kwargs,
+                )
+            except Exception as e:
+                _call_id = getattr(logging_obj, "litellm_call_id", "unknown")
+                verbose_logger.exception(
+                    "LiteLLM.AgenticHookError: Exception in "
+                    "async_should_run_agentic_loop [call_id=%s model=%s]: %s",
+                    _call_id,
+                    model,
+                    str(e),
+                )
+                continue
+
+            if not should_run:
+                continue
+
+            # Safety guards must run OUTSIDE the callback try/except — they are
+            # bounded-loop / cycle-break rails that must propagate to the caller.
+            fingerprint = self._check_agentic_loop_safety(
+                tool_calls=tool_calls,
+                fingerprints=fingerprints,
+                depth=depth,
+                max_loops=max_loops,
+                model=model,
+            )
+
+            try:
+                kwargs_with_provider = kwargs.copy() if kwargs else {}
+                kwargs_with_provider["custom_llm_provider"] = custom_llm_provider
+                build_plan_overridden = (
+                    callback.__class__.async_build_agentic_loop_plan
+                    is not CustomLogger.async_build_agentic_loop_plan
+                )
+                if not build_plan_overridden:
+                    return await callback.async_run_agentic_loop(
+                        tools=tool_calls,
                         model=model,
                         messages=messages,
-                        tools=tools,
+                        response=response,
+                        anthropic_messages_provider_config=anthropic_messages_provider_config,
+                        anthropic_messages_optional_request_params=anthropic_messages_optional_request_params,
+                        logging_obj=logging_obj,
                         stream=stream,
-                        custom_llm_provider=custom_llm_provider,
-                        kwargs=kwargs,
+                        kwargs=kwargs_with_provider,
                     )
 
+                plan = await callback.async_build_agentic_loop_plan(
+                    tools=tool_calls,
+                    model=model,
+                    messages=messages,
+                    response=response,
+                    anthropic_messages_provider_config=anthropic_messages_provider_config,
+                    anthropic_messages_optional_request_params=anthropic_messages_optional_request_params,
+                    logging_obj=logging_obj,
+                    stream=stream,
+                    kwargs=kwargs_with_provider,
+                )
 
-                    if should_run:
-                        fingerprint = self._fingerprint_agentic_tools(tool_calls)
-                        if fingerprint in fingerprints:
-                            raise ValueError(
-                                "Agentic loop detected repeated tool-call fingerprint; aborting rerun"
-                            )
-                        if depth >= max_loops:
-                            raise ValueError(
-                                f"Exceeded max_agentic_loops={max_loops} for model={model}"
-                            )
+                if plan.response_override is not None:
+                    return plan.response_override
+                if plan.terminate:
+                    verbose_logger.debug(
+                        "Agentic loop terminated by callback=%s reason=%s",
+                        callback.__class__.__name__,
+                        plan.stop_reason,
+                    )
+                    return response
+                if not plan.run_agentic_loop:
+                    continue
 
-                        kwargs_with_provider = kwargs.copy() if kwargs else {}
-                        kwargs_with_provider["custom_llm_provider"] = (
-                            custom_llm_provider
-                        )
-                        build_plan_overridden = (
-                            callback.__class__.async_build_agentic_loop_plan
-                            is not CustomLogger.async_build_agentic_loop_plan
-                        )
-                        if not build_plan_overridden:
-                            return await callback.async_run_agentic_loop(
-                                tools=tool_calls,
-                                model=model,
-                                messages=messages,
-                                response=response,
-                                anthropic_messages_provider_config=anthropic_messages_provider_config,
-                                anthropic_messages_optional_request_params=anthropic_messages_optional_request_params,
-                                logging_obj=logging_obj,
-                                stream=stream,
-                                kwargs=kwargs_with_provider,
-                            )
-
-                        plan = await callback.async_build_agentic_loop_plan(
-                            tools=tool_calls,
-                            model=model,
-                            messages=messages,
-                            response=response,
-                            anthropic_messages_provider_config=anthropic_messages_provider_config,
-                            anthropic_messages_optional_request_params=anthropic_messages_optional_request_params,
-                            logging_obj=logging_obj,
-                            stream=stream,
-                            kwargs=kwargs_with_provider,
-                        )
-
-                        if plan.response_override is not None:
-                            return plan.response_override
-                        if plan.terminate:
-                            verbose_logger.debug(
-                                "Agentic loop terminated by callback=%s reason=%s",
-                                callback.__class__.__name__,
-                                plan.stop_reason,
-                            )
-                            return response
-                        if not plan.run_agentic_loop:
-                            continue
-
-                        return await self._execute_anthropic_agentic_plan(
-                            plan=plan,
-                            model=model,
-                            messages=messages,
-                            anthropic_messages_optional_request_params=anthropic_messages_optional_request_params,
-                            logging_obj=logging_obj,
-                            kwargs=kwargs_with_provider,
-                            depth=depth,
-                            max_loops=max_loops,
-                            fingerprints=fingerprints,
-                            fingerprint=fingerprint,
-                            stream=stream,
-                        )
-
+                return await self._execute_anthropic_agentic_plan(
+                    plan=plan,
+                    model=model,
+                    messages=messages,
+                    anthropic_messages_optional_request_params=anthropic_messages_optional_request_params,
+                    logging_obj=logging_obj,
+                    kwargs=kwargs_with_provider,
+                    depth=depth,
+                    max_loops=max_loops,
+                    fingerprints=fingerprints,
+                    fingerprint=fingerprint,
+                    stream=stream,
+                )
             except Exception as e:
                 _call_id = getattr(logging_obj, "litellm_call_id", "unknown")
                 verbose_logger.exception(
@@ -4794,97 +4836,101 @@ class BaseLLMHTTPHandler:
         depth, max_loops, fingerprints = self._get_agentic_loop_settings(kwargs=kwargs)
 
         for callback in callbacks:
-            try:
-                if isinstance(callback, CustomLogger):
-                    # Check if callback has the chat completion agentic loop method
-                    if not hasattr(
-                        callback, "async_should_run_chat_completion_agentic_loop"
-                    ):
-                        continue
+            if not isinstance(callback, CustomLogger):
+                continue
+            if not hasattr(callback, "async_should_run_chat_completion_agentic_loop"):
+                continue
 
-                    # First: Check if agentic loop should run
-                    (
-                        should_run,
-                        tool_calls,
-                    ) = await callback.async_should_run_chat_completion_agentic_loop(
-                        response=response,
+            should_run: bool = False
+            tool_calls: Any = None
+            try:
+                (
+                    should_run,
+                    tool_calls,
+                ) = await callback.async_should_run_chat_completion_agentic_loop(
+                    response=response,
+                    model=model,
+                    messages=messages,
+                    tools=tools,
+                    stream=stream,
+                    custom_llm_provider=custom_llm_provider,
+                    kwargs=kwargs,
+                )
+            except Exception as e:
+                verbose_logger.exception(
+                    "LiteLLM.AgenticHookError: Exception in "
+                    "async_should_run_chat_completion_agentic_loop: %s",
+                    str(e),
+                )
+                continue
+
+            if not should_run:
+                continue
+
+            # Safety guards must run OUTSIDE the callback try/except — they are
+            # bounded-loop / cycle-break rails that must propagate to the caller.
+            fingerprint = self._check_agentic_loop_safety(
+                tool_calls=tool_calls,
+                fingerprints=fingerprints,
+                depth=depth,
+                max_loops=max_loops,
+                model=model,
+            )
+
+            try:
+                kwargs_with_provider = kwargs.copy() if kwargs else {}
+                kwargs_with_provider["custom_llm_provider"] = custom_llm_provider
+                build_plan_overridden = (
+                    callback.__class__.async_build_chat_completion_agentic_loop_plan
+                    is not CustomLogger.async_build_chat_completion_agentic_loop_plan
+                )
+                if not build_plan_overridden:
+                    return await callback.async_run_chat_completion_agentic_loop(
+                        tools=tool_calls,
                         model=model,
                         messages=messages,
-                        tools=tools,
+                        response=response,
+                        optional_params=optional_params,
+                        logging_obj=logging_obj,
                         stream=stream,
-                        custom_llm_provider=custom_llm_provider,
-                        kwargs=kwargs,
+                        kwargs=kwargs_with_provider,
                     )
 
-                    if should_run:
-                        fingerprint = self._fingerprint_agentic_tools(tool_calls)
-                        if fingerprint in fingerprints:
-                            raise ValueError(
-                                "Agentic loop detected repeated tool-call fingerprint; aborting rerun"
-                            )
-                        if depth >= max_loops:
-                            raise ValueError(
-                                f"Exceeded max_agentic_loops={max_loops} for model={model}"
-                            )
+                plan = await callback.async_build_chat_completion_agentic_loop_plan(
+                    tools=tool_calls,
+                    model=model,
+                    messages=messages,
+                    response=response,
+                    optional_params=optional_params,
+                    logging_obj=logging_obj,
+                    stream=stream,
+                    kwargs=kwargs_with_provider,
+                )
 
-                        kwargs_with_provider = kwargs.copy() if kwargs else {}
-                        kwargs_with_provider["custom_llm_provider"] = (
-                            custom_llm_provider
-                        )
-                        build_plan_overridden = (
-                            callback.__class__.async_build_chat_completion_agentic_loop_plan
-                            is not CustomLogger.async_build_chat_completion_agentic_loop_plan
-                        )
-                        if not build_plan_overridden:
-                            return (
-                                await callback.async_run_chat_completion_agentic_loop(
-                                    tools=tool_calls,
-                                    model=model,
-                                    messages=messages,
-                                    response=response,
-                                    optional_params=optional_params,
-                                    logging_obj=logging_obj,
-                                    stream=stream,
-                                    kwargs=kwargs_with_provider,
-                                )
-                            )
+                if plan.response_override is not None:
+                    return plan.response_override
+                if plan.terminate:
+                    verbose_logger.debug(
+                        "Agentic chat loop terminated by callback=%s reason=%s",
+                        callback.__class__.__name__,
+                        plan.stop_reason,
+                    )
+                    return response
+                if not plan.run_agentic_loop:
+                    continue
 
-                        plan = await callback.async_build_chat_completion_agentic_loop_plan(
-                            tools=tool_calls,
-                            model=model,
-                            messages=messages,
-                            response=response,
-                            optional_params=optional_params,
-                            logging_obj=logging_obj,
-                            stream=stream,
-                            kwargs=kwargs_with_provider,
-                        )
-
-                        if plan.response_override is not None:
-                            return plan.response_override
-                        if plan.terminate:
-                            verbose_logger.debug(
-                                "Agentic chat loop terminated by callback=%s reason=%s",
-                                callback.__class__.__name__,
-                                plan.stop_reason,
-                            )
-                            return response
-                        if not plan.run_agentic_loop:
-                            continue
-
-                        return await self._execute_chat_completion_agentic_plan(
-                            plan=plan,
-                            model=model,
-                            messages=messages,
-                            optional_params=optional_params,
-                            kwargs=kwargs_with_provider,
-                            custom_llm_provider=custom_llm_provider,
-                            depth=depth,
-                            max_loops=max_loops,
-                            fingerprints=fingerprints,
-                            fingerprint=fingerprint,
-                        )
-
+                return await self._execute_chat_completion_agentic_plan(
+                    plan=plan,
+                    model=model,
+                    messages=messages,
+                    optional_params=optional_params,
+                    kwargs=kwargs_with_provider,
+                    custom_llm_provider=custom_llm_provider,
+                    depth=depth,
+                    max_loops=max_loops,
+                    fingerprints=fingerprints,
+                    fingerprint=fingerprint,
+                )
             except Exception as e:
                 verbose_logger.exception(
                     f"LiteLLM.AgenticHookError: Exception in chat completion agentic hooks: {str(e)}"
