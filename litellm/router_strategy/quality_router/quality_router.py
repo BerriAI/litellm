@@ -6,9 +6,17 @@ inferred by re-using the existing ComplexityRouter's classification, then
 mapped through an admin-configured `complexity_to_quality` table. Each
 candidate model declares its own `quality_tier` in
 `model_info.litellm_routing_preferences`.
+
+Optional keyword override: deployments may also declare `keywords` in
+`litellm_routing_preferences`. If any declared keyword appears in the user
+message (case-insensitive substring match), the router short-circuits the
+complexity-classification flow and routes to the matching deployment. When
+multiple deployments match, ties are broken by (highest quality_tier first,
+then cheapest `model_info.input_cost_per_token`).
 """
 
-from typing import TYPE_CHECKING, Any, Dict, FrozenSet, List, Optional, Set, Union
+import math
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
 from litellm._logging import verbose_router_logger
 from litellm.integrations.custom_logger import CustomLogger
@@ -28,15 +36,8 @@ else:
 
 class QualityRouter(CustomLogger):
     """
-    Routes requests to a model at a target quality tier.
-
-    Pipeline:
-        1. Classify the user message via ComplexityRouter to get a ComplexityTier.
-        2. Map that tier name to a target quality tier (int) via
-           `config.complexity_to_quality`.
-        3. Resolve the target quality tier to a concrete model using the
-           per-deployment `quality_tier` declared in
-           `model_info.litellm_routing_preferences`.
+    Routes requests to a model at a target quality tier, with an optional
+    keyword override.
     """
 
     def __init__(
@@ -64,10 +65,15 @@ class QualityRouter(CustomLogger):
             litellm_router_instance=litellm_router_instance,
         )
 
-        # Pre-built tier → models index for O(1) resolution. Capabilities are
-        # tracked separately so resolution can filter by required capabilities
-        # without complicating the tier-walk loop.
-        self._model_capabilities: Dict[str, FrozenSet[str]] = {}
+        # Per-model indices populated alongside the tier index. `_model_keywords`
+        # stores keywords lowercased so we can substring-match against the
+        # lowercased user message in O(total-keyword-count). `_model_quality`
+        # and `_model_cost` are needed for keyword-match tiebreaking.
+        self._model_keywords: Dict[str, List[str]] = {}
+        self._model_quality: Dict[str, int] = {}
+        self._model_cost: Dict[str, Optional[float]] = {}
+
+        # Pre-built tier → models index for O(1) tier resolution.
         self._tier_to_models: Dict[int, List[str]] = self._build_tier_index()
 
         verbose_router_logger.debug(
@@ -98,6 +104,31 @@ class QualityRouter(CustomLogger):
             return model_info.get("litellm_routing_preferences")
         return getattr(model_info, "litellm_routing_preferences", None)
 
+    def _get_deployment_input_cost(self, deployment: Any) -> Optional[float]:
+        """
+        Extract `input_cost_per_token` from a deployment's model_info.
+
+        Returns None when not declared — None is treated as "infinite cost"
+        for the cheapest-tiebreak ordering, so unpriced models lose ties to
+        priced ones. (Admins who want a model to win on price must declare it.)
+        """
+        if isinstance(deployment, dict):
+            model_info = deployment.get("model_info") or {}
+        else:
+            model_info = getattr(deployment, "model_info", None) or {}
+
+        if isinstance(model_info, dict):
+            cost = model_info.get("input_cost_per_token")
+        else:
+            cost = getattr(model_info, "input_cost_per_token", None)
+
+        if cost is None:
+            return None
+        try:
+            return float(cost)
+        except (TypeError, ValueError):
+            return None
+
     def _get_deployment_model_name(self, deployment: Any) -> Optional[str]:
         """Extract `model_name` from a dict- or object-shaped deployment."""
         if isinstance(deployment, dict):
@@ -107,8 +138,9 @@ class QualityRouter(CustomLogger):
     def _build_tier_index(self) -> Dict[int, List[str]]:
         """
         Build {quality_tier: [model_name, ...]} for every model in
-        `available_models`. Raises if any listed model is missing
-        `litellm_routing_preferences`.
+        `available_models`, plus side indices `_model_keywords`,
+        `_model_quality`, and `_model_cost`. Raises if any listed model is
+        missing `litellm_routing_preferences`.
         """
         model_list = getattr(self.litellm_router_instance, "model_list", None) or []
         available = set(self.config.available_models)
@@ -132,10 +164,10 @@ class QualityRouter(CustomLogger):
             # Accept dict or Pydantic-shaped prefs.
             if isinstance(prefs, dict):
                 tier = prefs.get("quality_tier")
-                capabilities = prefs.get("capabilities") or []
+                keywords = prefs.get("keywords") or []
             else:
                 tier = getattr(prefs, "quality_tier", None)
-                capabilities = getattr(prefs, "capabilities", None) or []
+                keywords = getattr(prefs, "keywords", None) or []
 
             if tier is None:
                 raise ValueError(
@@ -145,7 +177,9 @@ class QualityRouter(CustomLogger):
 
             tier_int = int(tier)
             tier_to_models.setdefault(tier_int, []).append(name)
-            self._model_capabilities[name] = frozenset(capabilities)
+            self._model_keywords[name] = [str(k).lower() for k in keywords if k]
+            self._model_quality[name] = tier_int
+            self._model_cost[name] = self._get_deployment_input_cost(deployment)
             seen[name] = True
 
         missing = [name for name, found in seen.items() if not found]
@@ -157,63 +191,54 @@ class QualityRouter(CustomLogger):
 
         return tier_to_models
 
-    def _model_supports_capabilities(
-        self, model_name: str, required: FrozenSet[str]
-    ) -> bool:
-        """True if the model's declared capabilities are a superset of required."""
-        if not required:
-            return True
-        return required.issubset(self._model_capabilities.get(model_name, frozenset()))
+    def _keyword_override(self, user_message: str) -> Optional[Tuple[str, str]]:
+        """
+        Find a deployment whose declared keywords appear in `user_message`.
 
-    def _first_capable_model_at_tier(
-        self, tier: int, required: FrozenSet[str]
-    ) -> Optional[str]:
-        """First model at `tier` that supports all `required` capabilities, or None."""
-        for name in self._tier_to_models.get(tier, []):
-            if self._model_supports_capabilities(name, required):
-                return name
-        return None
+        Returns (model_name, matched_keyword) or None when no keyword matches.
+        When multiple deployments match, sorts by (quality_tier DESC,
+        input_cost_per_token ASC, model_name ASC) and returns the winner.
+        Unpriced models are treated as `+inf` so priced models win on price.
+        """
+        text = user_message.lower()
 
-    def _resolve_model_for_quality_tier(
-        self,
-        tier: int,
-        required_capabilities: Optional[Set[str]] = None,
-    ) -> str:
+        matches: List[Tuple[str, str]] = []  # (model_name, matched_keyword)
+        for model_name, keywords in self._model_keywords.items():
+            for kw in keywords:
+                if kw and kw in text:
+                    matches.append((model_name, kw))
+                    break  # one match per model is enough
+
+        if not matches:
+            return None
+
+        def sort_key(match: Tuple[str, str]) -> Tuple[int, float, str]:
+            name = match[0]
+            quality = self._model_quality.get(name, 0)
+            cost = self._model_cost.get(name)
+            cost_val = cost if cost is not None else math.inf
+            # Negate quality so higher tier sorts first under ASC sort.
+            return (-quality, cost_val, name)
+
+        matches.sort(key=sort_key)
+        return matches[0]
+
+    def _resolve_model_for_quality_tier(self, tier: int) -> str:
         """
         Resolve a quality tier to a concrete model name.
 
         Strategy:
-            1. Exact tier match → first capability-matching model at that tier.
-            2. Otherwise round up to the next higher tier that has a
-               capability-matching model.
-            3. Otherwise fall back to `config.default_model` — but only if it
-               also satisfies required capabilities. Routing to a model that
-               lacks a required capability would silently produce wrong results.
+            1. Exact tier match → first model registered at that tier.
+            2. Otherwise round up to the next higher tier that has a model.
+            3. Otherwise fall back to `config.default_model`.
         """
-        required: FrozenSet[str] = (
-            frozenset(required_capabilities) if required_capabilities else frozenset()
-        )
-
-        match = self._first_capable_model_at_tier(tier, required)
-        if match is not None:
-            return match
+        if tier in self._tier_to_models and self._tier_to_models[tier]:
+            return self._tier_to_models[tier][0]
 
         higher_tiers = sorted(t for t in self._tier_to_models if t > tier)
         for t in higher_tiers:
-            match = self._first_capable_model_at_tier(t, required)
-            if match is not None:
-                return match
-
-        if self.config.default_model and self._model_supports_capabilities(
-            self.config.default_model, required
-        ):
-            return self.config.default_model
-
-        if required:
-            raise ValueError(
-                f"QualityRouter: no model satisfies quality tier {tier} with "
-                f"required capabilities {sorted(required)}"
-            )
+            if self._tier_to_models[t]:
+                return self._tier_to_models[t][0]
 
         if self.config.default_model:
             return self.config.default_model
@@ -223,6 +248,22 @@ class QualityRouter(CustomLogger):
             f"no default_model configured"
         )
 
+    def _stash_decision(
+        self,
+        request_kwargs: Optional[Dict[str, Any]],
+        decision: Dict[str, Any],
+    ) -> None:
+        """
+        Stash the routing decision in request_kwargs.metadata so the Router can
+        lift it into response headers (`x-litellm-quality-router-*`). The same
+        dict object flows from here through to `make_call.set_response_headers`.
+        """
+        if request_kwargs is None:
+            return
+        metadata = request_kwargs.setdefault("metadata", {})
+        if isinstance(metadata, dict):
+            metadata["quality_router_decision"] = decision
+
     async def async_pre_routing_hook(
         self,
         model: str,
@@ -231,7 +272,7 @@ class QualityRouter(CustomLogger):
         input: Optional[Union[str, List]] = None,
         specific_deployment: Optional[bool] = False,
     ) -> Optional["PreRoutingHookResponse"]:
-        """Classify the request, map to a quality tier, resolve the model."""
+        """Try keyword override first; fall back to complexity-tier routing."""
         from litellm.types.router import PreRoutingHookResponse
 
         if messages is None or len(messages) == 0:
@@ -261,16 +302,6 @@ class QualityRouter(CustomLogger):
                 elif role == "system" and system_prompt is None:
                     system_prompt = content
 
-        # Required capabilities are an optional client-side override.
-        # Accept either an iterable of strings or None. Anything else is ignored
-        # rather than raising — matches the lenient style of other router params.
-        raw_caps = (request_kwargs or {}).get("litellm_capabilities")
-        required_capabilities: Optional[Set[str]] = (
-            {str(c) for c in raw_caps}
-            if isinstance(raw_caps, (list, tuple, set, frozenset)) and raw_caps
-            else None
-        )
-
         if user_message is None:
             verbose_router_logger.debug(
                 "QualityRouter: No user message found, routing to default model"
@@ -279,19 +310,38 @@ class QualityRouter(CustomLogger):
                 raise ValueError(
                     "QualityRouter: no user message and no default_model configured"
                 )
-            if required_capabilities and not self._model_supports_capabilities(
-                self.config.default_model, frozenset(required_capabilities)
-            ):
-                raise ValueError(
-                    f"QualityRouter: no user message and default_model "
-                    f"'{self.config.default_model}' does not satisfy required "
-                    f"capabilities {sorted(required_capabilities)}"
-                )
             return PreRoutingHookResponse(
                 model=self.config.default_model,
                 messages=messages,
             )
 
+        # Try keyword override first — it short-circuits complexity classification.
+        keyword_match = self._keyword_override(user_message)
+        if keyword_match is not None:
+            routed_model, matched_keyword = keyword_match
+            verbose_router_logger.info(
+                f"QualityRouter: keyword override matched='{matched_keyword}' "
+                f"routed_model={routed_model} "
+                f"(quality_tier={self._model_quality.get(routed_model)}, "
+                f"input_cost_per_token={self._model_cost.get(routed_model)})"
+            )
+            self._stash_decision(
+                request_kwargs,
+                {
+                    "router_model_name": self.model_name,
+                    "routed_model": routed_model,
+                    "routed_via": "keyword",
+                    "matched_keyword": matched_keyword,
+                    "quality_tier": self._model_quality.get(routed_model),
+                    "complexity_tier": None,
+                },
+            )
+            return PreRoutingHookResponse(
+                model=routed_model,
+                messages=messages,
+            )
+
+        # No keyword match → complexity classification flow.
         complexity_tier, score, signals = self._scorer.classify(
             user_message, system_prompt
         )
@@ -308,33 +358,25 @@ class QualityRouter(CustomLogger):
                 f"in complexity_to_quality mapping {self.config.complexity_to_quality}"
             )
 
-        routed_model = self._resolve_model_for_quality_tier(
-            int(quality_tier), required_capabilities=required_capabilities
-        )
+        routed_model = self._resolve_model_for_quality_tier(int(quality_tier))
 
         verbose_router_logger.info(
             f"QualityRouter: complexity={complexity_name}, score={score:.3f}, "
             f"signals={signals}, quality_tier={quality_tier}, "
-            f"required_capabilities={sorted(required_capabilities) if required_capabilities else []}, "
             f"routed_model={routed_model}"
         )
 
-        # Stash the decision in request_kwargs.metadata so the Router can lift
-        # it into response headers (`x-litellm-quality-router-*`) for
-        # transparency. The same dict object flows from here through to
-        # `make_call.set_response_headers`.
-        if request_kwargs is not None:
-            metadata = request_kwargs.setdefault("metadata", {})
-            if isinstance(metadata, dict):
-                metadata["quality_router_decision"] = {
-                    "router_model_name": self.model_name,
-                    "routed_model": routed_model,
-                    "quality_tier": int(quality_tier),
-                    "complexity_tier": complexity_name,
-                    "required_capabilities": (
-                        sorted(required_capabilities) if required_capabilities else []
-                    ),
-                }
+        self._stash_decision(
+            request_kwargs,
+            {
+                "router_model_name": self.model_name,
+                "routed_model": routed_model,
+                "routed_via": "quality_tier",
+                "matched_keyword": None,
+                "quality_tier": int(quality_tier),
+                "complexity_tier": complexity_name,
+            },
+        )
 
         return PreRoutingHookResponse(
             model=routed_model,

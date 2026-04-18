@@ -8246,15 +8246,27 @@ class Router:
                 else None
             )
             if isinstance(decision, dict):
-                if "routed_model" in decision:
+                # Only emit headers for fields that have a meaningful value.
+                # `complexity_tier` and `matched_keyword` are mutually exclusive
+                # (the keyword path short-circuits classification), so each
+                # request emits one or the other but not both.
+                if decision.get("routed_model") is not None:
                     additional_headers["x-litellm-quality-router-model"] = str(
                         decision["routed_model"]
                     )
-                if "quality_tier" in decision:
+                if decision.get("quality_tier") is not None:
                     additional_headers["x-litellm-quality-router-tier"] = str(
                         decision["quality_tier"]
                     )
-                if "complexity_tier" in decision:
+                if decision.get("routed_via") is not None:
+                    additional_headers["x-litellm-quality-router-via"] = str(
+                        decision["routed_via"]
+                    )
+                if decision.get("matched_keyword") is not None:
+                    additional_headers["x-litellm-quality-router-keyword"] = str(
+                        decision["matched_keyword"]
+                    )
+                if decision.get("complexity_tier") is not None:
                     additional_headers["x-litellm-quality-router-complexity"] = str(
                         decision["complexity_tier"]
                     )

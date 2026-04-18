@@ -4,7 +4,9 @@ Tests for the QualityRouter.
 Covers:
 - Tier index construction from `model_info.litellm_routing_preferences`.
 - Quality-tier resolution (exact, round-up, default fallback).
-- Pre-routing hook end-to-end (classification → quality tier → model).
+- Keyword override (match, tiebreaking by quality + price).
+- Pre-routing hook end-to-end.
+- Decision metadata stash + Router.set_response_headers lift.
 """
 
 import os
@@ -29,7 +31,8 @@ def _make_model_list(spec: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     spec entry shape: {
         "model_name": str,
         "quality_tier": Optional[int],
-        "capabilities": Optional[List[str]],   # default: omitted
+        "keywords": Optional[List[str]],
+        "input_cost_per_token": Optional[float],
     }
     If quality_tier is None, the deployment is created without
     `litellm_routing_preferences`.
@@ -39,9 +42,11 @@ def _make_model_list(spec: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         model_info: Dict[str, Any] = {"id": f"id-{entry['model_name']}"}
         if entry.get("quality_tier") is not None:
             prefs: Dict[str, Any] = {"quality_tier": entry["quality_tier"]}
-            if "capabilities" in entry:
-                prefs["capabilities"] = entry["capabilities"]
+            if "keywords" in entry:
+                prefs["keywords"] = entry["keywords"]
             model_info["litellm_routing_preferences"] = prefs
+        if "input_cost_per_token" in entry:
+            model_info["input_cost_per_token"] = entry["input_cost_per_token"]
         out.append(
             {
                 "model_name": entry["model_name"],
@@ -237,30 +242,44 @@ class TestPreRoutingHook:
         assert resp.model == "haiku"  # the configured default_model
 
 
-# ─── Capabilities ───────────────────────────────────────────────────────────
+# ─── Keyword override ──────────────────────────────────────────────────────
 
 
 @pytest.fixture
-def capability_router():
+def keyword_router():
     """
-    Router with mixed capabilities at each tier:
-      tier 1: haiku-text (no caps), haiku-vision (vision)
-      tier 2: sonnet-text (no caps), sonnet-vision (vision, function_calling)
-      tier 3: opus-vision (vision, function_calling, json_mode)
+    Router where multiple deployments declare overlapping keywords so we can
+    exercise the (quality DESC, price ASC) tiebreak.
+
+      - cheap-coder       tier 2, keywords [code, python], cost 0.000001
+      - smart-coder       tier 3, keywords [code, python], cost 0.000010
+      - law-bot           tier 2, keywords [legal, contract], cost 0.000005
+      - default-haiku     tier 1, no keywords, cost 0.0000005
     """
     spec = [
-        {"model_name": "haiku-text", "quality_tier": 1, "capabilities": []},
-        {"model_name": "haiku-vision", "quality_tier": 1, "capabilities": ["vision"]},
-        {"model_name": "sonnet-text", "quality_tier": 2, "capabilities": []},
         {
-            "model_name": "sonnet-vision",
-            "quality_tier": 2,
-            "capabilities": ["vision", "function_calling"],
+            "model_name": "default-haiku",
+            "quality_tier": 1,
+            "keywords": [],
+            "input_cost_per_token": 0.0000005,
         },
         {
-            "model_name": "opus-vision",
+            "model_name": "cheap-coder",
+            "quality_tier": 2,
+            "keywords": ["code", "python"],
+            "input_cost_per_token": 0.000001,
+        },
+        {
+            "model_name": "smart-coder",
             "quality_tier": 3,
-            "capabilities": ["vision", "function_calling", "json_mode"],
+            "keywords": ["code", "python"],
+            "input_cost_per_token": 0.000010,
+        },
+        {
+            "model_name": "law-bot",
+            "quality_tier": 2,
+            "keywords": ["legal", "contract"],
+            "input_cost_per_token": 0.000005,
         },
     ]
     router = MagicMock()
@@ -268,103 +287,145 @@ def capability_router():
     return QualityRouter(
         model_name="qr",
         litellm_router_instance=router,
-        default_model="haiku-text",
+        default_model="default-haiku",
         quality_router_config={
             "available_models": [
-                "haiku-text",
-                "haiku-vision",
-                "sonnet-text",
-                "sonnet-vision",
-                "opus-vision",
+                "default-haiku",
+                "cheap-coder",
+                "smart-coder",
+                "law-bot",
             ],
         },
     )
 
 
-class TestCapabilities:
-    def test_index_records_capabilities(self, capability_router):
-        assert capability_router._model_capabilities["haiku-text"] == frozenset()
-        assert capability_router._model_capabilities["haiku-vision"] == frozenset(
-            {"vision"}
-        )
-        assert capability_router._model_capabilities["opus-vision"] == frozenset(
-            {"vision", "function_calling", "json_mode"}
-        )
+class TestKeywordOverride:
+    def test_no_keyword_in_message_returns_none(self, keyword_router):
+        assert keyword_router._keyword_override("hello there") is None
 
-    def test_no_required_capabilities_picks_first_in_tier(self, capability_router):
-        # tier 2, no required caps → first registered model at tier 2.
-        assert capability_router._resolve_model_for_quality_tier(2) == "sonnet-text"
-
-    def test_required_capabilities_filter_within_tier(self, capability_router):
-        # tier 2 with vision → must pick sonnet-vision over sonnet-text.
-        assert (
-            capability_router._resolve_model_for_quality_tier(
-                2, required_capabilities={"vision"}
-            )
-            == "sonnet-vision"
+    def test_single_match_returns_that_model(self, keyword_router):
+        # Only law-bot declares "legal".
+        assert keyword_router._keyword_override("review this legal doc") == (
+            "law-bot",
+            "legal",
         )
 
-    def test_round_up_when_no_capable_model_at_tier(self, capability_router):
-        # tier 1 with function_calling: nothing at tier 1 has it → round up to
-        # tier 2 (sonnet-vision).
-        assert (
-            capability_router._resolve_model_for_quality_tier(
-                1, required_capabilities={"function_calling"}
-            )
-            == "sonnet-vision"
+    def test_case_insensitive_match(self, keyword_router):
+        assert keyword_router._keyword_override("LEGAL question") == (
+            "law-bot",
+            "legal",
         )
 
-    def test_raises_when_no_model_satisfies_capabilities(self, capability_router):
-        # No model anywhere has "audio".
-        with pytest.raises(ValueError, match="audio"):
-            capability_router._resolve_model_for_quality_tier(
-                1, required_capabilities={"audio"}
-            )
+    def test_overlap_picks_highest_quality_tier(self, keyword_router):
+        # Both cheap-coder (tier 2) and smart-coder (tier 3) declare "code".
+        # Quality wins over price → smart-coder.
+        assert keyword_router._keyword_override("write some code for me") == (
+            "smart-coder",
+            "code",
+        )
 
-    def test_default_model_used_only_if_it_satisfies_caps(self):
-        # Build a router whose default model has NO capabilities, then ask for
-        # a capability that nothing satisfies. Must raise rather than silently
-        # routing to the default.
-        spec = [{"model_name": "only-tier-1", "quality_tier": 1, "capabilities": []}]
+    def test_same_tier_picks_cheapest(self):
+        # Two models at the same tier, both matching "data" — cheapest wins.
+        spec = [
+            {
+                "model_name": "expensive",
+                "quality_tier": 2,
+                "keywords": ["data"],
+                "input_cost_per_token": 0.000050,
+            },
+            {
+                "model_name": "cheap",
+                "quality_tier": 2,
+                "keywords": ["data"],
+                "input_cost_per_token": 0.000005,
+            },
+        ]
         router = MagicMock()
         router.model_list = _make_model_list(spec)
         qr = QualityRouter(
             model_name="qr",
             litellm_router_instance=router,
-            default_model="only-tier-1",
-            quality_router_config={"available_models": ["only-tier-1"]},
+            default_model="cheap",
+            quality_router_config={"available_models": ["expensive", "cheap"]},
         )
-        with pytest.raises(ValueError, match="vision"):
-            qr._resolve_model_for_quality_tier(1, required_capabilities={"vision"})
+        match = qr._keyword_override("show me the data")
+        assert match == ("cheap", "data")
+
+    def test_unpriced_loses_to_priced_at_same_tier(self):
+        # Same quality tier, one has cost, one doesn't → priced wins.
+        spec = [
+            {
+                "model_name": "no-price",
+                "quality_tier": 2,
+                "keywords": ["data"],
+                # input_cost_per_token deliberately omitted
+            },
+            {
+                "model_name": "with-price",
+                "quality_tier": 2,
+                "keywords": ["data"],
+                "input_cost_per_token": 0.000005,
+            },
+        ]
+        router = MagicMock()
+        router.model_list = _make_model_list(spec)
+        qr = QualityRouter(
+            model_name="qr",
+            litellm_router_instance=router,
+            default_model="no-price",
+            quality_router_config={"available_models": ["no-price", "with-price"]},
+        )
+        match = qr._keyword_override("show me the data")
+        assert match == ("with-price", "data")
 
     @pytest.mark.asyncio
-    async def test_hook_reads_litellm_capabilities_from_request_kwargs(
-        self, capability_router
+    async def test_hook_short_circuits_complexity_on_keyword_match(
+        self, keyword_router
     ):
-        # Simple "hi" → tier 1 by complexity; with vision required, must pick
-        # haiku-vision (the tier-1 model that has vision).
-        messages = [{"role": "user", "content": "hi"}]
-        resp = await capability_router.async_pre_routing_hook(
+        # A reasoning-style prompt would normally route to a high-quality model
+        # via the complexity flow — but the keyword "code" should short-circuit
+        # to smart-coder (highest tier among "code" models).
+        messages = [
+            {
+                "role": "user",
+                "content": (
+                    "Think step by step and reason through this code problem. "
+                    "Analyze this carefully and break down each component."
+                ),
+            }
+        ]
+        request_kwargs: Dict[str, Any] = {}
+        resp = await keyword_router.async_pre_routing_hook(
             model="qr",
-            request_kwargs={"litellm_capabilities": ["vision"]},
+            request_kwargs=request_kwargs,
             messages=messages,
         )
         assert resp is not None
-        assert resp.model == "haiku-vision"
+        assert resp.model == "smart-coder"
+
+        decision = request_kwargs["metadata"]["quality_router_decision"]
+        assert decision["routed_via"] == "keyword"
+        assert decision["matched_keyword"] == "code"
+        assert decision["complexity_tier"] is None  # short-circuited
 
     @pytest.mark.asyncio
-    async def test_hook_with_no_capabilities_kwarg_behaves_as_before(
-        self, capability_router
-    ):
+    async def test_hook_falls_back_to_complexity_when_no_keyword(self, keyword_router):
+        # No declared keyword in the message → complexity-based routing.
+        # "hi" is SIMPLE → quality 1 → default-haiku (the only tier-1 model).
         messages = [{"role": "user", "content": "hi"}]
-        resp = await capability_router.async_pre_routing_hook(
+        request_kwargs: Dict[str, Any] = {}
+        resp = await keyword_router.async_pre_routing_hook(
             model="qr",
-            request_kwargs={},
+            request_kwargs=request_kwargs,
             messages=messages,
         )
         assert resp is not None
-        # tier 1, no caps required → first registered model at tier 1.
-        assert resp.model == "haiku-text"
+        assert resp.model == "default-haiku"
+
+        decision = request_kwargs["metadata"]["quality_router_decision"]
+        assert decision["routed_via"] == "quality_tier"
+        assert decision["matched_keyword"] is None
+        assert decision["complexity_tier"] == "SIMPLE"
 
 
 # ─── Routing-decision metadata (powers x-litellm-quality-router-* headers) ──
@@ -399,7 +460,8 @@ class TestDecisionMetadata:
         assert decision["quality_tier"] == 4
         assert decision["complexity_tier"] == "REASONING"
         assert decision["router_model_name"] == "quality-router-test"
-        assert decision["required_capabilities"] == []
+        assert decision["routed_via"] == "quality_tier"
+        assert decision["matched_keyword"] is None
 
     @pytest.mark.asyncio
     async def test_decision_metadata_preserves_existing_metadata(self, quality_router):
@@ -417,24 +479,6 @@ class TestDecisionMetadata:
         assert request_kwargs["metadata"]["trace_id"] == "abc-123"
         assert request_kwargs["metadata"]["user_id"] == "u-1"
         assert "quality_router_decision" in request_kwargs["metadata"]
-
-    @pytest.mark.asyncio
-    async def test_decision_metadata_includes_required_capabilities(
-        self, capability_router
-    ):
-        request_kwargs: Dict[str, Any] = {
-            "litellm_capabilities": ["vision"],
-        }
-
-        await capability_router.async_pre_routing_hook(
-            model="qr",
-            request_kwargs=request_kwargs,
-            messages=[{"role": "user", "content": "hi"}],
-        )
-
-        decision = request_kwargs["metadata"]["quality_router_decision"]
-        assert decision["routed_model"] == "haiku-vision"
-        assert decision["required_capabilities"] == ["vision"]
 
 
 # ─── Router.set_response_headers lifts decision into x-litellm-quality-* ────
@@ -477,10 +521,11 @@ class TestSetResponseHeadersLiftsDecision:
             "metadata": {
                 "quality_router_decision": {
                     "router_model_name": "qr",
-                    "routed_model": "haiku-vision",
-                    "quality_tier": 1,
-                    "complexity_tier": "SIMPLE",
-                    "required_capabilities": ["vision"],
+                    "routed_model": "smart-coder",
+                    "routed_via": "keyword",
+                    "matched_keyword": "code",
+                    "quality_tier": 3,
+                    "complexity_tier": None,
                 }
             }
         }
@@ -492,11 +537,64 @@ class TestSetResponseHeadersLiftsDecision:
         )
 
         headers = response._hidden_params["additional_headers"]
-        assert headers["x-litellm-quality-router-model"] == "haiku-vision"
-        assert headers["x-litellm-quality-router-tier"] == "1"
-        assert headers["x-litellm-quality-router-complexity"] == "SIMPLE"
+        assert headers["x-litellm-quality-router-model"] == "smart-coder"
+        assert headers["x-litellm-quality-router-tier"] == "3"
+        assert headers["x-litellm-quality-router-via"] == "keyword"
+        assert headers["x-litellm-quality-router-keyword"] == "code"
+        # Keyword route short-circuits classification → no complexity header.
+        assert "x-litellm-quality-router-complexity" not in headers
         # Existing x-litellm-model-group behavior is unchanged.
         assert headers["x-litellm-model-group"] == "qr"
+
+    @pytest.mark.asyncio
+    async def test_quality_tier_route_emits_complexity_not_keyword(self):
+        from pydantic import BaseModel
+
+        from litellm.router import Router
+
+        class FakeResponse(BaseModel):
+            model_config = {"arbitrary_types_allowed": True}
+            _hidden_params: Dict[str, Any] = {}
+
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "haiku",
+                    "litellm_params": {
+                        "model": "openai/gpt-4o-mini",
+                        "api_key": "sk-test",
+                    },
+                }
+            ]
+        )
+
+        response = FakeResponse()
+        response._hidden_params = {}
+
+        request_kwargs = {
+            "metadata": {
+                "quality_router_decision": {
+                    "router_model_name": "qr",
+                    "routed_model": "haiku",
+                    "routed_via": "quality_tier",
+                    "matched_keyword": None,
+                    "quality_tier": 1,
+                    "complexity_tier": "SIMPLE",
+                }
+            }
+        }
+
+        await router.set_response_headers(
+            response=response,
+            model_group="qr",
+            request_kwargs=request_kwargs,
+        )
+
+        headers = response._hidden_params["additional_headers"]
+        assert headers["x-litellm-quality-router-via"] == "quality_tier"
+        assert headers["x-litellm-quality-router-complexity"] == "SIMPLE"
+        # Quality-tier route → no keyword header.
+        assert "x-litellm-quality-router-keyword" not in headers
 
     @pytest.mark.asyncio
     async def test_no_decision_leaves_quality_router_headers_unset(self):
@@ -532,4 +630,3 @@ class TestSetResponseHeadersLiftsDecision:
         headers = response._hidden_params["additional_headers"]
         assert "x-litellm-quality-router-model" not in headers
         assert "x-litellm-quality-router-tier" not in headers
-        assert "x-litellm-quality-router-complexity" not in headers
