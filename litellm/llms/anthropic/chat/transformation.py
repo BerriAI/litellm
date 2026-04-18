@@ -74,6 +74,7 @@ from litellm.utils import (
     has_tool_call_blocks,
     last_assistant_with_tool_calls_has_no_thinking_blocks,
     supports_reasoning,
+    supports_task_budget,
     token_counter,
 )
 
@@ -191,14 +192,6 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         )
 
     @staticmethod
-    def _is_opus_4_7_model(model: str) -> bool:
-        """Check if the model is specifically Claude Opus 4.7."""
-        model_lower = model.lower()
-        return any(
-            v in model_lower for v in ("opus-4-7", "opus_4_7", "opus-4.7", "opus_4.7")
-        )
-
-    @staticmethod
     def _supports_effort_level(model: str, level: str) -> bool:
         """Check ``supports_{level}_reasoning_effort`` in the model map.
 
@@ -234,7 +227,10 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             "cache_control",
         ]
 
-        if AnthropicConfig._is_claude_4_7_model(model):
+        if supports_task_budget(
+            model=model,
+            custom_llm_provider=self.custom_llm_provider,
+        ):
             params.append("output_config")
 
         if (
@@ -1381,6 +1377,14 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             self._ensure_beta_header(
                 headers, ANTHROPIC_BETA_HEADER_VALUES.FAST_MODE_2026_02_01.value
             )
+        output_config = optional_params.get("output_config")
+        if (
+            isinstance(output_config, dict)
+            and output_config.get("task_budget") is not None
+        ):
+            self._ensure_beta_header(
+                headers, ANTHROPIC_BETA_HEADER_VALUES.TASK_BUDGETS_2026_03_13.value
+            )
         for tool in _tools:
             if tool.get("type") == ANTHROPIC_ADVISOR_TOOL_TYPE:
                 self._ensure_beta_header(
@@ -1563,9 +1567,12 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 f"effort='xhigh' is not supported by this model. Got model: {model}"
             )
         if task_budget is not None:
-            if not self._is_opus_4_7_model(model):
+            if not supports_task_budget(
+                model=model,
+                custom_llm_provider=self.custom_llm_provider,
+            ):
                 raise ValueError(
-                    f"output_config.task_budget is only supported by Claude Opus 4.7. "
+                    f"output_config.task_budget is not supported by this model. "
                     f"Got model: {model}"
                 )
             if not isinstance(task_budget, dict):

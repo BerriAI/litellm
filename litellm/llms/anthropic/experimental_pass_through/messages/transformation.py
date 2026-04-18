@@ -372,6 +372,14 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         if optional_params.get("speed") == "fast":
             beta_values.add(ANTHROPIC_BETA_HEADER_VALUES.FAST_MODE_2026_02_01.value)
 
+        # Check for task budgets (Claude Opus 4.7+)
+        output_config = optional_params.get("output_config")
+        if (
+            isinstance(output_config, dict)
+            and output_config.get("task_budget") is not None
+        ):
+            beta_values.add(ANTHROPIC_BETA_HEADER_VALUES.TASK_BUDGETS_2026_03_13.value)
+
         # Check for advisor tool
         tools = optional_params.get("tools")
         if tools:

@@ -8,12 +8,25 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 from unittest.mock import MagicMock, patch
 
+import litellm
+from litellm import utils as litellm_utils
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
     AnthropicMessagesConfig,
 )
 from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES
 from litellm.types.utils import ServerToolUse
+
+
+def _enable_task_budget_for_opus_47(monkeypatch):
+    model_info = dict(litellm.model_cost.get("claude-opus-4-7-20260416", {}))
+    model_info["supports_task_budget"] = True
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "claude-opus-4-7-20260416",
+        model_info,
+    )
+    litellm_utils._invalidate_model_cost_lowercase_map()
 
 
 def test_response_format_transformation_unit_test():
@@ -1559,8 +1572,9 @@ def test_effort_output_config_preservation():
     assert result["output_config"]["effort"] == "medium"
 
 
-def test_task_budget_output_config_preservation():
+def test_task_budget_output_config_preservation(monkeypatch):
     """Test that output_config with task_budget is preserved for Claude Opus 4.7."""
+    _enable_task_budget_for_opus_47(monkeypatch)
     config = AnthropicConfig()
 
     messages = [{"role": "user", "content": "Run this agentic task"}]
@@ -1607,8 +1621,9 @@ def test_task_budget_beta_header_injection():
     assert ANTHROPIC_TASK_BUDGETS_BETA_HEADER in headers["anthropic-beta"]
 
 
-def test_output_config_supported_for_claude_opus_47():
+def test_output_config_supported_for_claude_opus_47(monkeypatch):
     """Test that output_config is accepted as a direct param for Claude Opus 4.7."""
+    _enable_task_budget_for_opus_47(monkeypatch)
     config = AnthropicConfig()
 
     supported_params = config.get_supported_openai_params(
@@ -1665,7 +1680,7 @@ def test_task_budget_rejected_for_non_opus_47():
 
     with pytest.raises(
         ValueError,
-        match="output_config.task_budget is only supported by Claude Opus 4.7",
+        match="output_config.task_budget is not supported by this model",
     ):
         config.transform_request(
             model="claude-opus-4-6-20260205",
@@ -3668,6 +3683,17 @@ def test_messages_path_advisor_beta_header_preserved_when_user_sends_it():
     optional_params: dict = {"tools": []}
     result = config._update_headers_with_anthropic_beta(headers, optional_params)
     assert "advisor-tool-2026-03-01" in result.get("anthropic-beta", "")
+
+
+def test_messages_path_task_budget_beta_header_injected():
+    """task-budgets beta header is auto-injected in /messages path."""
+    config = AnthropicMessagesConfig()
+    headers: dict = {}
+    optional_params = {
+        "output_config": {"task_budget": {"type": "tokens", "total": 64000}}
+    }
+    result = config._update_headers_with_anthropic_beta(headers, optional_params)
+    assert "task-budgets-2026-03-13" in result.get("anthropic-beta", "")
 
 
 def test_strip_advisor_blocks_when_no_advisor_tool():
