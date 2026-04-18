@@ -842,19 +842,30 @@ def get_end_user_id_from_request_body(
         user_from_body_user_field = request_body["user"]
         return str(user_from_body_user_field)
 
+    def _as_dict(value: Any) -> dict:
+        # metadata / litellm_metadata can arrive as JSON strings from
+        # multipart/form-data or extra_body; coerce so string-encoded
+        # payloads can't evade end-user attribution.
+        if isinstance(value, dict):
+            return value
+        if isinstance(value, str):
+            from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
+
+            parsed = safe_json_loads(value)
+            return parsed if isinstance(parsed, dict) else {}
+        return {}
+
     # Check 4: 'litellm_metadata.user' in request_body (commonly Anthropic)
-    litellm_metadata = request_body.get("litellm_metadata")
-    if isinstance(litellm_metadata, dict):
-        user_from_litellm_metadata = litellm_metadata.get("user")
-        if user_from_litellm_metadata is not None:
-            return str(user_from_litellm_metadata)
+    litellm_metadata = _as_dict(request_body.get("litellm_metadata"))
+    user_from_litellm_metadata = litellm_metadata.get("user")
+    if user_from_litellm_metadata is not None:
+        return str(user_from_litellm_metadata)
 
     # Check 5: 'metadata.user_id' in request_body (another common pattern)
-    metadata_dict = request_body.get("metadata")
-    if isinstance(metadata_dict, dict):
-        user_id_from_metadata_field = metadata_dict.get("user_id")
-        if user_id_from_metadata_field is not None:
-            return str(user_id_from_metadata_field)
+    metadata_dict = _as_dict(request_body.get("metadata"))
+    user_id_from_metadata_field = metadata_dict.get("user_id")
+    if user_id_from_metadata_field is not None:
+        return str(user_id_from_metadata_field)
 
     # Check 6: 'safety_identifier' in request body (OpenAI Responses API parameter)
     # SECURITY NOTE: safety_identifier can be set by any caller in the request body.

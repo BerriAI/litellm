@@ -392,6 +392,24 @@ async def get_agent_by_id(
     """
     await check_feature_access_for_user(user_api_key_dict, "agents")
 
+    is_admin = (
+        user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
+        or user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
+    )
+    if not is_admin:
+        from litellm.proxy.agent_endpoints.auth.agent_permission_handler import (
+            AgentRequestHandler,
+        )
+
+        is_allowed = await AgentRequestHandler.is_agent_allowed(
+            agent_id=agent_id, user_api_key_auth=user_api_key_dict
+        )
+        if not is_allowed:
+            raise HTTPException(
+                status_code=403,
+                detail=f"Agent '{agent_id}' is not allowed for your key/team. Contact proxy admin for access.",
+            )
+
     from litellm.proxy.proxy_server import prisma_client
 
     if prisma_client is None:

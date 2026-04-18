@@ -1065,6 +1065,33 @@ async def organization_member_update(
                 },
             )
 
+        # Reject attempts to change the role of a global PROXY_ADMIN via
+        # org-scoped operations. An org-admin of any org could otherwise
+        # alter a PROXY_ADMIN user's per-org role, which has downstream
+        # effects on admin UI filtering and scope derivation.
+        target_user_row = await prisma_client.db.litellm_usertable.find_unique(
+            where={"user_id": data.user_id}
+        )
+        if target_user_row is not None and getattr(
+            target_user_row, "user_role", None
+        ) in (
+            LitellmUserRoles.PROXY_ADMIN.value,
+            LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
+        ):
+            if (
+                user_api_key_dict.user_role
+                != LitellmUserRoles.PROXY_ADMIN.value
+            ):
+                raise HTTPException(
+                    status_code=403,
+                    detail={
+                        "error": (
+                            "Only PROXY_ADMIN may modify the organization "
+                            "role of a user who is a global PROXY_ADMIN."
+                        )
+                    },
+                )
+
         # Update member role
         if data.role is not None:
             await prisma_client.db.litellm_organizationmembership.update(

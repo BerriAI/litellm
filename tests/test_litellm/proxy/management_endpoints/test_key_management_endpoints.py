@@ -8076,6 +8076,277 @@ async def test_update_key_non_budget_fields_allowed_for_internal_user(monkeypatc
     assert result is not None
 
 
+@pytest.mark.asyncio
+async def test_update_key_non_budget_rejects_cross_user_modification(monkeypatch):
+    """Regression: previously _check_key_admin_access was gated on
+    max_budget/spend changes only, so an internal user could rewrite any
+    OTHER field (alias, models, tpm_limit, blocked, metadata, …) on any
+    key they weren't admin of as long as they avoided budget/spend. This
+    confirms that a non-admin user updating a key that belongs to another
+    user fails with 403 even for non-budget fields."""
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        update_key_fn,
+    )
+
+    mock_prisma_client = AsyncMock()
+    test_hashed_token = (
+        "cafebabe" * 8
+    )
+
+    mock_existing_key = MagicMock()
+    mock_existing_key.token = test_hashed_token
+    mock_existing_key.user_id = "victim_user"  # owned by someone else
+    mock_existing_key.team_id = None
+    mock_existing_key.project_id = None
+    mock_existing_key.max_budget = 10.0
+    mock_existing_key.key_alias = "original"
+    mock_existing_key.models = []
+    mock_existing_key.model_dump.return_value = {
+        "token": test_hashed_token,
+        "user_id": "victim_user",
+        "team_id": None,
+        "max_budget": 10.0,
+    }
+
+    mock_prisma_client.get_data = AsyncMock(return_value=mock_existing_key)
+    mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(
+        return_value=mock_existing_key
+    )
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", AsyncMock())
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock())
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.hash_token", lambda t: test_hashed_token
+    )
+
+    mock_request = MagicMock()
+    mock_request.query_params = {}
+    attacker = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        api_key="sk-attacker",
+        user_id="attacker_user",  # NOT the owner
+    )
+
+    # Trying to blanket-rewrite a non-budget field on someone else's key
+    # must now fail.
+    with pytest.raises(ProxyException) as exc:
+        await update_key_fn(
+            request=mock_request,
+            data=UpdateKeyRequest(
+                key=test_hashed_token, key_alias="pwned", blocked=True
+            ),
+            user_api_key_dict=attacker,
+            litellm_changed_by=None,
+        )
+    assert str(exc.value.code) == "403"
+
+
+@pytest.mark.asyncio
+async def test_update_key_team_member_with_permission_can_update_non_budget(
+    monkeypatch,
+):
+    """A team member whose team grants /key/update in member_permissions can
+    update non-budget fields on a team key even though they are not a team
+    admin. Regression: the cross-key admin check was over-broad and rejected
+    this documented path."""
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        update_key_fn,
+    )
+
+    test_hashed_token = "deadbeef" * 8
+    team_id = "team-with-update-grant"
+    member_user_id = "team-member-user"
+
+    mock_existing_key = MagicMock()
+    mock_existing_key.token = test_hashed_token
+    mock_existing_key.user_id = None  # team-scoped key (no owning user)
+    mock_existing_key.team_id = team_id
+    mock_existing_key.project_id = None
+    mock_existing_key.max_budget = 10.0
+    mock_existing_key.key_alias = "original"
+    mock_existing_key.models = []
+    mock_existing_key.model_dump.return_value = {
+        "token": test_hashed_token,
+        "user_id": None,
+        "team_id": team_id,
+        "max_budget": 10.0,
+    }
+
+    team_table = LiteLLM_TeamTableCachedObj(
+        team_id=team_id,
+        team_alias="test-team",
+        tpm_limit=None,
+        rpm_limit=None,
+        max_budget=None,
+        spend=0.0,
+        models=[],
+        blocked=False,
+        members_with_roles=[
+            Member(user_id="some-team-admin", role="admin"),
+            Member(user_id=member_user_id, role="user"),
+        ],
+        team_member_permissions=["/key/update", "/key/info"],
+    )
+
+    mock_updated_key = MagicMock()
+    mock_updated_key.token = test_hashed_token
+    mock_updated_key.key_alias = "renamed-by-member"
+
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.get_data = AsyncMock(return_value=mock_existing_key)
+    mock_prisma_client.update_data = AsyncMock(return_value=mock_updated_key)
+    mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(
+        return_value=mock_existing_key
+    )
+
+    async def mock_get_team_object(*args, **kwargs):
+        return team_table
+
+    async def mock_enforce_unique_key_alias(**kwargs):
+        pass
+
+    async def mock_delete_cache_key_object(**kwargs):
+        pass
+
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints.get_team_object",
+        mock_get_team_object,
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.management_helpers.team_member_permission_checks.get_team_object",
+        mock_get_team_object,
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints._enforce_unique_key_alias",
+        mock_enforce_unique_key_alias,
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints._delete_cache_key_object",
+        mock_delete_cache_key_object,
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", AsyncMock())
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock())
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
+    monkeypatch.setattr("litellm.store_audit_logs", False)
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.hash_token", lambda t: test_hashed_token
+    )
+
+    mock_request = MagicMock()
+    mock_request.query_params = {}
+    team_member = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        api_key="sk-team-member",
+        user_id=member_user_id,
+        team_id=team_id,
+    )
+
+    # Non-budget update on a team key by a team member with /key/update
+    # permission should succeed.
+    result = await update_key_fn(
+        request=mock_request,
+        data=UpdateKeyRequest(key=test_hashed_token, key_alias="renamed-by-member"),
+        user_api_key_dict=team_member,
+        litellm_changed_by=None,
+    )
+
+    assert result is not None
+
+
+@pytest.mark.asyncio
+async def test_update_key_team_member_cannot_change_budget(monkeypatch):
+    """A team member with /key/update in member_permissions still cannot
+    change max_budget — budget/spend changes require team/org admin. The
+    member_permissions bypass only applies to non-budget fields."""
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        update_key_fn,
+    )
+
+    test_hashed_token = "feedface" * 8
+    team_id = "team-with-update-grant"
+    member_user_id = "team-member-user"
+
+    mock_existing_key = MagicMock()
+    mock_existing_key.token = test_hashed_token
+    mock_existing_key.user_id = None  # team-scoped key (no owning user)
+    mock_existing_key.team_id = team_id
+    mock_existing_key.project_id = None
+    mock_existing_key.max_budget = 10.0
+    mock_existing_key.key_alias = "original"
+    mock_existing_key.models = []
+    mock_existing_key.model_dump.return_value = {
+        "token": test_hashed_token,
+        "user_id": None,
+        "team_id": team_id,
+        "max_budget": 10.0,
+    }
+
+    team_table = LiteLLM_TeamTableCachedObj(
+        team_id=team_id,
+        team_alias="test-team",
+        tpm_limit=None,
+        rpm_limit=None,
+        max_budget=None,
+        spend=0.0,
+        models=[],
+        blocked=False,
+        members_with_roles=[
+            Member(user_id="some-team-admin", role="admin"),
+            Member(user_id=member_user_id, role="user"),
+        ],
+        team_member_permissions=["/key/update", "/key/info"],
+    )
+
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.get_data = AsyncMock(return_value=mock_existing_key)
+    mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(
+        return_value=mock_existing_key
+    )
+
+    async def mock_get_team_object(*args, **kwargs):
+        return team_table
+
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints.get_team_object",
+        mock_get_team_object,
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.management_helpers.team_member_permission_checks.get_team_object",
+        mock_get_team_object,
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", AsyncMock())
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock())
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.hash_token", lambda t: test_hashed_token
+    )
+
+    mock_request = MagicMock()
+    mock_request.query_params = {}
+    team_member = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        api_key="sk-team-member",
+        user_id=member_user_id,
+        team_id=team_id,
+    )
+
+    with pytest.raises(ProxyException) as exc:
+        await update_key_fn(
+            request=mock_request,
+            data=UpdateKeyRequest(key=test_hashed_token, max_budget=500.0),
+            user_api_key_dict=team_member,
+            litellm_changed_by=None,
+        )
+    assert str(exc.value.code) == "403"
+
+
 # ============================================================================
 # LIT-1884: Internal users cannot create invalid keys
 # ============================================================================

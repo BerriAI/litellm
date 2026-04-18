@@ -1391,6 +1391,38 @@ def test_non_org_admin_with_organizations_list():
     assert _user_is_org_admin({"organizations": ["org-1"]}, user_obj) is False
 
 
+def test_org_admin_cannot_escalate_to_other_org():
+    """Regression: admin of org-A requesting [org-A, org-B] must be rejected."""
+    user_obj = _make_org_admin_user("org-A")
+    assert _user_is_org_admin({"organizations": ["org-A", "org-B"]}, user_obj) is False
+
+
+def test_org_admin_of_multiple_orgs_can_operate_on_both():
+    """Admin of both org-A and org-B can operate on both."""
+    memberships = [
+        LiteLLM_OrganizationMembershipTable(
+            user_id="multi-admin",
+            organization_id="org-A",
+            user_role=LitellmUserRoles.ORG_ADMIN.value,
+            created_at=datetime(2024, 1, 1),
+            updated_at=datetime(2024, 1, 1),
+        ),
+        LiteLLM_OrganizationMembershipTable(
+            user_id="multi-admin",
+            organization_id="org-B",
+            user_role=LitellmUserRoles.ORG_ADMIN.value,
+            created_at=datetime(2024, 1, 1),
+            updated_at=datetime(2024, 1, 1),
+        ),
+    ]
+    user_obj = LiteLLM_UserTable(
+        user_id="multi-admin",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+        organization_memberships=memberships,
+    )
+    assert _user_is_org_admin({"organizations": ["org-A", "org-B"]}, user_obj) is True
+
+
 @pytest.mark.asyncio
 async def test_initialize_pass_through_registers_wildcard_for_auth_subpath():
     """

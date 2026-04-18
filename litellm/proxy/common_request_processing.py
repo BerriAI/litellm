@@ -1056,6 +1056,7 @@ class ProxyBaseLLMRequestProcessing:
             route_type=route_type,
             llm_router=llm_router,
             user_model=user_model,
+            user_api_key_dict=user_api_key_dict,
         )
         tasks.append(llm_call)
 

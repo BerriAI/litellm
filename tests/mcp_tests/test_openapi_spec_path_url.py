@@ -55,6 +55,11 @@ def test_load_openapi_spec_supports_http_url(monkeypatch: pytest.MonkeyPatch) ->
     # Ensure shared/custom client path is used
     monkeypatch.setattr(gen, "get_async_httpx_client", fake_get_async_httpx_client)
 
+    # Bypass SSRF validation in test (example.local doesn't resolve)
+    monkeypatch.setattr(
+        gen, "async_safe_get", lambda client, url, **kw: client.get(url)
+    )
+
     # Fail loudly if someone reintroduces direct httpx.get()
     def boom(*args, **kwargs):
         raise AssertionError("Direct httpx.get() must not be used for URL spec loading")
