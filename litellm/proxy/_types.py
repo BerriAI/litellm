@@ -2429,6 +2429,7 @@ class LiteLLM_VerificationTokenView(LiteLLM_VerificationToken):
     team_rpm_limit: Optional[int] = None
     team_max_budget: Optional[float] = None
     team_soft_budget: Optional[float] = None
+    team_budget_reset_at: Optional[datetime] = None
     team_models: List = []
     team_blocked: bool = False
     soft_budget: Optional[float] = None
@@ -2508,6 +2509,7 @@ class UserAPIKeyAuth(
     user_email: Optional[str] = None
     user_spend: Optional[float] = None
     user_max_budget: Optional[float] = None
+    user_budget_reset_at: Optional[datetime] = None
     request_route: Optional[str] = None
     user: Optional[Any] = None  # Expanded user object when expand=user is used
     created_by_user: Optional[Any] = (
