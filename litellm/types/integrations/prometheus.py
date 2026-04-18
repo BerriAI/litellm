@@ -853,7 +853,7 @@ class PrometheusSettings(BaseModel):
     prometheus_metrics_config: Optional[List[PrometheusMetricsConfig]] = Field(
         None,
         description="Configuration for filtering Prometheus metrics by groups and labels",
-    ) 6a34147f38 (feat(prometheus): add exclude_labels support to PrometheusMetricsConfig)
+    )
 
 
 class NoOpMetric:
