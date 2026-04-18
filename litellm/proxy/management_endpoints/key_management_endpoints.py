@@ -4981,9 +4981,9 @@ async def _list_key_helper(
                 }
 
         if return_full_object is True or (expand and "user" in expand):
-            key_dict["metadata"] = redact_sensitive_logging_metadata(
-                key_dict.get("metadata")
-            ) or {}
+            key_dict["metadata"] = (
+                redact_sensitive_logging_metadata(key_dict.get("metadata")) or {}
+            )
             if use_deleted_table:
                 # Use deleted key type to preserve deleted_at, deleted_by, etc.
                 key_list.append(LiteLLM_DeletedVerificationToken(**key_dict))
