@@ -9,7 +9,9 @@ import pytest
 from litellm import acompletion, completion
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 
-FAKE_API_BASE = "https://fake-cloudflare.example.com/client/v4/accounts/fake-acct/ai/run/"
+FAKE_API_BASE = (
+    "https://fake-cloudflare.example.com/client/v4/accounts/fake-acct/ai/run/"
+)
 FAKE_API_KEY = "fake-cf-api-key"
 
 
@@ -26,6 +28,29 @@ def _chat_response() -> Dict[str, Any]:
     return {
         "result": {
             "response": "I am a large language model created to assist you.",
+        },
+        "success": True,
+        "errors": [],
+        "messages": [],
+    }
+
+
+def _chat_response_openai_compatible() -> Dict[str, Any]:
+    # Newer Cloudflare Workers AI models (e.g. @cf/moonshotai/kimi-k2.5,
+    # OpenAI-compatible endpoints) return choices[*].message.content instead
+    # of the legacy top-level "response" field. Regression coverage for #25999.
+    return {
+        "result": {
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": "I am a large language model created to assist you.",
+                    },
+                    "finish_reason": "stop",
+                }
+            ],
         },
         "success": True,
         "errors": [],
@@ -74,6 +99,45 @@ def test_completion_cloudflare(sync_mode):
     assert response is not None
     assert response.choices[0].message.content is not None
     assert "language model" in response.choices[0].message.content.lower()
+
+
+def test_completion_cloudflare_openai_compatible_response():
+    """Regression test for issue #25999: newer Cloudflare Workers AI models
+    return an OpenAI-compatible `result.choices[*].message.content` payload
+    rather than the legacy `result.response` string."""
+    messages = [{"role": "user", "content": "what llm are you"}]
+    mock_resp = _make_mock_response(_chat_response_openai_compatible())
+
+    with patch.object(HTTPHandler, "post", return_value=mock_resp) as mock_post:
+        response = completion(
+            model="cloudflare/@cf/moonshotai/kimi-k2.5",
+            messages=messages,
+            max_tokens=15,
+            api_base=FAKE_API_BASE,
+            api_key=FAKE_API_KEY,
+        )
+        mock_post.assert_called_once()
+
+    assert response is not None
+    assert response.choices[0].message.content is not None
+    assert "language model" in response.choices[0].message.content.lower()
+
+
+def test_completion_cloudflare_unknown_response_shape_raises():
+    messages = [{"role": "user", "content": "hello"}]
+    # Neither legacy `result.response` nor OpenAI-compatible `result.choices`.
+    mock_resp = _make_mock_response({"result": {"unexpected": "shape"}})
+
+    with patch.object(HTTPHandler, "post", return_value=mock_resp):
+        with pytest.raises(Exception) as exc_info:
+            completion(
+                model="cloudflare/@cf/meta/llama-2-7b-chat-int8",
+                messages=messages,
+                max_tokens=15,
+                api_base=FAKE_API_BASE,
+                api_key=FAKE_API_KEY,
+            )
+        assert "recognized content field" in str(exc_info.value)
 
 
 @pytest.mark.parametrize("sync_mode", [True, False])
