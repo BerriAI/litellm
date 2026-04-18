@@ -2946,6 +2946,15 @@ async def _virtual_key_soft_budget_check(
         )
 
 
+def _parse_email_list(raw: Any) -> List[str]:
+    """Parse emails from a list or comma-separated string."""
+    if isinstance(raw, list):
+        return [e.strip() for e in raw if isinstance(e, str) and e.strip()]
+    elif isinstance(raw, str):
+        return [e.strip() for e in raw.split(",") if e.strip()]
+    return []
+
+
 def _normalize_alert_emails(
     cfg: Optional[Dict[str, Any]],
 ) -> Dict[str, List[str]]:
@@ -2956,10 +2965,6 @@ def _normalize_alert_emails(
     """
     if not cfg:
         return {}
-    from litellm_enterprise.enterprise_callbacks.send_emails.base_email import (
-        _parse_email_list,
-    )
-
     return {k: _parse_email_list(v) for k, v in cfg.items()}
 
 
