@@ -162,7 +162,8 @@ async def test_resolve_all_proxy_models_from_resolved_after_team_not_in_key_mode
 
 
 def test_concrete_models_allowed_skips_duplicate_router_names():
-    assert _concrete_models_allowed_by_resolved(["a"], ["a", "a", "b"]) == ["a", "b"]
+    """Router may list the same deployment twice; output is deduped. Only resolved names count."""
+    assert _concrete_models_allowed_by_resolved(["a", "b"], ["a", "a", "b"]) == ["a", "b"]
 
 
 def test_concrete_models_wildcard_in_resolved_list():
