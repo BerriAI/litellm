@@ -3145,6 +3145,8 @@ class ProxyConfig:
                             "Fix your cache configuration and restart the proxy to enable caching."
                         )
                         litellm.cache = None
+                        litellm.default_in_memory_ttl = None
+                        litellm.default_redis_ttl = None
                 elif key == "cache" and value is False:
                     pass
                 elif key == "guardrails":
