@@ -796,10 +796,7 @@ class VertexBase:
                 # Double-check after acquiring lock
                 if _credentials.expired:
                     try:
-                        verbose_logger.debug(
-                            "Credentials expired, refreshing for project_id: %s",
-                            project_id,
-                        )
+                        verbose_logger.debug("Credentials expired, refreshing")
                         self.refresh_auth(_credentials)
                         self._credentials_project_mapping[credential_cache_key] = (
                             _credentials,
