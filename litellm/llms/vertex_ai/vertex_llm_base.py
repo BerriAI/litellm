@@ -772,7 +772,7 @@ class VertexBase:
             )
 
         ## VALIDATE CREDENTIALS
-        verbose_logger.debug(f"Validating credentials for project_id: {project_id}")
+        verbose_logger.debug("Validating credentials")
         if (
             project_id is None
             and credential_project_id is not None
