@@ -843,6 +843,7 @@ class PrometheusMetricsConfig:
     group: str
     metrics: List[str]
     include_labels: Optional[List[str]] = None
+    exclude_labels: Optional[List[str]] = None
 
 
 @dataclass
