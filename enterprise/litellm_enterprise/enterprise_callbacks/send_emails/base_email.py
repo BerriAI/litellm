@@ -615,7 +615,14 @@ class BaseEmailLogger(CustomLogger):
             emails = _parse_email_list(raw_emails)
             if user_info.user_email:
                 emails.append(user_info.user_email)
-            recipient_emails = list(set(emails)) if emails else None
+            if not emails:
+                verbose_proxy_logger.warning(
+                    "No recipients for %d%% threshold on key %s, skipping alert",
+                    threshold_pct,
+                    _id,
+                )
+                continue
+            recipient_emails = list(set(emails))
 
             event_message = f"Max Budget Alert - {threshold_pct}% of Maximum Budget Reached"
             webhook_event = WebhookEvent(

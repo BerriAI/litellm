@@ -1562,7 +1562,7 @@ async def test_virtual_key_max_budget_alert_check_with_multi_threshold_map():
     }
     valid_token = UserAPIKeyAuth(
         token="test-token",
-        spend=30.0,
+        spend=60.0,
         max_budget=100.0,
         user_id="test-user",
         key_alias="test-key",
@@ -1670,7 +1670,7 @@ async def test_virtual_key_max_budget_alert_check_global_fallback():
     }
     valid_token = UserAPIKeyAuth(
         token="test-token",
-        spend=30.0,
+        spend=60.0,
         max_budget=100.0,
         user_id="test-user",
         key_alias="test-key",
@@ -1709,7 +1709,7 @@ async def test_virtual_key_max_budget_alert_check_per_key_overrides_global():
 
     valid_token = UserAPIKeyAuth(
         token="test-token",
-        spend=30.0,
+        spend=60.0,
         max_budget=100.0,
         user_id="test-user",
         key_alias="test-key",
