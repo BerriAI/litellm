@@ -3236,13 +3236,6 @@ async def test_eager_fetch_stream_raises_to_enable_fallback():
         model="vertex_ai/gemini-2.0-flash",
         llm_provider="vertex_ai",
     )
-    fetch_error.headers = {
-        "Content-Length": "123",
-        "Transfer-Encoding": "chunked",
-        "Content-Encoding": "gzip",
-        "Content-Type": "application/json",
-        "X-Custom-Header": "keep-me",
-    }
     mock_stream_wrapper.make_call = AsyncMock()
     mock_stream_wrapper.fetch_stream = AsyncMock(side_effect=fetch_error)
 
@@ -3250,7 +3243,7 @@ async def test_eager_fetch_stream_raises_to_enable_fallback():
     with patch("litellm.acompletion", new_callable=AsyncMock) as mock_acompletion:
         mock_acompletion.return_value = mock_stream_wrapper
 
-        with pytest.raises(litellm.RateLimitError) as exc_info:
+        with pytest.raises(litellm.RateLimitError):
             await router._acompletion(
                 model="vertex-model",
                 messages=[{"role": "user", "content": "Hello"}],
@@ -3259,14 +3252,6 @@ async def test_eager_fetch_stream_raises_to_enable_fallback():
 
         # fetch_stream should have been called
         mock_stream_wrapper.fetch_stream.assert_called_once()
-
-        # Verify problematic headers were stripped
-        raised = exc_info.value
-        assert "Content-Length" not in raised.headers
-        assert "Transfer-Encoding" not in raised.headers
-        assert "Content-Encoding" not in raised.headers
-        assert "Content-Type" not in raised.headers
-        assert raised.headers["X-Custom-Header"] == "keep-me"
 
 
 @pytest.mark.asyncio

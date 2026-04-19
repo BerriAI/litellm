@@ -2219,29 +2219,7 @@ class Router:
                     response.completion_stream is None
                     and response.make_call is not None
                 ):
-                    try:
-                        await response.fetch_stream()
-                    except Exception as fetch_err:
-                        # Strip Content-Length from upstream headers to prevent mismatch
-                        # when LiteLLM creates its own error response body
-                        _headers = getattr(fetch_err, "headers", None)
-                        if _headers:
-                            setattr(
-                                fetch_err,
-                                "headers",
-                                {
-                                    k: v
-                                    for k, v in _headers.items()
-                                    if k.lower()
-                                    not in (
-                                        "content-length",
-                                        "transfer-encoding",
-                                        "content-encoding",
-                                        "content-type",
-                                    )
-                                },
-                            )
-                        raise fetch_err
+                    await response.fetch_stream()
 
                 return await self._acompletion_streaming_iterator(
                     model_response=response,
@@ -5499,8 +5477,8 @@ class Router:
                     return response
 
                 else:
-                    error_message = "model={}. context_window_fallbacks={}.\n\nSet 'context_window_fallback' - https://docs.litellm.ai/docs/routing#fallbacks".format(
-                        model_group, context_window_fallbacks
+                    error_message = "model={}. context_window_fallbacks={}. fallbacks={}.\n\nSet 'context_window_fallback' - https://docs.litellm.ai/docs/routing#fallbacks".format(
+                        model_group, context_window_fallbacks, fallbacks
                     )
                     verbose_router_logger.info(
                         msg="Got 'ContextWindowExceededError'. No context_window_fallback set. Defaulting \
@@ -5534,8 +5512,8 @@ class Router:
                     )
                     return response
                 else:
-                    error_message = "model={}. content_policy_fallbacks={}.\n\nSet 'content_policy_fallback' - https://docs.litellm.ai/docs/routing#fallbacks".format(
-                        model_group, content_policy_fallbacks
+                    error_message = "model={}. content_policy_fallback={}. fallbacks={}.\n\nSet 'content_policy_fallback' - https://docs.litellm.ai/docs/routing#fallbacks".format(
+                        model_group, content_policy_fallbacks, fallbacks
                     )
                     verbose_router_logger.info(
                         msg="Got 'ContentPolicyViolationError'. No content_policy_fallback set. Defaulting \
@@ -5563,7 +5541,7 @@ class Router:
                         f"No fallback model group found for original model_group={model_group}. Fallbacks={fallbacks}"
                     )
                     if hasattr(original_exception, "message"):
-                        original_exception.message += f" No fallback model group found for original model_group={model_group}."  # type: ignore
+                        original_exception.message += f"No fallback model group found for original model_group={model_group}. Fallbacks={fallbacks}"  # type: ignore
                     raise original_exception
 
                 input_kwargs.update(
