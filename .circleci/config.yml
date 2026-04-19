@@ -1707,7 +1707,7 @@ jobs:
             export PATH="$HOME/miniconda/bin:$PATH"
             conda init bash
             source ~/.bashrc
-            conda create -n myenv python=3.9 -y
+            conda create -n myenv python=3.10 -y
             conda activate myenv
             python --version
       - run:
@@ -1822,7 +1822,7 @@ jobs:
             export PATH="$HOME/miniconda/bin:$PATH"
             conda init bash
             source ~/.bashrc
-            conda create -n myenv python=3.9 -y
+            conda create -n myenv python=3.10 -y
             conda activate myenv
             python --version
       - run:
@@ -2057,7 +2057,7 @@ jobs:
             export PATH="$HOME/miniconda/bin:$PATH"
             conda init bash
             source ~/.bashrc
-            conda create -n myenv python=3.9 -y
+            conda create -n myenv python=3.10 -y
             conda activate myenv
             python --version
       - run:
@@ -2208,7 +2208,7 @@ jobs:
             export PATH="$HOME/miniconda/bin:$PATH"
             conda init bash
             source ~/.bashrc
-            conda create -n myenv python=3.9 -y
+            conda create -n myenv python=3.10 -y
             conda activate myenv
             python --version
       - run:
@@ -2319,7 +2319,7 @@ jobs:
             export PATH="$HOME/miniconda/bin:$PATH"
             conda init bash
             source ~/.bashrc
-            conda create -n myenv python=3.9 -y
+            conda create -n myenv python=3.10 -y
             conda activate myenv
             python --version
       - run:
@@ -2444,7 +2444,7 @@ jobs:
             export PATH="$HOME/miniconda/bin:$PATH"
             conda init bash
             source ~/.bashrc
-            conda create -n myenv python=3.9 -y
+            conda create -n myenv python=3.10 -y
             conda activate myenv
             python --version
       - run:

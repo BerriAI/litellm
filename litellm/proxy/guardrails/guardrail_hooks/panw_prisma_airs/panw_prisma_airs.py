@@ -295,10 +295,10 @@ class PanwPrismaAirsHandler(CustomGuardrail):
 
         panw_metadata = {
             "app_user": (
-                metadata.get("app_user") or metadata.get("user") or "litellm_user"
-            )
-            if metadata
-            else "litellm_user",
+                (metadata.get("app_user") or metadata.get("user") or "litellm_user")
+                if metadata
+                else "litellm_user"
+            ),
             "ai_model": metadata.get("model", "unknown") if metadata else "unknown",
             "app_name": app_name_value,
             "source": "litellm_builtin_guardrail",
@@ -1088,9 +1088,11 @@ class PanwPrismaAirsHandler(CustomGuardrail):
                 guardrail_provider=self._PROVIDER_NAME,
                 guardrail_json_response=scan_result,
                 request_data=data,
-                guardrail_status="success"
-                if scan_result.get("action") == "allow"
-                else "guardrail_intervened",
+                guardrail_status=(
+                    "success"
+                    if scan_result.get("action") == "allow"
+                    else "guardrail_intervened"
+                ),
                 start_time=start_time.timestamp(),
                 end_time=end_time.timestamp(),
                 duration=(end_time - start_time).total_seconds(),
@@ -1226,9 +1228,11 @@ class PanwPrismaAirsHandler(CustomGuardrail):
                 guardrail_provider=self._PROVIDER_NAME,
                 guardrail_json_response=scan_result,
                 request_data=data,
-                guardrail_status="success"
-                if scan_result.get("action") == "allow"
-                else "guardrail_intervened",
+                guardrail_status=(
+                    "success"
+                    if scan_result.get("action") == "allow"
+                    else "guardrail_intervened"
+                ),
                 start_time=start_time.timestamp(),
                 end_time=end_time.timestamp(),
                 duration=(end_time - start_time).total_seconds(),
@@ -1449,9 +1453,11 @@ class PanwPrismaAirsHandler(CustomGuardrail):
                     guardrail_provider=self._PROVIDER_NAME,
                     guardrail_json_response=scan_result,
                     request_data=request_data,
-                    guardrail_status="success"
-                    if scan_result.get("action") == "allow"
-                    else "guardrail_intervened",
+                    guardrail_status=(
+                        "success"
+                        if scan_result.get("action") == "allow"
+                        else "guardrail_intervened"
+                    ),
                     start_time=start_time.timestamp(),
                     end_time=end_time.timestamp(),
                     duration=(end_time - start_time).total_seconds(),
