@@ -161,6 +161,7 @@ class MavvrikScheduler:
                     date_str,
                     exc,
                 )
+                await client.report_error(f"Config error for date {date_str}: {exc}")
                 return
             except Exception as exc:
                 # Transient error (network, upload failure) — log and skip
@@ -171,6 +172,7 @@ class MavvrikScheduler:
                     date_str,
                     exc,
                 )
+                await client.report_error(f"Export failed for date {date_str}: {exc}")
                 export_date += timedelta(days=1)
                 continue
 

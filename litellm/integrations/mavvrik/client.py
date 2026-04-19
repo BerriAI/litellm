@@ -204,6 +204,43 @@ class MavvrikClient:
             "Mavvrik uploader: marker advanced to epoch %d", epoch
         )
 
+    async def report_error(self, error_message: str) -> None:
+        """PATCH the Mavvrik agent endpoint to report an export error.
+
+        Uses the same endpoint as advance_marker but sends errorMessage
+        instead of metricsMarker so Mavvrik can track failures on their side.
+
+          PATCH {api_endpoint}/metrics/agent/ai/{connection_id}
+          Body: { "errorMessage": <str> }
+          Response: 204 No Content
+
+        This is best-effort — failures are logged but not raised.
+        """
+        headers = self._auth_headers
+        body = {
+            "errorMessage": error_message[:500]
+        }  # truncate to avoid oversized payloads
+
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                resp = await client.patch(self.agent_url, headers=headers, json=body)
+
+            if resp.status_code not in (200, 204):
+                verbose_proxy_logger.warning(
+                    "Mavvrik report_error PATCH returned %d: %s",
+                    resp.status_code,
+                    resp.text[:200],
+                )
+            else:
+                verbose_proxy_logger.debug(
+                    "Mavvrik report_error: error reported for connection %s",
+                    self.connection_id,
+                )
+        except Exception as exc:
+            verbose_proxy_logger.warning(
+                "Mavvrik report_error failed (non-fatal): %s", exc
+            )
+
     # ------------------------------------------------------------------
     # Step 1: Get signed URL from Mavvrik API
     # ------------------------------------------------------------------
