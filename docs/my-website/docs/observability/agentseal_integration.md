@@ -31,7 +31,7 @@ from agentseal.integrations.litellm import AgentSealGuardrail
 os.environ["OPENAI_API_KEY"] = "your-openai-key"
 
 # Initialize AgentSeal
-seal = Seal(api_key="as_sk_...")
+seal = Seal(api_key="your-agentseal-api-key")
 agentseal_handler = AgentSealGuardrail(seal=seal, agent="my-app")
 
 # Add AgentSeal as a callback
@@ -78,6 +78,7 @@ environment_variables:
 Create a `custom_callback.py` alongside your config:
 
 ```python
+import os
 from agentseal import Seal
 from agentseal.integrations.litellm import AgentSealGuardrail
 
