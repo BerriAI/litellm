@@ -175,7 +175,7 @@ def test_transform_mcp_tools_to_openai_uses_chat_format(monkeypatch):
     chat_tools = LiteLLM_Proxy_MCP_Handler._transform_mcp_tools_to_openai(
         ["tool"], target_format="chat"
     )
-    resp_tools = LiteLLM_Proxy_MCP_Handler._transform_mcp_tools_to_openai(["tool"])
+    resp_tools = LiteLLM_Proxy_MCP_Handler._transform_mcp_tools_to_openai(["tool"], target_format="responses")
 
     assert chat_tools == [{"chat": True}]
     assert resp_tools == [{"responses": True}]
