@@ -3292,6 +3292,7 @@ workflows:
       - build_and_test:
           requires:
             - build_docker_database_image
+            - e2e_ui_testing
           filters:
             branches:
               only:
@@ -3509,6 +3510,7 @@ workflows:
       - db_migration_disable_update_check:
           requires:
             - build_docker_database_image
+            - e2e_ui_testing
           filters:
             branches:
               only:
