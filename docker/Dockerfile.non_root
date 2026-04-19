@@ -15,29 +15,21 @@ COPY --from=uvbin /uv /usr/local/bin/uv
 COPY --from=uvbin /uvx /usr/local/bin/uvx
 
 RUN for i in 1 2 3; do \
-    apk add --no-cache \
-      python3 \
-      python3-dev \
-      clang \
-      llvm \
-      lld \
-      gcc \
-      linux-headers \
-      build-base \
-      bash \
-      coreutils \
-      curl \
-      openssl \
-      openssl-dev \
-      nodejs \
-      npm \
-      libsndfile && break || sleep 5; \
+      apk add --no-cache \
+        python3 \
+        python3-dev \
+        gcc \
+        bash \
+        coreutils \
+        curl \
+        openssl \
+        libsndfile \
+        nodejs && break || sleep 5; \
     done
 
 ENV UV_PROJECT_ENVIRONMENT=/app/.venv \
     UV_LINK_MODE=copy \
-    NVM_DIR=/root/.nvm \
-    PATH="/root/.nvm/versions/node/v20.20.2/bin:/app/.venv/bin:${PATH}" \
+    PATH="/app/.venv/bin:${PATH}" \
     LITELLM_NON_ROOT=true \
     PRISMA_BINARY_CACHE_DIR=/app/.cache/prisma-python/binaries \
     PRISMA_CLI_BINARY_TARGETS="debian-openssl-3.0.x" \
