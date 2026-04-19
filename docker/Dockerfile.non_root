@@ -77,9 +77,13 @@ RUN rm -rf dist/* && python -m build && \
   rm -f /wheels/litellm-*.whl && \
   cp dist/*.whl /wheels/
 
-# Optionally build local litellm-proxy-extras wheel
+# Optionally build local litellm-proxy-extras wheel. The PyPI version was
+# fetched earlier by `pip wheel -r requirements.txt`; drop it so only the
+# locally-built wheel is installable (mirrors the main litellm-*.whl path
+# above, and avoids an ambiguous install when versions differ).
 RUN if [ "$PROXY_EXTRAS_SOURCE" = "local" ]; then \
       cd /app/litellm-proxy-extras && rm -rf dist && python -m build && \
+      rm -f /wheels/litellm_proxy_extras-*.whl && \
       cp dist/*.whl /wheels/; \
     fi
 
