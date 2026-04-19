@@ -1570,8 +1570,7 @@ async def update_team(  # noqa: PLR0915
             current_org_id = getattr(existing_team_row, "organization_id", None)
             if (
                 data.organization_id != current_org_id
-                and user_api_key_dict.user_role
-                != LitellmUserRoles.PROXY_ADMIN.value
+                and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value
             ):
                 # Is the caller org_admin of the destination org?
                 caller_memberships = (
@@ -4052,9 +4051,7 @@ async def list_team(
         except Exception as e:
             team_exception = """Invalid team object for team_id: {}. team_object={}.
             Error: {}
-            """.format(
-                team.team_id, team.model_dump(), str(e)
-            )
+            """.format(team.team_id, team.model_dump(), str(e))
             verbose_proxy_logger.exception(team_exception)
             continue
     # Sort the responses by team_alias
