@@ -88,6 +88,8 @@ Callers may pass header `x-litellm-min-quality-tier: 3` (or metadata key
   on the same `litellm.Router` raise at init.
 - **Bandit-delta mapping is unvalidated.** `_compute_bandit_delta` is a v0
   guess; expect to retune after the first ~1000 sessions of real traffic.
-- **`request_type` is classified per turn from the latest user message only.**
-  The first turn's classification doesn't carry forward; a multi-turn session
-  may shift bucket between turns.
+- **`request_type` is classified per turn from the latest user message.** For
+  non-GENERAL turns, the current-turn type is used for bandit attribution (so
+  genuine mid-session topic shifts update the correct cell). For GENERAL turns
+  ("thanks!", "ok", "sounds good"), attribution falls back to the session's
+  original type to avoid misattributing closing pleasantries.

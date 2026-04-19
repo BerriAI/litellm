@@ -1052,6 +1052,7 @@ const sidebars = {
       },
       items: [
         "routing",
+        "adaptive_router",
         "scheduler",
         "proxy/auto_routing",
         "proxy/load_balancing",
