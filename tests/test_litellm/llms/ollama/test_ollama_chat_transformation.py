@@ -694,6 +694,30 @@ class TestOllamaReasoningContentStreaming:
         # reasoning_content is not set when there's no thinking in the chunk
         assert getattr(result2.choices[0].delta, "reasoning_content", None) is None
 
+    def test_thinking_and_content_in_same_chunk(self):
+        """
+        Test that a chunk containing both thinking and content preserves both fields.
+        """
+        iterator = OllamaChatCompletionResponseIterator(
+            streaming_response=iter([]),
+            sync_stream=True,
+        )
+
+        chunk = {
+            "model": "deepseek-r1",
+            "message": {
+                "role": "assistant",
+                "thinking": "Let me reason first.",
+                "content": "Final answer.",
+            },
+            "done": False,
+        }
+
+        result = iterator.chunk_parser(chunk)
+
+        assert result.choices[0].delta.reasoning_content == "Let me reason first."
+        assert result.choices[0].delta.content == "Final answer."
+
     def test_think_tags_in_content(self):
         """
         Test that <think> tags embedded in content are properly parsed.

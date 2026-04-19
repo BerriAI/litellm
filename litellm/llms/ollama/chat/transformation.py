@@ -505,7 +505,7 @@ class OllamaChatCompletionResponseIterator(BaseModelResponseIterator):
             if chunk["message"].get("thinking") is not None:
                 reasoning_content = chunk["message"].get("thinking")
                 self.started_reasoning_content = True
-            elif chunk["message"].get("content") is not None:
+            if chunk["message"].get("content") is not None:
                 if (
                     self.started_reasoning_content
                     and not self.finished_reasoning_content
