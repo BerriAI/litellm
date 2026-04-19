@@ -4,6 +4,7 @@ Evaluation suite for the ComplexityRouter.
 Tests the router's ability to correctly classify prompts into complexity tiers.
 Run with: python -m litellm.router_strategy.complexity_router.evals.eval_complexity_router
 """
+
 import os
 
 # Add parent to path for imports
@@ -273,16 +274,20 @@ def run_eval() -> Tuple[int, int, List[dict]]:
                 {
                     "case": i,
                     "description": case.description,
-                    "prompt": case.prompt[:80] + "..."
-                    if len(case.prompt) > 80
-                    else case.prompt,
+                    "prompt": (
+                        case.prompt[:80] + "..."
+                        if len(case.prompt) > 80
+                        else case.prompt
+                    ),
                     "expected": case.expected_tier.value,
                     "actual": tier.value,
                     "score": round(score, 3),
                     "signals": signals,
-                    "acceptable": [t.value for t in case.acceptable_tiers]
-                    if case.acceptable_tiers
-                    else None,
+                    "acceptable": (
+                        [t.value for t in case.acceptable_tiers]
+                        if case.acceptable_tiers
+                        else None
+                    ),
                 }
             )
 

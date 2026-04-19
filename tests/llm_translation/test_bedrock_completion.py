@@ -2969,9 +2969,10 @@ def test_bedrock_application_inference_profile():
         }
     ]
 
-    with patch.object(client, "post") as mock_post, patch.object(
-        client2, "post"
-    ) as mock_post2:
+    with (
+        patch.object(client, "post") as mock_post,
+        patch.object(client2, "post") as mock_post2,
+    ):
         try:
             resp = completion(
                 model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",

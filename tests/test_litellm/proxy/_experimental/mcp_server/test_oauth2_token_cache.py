@@ -75,12 +75,15 @@ async def test_token_cached_across_calls():
     mock_client = AsyncMock()
     mock_client.post.return_value = _token_response("cached-tok")
 
-    with patch(
-        "litellm.proxy._experimental.mcp_server.oauth2_token_cache.get_async_httpx_client",
-        return_value=mock_client,
-    ), patch(
-        "litellm.proxy._experimental.mcp_server.oauth2_token_cache.mcp_oauth2_token_cache",
-        cache,
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.oauth2_token_cache.get_async_httpx_client",
+            return_value=mock_client,
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.oauth2_token_cache.mcp_oauth2_token_cache",
+            cache,
+        ),
     ):
         t1 = await resolve_mcp_auth(server)
         t2 = await resolve_mcp_auth(server)
@@ -117,7 +120,12 @@ def test_needs_user_oauth_token_property():
     assert _server().needs_user_oauth_token is False
 
     # OAuth2 without credentials → needs per-user token
-    assert _server(client_id=None, client_secret=None, token_url=None, oauth2_flow=None).needs_user_oauth_token is True
+    assert (
+        _server(
+            client_id=None, client_secret=None, token_url=None, oauth2_flow=None
+        ).needs_user_oauth_token
+        is True
+    )
 
     # Non-OAuth2 → never needs user OAuth token
     assert _server(auth_type=MCPAuth.bearer_token).needs_user_oauth_token is False
@@ -130,15 +138,20 @@ async def test_http_error_raises_value_error():
     mock_response = MagicMock()
     mock_response.status_code = 401
     mock_response.raise_for_status.side_effect = httpx.HTTPStatusError(
-        "Unauthorized", request=MagicMock(), response=mock_response,
+        "Unauthorized",
+        request=MagicMock(),
+        response=mock_response,
     )
     mock_client = AsyncMock()
     mock_client.post.return_value = mock_response
 
-    with patch(
-        "litellm.proxy._experimental.mcp_server.oauth2_token_cache.get_async_httpx_client",
-        return_value=mock_client,
-    ), pytest.raises(ValueError, match="failed with status 401"):
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.oauth2_token_cache.get_async_httpx_client",
+            return_value=mock_client,
+        ),
+        pytest.raises(ValueError, match="failed with status 401"),
+    ):
         await resolve_mcp_auth(server)
 
 
@@ -152,8 +165,11 @@ async def test_non_dict_response_raises_value_error():
     mock_client = AsyncMock()
     mock_client.post.return_value = resp
 
-    with patch(
-        "litellm.proxy._experimental.mcp_server.oauth2_token_cache.get_async_httpx_client",
-        return_value=mock_client,
-    ), pytest.raises(ValueError, match="non-object JSON"):
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.oauth2_token_cache.get_async_httpx_client",
+            return_value=mock_client,
+        ),
+        pytest.raises(ValueError, match="non-object JSON"),
+    ):
         await resolve_mcp_auth(server)

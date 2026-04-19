@@ -247,9 +247,11 @@ def compress(
         messages=compressed_messages,
         original_tokens=original_tokens,
         compressed_tokens=compressed_tokens,
-        compression_ratio=round(1 - (compressed_tokens / original_tokens), 4)
-        if original_tokens > 0
-        else 0.0,
+        compression_ratio=(
+            round(1 - (compressed_tokens / original_tokens), 4)
+            if original_tokens > 0
+            else 0.0
+        ),
         cache=cache,
         tools=tools,
     )
