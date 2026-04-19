@@ -12,6 +12,7 @@ from typing import Union
 
 from litellm import _custom_logger_compatible_callbacks_literal
 from litellm.integrations.agentops import AgentOps
+from litellm.integrations.akto.akto_logger import AktoLogger
 from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheControlHook
 from litellm.integrations.argilla import ArgillaLogger
 from litellm.integrations.azure_storage.azure_storage import AzureBlobStorageLogger
@@ -102,6 +103,7 @@ class CustomLoggerRegistry:
         "focus": FocusLogger,
         "vantage": VantageLogger,
         "posthog": PostHogLogger,
+        "akto": AktoLogger,
     }
 
     try:

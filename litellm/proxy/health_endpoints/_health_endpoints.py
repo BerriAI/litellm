@@ -125,6 +125,7 @@ services = Union[
         "generic_api",
         "arize",
         "sqs",
+        "akto",
     ],
     str,
 ]
@@ -199,6 +200,7 @@ async def health_services_endpoint(  # noqa: PLR0915
             "generic_api",
             "arize",
             "sqs",
+            "akto",
         ]:
             raise HTTPException(
                 status_code=400,
@@ -301,6 +303,31 @@ async def health_services_endpoint(  # noqa: PLR0915
             return {
                 "status": "success",
                 "message": "Mock LLM request made - check langfuse.",
+            }
+        elif service == "akto":
+            from litellm.integrations.akto.akto_logger import AktoLogger
+            from litellm.litellm_core_utils.litellm_logging import (
+                get_custom_logger_compatible_class,
+            )
+
+            try:
+                akto_logger = get_custom_logger_compatible_class("akto")
+                if akto_logger is None:
+                    akto_logger = AktoLogger()
+                response = await akto_logger.async_health_check()
+            except Exception as e:
+                verbose_proxy_logger.warning("Akto health check error: %s", e)
+                return {
+                    "status": "unhealthy",
+                    "message": "Akto health check failed",
+                }
+            return {
+                "status": response["status"],
+                "message": (
+                    response["error_message"]
+                    if response["status"] == "unhealthy"
+                    else "Akto is healthy"
+                ),
             }
 
         if service == "webhook":

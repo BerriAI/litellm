@@ -3708,6 +3708,16 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
             _openmeter_logger = OpenMeterLogger()
             _in_memory_loggers.append(_openmeter_logger)
             return _openmeter_logger  # type: ignore
+        elif logging_integration == "akto":
+            from litellm.integrations.akto.akto_logger import AktoLogger
+
+            for callback in _in_memory_loggers:
+                if isinstance(callback, AktoLogger):
+                    return callback  # type: ignore
+
+            _akto_logger = AktoLogger()
+            _in_memory_loggers.append(_akto_logger)
+            return _akto_logger  # type: ignore
         elif logging_integration == "posthog":
             for callback in _in_memory_loggers:
                 if isinstance(callback, PostHogLogger):
@@ -4349,6 +4359,12 @@ def get_custom_logger_compatible_class(  # noqa: PLR0915
         elif logging_integration == "openmeter":
             for callback in _in_memory_loggers:
                 if isinstance(callback, OpenMeterLogger):
+                    return callback
+        elif logging_integration == "akto":
+            from litellm.integrations.akto.akto_logger import AktoLogger
+
+            for callback in _in_memory_loggers:
+                if isinstance(callback, AktoLogger):
                     return callback
         elif logging_integration == "braintrust":
             from litellm.integrations.braintrust_logging import BraintrustLogger

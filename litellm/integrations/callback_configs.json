@@ -454,5 +454,26 @@
       }
     },
     "description": "SQS Queue (AWS) Logging Integration"
+  },
+  {
+    "id": "akto",
+    "displayName": "Akto",
+    "logo": "akto.svg",
+    "supports_key_team_logging": false,
+    "dynamic_params": {
+      "AKTO_DATA_INGESTION_API_BASE": {
+        "type": "text",
+        "ui_name": "API Base URL",
+        "description": "Akto Data Ingestion API Base URL",
+        "required": true
+      },
+      "AKTO_API_KEY": {
+        "type": "password",
+        "ui_name": "API Key",
+        "description": "Akto API key for authentication",
+        "required": true
+      }
+    },
+    "description": "Akto Logging Integration"
   }
 ]
