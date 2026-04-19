@@ -23,9 +23,7 @@ class TestParseGcsUri:
     """Tests for the _parse_gcs_uri helper used by retrieve / content / delete."""
 
     def test_should_parse_standard_gs_uri(self, config):
-        bucket, encoded = config._parse_gcs_uri(
-            "gs://my-bucket/path/to/object.jsonl"
-        )
+        bucket, encoded = config._parse_gcs_uri("gs://my-bucket/path/to/object.jsonl")
         assert bucket == "my-bucket"
         assert encoded == urllib.parse.quote("path/to/object.jsonl", safe="")
 
@@ -33,7 +31,9 @@ class TestParseGcsUri:
         uri = "gs://litellm-local/litellm-vertex-files/publishers/google/models/gemini-2.0-flash-001/abc-123"
         bucket, encoded = config._parse_gcs_uri(uri)
         assert bucket == "litellm-local"
-        expected_path = "litellm-vertex-files/publishers/google/models/gemini-2.0-flash-001/abc-123"
+        expected_path = (
+            "litellm-vertex-files/publishers/google/models/gemini-2.0-flash-001/abc-123"
+        )
         assert encoded == urllib.parse.quote(expected_path, safe="")
 
     def test_should_handle_url_encoded_input(self, config):
@@ -52,6 +52,7 @@ class TestParseGcsUri:
         assert bucket == "my-bucket"
         assert encoded == "object.txt"
 
+
 class TestTransformRetrieveFile:
 
     def test_should_build_correct_gcs_metadata_url(self, config):
@@ -60,7 +61,10 @@ class TestTransformRetrieveFile:
             file_id=file_id, optional_params={}, litellm_params={}
         )
         expected_encoded = urllib.parse.quote("path/to/file.jsonl", safe="")
-        assert url == f"https://storage.googleapis.com/storage/v1/b/my-bucket/o/{expected_encoded}"
+        assert (
+            url
+            == f"https://storage.googleapis.com/storage/v1/b/my-bucket/o/{expected_encoded}"
+        )
         assert params == {}
 
     def test_should_return_openai_file_object_from_gcs_response(self, config):
@@ -116,7 +120,10 @@ class TestTransformFileContent:
             litellm_params={},
         )
         encoded = urllib.parse.quote("path/to/file.jsonl", safe="")
-        assert url == f"https://storage.googleapis.com/storage/v1/b/my-bucket/o/{encoded}?alt=media"
+        assert (
+            url
+            == f"https://storage.googleapis.com/storage/v1/b/my-bucket/o/{encoded}?alt=media"
+        )
         assert params == {}
 
     def test_should_return_binary_response_content(self, config):
@@ -144,14 +151,17 @@ class TestTransformDeleteFile:
             file_id=file_id, optional_params={}, litellm_params={}
         )
         encoded = urllib.parse.quote("path/to/file.jsonl", safe="")
-        assert url == f"https://storage.googleapis.com/storage/v1/b/my-bucket/o/{encoded}"
+        assert (
+            url == f"https://storage.googleapis.com/storage/v1/b/my-bucket/o/{encoded}"
+        )
         assert params == {}
 
     def test_should_return_file_deleted_with_reconstructed_id(self, config):
         raw_response = MagicMock(spec=httpx.Response)
         mock_request = MagicMock()
         encoded_name = urllib.parse.quote(
-            "litellm-vertex-files/publishers/google/models/gemini-2.0-flash-001/abc", safe=""
+            "litellm-vertex-files/publishers/google/models/gemini-2.0-flash-001/abc",
+            safe="",
         )
         mock_request.url = (
             f"https://storage.googleapis.com/storage/v1/b/my-bucket/o/{encoded_name}"
@@ -167,7 +177,10 @@ class TestTransformDeleteFile:
         assert isinstance(result, FileDeleted)
         assert result.deleted is True
         assert result.object == "file"
-        assert result.id == "gs://my-bucket/litellm-vertex-files/publishers/google/models/gemini-2.0-flash-001/abc"
+        assert (
+            result.id
+            == "gs://my-bucket/litellm-vertex-files/publishers/google/models/gemini-2.0-flash-001/abc"
+        )
 
     def test_should_fallback_to_deleted_id_when_no_request(self, config):
         raw_response = MagicMock(spec=httpx.Response)
@@ -213,9 +226,7 @@ class TestTransformDeleteFile:
             "litellm-vertex-files/publishers/google/models/gemini-2.0-flash-001/abc-123",
             safe="",
         )
-        mock_request.url = (
-            f"https://storage.googleapis.com/storage/v1/b/prod-bucket/o/{encoded_object}"
-        )
+        mock_request.url = f"https://storage.googleapis.com/storage/v1/b/prod-bucket/o/{encoded_object}"
         raw_response.request = mock_request
 
         result = config.transform_delete_file_response(

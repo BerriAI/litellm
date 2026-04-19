@@ -4,7 +4,9 @@ import pytest
 from fastapi import HTTPException
 
 from litellm.proxy.guardrails.guardrail_hooks.custom_code import (
-    RESPONSE_REJECTION_GUARDRAIL_CODE, CustomCodeGuardrail)
+    RESPONSE_REJECTION_GUARDRAIL_CODE,
+    CustomCodeGuardrail,
+)
 
 
 @pytest.fixture
@@ -17,7 +19,9 @@ def response_rejection_guardrail():
 
 
 @pytest.mark.asyncio
-async def test_response_rejection_allows_request_input_type(response_rejection_guardrail):
+async def test_response_rejection_allows_request_input_type(
+    response_rejection_guardrail,
+):
     """Should allow when input_type is 'request' (no response check)."""
     result = await response_rejection_guardrail.apply_guardrail(
         inputs={"texts": ["some user message"]},

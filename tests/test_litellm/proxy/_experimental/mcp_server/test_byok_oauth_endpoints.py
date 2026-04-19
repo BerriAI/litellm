@@ -246,11 +246,14 @@ async def test_token_endpoint_success():
     mock_store = AsyncMock()
     test_master_key = "test_master_key_value"
 
-    with patch(
-        "litellm.proxy._experimental.mcp_server.byok_oauth_endpoints.store_user_credential",
-        mock_store,
-    ), patch(
-        "litellm.proxy._experimental.mcp_server.byok_oauth_endpoints.router",
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.byok_oauth_endpoints.store_user_credential",
+            mock_store,
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.byok_oauth_endpoints.router",
+        ),
     ):
         # Import the actual handler function directly
         from litellm.proxy._experimental.mcp_server.byok_oauth_endpoints import (
@@ -269,9 +272,10 @@ async def test_token_endpoint_success():
             original_master_key = None
 
             # Temporarily inject our test values
-            with patch(
-                "litellm.proxy.proxy_server.prisma_client", mock_prisma
-            ), patch("litellm.proxy.proxy_server.master_key", test_master_key):
+            with (
+                patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
+                patch("litellm.proxy.proxy_server.master_key", test_master_key),
+            ):
                 result = await byok_token(
                     request=mock_request,
                     grant_type="authorization_code",
@@ -293,9 +297,7 @@ async def test_token_endpoint_success():
     # Verify JWT payload
     import jwt as pyjwt
 
-    payload = pyjwt.decode(
-        data["access_token"], test_master_key, algorithms=["HS256"]
-    )
+    payload = pyjwt.decode(data["access_token"], test_master_key, algorithms=["HS256"])
     assert payload["user_id"] == "user-42"
     assert payload["server_id"] == "server-1"
     assert payload["type"] == "byok_session"
@@ -318,8 +320,9 @@ async def test_token_endpoint_invalid_code():
 
     mock_request = MagicMock()
     with pytest.raises(HTTPException) as exc_info:
-        with patch("litellm.proxy.proxy_server.prisma_client", MagicMock()), patch(
-            "litellm.proxy.proxy_server.master_key", "key"
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+            patch("litellm.proxy.proxy_server.master_key", "key"),
         ):
             await byok_token(
                 request=mock_request,
@@ -350,8 +353,9 @@ async def test_token_endpoint_expired_code():
 
     mock_request = MagicMock()
     with pytest.raises(HTTPException) as exc_info:
-        with patch("litellm.proxy.proxy_server.prisma_client", MagicMock()), patch(
-            "litellm.proxy.proxy_server.master_key", "key"
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+            patch("litellm.proxy.proxy_server.master_key", "key"),
         ):
             await byok_token(
                 request=mock_request,
@@ -380,8 +384,9 @@ async def test_token_endpoint_wrong_verifier():
 
     mock_request = MagicMock()
     with pytest.raises(HTTPException) as exc_info:
-        with patch("litellm.proxy.proxy_server.prisma_client", MagicMock()), patch(
-            "litellm.proxy.proxy_server.master_key", "key"
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+            patch("litellm.proxy.proxy_server.master_key", "key"),
         ):
             await byok_token(
                 request=mock_request,
@@ -401,8 +406,9 @@ async def test_token_endpoint_unsupported_grant_type():
 
     mock_request = MagicMock()
     with pytest.raises(HTTPException) as exc_info:
-        with patch("litellm.proxy.proxy_server.prisma_client", MagicMock()), patch(
-            "litellm.proxy.proxy_server.master_key", "key"
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+            patch("litellm.proxy.proxy_server.master_key", "key"),
         ):
             await byok_token(
                 request=mock_request,
@@ -474,10 +480,13 @@ async def test_check_byok_credential_missing_credential():
 
     mock_prisma = MagicMock()
 
-    with patch(
-        "litellm.proxy._experimental.mcp_server.db.get_user_credential",
-        new=AsyncMock(return_value=None),
-    ), patch("litellm.proxy.proxy_server.prisma_client", mock_prisma):
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.db.get_user_credential",
+            new=AsyncMock(return_value=None),
+        ),
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
+    ):
         with pytest.raises(HTTPException) as exc_info:
             await _check_byok_credential(server, user_auth)
 
@@ -507,9 +516,12 @@ async def test_check_byok_credential_has_credential():
 
     mock_prisma = MagicMock()
 
-    with patch(
-        "litellm.proxy._experimental.mcp_server.db.get_user_credential",
-        new=AsyncMock(return_value="some-credential-value"),
-    ), patch("litellm.proxy.proxy_server.prisma_client", mock_prisma):
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.db.get_user_credential",
+            new=AsyncMock(return_value="some-credential-value"),
+        ),
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
+    ):
         # Should not raise
         await _check_byok_credential(server, user_auth)
