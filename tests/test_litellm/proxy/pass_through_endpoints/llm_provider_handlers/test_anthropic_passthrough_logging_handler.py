@@ -655,9 +655,7 @@ class TestBuildCompleteStreamingResponseRobustness:
             "data: [DONE]",
         ]
         result = self._build(chunks)
-        # Should not raise; result may be None if stream_chunk_builder
-        # can't assemble a full response from partial data, but the key
-        # assertion is that no exception was thrown.
+        assert result is None or hasattr(result, "choices")
 
     def test_non_json_sse_line_is_skipped(self):
         """Non-JSON SSE lines (comments, keep-alive pings) should be skipped."""
@@ -667,7 +665,7 @@ class TestBuildCompleteStreamingResponseRobustness:
             "this is not json at all",
         ]
         result = self._build(chunks)
-        # No exception should be raised
+        assert result is None or hasattr(result, "choices")
 
     def test_mixed_valid_and_invalid_frames(self):
         """Valid events should still be collected even when mixed with invalid ones."""
