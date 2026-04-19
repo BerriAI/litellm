@@ -307,11 +307,21 @@ class AdaptiveRouter:
         d_alpha, d_beta = self._compute_bandit_delta(delta)
         print("CALLS D_ALPHA", d_alpha)
         if d_alpha != 0 or d_beta != 0:
-            cell_key = (request_type, model_name)
+            # For non-GENERAL turns, attribute to the current-turn classification
+            # so genuine mid-session topic shifts (e.g. code → math) update the
+            # correct cell. For GENERAL turns ("thanks!", "ok", "sounds good"), fall
+            # back to the session's original type so closing pleasantries don't
+            # misattribute the reward.
+            attribution_type = (
+                request_type
+                if request_type != RequestType.GENERAL
+                else RequestType(state.classified_type)
+            )
+            cell_key = (attribution_type, model_name)
             self._cells[cell_key] = apply_delta(self._cells[cell_key], d_alpha, d_beta)
             await self.queue.add_state_delta(
                 self.router_name,
-                request_type.value,
+                attribution_type.value,
                 model_name,
                 d_alpha,
                 d_beta,

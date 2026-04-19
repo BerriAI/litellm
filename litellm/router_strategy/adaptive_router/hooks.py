@@ -44,10 +44,12 @@ def _resolve_session_key(kwargs: Dict[str, Any]) -> Optional[str]:
       1. Honor a client-supplied session id (`litellm_session_id` on either
          `litellm_params` or `litellm_params.metadata`, or `session_id` on
          metadata) — backward compat for callers already wired up.
-      2. Otherwise derive a sha256 over (identity fields, first message) so
-         the key is stable across turns of the same conversation.
+      2. Otherwise derive a sha256 over (identity fields, first
+         SIGNAL_GATE_MIN_MESSAGES messages) so the key is stable across turns
+         and only materialises once there is enough context for the bandit to
+         act on (matching the gate in the signal-processing path).
 
-    Returns None if there are no messages (nothing to attribute).
+    Returns None if the conversation is shorter than SIGNAL_GATE_MIN_MESSAGES.
     """
     litellm_params = kwargs.get("litellm_params") or {}
     sid = litellm_params.get("litellm_session_id")
@@ -60,19 +62,22 @@ def _resolve_session_key(kwargs: Dict[str, Any]) -> Optional[str]:
             return str(sid)
 
     messages = kwargs.get("messages") or []
-    if not messages:
+    if len(messages) < SIGNAL_GATE_MIN_MESSAGES:
+        # Don't attribute until we have enough turns to match the signal gate —
+        # ensures the hash is stable (same N messages every time) and avoids
+        # crediting the bandit for conversations that are too short to signal.
         return None
 
     identity = ":".join(
         str(metadata.get(f) or "") if isinstance(metadata, dict) else ""
         for f in _IDENTITY_FIELDS
     )
-    first = messages[0]
+    anchor = messages[:SIGNAL_GATE_MIN_MESSAGES]
     payload = (
         identity
         + "|"
         + json.dumps(
-            {"role": first.get("role"), "content": first.get("content")},
+            [{"role": m.get("role"), "content": m.get("content")} for m in anchor],
             sort_keys=True,
             default=str,
         )
@@ -140,20 +145,23 @@ class AdaptiveRouterPostCallHook(CustomLogger):
     def __init__(self, adaptive_router: AdaptiveRouter) -> None:
         self.adaptive_router = adaptive_router
 
-    async def async_post_call_success_hook(
+    async def async_post_call_response_headers_hook(
         self,
         data: Dict[str, Any],
         user_api_key_dict: Any,
         response: Any,
-    ) -> None:
+        request_headers: Optional[Dict[str, str]] = None,
+        litellm_call_info: Optional[Dict[str, Any]] = None,
+    ) -> Optional[Dict[str, str]]:
         """
-        Surface the chosen logical model picked by the pre-routing hook as the
-        `x-litellm-adaptive-router-model` response header.
+        Surface the chosen logical model as the `x-litellm-adaptive-router-model`
+        response header for both streaming and non-streaming responses.
 
-        The chosen model is stashed on `data["metadata"]` by
-        `AdaptiveRouter.async_pre_routing_hook`. The proxy awaits this hook
-        before reading `_hidden_params["additional_headers"]` for the outgoing
-        HTTP response, so any value we write here flows through.
+        `async_post_call_success_hook` fires after the stream is fully consumed,
+        so writing to `_hidden_params["additional_headers"]` there is too late for
+        streaming — the StreamingResponse headers are already frozen. This hook is
+        called during header construction (before StreamingResponse is built), so
+        the header is included for both paths.
         """
         metadata = data.get("metadata") or {}
         chosen = (
@@ -162,12 +170,8 @@ class AdaptiveRouterPostCallHook(CustomLogger):
             else None
         )
         if not chosen:
-            return
-        hidden_params = getattr(response, "_hidden_params", None)
-        if not isinstance(hidden_params, dict):
-            return
-        hidden_params.setdefault("additional_headers", {})
-        hidden_params["additional_headers"][ADAPTIVE_ROUTER_RESPONSE_HEADER] = chosen
+            return None
+        return {ADAPTIVE_ROUTER_RESPONSE_HEADER: chosen}
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         await self._record(kwargs, response_obj, response_status=200)
