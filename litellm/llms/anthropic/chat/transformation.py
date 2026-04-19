@@ -1367,6 +1367,11 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             self._ensure_beta_header(
                 headers, ANTHROPIC_BETA_HEADER_VALUES.FAST_MODE_2026_02_01.value
             )
+        _output_config = optional_params.get("output_config") or {}
+        if isinstance(_output_config, dict) and _output_config.get("task_budget"):
+            self._ensure_beta_header(
+                headers, ANTHROPIC_BETA_HEADER_VALUES.TASK_BUDGETS_2026_03_13.value
+            )
         for tool in _tools:
             if tool.get("type") == ANTHROPIC_ADVISOR_TOOL_TYPE:
                 self._ensure_beta_header(
@@ -1548,6 +1553,26 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 f"effort='xhigh' is not supported by this model. Got model: {model}"
             )
         data["output_config"] = output_config
+
+        # Validate task_budget if present
+        task_budget = output_config.get("task_budget")
+        if task_budget is not None:
+            if not isinstance(task_budget, dict):
+                raise ValueError(
+                    "output_config.task_budget must be a dict, "
+                    f"e.g. {{'type': 'tokens', 'total': 64000}}. Got: {type(task_budget)}"
+                )
+            if task_budget.get("type") != "tokens":
+                raise ValueError(
+                    "output_config.task_budget.type must be 'tokens'. "
+                    f"Got: {task_budget.get('type')!r}"
+                )
+            total = task_budget.get("total")
+            if not isinstance(total, int) or total <= 0:
+                raise ValueError(
+                    "output_config.task_budget.total must be a positive integer. "
+                    f"Got: {total!r}"
+                )
 
     def _transform_response_for_json_mode(
         self,

@@ -669,6 +669,7 @@ class ANTHROPIC_BETA_HEADER_VALUES(str, Enum):
     ADVANCED_TOOL_USE_2025_11_20 = "advanced-tool-use-2025-11-20"
     FAST_MODE_2026_02_01 = "fast-mode-2026-02-01"
     ADVISOR_TOOL_2026_03_01 = "advisor-tool-2026-03-01"
+    TASK_BUDGETS_2026_03_13 = "task-budgets-2026-03-13"
 
 
 # Tool search beta header constant (for Anthropic direct API and Microsoft Foundry)

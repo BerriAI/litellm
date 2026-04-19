@@ -3607,3 +3607,106 @@ def test_strip_advisor_blocks_no_op_when_no_advisor_blocks():
     original_content = [dict(b) for b in messages[1]["content"]]
     result = strip_advisor_blocks_from_messages(messages)
     assert result[1]["content"] == original_content
+
+
+# ---------------------------------------------------------------------------
+# task_budget tests
+# ---------------------------------------------------------------------------
+
+
+def test_task_budget_beta_header_injected():
+    """output_config with task_budget should add the task-budgets beta header."""
+    config = AnthropicConfig()
+    headers = config.update_headers_with_optional_anthropic_beta(
+        headers={},
+        optional_params={
+            "output_config": {
+                "effort": "high",
+                "task_budget": {"type": "tokens", "total": 64000},
+            }
+        },
+    )
+    assert "task-budgets-2026-03-13" in headers.get("anthropic-beta", ""), (
+        f"task-budgets beta header missing from: {headers}"
+    )
+
+
+def test_task_budget_beta_header_not_injected_without_task_budget():
+    """output_config without task_budget should NOT add the task-budgets beta header."""
+    config = AnthropicConfig()
+    headers = config.update_headers_with_optional_anthropic_beta(
+        headers={},
+        optional_params={"output_config": {"effort": "high"}},
+    )
+    assert "task-budgets-2026-03-13" not in headers.get("anthropic-beta", "")
+
+
+def test_task_budget_beta_header_merges_with_existing():
+    """task_budget beta header should merge with pre-existing anthropic-beta values."""
+    config = AnthropicConfig()
+    headers = {"anthropic-beta": "context-1m-2025-08-07"}
+    result = config.update_headers_with_optional_anthropic_beta(
+        headers=headers,
+        optional_params={
+            "output_config": {"task_budget": {"type": "tokens", "total": 32000}}
+        },
+    )
+    beta = result["anthropic-beta"]
+    assert "context-1m-2025-08-07" in beta
+    assert "task-budgets-2026-03-13" in beta
+
+
+def test_apply_output_config_task_budget_valid():
+    """Valid task_budget passes validation and is included in data."""
+    config = AnthropicConfig()
+    data: dict = {}
+    config._apply_output_config(
+        data=data,
+        model="claude-opus-4-7-20251101",
+        optional_params={
+            "output_config": {
+                "effort": "high",
+                "task_budget": {"type": "tokens", "total": 64000},
+            }
+        },
+    )
+    assert data["output_config"]["task_budget"] == {"type": "tokens", "total": 64000}
+
+
+def test_apply_output_config_task_budget_invalid_type():
+    """task_budget with wrong type field raises ValueError."""
+    config = AnthropicConfig()
+    with pytest.raises(ValueError, match="task_budget.type must be 'tokens'"):
+        config._apply_output_config(
+            data={},
+            model="claude-opus-4-7-20251101",
+            optional_params={
+                "output_config": {
+                    "task_budget": {"type": "characters", "total": 64000}
+                }
+            },
+        )
+
+
+def test_apply_output_config_task_budget_invalid_total():
+    """task_budget with non-positive total raises ValueError."""
+    config = AnthropicConfig()
+    with pytest.raises(ValueError, match="task_budget.total must be a positive integer"):
+        config._apply_output_config(
+            data={},
+            model="claude-opus-4-7-20251101",
+            optional_params={
+                "output_config": {"task_budget": {"type": "tokens", "total": -1}}
+            },
+        )
+
+
+def test_apply_output_config_task_budget_not_a_dict():
+    """task_budget that is not a dict raises ValueError."""
+    config = AnthropicConfig()
+    with pytest.raises(ValueError, match="task_budget must be a dict"):
+        config._apply_output_config(
+            data={},
+            model="claude-opus-4-7-20251101",
+            optional_params={"output_config": {"task_budget": 64000}},
+        )
