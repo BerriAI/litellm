@@ -7,6 +7,11 @@ from typing import Any, AsyncIterator, Dict
 
 from litellm import verbose_logger
 from litellm._uuid import uuid
+from .utils import (
+    build_text_blocks_with_citations,
+    build_web_tool_use,
+    build_web_search_results_from_annotations,
+)
 
 
 class AnthropicResponsesStreamWrapper:
@@ -41,6 +46,8 @@ class AnthropicResponsesStreamWrapper:
         self._sent_message_start = False
         self._sent_message_stop = False
         self._chunk_queue: deque = deque()
+        # Web tools: defer text emission until output_item.done
+        self._web_tool_uses: list = []
 
     def _make_message_start(self) -> Dict[str, Any]:
         return {
@@ -96,6 +103,10 @@ class AnthropicResponsesStreamWrapper:
             )
 
             if item_type == "message":
+                if self._web_tool_uses:
+                    # Don't open text block here — deferred to
+                    # output_item.done where full annotations (citations) are available.
+                    return
                 block_idx = self._next_block_index()
                 if item_id:
                     self._item_id_to_block_index[item_id] = block_idx
@@ -133,6 +144,10 @@ class AnthropicResponsesStreamWrapper:
                         },
                     }
                 )
+            elif item_type == "web_search_call":
+                # Don't emit content_block_start here — search queries
+                # are only available in output_item.done.
+                pass
             elif item_type == "reasoning":
                 block_idx = self._next_block_index()
                 if item_id:
@@ -148,6 +163,10 @@ class AnthropicResponsesStreamWrapper:
 
         # ---- text delta ----
         if event_type == "response.output_text.delta":
+            if self._web_tool_uses:
+                # Don't stream text deltas here — full text with citation
+                # is emitted from output_item.done.
+                return
             item_id = getattr(event, "item_id", None) or (
                 event.get("item_id") if isinstance(event, dict) else None
             )
@@ -223,6 +242,29 @@ class AnthropicResponsesStreamWrapper:
                 if item
                 else None
             )
+            item_type = (
+                getattr(item, "type", None)
+                or (item.get("type") if isinstance(item, dict) else None)
+                if item
+                else None
+            )
+            if item_type == "reasoning":
+                # Reasoning items are closed by individual part.done events
+                return
+            if item_type == "web_search_call":
+                self._emit_web_tool_use(item)
+                return
+            if item_type == "message" and self._web_tool_uses:
+                if not isinstance(item, dict):
+                    item = item.model_dump()
+                for part in item.get("content") or []:
+                    if isinstance(part, dict) and part.get("type") == "output_text":
+                        text = part.get("text", "")
+                        annotations = part.get("annotations") or []
+                        citations = self._emit_web_search_results(annotations)
+                        self._emit_cited_text_blocks(text, citations)
+                        break
+                return
             block_idx = (
                 self._item_id_to_block_index.get(item_id, self._current_block_index)
                 if item_id
@@ -288,6 +330,11 @@ class AnthropicResponsesStreamWrapper:
                 usage_delta["cache_creation_input_tokens"] = cache_creation_tokens
             if cache_read_tokens:
                 usage_delta["cache_read_input_tokens"] = cache_read_tokens
+            if self._web_tool_uses:
+                usage_delta["server_tool_use"] = {
+                    "web_search_requests": sum(c["name"] == "web_search" for c in self._web_tool_uses),
+                    "web_fetch_requests": sum(c["name"] == "web_fetch" for c in self._web_tool_uses),
+                }
 
             self._chunk_queue.append(
                 {
@@ -299,6 +346,81 @@ class AnthropicResponsesStreamWrapper:
             self._chunk_queue.append({"type": "message_stop"})
             self._sent_message_stop = True
             return
+
+    def _emit_web_tool_use(self, item: Any) -> None:
+        """Emit server_tool_use block and collect web tool info."""
+        block, input_dict = build_web_tool_use(item)
+        block_idx = self._next_block_index()
+        self._web_tool_uses.append(block)
+        self._chunk_queue.append(
+            {
+                "type": "content_block_start",
+                "index": block_idx,
+                "content_block": block,
+            }
+        )
+        self._chunk_queue.append(
+            {
+                "type": "content_block_delta",
+                "index": block_idx,
+                "delta": {
+                    "type": "input_json_delta",
+                    "partial_json": json.dumps(input_dict),
+                },
+            }
+        )
+        self._chunk_queue.append(
+            {"type": "content_block_stop", "index": block_idx}
+        )
+
+    def _emit_web_search_results(self, annotations: list) -> list:
+        """Emit web_search_tool_result blocks and return citations for text emission."""
+        blocks, citations = build_web_search_results_from_annotations(
+            self._web_tool_uses, annotations
+        )
+        for block in blocks:
+            block_idx = self._next_block_index()
+            self._chunk_queue.append(
+                {
+                    "type": "content_block_start",
+                    "index": block_idx,
+                    "content_block": block,
+                }
+            )
+            self._chunk_queue.append(
+            {"type": "content_block_stop", "index": block_idx}
+        )
+        return citations
+
+    def _emit_cited_text_blocks(self, text: str, citations: list) -> None:
+        """Emit text blocks with citation deltas."""
+        for block_data in build_text_blocks_with_citations(text, citations):
+            block_idx = self._next_block_index()
+            self._chunk_queue.append(
+                {
+                    "type": "content_block_start",
+                    "index": block_idx,
+                    "content_block": {"type": "text", "text": ""},
+                }
+            )
+            self._chunk_queue.append(
+                {
+                    "type": "content_block_delta",
+                    "index": block_idx,
+                    "delta": {"type": "text_delta", "text": block_data["text"]},
+                }
+            )
+            for cit in block_data.get("citations", []):
+                self._chunk_queue.append(
+                    {
+                        "type": "content_block_delta",
+                        "index": block_idx,
+                        "delta": {"type": "citations_delta", "citation": cit},
+                    }
+                )
+            self._chunk_queue.append(
+            {"type": "content_block_stop", "index": block_idx}
+        )
 
     def __aiter__(self) -> "AnthropicResponsesStreamWrapper":
         return self
