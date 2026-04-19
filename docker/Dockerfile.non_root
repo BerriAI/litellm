@@ -62,38 +62,12 @@ COPY . .
 # Set non-root flag for build time consistency
 ENV LITELLM_NON_ROOT=true
 
-# Build Admin UI once and stage the static output for the runtime image.
-# NOTE: .npmrc files (which may set ignore-scripts=true and min-release-age=3d)
-# are temporarily renamed during npm install/ci so they don't block lifecycle
-# scripts needed by the build. This is safe because npm ci installs from
-# package-lock.json with pinned versions + integrity hashes.
+# Stage the pre-built Admin UI from the checked-in Next.js static export.
+# The UI Drift Guard CI workflow keeps _experimental/out/ in sync with ui/litellm-dashboard/ source.
+# Restructure extensionless routes (foo.html -> foo/index.html) to match the layout
+# proxy_server.py expects, and drop a readiness marker.
 RUN mkdir -p /var/lib/litellm/ui /var/lib/litellm/assets && \
-    ([ -f /app/.npmrc ] && mv /app/.npmrc /app/.npmrc.bak || true) && \
-    NVM_VERSION="v0.40.4" && \
-    NVM_CHECKSUM="4b7412c49960c7d31e8df72da90c1fb5b8cccb419ac99537b737028d497aba4f" && \
-    NODE_VERSION="v20.20.2" && \
-    NVM_SCRIPT="/tmp/install-nvm.sh" && \
-    curl -fsSL "https://raw.githubusercontent.com/nvm-sh/nvm/${NVM_VERSION}/install.sh" -o "$NVM_SCRIPT" && \
-    echo "${NVM_CHECKSUM}  ${NVM_SCRIPT}" | sha256sum -c - && \
-    bash "$NVM_SCRIPT" && \
-    export NVM_DIR="$HOME/.nvm" && \
-    . "$NVM_DIR/nvm.sh" && \
-    nvm install "${NODE_VERSION}" && \
-    nvm use "${NODE_VERSION}" && \
-    npm install -g npm@11.12.1 && \
-    npm install -g node-gyp@12.2.0 && \
-    ln -sf "$(npm root -g)/node-gyp" "$(npm root -g)/npm/node_modules/node-gyp" && \
-    npm cache clean --force && \
-    cd /app/ui/litellm-dashboard && \
-    if [ -f "/app/enterprise/enterprise_ui/enterprise_colors.json" ]; then \
-      cp /app/enterprise/enterprise_ui/enterprise_colors.json ./ui_colors.json; \
-    fi && \
-    ([ -f .npmrc ] && mv .npmrc .npmrc.bak || true) && \
-    npm ci --no-audit --no-fund && \
-    ([ -f .npmrc.bak ] && mv .npmrc.bak .npmrc || true) && \
-    ([ -f /app/.npmrc.bak ] && mv /app/.npmrc.bak /app/.npmrc || true) && \
-    npm run build && \
-    cp -r /app/ui/litellm-dashboard/out/* /var/lib/litellm/ui/ && \
+    cp -r /app/litellm/proxy/_experimental/out/. /var/lib/litellm/ui/ && \
     cp /app/litellm/proxy/logo.jpg /var/lib/litellm/assets/logo.jpg && \
     ( cd /var/lib/litellm/ui && \
       for html_file in *.html; do \
@@ -103,8 +77,7 @@ RUN mkdir -p /var/lib/litellm/ui /var/lib/litellm/assets && \
           mv "$html_file" "$folder_name/index.html"; \
         fi; \
       done && \
-      touch .litellm_ui_ready ) && \
-    cd /app/ui/litellm-dashboard && rm -rf ./out
+      touch .litellm_ui_ready )
 
 RUN if [ "$PROXY_EXTRAS_SOURCE" = "published" ]; then \
       uv sync --frozen --no-default-groups --no-editable \
