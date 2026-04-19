@@ -90,9 +90,7 @@ class TestCheckAndMergeModelLevelGuardrails:
     def test_returns_data_unchanged_when_no_router(self):
         """Returns data unchanged when llm_router is None."""
         data = {"model": "gpt-4", "metadata": {}}
-        result = _check_and_merge_model_level_guardrails(
-            data=data, llm_router=None
-        )
+        result = _check_and_merge_model_level_guardrails(data=data, llm_router=None)
         assert result is data
 
     def test_returns_data_unchanged_when_no_model_info(self):
@@ -187,9 +185,7 @@ async def test_post_call_success_hook_runs_model_level_guardrail():
             )
             self.was_called = False
 
-        async def async_post_call_success_hook(
-            self, data, user_api_key_dict, response
-        ):
+        async def async_post_call_success_hook(self, data, user_api_key_dict, response):
             self.was_called = True
             return response
 
@@ -201,8 +197,9 @@ async def test_post_call_success_hook_runs_model_level_guardrail():
     mock_deployment.litellm_params.get.return_value = ["test-model-guardrail"]
     mock_router.get_deployment.return_value = mock_deployment
 
-    with patch("litellm.callbacks", [guardrail]), patch(
-        "litellm.proxy.proxy_server.llm_router", mock_router
+    with (
+        patch("litellm.callbacks", [guardrail]),
+        patch("litellm.proxy.proxy_server.llm_router", mock_router),
     ):
         proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
 
@@ -254,9 +251,7 @@ async def test_post_call_success_hook_skips_guardrail_not_on_model():
             )
             self.was_called = False
 
-        async def async_post_call_success_hook(
-            self, data, user_api_key_dict, response
-        ):
+        async def async_post_call_success_hook(self, data, user_api_key_dict, response):
             self.was_called = True
             return response
 
@@ -268,8 +263,9 @@ async def test_post_call_success_hook_skips_guardrail_not_on_model():
     mock_deployment.litellm_params.get.return_value = ["some-other-guardrail"]
     mock_router.get_deployment.return_value = mock_deployment
 
-    with patch("litellm.callbacks", [guardrail]), patch(
-        "litellm.proxy.proxy_server.llm_router", mock_router
+    with (
+        patch("litellm.callbacks", [guardrail]),
+        patch("litellm.proxy.proxy_server.llm_router", mock_router),
     ):
         proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
 

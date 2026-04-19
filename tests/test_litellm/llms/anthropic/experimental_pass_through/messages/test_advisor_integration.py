@@ -19,7 +19,12 @@ ADVISOR_TOOL = {
     "model": "claude-opus-4-6",
 }
 
-MESSAGES = [{"role": "user", "content": "Write a Python function to check if a number is prime."}]
+MESSAGES = [
+    {
+        "role": "user",
+        "content": "Write a Python function to check if a number is prime.",
+    }
+]
 
 
 def _text_resp(text: str, model: str = "gpt-4o-mini") -> Dict:
@@ -34,7 +39,9 @@ def _text_resp(text: str, model: str = "gpt-4o-mini") -> Dict:
     }
 
 
-def _advisor_call_resp(question: str = "How do I approach this?", tool_id: str = "tid_01") -> Dict:
+def _advisor_call_resp(
+    question: str = "How do I approach this?", tool_id: str = "tid_01"
+) -> Dict:
     return {
         "id": "msg_int_test",
         "type": "message",
@@ -105,7 +112,9 @@ async def test_full_dispatch_interceptor_fires_and_loop_completes():
     ]
 
     assert len(text_blocks) >= 1, "Final response must have text"
-    assert len(advisor_uses) == 0, "No advisor tool_use blocks must appear in final output"
+    assert (
+        len(advisor_uses) == 0
+    ), "No advisor tool_use blocks must appear in final output"
 
 
 # ---------------------------------------------------------------------------

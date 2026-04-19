@@ -39,9 +39,12 @@ def watsonx_chat_completion_call():
             }
             mock_response.raise_for_status = Mock()  # No-op to simulate no exception
 
-            with patch.object(client, "post") as mock_post, patch.object(
-                litellm.module_level_client, "post", return_value=mock_response
-            ) as mock_get:
+            with (
+                patch.object(client, "post") as mock_post,
+                patch.object(
+                    litellm.module_level_client, "post", return_value=mock_response
+                ) as mock_get,
+            ):
                 try:
                     completion(
                         model=model,
@@ -134,9 +137,12 @@ def watsonx_completion_call():
             }
             mock_response.raise_for_status = Mock()
 
-            with patch.object(client, "post") as mock_post, patch.object(
-                litellm.module_level_client, "post", return_value=mock_response
-            ) as mock_get:
+            with (
+                patch.object(client, "post") as mock_post,
+                patch.object(
+                    litellm.module_level_client, "post", return_value=mock_response
+                ) as mock_get,
+            ):
                 try:
                     litellm.text_completion(
                         model=model,
@@ -261,8 +267,11 @@ def test_watsonx_gpt_oss_prompt_transformation(monkeypatch):
     }
     mock_token_response.raise_for_status = Mock()
 
-    with patch.object(client, "post") as mock_post, patch.object(
-        litellm.module_level_client, "post", return_value=mock_token_response
+    with (
+        patch.object(client, "post") as mock_post,
+        patch.object(
+            litellm.module_level_client, "post", return_value=mock_token_response
+        ),
     ):
         try:
             completion(
@@ -373,8 +382,11 @@ def test_watsonx_chat_completion_with_reasoning_effort(monkeypatch):
     mock_token_response.raise_for_status = Mock()
 
     # Call litellm.completion with the new parameter
-    with patch.object(client, "post") as mock_post, patch.object(
-        litellm.module_level_client, "post", return_value=mock_token_response
+    with (
+        patch.object(client, "post") as mock_post,
+        patch.object(
+            litellm.module_level_client, "post", return_value=mock_token_response
+        ),
     ):
         try:
             completion(
@@ -436,7 +448,9 @@ def test_watsonx_zen_api_key_from_client(monkeypatch, watsonx_chat_completion_ca
             print(f"Caught expected exception: {e}")
 
     # Verify the request was made
-    assert mock_post.call_count == 1, "The completion endpoint should have been called once."
+    assert (
+        mock_post.call_count == 1
+    ), "The completion endpoint should have been called once."
 
     # Get the headers sent in the POST request
     request_kwargs = mock_post.call_args.kwargs
@@ -481,7 +495,9 @@ def test_watsonx_zen_api_key_from_env(monkeypatch, watsonx_chat_completion_call)
             print(f"Caught expected exception: {e}")
 
     # Verify the request was made
-    assert mock_post.call_count == 1, "The completion endpoint should have been called once."
+    assert (
+        mock_post.call_count == 1
+    ), "The completion endpoint should have been called once."
 
     # Get the headers sent in the POST request
     request_kwargs = mock_post.call_args.kwargs

@@ -92,7 +92,9 @@ class AdvisorOrchestrationHandler(MessagesInterceptor):
                 "  2. Include a 'model' field in the advisor tool definition."
             )
         _raw_max_uses = advisor_tool.get("max_uses")
-        max_uses: int = ADVISOR_MAX_USES if _raw_max_uses is None else int(_raw_max_uses)
+        max_uses: int = (
+            ADVISOR_MAX_USES if _raw_max_uses is None else int(_raw_max_uses)
+        )
         # Optional routing overrides for the advisor sub-call (e.g. proxy routing).
         # If not set in the tool definition, litellm resolves from env vars.
         advisor_api_key: Optional[str] = advisor_tool.get("api_key")
