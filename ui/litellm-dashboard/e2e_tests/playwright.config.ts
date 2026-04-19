@@ -6,7 +6,9 @@ import { defineConfig, devices } from "@playwright/test";
 export default defineConfig({
   testDir: ".",
   testMatch: ["**/*.spec.ts", "**/*.setup.ts"],
-  testIgnore: ["**/*.test.*"],
+  // Meta-tests for the guardedPage fixture live under tests/meta/ and do not
+  // need the proxy/DB/globalSetup. They run via playwright.meta.config.ts.
+  testIgnore: ["**/*.test.*", "**/tests/meta/**"],
   /* Run tests in files in parallel */
   fullyParallel: true,
   /* Fail the build on CI if you accidentally left test.only in the source code. */

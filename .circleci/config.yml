@@ -3041,6 +3041,15 @@ jobs:
           paths:
             - ui/litellm-dashboard/node_modules
       - run:
+          # Runs standalone — no proxy, no DB. Validates that the
+          # guardedPage fixture itself is wired correctly. If this fails,
+          # the (much more expensive) full Playwright run below would be
+          # producing false signals, so we fail fast here.
+          name: Run guardedPage fixture meta-tests
+          command: |
+            cd ui/litellm-dashboard
+            npx playwright test --config e2e_tests/playwright.meta.config.ts
+      - run:
           name: Build UI from source
           command: |
             cd ui/litellm-dashboard
