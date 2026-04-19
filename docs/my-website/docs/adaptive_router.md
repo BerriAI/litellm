@@ -62,7 +62,13 @@ curl -X POST {{baseURL}}/v1/chat/completions \
   }'
 ```
 
-The response includes an `x-litellm-adaptive-router-model` header telling you which model was actually picked. The "thanks!" turn fires a satisfaction signal — that's what moves the bandit.
+The response includes a header telling you which model was actually picked:
+
+```
+x-litellm-adaptive-router-model: gpt-4o
+```
+
+The "thanks!" turn in the example above fires a satisfaction signal — that's what moves the bandit.
 
 ## Tuning cost vs. quality
 
