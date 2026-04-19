@@ -3378,3 +3378,71 @@ async def test_midstream_fallback_reraises_when_content_generated():
 
         # Fallback should NOT have been attempted
         mock_fallback_utils.assert_not_called()
+
+
+def test_sync_midstream_fallback_reraises_when_content_generated():
+    """Sync counterpart: MidStreamFallbackError with generated content must
+    re-raise instead of attempting continuation-fallback."""
+    from unittest.mock import MagicMock
+
+    from litellm.exceptions import MidStreamFallbackError
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "gpt-4", "api_key": "fake-key"},
+            },
+        ],
+        fallbacks=[{"gpt-4": ["gpt-3.5-turbo"]}],
+    )
+
+    messages = [{"role": "user", "content": "Hello"}]
+    initial_kwargs = {"model": "gpt-4", "stream": True}
+
+    midstream_error = MidStreamFallbackError(
+        message="Connection reset",
+        model="gpt-4",
+        llm_provider="openai",
+        generated_content="Hello, I am a helpful assistant",
+        is_pre_first_chunk=False,
+    )
+
+    mock_chunks = [
+        MagicMock(choices=[MagicMock(delta=MagicMock(content="Hello"))]),
+    ]
+
+    class SyncIteratorMidStreamError:
+        def __init__(self):
+            self.model = "gpt-4"
+            self.custom_llm_provider = "openai"
+            self.logging_obj = MagicMock()
+            self.chunks = mock_chunks
+            self._index = 0
+
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            if self._index >= 1:
+                raise midstream_error
+            self._index += 1
+            return mock_chunks[0]
+
+    mock_response = SyncIteratorMidStreamError()
+
+    with patch.object(
+        router,
+        "function_with_fallbacks",
+    ) as mock_fallback:
+        result = router._completion_streaming_iterator(
+            model_response=mock_response,
+            messages=messages,
+            initial_kwargs=initial_kwargs,
+        )
+
+        with pytest.raises(MidStreamFallbackError):
+            list(result)
+
+        # Fallback should NOT have been attempted
+        mock_fallback.assert_not_called()
