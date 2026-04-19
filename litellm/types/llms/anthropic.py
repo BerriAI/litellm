@@ -36,10 +36,18 @@ class AnthropicOutputSchema(TypedDict, total=False):
     schema: Required[dict]
 
 
+class AnthropicTaskBudget(TypedDict, total=False):
+    """Token budget for an agentic task loop (task-budgets-2026-03-13 beta)."""
+
+    type: Required[Literal["tokens"]]
+    total: Required[int]
+
+
 class AnthropicOutputConfig(TypedDict, total=False):
     """Configuration for controlling Claude's output behavior."""
 
     effort: Literal["high", "medium", "low"]
+    task_budget: AnthropicTaskBudget
 
 
 class AnthropicMessagesTool(TypedDict, total=False):
