@@ -130,35 +130,6 @@ class NomaV2Guardrail(CustomGuardrail):
 
         raise ValueError("Noma v2 response missing valid action")
 
-    @staticmethod
-    def _json_safe_copy(data: Any) -> Any:
-        """JSON round-trip producing a deep, JSON-serializable copy of `data`.
-
-        Fast path: `json.dumps` (C-level) with a `default=` callback that
-        handles Pydantic models and falls back to `str(obj)` for anything
-        non-serializable (e.g. uvloop.Loop, locks, other C-extension objects
-        whose __reduce__ raises — which is why this replaces deepcopy).
-
-        Slow path: if `json.dumps` raises (circular refs, etc.), retry with
-        `safe_dumps` which walks the tree in Python with explicit cycle
-        detection. Finally `safe_json_loads` parses back to a Python tree.
-        """
-
-        def _default(obj: Any) -> Any:
-            if hasattr(obj, "model_dump"):
-                try:
-                    return obj.model_dump()
-                except Exception:
-                    pass
-            return str(obj)
-
-        try:
-            json_str = json.dumps(data, default=_default)
-        except (ValueError, TypeError):
-            json_str = safe_dumps(data)
-
-        return safe_json_loads(json_str, default={})
-
     def _build_scan_payload(
         self,
         inputs: GenericGuardrailAPIInputs,
@@ -167,16 +138,7 @@ class NomaV2Guardrail(CustomGuardrail):
         logging_obj: Optional["LiteLLMLoggingObj"],
         application_id: Optional[str],
     ) -> dict:
-        # JSON round-trip rather than deepcopy: on post_call / during_call /
-        # during_mcp_call, request_data contains uvloop.Loop and other C-extension
-        # objects whose __reduce__ raises, crashing pickle-based copy.
-        payload_request_data = self._json_safe_copy(request_data)
-        if not isinstance(payload_request_data, dict):
-            payload_request_data = {}
-        if not payload_request_data and request_data:
-            verbose_proxy_logger.warning(
-                "Noma v2 guardrail: request_data serialization failed in _build_scan_payload, proceeding with empty request_data"
-            )
+        payload_request_data = self._sanitize_payload_for_transport(request_data)
         if logging_obj is not None:
             payload_request_data["litellm_logging_obj"] = getattr(
                 logging_obj, "model_call_details", None
@@ -194,7 +156,20 @@ class NomaV2Guardrail(CustomGuardrail):
 
     @staticmethod
     def _sanitize_payload_for_transport(payload: dict) -> dict:
-        safe_payload = NomaV2Guardrail._json_safe_copy(payload)
+        def _default(obj: Any) -> Any:
+            if hasattr(obj, "model_dump"):
+                try:
+                    return obj.model_dump()
+                except Exception:
+                    pass
+            return str(obj)
+
+        try:
+            json_str = json.dumps(payload, default=_default)
+        except (ValueError, TypeError):
+            json_str = safe_dumps(payload)
+        
+        safe_payload = safe_json_loads(json_str, default={})
 
         if safe_payload == {} and payload:
             verbose_proxy_logger.warning(
