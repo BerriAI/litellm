@@ -14,8 +14,14 @@ async function globalSetup() {
       await page.getByPlaceholder("Enter your username").fill(email);
       await page.getByPlaceholder("Enter your password").fill(password);
       await page.getByRole("button", { name: "Login", exact: true }).click();
+      // Reject `/ui/ui/...` — that is the double-prefix regression we want
+      // this suite to catch instead of silently auth'ing against a broken
+      // bundle.
       await page.waitForURL(
-        (url) => url.pathname.startsWith("/ui") && !url.pathname.includes("/login"),
+        (url) =>
+          url.pathname.startsWith("/ui") &&
+          !url.pathname.startsWith("/ui/ui") &&
+          !url.pathname.includes("/login"),
         { timeout: 30_000 },
       );
       await expect(page.locator("a", { hasText: "Virtual Keys" })).toBeVisible({ timeout: 30_000 });
