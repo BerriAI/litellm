@@ -90,10 +90,8 @@ RUN --mount=type=cache,target=/app/.cache/uv,id=litellm-uv-cache \
         --python python3; \
     fi
 
-RUN mkdir -p /app/.cache/npm && \
-    prisma generate --schema=./schema.prisma && \
-    prisma --version && \
-    prisma migrate diff --from-empty --to-schema-datamodel ./schema.prisma --script > /dev/null 2>&1 || true
+RUN prisma generate --schema=./schema.prisma && \
+    prisma --version
 
 RUN sed -i 's/\r$//' docker/entrypoint.sh && chmod +x docker/entrypoint.sh && \
     sed -i 's/\r$//' docker/prod_entrypoint.sh && chmod +x docker/prod_entrypoint.sh
@@ -124,15 +122,10 @@ ENV PATH="/app/.venv/bin:${PATH}" \
     PRISMA_SKIP_POSTINSTALL_GENERATE=1 \
     PRISMA_HIDE_UPDATE_MESSAGE=1 \
     PRISMA_ENGINES_CHECKSUM_IGNORE_MISSING=1 \
-    NPM_CONFIG_CACHE=/app/.cache/npm \
-    NPM_CONFIG_PREFER_OFFLINE=true \
     PRISMA_OFFLINE_MODE=true
 
-RUN sed -i 's/\r$//' docker/entrypoint.sh && \
-    sed -i 's/\r$//' docker/prod_entrypoint.sh && \
-    chmod +x docker/entrypoint.sh docker/prod_entrypoint.sh && \
-    mkdir -p /nonexistent /.npm /var/lib/litellm/assets /var/lib/litellm/ui /tmp/.npm && \
-    chown -R nobody:nogroup /app /var/lib/litellm/ui /var/lib/litellm/assets /nonexistent /.npm /tmp/.npm && \
+RUN mkdir -p /nonexistent /var/lib/litellm/assets /var/lib/litellm/ui && \
+    chown -R nobody:nogroup /app /var/lib/litellm/ui /var/lib/litellm/assets /nonexistent && \
     PRISMA_PATH=$(python -c "import os, prisma; print(os.path.dirname(prisma.__file__))") && \
     chown -R nobody:nogroup "$PRISMA_PATH" && \
     LITELLM_PKG_MIGRATIONS_PATH="$(python -c 'import os, litellm_proxy_extras; print(os.path.dirname(litellm_proxy_extras.__file__))' 2>/dev/null || echo '')/migrations" && \
