@@ -34515,7 +34515,7 @@
         "supports_vision": true,
         "supports_web_search": true
     },
-    "xai/grok-4.20-multi-agent-beta-0309": {
+    "xai/grok-4.20-multi-agent-0309": {
         "cache_read_input_token_cost": 2e-07,
         "input_cost_per_token": 2e-06,
         "litellm_provider": "xai",
@@ -34529,23 +34529,8 @@
         "supports_reasoning": true,
         "supports_tool_choice": true,
         "supports_vision": true,
-        "supports_web_search": true
-    },
-    "xai/grok-4.20-beta-0309-reasoning": {
-        "cache_read_input_token_cost": 2e-07,
-        "input_cost_per_token": 2e-06,
-        "litellm_provider": "xai",
-        "max_input_tokens": 2000000,
-        "max_output_tokens": 2000000,
-        "max_tokens": 2000000,
-        "mode": "chat",
-        "output_cost_per_token": 6e-06,
-        "source": "https://docs.x.ai/docs/models",
-        "supports_function_calling": true,
-        "supports_reasoning": true,
-        "supports_tool_choice": true,
-        "supports_vision": true,
-        "supports_web_search": true
+        "supports_web_search": true,
+        "aliases": ["xai/grok-4.20-multi-agent-beta-0309"]
     },
     "xai/grok-4.20-0309-reasoning": {
         "cache_read_input_token_cost": 2e-07,
@@ -34561,9 +34546,10 @@
         "supports_reasoning": true,
         "supports_tool_choice": true,
         "supports_vision": true,
-        "supports_web_search": true
+        "supports_web_search": true,
+        "aliases": ["xai/grok-4.20-beta-0309-reasoning"]
     },
-    "xai/grok-4.20-beta-0309-non-reasoning": {
+    "xai/grok-4.20-0309-non-reasoning": {
         "cache_read_input_token_cost": 2e-07,
         "input_cost_per_token": 2e-06,
         "litellm_provider": "xai",
@@ -34576,7 +34562,8 @@
         "supports_function_calling": true,
         "supports_tool_choice": true,
         "supports_vision": true,
-        "supports_web_search": true
+        "supports_web_search": true,
+        "aliases": ["xai/grok-4.20-beta-0309-non-reasoning"]
     },
     "xai/grok-beta": {
         "input_cost_per_token": 5e-06,
