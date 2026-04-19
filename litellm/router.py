@@ -1800,6 +1800,9 @@ class Router:
                 async for item in model_response:
                     yield item
             except MidStreamFallbackError as e:
+                if not (e.is_pre_first_chunk or not e.generated_content):
+                    raise
+
                 from litellm.main import stream_chunk_builder
 
                 complete_response_object = stream_chunk_builder(
@@ -2210,6 +2213,36 @@ class Router:
             )
 
             if isinstance(response, CustomStreamWrapper):
+                # HTTP call is deferred until first iteration for streaming
+                # Trigger it now to catch errors early and enable normal fallback
+                if (
+                    response.completion_stream is None
+                    and response.make_call is not None
+                ):
+                    try:
+                        await response.fetch_stream()
+                    except Exception as fetch_err:
+                        # Strip Content-Length from upstream headers to prevent mismatch
+                        # when LiteLLM creates its own error response body
+                        _headers = getattr(fetch_err, "headers", None)
+                        if _headers:
+                            setattr(
+                                fetch_err,
+                                "headers",
+                                {
+                                    k: v
+                                    for k, v in _headers.items()
+                                    if k.lower()
+                                    not in (
+                                        "content-length",
+                                        "transfer-encoding",
+                                        "content-encoding",
+                                        "content-type",
+                                    )
+                                },
+                            )
+                        raise fetch_err
+
                 return await self._acompletion_streaming_iterator(
                     model_response=response,
                     messages=messages,
@@ -3864,7 +3897,7 @@ class Router:
             self._add_deployment_model_to_endpoint_for_llm_passthrough_route(
                 kwargs=kwargs, model=model, model_name=model_name
             )
-            
+
             # Get custom_llm_provider from deployment params
             try:
                 custom_llm_provider = data.get("custom_llm_provider")
@@ -3872,10 +3905,12 @@ class Router:
                     model=data["model"],
                     custom_llm_provider=custom_llm_provider,
                 )
-                custom_llm_provider = custom_llm_provider or inferred_custom_llm_provider
+                custom_llm_provider = (
+                    custom_llm_provider or inferred_custom_llm_provider
+                )
             except Exception:
                 custom_llm_provider = None
-            
+
             # Build response kwargs
             response_kwargs = {
                 **data,
@@ -3885,7 +3920,7 @@ class Router:
             # Only set custom_llm_provider if it's not None
             if custom_llm_provider is not None:
                 response_kwargs["custom_llm_provider"] = custom_llm_provider
-            
+
             response = original_generic_function(**response_kwargs)
 
             rpm_semaphore = self._get_client(
@@ -3981,7 +4016,9 @@ class Router:
                     model=data["model"],
                     custom_llm_provider=custom_llm_provider,
                 )
-                custom_llm_provider = custom_llm_provider or inferred_custom_llm_provider
+                custom_llm_provider = (
+                    custom_llm_provider or inferred_custom_llm_provider
+                )
             except Exception:
                 custom_llm_provider = None
 
@@ -4246,7 +4283,9 @@ class Router:
                     custom_llm_provider=custom_llm_provider,
                 )
                 # Preserve explicitly stored provider, fallback to inferred
-                custom_llm_provider = custom_llm_provider or inferred_custom_llm_provider
+                custom_llm_provider = (
+                    custom_llm_provider or inferred_custom_llm_provider
+                )
 
                 ## REPLACE MODEL IN FILE WITH SELECTED DEPLOYMENT ##
                 purpose = cast(Optional[OpenAIFilesPurpose], kwargs.get("purpose"))
@@ -5355,9 +5394,9 @@ class Router:
             e,
             (litellm.ContextWindowExceededError, litellm.ContentPolicyViolationError),
         )
-        _request_team_id: Optional[str] = (
-            kwargs.get("metadata", {}) or {}
-        ).get("user_api_key_team_id")
+        _request_team_id: Optional[str] = (kwargs.get("metadata", {}) or {}).get(
+            "user_api_key_team_id"
+        )
         all_deployments = self._get_all_deployments(
             model_name=original_model_group, team_id=_request_team_id
         )
@@ -5460,8 +5499,8 @@ class Router:
                     return response
 
                 else:
-                    error_message = "model={}. context_window_fallbacks={}. fallbacks={}.\n\nSet 'context_window_fallback' - https://docs.litellm.ai/docs/routing#fallbacks".format(
-                        model_group, context_window_fallbacks, fallbacks
+                    error_message = "model={}. context_window_fallbacks={}.\n\nSet 'context_window_fallback' - https://docs.litellm.ai/docs/routing#fallbacks".format(
+                        model_group, context_window_fallbacks
                     )
                     verbose_router_logger.info(
                         msg="Got 'ContextWindowExceededError'. No context_window_fallback set. Defaulting \
@@ -5495,8 +5534,8 @@ class Router:
                     )
                     return response
                 else:
-                    error_message = "model={}. content_policy_fallback={}. fallbacks={}.\n\nSet 'content_policy_fallback' - https://docs.litellm.ai/docs/routing#fallbacks".format(
-                        model_group, content_policy_fallbacks, fallbacks
+                    error_message = "model={}. content_policy_fallbacks={}.\n\nSet 'content_policy_fallback' - https://docs.litellm.ai/docs/routing#fallbacks".format(
+                        model_group, content_policy_fallbacks
                     )
                     verbose_router_logger.info(
                         msg="Got 'ContentPolicyViolationError'. No content_policy_fallback set. Defaulting \
@@ -5524,7 +5563,7 @@ class Router:
                         f"No fallback model group found for original model_group={model_group}. Fallbacks={fallbacks}"
                     )
                     if hasattr(original_exception, "message"):
-                        original_exception.message += f"No fallback model group found for original model_group={model_group}. Fallbacks={fallbacks}"  # type: ignore
+                        original_exception.message += f" No fallback model group found for original model_group={model_group}."  # type: ignore
                     raise original_exception
 
                 input_kwargs.update(

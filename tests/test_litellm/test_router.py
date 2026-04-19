@@ -274,7 +274,7 @@ async def test_async_router_afile_content_uses_deployment_custom_llm_provider():
     """
     Regression test: Ensure afile_content preserves deployment custom_llm_provider
     when model name lacks provider prefix (e.g., "gpt-4.1-mini" instead of "azure/gpt-4.1-mini").
-    
+
     This prevents "None is not a valid LlmProviders" errors when calling file content operations.
     """
     from unittest.mock import AsyncMock, MagicMock, patch
@@ -297,9 +297,11 @@ async def test_async_router_afile_content_uses_deployment_custom_llm_provider():
     # Mock the Azure file handler's afile_content method
     mock_response = MagicMock(spec=HttpxBinaryResponseContent)
     mock_response.response = MagicMock()
-    
-    with patch("litellm.llms.azure.files.handler.AzureOpenAIFilesAPI.afile_content", 
-               return_value=mock_response) as mock_afile_content:
+
+    with patch(
+        "litellm.llms.azure.files.handler.AzureOpenAIFilesAPI.afile_content",
+        return_value=mock_response,
+    ) as mock_afile_content:
         result = await router.afile_content(
             model="team-azure-batch",
             file_id="file-123",
@@ -1277,15 +1279,18 @@ async def test_acompletion_streaming_iterator():
     assert all(chunk in mock_chunks for chunk in collected_chunks)
     print("✓ Successfully streamed all chunks")
 
-    # Test 2: MidStreamFallbackError with fallback
+    # Test 2: MidStreamFallbackError with fallback (pre-first-chunk, no content generated)
     print("\n=== Test 2: MidStreamFallbackError with fallback ===")
 
-    # Create error that should trigger after first chunk
+    # Create error that triggers before any content was generated (e.g. a 429 on
+    # the very first chunk).  In this case the fallback path should use the
+    # original messages without a continuation prompt.
     error = MidStreamFallbackError(
-        message="Connection lost",
+        message="429 Resource exhausted",
         model="gpt-4",
         llm_provider="openai",
-        generated_content="Hello",
+        generated_content="",
+        is_pre_first_chunk=True,
     )
 
     class AsyncIteratorWithError:
@@ -1308,8 +1313,8 @@ async def test_acompletion_streaming_iterator():
             return item
 
     mock_error_response = AsyncIteratorWithError(
-        mock_chunks, 1
-    )  # Error after first chunk
+        mock_chunks, 0
+    )  # Error on first chunk (pre-first-chunk)
 
     setattr(mock_error_response, "model", "gpt-4")
     setattr(mock_error_response, "custom_llm_provider", "openai")
@@ -1343,26 +1348,18 @@ async def test_acompletion_streaming_iterator():
         assert mock_fallback_utils.called
         call_args = mock_fallback_utils.call_args
 
-        # Check that generated content was added to messages
+        # Pre-first-chunk: should use original messages, no continuation prompt
         fallback_kwargs = call_args.kwargs["kwargs"]
         modified_messages = fallback_kwargs["messages"]
-
-        # Should have original message + system message + assistant message with prefix
-        assert len(modified_messages) == 3
-        assert modified_messages[0] == {"role": "user", "content": "Hello"}
-        assert modified_messages[1]["role"] == "system"
-        assert "continuation" in modified_messages[1]["content"]
-        assert modified_messages[2]["role"] == "assistant"
-        assert modified_messages[2]["content"] == "Hello"
-        assert modified_messages[2]["prefix"] == True
+        assert modified_messages == messages
 
         # Verify fallback parameters
         assert call_args.kwargs["disable_fallbacks"] == False
         assert call_args.kwargs["model_group"] == "gpt-4"
 
-        # Should get original chunk + fallback chunks
-        assert len(collected_chunks) == 3  # 1 original + 2 fallback
-        print("✓ Fallback system called correctly with proper message modification")
+        # Should get fallback chunks only (no original chunks were yielded)
+        assert len(collected_chunks) == 2
+        print("✓ Fallback system called correctly with original messages")
 
     print("\n=== All tests passed! ===")
 
@@ -3132,7 +3129,9 @@ def test_multiregion_team_deployments_unique_model_names():
 
     # Each deployment has a unique ID (critical for cooldown/retry to work)
     deployment_ids = {d["model_info"]["id"] for d in deployments}
-    assert len(deployment_ids) == 2, "Each deployment must have a unique ID for cooldown tracking"
+    assert (
+        len(deployment_ids) == 2
+    ), "Each deployment must have a unique ID for cooldown tracking"
 
     # Wrong team: returns nothing
     deployments = router._get_all_deployments(
@@ -3185,9 +3184,9 @@ async def test_multiregion_team_failover_between_regions():
     deployments = router._get_all_deployments(
         model_name="claude-sonnet", team_id="metis-team"
     )
-    assert len(deployments) == 2, (
-        "Router must find both regional deployments by team_public_model_name"
-    )
+    assert (
+        len(deployments) == 2
+    ), "Router must find both regional deployments by team_public_model_name"
 
     # Make a normal request — should succeed from one of the regions
     response = await router.acompletion(
@@ -3200,3 +3199,197 @@ async def test_multiregion_team_failover_between_regions():
         "response from us-east-1",
         "response from us-west-2",
     ]
+
+
+@pytest.mark.asyncio
+async def test_eager_fetch_stream_raises_to_enable_fallback():
+    """When fetch_stream() fails the error must propagate so the retry/fallback
+    machinery in async_function_with_retries can handle it.
+
+    Providers like Vertex AI defer the real HTTP call until the first
+    iteration of the stream.  The eager fetch_stream() call in _acompletion
+    surfaces the error *before* entering the streaming iterator, which keeps
+    it inside the normal exception-handling path.
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "vertex-model",
+                "litellm_params": {
+                    "model": "vertex_ai/gemini-2.0-flash",
+                    "api_key": "fake-key",
+                },
+            },
+        ],
+    )
+
+    # Build a CustomStreamWrapper with a deferred make_call (completion_stream=None)
+    mock_stream_wrapper = MagicMock(spec=CustomStreamWrapper)
+    mock_stream_wrapper.completion_stream = None
+
+    fetch_error = litellm.RateLimitError(
+        message="429 Resource exhausted",
+        model="vertex_ai/gemini-2.0-flash",
+        llm_provider="vertex_ai",
+    )
+    fetch_error.headers = {
+        "Content-Length": "123",
+        "Transfer-Encoding": "chunked",
+        "Content-Encoding": "gzip",
+        "Content-Type": "application/json",
+        "X-Custom-Header": "keep-me",
+    }
+    mock_stream_wrapper.make_call = AsyncMock()
+    mock_stream_wrapper.fetch_stream = AsyncMock(side_effect=fetch_error)
+
+    # Patch litellm.acompletion to return our mock streaming wrapper
+    with patch("litellm.acompletion", new_callable=AsyncMock) as mock_acompletion:
+        mock_acompletion.return_value = mock_stream_wrapper
+
+        with pytest.raises(litellm.RateLimitError) as exc_info:
+            await router._acompletion(
+                model="vertex-model",
+                messages=[{"role": "user", "content": "Hello"}],
+                stream=True,
+            )
+
+        # fetch_stream should have been called
+        mock_stream_wrapper.fetch_stream.assert_called_once()
+
+        # Verify problematic headers were stripped
+        raised = exc_info.value
+        assert "Content-Length" not in raised.headers
+        assert "Transfer-Encoding" not in raised.headers
+        assert "Content-Encoding" not in raised.headers
+        assert "Content-Type" not in raised.headers
+        assert raised.headers["X-Custom-Header"] == "keep-me"
+
+
+@pytest.mark.asyncio
+async def test_eager_fetch_stream_skipped_when_stream_already_set():
+    """If completion_stream is already set (non-deferred provider), fetch_stream
+    must not be called and the response passes through to the streaming iterator.
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "openai-model",
+                "litellm_params": {
+                    "model": "gpt-4",
+                    "api_key": "fake-key",
+                },
+            },
+        ],
+    )
+
+    mock_stream_wrapper = MagicMock(spec=CustomStreamWrapper)
+    mock_stream_wrapper.completion_stream = MagicMock()  # already set
+    mock_stream_wrapper.make_call = None
+    mock_stream_wrapper.fetch_stream = AsyncMock()
+
+    # Patch _acompletion_streaming_iterator to avoid full iteration
+    mock_iterator_result = MagicMock()
+    with (
+        patch("litellm.acompletion", new_callable=AsyncMock) as mock_acompletion,
+        patch.object(
+            router,
+            "_acompletion_streaming_iterator",
+            new_callable=AsyncMock,
+            return_value=mock_iterator_result,
+        ),
+    ):
+        mock_acompletion.return_value = mock_stream_wrapper
+
+        result = await router._acompletion(
+            model="openai-model",
+            messages=[{"role": "user", "content": "Hello"}],
+            stream=True,
+        )
+
+        # fetch_stream should NOT have been called
+        mock_stream_wrapper.fetch_stream.assert_not_called()
+        assert result == mock_iterator_result
+
+
+@pytest.mark.asyncio
+async def test_midstream_fallback_reraises_when_content_generated():
+    """When a MidStreamFallbackError occurs after content has already been
+    streamed (is_pre_first_chunk=False, generated_content is non-empty),
+    it must be re-raised instead of triggering the continuation-fallback path.
+
+    Once content has been sent to the client, switching to a fallback model
+    mid-stream could produce incoherent output.
+    """
+    from unittest.mock import MagicMock
+
+    from litellm.exceptions import MidStreamFallbackError
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "gpt-4", "api_key": "fake-key"},
+            },
+        ],
+        fallbacks=[{"gpt-4": ["gpt-3.5-turbo"]}],
+    )
+
+    messages = [{"role": "user", "content": "Hello"}]
+    initial_kwargs = {"model": "gpt-4", "stream": True}
+
+    # Error with generated_content AND is_pre_first_chunk=False
+    midstream_error = MidStreamFallbackError(
+        message="Connection reset",
+        model="gpt-4",
+        llm_provider="openai",
+        generated_content="Hello, I am a helpful assistant",
+        is_pre_first_chunk=False,
+    )
+
+    mock_chunks = [
+        MagicMock(choices=[MagicMock(delta=MagicMock(content="Hello"))]),
+    ]
+
+    class AsyncIteratorMidStreamError:
+        def __init__(self):
+            self.model = "gpt-4"
+            self.custom_llm_provider = "openai"
+            self.logging_obj = MagicMock()
+            self.chunks = mock_chunks
+            self._index = 0
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            if self._index >= 1:
+                raise midstream_error
+            self._index += 1
+            return mock_chunks[0]
+
+    mock_response = AsyncIteratorMidStreamError()
+
+    with patch.object(
+        router,
+        "async_function_with_fallbacks_common_utils",
+    ) as mock_fallback_utils:
+        iterator = await router._acompletion_streaming_iterator(
+            model_response=mock_response,
+            messages=messages,
+            initial_kwargs=initial_kwargs,
+        )
+
+        with pytest.raises(MidStreamFallbackError):
+            async for _ in iterator:
+                pass
+
+        # Fallback should NOT have been attempted
+        mock_fallback_utils.assert_not_called()
