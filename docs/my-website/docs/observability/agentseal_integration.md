@@ -7,7 +7,7 @@ https://github.com/BerriAI/litellm
 
 :::
 
-[AgentSeal](https://agentseal.io) records every LLM call in a SHA-256 hash chain. Each entry's hash depends on the previous entry, so modifying any record breaks the chain and is immediately detectable. Built for compliance (EU AI Act, SOC 2) and production audit trails.
+[AgentSeal](https://agentseal.io) is a logging and audit trail API for AI agents. Every action is recorded with a verifiable history that can't be silently modified. Built for compliance and production use.
 
 ## Quick Start
 
