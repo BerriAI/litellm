@@ -68,7 +68,7 @@ model_list:
       api_key: os.environ/OPENAI_API_KEY
 
 litellm_settings:
-  callbacks: custom_callback.agentseal_handler
+  callbacks: ["custom_callback.agentseal_handler"]
 
 environment_variables:
   OPENAI_API_KEY: "your-openai-key"
