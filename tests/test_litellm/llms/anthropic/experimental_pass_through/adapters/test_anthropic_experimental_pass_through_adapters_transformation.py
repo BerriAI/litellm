@@ -2175,3 +2175,62 @@ class TestTranslateAnthropicOutputFormatToOpenAI:
             )
             is None
         )
+
+
+class TestTranslateToolsDropsToolChoice:
+    """Test that tool_choice is dropped when only web_search tools remain."""
+
+    def setup_method(self):
+        self.adapter = LiteLLMAnthropicMessagesAdapter()
+
+    def test_tool_choice_removed_when_only_web_search_tools(self):
+        """When all tools are web_search-type, tool_choice should be popped."""
+        new_kwargs: dict = {"tool_choice": "auto", "model": "gpt-4o"}
+        anthropic_request = {
+            "model": "claude-sonnet-4-20250514",
+            "max_tokens": 1024,
+            "messages": [{"role": "user", "content": "search the web"}],
+            "tools": [
+                {"type": "web_search_20260209", "name": "web_search"},
+            ],
+            "tool_choice": {"type": "auto"},
+        }
+
+        self.adapter._translate_tools_to_openai(
+            anthropic_message_request=anthropic_request,
+            new_kwargs=new_kwargs,
+        )
+
+        assert "tool_choice" not in new_kwargs
+        assert new_kwargs.get("web_search_options") == {}
+
+    def test_tool_choice_preserved_when_regular_tools_exist(self):
+        """When regular tools exist alongside web_search, tool_choice stays."""
+        new_kwargs: dict = {"tool_choice": "auto", "model": "gpt-4o"}
+        anthropic_request = {
+            "model": "claude-sonnet-4-20250514",
+            "max_tokens": 1024,
+            "messages": [{"role": "user", "content": "search and compute"}],
+            "tools": [
+                {"type": "web_search_20260209", "name": "web_search"},
+                {
+                    "type": "custom",
+                    "name": "get_weather",
+                    "description": "Get weather",
+                    "input_schema": {
+                        "type": "object",
+                        "properties": {"location": {"type": "string"}},
+                    },
+                },
+            ],
+            "tool_choice": {"type": "auto"},
+        }
+
+        self.adapter._translate_tools_to_openai(
+            anthropic_message_request=anthropic_request,
+            new_kwargs=new_kwargs,
+        )
+
+        assert "tool_choice" in new_kwargs
+        assert new_kwargs.get("web_search_options") == {}
+        assert "tools" in new_kwargs
