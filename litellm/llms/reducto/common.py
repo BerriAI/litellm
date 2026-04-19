@@ -1,23 +1,24 @@
 import base64
 import binascii
 from collections import defaultdict
-from typing import Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, NoReturn, Optional, Tuple
 
-import httpx
-
-import litellm
 from litellm.constants import request_timeout
-from litellm.llms.base_llm.ocr.transformation import OCRPage
 
 REDUCTO_API_BASE = "https://platform.reducto.ai"
 REDUCTO_ID_PREFIX = "reducto://"
+
+if TYPE_CHECKING:
+    from litellm.llms.base_llm.ocr.transformation import OCRPage
 
 
 def _normalize_api_base(api_base: Optional[str]) -> str:
     return (api_base or REDUCTO_API_BASE).rstrip("/")
 
 
-def _raise_bad_request(message: str, model: str) -> None:
+def _raise_bad_request(message: str, model: str) -> NoReturn:
+    import litellm
+
     raise litellm.BadRequestError(
         message=message,
         model=model,
@@ -46,9 +47,8 @@ def extract_file_id_or_bytes(
 
     try:
         header, encoded = source_url.split(",", 1)
-    except ValueError as exc:
+    except ValueError:
         _raise_bad_request("Invalid Reducto data URI provided.", model=model)
-        raise exc
 
     if ";base64" not in header:
         _raise_bad_request(
@@ -58,9 +58,8 @@ def extract_file_id_or_bytes(
     mime = header.removeprefix("data:").split(";")[0] or "application/octet-stream"
     try:
         raw_bytes = base64.b64decode(encoded, validate=True)
-    except (binascii.Error, ValueError) as exc:
+    except (binascii.Error, ValueError):
         _raise_bad_request("Invalid Reducto base64 payload provided.", model=model)
-        raise exc
 
     return None, raw_bytes, mime
 
@@ -71,13 +70,14 @@ def upload_bytes_sync(
     api_key: str,
     api_base: Optional[str],
 ) -> str:
-    with httpx.Client() as client:
-        response = client.post(
-            url="{}{}".format(_normalize_api_base(api_base), "/upload"),
-            headers={"Authorization": f"Bearer {api_key}"},
-            files={"file": ("document", raw_bytes, mime or "application/octet-stream")},
-            timeout=request_timeout,
-        )
+    import litellm
+
+    response = litellm.module_level_client.post(
+        url="{}{}".format(_normalize_api_base(api_base), "/upload"),
+        headers={"Authorization": f"Bearer {api_key}"},
+        files={"file": ("document", raw_bytes, mime or "application/octet-stream")},
+        timeout=request_timeout,
+    )
     response.raise_for_status()
     return response.json()["file_id"]
 
@@ -88,18 +88,21 @@ async def upload_bytes_async(
     api_key: str,
     api_base: Optional[str],
 ) -> str:
-    async with httpx.AsyncClient() as client:
-        response = await client.post(
-            url="{}{}".format(_normalize_api_base(api_base), "/upload"),
-            headers={"Authorization": f"Bearer {api_key}"},
-            files={"file": ("document", raw_bytes, mime or "application/octet-stream")},
-            timeout=request_timeout,
-        )
+    import litellm
+
+    response = await litellm.module_level_aclient.post(
+        url="{}{}".format(_normalize_api_base(api_base), "/upload"),
+        headers={"Authorization": f"Bearer {api_key}"},
+        files={"file": ("document", raw_bytes, mime or "application/octet-stream")},
+        timeout=request_timeout,
+    )
     response.raise_for_status()
     return response.json()["file_id"]
 
 
-def build_pages_from_reducto(result: Dict[str, Any]) -> List[OCRPage]:
+def build_pages_from_reducto(result: Dict[str, Any]) -> List["OCRPage"]:
+    from litellm.llms.base_llm.ocr.transformation import OCRPage
+
     chunks = result.get("chunks", []) or []
     blocks_by_page: Dict[int, List[Dict[str, Any]]] = defaultdict(list)
 
@@ -122,7 +125,7 @@ def build_pages_from_reducto(result: Dict[str, Any]) -> List[OCRPage]:
             return []
         return [OCRPage(index=0, markdown=fallback_markdown)]
 
-    pages: List[OCRPage] = []
+    pages: List["OCRPage"] = []
     for page_no, blocks in sorted(blocks_by_page.items()):
         markdown = "\n\n".join(
             block.get("content", "") for block in blocks if block.get("content")

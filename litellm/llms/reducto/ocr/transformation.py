@@ -16,7 +16,6 @@ from litellm.llms.reducto.common import (
     upload_bytes_async,
     upload_bytes_sync,
 )
-from litellm.secret_managers.main import get_secret_str
 
 
 class _BaseReductoOCRConfig(BaseOCRConfig):
@@ -47,6 +46,8 @@ class _BaseReductoOCRConfig(BaseOCRConfig):
         litellm_params: Optional[dict] = None,
         **kwargs,
     ) -> Dict:
+        from litellm.secret_managers.main import get_secret_str
+
         resolved_key = api_key or get_secret_str("REDUCTO_API_KEY")
         if resolved_key is None:
             raise ValueError(

@@ -545,10 +545,9 @@ def cost_per_token(  # noqa: PLR0915
             model=model, custom_llm_provider=custom_llm_provider
         )
 
-        if (
-            (model_info.get("input_cost_per_token") or 0.0) > 0
-            or (model_info.get("output_cost_per_token") or 0.0) > 0
-        ):
+        if (model_info.get("input_cost_per_token") or 0.0) > 0 or (
+            model_info.get("output_cost_per_token") or 0.0
+        ) > 0:
             return generic_cost_per_token(
                 model=model,
                 usage=usage_block,
@@ -1137,9 +1136,9 @@ def completion_cost(  # noqa: PLR0915
                     or isinstance(completion_response, dict)
                 ):  # tts returns a custom class
                     if isinstance(completion_response, dict):
-                        usage_obj: Optional[
-                            Union[dict, Usage]
-                        ] = completion_response.get("usage", {})
+                        usage_obj: Optional[Union[dict, Usage]] = (
+                            completion_response.get("usage", {})
+                        )
                     else:
                         usage_obj = getattr(completion_response, "usage", {})
                     if isinstance(usage_obj, BaseModel) and not _is_known_usage_objects(
@@ -1784,7 +1783,7 @@ def ocr_cost(
 
     pages_processed = response.usage_info.pages_processed
     if pages_processed is None:
-        raise ValueError("OCR response pages_processed is None")
+        return 0.0, 0.0
 
     ocr_cost_per_page: float = 0.0
     if model_info is not None:

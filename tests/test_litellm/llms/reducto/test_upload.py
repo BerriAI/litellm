@@ -1,8 +1,16 @@
 import json
 import os
+from unittest.mock import AsyncMock, Mock
 
+import httpx
 import litellm
 import pytest
+
+from litellm.llms.reducto.common import (
+    extract_file_id_or_bytes,
+    upload_bytes_async,
+    upload_bytes_sync,
+)
 
 
 @pytest.fixture()
@@ -112,3 +120,94 @@ async def test_parse_v3_uses_programmatic_api_key_over_env(
 
     assert upload_route.calls[0].request.headers["authorization"] == "Bearer passed-key"
     assert parse_route.calls[0].request.headers["authorization"] == "Bearer passed-key"
+
+
+def test_upload_bytes_sync_uses_shared_client(monkeypatch):
+    captured = {}
+
+    def fake_post(*, url, headers, files, timeout):
+        captured["url"] = url
+        captured["headers"] = headers
+        captured["files"] = files
+        captured["timeout"] = timeout
+        return httpx.Response(
+            200,
+            json={"file_id": "reducto://sync-upload"},
+            request=httpx.Request("POST", url),
+        )
+
+    sync_post = Mock(side_effect=fake_post)
+    monkeypatch.setattr(litellm.module_level_client, "post", sync_post)
+
+    class ForbiddenSyncClient:
+        def __init__(self, *args, **kwargs):
+            raise AssertionError("should not construct")
+
+    monkeypatch.setattr(httpx, "Client", ForbiddenSyncClient)
+
+    file_id = upload_bytes_sync(
+        raw_bytes=b"%PDF-1.4 sync",
+        mime="application/pdf",
+        api_key="sync-key",
+        api_base="https://sync.reducto.test/",
+    )
+
+    assert file_id == "reducto://sync-upload"
+    sync_post.assert_called_once()
+    assert captured["url"] == "https://sync.reducto.test/upload"
+    assert captured["headers"] == {"Authorization": "Bearer sync-key"}
+    assert captured["files"]["file"] == (
+        "document",
+        b"%PDF-1.4 sync",
+        "application/pdf",
+    )
+
+
+@pytest.mark.asyncio
+async def test_upload_bytes_async_uses_shared_aclient(monkeypatch):
+    captured = {}
+
+    async def fake_post(*, url, headers, files, timeout):
+        captured["url"] = url
+        captured["headers"] = headers
+        captured["files"] = files
+        captured["timeout"] = timeout
+        return httpx.Response(
+            200,
+            json={"file_id": "reducto://async-upload"},
+            request=httpx.Request("POST", url),
+        )
+
+    async_post = AsyncMock(side_effect=fake_post)
+    monkeypatch.setattr(litellm.module_level_aclient, "post", async_post)
+
+    class ForbiddenAsyncClient:
+        def __init__(self, *args, **kwargs):
+            raise AssertionError("should not construct")
+
+    monkeypatch.setattr(httpx, "AsyncClient", ForbiddenAsyncClient)
+
+    file_id = await upload_bytes_async(
+        raw_bytes=b"%PDF-1.4 async",
+        mime="application/pdf",
+        api_key="async-key",
+        api_base="https://async.reducto.test/",
+    )
+
+    assert file_id == "reducto://async-upload"
+    async_post.assert_awaited_once()
+    assert captured["url"] == "https://async.reducto.test/upload"
+    assert captured["headers"] == {"Authorization": "Bearer async-key"}
+    assert captured["files"]["file"] == (
+        "document",
+        b"%PDF-1.4 async",
+        "application/pdf",
+    )
+
+
+def test_extract_file_id_or_bytes_raises_on_malformed_data_uri():
+    with pytest.raises(litellm.BadRequestError, match="Invalid Reducto data URI"):
+        extract_file_id_or_bytes("data:application/pdf", model="reducto/parse-v3")
+
+    with pytest.raises(litellm.BadRequestError, match="Invalid Reducto base64 payload"):
+        extract_file_id_or_bytes("data:;base64,!!!not-base64", model="reducto/parse-v3")
