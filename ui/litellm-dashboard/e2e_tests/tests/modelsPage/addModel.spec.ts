@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { test, expect } from "../../fixtures/guarded-page";
 import { ADMIN_STORAGE_PATH, E2E_TEAM_CRUD_ID } from "../../constants";
 import { Role, users } from "../../fixtures/users";
 import { navigateToPage } from "../../helpers/navigation";

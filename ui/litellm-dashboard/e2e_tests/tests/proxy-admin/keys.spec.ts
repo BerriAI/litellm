@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { test, expect } from "../../fixtures/guarded-page";
 import {
   ADMIN_STORAGE_PATH,
   E2E_DELETE_KEY_ALIAS,

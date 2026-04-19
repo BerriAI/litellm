@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { test, expect } from "../../fixtures/guarded-page";
 
 test.describe("Authentication Checks", () => {
   test("should redirect unauthenticated user from a protected page", async ({ page }) => {

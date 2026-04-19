@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "../../fixtures/guarded-page";
 import { users } from "../../fixtures/users";
 import { Role } from "../../fixtures/roles";
 

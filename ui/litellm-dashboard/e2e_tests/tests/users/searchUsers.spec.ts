@@ -1,4 +1,5 @@
-import { test, expect, Page } from "@playwright/test";
+import type { Page } from "@playwright/test";
+import { test, expect } from "../../fixtures/guarded-page";
 import { ADMIN_STORAGE_PATH } from "../../constants";
 test.skip("Internal Users Search", () => {
   test.use({ storageState: ADMIN_STORAGE_PATH });

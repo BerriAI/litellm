@@ -1,7 +1,9 @@
 /**
  * Playwright fixture: `guardedPage`.
  *
- * Drop-in replacement for the default `page` fixture. It installs a
+ * This module re-exports Playwright's `test` with the default `page`
+ * fixture wrapped in a URL guard. Specs only need to change their import
+ * source — no per-test code changes. The guard installs a
  * `page.on('request')` listener that records any browser request whose URL
  * matches a forbidden pattern (indicating a UI-routing regression such as the
  * double-prefix bug where a bundle built with `NEXT_PUBLIC_BASE_URL="ui/"`
@@ -186,12 +188,22 @@ export function isForbiddenRequestUrl(
   return { forbidden: false };
 }
 
-type Fixtures = {
-  guardedPage: Page;
-};
-
-export const test = base.extend<Fixtures>({
-  guardedPage: async ({ page }, use, testInfo: TestInfo) => {
+/**
+ * Re-exports a `test` whose `page` fixture is wrapped with the URL guard.
+ *
+ * Usage: change the import in a spec from
+ *
+ *     import { test, expect } from "@playwright/test";
+ *
+ * to
+ *
+ *     import { test, expect } from "../../fixtures/guarded-page";
+ *
+ * and every existing `({ page })` callback is automatically checked. No
+ * other spec-level changes are required.
+ */
+export const test = base.extend<{}>({
+  page: async ({ page }, use, testInfo: TestInfo) => {
     const violations: Array<{ url: string; reason: string; method: string }> = [];
 
     const onRequest = (req: ReturnType<Page["on"]> extends never ? never : any) => {
@@ -225,7 +237,7 @@ export const test = base.extend<Fixtures>({
         violations,
         `Browser made ${violations.length} forbidden request(s). This usually means the UI ` +
           `bundle was built with a bogus NEXT_PUBLIC_BASE_URL and every API call is being ` +
-          `routed under /ui/ (see docs/my-website docs for the double-prefix incident).\n\n` +
+          `routed under /ui/ (see PR #25109 for the double-prefix incident).\n\n` +
           report,
       ).toEqual([]);
     }
