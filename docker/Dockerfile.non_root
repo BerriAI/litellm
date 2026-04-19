@@ -41,7 +41,8 @@ COPY enterprise/pyproject.toml enterprise/
 COPY litellm-proxy-extras/pyproject.toml litellm-proxy-extras/
 
 # Install third-party dependencies (cached unless pyproject.toml/uv.lock change)
-RUN uv sync --frozen --no-install-project --no-install-workspace --no-default-groups --no-editable \
+RUN --mount=type=cache,target=/app/.cache/uv,id=litellm-uv-cache \
+    uv sync --frozen --no-install-project --no-install-workspace --no-default-groups --no-editable \
     --extra proxy \
     --extra proxy-runtime \
     --extra extra_proxy \
@@ -71,7 +72,8 @@ RUN mkdir -p /var/lib/litellm/ui /var/lib/litellm/assets && \
       done && \
       touch .litellm_ui_ready )
 
-RUN if [ "$PROXY_EXTRAS_SOURCE" = "published" ]; then \
+RUN --mount=type=cache,target=/app/.cache/uv,id=litellm-uv-cache \
+    if [ "$PROXY_EXTRAS_SOURCE" = "published" ]; then \
       uv sync --frozen --no-default-groups --no-editable \
         --extra proxy \
         --extra proxy-runtime \
