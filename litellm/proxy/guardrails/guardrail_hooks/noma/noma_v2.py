@@ -168,9 +168,8 @@ class NomaV2Guardrail(CustomGuardrail):
             json_str = json.dumps(payload, default=_default)
         except (ValueError, TypeError):
             json_str = safe_dumps(payload)
-        
-        safe_payload = safe_json_loads(json_str, default={})
 
+        safe_payload = safe_json_loads(json_str, default={})
         if safe_payload == {} and payload:
             verbose_proxy_logger.warning(
                 "Noma v2 guardrail: payload serialization failed, falling back to empty payload"
