@@ -3,7 +3,6 @@ from typing import Callable, List, Optional, Union
 
 from openai import AsyncOpenAI, OpenAI
 
-import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.llms.base import BaseLLM
@@ -114,7 +113,7 @@ class OpenAITextCompletion(BaseLLM):
                     openai_client = OpenAI(
                         api_key=api_key,
                         base_url=api_base,
-                        http_client=litellm.client_session,
+                        http_client=BaseOpenAILLM._get_sync_http_client(),
                         timeout=timeout,
                         max_retries=max_retries,  # type: ignore
                         organization=organization,
@@ -224,7 +223,7 @@ class OpenAITextCompletion(BaseLLM):
             openai_client = OpenAI(
                 api_key=api_key,
                 base_url=api_base,
-                http_client=litellm.client_session,
+                http_client=BaseOpenAILLM._get_sync_http_client(),
                 timeout=timeout,
                 max_retries=max_retries,  # type: ignore
                 organization=organization,
@@ -285,7 +284,7 @@ class OpenAITextCompletion(BaseLLM):
             openai_client = AsyncOpenAI(
                 api_key=api_key,
                 base_url=api_base,
-                http_client=litellm.aclient_session,
+                http_client=BaseOpenAILLM._get_async_http_client(),
                 timeout=timeout,
                 max_retries=max_retries,
                 organization=organization,
