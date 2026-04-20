@@ -1531,15 +1531,14 @@ def completion(  # type: ignore # noqa: PLR0915
         # If the model will be bridged to the Responses API, allow params
         # that the bridge can handle (e.g. web_search_options) even if the
         # provider's chat/completions config doesn't list them.
-        if responses_api_model_info.get("mode") == "responses":
-            _bridge_params = []
-            if web_search_options is not None:
-                _bridge_params.append("web_search_options")
-            if _bridge_params:
-                existing = optional_param_args.get("allowed_openai_params") or []
-                optional_param_args["allowed_openai_params"] = list(
-                    set(existing + _bridge_params)
-                )
+        if (
+            responses_api_model_info.get("mode") == "responses"
+            and web_search_options is not None
+        ):
+            existing = optional_param_args.get("allowed_openai_params") or []
+            optional_param_args["allowed_openai_params"] = list(
+                set(existing + ["web_search_options"])
+            )
 
         optional_params = get_optional_params(
             **optional_param_args, **non_default_params
