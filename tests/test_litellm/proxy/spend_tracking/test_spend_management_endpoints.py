@@ -1374,6 +1374,71 @@ async def test_ui_view_spend_logs_with_model_id(client, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_ui_view_spend_logs_with_model_group(client, monkeypatch):
+    """Test that the model_group query param filters spend logs by model group."""
+    mock_spend_logs = [
+        {
+            "id": "log1",
+            "request_id": "req1",
+            "api_key": "sk-test-key",
+            "user": "test_user_1",
+            "team_id": "team1",
+            "spend": 0.05,
+            "startTime": datetime.datetime.now(timezone.utc).isoformat(),
+            "model": "gpt-3.5-turbo",
+            "model_group": "gpt-3.5-turbo",
+            "status": "success",
+        },
+        {
+            "id": "log2",
+            "request_id": "req2",
+            "api_key": "sk-test-key",
+            "user": "test_user_2",
+            "team_id": "team1",
+            "spend": 0.10,
+            "startTime": datetime.datetime.now(timezone.utc).isoformat(),
+            "model": "gpt-4-0613",
+            "model_group": "gpt-4",
+            "status": "success",
+        },
+    ]
+
+    def filter_by_model_group(where):
+        if "model_group" in where and where["model_group"] == "gpt-4":
+            return [mock_spend_logs[1]]
+        return mock_spend_logs
+
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.prisma_client",
+        make_ui_spend_logs_mock_prisma(mock_spend_logs, filter_by_model_group),
+    )
+
+    start_date, end_date = _default_date_range()
+
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN
+    )
+    try:
+        response = client.get(
+            "/spend/logs/ui",
+            params={
+                "model_group": "gpt-4",
+                "start_date": start_date,
+                "end_date": end_date,
+            },
+            headers={"Authorization": "Bearer sk-test"},
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total"] == 1
+        assert len(data["data"]) == 1
+        assert data["data"][0]["model_group"] == "gpt-4"
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
 async def test_ui_view_spend_logs_with_key_hash(client, monkeypatch):
     mock_spend_logs = [
         {
