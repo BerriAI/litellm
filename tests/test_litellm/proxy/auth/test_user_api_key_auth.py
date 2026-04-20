@@ -1716,100 +1716,128 @@ async def test_user_api_key_auth_builder_no_blocking_calls():
 # manager first, so Datadog APM tagged the
 # `litellm.proxy.auth.get_key_object_check_cache` span as errored on every
 # request and the APM error rate looked like the proxy was on fire.
+#
+# The fix is purely structural — reorder `try:` and
+# `with tracer.trace(...)` so the try lives inside the tracer scope — so
+# the regression test is also structural. It walks the AST of
+# litellm/proxy/auth/user_api_key_auth.py, locates the `with` statement
+# that opens the check-cache span, and asserts two invariants on it:
+#
+#   1. The `with` is NOT the direct body of a `try` (i.e. a previous
+#      author has not re-wrapped it). That would make the exception
+#      propagate through the span scope again.
+#
+#   2. The FIRST statement inside the `with` body IS a `try`. That is
+#      where the "No DB Connected" exception must be caught so DD APM
+#      never sees it escape.
+#
+# Walking the AST is the only reliable way to validate this — a
+# behavioural test that inlines the correct pattern or merely slices the
+# source by string offsets ends up tautological. If the production code
+# is ever reverted, this test fails loudly.
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
-async def test_check_cache_span_not_errored_when_db_unavailable():
+def _find_check_cache_with(tree: "ast.AST") -> "Tuple[ast.With, list]":
     """
-    The try/except must sit INSIDE tracer.trace(...), otherwise DD APM
-    flags every request's check-cache span as errored. See #25966.
+    Return the `ast.With` node that opens the
+    `litellm.proxy.auth.get_key_object_check_cache` span, and the list of
+    ancestor nodes from root down to (but not including) the With.
     """
-    import contextlib
+    import ast
 
-    import litellm.proxy.auth.user_api_key_auth as auth_module
+    target_span_name = "litellm.proxy.auth.get_key_object_check_cache"
 
-    errored_span_names: list = []
+    def _with_has_target_span(node: ast.With) -> bool:
+        for item in node.items:
+            call = item.context_expr
+            if (
+                isinstance(call, ast.Call)
+                and isinstance(call.func, ast.Attribute)
+                and call.func.attr == "trace"
+                and call.args
+                and isinstance(call.args[0], ast.Constant)
+                and call.args[0].value == target_span_name
+            ):
+                return True
+        return False
 
-    @contextlib.contextmanager
-    def spying_trace(name, *args, **kwargs):
-        try:
-            yield
-        except BaseException:
-            # If we reach here, the exception escaped the `with` scope
-            # and DD APM would tag this span as errored.
-            errored_span_names.append(name)
-            raise
+    ancestors: list = []
+    found: "Optional[Tuple[ast.With, list]]" = None
 
-    mock_tracer = MagicMock()
-    mock_tracer.trace = spying_trace
+    def visit(node, parents):
+        nonlocal found
+        if found is not None:
+            return
+        if isinstance(node, ast.With) and _with_has_target_span(node):
+            found = (node, list(parents))
+            return
+        for child in ast.iter_child_nodes(node):
+            visit(child, parents + [node])
 
-    async def raising_get_key_object(**kwargs):
-        # Matches the real `get_key_object` behaviour when prisma_client
-        # is None — the code path that fires on every request when
-        # allow_requests_on_db_unavailable: true.
-        raise Exception(
-            "No DB Connected. See - https://docs.litellm.ai/docs/proxy/virtual_keys"
-        )
-
-    with patch.object(auth_module, "tracer", mock_tracer), patch.object(
-        auth_module, "get_key_object", side_effect=raising_get_key_object
-    ):
-        # A direct call into _user_api_key_auth_builder would need ~20
-        # auth fixtures just to reach this branch. Reproducing the
-        # exact fragment of the function that owns this span is what
-        # the fix actually changes.
-        valid_token = None
-        with auth_module.tracer.trace(
-            "litellm.proxy.auth.get_key_object_check_cache"
-        ):
-            try:
-                valid_token = await auth_module.get_key_object(
-                    hashed_token="sk-test",
-                    prisma_client=None,
-                    user_api_key_cache=MagicMock(),
-                    parent_otel_span=None,
-                    proxy_logging_obj=None,
-                    check_cache_only=True,
-                )
-            except Exception:
-                valid_token = None
-
-    assert valid_token is None
-    assert (
-        "litellm.proxy.auth.get_key_object_check_cache" not in errored_span_names
-    ), (
-        "exception escaped the tracer.trace() scope — DD APM would mark "
-        "the span as errored"
+    visit(tree, ancestors)
+    assert found is not None, (
+        f"AST walk could not find `with tracer.trace({target_span_name!r})` "
+        f"— did someone rename the span?"
     )
+    return found  # type: ignore[return-value]
 
 
-def test_check_cache_source_has_try_inside_tracer():
+def test_check_cache_span_is_outside_try_block_ast_guard():
     """
-    Structural guard against regressing the fix for #25966.
+    AST-level regression guard for #25966.
 
-    The cache-check block in `_user_api_key_auth_builder` must keep
-    `tracer.trace(...)` on the OUTSIDE and `try/except` on the INSIDE.
-    Reverting that order re-introduces the Datadog APM false-positive
-    error spans; this assertion fails loudly if it happens.
+    Fails if the cache-check `with tracer.trace(...)` is directly wrapped
+    by a `try` block — which is exactly the broken ordering that let the
+    cache-miss exception escape the span scope and taint DD APM spans.
     """
+    import ast
     import inspect
 
     import litellm.proxy.auth.user_api_key_auth as auth_module
 
-    source = inspect.getsource(auth_module)
-    anchor = "litellm.proxy.auth.get_key_object_check_cache"
-    idx = source.find(anchor)
-    assert idx != -1, "check-cache tracer span not found — rename?"
+    tree = ast.parse(inspect.getsource(auth_module))
+    with_node, ancestors = _find_check_cache_with(tree)
 
-    # Look at the handful of lines directly preceding the tracer.trace
-    # call — before the fix the last non-empty one was a bare `try:`
-    # (the `with` was inside the try). After the fix `try:` lives below
-    # the `with`, so it must not appear just above it.
-    window_start = source.rfind("\n", 0, idx - 200)
-    window = source[window_start:idx]
-    preceding_lines = [ln.strip() for ln in window.splitlines() if ln.strip()]
-    assert preceding_lines and preceding_lines[-1] != "try:", (
-        "regressed: `try:` is wrapping `with tracer.trace(...)` again; "
-        "put try/except INSIDE the tracer span to keep the DD APM span clean"
+    # The immediate enclosing statement of the With must not be a Try
+    # where the With is the first element of the try body. Walk
+    # outwards: any Try whose `body` is the block that directly owns
+    # the With is a regression.
+    for ancestor in reversed(ancestors):
+        if isinstance(ancestor, ast.Try):
+            if with_node in ancestor.body:
+                raise AssertionError(
+                    "regressed: `try:` is wrapping "
+                    "`with tracer.trace(\"...get_key_object_check_cache\")`. "
+                    "Put try/except INSIDE the tracer span, otherwise DD APM "
+                    "tags every request's span as errored (see #25966)."
+                )
+        # Stop climbing at the enclosing function — anything above it
+        # is irrelevant to this block's exception semantics.
+        if isinstance(ancestor, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            break
+
+
+def test_check_cache_span_body_starts_with_try_ast_guard():
+    """
+    Complement to the guard above: the first statement inside the
+    check-cache `with` block must be a `try`, so the "No DB Connected"
+    exception is caught BEFORE it can escape the span scope.
+    """
+    import ast
+    import inspect
+
+    import litellm.proxy.auth.user_api_key_auth as auth_module
+
+    tree = ast.parse(inspect.getsource(auth_module))
+    with_node, _ = _find_check_cache_with(tree)
+
+    assert with_node.body, (
+        "the check-cache `with tracer.trace(...)` block is empty?"
+    )
+    assert isinstance(with_node.body[0], ast.Try), (
+        "regressed: the first statement inside the check-cache tracer "
+        "span is not `try:` — the cache-miss exception will propagate "
+        "through the span scope and DD APM will tag it as errored "
+        "(see #25966)."
     )
