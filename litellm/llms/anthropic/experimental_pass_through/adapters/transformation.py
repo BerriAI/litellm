@@ -117,7 +117,13 @@ from litellm.types.llms.openai import (
     ChatCompletionToolParamFunctionChunk,
     ChatCompletionUserMessage,
 )
-from litellm.types.utils import Choices, ModelResponse, StreamingChoices, Usage
+from litellm.types.utils import (
+    ChatCompletionDeltaToolCall,
+    Choices,
+    ModelResponse,
+    StreamingChoices,
+    Usage,
+)
 
 from .streaming_iterator import AnthropicStreamWrapper
 
@@ -1405,6 +1411,53 @@ class LiteLLMAnthropicMessagesAdapter:
                         )
 
         return "text", TextBlock(type="text", text="")
+
+    def iter_streaming_tool_calls(
+        self, choices: List[Union[OpenAIStreamingChoice, StreamingChoices]]
+    ) -> List[ChatCompletionDeltaToolCall]:
+        tool_calls: List[ChatCompletionDeltaToolCall] = []
+        for choice in choices:
+            delta = choice.delta
+            choice_tool_calls = (
+                delta.get("tool_calls")
+                if isinstance(delta, dict)
+                else getattr(delta, "tool_calls", None)
+            )
+            if choice_tool_calls is not None:
+                for tool_call in choice_tool_calls:
+                    if isinstance(tool_call, dict):
+                        tool_calls.append(ChatCompletionDeltaToolCall(**tool_call))
+                    else:
+                        tool_calls.append(tool_call)
+        return tool_calls
+
+    def translate_streaming_tool_call_to_anthropic_content_block(
+        self, tool_call: ChatCompletionDeltaToolCall
+    ) -> "ContentBlockContentBlockDict":
+        from litellm._uuid import uuid
+        from litellm.types.llms.anthropic import ToolUseBlock
+
+        function_name = ""
+        if tool_call.function is not None and tool_call.function.name is not None:
+            function_name = tool_call.function.name
+
+        return ToolUseBlock(
+            type="tool_use",
+            id=tool_call.id or str(uuid.uuid4()),
+            name=function_name,
+            input={},  # type: ignore[typeddict-item]
+        )
+
+    def translate_streaming_tool_call_to_anthropic_delta(
+        self, tool_call: ChatCompletionDeltaToolCall
+    ) -> Optional[ContentJsonBlockDelta]:
+        if tool_call.function is None or tool_call.function.arguments in (None, ""):
+            return None
+
+        return ContentJsonBlockDelta(
+            type="input_json_delta",
+            partial_json=tool_call.function.arguments,
+        )
 
     def _translate_streaming_openai_chunk_to_anthropic(
         self, choices: List[Union[OpenAIStreamingChoice, StreamingChoices]]
