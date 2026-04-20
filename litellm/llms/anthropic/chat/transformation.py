@@ -1331,15 +1331,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         }
 
         ## Handle output_config (Anthropic-specific parameter)
-        if "output_config" in optional_params:
-            output_config = optional_params.get("output_config")
-            if output_config and isinstance(output_config, dict):
-                effort = output_config.get("effort")
-                if effort and effort not in ["high", "medium", "low"]:
-                    raise ValueError(
-                        f"Invalid effort value: {effort}. Must be one of: 'high', 'medium', 'low'"
-                    )
-                data["output_config"] = output_config
+        self._apply_output_config(
+            data=data, model=model, optional_params=optional_params
+        )
 
         return data
 
