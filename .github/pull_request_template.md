@@ -32,6 +32,13 @@ If you're seeing a delay in your PR being merged, ping the LiteLLM Team on [Slac
 - [ ] **Merge / cherry-pick CI run**  
        Links:
 
+## Screenshots / Proof of Fix
+
+<!-- Include screenshots, screen recordings, or log output demonstrating that your changes work as expected.
+     For bug fixes: show reproduction before the fix and passing behavior after.
+     For new features: show the feature working end-to-end.
+     For UI changes: include before/after screenshots. -->
+
 ## Type
 
 <!-- Select the type of Pull Request -->

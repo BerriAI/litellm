@@ -66,16 +66,16 @@ git clone https://github.com/krrishdholakia/open-interpreter-litellm-fork
 ```
 To run it do: 
 ```
-poetry build 
+uv build 
 
 # call gpt-4 - always add 'litellm_proxy/' in front of the model name
-poetry run interpreter --model litellm_proxy/gpt-4
+uv run interpreter --model litellm_proxy/gpt-4
 
 # call llama-70b - always add 'litellm_proxy/' in front of the model name
-poetry run interpreter --model litellm_proxy/togethercomputer/llama-2-70b-chat
+uv run interpreter --model litellm_proxy/togethercomputer/llama-2-70b-chat
 
 # call claude-2 - always add 'litellm_proxy/' in front of the model name
-poetry run interpreter --model litellm_proxy/claude-2
+uv run interpreter --model litellm_proxy/claude-2
 ```
 
 And that's it! 

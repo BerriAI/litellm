@@ -1016,9 +1016,9 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
                     "toolResult": {
                         "promptName": self.prompt_name,
                         "contentName": tool_content_name,
-                        "content": output
-                        if isinstance(output, str)
-                        else json.dumps(output),
+                        "content": (
+                            output if isinstance(output, str) else json.dumps(output)
+                        ),
                     }
                 }
             }

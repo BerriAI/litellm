@@ -255,6 +255,8 @@ def test_transform_messages_sanitizes_empty_content():
         {"role": "user", "content": [{"type": "text", "text": ""}]},
         {"role": "user", "content": "Hi"},
     ]
-    result = config._transform_messages(messages=messages, model="databricks-claude", is_async=False)
+    result = config._transform_messages(
+        messages=messages, model="databricks-claude", is_async=False
+    )
     assert "content" not in result[0]
     assert result[1]["content"] == "Hi"

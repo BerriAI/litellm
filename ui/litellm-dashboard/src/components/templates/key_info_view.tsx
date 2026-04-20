@@ -20,7 +20,7 @@ import NotificationManager from "../molecules/notifications_manager";
 import { getPolicyInfoWithGuardrails, keyDeleteCall, keyUpdateCall } from "../networking";
 import { useResetKeySpend } from "@/app/(dashboard)/hooks/keys/useResetKeySpend";
 import ObjectPermissionsView from "../object_permissions_view";
-import { RegenerateKeyModal } from "../organisms/regenerate_key_modal";
+import { RegenerateKeyModal } from "../organisms/RegenerateKeyModal";
 import { parseErrorMessage } from "../shared/errorUtils";
 import { KeyEditView } from "./key_edit_view";
 
@@ -33,6 +33,21 @@ interface KeyInfoViewProps {
   teams: any[] | null;
   backButtonText?: string;
 }
+
+// Must stay in sync with LiteLLM_ManagementEndpoint_MetadataFields_Premium
+// in litellm/proxy/_types.py — limited to fields the key-edit form submits.
+const PREMIUM_METADATA_FIELDS = [
+  "policies",
+  "guardrails",
+  "prompts",
+  "tags",
+  "allowed_passthrough_routes",
+] as const;
+
+const isEmptyValue = (v: unknown): boolean =>
+  v == null ||
+  (Array.isArray(v) && v.length === 0) ||
+  (typeof v === "string" && v.trim() === "");
 
 /**
  * ─────────────────────────────────────────────────────────────────────────
@@ -144,6 +159,19 @@ export default function KeyInfoView({
       if (!canEditGuardrails) {
         delete formValues.guardrails;
         delete formValues.prompts;
+      }
+
+      // Drop premium metadata fields that are empty AND were empty before.
+      // The /key/update response echoes defaults like `policies: []` back into
+      // state; without this, the next save resends `[]` and trips the premium
+      // gate in prepare_metadata_fields for non-premium users.
+      for (const field of PREMIUM_METADATA_FIELDS) {
+        const previousValue =
+          (currentKeyData.metadata as Record<string, unknown> | undefined)?.[field] ??
+          (currentKeyData as unknown as Record<string, unknown>)[field];
+        if (isEmptyValue(formValues[field]) && isEmptyValue(previousValue)) {
+          delete formValues[field];
+        }
       }
 
       // Handle max budget empty string
