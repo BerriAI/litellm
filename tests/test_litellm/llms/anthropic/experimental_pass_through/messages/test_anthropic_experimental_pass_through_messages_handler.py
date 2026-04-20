@@ -499,3 +499,106 @@ class TestThinkingSummaryPreservation:
         assert result == {
             "reasoning_effort": {"effort": "medium", "summary": "concise"}
         }
+
+
+class TestShouldRouteToResponsesApi:
+    """Tests for _should_route_to_responses_api routing decision."""
+
+    def test_openai_provider_routes_to_responses(self):
+        """OpenAI provider should route to Responses API."""
+        from litellm.llms.anthropic.experimental_pass_through.messages.handler import (
+            _should_route_to_responses_api,
+        )
+
+        assert _should_route_to_responses_api("openai") is True
+
+    def test_mode_responses_routes_to_responses(self):
+        """model_info with mode=responses should route to Responses API."""
+        from litellm.llms.anthropic.experimental_pass_through.messages.handler import (
+            _should_route_to_responses_api,
+        )
+
+        assert (
+            _should_route_to_responses_api("github_copilot", {"mode": "responses"})
+            is True
+        )
+
+    def test_mode_chat_routes_to_completions(self):
+        """model_info with mode=chat should NOT route to Responses API."""
+        from litellm.llms.anthropic.experimental_pass_through.messages.handler import (
+            _should_route_to_responses_api,
+        )
+
+        assert (
+            _should_route_to_responses_api("github_copilot", {"mode": "chat"}) is False
+        )
+
+    def test_no_mode_defaults_to_completions(self):
+        """Without mode in model_info, non-openai provider goes to chat/completions."""
+        from litellm.llms.anthropic.experimental_pass_through.messages.handler import (
+            _should_route_to_responses_api,
+        )
+
+        assert _should_route_to_responses_api("github_copilot") is False
+        assert _should_route_to_responses_api("github_copilot", {}) is False
+        assert _should_route_to_responses_api("github_copilot", None) is False
+
+    def test_opt_out_flag_overrides_all(self):
+        """use_chat_completions_url_for_anthropic_messages=True forces chat/completions."""
+        import litellm
+        from litellm.llms.anthropic.experimental_pass_through.messages.handler import (
+            _should_route_to_responses_api,
+        )
+
+        original = litellm.use_chat_completions_url_for_anthropic_messages
+        try:
+            litellm.use_chat_completions_url_for_anthropic_messages = True
+            # Even openai provider is overridden
+            assert _should_route_to_responses_api("openai") is False
+            # Even mode=responses is overridden
+            assert (
+                _should_route_to_responses_api("github_copilot", {"mode": "responses"})
+                is False
+            )
+        finally:
+            litellm.use_chat_completions_url_for_anthropic_messages = original
+
+    def test_mode_responses_end_to_end(self):
+        """End-to-end: model_info with mode=responses routes to litellm.responses."""
+        from litellm.llms.anthropic.experimental_pass_through.messages.handler import (
+            anthropic_messages_handler,
+        )
+
+        with patch("litellm.responses", return_value="test-response") as mock_responses:
+            try:
+                anthropic_messages_handler(
+                    max_tokens=100,
+                    messages=[{"role": "user", "content": "Hello"}],
+                    model="my-custom-model",
+                    custom_llm_provider="my-custom-llm",
+                    api_key="test-api-key",
+                    model_info={"mode": "responses"},
+                )
+            except (ValueError, TypeError, AttributeError) as e:
+                print(f"Error: {e}")
+            mock_responses.assert_called_once()
+
+    def test_mode_chat_end_to_end(self):
+        """End-to-end: model_info with mode=chat routes to litellm.completion."""
+        from litellm.llms.anthropic.experimental_pass_through.messages.handler import (
+            anthropic_messages_handler,
+        )
+
+        with patch("litellm.completion", return_value=MagicMock()) as mock_completion:
+            try:
+                anthropic_messages_handler(
+                    max_tokens=100,
+                    messages=[{"role": "user", "content": "Hello"}],
+                    model="my-custom-model",
+                    custom_llm_provider="my-custom-llm",
+                    api_key="test-api-key",
+                    model_info={"mode": "chat"},
+                )
+            except (ValueError, TypeError, AttributeError) as e:
+                print(f"Error: {e}")
+            mock_completion.assert_called_once()
