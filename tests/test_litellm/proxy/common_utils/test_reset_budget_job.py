@@ -36,9 +36,13 @@ class MockLiteLLMVerificationToken:
     def set_find_many_results(self, results: List[Any]):
         self._find_many_results = results
 
-    async def find_many(self, where: Dict[str, Any] | None = None) -> List[Any]:
-        self.find_many_calls.append({"where": where})
-        return self._find_many_results
+    async def find_many(self, **kwargs) -> List[Any]:
+        self.find_many_calls.append(kwargs)
+        skip = kwargs.get("skip", 0)
+        take = kwargs.get("take")
+        if take is None:
+            return self._find_many_results[skip:]
+        return self._find_many_results[skip : skip + take]
 
     async def update(self, where: Dict[str, Any], data: Dict[str, Any]) -> Dict[str, Any]:
         self.update_calls.append({"where": where, "data": data})
@@ -60,9 +64,13 @@ class MockLiteLLMTeamTable:
     def set_find_many_results(self, results: List[Any]):
         self._find_many_results = results
 
-    async def find_many(self, where: Dict[str, Any] | None = None) -> List[Any]:
-        self.find_many_calls.append({"where": where})
-        return self._find_many_results
+    async def find_many(self, **kwargs) -> List[Any]:
+        self.find_many_calls.append(kwargs)
+        skip = kwargs.get("skip", 0)
+        take = kwargs.get("take")
+        if take is None:
+            return self._find_many_results[skip:]
+        return self._find_many_results[skip : skip + take]
 
     async def update(self, where: Dict[str, Any], data: Dict[str, Any]) -> Dict[str, Any]:
         self.update_calls.append({"where": where, "data": data})
@@ -700,10 +708,10 @@ def test_reset_budget_windows_filters_null_budget_limits_in_python(
         asyncio.run(reset_budget_job.reset_budget_windows())
 
     assert mock_prisma_client.db.litellm_verificationtoken.find_many_calls == [
-        {"where": None}
+        {"skip": 0, "take": 500, "order": {"token": "asc"}}
     ]
     assert mock_prisma_client.db.litellm_teamtable.find_many_calls == [
-        {"where": None}
+        {"skip": 0, "take": 500, "order": {"team_id": "asc"}}
     ]
 
     key_updates = mock_prisma_client.db.litellm_verificationtoken.update_calls
@@ -713,6 +721,46 @@ def test_reset_budget_windows_filters_null_budget_limits_in_python(
     team_updates = mock_prisma_client.db.litellm_teamtable.update_calls
     assert len(team_updates) == 1
     assert team_updates[0]["where"] == {"team_id": "team-with-windows"}
+
+
+def test_reset_budget_windows_paginates_large_tables(
+    reset_budget_job, mock_prisma_client
+):
+    reset_budget_job._RESET_BUDGET_WINDOWS_BATCH_SIZE = 2
+
+    keys = [
+        type(
+            "LiteLLM_VerificationToken",
+            (),
+            {"token": f"sk-{i}", "budget_limits": None},
+        )
+        for i in range(5)
+    ]
+    teams = [
+        type(
+            "LiteLLM_TeamTable",
+            (),
+            {"team_id": f"team-{i}", "budget_limits": None},
+        )
+        for i in range(5)
+    ]
+
+    mock_prisma_client.db.litellm_verificationtoken.set_find_many_results(keys)
+    mock_prisma_client.db.litellm_teamtable.set_find_many_results(teams)
+
+    with patch("litellm.proxy.proxy_server.spend_counter_cache", new=MagicMock()):
+        asyncio.run(reset_budget_job.reset_budget_windows())
+
+    assert mock_prisma_client.db.litellm_verificationtoken.find_many_calls == [
+        {"skip": 0, "take": 2, "order": {"token": "asc"}},
+        {"skip": 2, "take": 2, "order": {"token": "asc"}},
+        {"skip": 4, "take": 2, "order": {"token": "asc"}},
+    ]
+    assert mock_prisma_client.db.litellm_teamtable.find_many_calls == [
+        {"skip": 0, "take": 2, "order": {"team_id": "asc"}},
+        {"skip": 2, "take": 2, "order": {"team_id": "asc"}},
+        {"skip": 4, "take": 2, "order": {"team_id": "asc"}},
+    ]
 
 
 def test_reset_budget_resets_endusers_with_null_budget_id(

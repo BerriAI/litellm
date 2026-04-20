@@ -26,6 +26,8 @@ class ResetBudgetJob:
         self.proxy_logging_obj: ProxyLogging = proxy_logging_obj
         self.prisma_client: PrismaClient = prisma_client
 
+    _RESET_BUDGET_WINDOWS_BATCH_SIZE = 500
+
     async def reset_budget(
         self,
     ):
@@ -634,26 +636,37 @@ class ResetBudgetJob:
 
         # --- Keys ---
         try:
-            all_keys = await self.prisma_client.db.litellm_verificationtoken.find_many()
-            for key in all_keys:
-                raw = key.budget_limits  # type: ignore[attr-defined]
-                if not raw:
-                    continue
-                windows: list = raw if isinstance(raw, list) else json.loads(raw)
-                changed = False
-                for window in windows:
-                    counter_key = (
-                        f"spend:key:{key.token}:window:{window['budget_duration']}"
-                    )
-                    if await ResetBudgetJob._reset_expired_window(
-                        window, counter_key, spend_counter_cache, now
-                    ):
-                        changed = True
-                if changed:
-                    await self.prisma_client.db.litellm_verificationtoken.update(
-                        where={"token": key.token},
-                        data={"budget_limits": json.dumps(windows)},  # type: ignore[arg-type]
-                    )
+            skip = 0
+            while True:
+                all_keys = await self.prisma_client.db.litellm_verificationtoken.find_many(
+                    skip=skip,
+                    take=self._RESET_BUDGET_WINDOWS_BATCH_SIZE,
+                    order={"token": "asc"},
+                )
+                if len(all_keys) == 0:
+                    break
+                for key in all_keys:
+                    raw = key.budget_limits  # type: ignore[attr-defined]
+                    if not raw:
+                        continue
+                    windows: list = raw if isinstance(raw, list) else json.loads(raw)
+                    changed = False
+                    for window in windows:
+                        counter_key = (
+                            f"spend:key:{key.token}:window:{window['budget_duration']}"
+                        )
+                        if await ResetBudgetJob._reset_expired_window(
+                            window, counter_key, spend_counter_cache, now
+                        ):
+                            changed = True
+                    if changed:
+                        await self.prisma_client.db.litellm_verificationtoken.update(
+                            where={"token": key.token},
+                            data={"budget_limits": json.dumps(windows)},  # type: ignore[arg-type]
+                        )
+                if len(all_keys) < self._RESET_BUDGET_WINDOWS_BATCH_SIZE:
+                    break
+                skip += self._RESET_BUDGET_WINDOWS_BATCH_SIZE
         except Exception as e:
             verbose_proxy_logger.exception(
                 "Failed to reset budget windows for keys: %s", e
@@ -661,26 +674,37 @@ class ResetBudgetJob:
 
         # --- Teams ---
         try:
-            all_teams = await self.prisma_client.db.litellm_teamtable.find_many()
-            for team in all_teams:
-                raw = team.budget_limits  # type: ignore[attr-defined]
-                if not raw:
-                    continue
-                windows = raw if isinstance(raw, list) else json.loads(raw)
-                changed = False
-                for window in windows:
-                    counter_key = (
-                        f"spend:team:{team.team_id}:window:{window['budget_duration']}"
-                    )
-                    if await ResetBudgetJob._reset_expired_window(
-                        window, counter_key, spend_counter_cache, now
-                    ):
-                        changed = True
-                if changed:
-                    await self.prisma_client.db.litellm_teamtable.update(
-                        where={"team_id": team.team_id},
-                        data={"budget_limits": json.dumps(windows)},  # type: ignore[arg-type]
-                    )
+            skip = 0
+            while True:
+                all_teams = await self.prisma_client.db.litellm_teamtable.find_many(
+                    skip=skip,
+                    take=self._RESET_BUDGET_WINDOWS_BATCH_SIZE,
+                    order={"team_id": "asc"},
+                )
+                if len(all_teams) == 0:
+                    break
+                for team in all_teams:
+                    raw = team.budget_limits  # type: ignore[attr-defined]
+                    if not raw:
+                        continue
+                    windows = raw if isinstance(raw, list) else json.loads(raw)
+                    changed = False
+                    for window in windows:
+                        counter_key = (
+                            f"spend:team:{team.team_id}:window:{window['budget_duration']}"
+                        )
+                        if await ResetBudgetJob._reset_expired_window(
+                            window, counter_key, spend_counter_cache, now
+                        ):
+                            changed = True
+                    if changed:
+                        await self.prisma_client.db.litellm_teamtable.update(
+                            where={"team_id": team.team_id},
+                            data={"budget_limits": json.dumps(windows)},  # type: ignore[arg-type]
+                        )
+                if len(all_teams) < self._RESET_BUDGET_WINDOWS_BATCH_SIZE:
+                    break
+                skip += self._RESET_BUDGET_WINDOWS_BATCH_SIZE
         except Exception as e:
             verbose_proxy_logger.exception(
                 "Failed to reset budget windows for teams: %s", e
