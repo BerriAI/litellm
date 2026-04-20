@@ -409,7 +409,7 @@ class TestMavvrikClientRegister:
         assert "+00:00" in marker or "UTC" in marker or "Z" in marker or "+00" in marker
 
     @pytest.mark.asyncio
-    async def test_register_defaults_to_first_of_month_when_marker_zero(self):
+    async def test_register_returns_none_when_marker_zero(self):
         streamer = _make_streamer()
         mock_resp = MagicMock()
         mock_resp.status_code = 200
@@ -419,12 +419,10 @@ class TestMavvrikClientRegister:
         with patch("httpx.AsyncClient", return_value=cm):
             marker = await streamer.register()
 
-        marker_dt = datetime.fromisoformat(marker)
-        assert marker_dt.day == 1
-        assert marker_dt.hour == 0
+        assert marker is None
 
     @pytest.mark.asyncio
-    async def test_register_defaults_to_first_of_month_when_marker_absent(self):
+    async def test_register_returns_none_when_marker_absent(self):
         streamer = _make_streamer()
         mock_resp = MagicMock()
         mock_resp.status_code = 200
@@ -434,8 +432,7 @@ class TestMavvrikClientRegister:
         with patch("httpx.AsyncClient", return_value=cm):
             marker = await streamer.register()
 
-        marker_dt = datetime.fromisoformat(marker)
-        assert marker_dt.day == 1
+        assert marker is None
 
     @pytest.mark.asyncio
     async def test_register_raises_on_non_200(self):

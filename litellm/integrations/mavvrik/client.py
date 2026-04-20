@@ -22,6 +22,7 @@ Additionally implements registration and marker advance:
   Register — POST {api_endpoint}/metrics/agent/ai/{connection_id}
       Body: { "name": instance_id, "version": <litellm version>, "arch": <system arch> }
       Response: { "id": "...", "metricsMarker": <epoch_seconds> }
+      Returns ISO-8601 marker string, or None when epoch is 0 (first run).
 
   Advance marker — PATCH {api_endpoint}/metrics/agent/ai/{connection_id}
       Body: { "metricsMarker": <epoch_seconds> }
@@ -128,16 +129,17 @@ class MavvrikClient:
     # Registration — called once during POST /mavvrik/init
     # ------------------------------------------------------------------
 
-    async def register(self) -> str:
-        """POST to Mavvrik agent endpoint and return the initial marker as ISO-8601.
+    async def register(self) -> Optional[str]:
+        """POST to Mavvrik agent endpoint and return the current marker as ISO-8601.
 
           POST {api_endpoint}/metrics/agent/ai/{connection_id}
           Body: { "name": instance_id, "version": <litellm version>, "arch": <system arch> }
           Response: { "id": "...", "metricsMarker": <epoch_seconds> }
-          metricsMarker == 0 → default to first day of current month
 
         Returns:
-            ISO-8601 UTC string for the initial export window start.
+            ISO-8601 UTC string when a marker exists, or None when the remote
+            marker is absent or zero (brand-new connection).  The caller
+            (MavvrikOrchestrator) decides how to handle the first-run case.
 
         Raises:
             RuntimeError: if the registration call fails.
@@ -160,16 +162,16 @@ class MavvrikClient:
         response_body = resp.json()
         epoch = response_body.get("metricsMarker", 0)
 
-        if epoch:
-            marker_dt = _dt.fromtimestamp(float(epoch), tz=_tz.utc)
-        else:
-            marker_dt = self._utc_now().replace(
-                day=1, hour=0, minute=0, second=0, microsecond=0
+        if not epoch:
+            verbose_proxy_logger.info(
+                "Mavvrik register: remote epoch=%s → no marker (first run)",
+                epoch,
             )
+            return None
 
-        marker_iso = marker_dt.isoformat()
+        marker_iso = _dt.fromtimestamp(float(epoch), tz=_tz.utc).isoformat()
         verbose_proxy_logger.info(
-            "Mavvrik register: remote epoch=%s → initial marker %s",
+            "Mavvrik register: remote epoch=%s → marker %s",
             epoch,
             marker_iso,
         )

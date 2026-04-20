@@ -6,7 +6,7 @@ Consolidates all configuration concerns:
   - Encryption/decryption of the API key
 
 The export marker (cursor) is owned exclusively by the Mavvrik API.
-On each scheduled run, MavvrikScheduler calls client.register() to
+On each scheduled run, MavvrikOrchestrator calls client.register() to
 retrieve the current metricsMarker from Mavvrik — no local marker
 storage is needed.
 """

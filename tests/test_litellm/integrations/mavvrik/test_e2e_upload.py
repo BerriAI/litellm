@@ -76,13 +76,14 @@ def streamer():
 @_skip_if_no_creds
 class TestE2ERegister:
     @pytest.mark.asyncio
-    async def test_register_returns_iso_string(self, streamer):
-        """register() must return an ISO-8601 date string from the live API."""
+    async def test_register_returns_iso_string_or_none(self, streamer):
+        """register() must return an ISO-8601 date string or None (first run)."""
         marker = await streamer.register()
         print(f"\n  register() returned marker: {marker}")
 
-        dt = datetime.fromisoformat(marker)
-        assert dt.year >= 2020, f"Unexpected marker year: {dt.year}"
+        if marker is not None:
+            dt = datetime.fromisoformat(marker)
+            assert dt.year >= 2020, f"Unexpected marker year: {dt.year}"
 
     @pytest.mark.asyncio
     async def test_register_twice_is_idempotent(self, streamer):
@@ -91,8 +92,10 @@ class TestE2ERegister:
         m2 = await streamer.register()
         print(f"\n  First call:  {m1}")
         print(f"  Second call: {m2}")
-        datetime.fromisoformat(m1)
-        datetime.fromisoformat(m2)
+        if m1 is not None:
+            datetime.fromisoformat(m1)
+        if m2 is not None:
+            datetime.fromisoformat(m2)
 
 
 @_skip_if_no_creds
@@ -151,7 +154,8 @@ class TestE2EFullFlow:
     async def test_register_then_upload_then_advance(self, streamer):
         """Simulate one complete scheduled export cycle end-to-end."""
         marker_iso = await streamer.register()
-        datetime.fromisoformat(marker_iso)
+        if marker_iso is not None:
+            datetime.fromisoformat(marker_iso)
         print(f"\n  register() marker: {marker_iso}")
 
         await streamer.upload(_TEST_CSV, date_str=_TEST_DATE)

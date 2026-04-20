@@ -109,10 +109,10 @@ class TestInitMavvrikSettings:
         )
 
         with patch.object(
-            MavvrikClient, "register", new=AsyncMock(side_effect=Exception("network error"))
-        ), patch.object(
-            MavvrikSettings, "save", new=AsyncMock()
-        ), patch(
+            MavvrikClient,
+            "register",
+            new=AsyncMock(side_effect=Exception("network error")),
+        ), patch.object(MavvrikSettings, "save", new=AsyncMock()), patch(
             "litellm.integrations.mavvrik.MavvrikScheduler.register_exporter_and_job",
             new=AsyncMock(),
         ):
@@ -136,7 +136,6 @@ class TestGetMavvrikSettings:
                     "api_key_masked": None,
                     "api_endpoint": None,
                     "connection_id": None,
-                    "marker": None,
                     "status": "not_configured",
                 }
             ),
@@ -155,7 +154,6 @@ class TestGetMavvrikSettings:
                     "api_key_masked": "mav_*******",
                     "api_endpoint": "https://api.mavvrik.dev/acme",
                     "connection_id": "prod",
-                    "marker": "2024-01-14",
                     "status": "configured",
                 }
             ),
@@ -165,7 +163,6 @@ class TestGetMavvrikSettings:
         assert resp.status == "configured"
         assert resp.api_key_masked is not None
         assert "mav_plaintextkey" not in (resp.api_key_masked or "")
-        assert resp.marker == "2024-01-14"
         assert resp.connection_id == "prod"
 
     @pytest.mark.asyncio
@@ -198,31 +195,6 @@ class TestUpdateMavvrikSettings:
             await update_mavvrik_settings(req, user_api_key_dict=_admin_user())
         assert exc_info.value.status_code == 400
 
-    @pytest.mark.asyncio
-    async def test_update_marker_only(self):
-        req = MavvrikSettingsUpdate(marker="2024-06-01")
-
-        with patch(
-            f"{_SVC}.update_settings",
-            new=AsyncMock(
-                return_value={
-                    "message": "Mavvrik settings updated successfully",
-                    "status": "success",
-                }
-            ),
-        ) as mock_update:
-            resp = await update_mavvrik_settings(req, user_api_key_dict=_admin_user())
-
-        assert resp.status == "success"
-        mock_update.assert_called_once()
-        # Verify marker was forwarded
-        _, kwargs = mock_update.call_args
-        assert kwargs.get("marker") == "2024-06-01"
-
-    def test_update_rejects_invalid_marker_date(self):
-        with pytest.raises(Exception, match="YYYY-MM-DD"):
-            MavvrikSettingsUpdate(marker="not-a-date")
-
     def test_update_rejects_empty_api_key(self):
         with pytest.raises(Exception):
             MavvrikSettingsUpdate(api_key="")
@@ -241,7 +213,11 @@ class TestDeleteMavvrikSettings:
 
         with patch(
             f"{_SVC}.delete",
-            new=AsyncMock(side_effect=LookupError("Mavvrik settings not found — nothing to delete.")),
+            new=AsyncMock(
+                side_effect=LookupError(
+                    "Mavvrik settings not found — nothing to delete."
+                )
+            ),
         ):
             with pytest.raises(HTTPException) as exc_info:
                 await delete_mavvrik_settings(user_api_key_dict=_admin_user())
@@ -370,7 +346,9 @@ class TestExportMavvrikData:
         with patch(
             f"{_SVC}.export",
             new=AsyncMock(
-                side_effect=ValueError("Mavvrik not configured. Call POST /mavvrik/init first.")
+                side_effect=ValueError(
+                    "Mavvrik not configured. Call POST /mavvrik/init first."
+                )
             ),
         ):
             with pytest.raises(HTTPException) as exc_info:
@@ -431,7 +409,6 @@ class TestLifecycleFlow:
                     "api_key_masked": None,
                     "api_endpoint": None,
                     "connection_id": None,
-                    "marker": None,
                     "status": "not_configured",
                 }
             ),
@@ -439,43 +416,6 @@ class TestLifecycleFlow:
             get_resp = await get_mavvrik_settings(user_api_key_dict=_admin_user())
 
         assert get_resp.status == "not_configured"
-
-    @pytest.mark.asyncio
-    async def test_update_marker_visible_in_subsequent_get(self):
-        """PUT marker → GET returns new marker value."""
-        req = MavvrikSettingsUpdate(marker="2024-06-01")
-
-        with patch(
-            f"{_SVC}.update_settings",
-            new=AsyncMock(
-                return_value={
-                    "message": "Mavvrik settings updated successfully",
-                    "status": "success",
-                }
-            ),
-        ):
-            put_resp = await update_mavvrik_settings(
-                req, user_api_key_dict=_admin_user()
-            )
-
-        assert put_resp.status == "success"
-
-        with patch(
-            f"{_SVC}.get_settings",
-            new=AsyncMock(
-                return_value={
-                    "api_key_masked": "mav_*****",
-                    "api_endpoint": "https://api.mavvrik.dev/acme",
-                    "connection_id": "prod",
-                    "marker": "2024-06-01",
-                    "status": "configured",
-                }
-            ),
-        ):
-            get_resp = await get_mavvrik_settings(user_api_key_dict=_admin_user())
-
-        assert get_resp.marker == "2024-06-01"
-        assert get_resp.status == "configured"
 
 
 # ---------------------------------------------------------------------------

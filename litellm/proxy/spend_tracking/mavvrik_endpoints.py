@@ -134,8 +134,7 @@ async def update_mavvrik_settings(
 ):
     """Update one or more Mavvrik settings fields. All fields are optional.
 
-    Use the ``marker`` field to reset the export cursor to a specific date (YYYY-MM-DD)
-    when Mavvrik asks you to re-export from an earlier date.
+    The export marker is owned by the Mavvrik API and cannot be set here.
     """
     _require_admin(user_api_key_dict)
 
