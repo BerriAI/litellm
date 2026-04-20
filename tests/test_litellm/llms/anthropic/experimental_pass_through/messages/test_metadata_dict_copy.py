@@ -115,8 +115,8 @@ def test_non_dict_metadata_not_copied():
             litellm_params=GenericLiteLLMParams(),
             headers={},
         )
-    except Exception:
-        # AnthropicMessagesRequest might reject non-dict metadata; that's fine.
+    except (TypeError, ValueError):
+        # AnthropicMessagesRequest may reject non-dict metadata; that's fine.
         # The point is the copy logic itself doesn't crash.
         pass
 
