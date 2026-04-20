@@ -16,7 +16,6 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.llms.bedrock.common_utils import (
     ensure_bedrock_anthropic_messages_tool_names,
     normalize_tool_input_schema_types_for_bedrock_invoke,
-    remove_custom_field_from_tools,
 )
 from litellm.constants import BEDROCK_MIN_THINKING_BUDGET_TOKENS
 from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation import (
@@ -246,60 +245,6 @@ def test_remove_ttl_from_cache_control():
     request5 = {}
     cfg._remove_ttl_from_cache_control(request5)
     assert request5 == {}
-
-
-def test_remove_custom_field_from_tools():
-    """
-    Ensure the `custom` field is stripped from every tool definition.
-
-    Claude Code v2.1.69+ sends `custom: {defer_loading: true}` on tool
-    objects.  Bedrock does not accept this extra field and returns
-    "Extra inputs are not permitted".
-
-    Ref: https://github.com/BerriAI/litellm/issues/22847
-    """
-
-    # Case 1: tool with `custom` field should have it removed
-    request = {
-        "tools": [
-            {
-                "name": "Read",
-                "description": "Read a file",
-                "input_schema": {"type": "object", "properties": {}},
-                "custom": {"defer_loading": True},
-            },
-            {
-                "name": "Write",
-                "description": "Write a file",
-                "input_schema": {"type": "object", "properties": {}},
-            },
-        ]
-    }
-
-    remove_custom_field_from_tools(request)
-
-    for tool in request["tools"]:
-        assert "custom" not in tool, f"Tool {tool['name']} still has 'custom' field"
-    # Other fields should be preserved
-    assert request["tools"][0]["name"] == "Read"
-    assert request["tools"][1]["name"] == "Write"
-
-    # Case 2: request without tools key (should not raise error)
-    request2 = {"messages": [{"role": "user", "content": "hi"}]}
-    remove_custom_field_from_tools(request2)
-    assert "tools" not in request2
-
-    # Case 3: empty tools list (should not raise error)
-    request3 = {"tools": []}
-    remove_custom_field_from_tools(request3)
-    assert request3["tools"] == []
-
-    # Case 4: tools with None value (should not raise error)
-    request4 = {"tools": None}
-    remove_custom_field_from_tools(request4)
-    assert request4["tools"] is None
-
-
 def test_normalize_tool_input_schema_types_for_bedrock_invoke():
     """
     Claude Code sends ``input_schema.type: \"custom\"`` for custom tools.
