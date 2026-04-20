@@ -10,6 +10,7 @@ from litellm.router_strategy.adaptive_router.config import (
 )
 from litellm.router_strategy.adaptive_router.hooks import (
     AdaptiveRouterPostCallHook,
+    _recent_tool_results,
     _resolve_session_key,
 )
 from litellm.router_strategy.adaptive_router.signals import Turn
@@ -218,6 +219,79 @@ async def test_hook_passes_tool_calls_through():
     )
     turn: Turn = hook.adaptive_router.record_turn.await_args.kwargs["turn"]
     assert turn.tool_calls == [tc]
+
+
+# ---- _recent_tool_results ------------------------------------------------
+
+
+def test_recent_tool_results_empty_when_no_messages():
+    assert _recent_tool_results(None) == []
+    assert _recent_tool_results([]) == []
+
+
+def test_recent_tool_results_collects_trailing_tool_messages():
+    """Tool messages at the tail of the conversation are extracted in order."""
+    messages = [
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": None, "tool_calls": [{"id": "t1"}]},
+        {"role": "tool", "tool_call_id": "t1", "content": "result A"},
+        {"role": "tool", "tool_call_id": "t2", "content": "result B"},
+    ]
+    results = _recent_tool_results(messages)
+    assert [r["content"] for r in results] == ["result A", "result B"]
+    assert all(r["is_error"] is False for r in results)
+
+
+def test_recent_tool_results_propagates_is_error_flag():
+    messages = [
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": None, "tool_calls": [{"id": "t1"}]},
+        {"role": "tool", "content": "boom", "is_error": True},
+    ]
+    results = _recent_tool_results(messages)
+    assert results == [{"content": "boom", "is_error": True}]
+
+
+def test_recent_tool_results_stops_at_first_non_tool_message():
+    """Only the trailing run of tool messages counts — prior rounds are
+    considered already attributed."""
+    messages = [
+        {"role": "user", "content": "hi"},
+        {"role": "tool", "content": "stale"},  # earlier round, ignored
+        {"role": "assistant", "content": "intermediate"},
+        {"role": "user", "content": "follow-up"},
+        {"role": "tool", "content": "current"},
+    ]
+    results = _recent_tool_results(messages)
+    assert [r["content"] for r in results] == ["current"]
+
+
+def test_recent_tool_results_empty_when_no_trailing_tool_message():
+    messages = [
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": "hello"},
+    ]
+    assert _recent_tool_results(messages) == []
+
+
+@pytest.mark.asyncio
+async def test_hook_passes_tool_results_to_turn_for_failure_detection():
+    """A trailing tool message with `is_error` must reach `Turn.tool_results`
+    so the failure-signal path fires."""
+    hook = _make_hook()
+    messages = _long_messages()
+    messages.append(
+        {"role": "assistant", "content": None, "tool_calls": [{"id": "t1"}]}
+    )
+    messages.append(
+        {"role": "tool", "tool_call_id": "t1", "content": "500", "is_error": True}
+    )
+    kwargs = _kwargs(chosen="fast", messages=messages)
+
+    await hook.async_log_success_event(kwargs, _resp_with_content("ok"), 0.0, 1.0)
+
+    turn: Turn = hook.adaptive_router.record_turn.await_args.kwargs["turn"]
+    assert turn.tool_results == [{"content": "500", "is_error": True}]
 
 
 @pytest.mark.asyncio

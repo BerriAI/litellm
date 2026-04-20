@@ -102,6 +102,36 @@ def _last_user_content(messages: Optional[List[Dict[str, Any]]]) -> Optional[str
     return None
 
 
+def _recent_tool_results(messages: Optional[List[Dict[str, Any]]]) -> List[Dict[str, Any]]:
+    """Extract the current turn's tool result payloads from the request messages.
+
+    Tool results are `role == "tool"` messages that sit at the tail of the
+    conversation — i.e. after the most recent assistant message with
+    `tool_calls`, waiting for the model to produce a user-facing reply. Walk
+    backwards from the end and collect the contiguous run of tool messages;
+    stop at the first non-tool message.
+
+    Each result is normalized to `{content, is_error}` — the only fields
+    `signals._detect_failure` / `_detect_exhaustion` actually read.
+    """
+    if not messages:
+        return []
+    results: List[Dict[str, Any]] = []
+    for msg in reversed(messages):
+        if not isinstance(msg, dict):
+            break
+        if msg.get("role") != "tool":
+            break
+        content = msg.get("content")
+        # Some providers (Anthropic-style) carry an explicit error flag; OpenAI
+        # tool results don't, so fall back to an empty/missing content heuristic
+        # inside `_detect_failure`.
+        is_error = bool(msg.get("is_error"))
+        results.append({"content": content, "is_error": is_error})
+    results.reverse()
+    return results
+
+
 def _assistant_content_and_tool_calls(response_obj: Any) -> tuple:
     """Return (assistant_text, tool_calls_list) extracted from a ModelResponse-ish object."""
     if response_obj is None:
@@ -222,6 +252,7 @@ class AdaptiveRouterPostCallHook(CustomLogger):
 
             user_text = _last_user_content(messages)
             assistant_text, tool_calls = _assistant_content_and_tool_calls(response_obj)
+            tool_results = _recent_tool_results(messages)
 
             request_type = classify_prompt(user_text or "")
             turn = Turn(
@@ -230,7 +261,7 @@ class AdaptiveRouterPostCallHook(CustomLogger):
                     assistant_text if isinstance(assistant_text, str) else None
                 ),
                 tool_calls=tool_calls,
-                tool_results=[],
+                tool_results=tool_results,
                 response_status=response_status,
             )
             await self.adaptive_router.record_turn(
