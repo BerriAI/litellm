@@ -135,3 +135,108 @@ async def test_returns_messages_unchanged_in_response():
     )
 
     assert response.messages == messages
+
+
+# ---- min_quality_tier extraction ----------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_min_quality_tier_from_header_is_forwarded_to_pick_model():
+    """`x-litellm-min-quality-tier` header should reach pick_model."""
+    r = _make_router()
+    r.pick_model = AsyncMock(return_value="smart")  # type: ignore[method-assign]
+
+    await r.async_pre_routing_hook(
+        model="smart-cheap-router",
+        request_kwargs={"headers": {"x-litellm-min-quality-tier": "3"}},
+        messages=[{"role": "user", "content": "hi"}],
+    )
+
+    assert (
+        r.pick_model.await_args.kwargs["min_quality_tier"] == 3  # type: ignore[union-attr]
+    )
+
+
+@pytest.mark.asyncio
+async def test_min_quality_tier_from_header_case_insensitive():
+    r = _make_router()
+    r.pick_model = AsyncMock(return_value="smart")  # type: ignore[method-assign]
+
+    await r.async_pre_routing_hook(
+        model="smart-cheap-router",
+        request_kwargs={"headers": {"X-LiteLLM-Min-Quality-Tier": "2"}},
+        messages=[{"role": "user", "content": "hi"}],
+    )
+
+    assert (
+        r.pick_model.await_args.kwargs["min_quality_tier"] == 2  # type: ignore[union-attr]
+    )
+
+
+@pytest.mark.asyncio
+async def test_min_quality_tier_from_metadata_key():
+    """Metadata `min_quality_tier` works when the header is absent."""
+    r = _make_router()
+    r.pick_model = AsyncMock(return_value="smart")  # type: ignore[method-assign]
+
+    await r.async_pre_routing_hook(
+        model="smart-cheap-router",
+        request_kwargs={"metadata": {"min_quality_tier": 3}},
+        messages=[{"role": "user", "content": "hi"}],
+    )
+
+    assert (
+        r.pick_model.await_args.kwargs["min_quality_tier"] == 3  # type: ignore[union-attr]
+    )
+
+
+@pytest.mark.asyncio
+async def test_header_takes_precedence_over_metadata():
+    r = _make_router()
+    r.pick_model = AsyncMock(return_value="smart")  # type: ignore[method-assign]
+
+    await r.async_pre_routing_hook(
+        model="smart-cheap-router",
+        request_kwargs={
+            "headers": {"x-litellm-min-quality-tier": "3"},
+            "metadata": {"min_quality_tier": 1},
+        },
+        messages=[{"role": "user", "content": "hi"}],
+    )
+
+    assert (
+        r.pick_model.await_args.kwargs["min_quality_tier"] == 3  # type: ignore[union-attr]
+    )
+
+
+@pytest.mark.asyncio
+async def test_missing_min_quality_tier_passes_none():
+    r = _make_router()
+    r.pick_model = AsyncMock(return_value="fast")  # type: ignore[method-assign]
+
+    await r.async_pre_routing_hook(
+        model="smart-cheap-router",
+        request_kwargs={},
+        messages=[{"role": "user", "content": "hi"}],
+    )
+
+    assert (
+        r.pick_model.await_args.kwargs["min_quality_tier"] is None  # type: ignore[union-attr]
+    )
+
+
+@pytest.mark.asyncio
+async def test_invalid_min_quality_tier_header_treated_as_none():
+    """A garbage header value must not crash the request — treat as unset."""
+    r = _make_router()
+    r.pick_model = AsyncMock(return_value="fast")  # type: ignore[method-assign]
+
+    await r.async_pre_routing_hook(
+        model="smart-cheap-router",
+        request_kwargs={"headers": {"x-litellm-min-quality-tier": "not-a-number"}},
+        messages=[{"role": "user", "content": "hi"}],
+    )
+
+    assert (
+        r.pick_model.await_args.kwargs["min_quality_tier"] is None  # type: ignore[union-attr]
+    )

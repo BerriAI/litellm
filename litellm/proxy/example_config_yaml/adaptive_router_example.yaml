@@ -17,7 +17,7 @@ model_list:
   # entries in this list).
   - model_name: smart-cheap-router
     litellm_params:
-      model: openai/gpt-4o-mini # placeholder; never actually called -- router picks from available_models
+      model: auto_router/adaptive_router # required prefix -- triggers adaptive-router init
       adaptive_router_config:
         available_models: ["fast", "smart"]
         weights:
