@@ -1023,8 +1023,16 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
         # note: never string compare api keys, this is vulenerable to a time attack. Use secrets.compare_digest instead
         if valid_token is None:
             ## Check CACHE
-            try:
-                with tracer.trace("litellm.proxy.auth.get_key_object_check_cache"):
+            # The try/except lives INSIDE the tracer span, not around it.
+            # A cache miss (or a DB-disconnected proxy running with
+            # `allow_requests_on_db_unavailable: true`) makes
+            # `get_key_object(..., check_cache_only=True)` raise; that is
+            # an expected, fully-handled control-flow signal. If the
+            # exception were allowed to propagate through `tracer.trace`,
+            # Datadog APM would tag the span as errored on every request,
+            # producing a flood of false-positive error spans (see #25966).
+            with tracer.trace("litellm.proxy.auth.get_key_object_check_cache"):
+                try:
                     valid_token = await get_key_object(
                         hashed_token=hash_token(api_key),
                         prisma_client=prisma_client,
@@ -1033,9 +1041,9 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                         proxy_logging_obj=proxy_logging_obj,
                         check_cache_only=True,
                     )
-            except Exception:
-                verbose_logger.debug("api key not found in cache.")
-                valid_token = None
+                except Exception:
+                    verbose_logger.debug("api key not found in cache.")
+                    valid_token = None
 
             ## Check UI Hash Key
             if valid_token is None and get_secret_bool("EXPERIMENTAL_UI_LOGIN"):

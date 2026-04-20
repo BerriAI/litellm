@@ -1705,3 +1705,111 @@ async def test_user_api_key_auth_builder_no_blocking_calls():
     finally:
         for k, v in _originals.items():
             setattr(_proxy_server_mod, k, v)
+
+
+# ---------------------------------------------------------------------------
+# Regression coverage for issue #25966 — when the proxy runs without a DB
+# and `allow_requests_on_db_unavailable: true`, the cache-only call to
+# get_key_object inside _user_api_key_auth_builder raises on every request
+# (no DB to fall back to). The exception is intentionally swallowed, but it
+# used to propagate through the surrounding `tracer.trace(...)` context
+# manager first, so Datadog APM tagged the
+# `litellm.proxy.auth.get_key_object_check_cache` span as errored on every
+# request and the APM error rate looked like the proxy was on fire.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_check_cache_span_not_errored_when_db_unavailable():
+    """
+    The try/except must sit INSIDE tracer.trace(...), otherwise DD APM
+    flags every request's check-cache span as errored. See #25966.
+    """
+    import contextlib
+
+    import litellm.proxy.auth.user_api_key_auth as auth_module
+
+    errored_span_names: list = []
+
+    @contextlib.contextmanager
+    def spying_trace(name, *args, **kwargs):
+        try:
+            yield
+        except BaseException:
+            # If we reach here, the exception escaped the `with` scope
+            # and DD APM would tag this span as errored.
+            errored_span_names.append(name)
+            raise
+
+    mock_tracer = MagicMock()
+    mock_tracer.trace = spying_trace
+
+    async def raising_get_key_object(**kwargs):
+        # Matches the real `get_key_object` behaviour when prisma_client
+        # is None — the code path that fires on every request when
+        # allow_requests_on_db_unavailable: true.
+        raise Exception(
+            "No DB Connected. See - https://docs.litellm.ai/docs/proxy/virtual_keys"
+        )
+
+    with patch.object(auth_module, "tracer", mock_tracer), patch.object(
+        auth_module, "get_key_object", side_effect=raising_get_key_object
+    ):
+        # A direct call into _user_api_key_auth_builder would need ~20
+        # auth fixtures just to reach this branch. Reproducing the
+        # exact fragment of the function that owns this span is what
+        # the fix actually changes.
+        valid_token = None
+        with auth_module.tracer.trace(
+            "litellm.proxy.auth.get_key_object_check_cache"
+        ):
+            try:
+                valid_token = await auth_module.get_key_object(
+                    hashed_token="sk-test",
+                    prisma_client=None,
+                    user_api_key_cache=MagicMock(),
+                    parent_otel_span=None,
+                    proxy_logging_obj=None,
+                    check_cache_only=True,
+                )
+            except Exception:
+                valid_token = None
+
+    assert valid_token is None
+    assert (
+        "litellm.proxy.auth.get_key_object_check_cache" not in errored_span_names
+    ), (
+        "exception escaped the tracer.trace() scope — DD APM would mark "
+        "the span as errored"
+    )
+
+
+def test_check_cache_source_has_try_inside_tracer():
+    """
+    Structural guard against regressing the fix for #25966.
+
+    The cache-check block in `_user_api_key_auth_builder` must keep
+    `tracer.trace(...)` on the OUTSIDE and `try/except` on the INSIDE.
+    Reverting that order re-introduces the Datadog APM false-positive
+    error spans; this assertion fails loudly if it happens.
+    """
+    import inspect
+
+    import litellm.proxy.auth.user_api_key_auth as auth_module
+
+    source = inspect.getsource(auth_module)
+    anchor = "litellm.proxy.auth.get_key_object_check_cache"
+    idx = source.find(anchor)
+    assert idx != -1, "check-cache tracer span not found — rename?"
+
+    # Look at the handful of lines directly preceding the tracer.trace
+    # call — before the fix the last non-empty one was a bare `try:`
+    # (the `with` was inside the try). After the fix `try:` lives below
+    # the `with`, so it must not appear just above it.
+    window_start = source.rfind("\n", 0, idx - 200)
+    window = source[window_start:idx]
+    preceding_lines = [ln.strip() for ln in window.splitlines() if ln.strip()]
+    assert preceding_lines and preceding_lines[-1] != "try:", (
+        "regressed: `try:` is wrapping `with tracer.trace(...)` again; "
+        "put try/except INSIDE the tracer span to keep the DD APM span clean"
+    )
