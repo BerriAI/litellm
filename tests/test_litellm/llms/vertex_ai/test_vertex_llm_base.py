@@ -132,9 +132,12 @@ class TestVertexBase:
         mock_creds.project_id = "project-1"
         mock_creds.quota_project_id = "project-1"
 
-        with patch.object(
-            vertex_base, "load_auth", return_value=(mock_creds, "project-1")
-        ), patch.object(vertex_base, "refresh_auth") as mock_refresh:
+        with (
+            patch.object(
+                vertex_base, "load_auth", return_value=(mock_creds, "project-1")
+            ),
+            patch.object(vertex_base, "refresh_auth") as mock_refresh,
+        ):
 
             def mock_refresh_impl(creds):
                 creds.token = "refreshed-token"
@@ -198,11 +201,14 @@ class TestVertexBase:
         mock_creds.expired = False
         mock_creds.quota_project_id = quota_project_id
 
-        with patch.object(
-            vertex_base, "_credentials_from_authorized_user", return_value=mock_creds
-        ) as mock_credentials_from_authorized_user, patch.object(
-            vertex_base, "refresh_auth"
-        ) as mock_refresh:
+        with (
+            patch.object(
+                vertex_base,
+                "_credentials_from_authorized_user",
+                return_value=mock_creds,
+            ) as mock_credentials_from_authorized_user,
+            patch.object(vertex_base, "refresh_auth") as mock_refresh,
+        ):
 
             def mock_refresh_impl(creds):
                 creds.token = "refreshed-token"
@@ -262,11 +268,12 @@ class TestVertexBase:
         mock_creds.expired = False
         mock_creds.project_id = "test-project"
 
-        with patch.object(
-            vertex_base, "_credentials_from_identity_pool", return_value=mock_creds
-        ) as mock_credentials_from_identity_pool, patch.object(
-            vertex_base, "refresh_auth"
-        ) as mock_refresh:
+        with (
+            patch.object(
+                vertex_base, "_credentials_from_identity_pool", return_value=mock_creds
+            ) as mock_credentials_from_identity_pool,
+            patch.object(vertex_base, "refresh_auth") as mock_refresh,
+        ):
 
             def mock_refresh_impl(creds):
                 creds.token = "refreshed-token"
@@ -310,13 +317,14 @@ class TestVertexBase:
         mock_creds.expired = False
         mock_creds.project_id = "test-project"
 
-        with patch.object(
-            vertex_base,
-            "_credentials_from_identity_pool_with_aws",
-            return_value=mock_creds,
-        ) as mock_credentials_from_identity_pool_with_aws, patch.object(
-            vertex_base, "refresh_auth"
-        ) as mock_refresh:
+        with (
+            patch.object(
+                vertex_base,
+                "_credentials_from_identity_pool_with_aws",
+                return_value=mock_creds,
+            ) as mock_credentials_from_identity_pool_with_aws,
+            patch.object(vertex_base, "refresh_auth") as mock_refresh,
+        ):
 
             def mock_refresh_impl(creds):
                 creds.token = "refreshed-token"
@@ -490,9 +498,12 @@ class TestVertexBase:
 
         credentials = {"type": "service_account", "project_id": "project-1"}
 
-        with patch.object(
-            vertex_base, "load_auth", return_value=(mock_creds, "project-1")
-        ), patch.object(vertex_base, "refresh_auth") as mock_refresh:
+        with (
+            patch.object(
+                vertex_base, "load_auth", return_value=(mock_creds, "project-1")
+            ),
+            patch.object(vertex_base, "refresh_auth") as mock_refresh,
+        ):
 
             def mock_refresh_impl(creds):
                 creds.token = "refreshed-token"
@@ -1079,9 +1090,7 @@ class TestVertexBase:
         vertex_base = VertexBase()
         json_obj = {
             "type": "external_account",
-            "credential_source": {
-                "executable": {"command": "/path/to/executable"}
-            },
+            "credential_source": {"executable": {"command": "/path/to/executable"}},
         }
         scopes = ["https://www.googleapis.com/auth/cloud-platform"]
 
@@ -1110,12 +1119,14 @@ class TestVertexBase:
         mock_creds = MagicMock()
         mock_creds.project_id = "test-project"
 
-        with patch.object(
-            vertex_base, "_credentials_from_pluggable", return_value=mock_creds
-        ) as mock_pluggable, patch.object(
-            vertex_base, "_credentials_from_identity_pool"
-        ) as mock_identity_pool, patch.object(
-            vertex_base, "refresh_auth"
+        with (
+            patch.object(
+                vertex_base, "_credentials_from_pluggable", return_value=mock_creds
+            ) as mock_pluggable,
+            patch.object(
+                vertex_base, "_credentials_from_identity_pool"
+            ) as mock_identity_pool,
+            patch.object(vertex_base, "refresh_auth"),
         ):
             creds, project_id = vertex_base.load_auth(
                 credentials=json.dumps(json_obj), project_id=None
@@ -1199,11 +1210,12 @@ class TestVertexBase:
         # IMPORTANT: Patch at the SOURCE modules, not at vertex_llm_base level.
         # The imports happen inside the function via `from X import Y`, so
         # the mock must replace the class in its defining module.
-        with patch(
-            "litellm.llms.bedrock.base_aws_llm.BaseAWSLLM"
-        ) as MockBaseAWSLLM, patch(
-            "google.auth.aws.Credentials",
-        ) as MockAwsCredentials:
+        with (
+            patch("litellm.llms.bedrock.base_aws_llm.BaseAWSLLM") as MockBaseAWSLLM,
+            patch(
+                "google.auth.aws.Credentials",
+            ) as MockAwsCredentials,
+        ):
             mock_base_aws = MagicMock()
             mock_base_aws.get_credentials.return_value = mock_boto3_creds
             MockBaseAWSLLM.return_value = mock_base_aws
@@ -1220,7 +1232,10 @@ class TestVertexBase:
             assert call_kwargs["subject_token_type"] == json_obj["subject_token_type"]
             assert call_kwargs["token_url"] == json_obj["token_url"]
             assert call_kwargs["credential_source"] is None
-            assert call_kwargs["service_account_impersonation_url"] == json_obj["service_account_impersonation_url"]
+            assert (
+                call_kwargs["service_account_impersonation_url"]
+                == json_obj["service_account_impersonation_url"]
+            )
 
             # Verify the supplier is a lazy credentials provider (calls
             # get_credentials on demand, not at construction time)
@@ -1275,15 +1290,17 @@ class TestVertexBase:
         mock_creds.expired = False
         mock_creds.project_id = "test-project"
 
-        with patch(
-            "litellm.llms.vertex_ai.vertex_ai_aws_wif.VertexAIAwsWifAuth.credentials_from_explicit_aws",
-            return_value=mock_creds,
-        ) as mock_explicit_auth, patch.object(
-            vertex_base,
-            "_credentials_from_identity_pool_with_aws",
-        ) as mock_metadata_auth, patch.object(
-            vertex_base, "refresh_auth"
-        ) as mock_refresh:
+        with (
+            patch(
+                "litellm.llms.vertex_ai.vertex_ai_aws_wif.VertexAIAwsWifAuth.credentials_from_explicit_aws",
+                return_value=mock_creds,
+            ) as mock_explicit_auth,
+            patch.object(
+                vertex_base,
+                "_credentials_from_identity_pool_with_aws",
+            ) as mock_metadata_auth,
+            patch.object(vertex_base, "refresh_auth") as mock_refresh,
+        ):
 
             def mock_refresh_impl(creds):
                 creds.token = "refreshed-token"
@@ -1312,7 +1329,9 @@ class TestVertexBase:
                 "aws_role_name": "arn:aws:iam::123456789012:role/MyRole",
                 "aws_region_name": "us-east-1",
             }
-            assert call_kwargs["scopes"] == ["https://www.googleapis.com/auth/cloud-platform"]
+            assert call_kwargs["scopes"] == [
+                "https://www.googleapis.com/auth/cloud-platform"
+            ]
             assert token == "refreshed-token"
 
     @pytest.mark.parametrize("is_async", [True, False], ids=["async", "sync"])
@@ -1334,15 +1353,17 @@ class TestVertexBase:
         mock_creds.expired = False
         mock_creds.project_id = "test-project"
 
-        with patch(
-            "litellm.llms.vertex_ai.vertex_ai_aws_wif.VertexAIAwsWifAuth.credentials_from_explicit_aws",
-        ) as mock_explicit_auth, patch.object(
-            vertex_base,
-            "_credentials_from_identity_pool_with_aws",
-            return_value=mock_creds,
-        ) as mock_metadata_auth, patch.object(
-            vertex_base, "refresh_auth"
-        ) as mock_refresh:
+        with (
+            patch(
+                "litellm.llms.vertex_ai.vertex_ai_aws_wif.VertexAIAwsWifAuth.credentials_from_explicit_aws",
+            ) as mock_explicit_auth,
+            patch.object(
+                vertex_base,
+                "_credentials_from_identity_pool_with_aws",
+                return_value=mock_creds,
+            ) as mock_metadata_auth,
+            patch.object(vertex_base, "refresh_auth") as mock_refresh,
+        ):
 
             def mock_refresh_impl(creds):
                 creds.token = "refreshed-token"
