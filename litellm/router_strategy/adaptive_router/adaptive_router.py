@@ -39,8 +39,14 @@ from litellm.router_strategy.adaptive_router.bandit import (
 from litellm.router_strategy.adaptive_router.classifier import classify_prompt
 from litellm.router_strategy.adaptive_router.config import (
     ADAPTIVE_ROUTER_CHOSEN_MODEL_KEY,
+    MIN_QUALITY_TIER_HEADER,
+    MIN_QUALITY_TIER_METADATA_KEY,
     OWNER_CACHE_TTL_SECONDS,
 )
+
+# Sweep session-state cache when it exceeds this many live entries. Expired
+# entries are dropped in bulk; amortizes to O(1) per insert.
+_SESSION_STATE_SWEEP_THRESHOLD: int = 1024
 from litellm.router_strategy.adaptive_router.signals import (
     SessionState,
     SignalDelta,
@@ -80,6 +86,9 @@ class AdaptiveRouter:
         self._cells: Dict[Tuple[RequestType, str], BanditCell] = {}
         self._owner_cache: Dict[str, Tuple[str, float]] = {}
         self._session_states: Dict[Tuple[str, str], SessionState] = {}
+        # Parallel expiry map for _session_states, same TTL as _owner_cache.
+        # Evicted opportunistically in `get_or_create_session_state`.
+        self._session_states_expiry: Dict[Tuple[str, str], float] = {}
         self._skipped_updates_total: int = 0
         self._lock = asyncio.Lock()
 
@@ -155,7 +164,10 @@ class AdaptiveRouter:
         )
 
         request_type = classify_prompt(user_text)
-        chosen_model = await self.pick_model(request_type=request_type)
+        min_quality_tier = self._extract_min_quality_tier(request_kwargs)
+        chosen_model = await self.pick_model(
+            request_type=request_type, min_quality_tier=min_quality_tier
+        )
         verbose_router_logger.debug(
             "AdaptiveRouter[%s]: classified=%s -> chose %s",
             self.router_name,
@@ -257,6 +269,37 @@ class AdaptiveRouter:
             "queue": queue,
         }
 
+    @staticmethod
+    def _extract_min_quality_tier(
+        request_kwargs: Dict[str, Any],
+    ) -> Optional[int]:
+        """Pull `min_quality_tier` from request headers or metadata.
+
+        Precedence: headers (`x-litellm-min-quality-tier`) over metadata
+        (`min_quality_tier`). Headers arrive lowercased from the proxy but we
+        lookup case-insensitively to be safe. Unparseable values are ignored
+        (treated as "not set") rather than raising — a bad header shouldn't
+        fail the request.
+        """
+        headers = request_kwargs.get("headers") or {}
+        if isinstance(headers, dict):
+            for k, v in headers.items():
+                if isinstance(k, str) and k.lower() == MIN_QUALITY_TIER_HEADER:
+                    try:
+                        return int(v)
+                    except (TypeError, ValueError):
+                        return None
+
+        metadata = request_kwargs.get("metadata") or {}
+        if isinstance(metadata, dict):
+            raw = metadata.get(MIN_QUALITY_TIER_METADATA_KEY)
+            if raw is not None:
+                try:
+                    return int(raw)
+                except (TypeError, ValueError):
+                    return None
+        return None
+
     def _eligible_models(self, min_quality_tier: Optional[int]) -> List[str]:
         if min_quality_tier is None:
             return list(self.config.available_models)
@@ -276,6 +319,14 @@ class AdaptiveRouter:
         request_type: RequestType,
     ) -> SessionState:
         key = (session_id, model_name)
+        now = time.time()
+
+        # Opportunistic bulk sweep when the cache grows past the threshold.
+        # Cheap relative to the alternative of a bounded LRU — conversations
+        # naturally become inactive within OWNER_CACHE_TTL_SECONDS.
+        if len(self._session_states) >= _SESSION_STATE_SWEEP_THRESHOLD:
+            self._evict_expired_session_states(now)
+
         state = self._session_states.get(key)
         if state is None:
             state = SessionState(
@@ -285,7 +336,16 @@ class AdaptiveRouter:
                 classified_type=request_type.value,
             )
             self._session_states[key] = state
+        self._session_states_expiry[key] = now + OWNER_CACHE_TTL_SECONDS
         return state
+
+    def _evict_expired_session_states(self, now: float) -> None:
+        """Drop session states whose TTL has passed. O(n) but amortized O(1)
+        per insert thanks to `_SESSION_STATE_SWEEP_THRESHOLD`."""
+        expired = [k for k, exp in self._session_states_expiry.items() if exp <= now]
+        for k in expired:
+            self._session_states.pop(k, None)
+            self._session_states_expiry.pop(k, None)
 
     async def record_turn(
         self,

@@ -36,7 +36,7 @@ model_list:
 
   - model_name: my-router
     litellm_params:
-      model: adaptive_router/smart-router
+      model: auto_router/adaptive_router
       adaptive_router_config:
         available_models: ["gpt-4o", "gpt-4o-mini"]
         weights:

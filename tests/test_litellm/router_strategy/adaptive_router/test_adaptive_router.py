@@ -222,3 +222,49 @@ async def test_load_state_from_db_handles_unknown_request_type():
     assert r._cells[(RequestType.GENERAL, "fast")].alpha == 7.0
     # Other request types kept their cold-start values.
     assert r._cells[(RequestType.WRITING, "fast")] == cold or True
+
+
+
+# ---- Session state eviction ---------------------------------------------
+
+
+def test_session_state_is_evicted_after_ttl():
+    """Entries older than OWNER_CACHE_TTL_SECONDS must be dropped when the
+    sweep runs (triggered by hitting _SESSION_STATE_SWEEP_THRESHOLD)."""
+    import time as _time
+
+    from litellm.router_strategy.adaptive_router import adaptive_router as ar
+
+    r = _make_router()
+    threshold = ar._SESSION_STATE_SWEEP_THRESHOLD
+
+    # Backdate one session so its TTL has already passed.
+    stale_key = ("sess-stale", "fast")
+    r.get_or_create_session_state("sess-stale", "fast", RequestType.GENERAL)
+    r._session_states_expiry[stale_key] = _time.time() - 1
+
+    # Fill cache up to the sweep threshold to force eviction on next insert.
+    for i in range(threshold):
+        r.get_or_create_session_state(f"sess-{i}", "fast", RequestType.GENERAL)
+
+    # Next insert triggers the sweep; stale entry should be gone.
+    r.get_or_create_session_state("sess-new", "fast", RequestType.GENERAL)
+    assert stale_key not in r._session_states
+    assert stale_key not in r._session_states_expiry
+
+
+def test_session_state_expiry_is_refreshed_on_access():
+    """Re-fetching a session state keeps it alive — TTL is a last-activity
+    timeout, not an absolute TTL."""
+    import time as _time
+
+    r = _make_router()
+    r.get_or_create_session_state("sess-A", "fast", RequestType.GENERAL)
+    first_exp = r._session_states_expiry[("sess-A", "fast")]
+
+    _time.sleep(0.01)  # move clock forward
+    r.get_or_create_session_state("sess-A", "fast", RequestType.GENERAL)
+    second_exp = r._session_states_expiry[("sess-A", "fast")]
+
+    assert second_exp > first_exp
+
