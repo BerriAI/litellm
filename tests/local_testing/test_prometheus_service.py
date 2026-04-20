@@ -139,7 +139,7 @@ async def test_router_with_caching():
         assert sl.prometheusServicesLogger.mock_testing_success_calls > 0
 
     except Exception as e:
-        pytest.fail(f"An exception occured - {str(e)}")
+        pytest.fail(f"An exception occurred - {str(e)}")
 
 
 @pytest.mark.asyncio

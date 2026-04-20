@@ -26,4 +26,4 @@
 #     except BudgetExceededError as e:
 #         pass
 #     except Exception as e:
-#         pytest.fail(f"An error occured: {str(e)}")
+#         pytest.fail(f"An error occurred: {str(e)}")

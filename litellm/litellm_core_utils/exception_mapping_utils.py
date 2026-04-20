@@ -870,7 +870,7 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                         and isinstance(error_str, str)
                         and "bearer" in error_str.lower()
                     ):
-                        # only keep the first 10 chars after the occurnence of "bearer"
+                        # only keep the first 10 chars after the occurrence of "bearer"
                         _bearer_token_start_index = error_str.lower().find("bearer")
                         error_str = error_str[: _bearer_token_start_index + 14]
                         error_str += "XXXXXXX" + '"'

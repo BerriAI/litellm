@@ -736,7 +736,7 @@ def test_vertex_ai_embedding_completion_cost(caplog):
     for item in captured_logs:
         print("\nitem:{}\n".format(item))
         if (
-            "litellm.litellm_core_utils.llm_cost_calc.google.cost_per_character(): Exception occured "
+            "litellm.litellm_core_utils.llm_cost_calc.google.cost_per_character(): Exception occurred "
             in item
         ):
             raise Exception("Error log raised for calculating embedding cost")

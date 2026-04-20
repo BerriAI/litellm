@@ -633,7 +633,7 @@ class CustomStreamWrapper:
                 return ""
         except Exception as e:
             verbose_logger.exception(
-                "litellm.CustomStreamWrapper.handle_baseten_chunk(): Exception occured - {}".format(
+                "litellm.CustomStreamWrapper.handle_baseten_chunk(): Exception occurred - {}".format(
                     str(e)
                 )
             )
@@ -1542,7 +1542,7 @@ class CustomStreamWrapper:
                             model_response.choices[0].delta = Delta(**_json_delta)
                         except Exception as e:
                             verbose_logger.exception(
-                                "litellm.CustomStreamWrapper.chunk_creator(): Exception occured - {}".format(
+                                "litellm.CustomStreamWrapper.chunk_creator(): Exception occurred - {}".format(
                                     str(e)
                                 )
                             )

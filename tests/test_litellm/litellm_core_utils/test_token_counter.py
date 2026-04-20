@@ -225,7 +225,7 @@ def test_tokenizers():
 
         print("test tokenizer: It worked!")
     except Exception as e:
-        pytest.fail(f"An exception occured: {e}")
+        pytest.fail(f"An exception occurred: {e}")
 
 
 # test_tokenizers()
@@ -259,7 +259,7 @@ def test_encoding_and_decoding():
 
         assert llama2_text == sample_text
     except Exception as e:
-        pytest.fail(f"An exception occured: {e}\n{traceback.format_exc()}")
+        pytest.fail(f"An exception occurred: {e}\n{traceback.format_exc()}")
 
 
 # test_encoding_and_decoding()
