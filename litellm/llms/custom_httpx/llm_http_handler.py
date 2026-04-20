@@ -2666,10 +2666,12 @@ class BaseLLMHTTPHandler:
                 provider_config=responses_api_provider_config,
             )
 
-        return responses_api_provider_config.transform_get_response_api_response(
+        result = responses_api_provider_config.transform_get_response_api_response(
             raw_response=response,
             logging_obj=logging_obj,
         )
+        result._hidden_params["response_cost"] = 0.0
+        return result
 
     async def async_get_responses(
         self,
@@ -2741,10 +2743,12 @@ class BaseLLMHTTPHandler:
                 provider_config=responses_api_provider_config,
             )
 
-        return responses_api_provider_config.transform_get_response_api_response(
+        result = responses_api_provider_config.transform_get_response_api_response(
             raw_response=response,
             logging_obj=logging_obj,
         )
+        result._hidden_params["response_cost"] = 0.0
+        return result
 
     #####################################################################
     ################ LIST RESPONSES INPUT ITEMS HANDLER ###########################
