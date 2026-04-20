@@ -579,6 +579,37 @@ def test_bedrock_messages_strips_output_config_with_output_format():
     assert "output_format" not in result
 
 
+def test_bedrock_messages_strips_context_management():
+    """
+    Ensure context_management is stripped from the request before sending to
+    Bedrock Invoke, which doesn't support this Anthropic-specific parameter.
+
+    Claude Code sends `context_management: {type: "auto"}` in /v1/messages and
+    Bedrock Invoke rejects the request with "Extra inputs are not permitted".
+    """
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    messages = [{"role": "user", "content": [{"type": "text", "text": "Hello"}]}]
+    optional_params = {
+        "max_tokens": 4096,
+        "context_management": {"type": "auto"},
+    }
+
+    result = cfg.transform_anthropic_messages_request(
+        model="anthropic.claude-3-haiku-20240307-v1:0",
+        messages=messages,
+        anthropic_messages_optional_request_params=optional_params,
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert (
+        "context_management" not in result
+    ), "context_management should be stripped — Bedrock Invoke rejects it"
+    assert result.get("max_tokens") == 4096
+
+
 @pytest.mark.asyncio
 async def test_promote_message_stop_usage_preserves_message_delta_output_tokens():
     """

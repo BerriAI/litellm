@@ -504,6 +504,11 @@ class AmazonAnthropicClaudeMessagesConfig(
         # Fixes: https://github.com/BerriAI/litellm/issues/22797
         anthropic_messages_request.pop("output_config", None)
 
+        # 5c. Strip `context_management` — Bedrock Invoke doesn't support it.
+        # Claude Code sends context_management: {type: "auto"} in /v1/messages;
+        # Bedrock rejects the request with "Extra inputs are not permitted".
+        anthropic_messages_request.pop("context_management", None)
+
         # 5a. Remove `custom` field from tools (Bedrock doesn't support it)
         # Claude Code sends `custom: {defer_loading: true}` on tool definitions,
         # which causes Bedrock to reject the request with "Extra inputs are not permitted"
