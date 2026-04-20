@@ -748,13 +748,14 @@ def _transform_request_body(  # noqa: PLR0915
                     ]
 
         data = RequestBody(contents=content)
-        if system_instructions is not None:
+        # Vertex rejects system_instruction/tools/toolConfig alongside cachedContent.
+        if system_instructions is not None and cached_content is None:
             data["system_instruction"] = system_instructions
-        if tools is not None:
+        if tools is not None and cached_content is None:
             data["tools"] = tools
-        if tool_choice is not None:
+        if tool_choice is not None and cached_content is None:
             data["toolConfig"] = tool_choice
-        if include_server_side_tool_invocations:
+        if include_server_side_tool_invocations and cached_content is None:
             if "toolConfig" not in data:
                 data["toolConfig"] = {}
             data["toolConfig"]["includeServerSideToolInvocations"] = True
