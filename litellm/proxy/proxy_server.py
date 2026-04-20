@@ -6591,6 +6591,10 @@ class ProxyStartupEvent:
                 id=MAVVRIK_EXPORT_USAGE_DATA_JOB_NAME,
                 replace_existing=True,
             )
+            verbose_proxy_logger.info(
+                "Mavvrik: background export job scheduled every %d min",
+                MAVVRIK_EXPORT_INTERVAL_MINUTES,
+            )
 
         ########################################################
         # Prometheus Background Job

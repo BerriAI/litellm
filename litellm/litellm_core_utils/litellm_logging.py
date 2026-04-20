@@ -3954,14 +3954,14 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
             _in_memory_loggers.append(galileo_logger)
             return galileo_logger  # type: ignore
         elif logging_integration == "mavvrik":
-            from litellm.integrations.mavvrik.uploader import Uploader as MavvrikUploader
+            from litellm.integrations.mavvrik.logger import Logger as MavvrikLogger
 
             for callback in _in_memory_loggers:
-                if isinstance(callback, MavvrikUploader):
+                if isinstance(callback, MavvrikLogger):
                     return callback  # type: ignore
-            mavvrik_uploader = MavvrikUploader()
-            _in_memory_loggers.append(mavvrik_uploader)
-            return mavvrik_uploader  # type: ignore
+            mavvrik_logger = MavvrikLogger()
+            _in_memory_loggers.append(mavvrik_logger)
+            return mavvrik_logger  # type: ignore
         elif logging_integration == "cloudzero":
             from litellm.integrations.cloudzero.cloudzero import CloudZeroLogger
 
