@@ -9,11 +9,9 @@ class TestParallelAISearch(BaseSearchTest):
     """
     Tests for Parallel AI Search functionality.
     """
-    
+
     def get_search_provider(self) -> str:
         """
         Return search_provider for Parallel AI Search.
         """
         return "parallel_ai"
-
-
