@@ -8819,8 +8819,6 @@ class Router:
                 and self.routing_strategy == "latency-based-routing"
             ):
                 _settings_to_return[var] = self.lowestlatency_logger.routing_args.json()
-            elif var == "routing_strategy_args":
-                _settings_to_return[var] = None
         return _settings_to_return
 
     def update_settings(self, **kwargs):
@@ -9731,7 +9729,7 @@ class Router:
         self,
         model: str,
         request_kwargs: Dict,
-        messages: Optional[List[Dict[str, str]]] = None,
+        messages: Optional[List[Dict[str, Any]]] = None,
         input: Optional[Union[str, List]] = None,
         specific_deployment: Optional[bool] = False,
     ) -> Optional[PreRoutingHookResponse]:
