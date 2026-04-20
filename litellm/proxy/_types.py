@@ -4605,8 +4605,17 @@ class PlaygroundNodeResponse(LiteLLMPydanticObjectBase):
 
 
 class CreatePlaygroundBookingRequest(LiteLLMPydanticObjectBase):
-    gpu_count: int = Field(ge=1, le=8)
-    preferred_node: Optional[str] = None
+    # Booking target night (YYYY-MM-DD). Must be today or within the 7-day
+    # horizon; the handler enforces that. The frontend sends the date picked
+    # from the seat grid, so the server does not infer "tonight" implicitly.
+    night_of: date
+    # Node the caller selected in the UI (friendly name, e.g. "h200-prod").
+    # Resolved to an ip_address on the server side.
+    node_name: str
+    # Comma-separated GPU indices the caller picked in the seat grid, e.g.
+    # "0,1,2". The server parses, dedupes, and validates against the node's
+    # total_gpus + any existing bookings for night_of.
+    gpu_indices: str
     # Admin-only: when a caller with PROXY_ADMIN role is acting on behalf of
     # another user (e.g. grid forwarding a user's JWT-authenticated request),
     # set target_user_id to the litellm user_id of the real caller. Ignored
@@ -4657,6 +4666,10 @@ class PlaygroundSlotNode(LiteLLMPydanticObjectBase):
     gpu_type: str
     total_gpus: int
     available_gpus: int
+    # GPU indices already booked for the night_of the parent response covers.
+    # The frontend seat grid renders these as disabled slots so users can't
+    # pick colliding indices.
+    booked_gpu_indices: List[int] = []
 
 
 class PlaygroundSlotsResponse(LiteLLMPydanticObjectBase):

@@ -76,6 +76,9 @@ OVERFLOW_HOUR = int(os.getenv("PLAYGROUND_OVERFLOW_START_HOUR", "22"))
 OVERFLOW_MINUTE = int(os.getenv("PLAYGROUND_OVERFLOW_START_MINUTE", "0"))
 CUTOFF_HOUR = int(os.getenv("PLAYGROUND_CUTOFF_HOUR", "22"))
 CUTOFF_MINUTE = int(os.getenv("PLAYGROUND_CUTOFF_MINUTE", "30"))
+# How far ahead users can book (days, inclusive). Today is day 0, so the
+# default of 7 means today + the next 7 calendar nights.
+BOOKING_HORIZON_DAYS = int(os.getenv("PLAYGROUND_BOOKING_HORIZON_DAYS", "7"))
 
 _SSH_KEY_TYPES = {
     "ssh-rsa",
@@ -162,26 +165,48 @@ def _effective_user_id(key: UserAPIKeyAuth, target_user_id: Optional[str]) -> st
     return key.user_id
 
 
-async def _can_book(user_id: str) -> Tuple[bool, str]:
-    """Gate booking creation: SSH key required, window open, no existing
-    booking tonight, weekly limit (relaxed during overflow)."""
+def _night_of_dt(night: date) -> datetime:
+    """Same serialization rule as _tonight_dt but for an arbitrary date."""
+    return datetime.combine(night, datetime.min.time(), tzinfo=timezone.utc)
+
+
+async def _can_book(user_id: str, night_of: date) -> Tuple[bool, str]:
+    """Gate booking creation for a specific night:
+      - SSH key required
+      - night_of within [today, today + BOOKING_HORIZON_DAYS]
+      - for same-day bookings, tonight's cutoff hasn't passed
+      - user doesn't already hold a (non-cancelled) booking for night_of
+      - weekly limit honored, except during tonight's overflow window
+    """
     prisma = _prisma()
 
     if not await prisma.db.litellm_usersshkey.count(where={"user_id": user_id}):
         return False, "Register an SSH key before booking"
 
-    phase = _booking_phase()
-    if phase == "closed":
+    today = _tonight()
+    if night_of < today:
+        return False, "Cannot book a night in the past"
+    if night_of > today + timedelta(days=BOOKING_HORIZON_DAYS):
+        return (
+            False,
+            f"Bookings are open up to {BOOKING_HORIZON_DAYS} days ahead",
+        )
+
+    is_tonight = night_of == today
+    # Cutoff / overflow phase only applies to tonight. Future-night bookings
+    # are always "open" regardless of the current wall clock.
+    phase = _booking_phase() if is_tonight else "open"
+    if is_tonight and phase == "closed":
         return False, "Booking cutoff has passed for tonight"
 
     if await prisma.db.litellm_playgroundbooking.count(
         where={
             "user_id": user_id,
-            "night_of": _tonight_dt(),
+            "night_of": _night_of_dt(night_of),
             "status": {"not": "cancelled"},
         }
     ):
-        return False, "You already have a booking for tonight"
+        return False, f"You already have a booking for {night_of.isoformat()}"
 
     # Overflow window relaxes the weekly limit but not the per-night unique check.
     if phase == "open":
@@ -199,37 +224,79 @@ async def _can_book(user_id: str) -> Tuple[bool, str]:
     return True, ""
 
 
-async def _allocate(
-    gpu_count: int, preferred_node: Optional[str]
-) -> Tuple[Optional[str], Optional[str]]:
-    """Pick a node with enough free GPUs tonight. Returns (ip, "0,1,2") or (None, None).
+def _parse_gpu_indices(raw: str) -> List[int]:
+    """Parse 'a,b,c' → [a, b, c]. Raises HTTP 400 on any malformed input.
 
-    Known race: read-then-write isn't serialized at the DB layer, so two
-    concurrent bookings can overlap on GPU indices. Acceptable at current
-    user count; add an advisory lock if it ever bites.
+    Enforces non-empty, unique, MAX_GPUS ceiling. Range-vs-total_gpus check
+    happens in _reserve_seats once the node is known.
+    """
+    try:
+        parsed = [int(x.strip()) for x in raw.split(",") if x.strip() != ""]
+    except ValueError:
+        raise HTTPException(400, "gpu_indices must be comma-separated integers")
+    if not parsed:
+        raise HTTPException(400, "gpu_indices cannot be empty")
+    if len(parsed) != len(set(parsed)):
+        raise HTTPException(400, "gpu_indices contains duplicates")
+    if len(parsed) > MAX_GPUS:
+        raise HTTPException(400, f"Cannot book more than {MAX_GPUS} GPUs at once")
+    return parsed
+
+
+async def _reserve_seats(night_of: date, node_name: str, gpu_indices_str: str):
+    """Resolve node_name, validate gpu_indices against node capacity and
+    existing bookings for night_of. Returns (node, sorted_indices) on success,
+    raises HTTPException on any collision or validation failure.
+
+    Known race: the overlap check and the subsequent INSERT are not in a
+    single DB transaction, so two concurrent callers requesting overlapping
+    seats could both succeed. Acceptable at current user count; if it bites,
+    wrap with a pg advisory lock keyed on (node_id, night_of).
     """
     prisma = _prisma()
-    tonight_dt = _tonight_dt()
 
-    nodes = await prisma.db.litellm_playgroundnode.find_many(
-        where={"is_playground_eligible": True, "is_healthy": True},
+    indices = _parse_gpu_indices(gpu_indices_str)
+
+    node = await prisma.db.litellm_playgroundnode.find_first(
+        where={"name": node_name}
     )
-    nodes.sort(key=lambda n: (n.ip_address != preferred_node, n.ip_address))
+    if node is None:
+        raise HTTPException(404, f"Node '{node_name}' not found")
+    if not node.is_playground_eligible:
+        raise HTTPException(409, f"Node '{node_name}' is not playground-eligible")
+    if not node.is_healthy:
+        raise HTTPException(409, f"Node '{node_name}' is currently unhealthy")
 
-    for node in nodes:
-        existing = await prisma.db.litellm_playgroundbooking.find_many(
-            where={
-                "allocated_node": node.ip_address,
-                "night_of": tonight_dt,
-                "status": {"in": ["allocated", "active"]},
-            }
+    out_of_range = [i for i in indices if i < 0 or i >= node.total_gpus]
+    if out_of_range:
+        raise HTTPException(
+            400,
+            f"GPU indices {out_of_range} out of range for node "
+            f"'{node_name}' (valid: 0..{node.total_gpus - 1})",
         )
-        used = {g for b in existing for g in (b.allocated_gpus or "").split(",") if g}
-        free = [str(i) for i in range(node.total_gpus) if str(i) not in used]
-        if len(free) >= gpu_count:
-            return node.ip_address, ",".join(free[:gpu_count])
 
-    return None, None
+    existing = await prisma.db.litellm_playgroundbooking.find_many(
+        where={
+            "allocated_node": node.ip_address,
+            "night_of": _night_of_dt(night_of),
+            "status": {"in": ["allocated", "active"]},
+        }
+    )
+    already_booked = {
+        int(g)
+        for b in existing
+        for g in (b.allocated_gpus or "").split(",")
+        if g.strip() != ""
+    }
+    conflicts = sorted(i for i in indices if i in already_booked)
+    if conflicts:
+        raise HTTPException(
+            409,
+            f"GPU indices {conflicts} already booked on '{node_name}' "
+            f"for {night_of.isoformat()}",
+        )
+
+    return node, sorted(indices)
 
 
 # ─── slots ──────────────────────────────────────────────────────────────────
@@ -244,28 +311,58 @@ async def _allocate(
 @management_endpoint_wrapper
 async def get_playground_slots(
     request: Request,
+    night_of: Optional[str] = None,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ) -> PlaygroundSlotsResponse:
-    """Available GPUs per eligible node tonight + booking phase."""
+    """Per-node GPU availability for a given night + booking phase.
+
+    Query params:
+      night_of (YYYY-MM-DD, default = today IST): which night to show.
+    """
     prisma = _prisma()
-    tonight = _tonight()
-    tonight_dt = _tonight_dt()
+
+    if night_of is not None:
+        try:
+            night = date.fromisoformat(night_of)
+        except ValueError:
+            raise HTTPException(400, "night_of must be YYYY-MM-DD")
+    else:
+        night = _tonight()
+
+    today = _tonight()
+    if night < today:
+        raise HTTPException(400, "Cannot query slots for a past night")
+    if night > today + timedelta(days=BOOKING_HORIZON_DAYS):
+        raise HTTPException(
+            400,
+            f"night_of is beyond the {BOOKING_HORIZON_DAYS}-day booking horizon",
+        )
 
     nodes = await prisma.db.litellm_playgroundnode.find_many(
         where={"is_playground_eligible": True, "is_healthy": True},
     )
     bookings = await prisma.db.litellm_playgroundbooking.find_many(
-        where={"night_of": tonight_dt, "status": {"in": ["allocated", "active"]}}
+        where={
+            "night_of": _night_of_dt(night),
+            "status": {"in": ["allocated", "active"]},
+        }
     )
-    used_by_node: Dict[str, int] = {}
+
+    booked_by_node: Dict[str, List[int]] = {}
     for b in bookings:
-        used_by_node[b.allocated_node] = used_by_node.get(b.allocated_node, 0) + len(
-            [g for g in (b.allocated_gpus or "").split(",") if g]
-        )
+        for g in (b.allocated_gpus or "").split(","):
+            g = g.strip()
+            if g == "":
+                continue
+            booked_by_node.setdefault(b.allocated_node, []).append(int(g))
+
+    # Phase only applies when we're showing tonight; future-night slots are
+    # always reported as "open" so the frontend renders them as bookable.
+    phase = _booking_phase() if night == today else "open"
 
     return PlaygroundSlotsResponse(
-        night_of=tonight,
-        booking_phase=_booking_phase(),
+        night_of=night,
+        booking_phase=phase,
         nodes=[
             PlaygroundSlotNode(
                 node_id=n.node_id,
@@ -273,7 +370,10 @@ async def get_playground_slots(
                 ip_address=n.ip_address,
                 gpu_type=n.gpu_type,
                 total_gpus=n.total_gpus,
-                available_gpus=max(0, n.total_gpus - used_by_node.get(n.ip_address, 0)),
+                available_gpus=max(
+                    0, n.total_gpus - len(booked_by_node.get(n.ip_address, []))
+                ),
+                booked_gpu_indices=sorted(booked_by_node.get(n.ip_address, [])),
             )
             for n in nodes
         ],
@@ -295,34 +395,38 @@ async def create_playground_booking(
     data: CreatePlaygroundBookingRequest,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ) -> PlaygroundBookingResponse:
-    """Create a booking for tonight."""
+    """Create a seat-style booking: user picks a specific night + node + GPU
+    indices from the frontend seat grid. The server validates, reserves, and
+    persists the exact seats the caller asked for (no allocator fallback)."""
     prisma = _prisma()
     user_id = _effective_user_id(user_api_key_dict, data.target_user_id)
 
-    if data.gpu_count > MAX_GPUS:
-        raise HTTPException(400, f"gpu_count must be <= {MAX_GPUS}")
-
-    ok, reason = await _can_book(user_id)
+    ok, reason = await _can_book(user_id, data.night_of)
     if not ok:
         raise HTTPException(409, reason)
 
-    node_ip, gpu_ids = await _allocate(data.gpu_count, data.preferred_node)
-    if not node_ip:
-        raise HTTPException(409, "No GPUs available on any node")
+    node, indices = await _reserve_seats(data.night_of, data.node_name, data.gpu_indices)
+
+    # `is_overflow` is a same-day-after-OVERFLOW_HOUR distinction; future-night
+    # bookings are never overflow regardless of the wall clock.
+    is_overflow = (
+        data.night_of == _tonight() and _booking_phase() == "overflow"
+    )
 
     booking = await prisma.db.litellm_playgroundbooking.create(
         data={
             "user_id": user_id,
-            "gpu_count": data.gpu_count,
-            "preferred_node": data.preferred_node,
-            "allocated_node": node_ip,
-            "allocated_gpus": gpu_ids,
-            "night_of": _tonight_dt(),
-            "is_overflow": _booking_phase() == "overflow",
+            "gpu_count": len(indices),
+            "preferred_node": None,
+            "allocated_node": node.ip_address,
+            "allocated_gpus": ",".join(str(i) for i in indices),
+            "night_of": _night_of_dt(data.night_of),
+            "is_overflow": is_overflow,
         }
     )
     verbose_proxy_logger.info(
-        f"playground: booking {booking.booking_id} user={user_id} gpus={gpu_ids} node={node_ip}"
+        f"playground: booking {booking.booking_id} user={user_id} "
+        f"gpus={indices} node={node.ip_address} night={data.night_of.isoformat()}"
     )
     return PlaygroundBookingResponse(**booking.model_dump())
 
