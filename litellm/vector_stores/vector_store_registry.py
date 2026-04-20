@@ -370,8 +370,19 @@ class VectorStoreRegistry:
                     break
 
             # Verify vector store still exists in database (if we have DB access)
-            # This ensures deleted vector stores are removed from cache
-            if vector_store is not None and prisma_client is not None:
+            # This ensures deleted vector stores are removed from cache.
+            #
+            # Vector stores declared in proxy_config.yaml are intentionally
+            # never written to the DB table — verifying them against the DB
+            # would always miss and they would be evicted on first use,
+            # making them visible in /vector_store/list (see #25947) but
+            # silently unreachable during inference. Skip the DB check for
+            # those entries; they are authoritative from the config file.
+            if (
+                vector_store is not None
+                and prisma_client is not None
+                and vector_store.get("from_litellm_config") is not True
+            ):
                 try:
                     # Check if it still exists in database
                     db_vector_store = await prisma_client.db.litellm_managedvectorstorestable.find_unique(

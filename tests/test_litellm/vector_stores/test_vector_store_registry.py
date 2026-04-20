@@ -13,7 +13,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 from datetime import datetime, timezone
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import litellm
 from litellm.types.vector_stores import LiteLLM_ManagedVectorStore
@@ -229,3 +229,94 @@ def test_add_vector_store_to_registry_does_not_mark_from_litellm_config():
 
     assert len(registry.vector_stores) == 1
     assert registry.vector_stores[0].get("from_litellm_config") is not True
+
+
+@pytest.mark.asyncio
+async def test_pop_vector_stores_preserves_config_loaded_on_db_miss():
+    """
+    Request-path regression for #25947 (Greptile follow-up): a
+    vector store loaded from proxy_config.yaml must still be usable
+    during inference when it is missing from the DB — the DB-reconcile
+    eviction that applies to runtime entries must not fire for
+    config-declared ones, or they get listed in the UI but silently
+    evicted on first use.
+    """
+    registry = VectorStoreRegistry(vector_stores=[])
+    registry.load_vector_stores_from_config(
+        [
+            {
+                "vector_store_name": "config-demo",
+                "litellm_params": {
+                    "custom_llm_provider": "pg_vector",
+                    "vector_store_id": "vs-config-path",
+                },
+            }
+        ]
+    )
+
+    prisma = MagicMock()
+    # Any DB lookup returns "not found" — mimics a proxy running without
+    # the managed vector_store table populated.
+    prisma.db.litellm_managedvectorstorestable.find_unique = AsyncMock(
+        return_value=None
+    )
+
+    with patch.object(
+        registry,
+        "get_litellm_managed_vector_store_from_registry_or_db",
+        new=AsyncMock(return_value=None),
+    ):
+        result = await registry.pop_vector_stores_to_run_with_db_fallback(
+            non_default_params={"vector_store_ids": ["vs-config-path"]},
+            prisma_client=prisma,
+        )
+
+    assert len(result) == 1
+    assert result[0]["vector_store_id"] == "vs-config-path"
+    # Still in the registry — not evicted by the DB-miss reconcile.
+    ids_after = [vs.get("vector_store_id") for vs in registry.vector_stores]
+    assert "vs-config-path" in ids_after
+    # DB path should not have been consulted for a config-declared store —
+    # we know it will never be there, so asking wastes a round-trip.
+    prisma.db.litellm_managedvectorstorestable.find_unique.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_pop_vector_stores_still_evicts_runtime_on_db_miss():
+    """
+    Regression guard: runtime-inserted entries (no from_litellm_config
+    flag) must keep the old eviction semantics, otherwise stale cache
+    after a runtime deletion would never be cleaned up.
+    """
+    from unittest.mock import AsyncMock as _AsyncMock
+
+    registry = VectorStoreRegistry(vector_stores=[])
+    registry.add_vector_store_to_registry(
+        LiteLLM_ManagedVectorStore(
+            vector_store_id="vs-runtime-gone",
+            custom_llm_provider="openai",
+            vector_store_name="runtime-gone",
+            created_at=datetime.now(timezone.utc),
+            updated_at=datetime.now(timezone.utc),
+        )
+    )
+
+    prisma = MagicMock()
+    prisma.db.litellm_managedvectorstorestable.find_unique = _AsyncMock(
+        return_value=None
+    )
+
+    with patch.object(
+        registry,
+        "get_litellm_managed_vector_store_from_registry_or_db",
+        new=_AsyncMock(return_value=None),
+    ):
+        await registry.pop_vector_stores_to_run_with_db_fallback(
+            non_default_params={"vector_store_ids": ["vs-runtime-gone"]},
+            prisma_client=prisma,
+        )
+
+    # Evicted from the in-memory registry, as before the fix.
+    ids_after = [vs.get("vector_store_id") for vs in registry.vector_stores]
+    assert "vs-runtime-gone" not in ids_after
+    prisma.db.litellm_managedvectorstorestable.find_unique.assert_called_once()
