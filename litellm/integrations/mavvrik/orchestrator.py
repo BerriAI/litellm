@@ -120,15 +120,30 @@ class Orchestrator:
             start_date = await self._register()
 
             if start_date > self._yesterday:
-                verbose_logger.debug("Orchestrator: up to date, nothing to export")
+                verbose_logger.warning(
+                    "Mavvrik Orchestrator: up to date (start=%s, yesterday=%s), nothing to export",
+                    start_date,
+                    self._yesterday,
+                )
                 return
+
+            verbose_logger.warning(
+                "Mavvrik Orchestrator: starting export from %s to %s",
+                start_date,
+                self._yesterday,
+            )
 
             for export_date in self._date_range(start_date):
                 await self._upload_date(export_date)
                 await self._advance_marker(export_date)
 
+            verbose_logger.warning(
+                "Mavvrik Orchestrator: export complete, last date exported=%s",
+                self._yesterday,
+            )
+
         except Exception as exc:
-            verbose_logger.error("Orchestrator: run failed: %s", exc)
+            verbose_logger.error("Mavvrik Orchestrator: run failed: %s", exc, exc_info=True)
             await self._client.report_error(str(exc)[:500])
 
     # ------------------------------------------------------------------
@@ -143,7 +158,7 @@ class Orchestrator:
         (brand-new connection, no marker yet).
         """
         marker_str = await self._client.register()
-        verbose_logger.debug("Orchestrator: marker = %s", marker_str)
+        verbose_logger.warning("Mavvrik Orchestrator: marker from Mavvrik API = %s", marker_str)
 
         if marker_str:
             return date.fromisoformat(marker_str[:10])
@@ -153,12 +168,22 @@ class Orchestrator:
     async def _upload_date(self, export_date: date) -> None:
         """Step 2: Fetch usage data, transform to CSV, and upload to Mavvrik."""
         date_str = export_date.isoformat()
-        verbose_logger.info("Orchestrator: uploading date %s", date_str)
 
-        await self._uploader.upload_usage_data(
+        records = await self._uploader.upload_usage_data(
             date_str=date_str,
             limit=MAVVRIK_MAX_FETCHED_DATA_RECORDS,
         )
+
+        if records > 0:
+            verbose_logger.warning(
+                "Mavvrik Orchestrator: %s → uploaded %d records to GCS ✓",
+                date_str, records,
+            )
+        else:
+            verbose_logger.warning(
+                "Mavvrik Orchestrator: %s → no data in DB, skipped (no GCS object written)",
+                date_str,
+            )
 
     async def _advance_marker(self, exported_date: date) -> None:
         """Step 3: Advance the Mavvrik marker to the next day.

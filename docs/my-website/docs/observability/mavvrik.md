@@ -98,7 +98,7 @@ curl -X POST "http://localhost:4000/mavvrik/dry-run" \
   "status": "success",
   "dry_run_data": {
     "usage_data": [...],
-    "csv_preview": "date,model,team_id,user,spend,prompt_tokens,completion_tokens,..."
+    "csv_preview": "date,model,team_id,user_id,spend,prompt_tokens,completion_tokens,..."
   },
   "summary": {
     "total_records": 10,
@@ -175,7 +175,7 @@ LiteLLM exports daily spend aggregates from `LiteLLM_DailyUserSpend` as a CSV fi
 | `date` | Calendar date (YYYY-MM-DD) |
 | `model` | LLM model name |
 | `team_id` | LiteLLM team identifier |
-| `user` | LiteLLM user identifier |
+| `user_id` | LiteLLM user identifier |
 | `spend` | Total cost in USD |
 | `prompt_tokens` | Input tokens consumed |
 | `completion_tokens` | Output tokens generated |
@@ -239,7 +239,8 @@ curl -X DELETE "http://localhost:4000/mavvrik/delete" \
 
 3. **No data appearing in Mavvrik**
    - Use the dry-run endpoint to verify data exists for the target date
-   - Check the `marker` field in `GET /mavvrik/settings` — if it is already at yesterday's date, there is nothing new to export
+   - Check proxy logs for `Mavvrik Orchestrator: up to date` — if the marker is already at today, there is nothing new to export
+   - Check proxy logs for `no data in DB, skipped` — the date has no spend rows in `LiteLLM_DailyUserSpend`
    - Ensure the proxy has been generating traffic (check `LiteLLM_DailyUserSpend` table)
    - Only complete calendar days are exported — today's data will appear after midnight UTC
 
