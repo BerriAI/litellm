@@ -1,4 +1,4 @@
-# Claude Code: Any Advisor Model via LiteLLM
+# Claude Code: Any Advisor Model via LiteLLM (Beta)
 
 This tutorial shows how to use **Claude Code's advisor tool** with **any model/provider** (OpenAI, Gemini, Bedrock, etc.) by routing through LiteLLM.
 

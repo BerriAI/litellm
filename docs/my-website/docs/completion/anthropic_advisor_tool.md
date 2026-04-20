@@ -1,7 +1,7 @@
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# Advisor Tool
+# Advisor Tool (Beta)
 
 LiteLLM supports the Anthropic advisor tool across `chat/completions` and `messages` APIs (SDK + proxy).
 
