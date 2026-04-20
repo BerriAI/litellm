@@ -100,4 +100,4 @@ STABILIZATION_TODO.md
 **/test-results
 **/playwright-report
 **/*.storageState.json
-**/coverage
+**/coveragelitellm/proxy/_experimental/out/
