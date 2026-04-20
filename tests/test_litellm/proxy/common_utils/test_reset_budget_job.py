@@ -4,6 +4,7 @@ import sys
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -27,12 +28,44 @@ class MockLiteLLMTeamMembership:
 
 class MockLiteLLMVerificationToken:
     def __init__(self):
+        self.find_many_calls: List[Dict[str, Any]] = []
+        self.update_calls: List[Dict[str, Any]] = []
         self.update_many_calls: List[Dict[str, Any]] = []
+        self._find_many_results: List[Any] = []
+
+    def set_find_many_results(self, results: List[Any]):
+        self._find_many_results = results
+
+    async def find_many(self, where: Dict[str, Any] | None = None) -> List[Any]:
+        self.find_many_calls.append({"where": where})
+        return self._find_many_results
+
+    async def update(self, where: Dict[str, Any], data: Dict[str, Any]) -> Dict[str, Any]:
+        self.update_calls.append({"where": where, "data": data})
+        return {"count": 1}
 
     async def update_many(
         self, where: Dict[str, Any], data: Dict[str, Any]
     ) -> Dict[str, Any]:
         self.update_many_calls.append({"where": where, "data": data})
+        return {"count": 1}
+
+
+class MockLiteLLMTeamTable:
+    def __init__(self):
+        self.find_many_calls: List[Dict[str, Any]] = []
+        self.update_calls: List[Dict[str, Any]] = []
+        self._find_many_results: List[Any] = []
+
+    def set_find_many_results(self, results: List[Any]):
+        self._find_many_results = results
+
+    async def find_many(self, where: Dict[str, Any] | None = None) -> List[Any]:
+        self.find_many_calls.append({"where": where})
+        return self._find_many_results
+
+    async def update(self, where: Dict[str, Any], data: Dict[str, Any]) -> Dict[str, Any]:
+        self.update_calls.append({"where": where, "data": data})
         return {"count": 1}
 
 
@@ -53,6 +86,7 @@ class MockDB:
     def __init__(self):
         self.litellm_teammembership = MockLiteLLMTeamMembership()
         self.litellm_verificationtoken = MockLiteLLMVerificationToken()
+        self.litellm_teamtable = MockLiteLLMTeamTable()
         self.litellm_endusertable = MockLiteLLMEndUserTable()
 
 
@@ -613,6 +647,72 @@ def test_budget_table_reset_also_resets_linked_keys(
     )
     assert calls[0]["where"]["budget_id"] == {"in": ["7d-budget-tier"]}
     assert calls[0]["data"]["spend"] == 0
+
+
+def test_reset_budget_windows_filters_null_budget_limits_in_python(
+    reset_budget_job, mock_prisma_client
+):
+    """
+    reset_budget_windows() should fetch keys and teams without Prisma JSON null
+    filters and skip empty budget_limits records in Python.
+    """
+    key_with_windows = type(
+        "LiteLLM_VerificationToken",
+        (),
+        {
+            "token": "sk-key-with-windows",
+            "budget_limits": '[{"budget_duration": "24h", "reset_at": null}]',
+        },
+    )
+    key_without_windows = type(
+        "LiteLLM_VerificationToken",
+        (),
+        {"token": "sk-key-without-windows", "budget_limits": None},
+    )
+    team_with_windows = type(
+        "LiteLLM_TeamTable",
+        (),
+        {
+            "team_id": "team-with-windows",
+            "budget_limits": [{"budget_duration": "7d", "reset_at": None}],
+        },
+    )
+    team_without_windows = type(
+        "LiteLLM_TeamTable",
+        (),
+        {"team_id": "team-without-windows", "budget_limits": None},
+    )
+
+    mock_prisma_client.db.litellm_verificationtoken.set_find_many_results(
+        [key_with_windows, key_without_windows]
+    )
+    mock_prisma_client.db.litellm_teamtable.set_find_many_results(
+        [team_with_windows, team_without_windows]
+    )
+
+    with patch(
+        "litellm.proxy.proxy_server.spend_counter_cache", new=MagicMock()
+    ), patch.object(
+        ResetBudgetJob,
+        "_reset_expired_window",
+        new=AsyncMock(return_value=True),
+    ):
+        asyncio.run(reset_budget_job.reset_budget_windows())
+
+    assert mock_prisma_client.db.litellm_verificationtoken.find_many_calls == [
+        {"where": None}
+    ]
+    assert mock_prisma_client.db.litellm_teamtable.find_many_calls == [
+        {"where": None}
+    ]
+
+    key_updates = mock_prisma_client.db.litellm_verificationtoken.update_calls
+    assert len(key_updates) == 1
+    assert key_updates[0]["where"] == {"token": "sk-key-with-windows"}
+
+    team_updates = mock_prisma_client.db.litellm_teamtable.update_calls
+    assert len(team_updates) == 1
+    assert team_updates[0]["where"] == {"team_id": "team-with-windows"}
 
 
 def test_reset_budget_resets_endusers_with_null_budget_id(
