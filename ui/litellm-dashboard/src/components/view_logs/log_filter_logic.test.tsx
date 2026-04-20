@@ -109,6 +109,17 @@ describe("useLogFilterLogic", () => {
       expect(result.current.filters["Status"]).toBe("");
     });
 
+    it("calls setCurrentPage(1)", () => {
+      const setCurrentPage = vi.fn();
+      const { result } = renderFilterHook({ setCurrentPage });
+
+      act(() => {
+        result.current.handleFilterReset();
+      });
+
+      expect(setCurrentPage).toHaveBeenCalledWith(1);
+    });
+
     it("triggers a fetch with all filter params undefined", async () => {
       vi.mocked(uiSpendLogsCall).mockResolvedValue(emptyResponse);
       const { result } = renderFilterHook();
@@ -154,6 +165,22 @@ describe("useLogFilterLogic", () => {
       });
 
       expect(setCurrentPage).toHaveBeenCalledWith(1);
+    });
+
+    it("merges partial updates without clobbering other filter keys", () => {
+      const { result } = renderFilterHook();
+
+      act(() => {
+        result.current.handleFilterChange({ "Team ID": "team-a" });
+      });
+      expect(result.current.filters["Team ID"]).toBe("team-a");
+
+      act(() => {
+        result.current.handleFilterChange({ Model: "gpt-4" });
+      });
+
+      expect(result.current.filters["Team ID"]).toBe("team-a");
+      expect(result.current.filters["Model"]).toBe("gpt-4");
     });
 
     it("does not call setCurrentPage when filters are identical", async () => {
@@ -256,6 +283,24 @@ describe("useLogFilterLogic", () => {
       act(() => {
         result.current.handleFilterChange({ "Key Alias": "alias-1" });
       });
+
+      await waitFor(() => expect(uiSpendLogsCall).toHaveBeenCalled(), { timeout: 500 });
+    });
+
+    it("does not call uiSpendLogsCall before the debounce elapses", async () => {
+      const { result } = renderFilterHook();
+
+      // Wait for the initial query fire, then reset the spy so we only observe
+      // calls triggered by the filter change below.
+      await waitFor(() => expect(uiSpendLogsCall).toHaveBeenCalled(), { timeout: 500 });
+      vi.mocked(uiSpendLogsCall).mockClear();
+
+      act(() => {
+        result.current.handleFilterChange({ "Key Alias": "alias-1" });
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(uiSpendLogsCall).not.toHaveBeenCalled();
 
       await waitFor(() => expect(uiSpendLogsCall).toHaveBeenCalled(), { timeout: 500 });
     });
@@ -455,8 +500,30 @@ describe("useLogFilterLogic", () => {
   });
 
   describe("query enablement", () => {
-    it("does not call uiSpendLogsCall when accessToken is null", async () => {
-      const { result } = renderFilterHook({ accessToken: null });
+    const nullCredentialCases: Array<{ name: string; override: HookOverrides }> = [
+      { name: "accessToken", override: { accessToken: null } },
+      { name: "token", override: { token: null } },
+      { name: "userRole", override: { userRole: null } },
+      { name: "userID", override: { userID: null } },
+    ];
+
+    it.each(nullCredentialCases)(
+      "does not call uiSpendLogsCall when $name is null",
+      async ({ override }) => {
+        const { result } = renderFilterHook(override);
+
+        act(() => {
+          result.current.handleFilterChange({ "Key Alias": "alias-1" });
+        });
+
+        await new Promise((resolve) => setTimeout(resolve, 350));
+
+        expect(uiSpendLogsCall).not.toHaveBeenCalled();
+      },
+    );
+
+    it("does not call uiSpendLogsCall when activeTab is not 'request logs'", async () => {
+      const { result } = renderFilterHook({ activeTab: "audit logs" });
 
       act(() => {
         result.current.handleFilterChange({ "Key Alias": "alias-1" });
@@ -465,6 +532,30 @@ describe("useLogFilterLogic", () => {
       await new Promise((resolve) => setTimeout(resolve, 350));
 
       expect(uiSpendLogsCall).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("filterByCurrentUser", () => {
+    it("sends user_id: userID when the User ID filter is blank", async () => {
+      const { result } = renderFilterHook({
+        filterByCurrentUser: true,
+        userID: "me-123",
+      });
+
+      act(() => {
+        result.current.handleFilterChange({ "Key Alias": "alias-1" });
+      });
+
+      await waitFor(
+        () => {
+          expect(uiSpendLogsCall).toHaveBeenCalledWith(
+            expect.objectContaining({
+              params: expect.objectContaining({ user_id: "me-123" }),
+            }),
+          );
+        },
+        { timeout: 500 },
+      );
     });
   });
 
