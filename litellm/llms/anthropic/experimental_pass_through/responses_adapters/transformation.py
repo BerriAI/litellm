@@ -8,6 +8,7 @@ path used for OpenAI and Azure models.
 import json
 from typing import Any, Dict, List, Optional, Union, cast
 
+from litellm._logging import verbose_logger
 from litellm.llms.anthropic.experimental_pass_through.utils import (
     is_reasoning_auto_summary_enabled,
 )
@@ -200,6 +201,11 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                 allowed = tool_dict.get("allowed_domains")
                 if allowed:
                     web_tool["filters"] = {"allowed_domains": allowed}
+                if tool_dict.get("blocked_domains"):
+                    verbose_logger.warning(
+                        "Responses API does not support 'blocked_domains' on web_search tools; "
+                        "this field will be ignored."
+                    )
                 result.append(web_tool)
                 continue
             func_tool: Dict[str, Any] = {"type": "function", "name": tool_name}
