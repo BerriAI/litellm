@@ -406,6 +406,180 @@ async def test_semantic_filter_hook_triggers_on_completion():
     print(f"✅ Hook triggered correctly: {len(tools)} -> {len(result['tools'])} tools")
 
 
+def _make_filter():
+    """Build a ``SemanticMCPToolFilter`` without exercising the embedding
+    router. These tests only poke pure-Python methods (``_extract_tool_info``
+    and ``_get_tools_by_names``)."""
+    from litellm.proxy._experimental.mcp_server.semantic_tool_filter import (
+        SemanticMCPToolFilter,
+    )
+
+    return SemanticMCPToolFilter(
+        embedding_model="text-embedding-3-small",
+        litellm_router_instance=Mock(),
+        top_k=10,
+        similarity_threshold=0.3,
+        enabled=True,
+    )
+
+
+def test_extract_tool_info_openai_chat_wrapper():
+    """Chat Completions wrapper: name and description come from .function."""
+    f = _make_filter()
+    name, description = f._extract_tool_info(
+        {"type": "function", "function": {"name": "foo", "description": "bar"}}
+    )
+    assert (name, description) == ("foo", "bar")
+
+
+def test_extract_tool_info_flat_dict():
+    """Responses API / expanded MCP tool: flat dict with name+description."""
+    f = _make_filter()
+    name, description = f._extract_tool_info(
+        {"name": "foo", "description": "bar"}
+    )
+    assert (name, description) == ("foo", "bar")
+
+
+def test_extract_tool_info_mcptool_object():
+    """MCPTool objects keep working unchanged."""
+    f = _make_filter()
+    name, description = f._extract_tool_info(
+        MCPTool(name="foo", description="bar", inputSchema={"type": "object"})
+    )
+    assert (name, description) == ("foo", "bar")
+
+
+def test_extract_tool_info_falls_back_to_name_when_description_missing():
+    f = _make_filter()
+    name, description = f._extract_tool_info(
+        {"type": "function", "function": {"name": "foo"}}
+    )
+    assert (name, description) == ("foo", "foo")
+
+
+def test_get_tools_by_names_exact_match_preserves_router_order():
+    f = _make_filter()
+    tools = [
+        MCPTool(name="b", description="", inputSchema={}),
+        MCPTool(name="a", description="", inputSchema={}),
+        MCPTool(name="c", description="", inputSchema={}),
+    ]
+    matched = f._get_tools_by_names(["a", "c", "b"], tools)
+    assert [t.name for t in matched] == ["a", "c", "b"]
+
+
+def test_get_tools_by_names_client_prefix_is_resolved():
+    """Client wraps an MCP canonical tool with its own alias prefix
+    (``litellm_<server>-<tool>``). Canonical from the router is
+    ``fc_web_search-firecrawl_scrape``; the wrapped client name still
+    resolves to it."""
+    f = _make_filter()
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "litellm_fc_web_search-firecrawl_scrape",
+                "description": "scrape",
+            },
+        }
+    ]
+    matched = f._get_tools_by_names(["fc_web_search-firecrawl_scrape"], tools)
+    assert len(matched) == 1
+    assert matched[0] is tools[0]
+
+
+def test_get_tools_by_names_longest_canonical_wins():
+    """Two canonicals share a tail; client-prefixed name must bind to the
+    longer (more specific) canonical only."""
+    f = _make_filter()
+    tool = MCPTool(
+        name="litellm_fc_web_search-scrape", description="", inputSchema={}
+    )
+    canonicals = ["search-scrape", "fc_web_search-scrape"]
+    matched = f._get_tools_by_names(canonicals, [tool])
+    # The tool resolves exactly once, against the longer canonical, so
+    # ``search-scrape`` must drop out of the result.
+    assert len(matched) == 1
+    assert matched[0] is tool
+
+
+def test_get_tools_by_names_multi_server_no_cross_match():
+    """Two MCP servers register a same-named tool. A client-prefixed name
+    referencing server_a must not be bound to server_b's canonical."""
+    f = _make_filter()
+    tools = [
+        MCPTool(
+            name="litellm_server_a-search", description="", inputSchema={}
+        )
+    ]
+    canonicals = ["server_a-search", "server_b-search"]
+    matched = f._get_tools_by_names(canonicals, tools)
+    assert len(matched) == 1
+    assert matched[0] is tools[0]
+
+
+def test_get_tools_by_names_native_tool_no_false_match():
+    """A native client tool that happens to share the trailing portion of
+    a canonical name (``read`` vs ``fs-read``) must not alias into it:
+    the match requires a separator boundary immediately before the full
+    canonical."""
+    f = _make_filter()
+    tools = [MCPTool(name="read", description="", inputSchema={})]
+    matched = f._get_tools_by_names(["fs-read"], tools)
+    assert matched == []
+
+
+def test_get_tools_by_names_ordering_follows_router_with_mixed_inputs():
+    f = _make_filter()
+    tools = [
+        # Exact match for "a".
+        MCPTool(name="a", description="", inputSchema={}),
+        # Client-prefixed name for canonical "c".
+        {"type": "function", "function": {"name": "litellm_c"}},
+        # Wrapped flat dict for canonical "b".
+        {"name": "ext-b"},
+    ]
+    matched = f._get_tools_by_names(["b", "a", "c"], tools)
+    matched_names = [get_tool_name_for_test(t) for t in matched]
+    assert matched_names == ["ext-b", "a", "litellm_c"]
+
+
+def get_tool_name_for_test(tool):
+    """Local mirror of ``get_tool_name`` so assertions don't couple to the
+    helper module import order in other tests."""
+    from litellm.proxy._experimental.mcp_server.utils import get_tool_name
+
+    return get_tool_name(tool)
+
+
+def test_get_tool_names_csv_handles_all_shapes():
+    """``_get_tool_names_csv`` used to read only flat-dict ``name`` or
+    ``.name``; wrapped Chat Completions tools therefore surfaced as empty
+    strings in the ``x-litellm-semantic-filter-tools`` response header."""
+    from litellm.proxy._experimental.mcp_server.semantic_tool_filter import (
+        SemanticMCPToolFilter,
+    )
+    from litellm.proxy.hooks.mcp_semantic_filter import SemanticToolFilterHook
+
+    filter_instance = SemanticMCPToolFilter(
+        embedding_model="text-embedding-3-small",
+        litellm_router_instance=Mock(),
+        top_k=3,
+        similarity_threshold=0.3,
+        enabled=True,
+    )
+    hook = SemanticToolFilterHook(filter_instance)
+
+    tools = [
+        {"type": "function", "function": {"name": "foo"}},
+        {"name": "bar"},
+        MCPTool(name="baz", description="", inputSchema={}),
+    ]
+
+    assert hook._get_tool_names_csv(tools) == "foo,bar,baz"
+
+
 @pytest.mark.asyncio
 async def test_semantic_filter_hook_skips_no_tools():
     """

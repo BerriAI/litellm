@@ -7,6 +7,10 @@ Filters MCP tools semantically for /chat/completions and /responses endpoints.
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from litellm._logging import verbose_logger
+from litellm.proxy._experimental.mcp_server.utils import (
+    MCP_TOOL_PREFIX_SEPARATOR,
+    get_tool_name,
+)
 
 if TYPE_CHECKING:
     from semantic_router.routers import SemanticRouter
@@ -87,18 +91,23 @@ class SemanticMCPToolFilter:
             raise
 
     def _extract_tool_info(self, tool) -> tuple[str, str]:
-        """Extract name and description from MCP tool or OpenAI function dict."""
-        name: str
-        description: str
+        """Extract name and description from MCP tool or OpenAI function dict.
+
+        Description falls back to the name so the embedding input is never
+        empty, which matters when the same code path handles both MCP tool
+        objects and OpenAI-style function dicts.
+        """
+        name = get_tool_name(tool)
 
         if isinstance(tool, dict):
-            # OpenAI function format
-            name = tool.get("name", "")
-            description = tool.get("description", name)
+            # Prefer the nested ``function`` block if present (Chat
+            # Completions wrapper), otherwise read from the flat dict.
+            fn = tool.get("function") if isinstance(tool.get("function"), dict) else None
+            source: Dict[str, Any] = fn if fn is not None else tool
+            description = source.get("description", name) or name
         else:
-            # MCPTool object
-            name = str(tool.name)
-            description = str(tool.description) if tool.description else str(tool.name)
+            raw_description = getattr(tool, "description", None)
+            description = str(raw_description) if raw_description else name
 
         return name, description
 
@@ -217,16 +226,57 @@ class SemanticMCPToolFilter:
     def _get_tools_by_names(
         self, tool_names: List[str], available_tools: List[Any]
     ) -> List[Any]:
-        """Get tools from available_tools by their names, preserving order."""
-        # Match tools from available_tools (preserves format - dict or MCPTool)
-        matched_tools = []
-        for tool in available_tools:
-            tool_name, _ = self._extract_tool_info(tool)
-            if tool_name in tool_names:
-                matched_tools.append(tool)
+        """Get tools from ``available_tools`` by their names, preserving order.
 
-        # Reorder to match semantic router's ordering
-        tool_map = {self._extract_tool_info(t)[0]: t for t in matched_tools}
+        The semantic router emits canonical MCP names (e.g. ``<server>-<tool>``
+        produced by ``add_server_prefix_to_name``). Clients, however, may
+        send tools with their own extra prefix — for example opencode wraps
+        every MCP tool as ``litellm_<server>-<tool>`` and Responses-API
+        callers sometimes mirror the same pattern. Strict equality then
+        drops every tool and the downstream request is shipped with
+        ``tools=[]``, which upstream vLLM rejects when ``tool_choice`` is
+        set.
+
+        Matching rules (applied in order for every available tool):
+
+        1. Exact canonical match wins.
+        2. Otherwise, the longest canonical that appears as a suffix of the
+           client name, preceded by a separator (``MCP_TOOL_PREFIX_SEPARATOR``
+           or ``_``), is selected. Requiring a separator boundary prevents a
+           native client tool (e.g. ``read``) from aliasing into an MCP
+           canonical (e.g. ``fs-read``), and the longest-wins rule
+           disambiguates when several canonicals share a common tail
+           (e.g. ``search-scrape`` vs ``fc_web_search-scrape``).
+
+        Ordering from ``tool_names`` is preserved; unmatched canonicals are
+        skipped rather than fabricated.
+        """
+        if not tool_names or not available_tools:
+            return []
+
+        canonical_set = set(tool_names)
+        # Longer canonicals first so the suffix scan always picks the most
+        # specific match when several share a tail.
+        canonicals_desc_len = sorted(tool_names, key=len, reverse=True)
+        separators = (MCP_TOOL_PREFIX_SEPARATOR, "_")
+
+        tool_map: Dict[str, Any] = {}
+        for tool in available_tools:
+            tool_name = get_tool_name(tool)
+            if not tool_name:
+                continue
+
+            if tool_name in canonical_set:
+                tool_map.setdefault(tool_name, tool)
+                continue
+
+            for canonical in canonicals_desc_len:
+                if any(
+                    tool_name.endswith(sep + canonical) for sep in separators
+                ):
+                    tool_map.setdefault(canonical, tool)
+                    break
+
         return [tool_map[name] for name in tool_names if name in tool_map]
 
     def extract_user_query(self, messages: List[Dict[str, Any]]) -> str:

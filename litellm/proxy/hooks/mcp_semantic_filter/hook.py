@@ -14,6 +14,7 @@ from litellm.constants import (
     DEFAULT_MCP_SEMANTIC_FILTER_TOP_K,
 )
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.proxy._experimental.mcp_server.utils import get_tool_name
 
 if TYPE_CHECKING:
     from litellm.caching.caching import DualCache
@@ -288,20 +289,16 @@ class SemanticToolFilterHook(CustomLogger):
         return headers
 
     def _get_tool_names_csv(self, tools: List[Any]) -> str:
-        """Extract tool names and return as CSV string."""
+        """Extract tool names and return as CSV string.
+
+        Uses the shared ``get_tool_name`` helper so OpenAI Chat Completions
+        wrapper tools (``{"type": "function", "function": {"name": ...}}``)
+        and flat/MCP tool objects all resolve to their display name.
+        """
         if not tools:
             return ""
 
-        tool_names = []
-        for tool in tools:
-            name = (
-                tool.get("name", "")
-                if isinstance(tool, dict)
-                else getattr(tool, "name", "")
-            )
-            if name:
-                tool_names.append(name)
-
+        tool_names = [name for name in (get_tool_name(t) for t in tools) if name]
         return ",".join(tool_names)
 
     @staticmethod

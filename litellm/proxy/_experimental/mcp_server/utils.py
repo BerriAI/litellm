@@ -101,6 +101,29 @@ def split_server_prefix_from_name(prefixed_name: str) -> Tuple[str, str]:
     return prefixed_name, ""
 
 
+def get_tool_name(tool: Any) -> str:
+    """Extract the tool name from an MCP tool or an OpenAI tool dict.
+
+    Callers throughout the proxy receive tool definitions in one of three
+    shapes, depending on whether a request came from the Responses API, the
+    Chat Completions API, or the internal MCP registry. This helper
+    normalises them to a single string:
+
+    - OpenAI Chat Completions wrapper: ``{"type": "function", "function": {"name": ...}}``
+    - Flat dict (Responses API / expanded MCP tools): ``{"name": ...}``
+    - ``MCPTool`` (or any object with a ``.name`` attribute)
+
+    Returns ``""`` when the name cannot be determined, so callers can still
+    filter out unnamed entries without raising.
+    """
+    if isinstance(tool, dict):
+        fn = tool.get("function")
+        if isinstance(fn, dict) and fn.get("name"):
+            return fn["name"]
+        return tool.get("name", "") or ""
+    return getattr(tool, "name", "") or ""
+
+
 def is_tool_name_prefixed(
     tool_name: str,
     known_server_prefixes: Optional[set] = None,
