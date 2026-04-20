@@ -868,7 +868,18 @@ def responses(
             if isinstance(reasoning, dict):
                 reasoning = {**reasoning, "effort": force_reasoning_effort}
             else:
-                reasoning = {"effort": force_reasoning_effort}
+                from litellm.llms.anthropic.experimental_pass_through.utils import (
+                    is_reasoning_auto_summary_enabled,
+                )
+
+                reasoning = {
+                    **(
+                        {"summary": "detailed"}
+                        if is_reasoning_auto_summary_enabled()
+                        else {}
+                    ),
+                    "effort": force_reasoning_effort,
+                }
             local_vars["reasoning"] = reasoning
         # Get ResponsesAPIOptionalRequestParams with only valid parameters
         response_api_optional_params: ResponsesAPIOptionalRequestParams = (

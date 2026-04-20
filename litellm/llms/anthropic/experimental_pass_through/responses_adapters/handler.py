@@ -99,10 +99,17 @@ def _build_responses_kwargs(
     if force_reasoning_effort:
         reasoning = responses_kwargs.get("reasoning")
         if isinstance(reasoning, dict):
-            responses_kwargs["reasoning"] = {**reasoning, "effort": force_reasoning_effort}
+            responses_kwargs["reasoning"] = {
+                **reasoning,
+                "effort": force_reasoning_effort,
+            }
         else:
             responses_kwargs["reasoning"] = {
-                **({"summary": "detailed"} if is_reasoning_auto_summary_enabled() else {}),
+                **(
+                    {"summary": "detailed"}
+                    if is_reasoning_auto_summary_enabled()
+                    else {}
+                ),
                 "effort": force_reasoning_effort,
             }
 

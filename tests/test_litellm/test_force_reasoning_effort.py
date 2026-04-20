@@ -269,14 +269,13 @@ class TestAnthropicMessagesForceReasoningEffort:
             except (ValueError, TypeError, AttributeError):
                 pass
 
-            if mock_handler.called:
-                call_kwargs = mock_handler.call_args
-                optional_params = call_kwargs.kwargs.get(
-                    "anthropic_messages_optional_request_params", {}
-                )
-                assert optional_params.get("output_config", {}).get("effort") == "high"
-                # thinking should be enabled when not already set
-                assert optional_params.get("thinking") == {"type": "adaptive"}
+            assert mock_handler.called, "mock handler was not called — test is a no-op"
+            call_kwargs = mock_handler.call_args
+            optional_params = call_kwargs.kwargs.get(
+                "anthropic_messages_optional_request_params", {}
+            )
+            assert optional_params.get("output_config", {}).get("effort") == "high"
+            assert optional_params.get("thinking") == {"type": "adaptive"}
 
     def test_force_preserves_existing_thinking_config(self):
         """force_reasoning_effort should not override existing enabled thinking config."""
@@ -299,18 +298,18 @@ class TestAnthropicMessagesForceReasoningEffort:
             except (ValueError, TypeError, AttributeError):
                 pass
 
-            if mock_handler.called:
-                call_kwargs = mock_handler.call_args
-                optional_params = call_kwargs.kwargs.get(
-                    "anthropic_messages_optional_request_params", {}
-                )
-                assert optional_params.get("output_config", {}).get("effort") == "high"
-                # Pre-existing enabled thinking should be preserved
-                thinking = optional_params.get("thinking", {})
-                assert (
-                    thinking.get("type") != "adaptive"
-                    or thinking.get("type") == "enabled"
-                )
+            assert mock_handler.called, "mock handler was not called — test is a no-op"
+            call_kwargs = mock_handler.call_args
+            optional_params = call_kwargs.kwargs.get(
+                "anthropic_messages_optional_request_params", {}
+            )
+            assert optional_params.get("output_config", {}).get("effort") == "high"
+            # Pre-existing enabled thinking should be preserved
+            thinking = optional_params.get("thinking", {})
+            assert (
+                thinking.get("type") != "adaptive"
+                or thinking.get("type") == "enabled"
+            )
 
 
 # ---------------------------------------------------------------------------
