@@ -296,6 +296,11 @@ class OllamaChatConfig(BaseConfig):
                 ollama_message["content"] = content_str
             if images is not None:
                 ollama_message["images"] = images
+            if tool_calls is not None and isinstance(tool_calls, list):
+                ollama_message["tool_calls"] = new_tools
+            tool_call_id = m.get("tool_call_id")
+            if tool_call_id is not None:
+                ollama_message["tool_call_id"] = cast(str, tool_call_id)
 
             new_messages.append(ollama_message)
 
