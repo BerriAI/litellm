@@ -325,3 +325,46 @@ async def test_deployment_hook_converts_stream_and_logging_obj_syncs():
         logging_obj.stream = _hook_stream
 
     assert logging_obj.stream is False
+
+def test_prepare_followup_kwargs_excludes_internal_keys():
+    """Test that _prepare_followup_kwargs excludes internal keys"""
+    kwargs = {
+        "output_config": {"format": "json"},
+        "litellm_logging_obj": "should_be_excluded",
+        "_websearch_interception_enabled": True,
+        "some_param": "keep_this",
+    }
+    result = WebSearchInterceptionLogger._prepare_followup_kwargs(kwargs)
+    assert "litellm_logging_obj" not in result
+    assert "_websearch_interception_enabled" not in result
+    assert result["some_param"] == "keep_this"
+    assert result["output_config"] == {"format": "json"}
+
+
+def test_followup_kwargs_deduplication_against_optional_params():
+    """Test that overlapping keys between optional_params and kwargs_for_followup
+    are resolved by removing them from kwargs_for_followup.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/24856
+    When both anthropic optional params and forwarded kwargs contain the same
+    key (e.g. output_config), acreate() raises:
+      TypeError: acreate() got multiple values for keyword argument 'output_config'
+    """
+    optional_params = {
+        "output_config": {"format": "json"},
+        "temperature": 0.7,
+    }
+    kwargs = {
+        "output_config": {"format": "json"},  # duplicate!
+        "some_other_kwarg": "value",
+        "temperature": 0.5,  # also duplicate
+    }
+    kwargs_for_followup = WebSearchInterceptionLogger._prepare_followup_kwargs(kwargs)
+
+    # Simulate the deduplication logic from _execute_agentic_loop
+    for key in optional_params:
+        kwargs_for_followup.pop(key, None)
+
+    assert "output_config" not in kwargs_for_followup
+    assert "temperature" not in kwargs_for_followup
+    assert kwargs_for_followup["some_other_kwarg"] == "value"
