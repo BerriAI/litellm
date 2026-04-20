@@ -90,7 +90,10 @@ def test_resolve_session_key_returns_none_when_no_messages():
 
 
 def test_resolve_session_key_derives_stable_hash_from_first_message():
-    msgs = [{"role": "user", "content": "Hello, world"}]
+    # `_resolve_session_key` requires at least SIGNAL_GATE_MIN_MESSAGES
+    # messages before it will derive a hash (matches the signal-processing
+    # gate) — otherwise the session is too short to attribute.
+    msgs = _long_messages("Hello, world")
     k1 = _resolve_session_key({"messages": msgs})
     k2 = _resolve_session_key({"messages": list(msgs)})
     assert k1 == k2
@@ -98,13 +101,13 @@ def test_resolve_session_key_derives_stable_hash_from_first_message():
 
 
 def test_resolve_session_key_does_not_prefix_sk():
-    key = _resolve_session_key({"messages": [{"role": "user", "content": "hi"}]})
+    key = _resolve_session_key({"messages": _long_messages()})
     assert key and not key.startswith("sk_")
 
 
 def test_resolve_session_key_segments_by_identity_fields():
     """Same first message but different api keys must yield different keys."""
-    msgs = [{"role": "user", "content": "same prompt"}]
+    msgs = _long_messages("same prompt")
     k_team_a = _resolve_session_key(
         {
             "messages": msgs,
@@ -131,8 +134,8 @@ def test_resolve_session_key_segments_by_identity_fields():
 
 
 def test_resolve_session_key_changes_when_first_message_changes():
-    k1 = _resolve_session_key({"messages": [{"role": "user", "content": "alpha"}]})
-    k2 = _resolve_session_key({"messages": [{"role": "user", "content": "beta"}]})
+    k1 = _resolve_session_key({"messages": _long_messages("alpha")})
+    k2 = _resolve_session_key({"messages": _long_messages("beta")})
     assert k1 != k2
 
 
@@ -319,85 +322,47 @@ async def test_hook_failure_event_uses_status_code_from_exception():
 
 
 @pytest.mark.asyncio
-async def test_post_call_success_hook_sets_response_header():
+async def test_post_call_response_headers_hook_returns_chosen_model_header():
+    """The header hook returns the `x-litellm-adaptive-router-model` header
+    so proxy header construction picks it up (works for both streaming and
+    non-streaming; `async_post_call_success_hook` is too late for streaming)."""
     hook = _make_hook()
-    response = MagicMock()
-    response._hidden_params = {}
-
-    await hook.async_post_call_success_hook(
+    headers = await hook.async_post_call_response_headers_hook(
         data={"metadata": {"adaptive_router_chosen_model": "smart"}},
         user_api_key_dict=MagicMock(),
-        response=response,
+        response=MagicMock(),
     )
-
-    assert (
-        response._hidden_params["additional_headers"]["x-litellm-adaptive-router-model"]
-        == "smart"
-    )
+    assert headers == {"x-litellm-adaptive-router-model": "smart"}
 
 
 @pytest.mark.asyncio
-async def test_post_call_success_hook_preserves_existing_additional_headers():
+async def test_post_call_response_headers_hook_noop_when_metadata_missing_key():
     hook = _make_hook()
-    response = MagicMock()
-    response._hidden_params = {"additional_headers": {"x-existing": "keep-me"}}
-
-    await hook.async_post_call_success_hook(
-        data={"metadata": {"adaptive_router_chosen_model": "fast"}},
-        user_api_key_dict=MagicMock(),
-        response=response,
-    )
-
-    assert response._hidden_params["additional_headers"]["x-existing"] == "keep-me"
-    assert (
-        response._hidden_params["additional_headers"]["x-litellm-adaptive-router-model"]
-        == "fast"
-    )
-
-
-@pytest.mark.asyncio
-async def test_post_call_success_hook_noop_when_metadata_missing_key():
-    hook = _make_hook()
-    response = MagicMock()
-    response._hidden_params = {}
-
-    await hook.async_post_call_success_hook(
+    headers = await hook.async_post_call_response_headers_hook(
         data={"metadata": {"litellm_session_id": "sess-A"}},
         user_api_key_dict=MagicMock(),
-        response=response,
+        response=MagicMock(),
     )
-
-    assert response._hidden_params == {}
+    assert headers is None
 
 
 @pytest.mark.asyncio
-async def test_post_call_success_hook_noop_when_no_metadata():
+async def test_post_call_response_headers_hook_noop_when_no_metadata():
     hook = _make_hook()
-    response = MagicMock()
-    response._hidden_params = {}
-
-    await hook.async_post_call_success_hook(
+    headers = await hook.async_post_call_response_headers_hook(
         data={},
         user_api_key_dict=MagicMock(),
-        response=response,
+        response=MagicMock(),
     )
-
-    assert response._hidden_params == {}
+    assert headers is None
 
 
 @pytest.mark.asyncio
-async def test_post_call_success_hook_noop_when_hidden_params_not_dict():
+async def test_post_call_response_headers_hook_noop_when_metadata_not_dict():
     hook = _make_hook()
-
-    class _NoHiddenParams:
-        pass
-
-    response = _NoHiddenParams()
-
-    await hook.async_post_call_success_hook(
-        data={"metadata": {"adaptive_router_chosen_model": "smart"}},
+    headers = await hook.async_post_call_response_headers_hook(
+        data={"metadata": "not-a-dict"},
         user_api_key_dict=MagicMock(),
-        response=response,
+        response=MagicMock(),
     )
-
-    assert not hasattr(response, "_hidden_params")
+    assert headers is None
