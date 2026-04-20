@@ -268,10 +268,19 @@ class SemanticMCPToolFilter:
         for canonical in tool_names:
             tool = available_by_name.get(canonical)
             if tool is None:
-                for client_name, candidate in available_by_name.items():
-                    if self._name_matches_canonical(client_name, canonical):
-                        tool = candidate
-                        break
+                # Prefer the shortest qualifying name. When several
+                # incoming tools suffix-match the same canonical (e.g.
+                # "my_search" and "my_tag_search" both end in "search"),
+                # the one closest in length to the canonical is the
+                # least-wrapped and most likely the intended target.
+                best_name: Optional[str] = None
+                for client_name in available_by_name:
+                    if not self._name_matches_canonical(client_name, canonical):
+                        continue
+                    if best_name is None or len(client_name) < len(best_name):
+                        best_name = client_name
+                if best_name is not None:
+                    tool = available_by_name[best_name]
             if tool is not None and id(tool) not in used_ids:
                 matched.append(tool)
                 used_ids.add(id(tool))

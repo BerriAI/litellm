@@ -500,8 +500,10 @@ class TestGetToolsByNames:
 
     def test_same_tool_not_returned_twice(self):
         """
-        Two canonicals that both suffix-match the same incoming tool
-        must not produce a duplicate in the output list.
+        Two distinct canonicals that both suffix-match the same incoming
+        tool must not produce a duplicate in the output list.
+        ``read_file`` and ``file`` are both valid separator-anchored
+        suffixes of ``srv_read_file``.
         """
         filter_instance = self._make_filter()
         available_tools = [
@@ -509,10 +511,30 @@ class TestGetToolsByNames:
         ]
 
         matched = filter_instance._get_tools_by_names(
-            ["read_file", "read_file"], available_tools
+            ["read_file", "file"], available_tools
         )
 
         assert len(matched) == 1
+
+    def test_suffix_fallback_prefers_shortest_candidate(self):
+        """
+        When no exact match exists and several incoming tools
+        suffix-match the same canonical, the one closest in length to
+        the canonical (i.e. the least-wrapped) should be chosen.
+        """
+        filter_instance = self._make_filter()
+        canonical = "search"
+        available_tools = [
+            {"name": "my_tag_search", "description": "tag search"},
+            {"name": "my_search", "description": "plain search"},
+        ]
+
+        matched = filter_instance._get_tools_by_names(
+            [canonical], available_tools
+        )
+
+        assert len(matched) == 1
+        assert matched[0]["name"] == "my_search"
 
     def test_ordering_follows_router_output(self):
         """Returned tools follow the order the semantic router chose."""
