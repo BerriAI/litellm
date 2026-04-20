@@ -265,10 +265,13 @@ export default function ModelInfoView({
       if (values.guardrails) {
         updatedLitellmParams.guardrails = values.guardrails;
       }
-      if (values.vector_store_ids !== undefined) {
-        updatedLitellmParams.vector_store_ids = Array.isArray(values.vector_store_ids)
-          ? values.vector_store_ids
-          : [];
+      if (values.vector_store_ids?.length > 0) {
+        updatedLitellmParams.vector_store_ids = values.vector_store_ids;
+      } else if (values.vector_store_ids !== undefined) {
+        // User explicitly cleared previously-set vector stores — send [] to clear on backend
+        updatedLitellmParams.vector_store_ids = [];
+      } else {
+        delete updatedLitellmParams.vector_store_ids;
       }
 
       // Handle cache control settings
@@ -631,9 +634,11 @@ export default function ModelInfoView({
                     guardrails: Array.isArray(localModelData.litellm_params?.guardrails)
                       ? localModelData.litellm_params.guardrails
                       : [],
-                    vector_store_ids: Array.isArray(localModelData.litellm_params?.vector_store_ids)
-                      ? localModelData.litellm_params.vector_store_ids
-                      : [],
+                    vector_store_ids:
+                      Array.isArray(localModelData.litellm_params?.vector_store_ids) &&
+                      localModelData.litellm_params.vector_store_ids.length > 0
+                        ? localModelData.litellm_params.vector_store_ids
+                        : undefined,
                     tags: Array.isArray(localModelData.litellm_params?.tags) ? localModelData.litellm_params.tags : [],
                     health_check_model: isWildcardModel ? localModelData.model_info?.health_check_model : null,
                     litellm_credential_name: localModelData.litellm_params?.litellm_credential_name || "",

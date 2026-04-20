@@ -57,6 +57,22 @@ IMAGE_ATTRIBUTE = "images"
 TOOL_CALLS_ATTRIBUTE = "tool_calls"
 FUNCTION_CALL_ATTRIBUTE = "function_call"
 
+_SYNC_ITER_EXHAUSTED = object()
+
+
+def _next_sync_or_exhausted(it: Any) -> Any:
+    """
+    Call next(it) from a thread and return _SYNC_ITER_EXHAUSTED on StopIteration.
+
+    asyncio.to_thread re-raises thread exceptions inside a coroutine, where PEP 479
+    converts StopIteration to RuntimeError before any except clause can catch it.
+    Returning a sentinel instead keeps StopIteration out of the coroutine boundary.
+    """
+    try:
+        return next(it)
+    except StopIteration:
+        return _SYNC_ITER_EXHAUSTED
+
 
 def is_async_iterable(obj: Any) -> bool:
     """
@@ -111,9 +127,9 @@ class CustomStreamWrapper:
 
         self.system_fingerprint: Optional[str] = None
         self.received_finish_reason: Optional[str] = None
-        self.intermittent_finish_reason: Optional[
-            str
-        ] = None  # finish reasons that show up mid-stream
+        self.intermittent_finish_reason: Optional[str] = (
+            None  # finish reasons that show up mid-stream
+        )
         self.special_tokens = [
             "<|assistant|>",
             "<|system|>",
@@ -160,6 +176,7 @@ class CustomStreamWrapper:
         self.chunks: List = (
             []
         )  # keep track of the returned chunks - used for calculating the input/output tokens for stream options
+        self._repeated_messages_count = 1
         self.is_function_call = self.check_is_function_call(logging_obj=logging_obj)
         self.created: Optional[int] = None
         self._last_returned_hidden_params: Optional[dict] = None
@@ -241,7 +258,7 @@ class CustomStreamWrapper:
         except Exception as e:
             raise e
 
-    def safety_checker(self) -> None:
+    def raise_on_model_repetition(self) -> None:
         """
         Fixes - https://github.com/BerriAI/litellm/issues/5158
 
@@ -249,28 +266,35 @@ class CustomStreamWrapper:
 
         Raises - InternalServerError, if LLM enters infinite loop while streaming
         """
-        if len(self.chunks) >= litellm.REPEATED_STREAMING_CHUNK_LIMIT:
-            # Get the last n chunks
-            last_chunks = self.chunks[-litellm.REPEATED_STREAMING_CHUNK_LIMIT :]
+        if len(self.chunks) < 2:
+            return
 
-            # Extract the relevant content from the chunks
-            last_contents = [chunk.choices[0].delta.content for chunk in last_chunks]
+        last_content = self.chunks[-1].choices[0].delta.content
 
-            # Check if all extracted contents are identical
-            if all(content == last_contents[0] for content in last_contents):
-                if (
-                    last_contents[0] is not None
-                    and isinstance(last_contents[0], str)
-                    and len(last_contents[0]) > 2
-                ):  # ignore empty content - https://github.com/BerriAI/litellm/issues/5158#issuecomment-2287156946
-                    # All last n chunks are identical
-                    raise litellm.InternalServerError(
-                        message="The model is repeating the same chunk = {}.".format(
-                            last_contents[0]
-                        ),
-                        model="",
-                        llm_provider="",
-                    )
+        if (
+            last_content is None
+            or not isinstance(last_content, str)
+            or len(last_content) <= 2
+        ):  # ignore empty content - https://github.com/BerriAI/litellm/issues/5158#issuecomment-2287156946
+            self._repeated_messages_count = 1
+            return
+
+        second_to_last_content = self.chunks[-2].choices[0].delta.content
+
+        if last_content == second_to_last_content:
+            self._repeated_messages_count += 1
+        else:
+            self._repeated_messages_count = 1
+
+        if self._repeated_messages_count >= litellm.REPEATED_STREAMING_CHUNK_LIMIT:
+            # All last n chunks are identical
+            raise litellm.InternalServerError(
+                message="The model is repeating the same chunk = {}.".format(
+                    last_content
+                ),
+                model="",
+                llm_provider="",
+            )
 
     def check_special_tokens(self, chunk: str, finish_reason: Optional[str]):
         """
@@ -807,6 +831,10 @@ class CustomStreamWrapper:
                 "annotations" in model_response.choices[0].delta
                 and model_response.choices[0].delta.annotations is not None
             )
+            or (
+                getattr(model_response.choices[0].delta, "reasoning_items", None)
+                is not None
+            )
         ):
             return True
         else:
@@ -924,7 +952,7 @@ class CustomStreamWrapper:
         if (
             is_chunk_non_empty
         ):  # cannot set content of an OpenAI Object to be an empty string
-            self.safety_checker()
+            self.raise_on_model_repetition()
             hold, model_response_str = self.check_special_tokens(
                 chunk=completion_obj["content"],
                 finish_reason=model_response.choices[0].finish_reason,
@@ -1106,7 +1134,11 @@ class CustomStreamWrapper:
             ):
                 if self.received_finish_reason is not None:
                     _chunk_has_content = isinstance(chunk, dict) and (
-                        bool(chunk.get("text", "")) or chunk.get("tool_use") is not None
+                        bool(chunk.get("text", ""))
+                        or chunk.get("tool_use") is not None
+                        # Usage-only final chunks are valid and needed to surface
+                        # finish_reason/usage to downstream translators.
+                        or chunk.get("usage") is not None
                     )
                     if not _chunk_has_content and (
                         not isinstance(chunk, dict)
@@ -1254,9 +1286,9 @@ class CustomStreamWrapper:
                             and chunk.candidates[0].finish_reason.name  # type: ignore
                             != "FINISH_REASON_UNSPECIFIED"
                         ):  # every non-final chunk in vertex ai has this
-                            self.received_finish_reason = chunk.candidates[  # type: ignore
-                                0
-                            ].finish_reason.name
+                            self.received_finish_reason = map_finish_reason(  # type: ignore
+                                chunk.candidates[0].finish_reason.name
+                            )
                     except Exception:
                         if chunk.candidates[0].finish_reason.name == "SAFETY":  # type: ignore
                             raise Exception(
@@ -1492,9 +1524,9 @@ class CustomStreamWrapper:
                                                 t.function.arguments = ""
                             _json_delta = delta.model_dump()
                             if "role" not in _json_delta or _json_delta["role"] is None:
-                                _json_delta[
-                                    "role"
-                                ] = "assistant"  # mistral's api returns role as None
+                                _json_delta["role"] = (
+                                    "assistant"  # mistral's api returns role as None
+                                )
                             if "tool_calls" in _json_delta and isinstance(
                                 _json_delta["tool_calls"], list
                             ):
@@ -1893,15 +1925,19 @@ class CustomStreamWrapper:
                         "usage",
                         getattr(complete_streaming_response, "usage"),
                     )
+                    try:
+                        _cache_copy = complete_streaming_response.model_copy(deep=True)
+                        _log_copy = complete_streaming_response.model_copy(deep=True)
+                    except RuntimeError:
+                        _cache_copy = complete_streaming_response.model_copy()
+                        _log_copy = complete_streaming_response.model_copy()
                     self.cache_streaming_response(
-                        processed_chunk=complete_streaming_response.model_copy(
-                            deep=True
-                        ),
+                        processed_chunk=_cache_copy,
                         cache_hit=cache_hit,
                     )
                     executor.submit(
                         self.logging_obj.success_handler,
-                        complete_streaming_response.model_copy(deep=True),
+                        _log_copy,
                         None,
                         None,
                         cache_hit,
@@ -2078,7 +2114,9 @@ class CustomStreamWrapper:
                     ):
                         chunk = self.completion_stream
                     else:
-                        chunk = next(self.completion_stream)  # type: ignore[arg-type]
+                        chunk = await asyncio.to_thread(_next_sync_or_exhausted, self.completion_stream)  # type: ignore[arg-type]
+                        if chunk is _SYNC_ITER_EXHAUSTED:
+                            raise StopAsyncIteration
                     if chunk is not None and chunk != b"":
                         processed_chunk = self.chunk_creator(chunk=chunk)
                         if processed_chunk is None:
@@ -2113,11 +2151,13 @@ class CustomStreamWrapper:
                         "usage",
                         getattr(complete_streaming_response, "usage"),
                     )
+                    try:
+                        _copy = complete_streaming_response.model_copy(deep=True)
+                    except RuntimeError:
+                        _copy = complete_streaming_response.model_copy()
                     asyncio.create_task(
                         self.async_cache_streaming_response(
-                            processed_chunk=complete_streaming_response.model_copy(
-                                deep=True
-                            ),
+                            processed_chunk=_copy,
                             cache_hit=cache_hit,
                         )
                     )
@@ -2136,22 +2176,40 @@ class CustomStreamWrapper:
                     self.sent_stream_usage = True
                     return response
 
-                asyncio.create_task(
-                    self.logging_obj.async_success_handler(
+                _deferred_cb = getattr(
+                    self.logging_obj,
+                    "_on_deferred_stream_complete",
+                    None,
+                )
+                if _deferred_cb is not None:
+                    # Proxy has post-call guardrails. Store the assembled
+                    # response so the outer streaming consumer
+                    # (ProxyLogging.async_post_call_streaming_iterator_hook)
+                    # can fire the deferred callback AFTER all guardrail
+                    # end-of-stream blocks complete.  Scheduling here via
+                    # create_task would race with unified_guardrail's
+                    # end-of-stream block for short-stream providers.
+                    self.logging_obj._deferred_stream_complete_args = (  # type: ignore[attr-defined]
+                        complete_streaming_response,
+                        cache_hit,
+                    )
+                else:
+                    asyncio.create_task(
+                        self.logging_obj.async_success_handler(
+                            complete_streaming_response,
+                            cache_hit=cache_hit,
+                            start_time=None,
+                            end_time=None,
+                        )
+                    )
+
+                    executor.submit(
+                        self.logging_obj.success_handler,
                         complete_streaming_response,
                         cache_hit=cache_hit,
                         start_time=None,
                         end_time=None,
                     )
-                )
-
-                executor.submit(
-                    self.logging_obj.success_handler,
-                    complete_streaming_response,
-                    cache_hit=cache_hit,
-                    start_time=None,
-                    end_time=None,
-                )
 
                 raise StopAsyncIteration  # Re-raise StopIteration
             else:

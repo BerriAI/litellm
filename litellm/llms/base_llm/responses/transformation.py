@@ -54,6 +54,14 @@ class BaseResponsesAPIConfig(ABC):
             and v is not None
         }
 
+    def supports_native_file_search(self) -> bool:
+        """Return True if this provider handles the file_search tool natively.
+
+        Override in provider subclasses that support file_search without
+        LiteLLM emulation (e.g. OpenAI, Azure OpenAI).
+        """
+        return False
+
     @abstractmethod
     def get_supported_openai_params(self, model: str) -> list:
         pass

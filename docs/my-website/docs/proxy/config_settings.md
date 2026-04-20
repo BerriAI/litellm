@@ -197,16 +197,18 @@ router_settings:
 | key_generation_settings | object | Restricts who can generate keys. [Further docs](./virtual_keys.md#restricting-key-generation) |
 | disable_add_transform_inline_image_block | boolean | For Fireworks AI models - if true, turns off the auto-add of `#transform=inline` to the url of the image_url, if the model is not a vision model. |
 | use_chat_completions_url_for_anthropic_messages | boolean | If true, routes OpenAI `/v1/messages` requests through chat/completions instead of the Responses API. Can also be set via env var `LITELLM_USE_CHAT_COMPLETIONS_URL_FOR_ANTHROPIC_MESSAGES=true`. |
+| skip_system_message_in_guardrail | boolean | If true, unified guardrails omit `role: system` from scanned input on **chat completions** and **Anthropic `/v1/messages`** only; the LLM still receives full messages. Per-guardrail override: `litellm_params.skip_system_message_in_guardrail` on each guardrail. [Guardrails quick start](./guardrails/quick_start#skip-system-messages-in-guardrail-evaluation) |
 | disable_hf_tokenizer_download | boolean | If true, it defaults to using the openai tokenizer for all models (including huggingface models). |
 | enable_json_schema_validation | boolean | If true, enables json schema validation for all requests. |
 | enable_key_alias_format_validation | boolean | If true, validates `key_alias` format on `/key/generate` and `/key/update`. Must be 2-255 chars, start/end with alphanumeric, only allow `a-zA-Z0-9_-/.@`. Default `false`. |
 | disable_copilot_system_to_assistant | boolean | **DEPRECATED** - GitHub Copilot API supports system prompts. |
+| default_team_params | object | Default parameters applied to every new team created via `/team/new` (including SSO auto-created teams). Only fills in fields not explicitly set in the request. Sub-fields: `max_budget` (float), `budget_duration` (string, e.g. `"30d"`), `tpm_limit` (integer), `rpm_limit` (integer), `team_member_permissions` (array of strings, e.g. `["/team/daily/activity", "/key/generate"]`), `models` (array of strings — only applied to SSO auto-created teams). |
 
 ### general_settings - Reference
 
 | Name | Type | Description |
 |------|------|-------------|
-| completion_model | string | The default model to use for completions when `model` is not specified in the request |
+| completion_model | string | The model to use for all completions, overriding any `model` specified in the request |
 | disable_spend_logs | boolean | If true, turns off writing each transaction to the database |
 | disable_spend_updates | boolean | If true, turns off all spend updates to the DB. Including key/user/team spend updates. |
 | disable_master_key_return | boolean | If true, turns off returning master key on UI. (checked on '/user/info' endpoint) |
@@ -237,7 +239,7 @@ router_settings:
 | public_routes | List[str] | (Enterprise Feature) Control list of public routes |
 | alert_types | List[str] | Control list of alert types to send to slack (Doc on alert types)[./alerting.md] |
 | enforced_params | List[str] | (Enterprise Feature) List of params that must be included in all requests to the proxy |
-| enable_oauth2_auth | boolean | (Enterprise Feature) If true, enables oauth2.0 authentication |
+| enable_oauth2_auth | boolean | (Enterprise Feature) If true, enables oauth2.0 authentication on LLM + info routes |
 | use_x_forwarded_for | str | If true, uses the X-Forwarded-For header to get the client IP address |
 | service_account_settings | List[Dict[str, Any]] | Set `service_account_settings` if you want to create settings that only apply to service account keys (Doc on service accounts)[./service_accounts.md] | 
 | image_generation_model | str | The default model to use for image generation - ignores model set in request |
@@ -279,6 +281,34 @@ router_settings:
 | forward_client_headers_to_llm_api | boolean | If true, forwards the client headers (any `x-` headers and `anthropic-beta` headers) to the backend LLM call |
 | maximum_spend_logs_retention_period               | str                   | Used to set the max retention time for spend logs in the db, after which they will be auto-purged                                                                                                                                                                                                                             |
 | maximum_spend_logs_retention_interval             | str                   | Used to set the interval in which the spend log cleanup task should run in.                                                                                                                                                                                                                                                   |
+| alert_type_config | dict | Configuration mapping alert types to their handler settings |
+| always_include_stream_usage | boolean | If true, includes usage metrics in every streaming response chunk |
+| auto_redirect_ui_login_to_sso | boolean | If true, automatically redirects UI login page to SSO provider |
+| control_plane_url | string | URL of the control plane for cross-instance state sharing |
+| custom_auth_run_common_checks | boolean | If true, runs standard auth validation checks alongside custom auth handlers |
+| custom_ui_sso_sign_in_handler | string | Custom handler for SSO sign-in logic in the UI |
+| database_connection_pool_timeout | integer | Database connection pool timeout in seconds |
+| disable_error_logs | boolean | If true, suppresses error tracking and storage in the database |
+| enable_health_check_routing | boolean | If true, enables health check-driven request routing to avoid unhealthy deployments |
+| health_check_ignore_transient_errors | boolean | If true, 429 (rate limit) and 408 (timeout) health check failures are ignored and do not affect routing or cooldown |
+| enable_mcp_registry | boolean | If true, enables access to the centralized MCP server registry |
+| enforce_rbac | boolean | If true, enables role-based access control (RBAC) for all proxy operations |
+| forward_llm_provider_auth_headers | boolean | If true, forwards provider-specific auth headers to LLM API calls |
+| health_check_concurrency | integer | Maximum number of concurrent health check operations |
+| health_check_staleness_threshold | integer | Maximum age in seconds for health check results before marking deployments as stale |
+| maximum_spend_logs_cleanup_cron | string | Cron expression for scheduling automatic spend log cleanup tasks |
+| mcp_client_side_auth_header_name | string | HTTP header name for client-side MCP server credentials |
+| mcp_internal_ip_ranges | list | CIDR ranges considered internal for non-public MCP server access control |
+| mcp_required_fields | list | List of required field names for MCP server submissions |
+| mcp_trusted_proxy_ranges | list | CIDR ranges of proxies trusted to forward X-Forwarded-For headers for MCP |
+| require_end_user_mcp_access_defined | boolean | If true, requires end users to have explicit MCP access permissions defined |
+| role_permissions | list | List of role-based permission configurations |
+| search_tools | list | List of search tool configurations for enabling web search capabilities |
+| token_rate_limit_type | string | Rate limit counting method: "total", "output", or "input" tokens |
+| use_redis_transaction_buffer | boolean | If true, buffers database transactions in Redis before writing |
+| use_shared_health_check | boolean | If true, uses Redis-backed shared health check state across multiple proxy instances |
+| user_header_mappings | dict | Map custom request headers to user IDs using lookup rules |
+| user_header_name | string | HTTP header name to extract user identity from requests |
 
 ### router_settings - Reference
 
@@ -361,11 +391,15 @@ router_settings:
 | redis_url | str | URL for Redis server. **Known performance issue with Redis URL.** |
 | cache_responses | boolean | Flag to enable caching LLM Responses, if cache set under `router_settings`. If true, caches responses. Defaults to False. |
 | router_general_settings | RouterGeneralSettings | [SDK-Only] Router general settings - contains optimizations like 'async_only_mode'. [Docs](../routing.md#router-general-settings) |
-| optional_pre_call_checks | List[str] | List of pre-call checks to add to the router. Supported: `router_budget_limiting`, `prompt_caching`, `responses_api_deployment_check`, `encrypted_content_affinity`, `deployment_affinity`, `session_affinity`, `forward_client_headers_by_model_group` |
+| optional_pre_call_checks | List[str] | List of pre-call checks to add to the router. Supported: `router_budget_limiting`, `prompt_caching`, `responses_api_deployment_check`, `encrypted_content_affinity` (requires LiteLLM >= 1.82.3), `deployment_affinity`, `session_affinity`, `forward_client_headers_by_model_group` |
 | deployment_affinity_ttl_seconds | int | TTL (seconds) for user-key → deployment affinity mapping when `deployment_affinity` is enabled (configured at Router init / proxy startup). Defaults to `3600` (1 hour). |
+| model_group_affinity_config | Dict[str, List[str]] | Per-model-group affinity flags. Keys are model group names; values are lists of checks to enable (`deployment_affinity`, `responses_api_deployment_check`, `session_affinity`). Groups not listed fall back to the global `optional_pre_call_checks`. [Docs](../response_api.md#per-model-group-affinity-configuration) |
 | ignore_invalid_deployments | boolean | If true, ignores invalid deployments. Default for proxy is True - to prevent invalid models from blocking other models from being loaded. |
-| search_tools | List[SearchToolTypedDict] | List of search tool configurations for Search API integration. Each tool specifies a search_tool_name and litellm_params with search_provider, api_key, api_base, etc. [Further Docs](../search.md) |
+| search_tools | List[SearchToolTypedDict] | List of search tool configurations for Search API integration. Each tool specifies a search_tool_name and litellm_params with search_provider, api_key, api_base, etc. [Further Docs](../search/index.md) |
 | guardrail_list | List[GuardrailTypedDict] | List of guardrail configurations for guardrail load balancing. Enables load balancing across multiple guardrail deployments with the same guardrail_name. [Further Docs](./guardrails/guardrail_load_balancing.md) |
+| enable_health_check_routing | boolean | If true, enables health check-driven deployment filtering to avoid routing requests to unhealthy deployments |
+| health_check_staleness_threshold | integer | Maximum age in seconds for cached health check results before marking deployments as stale |
+| health_check_ignore_transient_errors | boolean | If true, 429 (rate limit) and 408 (timeout) health check failures are ignored and do not affect routing or cooldown |
 
 
 ### environment variables - Reference
@@ -401,8 +435,10 @@ router_settings:
 | AUTH_STRATEGY | Strategy used for authentication (e.g., OAuth, API key)
 | AUTO_REDIRECT_UI_LOGIN_TO_SSO | Flag to enable automatic redirect of UI login page to SSO when SSO is configured. Default is **false**
 | AUDIO_SPEECH_CHUNK_SIZE | Chunk size for audio speech processing. Default is 1024
-| ANTHROPIC_API_KEY | API key for Anthropic service
+| ANTHROPIC_API_KEY | API key for Anthropic service. Uses `x-api-key` header for authentication.
+| ANTHROPIC_AUTH_TOKEN | Alternative auth token for Anthropic service. Uses `Authorization: Bearer` header instead of `x-api-key`. Used as fallback when `ANTHROPIC_API_KEY` is not set.
 | ANTHROPIC_API_BASE | Base URL for Anthropic API. Default is https://api.anthropic.com
+| ANTHROPIC_BASE_URL | Alternative to `ANTHROPIC_API_BASE` for setting the Anthropic API base URL. Used as fallback when `ANTHROPIC_API_BASE` is not set.
 | ANTHROPIC_TOKEN_COUNTING_BETA_VERSION | Beta version header for Anthropic token counting API. Default is `token-counting-2024-11-01`
 | AWS_ACCESS_KEY_ID | Access Key ID for AWS services
 | AWS_BATCH_ROLE_ARN | ARN of the AWS IAM role for batch operations
@@ -451,6 +487,8 @@ router_settings:
 | AZURE_STORAGE_CLIENT_ID | The Application Client ID to use for Authentication to Azure Blob Storage logging
 | AZURE_STORAGE_CLIENT_SECRET | The Application Client Secret to use for Authentication to Azure Blob Storage logging
 | AZURE_VECTOR_STORE_COST_PER_GB_PER_DAY | Cost per GB per day for Azure Vector Store service
+| BACKGROUND_HEALTH_CHECK_MAX_TOKENS | Optional global default for `max_tokens` on proxy background health checks when a model has no `health_check_max_tokens`. If unset, non-wildcard models default to 5. Applies to wildcard routes when set. Default is unset
+| BACKGROUND_HEALTH_CHECK_MAX_TOKENS_REASONING | For **non-wildcard** reasoning models (`supports_reasoning(model)=true`), this takes precedence over `BACKGROUND_HEALTH_CHECK_MAX_TOKENS` when set. If unset, reasoning models fall back to `BACKGROUND_HEALTH_CHECK_MAX_TOKENS` (if set) or default behavior. Wildcard routes ignore this. Default is unset
 | BATCH_STATUS_POLL_INTERVAL_SECONDS | Interval in seconds for polling batch status. Default is 3600 (1 hour)
 | BATCH_STATUS_POLL_MAX_ATTEMPTS | Maximum number of attempts for polling batch status. Default is 24 (for 24 hours)
 | BEDROCK_MAX_POLICY_SIZE | Maximum size for Bedrock policy. Default is 75
@@ -562,10 +600,13 @@ router_settings:
 | LITELLM_MCP_TOOL_LISTING_TIMEOUT | Timeout in seconds for listing tools from an MCP server. Default is 30
 | LITELLM_MCP_METADATA_TIMEOUT | HTTP client timeout in seconds for OAuth metadata fetching. Default is 10
 | LITELLM_MCP_HEALTH_CHECK_TIMEOUT | Health check timeout in seconds for MCP servers. Default is 10
+| LITELLM_MCP_STDIO_EXTRA_COMMANDS | Comma-separated extra command basenames allowed for MCP stdio transport beyond the built-in allowlist. Example: `my-mcp-bin`. Empty by default
 | MCP_OAUTH2_TOKEN_CACHE_DEFAULT_TTL | Default TTL in seconds for MCP OAuth2 token cache. Default is 3600
 | MCP_OAUTH2_TOKEN_CACHE_MAX_SIZE | Maximum number of entries in MCP OAuth2 token cache. Default is 200
 | MCP_OAUTH2_TOKEN_CACHE_MIN_TTL | Minimum TTL in seconds for MCP OAuth2 token cache. Default is 10
 | MCP_OAUTH2_TOKEN_EXPIRY_BUFFER_SECONDS | Seconds to subtract from token expiry when computing cache TTL. Default is 60
+| MCP_PER_USER_TOKEN_DEFAULT_TTL | Default TTL in seconds for per-user MCP OAuth tokens stored in Redis. Default is 43200 (12 hours)
+| MCP_PER_USER_TOKEN_EXPIRY_BUFFER_SECONDS | Seconds to subtract from per-user MCP OAuth token expiry when computing Redis TTL. Default is 60
 | DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT | Default token count for mock response completions. Default is 20
 | DEFAULT_MOCK_RESPONSE_PROMPT_TOKEN_COUNT | Default token count for mock response prompts. Default is 10
 | DEFAULT_MODEL_CREATED_AT_TIME | Default creation timestamp for models. Default is 1677610602
@@ -680,6 +721,11 @@ router_settings:
 | GITHUB_COPILOT_TOKEN_DIR | Directory to store GitHub Copilot token for `github_copilot` llm provider
 | GITHUB_COPILOT_API_KEY_FILE | File to store GitHub Copilot API key for `github_copilot` llm provider
 | GITHUB_COPILOT_ACCESS_TOKEN_FILE | File to store GitHub Copilot access token for `github_copilot` llm provider
+| GITHUB_COPILOT_API_BASE | Base URL for GitHub Copilot API. For GitHub Enterprise subscriptions with custom host, it is similar to https://copilot-api.my-company.ghe.com. Default is https://api.githubcopilot.com
+| GITHUB_COPILOT_DEVICE_CODE_URL | URL for GitHub Copilot device code authentication. For GitHub Enterprise subscriptions with custom host, it is similar to https://my-company.ghe.com/login/device/code. Default is https://github.com/login/device/code
+| GITHUB_COPILOT_ACCESS_TOKEN_URL | URL for GitHub Copilot access token retrieval. For GitHub Enterprise subscriptions with custom host, it is similar to https://my-company.ghe.com/login/oauth/access_token. Default is https://github.com/login/oauth/access_token
+| GITHUB_COPILOT_API_KEY_URL | URL for GitHub Copilot API key retrieval. For GitHub Enterprise subscriptions with custom host, it is similar to https://my-company.ghe.com/api/v3/copilot_internal/v2/token. Default is https://api.github.com/copilot_internal/v2/token
+| GITHUB_COPILOT_CLIENT_ID | Client ID for GitHub Copilot device flow authentication. This is used by the `github_copilot` provider for device code authentication. Default is "Iv1.b507a08c87ecfe98"
 | GREENSCALE_API_KEY | API key for Greenscale service
 | GREENSCALE_ENDPOINT | Endpoint URL for Greenscale service
 | GRAYSWAN_API_BASE | Base URL for GraySwan API. Default is https://api.grayswan.ai
@@ -765,6 +811,8 @@ router_settings:
 | LITELLM_ASSETS_PATH | Path to directory for UI assets and logos. Used when running with read-only filesystem (e.g., Kubernetes). Default is `/var/lib/litellm/assets` in Docker.
 | LITELLM_BLOG_POSTS_URL | Custom URL for fetching LiteLLM blog posts JSON. Default is the GitHub main branch URL
 | LITELLM_CLI_JWT_EXPIRATION_HOURS | Expiration time in hours for CLI-generated JWT tokens. Default is 24 hours
+| LITELLM_CORS_ALLOW_CREDENTIALS | Set to `true` to explicitly allow credentials in CORS responses. When not set, credentials are disabled automatically if `LITELLM_CORS_ORIGINS` is `*` (wildcard) to prevent the browser security misconfiguration of reflecting any origin with credentials
+| LITELLM_CORS_ORIGINS | Comma-separated list of allowed CORS origins (e.g. `https://app.example.com,https://admin.example.com`). Defaults to `*` (all origins) when not set
 | LITELLM_DD_AGENT_HOST | Hostname or IP of DataDog agent for LiteLLM-specific logging. When set, logs are sent to agent instead of direct API
 | LITELLM_DEPLOYMENT_ENVIRONMENT | Environment name for the deployment (e.g., "production", "staging"). Used as a fallback when OTEL_ENVIRONMENT_NAME is not set. Sets the `environment` tag in telemetry data
 | LITELLM_DETAILED_TIMING | When true, adds detailed per-phase timing headers to responses (`x-litellm-timing-{pre-processing,llm-api,post-processing,message-copy}-ms`). Default is false. See [latency overhead docs](../troubleshoot/latency_overhead.md)
@@ -788,8 +836,10 @@ router_settings:
 | LITELLM_KEY_ROTATION_ENABLED | Enable auto-key rotation for LiteLLM (boolean). Default is false.
 | LITELLM_KEY_ROTATION_CHECK_INTERVAL_SECONDS | Interval in seconds for how often to run job that auto-rotates keys. Default is 86400 (24 hours).
 | LITELLM_KEY_ROTATION_GRACE_PERIOD | Duration to keep old key valid after rotation (e.g. "24h", "2d"). Default is empty (immediate revoke). Used for scheduled rotations and as fallback when not specified in regenerate request.
+| LITELLM_KEY_ROTATION_LOCK_TTL_SECONDS | TTL in seconds for the distributed lock used by the key rotation job. Default is 600 (10 minutes).
 | LITELLM_LICENSE | License key for LiteLLM usage
 | LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS | Set to `True` to use the local bundled Anthropic beta headers config only, disabling remote fetching. Default is `False`
+| LITELLM_OIDC_ALLOWED_CREDENTIAL_DIRS | Comma-separated list of absolute directories from which the `oidc/file/` provider is permitted to read token files. Defaults to `/var/run/secrets,/run/secrets`.
 | LITELLM_LOCAL_BLOG_POSTS | When set to `True`, uses the local bundled blog posts only, disabling remote fetching from GitHub. Default is `False`
 | LITELLM_LOCAL_MODEL_COST_MAP | Local configuration for model cost mapping in LiteLLM
 | LITELLM_LOCAL_POLICY_TEMPLATES | When set to "true", uses local backup policy templates instead of fetching from GitHub. Policy templates are fetched from https://raw.githubusercontent.com/BerriAI/litellm/main/policy_templates.json by default, with automatic fallback to local backup on failure
@@ -801,6 +851,7 @@ router_settings:
 | LITELLM_OTEL_INTEGRATION_ENABLE_EVENTS | Optionally enable semantic logs for OTEL
 | LITELLM_OTEL_INTEGRATION_ENABLE_METRICS | Optionally enable emantic metrics for OTEL
 | LITELLM_ENABLE_PYROSCOPE | If true, enables Pyroscope CPU profiling. Profiles are sent to PYROSCOPE_SERVER_ADDRESS. Off by default. See [Pyroscope profiling](/proxy/pyroscope_profiling).
+| LITELLM_ENABLE_TEAM_STALE_ALIAS_BYPASS | When `true`, if a team's legacy `model_aliases` entry maps a public model name to an internal `model_name_<team_id>_<uuid>` deployment, pre-call handling can skip that rewrite when team-scoped sibling deployments exist for the public name—so load balancing / `order` apply across siblings. Default is `false` for backwards compatibility. See [Team-scoped models and legacy aliases](./load_balancing#team-scoped-models-and-legacy-model_aliases). When stale aliases are detected and this flag is off, the proxy may log a one-time warning.
 | PYROSCOPE_APP_NAME | Application name reported to Pyroscope. Required when LITELLM_ENABLE_PYROSCOPE is true. No default.
 | PYROSCOPE_SERVER_ADDRESS | Pyroscope server URL to send profiles to. Required when LITELLM_ENABLE_PYROSCOPE is true. No default.
 | PYROSCOPE_SAMPLE_RATE | Optional. Sample rate for Pyroscope profiling (integer). No default; when unset, the pyroscope-io library default is used.
@@ -811,7 +862,7 @@ router_settings:
 | LITELLM_MODE | Operating mode for LiteLLM (e.g., production, development)
 | LITELLM_NON_ROOT | Flag to run LiteLLM in non-root mode for enhanced security in Docker containers
 | LITELLM_RATE_LIMIT_WINDOW_SIZE | Rate limit window size for LiteLLM. Default is 60
-| LITELLM_REASONING_AUTO_SUMMARY | If set to "true", automatically enables detailed reasoning summaries for reasoning models (e.g., o1, o3-mini, deepseek-reasoner). When enabled, adds `summary: "detailed"` to reasoning effort configurations. Default is "false"
+| LITELLM_REASONING_AUTO_SUMMARY | If set to "true", automatically enables detailed reasoning summaries (`summary: "detailed"`) for reasoning models across all translation paths (Anthropic adapter, Responses API, etc.). Default is "false"
 | LITELLM_SALT_KEY | Salt key for encryption in LiteLLM
 | LITELLM_SSL_CIPHERS | SSL/TLS cipher configuration for faster handshakes. Controls cipher suite preferences for OpenSSL connections.
 | LITELLM_SECRET_AWS_KMS_LITELLM_LICENSE | AWS KMS encrypted license for LiteLLM
@@ -872,6 +923,7 @@ router_settings:
 | MODEL_COST_MAP_MAX_SHRINK_RATIO | Maximum allowed shrinkage ratio when validating a fetched model cost map against the local backup. Rejects the fetched map if it is smaller than this fraction of the backup. Default is 0.5
 | MODEL_COST_MAP_MIN_MODEL_COUNT | Minimum number of models a fetched cost map must contain to be considered valid. Default is 50
 | NO_DOCS | Flag to disable Swagger UI documentation
+| NO_OPENAPI | Flag to disable the /openapi.json endpoint
 | NO_REDOC | Flag to disable Redoc documentation
 | NO_PROXY | List of addresses to bypass proxy
 | NON_LLM_CONNECTION_TIMEOUT | Timeout in seconds for non-LLM service connections. Default is 15
@@ -882,6 +934,7 @@ router_settings:
 | OPENAI_CHATGPT_API_BASE | Alternative to CHATGPT_API_BASE. Base URL for ChatGPT API
 | OPENAI_FILE_SEARCH_COST_PER_1K_CALLS | Cost per 1000 calls for OpenAI file search. Default is 0.0025
 | OPENAI_ORGANIZATION | Organization identifier for OpenAI
+| OPENAPI_URL | The path to the OpenAPI JSON endpoint. **By default this is "/openapi.json"**
 | OPENID_BASE_URL | Base URL for OpenID Connect services
 | OPENID_CLIENT_ID | Client ID for OpenID Connect authentication
 | OPENID_CLIENT_SECRET | Client secret for OpenID Connect authentication
@@ -902,6 +955,7 @@ router_settings:
 | OTEL_SERVICE_NAME | Service name identifier for OpenTelemetry
 | OTEL_TRACER_NAME | Tracer name for OpenTelemetry tracing
 | OTEL_LOGS_EXPORTER | Exporter type for OpenTelemetry logs (e.g., console)
+| OTEL_IGNORE_CONTEXT_PROPAGATION | When true, ignore parent span context propagation in OpenTelemetry callbacks
 | PAGERDUTY_API_KEY | API key for PagerDuty Alerting
 | PANW_PRISMA_AIRS_API_KEY | API key for PANW Prisma AIRS service
 | PANW_PRISMA_AIRS_API_BASE | Base URL for PANW Prisma AIRS service
@@ -949,6 +1003,8 @@ router_settings:
 | QDRANT_URL | Connection URL for Qdrant database
 | QDRANT_VECTOR_SIZE | Vector size for Qdrant operations. Default is 1536
 | REDIS_CONNECTION_POOL_TIMEOUT | Timeout in seconds for Redis connection pool. Default is 5
+| REDIS_CIRCUIT_BREAKER_FAILURE_THRESHOLD | Number of consecutive failures before the Redis circuit breaker opens. Default is 5
+| REDIS_CIRCUIT_BREAKER_RECOVERY_TIMEOUT | Time in seconds before the Redis circuit breaker attempts recovery after opening. Default is 60
 | REDIS_CLUSTER_NODES | JSON-formatted list of Redis cluster startup nodes for Redis Cluster mode. Example: `[{"host": "node1", "port": 6379}]`
 | REDIS_HOST | Hostname for Redis server
 | REDIS_PASSWORD | Password for Redis service
@@ -992,6 +1048,7 @@ router_settings:
 | SENDGRID_SENDER_EMAIL | Email address used as the sender in SendGrid email transactions 
 | SPEND_LOGS_URL | URL for retrieving spend logs
 | SPEND_LOG_CLEANUP_BATCH_SIZE | Number of logs deleted per batch during cleanup. Default is 1000
+| STALE_OBJECT_CLEANUP_BATCH_SIZE | Max number of stale managed objects updated per cleanup cycle. Default is 1000
 | SSL_CERTIFICATE | Path to the SSL certificate file
 | SSL_ECDH_CURVE | ECDH curve for SSL/TLS key exchange (e.g., 'X25519' to disable PQC).
 | SSL_SECURITY_LEVEL | [BETA] Security level for SSL/TLS connections. E.g. `DEFAULT@SECLEVEL=1`

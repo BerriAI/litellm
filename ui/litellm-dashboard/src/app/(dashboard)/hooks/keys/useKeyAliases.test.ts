@@ -65,7 +65,7 @@ describe("useInfiniteKeyAliases", () => {
       expect(result.current.isSuccess).toBe(true);
     });
 
-    expect(mockKeyAliasesCall).toHaveBeenCalledWith("test-token", 1, 50, undefined);
+    expect(mockKeyAliasesCall).toHaveBeenCalledWith("test-token", 1, 50, undefined, undefined);
     expect(result.current.data?.pages[0]).toEqual(mockPage1);
   });
 
@@ -74,7 +74,7 @@ describe("useInfiniteKeyAliases", () => {
     renderHook(() => useInfiniteKeyAliases(25), { wrapper });
 
     await waitFor(() => {
-      expect(mockKeyAliasesCall).toHaveBeenCalledWith("test-token", 1, 25, undefined);
+      expect(mockKeyAliasesCall).toHaveBeenCalledWith("test-token", 1, 25, undefined, undefined);
     });
   });
 
@@ -83,7 +83,7 @@ describe("useInfiniteKeyAliases", () => {
     renderHook(() => useInfiniteKeyAliases(50, "my-alias"), { wrapper });
 
     await waitFor(() => {
-      expect(mockKeyAliasesCall).toHaveBeenCalledWith("test-token", 1, 50, "my-alias");
+      expect(mockKeyAliasesCall).toHaveBeenCalledWith("test-token", 1, 50, "my-alias", undefined);
     });
   });
 
@@ -145,7 +145,7 @@ describe("useInfiniteKeyAliases", () => {
       expect(result.current.data?.pages).toHaveLength(2);
     });
 
-    expect(mockKeyAliasesCall).toHaveBeenCalledWith("test-token", 2, 2, undefined);
+    expect(mockKeyAliasesCall).toHaveBeenCalledWith("test-token", 2, 2, undefined, undefined);
     expect(result.current.data?.pages[1]).toEqual(mockPage2);
   });
 
@@ -171,7 +171,7 @@ describe("useInfiniteKeyAliases", () => {
     rerender({ search: "search-result" });
 
     await waitFor(() => {
-      expect(mockKeyAliasesCall).toHaveBeenCalledWith("test-token", 1, 50, "search-result");
+      expect(mockKeyAliasesCall).toHaveBeenCalledWith("test-token", 1, 50, "search-result", undefined);
     });
   });
 });

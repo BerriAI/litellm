@@ -375,7 +375,7 @@ search_tools:
 - [Search Providers](../search/index.md) - Detailed search provider setup
 - [Claude Code WebSearch](../tutorials/claude_code_websearch.md) - Using with Claude Code
 - [Tool Calling](../completion/function_call.md) - General tool calling documentation
-- [Callbacks](./custom_callback.md) - Custom callback documentation
+- [Callbacks](../observability/custom_callback.md) - Custom callback documentation
 
 ## Technical Details
 

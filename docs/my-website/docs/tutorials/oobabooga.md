@@ -2,7 +2,7 @@
 
 ### Install + Import LiteLLM 
 ```python 
-!pip install litellm
+!uv add litellm
 from litellm import completion 
 import os
 ```

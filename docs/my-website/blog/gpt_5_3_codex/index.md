@@ -3,18 +3,9 @@ slug: gpt_5_3_codex
 title: "Day 0 Support: GPT-5.3-Codex"
 date: 2026-02-24T10:00:00
 authors:
-  - name: Sameer Kankute
-    title: SWE @ LiteLLM (LLM Translation)
-    url: https://www.linkedin.com/in/sameer-kankute/
-    image_url: https://pbs.twimg.com/profile_images/2001352686994907136/ONgNuSk5_400x400.jpg
-  - name: Krrish Dholakia
-    title: "CEO, LiteLLM"
-    url: https://www.linkedin.com/in/krish-d/
-    image_url: https://pbs.twimg.com/profile_images/1298587542745358340/DZv3Oj-h_400x400.jpg
-  - name: Ishaan Jaff
-    title: "CTO, LiteLLM"
-    url: https://www.linkedin.com/in/reffajnaahsi/
-    image_url: https://pbs.twimg.com/profile_images/1613813310264340481/lz54oEiB_400x400.jpg
+  - sameer
+  - krrish
+  - ishaan-alt
 description: "Day 0 support for GPT-5.3-Codex on LiteLLM, including phase parameter handling for Responses API."
 tags: [openai, gpt-5.3-codex, codex, day 0 support]
 hide_table_of_contents: false
@@ -24,6 +15,8 @@ import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
 LiteLLM now supports GPT-5.3-Codex on Day 0, including support for the new assistant `phase` metadata on Responses API output items.
+
+{/* truncate */}
 
 ## Why `phase` matters for GPT-5.3-Codex
 

@@ -87,6 +87,6 @@ Change the setting from the UI and have it take effect immediately—perfect for
 
 ## Related Documentation
 
-- [Admin UI Overview](./ui_overview.md) – General guide to the LiteLLM Admin UI
-- [Models and Endpoints](./models_and_endpoints.md) – Managing models and API endpoints
+- [Admin UI Overview](./ui.md) – General guide to the LiteLLM Admin UI
+- [Models and Endpoints](./model_management.md) – Managing models and API endpoints
 - [Config Settings](./config_settings.md) – `store_model_in_db` in `general_settings`

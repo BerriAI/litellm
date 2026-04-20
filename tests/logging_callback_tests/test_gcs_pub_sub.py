@@ -133,6 +133,7 @@ def assert_gcs_pubsub_request_matches_expected(
     if differences:
         assert False, f"Dictionary mismatch: {differences}"
 
+
 def assert_gcs_pubsub_request_matches_expected_standard_logging_payload(
     actual_request_body: dict,
     expected_file_name: str,
@@ -175,7 +176,7 @@ def assert_gcs_pubsub_request_matches_expected_standard_logging_payload(
         "response_time",
         "completion_tokens",
         "prompt_tokens",
-        "total_tokens"
+        "total_tokens",
     ]
 
     for field in FIELDS_EXISTENCE_CHECKS:
@@ -190,7 +191,9 @@ async def test_async_gcs_pub_sub():
     mock_post.return_value.text = "Accepted"
 
     # Initialize the GcsPubSubLogger and set the mock
-    gcs_pub_sub_logger = GcsPubSubLogger(flush_interval=1)
+    gcs_pub_sub_logger = GcsPubSubLogger(
+        project_id="STUBBED_PROJECT_ID", topic_id="STUBBED_TOPIC_ID", flush_interval=1
+    )
     gcs_pub_sub_logger.async_httpx_client.post = mock_post
 
     mock_construct_request_headers = AsyncMock()
@@ -215,7 +218,7 @@ async def test_async_gcs_pub_sub():
     print("sent to url", actual_url)
     assert (
         actual_url
-        == "https://pubsub.googleapis.com/v1/projects/reliableKeys/topics/litellmDB:publish"
+        == "https://pubsub.googleapis.com/v1/projects/STUBBED_PROJECT_ID/topics/STUBBED_TOPIC_ID:publish"
     )
     actual_request = mock_post.call_args[1]["json"]
 
@@ -245,7 +248,9 @@ async def test_async_gcs_pub_sub_v1():
     mock_post.return_value.text = "Accepted"
 
     # Initialize the GcsPubSubLogger and set the mock
-    gcs_pub_sub_logger = GcsPubSubLogger(flush_interval=1)
+    gcs_pub_sub_logger = GcsPubSubLogger(
+        project_id="STUBBED_PROJECT_ID", topic_id="STUBBED_TOPIC_ID", flush_interval=1
+    )
     gcs_pub_sub_logger.async_httpx_client.post = mock_post
 
     mock_construct_request_headers = AsyncMock()
@@ -270,7 +275,7 @@ async def test_async_gcs_pub_sub_v1():
     print("sent to url", actual_url)
     assert (
         actual_url
-        == "https://pubsub.googleapis.com/v1/projects/reliableKeys/topics/litellmDB:publish"
+        == "https://pubsub.googleapis.com/v1/projects/STUBBED_PROJECT_ID/topics/STUBBED_TOPIC_ID:publish"
     )
     actual_request = mock_post.call_args[1]["json"]
 

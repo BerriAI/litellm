@@ -175,7 +175,14 @@ export const CreateUserButton: React.FC<CreateuserProps> = ({
   // Modify the return statement to handle embedded mode
   if (isEmbedded) {
     return (
-      <Form form={form} onFinish={handleCreate} labelCol={{ span: 8 }} wrapperCol={{ span: 16 }} labelAlign="left">
+      <Form
+        form={form}
+        onFinish={handleCreate}
+        labelCol={{ span: 8 }}
+        wrapperCol={{ span: 16 }}
+        labelAlign="left"
+        initialValues={{ user_role: "internal_user_viewer" }}
+      >
         <Alert
           message="Email invitations"
           description={
@@ -210,9 +217,7 @@ export const CreateUserButton: React.FC<CreateuserProps> = ({
           </Select2>
         </Form.Item>
         <Form.Item label="Team" name="team_id">
-          <Select placeholder="Select Team" style={{ width: "100%" }}>
-            <TeamDropdown teams={availableTeams} />
-          </Select>
+          <TeamDropdown />
         </Form.Item>
 
         <Form.Item label="Metadata" name="metadata">
@@ -259,7 +264,14 @@ export const CreateUserButton: React.FC<CreateuserProps> = ({
             className="mb-4"
           />
         </Space>
-        <Form form={form} onFinish={handleCreate} labelCol={{ span: 8 }} wrapperCol={{ span: 16 }} labelAlign="left">
+        <Form
+          form={form}
+          onFinish={handleCreate}
+          labelCol={{ span: 8 }}
+          wrapperCol={{ span: 16 }}
+          labelAlign="left"
+          initialValues={{ user_role: "internal_user_viewer" }}
+        >
           <Form.Item label="User Email" name="user_email">
             <Input />
           </Form.Item>
@@ -294,7 +306,7 @@ export const CreateUserButton: React.FC<CreateuserProps> = ({
             name="team_id"
             help="If selected, user will be added as a 'user' role to the team."
           >
-            <TeamDropdown teams={availableTeams} />
+            <TeamDropdown />
           </Form.Item>
 
           <Form.Item

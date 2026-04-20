@@ -1,5 +1,6 @@
 import React, { useState } from "react";
-import { Button, Input, Card, Typography, Spin, message, Divider } from "antd";
+import { Button, Input, Card, Typography, Spin, Divider } from "antd";
+import MessageManager from "@/components/molecules/message_manager";
 import { SendOutlined, DatabaseOutlined, LoadingOutlined, DownOutlined, RightOutlined } from "@ant-design/icons";
 import { vectorStoreSearchCall } from "../networking";
 import NotificationsManager from "../molecules/notifications_manager";
@@ -46,7 +47,7 @@ export const VectorStoreTester: React.FC<VectorStoreTesterProps> = ({ vectorStor
 
   const handleSearch = async () => {
     if (!query.trim()) {
-      message.warning("Please enter a search query");
+      MessageManager.warning("Please enter a search query");
       return;
     }
 

@@ -1,0 +1,17 @@
+model_list:
+  - model_name: fake-openai-gpt-4
+    litellm_params:
+      model: openai/fake-gpt-4
+      api_base: os.environ/MOCK_LLM_URL
+      api_key: fake-key
+  - model_name: fake-anthropic-claude
+    litellm_params:
+      model: openai/fake-claude
+      api_base: os.environ/MOCK_LLM_URL
+      api_key: fake-key
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+  database_url: os.environ/DATABASE_URL
+  store_prompts_in_spend_logs: true
+  store_model_in_db: true

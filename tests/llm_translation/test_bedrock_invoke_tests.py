@@ -16,7 +16,7 @@ class TestBedrockInvokeClaudeJson(BaseLLMChatTest):
     def get_base_completion_call_args(self) -> dict:
         litellm._turn_on_debug()
         return {
-            "model": "bedrock/invoke/anthropic.claude-3-5-sonnet-20240620-v1:0",
+            "model": "bedrock/invoke/us.anthropic.claude-haiku-4-5-20251001-v1:0",
         }
 
     def test_tool_call_no_arguments(self, tool_call_no_arguments):
@@ -33,7 +33,7 @@ class TestBedrockInvokeNovaJson(BaseLLMChatTest):
     def test_tool_call_no_arguments(self, tool_call_no_arguments):
         """Test that tool calls with no arguments is translated correctly. Relevant issue: https://github.com/BerriAI/litellm/issues/6833"""
         pass
-    
+
     @pytest.fixture(autouse=True)
     def skip_non_json_tests(self, request):
         if not "json" in request.function.__name__.lower():

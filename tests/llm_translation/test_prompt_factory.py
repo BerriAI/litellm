@@ -775,6 +775,404 @@ def test_ensure_alternating_roles(
     assert messages == expected_messages
 
 
+def test_ensure_alternating_roles_with_tool_calls():
+    """Fixes Regression in #18685"""
+    messages = [
+        {"role": "user", "content": "What's the weather?"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_123",
+                    "type": "function",
+                    "function": {
+                        "name": "get_weather",
+                        "arguments": '{"location": "NYC"}',
+                    },
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": "call_123", "content": "72F, sunny"},
+        {"role": "assistant", "content": "It's 72F and sunny in NYC."},
+        {"role": "user", "content": "What about tomorrow?"},
+        {"role": "user", "content": "And the day after?"},
+        {"role": "user", "content": "What about next week?"},
+    ]
+
+    transformed_messages = get_completion_messages(
+        messages=messages,
+        assistant_continue_message=None,
+        user_continue_message=None,
+        ensure_alternating_roles=True,
+    )
+
+    assert transformed_messages == [
+        {"role": "user", "content": "What's the weather?"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_123",
+                    "type": "function",
+                    "function": {
+                        "name": "get_weather",
+                        "arguments": '{"location": "NYC"}',
+                    },
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": "call_123", "content": "72F, sunny"},
+        {"role": "assistant", "content": "It's 72F and sunny in NYC."},
+        {"role": "user", "content": "What about tomorrow?"},
+        {"role": "assistant", "content": "Please continue."},
+        {"role": "user", "content": "And the day after?"},
+        {"role": "assistant", "content": "Please continue."},
+        {"role": "user", "content": "What about next week?"},
+    ]
+
+
+def test_ensure_alternating_roles_three_consecutive_assistants():
+    messages = [
+        {"role": "user", "content": "Hello"},
+        {"role": "assistant", "content": "A1"},
+        {"role": "assistant", "content": "A2"},
+        {"role": "assistant", "content": "A3"},
+    ]
+
+    transformed_messages = get_completion_messages(
+        messages=messages,
+        assistant_continue_message=None,
+        user_continue_message=None,
+        ensure_alternating_roles=True,
+    )
+
+    assert transformed_messages == [
+        {"role": "user", "content": "Hello"},
+        {"role": "assistant", "content": "A1"},
+        {"role": "user", "content": "Please continue."},
+        {"role": "assistant", "content": "A2"},
+        {"role": "user", "content": "Please continue."},
+        {"role": "assistant", "content": "A3"},
+        {"role": "user", "content": "Please continue."},
+    ]
+
+
+def test_ensure_alternating_roles_inserts_assistant_continue_across_tool_chain():
+    """[user, assistant(tc), tool, user] gets assistant_continue before the second user."""
+    messages = [
+        {"role": "user", "content": "Search for X"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "c1",
+                    "type": "function",
+                    "function": {"name": "search", "arguments": "{}"},
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": "c1", "content": "results"},
+        {"role": "user", "content": "Thanks, now do Y"},
+    ]
+
+    transformed_messages = get_completion_messages(
+        messages=messages,
+        assistant_continue_message=None,
+        user_continue_message=None,
+        ensure_alternating_roles=True,
+    )
+
+    assert transformed_messages == [
+        {"role": "user", "content": "Search for X"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "c1",
+                    "type": "function",
+                    "function": {"name": "search", "arguments": "{}"},
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": "c1", "content": "results"},
+        {"role": "assistant", "content": "Please continue."},
+        {"role": "user", "content": "Thanks, now do Y"},
+    ]
+
+
+def test_ensure_alternating_roles_assistant_tool_call_then_assistant():
+    """
+    Malformed [assistant(tc), assistant(no-tc), user]:
+    user_continue inserts break between adjacents, then assistant_continue
+    fills the counted-sequence gap.
+    """
+    messages = [
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "c1",
+                    "type": "function",
+                    "function": {"name": "search", "arguments": "{}"},
+                }
+            ],
+        },
+        {"role": "assistant", "content": "Here's what I found."},
+        {"role": "user", "content": "Thanks"},
+    ]
+
+    transformed_messages = get_completion_messages(
+        messages=messages,
+        assistant_continue_message=None,
+        user_continue_message=None,
+        ensure_alternating_roles=True,
+    )
+
+    assert transformed_messages == [
+        {"role": "user", "content": "Please continue."},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "c1",
+                    "type": "function",
+                    "function": {"name": "search", "arguments": "{}"},
+                }
+            ],
+        },
+        {"role": "assistant", "content": "Please continue."},
+        {"role": "user", "content": "Please continue."},
+        {"role": "assistant", "content": "Here's what I found."},
+        {"role": "user", "content": "Thanks"},
+    ]
+
+
+def test_ensure_alternating_roles_trailing_tool_call_assistant():
+    messages = [
+        {"role": "user", "content": "What's the weather?"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_abc",
+                    "type": "function",
+                    "function": {
+                        "name": "get_weather",
+                        "arguments": '{"location": "NYC"}',
+                    },
+                }
+            ],
+        },
+    ]
+
+    transformed_messages = get_completion_messages(
+        messages=messages,
+        assistant_continue_message=None,
+        user_continue_message=None,
+        ensure_alternating_roles=True,
+    )
+
+    assert transformed_messages == [
+        {"role": "user", "content": "What's the weather?"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_abc",
+                    "type": "function",
+                    "function": {
+                        "name": "get_weather",
+                        "arguments": '{"location": "NYC"}',
+                    },
+                }
+            ],
+        },
+        {"role": "assistant", "content": "Please continue."},
+        {"role": "user", "content": "Please continue."},
+    ]
+
+
+def test_ensure_alternating_roles_multiple_tool_results():
+    """[user, assistant(tc), tool, tool, user] — multiple tool results before next user."""
+    messages = [
+        {"role": "user", "content": "Search for X and Y"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "c1",
+                    "type": "function",
+                    "function": {"name": "search_x", "arguments": "{}"},
+                },
+                {
+                    "id": "c2",
+                    "type": "function",
+                    "function": {"name": "search_y", "arguments": "{}"},
+                },
+            ],
+        },
+        {"role": "tool", "tool_call_id": "c1", "content": "result X"},
+        {"role": "tool", "tool_call_id": "c2", "content": "result Y"},
+        {"role": "user", "content": "Thanks"},
+    ]
+
+    transformed_messages = get_completion_messages(
+        messages=messages,
+        assistant_continue_message=None,
+        user_continue_message=None,
+        ensure_alternating_roles=True,
+    )
+
+    assert transformed_messages == [
+        {"role": "user", "content": "Search for X and Y"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "c1",
+                    "type": "function",
+                    "function": {"name": "search_x", "arguments": "{}"},
+                },
+                {
+                    "id": "c2",
+                    "type": "function",
+                    "function": {"name": "search_y", "arguments": "{}"},
+                },
+            ],
+        },
+        {"role": "tool", "tool_call_id": "c1", "content": "result X"},
+        {"role": "tool", "tool_call_id": "c2", "content": "result Y"},
+        {"role": "assistant", "content": "Please continue."},
+        {"role": "user", "content": "Thanks"},
+    ]
+
+
+def test_ensure_alternating_roles_chained_tool_calls():
+    """[user, assistant(tc), tool, assistant(tc), tool, user] — chained tool calls."""
+    messages = [
+        {"role": "user", "content": "Do multi-step task"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "c1",
+                    "type": "function",
+                    "function": {"name": "step1", "arguments": "{}"},
+                },
+            ],
+        },
+        {"role": "tool", "tool_call_id": "c1", "content": "step1 done"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "c2",
+                    "type": "function",
+                    "function": {"name": "step2", "arguments": "{}"},
+                },
+            ],
+        },
+        {"role": "tool", "tool_call_id": "c2", "content": "step2 done"},
+        {"role": "user", "content": "What happened?"},
+    ]
+
+    transformed_messages = get_completion_messages(
+        messages=messages,
+        assistant_continue_message=None,
+        user_continue_message=None,
+        ensure_alternating_roles=True,
+    )
+
+    assert transformed_messages == [
+        {"role": "user", "content": "Do multi-step task"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "c1",
+                    "type": "function",
+                    "function": {"name": "step1", "arguments": "{}"},
+                },
+            ],
+        },
+        {"role": "tool", "tool_call_id": "c1", "content": "step1 done"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "c2",
+                    "type": "function",
+                    "function": {"name": "step2", "arguments": "{}"},
+                },
+            ],
+        },
+        {"role": "tool", "tool_call_id": "c2", "content": "step2 done"},
+        {"role": "assistant", "content": "Please continue."},
+        {"role": "user", "content": "What happened?"},
+    ]
+
+
+def test_ensure_alternating_roles_system_prefix_with_tool_chain():
+    """[system, user, assistant(tc), tool, user] — system prefix doesn't interfere."""
+    messages = [
+        {"role": "system", "content": "You are helpful."},
+        {"role": "user", "content": "Search for X"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "c1",
+                    "type": "function",
+                    "function": {"name": "search", "arguments": "{}"},
+                },
+            ],
+        },
+        {"role": "tool", "tool_call_id": "c1", "content": "results"},
+        {"role": "user", "content": "Thanks"},
+    ]
+
+    transformed_messages = get_completion_messages(
+        messages=messages,
+        assistant_continue_message=None,
+        user_continue_message=None,
+        ensure_alternating_roles=True,
+    )
+
+    assert transformed_messages == [
+        {"role": "system", "content": "You are helpful."},
+        {"role": "user", "content": "Search for X"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "c1",
+                    "type": "function",
+                    "function": {"name": "search", "arguments": "{}"},
+                },
+            ],
+        },
+        {"role": "tool", "tool_call_id": "c1", "content": "results"},
+        {"role": "assistant", "content": "Please continue."},
+        {"role": "user", "content": "Thanks"},
+    ]
+
+
 def test_alternating_roles_e2e():
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
     import json
@@ -1277,7 +1675,7 @@ def test_anthropic_messages_pt_raw_bash_tool_result_passthrough():
                     "type": "server_tool_use",
                     "id": "srvtoolu_01BASH",
                     "name": "bash_code_execution",
-                    "input": {"command": "python3 -c \"print(1+1)\""},
+                    "input": {"command": 'python3 -c "print(1+1)"'},
                 },
                 {
                     "type": "bash_code_execution_tool_result",
@@ -1469,10 +1867,16 @@ def test_attempt_json_repair_missing_closing_brace():
         _attempt_json_repair,
     )
 
-    truncated = '{"command": ["bash","-lc","find /x/repos -name \'messages.py\' -type f"]'
+    truncated = (
+        '{"command": ["bash","-lc","find /x/repos -name \'messages.py\' -type f"]'
+    )
     result = _attempt_json_repair(truncated)
     assert result is not None
-    assert result["command"] == ["bash", "-lc", "find /x/repos -name 'messages.py' -type f"]
+    assert result["command"] == [
+        "bash",
+        "-lc",
+        "find /x/repos -name 'messages.py' -type f",
+    ]
 
 
 def test_attempt_json_repair_missing_bracket_and_brace():
@@ -1568,7 +1972,7 @@ def test_parse_tool_call_arguments_non_object_json():
         parse_tool_call_arguments,
     )
 
-    result = parse_tool_call_arguments('[1, 2, 3]')
+    result = parse_tool_call_arguments("[1, 2, 3]")
     assert result == [1, 2, 3]
 
 
@@ -1601,7 +2005,6 @@ def test_parse_tool_call_arguments_still_raises_for_unrepairable():
     error_msg = str(exc_info.value)
     assert "test_tool" in error_msg
     assert "test context" in error_msg
-
 
 
 def test_anthropic_messages_pt_interleave_thinking_with_server_tool_calls():
@@ -1778,7 +2181,11 @@ def test_anthropic_messages_pt_thinking_blocks_no_server_tools_unchanged():
     types = [c.get("type") for c in content]
 
     # Original behavior: thinking first, then text, then tool_use
-    assert types == ["thinking", "text", "tool_use"], f"Expected sequential order but got: {types}"
+    assert types == [
+        "thinking",
+        "text",
+        "tool_use",
+    ], f"Expected sequential order but got: {types}"
 
 
 def test_anthropic_messages_pt_interleave_more_thinking_than_tool_groups():
@@ -1823,7 +2230,14 @@ def test_anthropic_messages_pt_interleave_more_thinking_than_tool_groups():
                     {
                         "type": "web_search_tool_result",
                         "tool_use_id": "srvtoolu_01ONLY",
-                        "content": [{"type": "web_search_result", "url": "https://example.com", "title": "Test", "snippet": "result"}],
+                        "content": [
+                            {
+                                "type": "web_search_result",
+                                "url": "https://example.com",
+                                "title": "Test",
+                                "snippet": "result",
+                            }
+                        ],
                     },
                 ]
             },
@@ -1840,11 +2254,11 @@ def test_anthropic_messages_pt_interleave_more_thinking_than_tool_groups():
 
     # thinking_1 paired with tool group, thinking_2 and thinking_3 before text
     assert types == [
-        "thinking",            # paired with tool group
+        "thinking",  # paired with tool group
         "server_tool_use",
         "web_search_tool_result",
-        "thinking",            # extra - before text
-        "thinking",            # extra - before text
+        "thinking",  # extra - before text
+        "thinking",  # extra - before text
         "text",
     ], f"Expected order but got: {types}"
 
@@ -1939,7 +2353,9 @@ def test_anthropic_messages_pt_list_content_with_thinking_preserves_order():
 
     # Verify no duplicate thinking blocks
     thinking_count = sum(1 for t in types if t == "thinking")
-    assert thinking_count == 2, f"Expected 2 thinking blocks, got {thinking_count} (duplication detected)"
+    assert (
+        thinking_count == 2
+    ), f"Expected 2 thinking blocks, got {thinking_count} (duplication detected)"
 
     # Verify signatures preserved in correct positions
     assert content[0]["signature"] == "sig_1"

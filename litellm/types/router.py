@@ -77,6 +77,7 @@ class UpdateRouterConfig(BaseModel):
     routing_strategy_args: Optional[dict] = None
     routing_strategy: Optional[str] = None
     model_group_retry_policy: Optional[dict] = None
+    model_group_affinity_config: Optional[Dict[str, List[str]]] = None
     allowed_fails: Optional[int] = None
     cooldown_time: Optional[float] = None
     num_retries: Optional[int] = None
@@ -94,16 +95,18 @@ class ModelInfo(BaseModel):
     id: Optional[
         str
     ]  # Allow id to be optional on input, but it will always be present as a str in the model instance
-    db_model: bool = False  # used for proxy - to separate models which are stored in the db vs. config.
+    db_model: bool = (
+        False  # used for proxy - to separate models which are stored in the db vs. config.
+    )
     updated_at: Optional[datetime.datetime] = None
     updated_by: Optional[str] = None
 
     created_at: Optional[datetime.datetime] = None
     created_by: Optional[str] = None
 
-    base_model: Optional[
-        str
-    ] = None  # specify if the base model is azure/gpt-3.5-turbo etc for accurate cost tracking
+    base_model: Optional[str] = (
+        None  # specify if the base model is azure/gpt-3.5-turbo etc for accurate cost tracking
+    )
     tier: Optional[Literal["free", "paid"]] = None
 
     """
@@ -172,12 +175,12 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     custom_llm_provider: Optional[str] = None
     tpm: Optional[int] = None
     rpm: Optional[int] = None
-    timeout: Optional[
-        Union[float, str, httpx.Timeout]
-    ] = None  # if str, pass in as os.environ/
-    stream_timeout: Optional[
-        Union[float, str]
-    ] = None  # timeout when making stream=True calls, if str, pass in as os.environ/
+    timeout: Optional[Union[float, str, httpx.Timeout]] = (
+        None  # if str, pass in as os.environ/
+    )
+    stream_timeout: Optional[Union[float, str]] = (
+        None  # timeout when making stream=True calls, if str, pass in as os.environ/
+    )
     max_retries: Optional[int] = None
     organization: Optional[str] = None  # for openai orgs
     configurable_clientside_auth_params: CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS = None
@@ -187,6 +190,11 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     litellm_trace_id: Optional[str] = None
 
     max_file_size_mb: Optional[float] = None
+
+    # Proxy-wide default rate limits applied to any API key using this deployment
+    # when the key does not have a model-specific tpm/rpm limit configured.
+    default_api_key_tpm_limit: Optional[int] = None
+    default_api_key_rpm_limit: Optional[int] = None
 
     # Deployment budgets
     max_budget: Optional[float] = None
@@ -332,6 +340,7 @@ class LiteLLMParamsTypedDict(TypedDict, total=False):
     output_cost_per_token: Optional[float]
     input_cost_per_second: Optional[float]
     output_cost_per_second: Optional[float]
+    output_cost_per_second_1080p: Optional[float]
     num_retries: Optional[int]
     ## MOCK RESPONSES ##
     mock_response: Optional[Union[str, ModelResponse, Exception]]
