@@ -89,28 +89,32 @@ class Service:
         import litellm.proxy.proxy_server as _pserver
 
         _scheduler = getattr(_pserver, "scheduler", None)
-        if _scheduler is not None:
-            uploader = Uploader(
-                api_key=api_key,
-                api_endpoint=api_endpoint,
-                connection_id=connection_id,
-            )
-            orchestrator = Orchestrator(uploader=uploader)
-            _scheduler.add_job(
-                orchestrator.run,
-                "interval",
-                minutes=MAVVRIK_EXPORT_INTERVAL_MINUTES,
-                id=MAVVRIK_EXPORT_USAGE_DATA_JOB_NAME,
-                replace_existing=True,
-            )
-            verbose_proxy_logger.info(
-                "mavvrik background export job scheduled every %d min",
-                MAVVRIK_EXPORT_INTERVAL_MINUTES,
-            )
-        else:
+        if _scheduler is None:
             verbose_proxy_logger.warning(
                 "mavvrik: scheduler not available, background job not registered"
             )
+            return {
+                "message": "Mavvrik settings initialized successfully",
+                "status": "success",
+            }
+
+        uploader = Uploader(
+            api_key=api_key,
+            api_endpoint=api_endpoint,
+            connection_id=connection_id,
+        )
+        orchestrator = Orchestrator(uploader=uploader)
+        _scheduler.add_job(
+            orchestrator.run,
+            "interval",
+            minutes=MAVVRIK_EXPORT_INTERVAL_MINUTES,
+            id=MAVVRIK_EXPORT_USAGE_DATA_JOB_NAME,
+            replace_existing=True,
+        )
+        verbose_proxy_logger.info(
+            "mavvrik background export job scheduled every %d min",
+            MAVVRIK_EXPORT_INTERVAL_MINUTES,
+        )
 
         return {
             "message": "Mavvrik settings initialized successfully",

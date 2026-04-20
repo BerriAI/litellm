@@ -115,10 +115,12 @@ class Settings:
             return {}
 
         encrypted_key: Optional[str] = value.get("api_key")
-        if encrypted_key:
-            decrypted = self.decrypt_value_helper(encrypted_key, key="mavvrik_api_key")
-            if decrypted is not None:
-                value["api_key"] = decrypted
+        if not encrypted_key:
+            return value
+
+        decrypted = self.decrypt_value_helper(encrypted_key, key="mavvrik_api_key")
+        if decrypted is not None:
+            value["api_key"] = decrypted
 
         return value
 

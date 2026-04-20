@@ -223,16 +223,16 @@ class Client:
             async with httpx.AsyncClient(timeout=30.0) as client:
                 resp = await client.patch(self.agent_url, headers=headers, json=body)
 
-            if resp.status_code not in (200, 204):
+            if resp.status_code in (200, 204):
+                verbose_proxy_logger.debug(
+                    "report_error: error reported for connection %s",
+                    self.connection_id,
+                )
+            else:
                 verbose_proxy_logger.warning(
                     "report_error PATCH returned %d: %s",
                     resp.status_code,
                     resp.text[:200],
-                )
-            else:
-                verbose_proxy_logger.debug(
-                    "report_error: error reported for connection %s",
-                    self.connection_id,
                 )
         except Exception as exc:
             verbose_proxy_logger.warning("report_error failed (non-fatal): %s", exc)
@@ -264,14 +264,14 @@ class Client:
                 if resp.status_code == 200:
                     body = resp.json()
                     signed_url = body.get("url")
-                    if signed_url:
-                        verbose_proxy_logger.debug(
-                            "uploader: got signed URL for date %s", date_str
+                    if not signed_url:
+                        raise RuntimeError(
+                            f"Mavvrik API response missing 'url' field: {body}"
                         )
-                        return signed_url
-                    raise RuntimeError(
-                        f"Mavvrik API response missing 'url' field: {body}"
+                    verbose_proxy_logger.debug(
+                        "uploader: got signed URL for date %s", date_str
                     )
+                    return signed_url
 
                 last_exc = RuntimeError(
                     f"Mavvrik signed URL request failed: {resp.status_code} {resp.text[:200]}"

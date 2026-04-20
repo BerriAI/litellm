@@ -90,24 +90,25 @@ class Orchestrator:
         """
         pod_lock_manager = self._get_pod_lock_manager()
 
-        if pod_lock_manager and pod_lock_manager.redis_cache:
-            if await pod_lock_manager.acquire_lock(
-                cronjob_id=MAVVRIK_EXPORT_USAGE_DATA_JOB_NAME
-            ):
-                try:
-                    await self._run_pipeline()
-                finally:
-                    await pod_lock_manager.release_lock(
-                        cronjob_id=MAVVRIK_EXPORT_USAGE_DATA_JOB_NAME
-                    )
-            else:
-                verbose_logger.debug(
-                    "Orchestrator: pod lock not acquired — another pod is running"
-                )
-        else:
-            # Redis not available — no distributed locking possible.
-            # Run directly; single-node deployments don't need a pod lock.
+        # No Redis — run directly (single-node deployments don't need a pod lock).
+        if not pod_lock_manager or not pod_lock_manager.redis_cache:
             await self._run_pipeline()
+            return
+
+        if not await pod_lock_manager.acquire_lock(
+            cronjob_id=MAVVRIK_EXPORT_USAGE_DATA_JOB_NAME
+        ):
+            verbose_logger.debug(
+                "Orchestrator: pod lock not acquired — another pod is running"
+            )
+            return
+
+        try:
+            await self._run_pipeline()
+        finally:
+            await pod_lock_manager.release_lock(
+                cronjob_id=MAVVRIK_EXPORT_USAGE_DATA_JOB_NAME
+            )
 
     # ------------------------------------------------------------------
     # Pipeline
@@ -180,8 +181,6 @@ class Orchestrator:
           2. MIN(date) in LiteLLM_DailyUserSpend
           3. Yesterday as a last-resort fallback
         """
-        yesterday = self._yesterday
-
         requested_start: Optional[date] = None
         if MAVVRIK_LOOKBACK_START_DATE is not None:
             try:
@@ -206,23 +205,24 @@ class Orchestrator:
             verbose_logger.info(
                 "Orchestrator: no marker found, starting from %s", start_date
             )
-        elif requested_start is not None:
-            start_date = requested_start
+            return start_date
+
+        if requested_start is not None:
             verbose_logger.info(
                 "Orchestrator: no marker found, starting from "
                 "MAVVRIK_LOOKBACK_START_DATE %s",
-                start_date,
+                requested_start,
             )
-        elif earliest_db is not None:
-            start_date = earliest_db
+            return requested_start
+
+        if earliest_db is not None:
             verbose_logger.info(
                 "Orchestrator: no marker found, starting from earliest DB date %s",
-                start_date,
+                earliest_db,
             )
-        else:
-            start_date = yesterday
+            return earliest_db
 
-        return start_date
+        return self._yesterday
 
     # ------------------------------------------------------------------
     # Infrastructure helpers
