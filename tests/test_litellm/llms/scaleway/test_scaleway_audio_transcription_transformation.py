@@ -154,6 +154,7 @@ def test_scaleway_transform_request_drops_unsupported_params():
 
 def test_scaleway_transform_response_parses_text():
     mock_response = MagicMock(spec=httpx.Response)
+    mock_response.headers = {"content-type": "application/json"}
     mock_response.json.return_value = {"text": "Four score and seven years ago"}
 
     response = (
@@ -168,6 +169,7 @@ def test_scaleway_transform_response_parses_text():
 
 def test_scaleway_transform_response_preserves_segments_and_language():
     mock_response = MagicMock(spec=httpx.Response)
+    mock_response.headers = {"content-type": "application/json"}
     mock_response.json.return_value = {
         "text": "hello world",
         "language": "en",
@@ -193,11 +195,46 @@ def test_scaleway_transform_response_raises_typed_exception_on_non_json():
     error handlers downstream can classify it as a Scaleway failure."""
     mock_response = MagicMock(spec=httpx.Response)
     mock_response.json.side_effect = ValueError("not json")
+    mock_response.headers = {"content-type": "application/json"}
     mock_response.text = "upstream 502 bad gateway"
     mock_response.status_code = 502
-    mock_response.headers = {}
 
     with pytest.raises(ScalewayAudioTranscriptionException):
         ScalewayAudioTranscriptionConfig().transform_audio_transcription_response(
             mock_response
         )
+
+
+def test_scaleway_transform_response_returns_plain_text_for_non_json_content_type():
+    """When Scaleway responds with text/srt/vtt (response_format="text" etc.),
+    the content-type is not application/json — return the body as plain text
+    rather than exploding on .json()."""
+    mock_response = MagicMock(spec=httpx.Response)
+    mock_response.headers = {"content-type": "text/plain; charset=utf-8"}
+    mock_response.text = "Four score and seven years ago"
+
+    response = (
+        ScalewayAudioTranscriptionConfig().transform_audio_transcription_response(
+            mock_response
+        )
+    )
+
+    assert isinstance(response, TranscriptionResponse)
+    assert response.text == "Four score and seven years ago"
+
+
+def test_scaleway_validate_environment_raises_when_no_key(monkeypatch):
+    """Missing credential should fail fast with a typed exception rather than
+    silently emitting 'Bearer None'."""
+    monkeypatch.delenv("SCW_SECRET_KEY", raising=False)
+
+    with pytest.raises(ScalewayAudioTranscriptionException) as excinfo:
+        ScalewayAudioTranscriptionConfig().validate_environment(
+            headers={},
+            model="whisper-large-v3",
+            messages=[],
+            optional_params={},
+            litellm_params={},
+        )
+
+    assert "SCW_SECRET_KEY" in str(excinfo.value)
