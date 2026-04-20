@@ -52,7 +52,3 @@ build/
 *.log
 .env
 .env.local
-
-# UI source tree is not needed for the non_root image — the built output lives in
-# litellm/proxy/_experimental/out/ and is copied directly.
-ui/

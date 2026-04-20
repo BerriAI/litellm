@@ -56,7 +56,7 @@ COPY . .
 ENV LITELLM_NON_ROOT=true
 
 # Stage the pre-built Admin UI from the checked-in Next.js static export.
-# The UI Drift Guard CI workflow keeps _experimental/out/ in sync with ui/litellm-dashboard/ source.
+# _experimental/out/ is regenerated as part of the release runbook.
 # Restructure extensionless routes (foo.html -> foo/index.html) to match the layout
 # proxy_server.py expects, and drop a readiness marker.
 RUN mkdir -p /var/lib/litellm/ui /var/lib/litellm/assets && \
