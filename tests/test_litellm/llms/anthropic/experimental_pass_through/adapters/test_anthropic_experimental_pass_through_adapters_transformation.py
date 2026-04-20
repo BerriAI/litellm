@@ -573,7 +573,7 @@ def test_translate_openai_content_to_anthropic_thinking_and_redacted_thinking():
     assert result[1]["data"] == "REDACTED"
 
 
-def test_translate_streaming_openai_chunk_to_anthropic_with_thinking():
+def test_translate_streaming_openai_chunk_to_anthropic_with_signature():
     choices = [
         StreamingChoices(
             finish_reason=None,
