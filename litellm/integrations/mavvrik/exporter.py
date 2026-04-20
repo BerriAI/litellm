@@ -42,6 +42,11 @@ class MavvrikExporter(CustomLogger):
         self._api_key = api_key or os.getenv("MAVVRIK_API_KEY")
         self._api_endpoint = api_endpoint or os.getenv("MAVVRIK_API_ENDPOINT", "")
         self._connection_id = connection_id or os.getenv("MAVVRIK_CONNECTION_ID", "")
+        self._mavvrik_client = MavvrikClient(
+            api_key=self._api_key or "",
+            api_endpoint=self._api_endpoint or "",
+            connection_id=self._connection_id or "",
+        )
 
         verbose_logger.debug(
             "MavvrikExporter initialised: endpoint=%s connection_id=%s",
@@ -69,15 +74,6 @@ class MavvrikExporter(CustomLogger):
     def is_valid(self) -> bool:
         """True when all required config fields are present."""
         return bool(self._api_key and self._api_endpoint and self._connection_id)
-
-    @property
-    def _client(self) -> MavvrikClient:
-        """Build and return a MavvrikClient instance."""
-        return MavvrikClient(
-            api_key=self._api_key or "",
-            api_endpoint=self._api_endpoint or "",
-            connection_id=self._connection_id or "",
-        )
 
     # ------------------------------------------------------------------
     # Core export
@@ -113,20 +109,24 @@ class MavvrikExporter(CustomLogger):
             "MavvrikExporter: %d rows fetched, transforming…", len(df)
         )
 
-        transformer = MavvrikTransformer()
-        csv_payload = transformer.to_csv(df, connection_id=self._connection_id)
+        # Apply the same filter as MavvrikTransformer so record count matches
+        # what is actually uploaded (successful_requests > 0).
+        if "successful_requests" in df.columns:
+            df = df.filter(pl.col("successful_requests") > 0)
 
-        if not csv_payload:
+        if df.is_empty():
             verbose_logger.debug(
-                "MavvrikExporter: 0 rows after transform for %s, skipping upload",
+                "MavvrikExporter: 0 rows after filter for %s, skipping upload",
                 date_str,
             )
             return 0
 
-        # Count rows actually exported (post-filter, matches what was uploaded).
-        records_exported = csv_payload.count("\n") - 1  # subtract header row
+        records_exported = len(df)
 
-        client = self._client
+        transformer = MavvrikTransformer()
+        csv_payload = transformer.to_csv(df, connection_id=self._connection_id)
+
+        client = self._mavvrik_client
         await client.upload(csv_payload, date_str=date_str)
 
         verbose_logger.info(

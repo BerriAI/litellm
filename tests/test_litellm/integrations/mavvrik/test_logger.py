@@ -156,12 +156,12 @@ class TestExportUsageData:
         mock_client = MagicMock()
         mock_client.upload = AsyncMock()
 
+        # _mavvrik_client is built in __init__, so patch the instance attribute directly.
+        exporter._mavvrik_client = mock_client
+
         with patch(
             "litellm.integrations.mavvrik.exporter.MavvrikDatabase",
             return_value=mock_db,
-        ), patch(
-            "litellm.integrations.mavvrik.exporter.MavvrikClient",
-            return_value=mock_client,
         ):
             count = await exporter.export_usage_data(date_str="2026-04-10")
 

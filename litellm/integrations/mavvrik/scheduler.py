@@ -131,18 +131,17 @@ class MavvrikScheduler:
 
         # Remove any existing MavvrikExporter instances to avoid accumulating
         # duplicates on repeated /mavvrik/init calls.
-        for cb_attr in (
-            "success_callbacks",
-            "failure_callbacks",
-            "async_success_callbacks",
+        # Callbacks live on module-level lists (litellm.success_callback etc.),
+        # not on LoggingCallbackManager — use remove_callbacks_by_type directly.
+        for cb_list in (
+            litellm.success_callback,
+            litellm.failure_callback,
+            litellm._async_success_callback,
+            litellm._async_failure_callback,
         ):
-            cb_list = getattr(litellm.logging_callback_manager, cb_attr, None)
-            if cb_list is not None:
-                setattr(
-                    litellm.logging_callback_manager,
-                    cb_attr,
-                    [cb for cb in cb_list if not isinstance(cb, _Exporter)],
-                )
+            litellm.logging_callback_manager.remove_callbacks_by_type(
+                cb_list, _Exporter
+            )
 
         mavvrik_exporter = _Exporter(
             api_key=api_key,

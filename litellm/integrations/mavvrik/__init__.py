@@ -298,12 +298,15 @@ class MavvrikService:
         from litellm.integrations.mavvrik.exporter import MavvrikExporter
 
         data = await self._settings.load()
+        if not data and not self._settings.has_env_vars:
+            raise ValueError("Mavvrik not configured. Call POST /mavvrik/init first.")
+
         date_str = date_str or self._yesterday()
 
         exporter = MavvrikExporter(
-            api_key=data.get("api_key"),
-            api_endpoint=data.get("api_endpoint"),
-            connection_id=data.get("connection_id"),
+            api_key=data.get("api_key") if data else None,
+            api_endpoint=data.get("api_endpoint") if data else None,
+            connection_id=data.get("connection_id") if data else None,
         )
         result = await exporter.dry_run(date_str=date_str, limit=limit)
         return {

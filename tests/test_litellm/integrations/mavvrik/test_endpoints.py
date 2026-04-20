@@ -515,21 +515,21 @@ class TestRegisterModule:
         mock_scheduler = MagicMock()
         mock_scheduler.add_job = MagicMock()
 
-        # Simulate an existing exporter already registered from a previous /mavvrik/init
-        existing_exporter = MagicMock(spec=MavvrikExporter)
-        success_cbs = [existing_exporter]
-        async_success_cbs = [existing_exporter]
+        # Simulate an existing exporter already registered from a previous /mavvrik/init.
+        # Callbacks live on module-level lists (litellm.success_callback etc.),
+        # not on LoggingCallbackManager attributes — patch them directly on the
+        # real litellm module so remove_callbacks_by_type and add_* work correctly.
+        import litellm as _litellm
 
-        mock_litellm = MagicMock()
-        mock_litellm.logging_callback_manager.success_callbacks = success_cbs
-        mock_litellm.logging_callback_manager.failure_callbacks = []
-        mock_litellm.logging_callback_manager.async_success_callbacks = (
-            async_success_cbs
+        existing_exporter = MavvrikExporter(
+            api_key="old_key",
+            api_endpoint="https://api.mavvrik.dev/acme",
+            connection_id="old",
         )
-        mock_litellm.success_callback = []
-        mock_litellm._async_success_callback = []
+        original_async_cbs = _litellm._async_success_callback[:]
+        _litellm._async_success_callback.append(existing_exporter)
 
-        with patch("litellm.integrations.mavvrik.scheduler.litellm", mock_litellm):
+        try:
             await MavvrikScheduler.register_exporter_and_job(
                 api_key="new_key",
                 api_endpoint="https://api.mavvrik.dev/acme",
@@ -537,15 +537,14 @@ class TestRegisterModule:
                 scheduler=mock_scheduler,
             )
 
-        # The existing MavvrikExporter instance should have been removed
-        assert (
-            existing_exporter
-            not in mock_litellm.logging_callback_manager.success_callbacks
-        )
-        assert (
-            existing_exporter
-            not in mock_litellm.logging_callback_manager.async_success_callbacks
-        )
-        # A new exporter was added (the MavvrikExporter instance added by register_exporter_and_job)
-        mock_litellm.logging_callback_manager.add_litellm_success_callback.assert_called_once()
-        mock_scheduler.add_job.assert_called_once()
+            # The old exporter should have been removed; only one (new) exporter present.
+            mavvrik_exporters = [
+                cb for cb in _litellm._async_success_callback
+                if isinstance(cb, MavvrikExporter)
+            ]
+            assert existing_exporter not in _litellm._async_success_callback
+            assert len(mavvrik_exporters) == 1
+            mock_scheduler.add_job.assert_called_once()
+        finally:
+            # Restore original callback list state.
+            _litellm._async_success_callback[:] = original_async_cbs

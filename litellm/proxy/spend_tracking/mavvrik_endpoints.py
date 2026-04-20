@@ -66,7 +66,7 @@ async def _mavvrik_errors() -> AsyncIterator[None]:
         raise HTTPException(status_code=404, detail={"error": str(exc)}) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail={"error": str(exc)}) from exc
-    except (RuntimeError, Exception) as exc:
+    except Exception as exc:
         raise HTTPException(status_code=500, detail={"error": str(exc)}) from exc
 
 
