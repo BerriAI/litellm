@@ -1,13 +1,12 @@
 """Mavvrik cost-data integration for LiteLLM.
 
 Module layout:
-  exporter.py      — MavvrikExporter (CustomLogger subclass, core export pipeline)
+  uploader.py      — MavvrikUploader (fetch → transform → upload pipeline)
   client.py        — MavvrikClient (3-step signed URL upload + register/advance_marker)
   database.py      — MavvrikDatabase (DB queries)
   transform.py     — MavvrikTransformer (DataFrame → CSV)
   settings.py      — MavvrikSettings (config detection and persistence)
-  orchestrator.py  — MavvrikOrchestrator (register → date loop → export → advance)
-  scheduler.py     — MavvrikScheduler (APScheduler registration + pod lock)
+  orchestrator.py  — MavvrikOrchestrator (pod lock + register → date loop → upload → advance)
 
 Public facade:
   MavvrikService — used by mavvrik_endpoints.py; all business logic lives here.
@@ -19,7 +18,6 @@ from typing import Optional
 
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.mavvrik.settings import MavvrikSettings
-from litellm.integrations.mavvrik.scheduler import MavvrikScheduler
 
 
 class MavvrikService:
@@ -74,24 +72,47 @@ class MavvrikService:
         Returns:
             {"message": str, "status": "success"}
         """
-        # Step 1 — persist credentials (no marker stored locally).
+        # Step 1 — persist credentials.
         await self._settings.save(
             api_key=api_key,
             api_endpoint=api_endpoint,
             connection_id=connection_id,
         )
 
-        # Step 3 — schedule the background export job.
+        # Step 2 — schedule the background export job.
         try:
+            from litellm.constants import (
+                MAVVRIK_EXPORT_INTERVAL_MINUTES,
+                MAVVRIK_EXPORT_USAGE_DATA_JOB_NAME,
+            )
+            from litellm.integrations.mavvrik.orchestrator import MavvrikOrchestrator
+            from litellm.integrations.mavvrik.uploader import MavvrikUploader
+
             import litellm.proxy.proxy_server as _pserver
 
             _scheduler = getattr(_pserver, "scheduler", None)
-            await MavvrikScheduler.register_exporter_and_job(
-                api_key=api_key,
-                api_endpoint=api_endpoint,
-                connection_id=connection_id,
-                scheduler=_scheduler,
-            )
+            if _scheduler is not None:
+                uploader = MavvrikUploader(
+                    api_key=api_key,
+                    api_endpoint=api_endpoint,
+                    connection_id=connection_id,
+                )
+                orchestrator = MavvrikOrchestrator(uploader=uploader)
+                _scheduler.add_job(
+                    orchestrator.run,
+                    "interval",
+                    minutes=MAVVRIK_EXPORT_INTERVAL_MINUTES,
+                    id=MAVVRIK_EXPORT_USAGE_DATA_JOB_NAME,
+                    replace_existing=True,
+                )
+                verbose_proxy_logger.info(
+                    "Mavvrik background export job scheduled every %d min",
+                    MAVVRIK_EXPORT_INTERVAL_MINUTES,
+                )
+            else:
+                verbose_proxy_logger.warning(
+                    "Mavvrik: scheduler not available, background job not registered"
+                )
         except Exception as sched_exc:
             verbose_proxy_logger.warning(
                 "Mavvrik: could not register background job after init (%s)", sched_exc
@@ -186,7 +207,9 @@ class MavvrikService:
         }
         missing = [k for k, v in merged.items() if not v]
         if missing:
-            raise ValueError(f"Missing required Mavvrik settings after merge: {missing}")
+            raise ValueError(
+                f"Missing required Mavvrik settings after merge: {missing}"
+            )
 
         await self._settings.save(**merged)
         return {"message": "Mavvrik settings updated successfully", "status": "success"}
@@ -238,7 +261,7 @@ class MavvrikService:
         date_str: Optional[str] = None,
         limit: Optional[int] = None,
     ) -> dict:
-        """Export spend data for a calendar date to Mavvrik.
+        """Upload spend data for a calendar date to Mavvrik.
 
         Args:
             date_str: YYYY-MM-DD.  Defaults to yesterday (UTC) when omitted.
@@ -250,7 +273,7 @@ class MavvrikService:
         Returns:
             {"message": str, "status": "success", "records_exported": int}
         """
-        from litellm.integrations.mavvrik.exporter import MavvrikExporter
+        from litellm.integrations.mavvrik.uploader import MavvrikUploader
 
         data = await self._settings.load()
 
@@ -260,14 +283,12 @@ class MavvrikService:
 
         date_str = date_str or self._yesterday()
 
-        # MavvrikExporter already falls back to MAVVRIK_* env vars when
-        # constructor args are None/empty, so pass None for missing DB fields.
-        exporter = MavvrikExporter(
+        uploader = MavvrikUploader(
             api_key=data.get("api_key") if data else None,
             api_endpoint=data.get("api_endpoint") if data else None,
             connection_id=data.get("connection_id") if data else None,
         )
-        records_exported = await exporter.export_usage_data(
+        records_exported = await uploader.upload_usage_data(
             date_str=date_str,
             limit=limit,
         )
@@ -295,7 +316,7 @@ class MavvrikService:
         Returns:
             {"message": str, "status": "success", "dry_run_data": dict, "summary": dict}
         """
-        from litellm.integrations.mavvrik.exporter import MavvrikExporter
+        from litellm.integrations.mavvrik.uploader import MavvrikUploader
 
         data = await self._settings.load()
         if not data and not self._settings.has_env_vars:
@@ -303,12 +324,12 @@ class MavvrikService:
 
         date_str = date_str or self._yesterday()
 
-        exporter = MavvrikExporter(
+        uploader = MavvrikUploader(
             api_key=data.get("api_key") if data else None,
             api_endpoint=data.get("api_endpoint") if data else None,
             connection_id=data.get("connection_id") if data else None,
         )
-        result = await exporter.dry_run(date_str=date_str, limit=limit)
+        result = await uploader.dry_run(date_str=date_str, limit=limit)
         return {
             "message": "Mavvrik dry run completed",
             "status": "success",

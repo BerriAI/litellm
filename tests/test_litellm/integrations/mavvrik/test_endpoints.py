@@ -96,10 +96,8 @@ class TestInitMavvrikSettings:
         assert resp.status == "success"
 
     @pytest.mark.asyncio
-    async def test_init_falls_back_to_first_of_month_when_register_fails(self):
-        """When MavvrikClient.register() fails, MavvrikService still succeeds
-        (the first-of-month fallback happens inside initialize())."""
-        from litellm.integrations.mavvrik.client import MavvrikClient
+    async def test_init_succeeds_even_when_scheduler_unavailable(self):
+        """MavvrikService.initialize() succeeds even if scheduler is not available."""
         from litellm.integrations.mavvrik.settings import MavvrikSettings
 
         req = MavvrikInitRequest(
@@ -108,13 +106,8 @@ class TestInitMavvrikSettings:
             connection_id="litellm-prod",
         )
 
-        with patch.object(
-            MavvrikClient,
-            "register",
-            new=AsyncMock(side_effect=Exception("network error")),
-        ), patch.object(MavvrikSettings, "save", new=AsyncMock()), patch(
-            "litellm.integrations.mavvrik.MavvrikScheduler.register_exporter_and_job",
-            new=AsyncMock(),
+        with patch.object(MavvrikSettings, "save", new=AsyncMock()), patch(
+            "litellm.proxy.proxy_server.scheduler", None
         ):
             resp = await init_mavvrik_settings(req, user_api_key_dict=_admin_user())
 
@@ -419,54 +412,11 @@ class TestLifecycleFlow:
 
 
 # ---------------------------------------------------------------------------
-# MavvrikScheduler — scheduler registration (replaces register.py)
+# MavvrikSettings — setup detection
 # ---------------------------------------------------------------------------
 
 
-class TestRegisterModule:
-    @pytest.mark.asyncio
-    async def test_register_exporter_and_job_adds_scheduler_job(self):
-        """register_exporter_and_job schedules the export job when scheduler is present."""
-        from litellm.integrations.mavvrik.scheduler import MavvrikScheduler
-
-        mock_scheduler = MagicMock()
-        mock_scheduler.add_job = MagicMock()
-
-        with patch("litellm.integrations.mavvrik.scheduler.litellm") as mock_litellm:
-            mock_litellm.logging_callback_manager = MagicMock()
-            mock_litellm.success_callback = []
-            mock_litellm._async_success_callback = []
-
-            await MavvrikScheduler.register_exporter_and_job(
-                api_key="mav_key",
-                api_endpoint="https://api.mavvrik.dev/acme",
-                connection_id="prod",
-                scheduler=mock_scheduler,
-            )
-
-        mock_scheduler.add_job.assert_called_once()
-        # APScheduler add_job is called with positional + keyword args;
-        # verify "interval" appears somewhere in the call
-        call_args = mock_scheduler.add_job.call_args
-        all_args = list(call_args.args) + list(call_args.kwargs.values())
-        assert "interval" in all_args
-
-    @pytest.mark.asyncio
-    async def test_register_job_skips_when_no_loggers(self):
-        """register_job does nothing if no MavvrikExporter instance exists."""
-        from litellm.integrations.mavvrik.scheduler import MavvrikScheduler
-
-        mock_scheduler = MagicMock()
-        mock_scheduler.add_job = MagicMock()
-
-        with patch("litellm.integrations.mavvrik.scheduler.litellm") as mock_litellm:
-            mock_litellm.logging_callback_manager.get_custom_loggers_for_type = (
-                MagicMock(return_value=[])
-            )
-            MavvrikScheduler.register_job(scheduler=mock_scheduler)
-
-        mock_scheduler.add_job.assert_not_called()
-
+class TestSettingsSetup:
     @pytest.mark.asyncio
     async def test_is_mavvrik_setup_true_when_env_vars_set(self):
         """MavvrikSettings.is_setup returns True when all env vars are present."""
@@ -505,46 +455,3 @@ class TestRegisterModule:
                 result = await MavvrikSettings().is_setup()
 
         assert result is False
-
-    @pytest.mark.asyncio
-    async def test_register_exporter_and_job_deduplicates_on_repeated_init(self):
-        """Calling register_exporter_and_job twice must not accumulate two exporters."""
-        from litellm.integrations.mavvrik.exporter import MavvrikExporter
-        from litellm.integrations.mavvrik.scheduler import MavvrikScheduler
-
-        mock_scheduler = MagicMock()
-        mock_scheduler.add_job = MagicMock()
-
-        # Simulate an existing exporter already registered from a previous /mavvrik/init.
-        # Callbacks live on module-level lists (litellm.success_callback etc.),
-        # not on LoggingCallbackManager attributes — patch them directly on the
-        # real litellm module so remove_callbacks_by_type and add_* work correctly.
-        import litellm as _litellm
-
-        existing_exporter = MavvrikExporter(
-            api_key="old_key",
-            api_endpoint="https://api.mavvrik.dev/acme",
-            connection_id="old",
-        )
-        original_async_cbs = _litellm._async_success_callback[:]
-        _litellm._async_success_callback.append(existing_exporter)
-
-        try:
-            await MavvrikScheduler.register_exporter_and_job(
-                api_key="new_key",
-                api_endpoint="https://api.mavvrik.dev/acme",
-                connection_id="prod",
-                scheduler=mock_scheduler,
-            )
-
-            # The old exporter should have been removed; only one (new) exporter present.
-            mavvrik_exporters = [
-                cb for cb in _litellm._async_success_callback
-                if isinstance(cb, MavvrikExporter)
-            ]
-            assert existing_exporter not in _litellm._async_success_callback
-            assert len(mavvrik_exporters) == 1
-            mock_scheduler.add_job.assert_called_once()
-        finally:
-            # Restore original callback list state.
-            _litellm._async_success_callback[:] = original_async_cbs

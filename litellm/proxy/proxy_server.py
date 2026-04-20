@@ -6575,11 +6575,24 @@ class ProxyStartupEvent:
         ########################################################
         # Mavvrik Background Job
         ########################################################
-        from litellm.integrations.mavvrik.scheduler import MavvrikScheduler
+        from litellm.constants import (
+            MAVVRIK_EXPORT_INTERVAL_MINUTES,
+            MAVVRIK_EXPORT_USAGE_DATA_JOB_NAME,
+        )
+        from litellm.integrations.mavvrik.orchestrator import MavvrikOrchestrator
         from litellm.integrations.mavvrik.settings import MavvrikSettings as _MavvrikSettings
+        from litellm.integrations.mavvrik.uploader import MavvrikUploader
 
         if await _MavvrikSettings().is_setup():
-            MavvrikScheduler.register_job(scheduler=scheduler)
+            _mavvrik_uploader = MavvrikUploader()
+            _mavvrik_orchestrator = MavvrikOrchestrator(uploader=_mavvrik_uploader)
+            scheduler.add_job(
+                _mavvrik_orchestrator.run,
+                "interval",
+                minutes=MAVVRIK_EXPORT_INTERVAL_MINUTES,
+                id=MAVVRIK_EXPORT_USAGE_DATA_JOB_NAME,
+                replace_existing=True,
+            )
 
         ########################################################
         # Prometheus Background Job

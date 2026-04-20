@@ -1,10 +1,10 @@
-"""MavvrikExporter — CustomLogger subclass for the Mavvrik cost-data integration.
+"""MavvrikUploader — fetch, transform, and upload spend data to Mavvrik.
 
-Export flow (called externally by scheduler or proxy endpoints):
+Upload flow (called by MavvrikOrchestrator or manual endpoints):
 
   1. Query MavvrikDatabase for rows on a given date.
-  2. Transform rows to CSV via MavvrikTransformer.
-  3. GZIP-compress the CSV in memory.
+  2. Filter rows with successful_requests > 0.
+  3. Transform rows to CSV via MavvrikTransformer.
   4. Upload via MavvrikClient (3-step signed URL upload).
 
 Environment variables (fallback when DB settings are absent):
@@ -16,29 +16,26 @@ Environment variables (fallback when DB settings are absent):
 import os
 from datetime import timedelta, timezone
 from datetime import datetime as _dt
-from typing import Any, Optional
+from typing import Optional
 
 import polars as pl
 
 from litellm._logging import verbose_logger
 from litellm.constants import MAVVRIK_MAX_FETCHED_DATA_RECORDS
-from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.mavvrik.client import MavvrikClient
 from litellm.integrations.mavvrik.database import MavvrikDatabase
 from litellm.integrations.mavvrik.transform import MavvrikTransformer
 
 
-class MavvrikExporter(CustomLogger):
-    """Export LiteLLM spend data to Mavvrik via signed URL uploads."""
+class MavvrikUploader:
+    """Fetch LiteLLM spend data, transform to CSV, and upload to Mavvrik."""
 
     def __init__(
         self,
         api_key: Optional[str] = None,
         api_endpoint: Optional[str] = None,
         connection_id: Optional[str] = None,
-        **kwargs: Any,
     ):
-        super().__init__(**kwargs)
         self._api_key = api_key or os.getenv("MAVVRIK_API_KEY")
         self._api_endpoint = api_endpoint or os.getenv("MAVVRIK_API_ENDPOINT", "")
         self._connection_id = connection_id or os.getenv("MAVVRIK_CONNECTION_ID", "")
@@ -49,7 +46,7 @@ class MavvrikExporter(CustomLogger):
         )
 
         verbose_logger.debug(
-            "MavvrikExporter initialised: endpoint=%s connection_id=%s",
+            "MavvrikUploader initialised: endpoint=%s connection_id=%s",
             self._api_endpoint,
             self._connection_id,
         )
@@ -76,10 +73,10 @@ class MavvrikExporter(CustomLogger):
         return bool(self._api_key and self._api_endpoint and self._connection_id)
 
     # ------------------------------------------------------------------
-    # Core export
+    # Core upload
     # ------------------------------------------------------------------
 
-    async def export_usage_data(
+    async def upload_usage_data(
         self,
         date_str: str,
         limit: Optional[int] = None,
@@ -87,55 +84,51 @@ class MavvrikExporter(CustomLogger):
         """Query → transform → upload for a single calendar date (YYYY-MM-DD).
 
         Re-uploading the same date overwrites the previous upload — idempotent.
-        Called by the scheduler and the manual /mavvrik/export endpoint.
+        Called by the orchestrator and the manual /mavvrik/export endpoint.
 
         Returns:
-            Number of records exported (0 if no data).
+            Number of records uploaded (0 if no data).
         """
         self._validate_config()
 
-        verbose_logger.debug("MavvrikExporter: exporting date %s", date_str)
+        verbose_logger.debug("MavvrikUploader: uploading date %s", date_str)
 
         db = MavvrikDatabase()
         df = await db.get_usage_data(date_str=date_str, limit=limit)
 
         if df.is_empty():
             verbose_logger.debug(
-                "MavvrikExporter: no spend data for %s, nothing to upload", date_str
+                "MavvrikUploader: no spend data for %s, nothing to upload", date_str
             )
             return 0
 
-        verbose_logger.debug(
-            "MavvrikExporter: %d rows fetched, transforming…", len(df)
-        )
+        verbose_logger.debug("MavvrikUploader: %d rows fetched, transforming…", len(df))
 
-        # Apply the same filter as MavvrikTransformer so record count matches
-        # what is actually uploaded (successful_requests > 0).
+        # Filter to match what MavvrikTransformer produces.
         if "successful_requests" in df.columns:
             df = df.filter(pl.col("successful_requests") > 0)
 
         if df.is_empty():
             verbose_logger.debug(
-                "MavvrikExporter: 0 rows after filter for %s, skipping upload",
+                "MavvrikUploader: 0 rows after filter for %s, skipping upload",
                 date_str,
             )
             return 0
 
-        records_exported = len(df)
+        records_uploaded = len(df)
 
         transformer = MavvrikTransformer()
         csv_payload = transformer.to_csv(df, connection_id=self._connection_id)
 
-        client = self._mavvrik_client
-        await client.upload(csv_payload, date_str=date_str)
+        await self._mavvrik_client.upload(csv_payload, date_str=date_str)
 
         verbose_logger.info(
-            "MavvrikExporter: uploaded %d records (%d CSV bytes) for date %s",
-            records_exported,
+            "MavvrikUploader: uploaded %d records (%d CSV bytes) for date %s",
+            records_uploaded,
             len(csv_payload),
             date_str,
         )
-        return records_exported
+        return records_uploaded
 
     # ------------------------------------------------------------------
     # Dry run (preview without uploading)
@@ -148,9 +141,7 @@ class MavvrikExporter(CustomLogger):
     ) -> dict:
         """Return transformed records as dicts without uploading — for /mavvrik/dry-run."""
         if not date_str:
-            date_str = (
-                _dt.now(timezone.utc).date() - timedelta(days=1)
-            ).isoformat()
+            date_str = (_dt.now(timezone.utc).date() - timedelta(days=1)).isoformat()
 
         db = MavvrikDatabase()
         df = await db.get_usage_data(
@@ -217,6 +208,6 @@ class MavvrikExporter(CustomLogger):
         ]
         if missing:
             raise ValueError(
-                f"MavvrikExporter: missing required config fields: {missing}. "
+                f"MavvrikUploader: missing required config fields: {missing}. "
                 "Set via /mavvrik/init or MAVVRIK_* environment variables."
             )

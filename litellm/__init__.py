@@ -146,7 +146,6 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "cloudzero",
     "focus",
     "vantage",
-    "mavvrik",
     "posthog",
     "levo",
 ]

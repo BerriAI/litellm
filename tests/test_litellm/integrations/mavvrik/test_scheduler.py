@@ -9,22 +9,22 @@ import pytest
 
 sys.path.insert(0, os.path.abspath("../../../.."))
 
-from litellm.integrations.mavvrik.exporter import MavvrikExporter
+from litellm.integrations.mavvrik.uploader import MavvrikUploader
 from litellm.integrations.mavvrik.orchestrator import MavvrikOrchestrator
 
 
-def _make_exporter(**kwargs) -> MavvrikExporter:
+def _make_uploader(**kwargs) -> MavvrikUploader:
     defaults = dict(
         api_key="mav_key",
         api_endpoint="https://api.mavvrik.dev/acme",
         connection_id="litellm-test",
     )
     defaults.update(kwargs)
-    return MavvrikExporter(**defaults)
+    return MavvrikUploader(**defaults)
 
 
 def _make_orchestrator(**kwargs) -> MavvrikOrchestrator:
-    return MavvrikOrchestrator(exporter=_make_exporter(**kwargs))
+    return MavvrikOrchestrator(uploader=_make_uploader(**kwargs))
 
 
 # ---------------------------------------------------------------------------
@@ -88,7 +88,9 @@ class TestResolveFirstRunStartDate:
         with patch(
             "litellm.integrations.mavvrik.orchestrator.MAVVRIK_LOOKBACK_START_DATE",
             None,
-        ), patch.object(MavvrikOrchestrator, "_utc_today", return_value=date(2026, 4, 16)):
+        ), patch.object(
+            MavvrikOrchestrator, "_utc_today", return_value=date(2026, 4, 16)
+        ):
             result = await orc._resolve_first_run_start_date()
 
         assert result == date(2026, 4, 15)
@@ -110,19 +112,19 @@ class TestResolveFirstRunStartDate:
 
 
 # ---------------------------------------------------------------------------
-# run() / _export_date_range()
+# run() / _run_pipeline()
 # ---------------------------------------------------------------------------
 
 
 class TestRunExportLoop:
     @pytest.mark.asyncio
-    async def test_exports_all_dates_since_marker(self):
-        """Exports each day from marker to yesterday (inclusive)."""
+    async def test_uploads_all_dates_since_marker(self):
+        """Uploads each day from marker to yesterday (inclusive)."""
         orc = _make_orchestrator()
-        exported_dates = []
+        uploaded_dates = []
 
-        async def fake_export(date_str, limit=None):  # noqa: ARG001
-            exported_dates.append(date_str)
+        async def fake_upload(date_str, limit=None):  # noqa: ARG001
+            uploaded_dates.append(date_str)
             return 7
 
         orc._client = MagicMock()
@@ -131,11 +133,15 @@ class TestRunExportLoop:
         orc._client.report_error = AsyncMock()
 
         with patch.object(
-            orc._exporter, "export_usage_data", side_effect=fake_export
-        ), patch.object(MavvrikOrchestrator, "_utc_today", return_value=date(2026, 4, 11)):
+            orc._uploader, "upload_usage_data", side_effect=fake_upload
+        ), patch.object(
+            MavvrikOrchestrator, "_utc_today", return_value=date(2026, 4, 11)
+        ), patch.object(
+            MavvrikOrchestrator, "_get_pod_lock_manager", return_value=None
+        ):
             await orc.run()
 
-        assert exported_dates == ["2026-04-09", "2026-04-10"]
+        assert uploaded_dates == ["2026-04-09", "2026-04-10"]
         assert orc._client.advance_marker.call_count == 2
 
     @pytest.mark.asyncio
@@ -145,7 +151,7 @@ class TestRunExportLoop:
 
         orc = _make_orchestrator()
 
-        async def fake_export(date_str, limit=None):  # noqa: ARG001
+        async def fake_upload(date_str, limit=None):  # noqa: ARG001
             return 3
 
         orc._client = MagicMock()
@@ -154,18 +160,20 @@ class TestRunExportLoop:
         orc._client.report_error = AsyncMock()
 
         with patch.object(
-            orc._exporter, "export_usage_data", side_effect=fake_export
-        ), patch.object(MavvrikOrchestrator, "_utc_today", return_value=date(2026, 4, 10)):
+            orc._uploader, "upload_usage_data", side_effect=fake_upload
+        ), patch.object(
+            MavvrikOrchestrator, "_utc_today", return_value=date(2026, 4, 10)
+        ), patch.object(
+            MavvrikOrchestrator, "_get_pod_lock_manager", return_value=None
+        ):
             await orc.run()
 
-        expected_epoch = int(
-            datetime(2026, 4, 10, tzinfo=timezone.utc).timestamp()
-        )
+        expected_epoch = int(datetime(2026, 4, 10, tzinfo=timezone.utc).timestamp())
         orc._client.advance_marker.assert_called_once_with(expected_epoch)
 
     @pytest.mark.asyncio
     async def test_does_nothing_when_marker_up_to_date(self):
-        """No exports when marker is already at today (nothing to export)."""
+        """No uploads when marker is already at today (nothing to upload)."""
         orc = _make_orchestrator()
 
         orc._client = MagicMock()
@@ -173,22 +181,26 @@ class TestRunExportLoop:
         orc._client.advance_marker = AsyncMock()
         orc._client.report_error = AsyncMock()
 
-        with patch.object(orc._exporter, "export_usage_data") as mock_export, patch.object(
+        with patch.object(
+            orc._uploader, "upload_usage_data"
+        ) as mock_upload, patch.object(
             MavvrikOrchestrator, "_utc_today", return_value=date(2026, 4, 11)
+        ), patch.object(
+            MavvrikOrchestrator, "_get_pod_lock_manager", return_value=None
         ):
             await orc.run()
 
-        mock_export.assert_not_called()
+        mock_upload.assert_not_called()
         orc._client.advance_marker.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_first_run_uses_earliest_db_date(self):
         """First run with register() failure starts from MIN(date) in DB."""
         orc = _make_orchestrator()
-        exported_dates = []
+        uploaded_dates = []
 
-        async def fake_export(date_str, limit=None):  # noqa: ARG001
-            exported_dates.append(date_str)
+        async def fake_upload(date_str, limit=None):  # noqa: ARG001
+            uploaded_dates.append(date_str)
             return 3
 
         orc._client = MagicMock()
@@ -199,10 +211,15 @@ class TestRunExportLoop:
         orc._db.get_earliest_date = AsyncMock(return_value="2026-04-09")
 
         with patch.object(
-            orc._exporter, "export_usage_data", side_effect=fake_export
+            orc._uploader, "upload_usage_data", side_effect=fake_upload
         ), patch(
-            "litellm.integrations.mavvrik.orchestrator.MAVVRIK_LOOKBACK_START_DATE", None
-        ), patch.object(MavvrikOrchestrator, "_utc_today", return_value=date(2026, 4, 11)):
+            "litellm.integrations.mavvrik.orchestrator.MAVVRIK_LOOKBACK_START_DATE",
+            None,
+        ), patch.object(
+            MavvrikOrchestrator, "_utc_today", return_value=date(2026, 4, 11)
+        ), patch.object(
+            MavvrikOrchestrator, "_get_pod_lock_manager", return_value=None
+        ):
             await orc.run()
 
-        assert exported_dates == ["2026-04-09", "2026-04-10"]
+        assert uploaded_dates == ["2026-04-09", "2026-04-10"]

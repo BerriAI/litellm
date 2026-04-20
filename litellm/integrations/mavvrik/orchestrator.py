@@ -1,27 +1,25 @@
-"""MavvrikOrchestrator — export pipeline: register → date loop → upload → advance.
+"""MavvrikOrchestrator — export pipeline: register → fetch → upload → advance.
 
 Owns all business orchestration for the Mavvrik export:
-  - Retrieving the current marker from the Mavvrik API via client.register()
-  - Resolving the first-run start date (env var / earliest DB date / yesterday)
-  - Iterating over complete calendar days from the marker to yesterday
-  - Exporting each day via MavvrikExporter.export_usage_data()
-  - Advancing the remote marker to the next day after each successful upload
+  - Acquiring/releasing the pod lock (Redis-backed, multi-pod safe)
+  - Registering with the Mavvrik API and resolving the export start date
+  - Fetching usage data from the local database
+  - Uploading the data to Mavvrik via signed URL
+  - Advancing the remote marker after each successful upload
   - Reporting errors to Mavvrik for visibility
-
-Infrastructure concerns (pod lock, APScheduler registration) live in
-MavvrikScheduler, which delegates to this class.
 
 Marker semantics:
   metricsMarker returned by register() is the START of the window to export,
-  not the last exported date. After exporting a date, advance_marker() is
+  not the last exported date. After uploading a date, advance_marker() is
   called with (export_date + 1 day) so the next run starts from there.
 """
 
 from datetime import date, datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, Iterator, Optional
 
-from litellm._logging import verbose_logger
+from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm.constants import (
+    MAVVRIK_EXPORT_USAGE_DATA_JOB_NAME,
     MAVVRIK_LOOKBACK_START_DATE,
     MAVVRIK_MAX_FETCHED_DATA_RECORDS,
 )
@@ -29,20 +27,25 @@ from litellm.integrations.mavvrik.client import MavvrikClient
 from litellm.integrations.mavvrik.database import MavvrikDatabase
 
 if TYPE_CHECKING:
-    from litellm.integrations.mavvrik.exporter import MavvrikExporter
+    from litellm.integrations.mavvrik.uploader import MavvrikUploader
 else:
-    MavvrikExporter = Any
+    MavvrikUploader = Any
 
 
 class MavvrikOrchestrator:
-    """Pipeline orchestrator that drives the incremental Mavvrik export loop."""
+    """Pipeline orchestrator that drives the incremental Mavvrik export loop.
 
-    def __init__(self, exporter: "MavvrikExporter") -> None:
-        self._exporter = exporter
+    The run() method reads as a high-level pipeline:
+
+        pod lock  →  register  →  for each date:  upload  →  advance marker
+    """
+
+    def __init__(self, uploader: "MavvrikUploader") -> None:
+        self._uploader = uploader
         self._client = MavvrikClient(
-            api_key=exporter.api_key or "",
-            api_endpoint=exporter.api_endpoint or "",
-            connection_id=exporter.connection_id or "",
+            api_key=uploader.api_key or "",
+            api_endpoint=uploader.api_endpoint or "",
+            connection_id=uploader.connection_id or "",
         )
         self._db = MavvrikDatabase()
 
@@ -59,36 +62,86 @@ class MavvrikOrchestrator:
     def _yesterday(self) -> date:
         return self._utc_today() - timedelta(days=1)
 
+    def _date_range(self, start: date) -> Iterator[date]:
+        """Yield each date from start to yesterday (inclusive)."""
+        current = start
+        yesterday = self._yesterday
+        while current <= yesterday:
+            yield current
+            current += timedelta(days=1)
+
+    @staticmethod
+    def _to_epoch(d: date) -> int:
+        """Convert a date to a UTC epoch timestamp (midnight)."""
+        return int(datetime(d.year, d.month, d.day, tzinfo=timezone.utc).timestamp())
+
     # ------------------------------------------------------------------
-    # Main entry point (called by MavvrikScheduler after acquiring lock)
+    # Main entry point (called by APScheduler)
     # ------------------------------------------------------------------
 
     async def run(self) -> None:
-        """Export every complete calendar day starting from the Mavvrik marker.
+        """Acquire the pod lock, then execute the full export pipeline.
 
-        Single outer try/catch — any failure is reported to Mavvrik and logged.
+        Pipeline:
+          1. Register with Mavvrik → resolve start date
+          2. For each date from start to yesterday:
+             a. Upload usage data (fetch → transform → upload)
+             b. Advance the remote marker
         """
+        pod_lock_manager = self._get_pod_lock_manager()
+
+        if pod_lock_manager and pod_lock_manager.redis_cache:
+            if await pod_lock_manager.acquire_lock(
+                cronjob_id=MAVVRIK_EXPORT_USAGE_DATA_JOB_NAME
+            ):
+                try:
+                    await self._run_pipeline()
+                finally:
+                    await pod_lock_manager.release_lock(
+                        cronjob_id=MAVVRIK_EXPORT_USAGE_DATA_JOB_NAME
+                    )
+            else:
+                verbose_logger.debug(
+                    "MavvrikOrchestrator: pod lock not acquired — another pod is running"
+                )
+        else:
+            # Redis not available — no distributed locking possible.
+            # Run directly; single-node deployments don't need a pod lock.
+            await self._run_pipeline()
+
+    # ------------------------------------------------------------------
+    # Pipeline
+    # ------------------------------------------------------------------
+
+    async def _run_pipeline(self) -> None:
+        """Execute the export pipeline (called after pod lock is acquired)."""
         try:
-            start_date = await self._get_start_date()
+            start_date = await self._register()
+
             if start_date > self._yesterday:
                 verbose_logger.debug(
                     "MavvrikOrchestrator: up to date, nothing to export"
                 )
                 return
-            await self._export_date_range(start_date)
+
+            for export_date in self._date_range(start_date):
+                await self._upload_date(export_date)
+                await self._advance_marker(export_date)
+
         except Exception as exc:
             verbose_logger.error("MavvrikOrchestrator: run failed: %s", exc)
             await self._client.report_error(str(exc)[:500])
 
     # ------------------------------------------------------------------
-    # Private helpers
+    # Pipeline steps
     # ------------------------------------------------------------------
 
-    async def _get_start_date(self) -> date:
-        """Return the start date for this export run.
+    async def _register(self) -> date:
+        """Step 1: Register with Mavvrik and return the export start date.
 
-        Calls register() to get the metricsMarker from Mavvrik (source of truth).
-        Falls back to first-run resolution if register() fails or returns None.
+        Calls client.register() to get the metricsMarker (source of truth).
+        Falls back to first-run resolution if register() fails or returns
+        None (brand-new connection, no marker yet).
         """
         marker_str: Optional[str] = None
         try:
@@ -96,7 +149,8 @@ class MavvrikOrchestrator:
             verbose_logger.debug("MavvrikOrchestrator: Mavvrik marker = %s", marker_str)
         except Exception as exc:
             verbose_logger.warning(
-                "MavvrikOrchestrator: register() failed, falling back to first-run start date: %s",
+                "MavvrikOrchestrator: register() failed, "
+                "falling back to first-run start date: %s",
                 exc,
             )
 
@@ -105,34 +159,28 @@ class MavvrikOrchestrator:
 
         return await self._resolve_first_run_start_date()
 
-    async def _export_date_range(self, start_date: date) -> None:
-        """Export each calendar day from start_date to yesterday (inclusive).
+    async def _upload_date(self, export_date: date) -> None:
+        """Step 2: Fetch usage data, transform to CSV, and upload to Mavvrik."""
+        date_str = export_date.isoformat()
+        verbose_logger.info("MavvrikOrchestrator: uploading date %s", date_str)
 
-        After each successful upload, advances the Mavvrik marker to
-        (export_date + 1 day) so the next run picks up from there.
+        await self._uploader.upload_usage_data(
+            date_str=date_str,
+            limit=MAVVRIK_MAX_FETCHED_DATA_RECORDS,
+        )
+
+    async def _advance_marker(self, exported_date: date) -> None:
+        """Step 3: Advance the Mavvrik marker to the next day.
+
+        metricsMarker is the start of the next export window, so we set it
+        to (exported_date + 1 day).
         """
-        export_date = start_date
-        while export_date <= self._yesterday:
-            date_str = export_date.isoformat()
-            verbose_logger.info("MavvrikOrchestrator: exporting date %s", date_str)
+        next_date = exported_date + timedelta(days=1)
+        await self._client.advance_marker(self._to_epoch(next_date))
 
-            await self._exporter.export_usage_data(
-                date_str=date_str,
-                limit=MAVVRIK_MAX_FETCHED_DATA_RECORDS,
-            )
-
-            # metricsMarker is the start of the next export window.
-            next_date = export_date + timedelta(days=1)
-            next_epoch = int(
-                datetime(
-                    next_date.year,
-                    next_date.month,
-                    next_date.day,
-                    tzinfo=timezone.utc,
-                ).timestamp()
-            )
-            await self._client.advance_marker(next_epoch)
-            export_date = next_date
+    # ------------------------------------------------------------------
+    # First-run start date resolution
+    # ------------------------------------------------------------------
 
     async def _resolve_first_run_start_date(self) -> date:
         """Determine the export start date on the very first run (no Mavvrik marker yet).
@@ -185,3 +233,21 @@ class MavvrikOrchestrator:
             start_date = yesterday
 
         return start_date
+
+    # ------------------------------------------------------------------
+    # Infrastructure helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _get_pod_lock_manager():
+        """Return the pod lock manager from the proxy, or None if unavailable."""
+        try:
+            from litellm.proxy.proxy_server import proxy_logging_obj
+
+            if proxy_logging_obj is not None:
+                writer = getattr(proxy_logging_obj, "db_spend_update_writer", None)
+                if writer is not None:
+                    return getattr(writer, "pod_lock_manager", None)
+        except Exception:
+            pass
+        return None
