@@ -339,6 +339,13 @@ const sidebars = {
                 },
               ],
             },
+            {
+              type: "category",
+              label: "Skills Gateway",
+              items: [
+                "skills_gateway",
+              ],
+            },
           ],
         },
         {
@@ -1150,6 +1157,7 @@ const sidebars = {
       label: "Troubleshooting",
       items: [
         "troubleshoot/ui_issues",
+        "troubleshoot/cost_discrepancy",
         "mcp_troubleshoot",
         {
           type: "category",

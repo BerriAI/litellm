@@ -51,6 +51,7 @@ import litellm.litellm_core_utils
 
 # audio_utils.utils is lazy-loaded - only imported when needed for transcription calls
 import litellm.litellm_core_utils.json_validation_rule
+from litellm._internal_context import is_internal_call
 from litellm._lazy_imports import (
     _get_default_encoding,
     _get_modified_max_tokens,
@@ -213,9 +214,11 @@ _CALL_TYPE_ENUM_MAP: dict = {ct.value: ct for ct in CallTypes}
 
 try:
     # Python 3.9+
-    with resources.files("litellm.litellm_core_utils.tokenizers").joinpath(
-        "anthropic_tokenizer.json"
-    ).open("r", encoding="utf-8") as f:
+    with (
+        resources.files("litellm.litellm_core_utils.tokenizers")
+        .joinpath("anthropic_tokenizer.json")
+        .open("r", encoding="utf-8") as f
+    ):
         json_data = json.load(f)
 except (ImportError, AttributeError, TypeError):
     with resources.open_text(
@@ -1792,7 +1795,8 @@ def client(original_function):  # noqa: PLR0915
 
         model: Optional[str] = args[0] if len(args) > 0 else kwargs.get("model", None)
         is_completion_with_fallbacks = kwargs.get("fallbacks") is not None
-        _is_litellm_internal_call = kwargs.pop("_is_litellm_internal_call", False)
+        kwargs.pop("_is_litellm_internal_call", None)  # discard if injected
+        _is_litellm_internal_call = is_internal_call.get()
 
         try:
             if logging_obj is None:
@@ -4811,11 +4815,21 @@ def _apply_openai_param_overrides(
     If user passes in allowed_openai_params, apply them to optional_params
 
     These params will get passed as is to the LLM API since the user opted in to passing them in the request
+
+    Only params the caller actually sent are forwarded. Previously this
+    function unconditionally wrote `None` for any allowed param missing from
+    the request, which then reached the provider SDK as a top-level kwarg it
+    did not recognize (e.g. openai SDK raising
+    `AsyncCompletions.create() got an unexpected keyword argument 'enable_thinking'`).
+    See https://github.com/BerriAI/litellm/issues/25697
     """
     if allowed_openai_params:
         for param in allowed_openai_params:
-            if param not in optional_params:
-                optional_params[param] = non_default_params.pop(param, None)
+            if param in optional_params:
+                continue
+            if param not in non_default_params:
+                continue
+            optional_params[param] = non_default_params.pop(param)
     return optional_params
 
 
