@@ -9084,9 +9084,6 @@
         "cache_read_input_token_cost": 5e-07,
         "input_cost_per_token": 5e-06,
         "litellm_provider": "anthropic",
-        "aliases": [
-            "claude-opus-4-6-20250514"
-        ],
         "max_input_tokens": 1000000,
         "max_output_tokens": 128000,
         "max_tokens": 128000,
