@@ -183,7 +183,11 @@ def test_get_combined_thinking_content_preserves_interleaved_blocks():
         make_chunk(role="assistant", content=None),
         make_chunk(
             thinking_blocks=[
-                {"type": "thinking", "thinking": "Step 1 analysis...", "signature": None}
+                {
+                    "type": "thinking",
+                    "thinking": "Step 1 analysis...",
+                    "signature": None,
+                }
             ]
         ),
         make_chunk(
@@ -201,7 +205,11 @@ def test_get_combined_thinking_content_preserves_interleaved_blocks():
         ),
         make_chunk(
             thinking_blocks=[
-                {"type": "thinking", "thinking": "Step 2 analysis...", "signature": None}
+                {
+                    "type": "thinking",
+                    "thinking": "Step 2 analysis...",
+                    "signature": None,
+                }
             ]
         ),
         make_chunk(
@@ -402,7 +410,7 @@ def test_stream_chunk_builder_litellm_usage_chunks():
 def test_get_model_from_chunks_azure_model_router():
     """
     Test that _get_model_from_chunks finds the actual model from Azure Model Router chunks.
-    
+
     Azure Model Router returns the request model (e.g., 'azure-model-router') in the first chunk,
     but subsequent chunks contain the actual model (e.g., 'gpt-4.1-nano-2025-04-14').
     This is important for accurate cost calculation.
@@ -413,24 +421,24 @@ def test_get_model_from_chunks_azure_model_router():
         {"model": "gpt-4.1-nano-2025-04-14", "id": "chatcmpl-123", "choices": []},
         {"model": "gpt-4.1-nano-2025-04-14", "id": "chatcmpl-123", "choices": []},
     ]
-    
+
     result = ChunkProcessor._get_model_from_chunks(
         chunks=chunks, first_chunk_model="azure-model-router"
     )
-    
+
     # Should return the actual model, not the request model
     assert result == "gpt-4.1-nano-2025-04-14"
-    
+
     # Test when all chunks have the same model (non-router case)
     chunks_same_model = [
         {"model": "gpt-4", "id": "chatcmpl-456", "choices": []},
         {"model": "gpt-4", "id": "chatcmpl-456", "choices": []},
     ]
-    
+
     result_same = ChunkProcessor._get_model_from_chunks(
         chunks=chunks_same_model, first_chunk_model="gpt-4"
     )
-    
+
     # Should return the first chunk's model when all are the same
     assert result_same == "gpt-4"
 
@@ -511,8 +519,8 @@ def test_stream_chunk_builder_anthropic_web_search():
 
     assert usage.prompt_tokens == 50
     assert usage.completion_tokens == 27
-    assert usage.total_tokens == 77    
-    assert usage.server_tool_use['web_search_requests'] == 2
+    assert usage.total_tokens == 77
+    assert usage.server_tool_use["web_search_requests"] == 2
 
 
 def test_sort_chunks_handles_dict_hidden_params_created_at():
@@ -602,4 +610,6 @@ def test_stream_chunk_builder_dict_snapshot_preserves_hidden_provider_fields():
 
     response = stream_chunk_builder(chunks=[chunk_dict])
     assert response is not None
-    assert response._hidden_params["provider_specific_fields"]["traffic_type"] == "default"
+    assert (
+        response._hidden_params["provider_specific_fields"]["traffic_type"] == "default"
+    )

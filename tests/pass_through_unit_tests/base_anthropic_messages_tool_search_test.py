@@ -34,12 +34,12 @@ def get_deferred_tools() -> List[Dict[str, Any]]:
                 "properties": {
                     "location": {
                         "type": "string",
-                        "description": "The city and state, e.g. San Francisco, CA"
+                        "description": "The city and state, e.g. San Francisco, CA",
                     }
                 },
-                "required": ["location"]
+                "required": ["location"],
             },
-            "defer_loading": True
+            "defer_loading": True,
         },
         {
             "name": "get_stock_price",
@@ -49,12 +49,12 @@ def get_deferred_tools() -> List[Dict[str, Any]]:
                 "properties": {
                     "ticker": {
                         "type": "string",
-                        "description": "The stock ticker symbol, e.g. AAPL"
+                        "description": "The stock ticker symbol, e.g. AAPL",
                     }
                 },
-                "required": ["ticker"]
+                "required": ["ticker"],
             },
-            "defer_loading": True
+            "defer_loading": True,
         },
         {
             "name": "search_web",
@@ -62,51 +62,41 @@ def get_deferred_tools() -> List[Dict[str, Any]]:
             "input_schema": {
                 "type": "object",
                 "properties": {
-                    "query": {
-                        "type": "string",
-                        "description": "The search query"
-                    }
+                    "query": {"type": "string", "description": "The search query"}
                 },
-                "required": ["query"]
+                "required": ["query"],
             },
-            "defer_loading": True
+            "defer_loading": True,
         },
     ]
 
 
 def get_tool_search_tool_regex() -> Dict[str, Any]:
     """Returns the tool search tool using regex variant."""
-    return {
-        "type": "tool_search_tool_regex_20251119",
-        "name": "tool_search_tool_regex"
-    }
+    return {"type": "tool_search_tool_regex_20251119", "name": "tool_search_tool_regex"}
 
 
 def get_tool_search_tool_bm25() -> Dict[str, Any]:
     """Returns the tool search tool using BM25 variant."""
-    return {
-        "type": "tool_search_tool_bm25_20251119",
-        "name": "tool_search_tool_bm25"
-    }
+    return {"type": "tool_search_tool_bm25_20251119", "name": "tool_search_tool_bm25"}
 
 
 class BaseAnthropicMessagesToolSearchTest(ABC):
     """
     Base test class for tool search E2E tests across different providers.
-    
+
     Subclasses must implement:
     - get_model(): Returns the model string to use for tests
-    
+
     Tests pass the anthropic-beta header via extra_headers to validate
     that the header is correctly forwarded to downstream providers.
     """
-
 
     @abstractmethod
     def get_model(self) -> str:
         """
         Returns the model string to use for tests.
-        
+
         Examples:
         - "anthropic/claude-sonnet-4-20250514"
         - "vertex_ai/claude-sonnet-4@20250514"
@@ -133,20 +123,15 @@ class BaseAnthropicMessagesToolSearchTest(ABC):
     async def test_tool_search_basic_request(self):
         """
         E2E test: Basic tool search request should succeed.
-        
+
         This validates that the tool search beta header is being passed via
         extra_headers and forwarded correctly to the downstream provider.
         """
         litellm._turn_on_debug()
-        
+
         tools = self.get_tools_with_tool_search()
-        messages = [
-            {
-                "role": "user",
-                "content": "What's the weather in San Francisco?"
-            }
-        ]
-        
+        messages = [{"role": "user", "content": "What's the weather in San Francisco?"}]
+
         response = await litellm.anthropic.messages.acreate(
             model=self.get_model(),
             messages=messages,
@@ -154,13 +139,13 @@ class BaseAnthropicMessagesToolSearchTest(ABC):
             max_tokens=1024,
             extra_headers=self.get_extra_headers(),
         )
-        
+
         print(f"Response: {json.dumps(response, indent=2, default=str)}")
-        
+
         # Validate response structure
         assert "content" in response, "Response should contain content"
         assert "usage" in response, "Response should contain usage"
-        
+
         # The model should either respond with text or use a tool
         content = response.get("content", [])
         assert len(content) > 0, "Response should have content"
@@ -169,20 +154,20 @@ class BaseAnthropicMessagesToolSearchTest(ABC):
     async def test_tool_search_discovers_tool(self):
         """
         E2E test: Tool search should discover and use a deferred tool.
-        
+
         This validates that when the user asks about weather, the model
         discovers the get_weather tool via tool search and attempts to use it.
         """
         litellm._turn_on_debug()
-        
+
         tools = self.get_tools_with_tool_search()
         messages = [
             {
                 "role": "user",
-                "content": "I need to know the current weather in New York City. Please use the appropriate tool."
+                "content": "I need to know the current weather in New York City. Please use the appropriate tool.",
             }
         ]
-        
+
         response = await litellm.anthropic.messages.acreate(
             model=self.get_model(),
             messages=messages,
@@ -190,20 +175,22 @@ class BaseAnthropicMessagesToolSearchTest(ABC):
             max_tokens=1024,
             extra_headers=self.get_extra_headers(),
         )
-        
+
         print(f"Response: {json.dumps(response, indent=2, default=str)}")
-        
+
         content = response.get("content", [])
-        
+
         # Check if the model used tool_use (either tool_search or get_weather)
         tool_uses = [block for block in content if block.get("type") == "tool_use"]
-        
+
         print(f"Tool uses: {json.dumps(tool_uses, indent=2, default=str)}")
-        
+
         # The model should attempt to use tools when asked about weather
         # It might use tool_search first, or directly use get_weather if discovered
         if response.get("stop_reason") == "tool_use":
-            assert len(tool_uses) > 0, "Expected tool_use blocks when stop_reason is tool_use"
+            assert (
+                len(tool_uses) > 0
+            ), "Expected tool_use blocks when stop_reason is tool_use"
 
     @pytest.mark.asyncio
     @pytest.mark.flaky(retries=3, delay=5)
@@ -212,15 +199,10 @@ class BaseAnthropicMessagesToolSearchTest(ABC):
         E2E test: Tool search should work with streaming responses.
         """
         litellm._turn_on_debug()
-        
+
         tools = self.get_tools_with_tool_search()
-        messages = [
-            {
-                "role": "user",
-                "content": "What's the weather like in Tokyo?"
-            }
-        ]
-        
+        messages = [{"role": "user", "content": "What's the weather like in Tokyo?"}]
+
         response = await litellm.anthropic.messages.acreate(
             model=self.get_model(),
             messages=messages,
@@ -229,7 +211,7 @@ class BaseAnthropicMessagesToolSearchTest(ABC):
             stream=True,
             extra_headers=self.get_extra_headers(),
         )
-        
+
         # Collect all chunks
         chunks = []
         async for chunk in response:
@@ -240,16 +222,18 @@ class BaseAnthropicMessagesToolSearchTest(ABC):
                         try:
                             json_data = json.loads(line[6:])
                             chunks.append(json_data)
-                            print(f"Chunk: {json.dumps(json_data, indent=2, default=str)}")
+                            print(
+                                f"Chunk: {json.dumps(json_data, indent=2, default=str)}"
+                            )
                         except json.JSONDecodeError:
                             pass
             elif isinstance(chunk, dict):
                 chunks.append(chunk)
                 print(f"Chunk: {json.dumps(chunk, indent=2, default=str)}")
-        
+
         # Should have received chunks
         assert len(chunks) > 0, "Expected to receive streaming chunks"
-        
+
         # Should have message_start
         message_starts = [c for c in chunks if c.get("type") == "message_start"]
         assert len(message_starts) > 0, "Expected message_start in streaming response"
@@ -258,20 +242,17 @@ class BaseAnthropicMessagesToolSearchTest(ABC):
     async def test_tool_search_with_multiple_deferred_tools(self):
         """
         E2E test: Tool search should work with multiple deferred tools.
-        
+
         This validates that the model can discover the appropriate tool
         from a larger catalog of deferred tools.
         """
         litellm._turn_on_debug()
-        
+
         tools = self.get_tools_with_tool_search()
         messages = [
-            {
-                "role": "user",
-                "content": "What's the stock price of Apple (AAPL)?"
-            }
+            {"role": "user", "content": "What's the stock price of Apple (AAPL)?"}
         ]
-        
+
         response = await litellm.anthropic.messages.acreate(
             model=self.get_model(),
             messages=messages,
@@ -279,17 +260,16 @@ class BaseAnthropicMessagesToolSearchTest(ABC):
             max_tokens=1024,
             extra_headers=self.get_extra_headers(),
         )
-        
+
         print(f"Response: {json.dumps(response, indent=2, default=str)}")
-        
+
         # Validate response
         assert "content" in response, "Response should contain content"
-        
+
         content = response.get("content", [])
         tool_uses = [block for block in content if block.get("type") == "tool_use"]
-        
+
         # If the model decides to use a tool, it should be related to stocks
         if tool_uses:
             tool_names = [t.get("name") for t in tool_uses]
             print(f"Tools used: {tool_names}")
-

@@ -50,7 +50,7 @@ print("Testing proxy custom logger")
 
 @pytest.mark.skipif(
     os.environ.get("OPENAI_API_KEY") is None,
-    reason="OPENAI_API_KEY not set - skipping integration test"
+    reason="OPENAI_API_KEY not set - skipping integration test",
 )
 def test_embedding(client):
     try:
@@ -88,33 +88,39 @@ def test_embedding(client):
         )  # checks if kwargs passed to async_log_success_event are correct
         kwargs = my_custom_logger.async_embedding_kwargs
         litellm_params = kwargs.get("litellm_params")
-        
+
         # Test 1: Verify metadata is populated correctly
         metadata = litellm_params.get("metadata", None)
         print("\n\n Metadata in custom logger kwargs", litellm_params.get("metadata"))
         assert metadata is not None, "metadata should be present in litellm_params"
         assert "user_api_key" in metadata, "user_api_key should be in metadata"
         assert "headers" in metadata, "headers should be in metadata"
-        
+
         # Test 2: Verify proxy_server_request contains the original request details
         proxy_server_request = litellm_params.get("proxy_server_request")
         assert proxy_server_request is not None, "proxy_server_request should exist"
-        assert proxy_server_request.get("url") == "http://testserver/embeddings", "url should match"
+        assert (
+            proxy_server_request.get("url") == "http://testserver/embeddings"
+        ), "url should match"
         assert proxy_server_request.get("method") == "POST", "method should be POST"
         assert "headers" in proxy_server_request, "headers should be present"
         assert "body" in proxy_server_request, "body should be present"
-        
+
         # Test 3: Verify request body contains the original input data
         body = proxy_server_request["body"]
-        assert body.get("model") == "azure-embedding-model", "model should match original request"
+        assert (
+            body.get("model") == "azure-embedding-model"
+        ), "model should match original request"
         assert body.get("input") == ["hello"], "input should match original request"
-        
+
         # Test 4: Verify model_info is populated
         model_info = litellm_params.get("model_info")
         assert model_info is not None, "model_info should exist"
         assert model_info.get("mode") == "embedding", "mode should be embedding"
         assert model_info.get("id") == "hello", "id should match"
-        assert model_info.get("input_cost_per_token") == 0.002, "input cost should match"
+        assert (
+            model_info.get("input_cost_per_token") == 0.002
+        ), "input cost should match"
         result = response.json()
         print(f"Received response: {result}")
         print("Passed Embedding custom logger on proxy!")
@@ -124,7 +130,7 @@ def test_embedding(client):
 
 @pytest.mark.skipif(
     os.environ.get("OPENAI_API_KEY") is None,
-    reason="OPENAI_API_KEY not set - skipping integration test"
+    reason="OPENAI_API_KEY not set - skipping integration test",
 )
 def test_chat_completion(client):
     try:
@@ -179,35 +185,52 @@ def test_chat_completion(client):
             my_custom_logger.async_completion_kwargs,
         )
         litellm_params = my_custom_logger.async_completion_kwargs.get("litellm_params")
-        
+
         # Test 1: Verify metadata is populated correctly
         metadata = litellm_params.get("metadata", None)
         print("\n\n Metadata in custom logger kwargs", litellm_params.get("metadata"))
         assert metadata is not None, "metadata should be present"
         assert "user_api_key" in metadata, "user_api_key should be in metadata"
-        assert "user_api_key_metadata" in metadata, "user_api_key_metadata should be in metadata"
+        assert (
+            "user_api_key_metadata" in metadata
+        ), "user_api_key_metadata should be in metadata"
         assert "headers" in metadata, "headers should be in metadata"
-        
+
         # Test 2: Verify model_info is populated
         config_model_info = litellm_params.get("model_info")
         assert config_model_info is not None, "model_info should exist"
         assert config_model_info.get("id") == "gm", "model id should match"
         assert config_model_info.get("mode") == "chat", "mode should be chat"
-        assert config_model_info.get("input_cost_per_token") == 0.0002, "input cost should match"
-        
+        assert (
+            config_model_info.get("input_cost_per_token") == 0.0002
+        ), "input cost should match"
+
         # Test 3: Verify proxy_server_request contains request details
         proxy_server_request_object = litellm_params.get("proxy_server_request")
-        assert proxy_server_request_object is not None, "proxy_server_request should exist"
-        assert proxy_server_request_object.get("url") == "http://testserver/chat/completions", "url should match"
-        assert proxy_server_request_object.get("method") == "POST", "method should be POST"
-        
+        assert (
+            proxy_server_request_object is not None
+        ), "proxy_server_request should exist"
+        assert (
+            proxy_server_request_object.get("url")
+            == "http://testserver/chat/completions"
+        ), "url should match"
+        assert (
+            proxy_server_request_object.get("method") == "POST"
+        ), "method should be POST"
+
         # Test 4: Verify authorization is not leaked in logged headers
-        assert "authorization" not in proxy_server_request_object["headers"], "authorization should not be in headers"
-        
+        assert (
+            "authorization" not in proxy_server_request_object["headers"]
+        ), "authorization should not be in headers"
+
         # Test 5: Verify request body contains original input data
         body = proxy_server_request_object.get("body", {})
-        assert body.get("model") == "Azure OpenAI GPT-4 Canada", "model should match original request"
-        assert body.get("messages") == [{"role": "user", "content": "write a litellm poem"}], "messages should match"
+        assert (
+            body.get("model") == "Azure OpenAI GPT-4 Canada"
+        ), "model should match original request"
+        assert body.get("messages") == [
+            {"role": "user", "content": "write a litellm poem"}
+        ], "messages should match"
         assert body.get("max_tokens") == 10, "max_tokens should match"
         result = response.json()
         print(f"Received response: {result}")
@@ -218,7 +241,7 @@ def test_chat_completion(client):
 
 @pytest.mark.skipif(
     os.environ.get("OPENAI_API_KEY") is None,
-    reason="OPENAI_API_KEY not set - skipping integration test"
+    reason="OPENAI_API_KEY not set - skipping integration test",
 )
 def test_chat_completion_stream(client):
     try:
