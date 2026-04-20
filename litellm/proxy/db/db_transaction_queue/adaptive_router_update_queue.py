@@ -107,24 +107,11 @@ class AdaptiveRouterUpdateQueue:
             router, rt, model = key
             payload = batch[key]
             try:
-                existing = (
-                    await prisma_client.db.litellm_adaptiverouterstate.find_unique(
-                        where={
-                            "router_name_request_type_model_name": {
-                                "router_name": router,
-                                "request_type": rt,
-                                "model_name": model,
-                            }
-                        }
-                    )
-                )
-                new_alpha = (existing.alpha if existing else 0.0) + payload[
-                    "delta_alpha"
-                ]
-                new_beta = (existing.beta if existing else 0.0) + payload["delta_beta"]
-                new_samples = (existing.total_samples if existing else 0) + int(
-                    payload["samples_added"]
-                )
+                # Atomic increment: push the delta directly into the DB so
+                # concurrent flushers from multiple pods don't overwrite each
+                # other. The upsert creates the row with the delta as the
+                # initial value on first write, then increments on subsequent
+                # writes — no read-modify-write race.
                 await prisma_client.db.litellm_adaptiverouterstate.upsert(
                     where={
                         "router_name_request_type_model_name": {
@@ -138,14 +125,14 @@ class AdaptiveRouterUpdateQueue:
                             "router_name": router,
                             "request_type": rt,
                             "model_name": model,
-                            "alpha": new_alpha,
-                            "beta": new_beta,
-                            "total_samples": new_samples,
+                            "alpha": payload["delta_alpha"],
+                            "beta": payload["delta_beta"],
+                            "total_samples": int(payload["samples_added"]),
                         },
                         "update": {
-                            "alpha": new_alpha,
-                            "beta": new_beta,
-                            "total_samples": new_samples,
+                            "alpha": {"increment": payload["delta_alpha"]},
+                            "beta": {"increment": payload["delta_beta"]},
+                            "total_samples": {"increment": int(payload["samples_added"])},
                         },
                     },
                 )

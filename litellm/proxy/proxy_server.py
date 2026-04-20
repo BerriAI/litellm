@@ -952,8 +952,10 @@ async def proxy_startup_event(app: FastAPI):  # noqa: PLR0915
             _run_background_health_check()
         )  # start the background health check coroutine.
 
-    # Start adaptive-router queue flusher if any AdaptiveRouter is configured.
+    # Start adaptive-router queue flusher and load persisted state if any AdaptiveRouter is configured.
     if llm_router is not None and getattr(llm_router, "adaptive_routers", None):
+        for _ar in llm_router.adaptive_routers.values():
+            await _ar.load_state_from_db(prisma_client)
         asyncio.create_task(_adaptive_router_flusher_loop())
 
     ## [Optional] Initialize dd tracer

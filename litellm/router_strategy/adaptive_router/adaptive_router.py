@@ -297,7 +297,9 @@ class AdaptiveRouter:
         """Apply one turn, push session snapshot + bandit deltas to the queue."""
         state = self.get_or_create_session_state(session_id, model_name, request_type)
         delta = apply_turn(state, turn)
-        print("CALLS DELTA", delta)
+        verbose_router_logger.debug(
+            "AdaptiveRouter[%s]: record_turn delta=%s", self.router_name, delta
+        )
 
         snapshot = asdict(state)
         await self.queue.add_session_state(
@@ -305,7 +307,12 @@ class AdaptiveRouter:
         )
 
         d_alpha, d_beta = self._compute_bandit_delta(delta)
-        print("CALLS D_ALPHA", d_alpha)
+        verbose_router_logger.debug(
+            "AdaptiveRouter[%s]: bandit delta alpha=%.2f beta=%.2f",
+            self.router_name,
+            d_alpha,
+            d_beta,
+        )
         if d_alpha != 0 or d_beta != 0:
             # For non-GENERAL turns, attribute to the current-turn classification
             # so genuine mid-session topic shifts (e.g. code → math) update the
