@@ -18,12 +18,12 @@ Supported Providers (`cache_control` marker):
 - Databricks - Claude (`databricks/`)
 - DashScope / Qwen (`dashscope/`)
 - MiniMax (`minimax/`)
+- Z.ai / GLM (`zai/`)
 
 Provider Managed (automatic, no marker needed):
 - OpenAI (`openai/`)
 - DeepSeek (`deepseek/`)
 - xAI (`xai/`)
-- Z.ai / GLM (`zai/`)
 
 ## How it works
 
