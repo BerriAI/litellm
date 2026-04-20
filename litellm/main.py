@@ -7605,6 +7605,21 @@ def stream_chunk_builder(  # noqa: PLR0915
                     for key, value in fields.items():
                         if key not in combined_provider_fields:
                             combined_provider_fields[key] = value
+                        elif key == "server_side_tool_invocations" and isinstance(value, list):
+                            # Merge by id — matches _extract_server_side_tool_invocations behavior
+                            existing = {e.get("id"): e for e in combined_provider_fields[key]}
+                            for inv in value:
+                                inv_id = inv.get("id", "")
+                                if inv_id in existing:
+                                    for k, v in inv.items():
+                                        if v is not None and k not in existing[inv_id]:
+                                            existing[inv_id][k] = v
+                                else:
+                                    existing[inv_id] = dict(inv)
+                            combined_provider_fields[key] = list(existing.values())
+                        elif key == "thought_signatures" and isinstance(value, list):
+                            # Accumulate all thought signatures across chunks
+                            combined_provider_fields[key] = combined_provider_fields[key] + value
                         elif isinstance(value, list) and isinstance(
                             combined_provider_fields[key], list
                         ):
