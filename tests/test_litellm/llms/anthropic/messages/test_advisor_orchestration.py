@@ -79,6 +79,9 @@ def test_can_handle_edge_cases():
     with patch(
         "litellm.llms.anthropic.experimental_pass_through.messages.interceptors.advisor.resolve_proxy_model_alias_to_litellm_model",
         return_value="",
+    ), patch(
+        "litellm.llms.anthropic.experimental_pass_through.messages.interceptors.advisor.supports_native_advisor_tool",
+        return_value=True,
     ):
         assert h.can_handle([ADVISOR_TOOL], "openai")
         assert h.can_handle([ADVISOR_TOOL], "bedrock")
@@ -110,6 +113,9 @@ async def test_anthropic_native_interceptor_skipped():
     with patch(
         "litellm.llms.anthropic.experimental_pass_through.messages.interceptors.advisor.resolve_proxy_model_alias_to_litellm_model",
         return_value="",
+    ), patch(
+        "litellm.llms.anthropic.experimental_pass_through.messages.interceptors.advisor.supports_native_advisor_tool",
+        return_value=True,
     ):
         assert not h.can_handle(
             [ADVISOR_TOOL], "anthropic"
