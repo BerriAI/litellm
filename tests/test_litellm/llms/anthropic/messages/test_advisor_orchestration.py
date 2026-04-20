@@ -74,16 +74,21 @@ def test_can_handle_edge_cases():
     )
 
     h = AdvisorOrchestrationHandler()
-
-    assert h.can_handle([ADVISOR_TOOL], "openai")
-    assert h.can_handle([ADVISOR_TOOL], "bedrock")
-    assert h.can_handle([ADVISOR_TOOL], "gemini")
-    assert not h.can_handle([ADVISOR_TOOL], "anthropic")
-    assert not h.can_handle([], "openai")
-    assert not h.can_handle(None, "openai")
-    assert not h.can_handle([{"type": "function", "name": "bash"}], "openai")
-    # provider=None: unknown → should intercept (treat as non-native)
-    assert h.can_handle([ADVISOR_TOOL], None)
+    # Ensure this edge-case test is deterministic regardless of any proxy-level
+    # model_group_alias configured by other tests.
+    with patch(
+        "litellm.llms.anthropic.experimental_pass_through.messages.interceptors.advisor.resolve_proxy_model_alias_to_litellm_model",
+        return_value="",
+    ):
+        assert h.can_handle([ADVISOR_TOOL], "openai")
+        assert h.can_handle([ADVISOR_TOOL], "bedrock")
+        assert h.can_handle([ADVISOR_TOOL], "gemini")
+        assert not h.can_handle([ADVISOR_TOOL], "anthropic")
+        assert not h.can_handle([], "openai")
+        assert not h.can_handle(None, "openai")
+        assert not h.can_handle([{"type": "function", "name": "bash"}], "openai")
+        # provider=None: unknown → should intercept (treat as non-native)
+        assert h.can_handle([ADVISOR_TOOL], None)
 
 
 # ---------------------------------------------------------------------------
@@ -102,9 +107,13 @@ async def test_anthropic_native_interceptor_skipped():
     )
 
     h = AdvisorOrchestrationHandler()
-    assert not h.can_handle(
-        [ADVISOR_TOOL], "anthropic"
-    ), "Interceptor must NOT trigger for anthropic provider"
+    with patch(
+        "litellm.llms.anthropic.experimental_pass_through.messages.interceptors.advisor.resolve_proxy_model_alias_to_litellm_model",
+        return_value="",
+    ):
+        assert not h.can_handle(
+            [ADVISOR_TOOL], "anthropic"
+        ), "Interceptor must NOT trigger for anthropic provider"
 
 
 # ---------------------------------------------------------------------------
