@@ -73,7 +73,7 @@ class AdvisorOrchestrationHandler(MessagesInterceptor):
             return False
         return True
 
-    async def handle(
+    async def handle(  # noqa: PLR0915
         self,
         *,
         model: str,
