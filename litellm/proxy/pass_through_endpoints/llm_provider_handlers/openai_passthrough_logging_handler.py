@@ -369,7 +369,10 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
             # Extract user information for tracking
             passthrough_logging_payload: Optional[
                 PassthroughStandardLoggingPayload
-            ] = kwargs.get("passthrough_logging_payload")
+            ] = (
+                kwargs.get("passthrough_logging_payload")
+                or logging_obj.model_call_details.get("passthrough_logging_payload")
+            )
             if passthrough_logging_payload:
                 user = handler_instance._get_user_from_metadata(
                     passthrough_logging_payload=passthrough_logging_payload,

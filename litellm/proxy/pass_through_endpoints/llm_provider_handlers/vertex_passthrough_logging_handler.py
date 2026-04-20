@@ -554,7 +554,9 @@ class VertexPassthroughLoggingHandler:
 
         from litellm.proxy.pass_through_endpoints.llm_provider_handlers.base_passthrough_logging_handler import BasePassthroughLoggingHandler  # noqa: PLC0415
         BasePassthroughLoggingHandler._apply_spend_logs_metadata(
-            kwargs, kwargs.get("passthrough_logging_payload")
+            kwargs,
+            kwargs.get("passthrough_logging_payload")
+            or logging_obj.model_call_details.get("passthrough_logging_payload"),
         )
 
         # pretty print standard logging object

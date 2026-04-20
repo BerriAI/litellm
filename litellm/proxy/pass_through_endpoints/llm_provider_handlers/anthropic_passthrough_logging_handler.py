@@ -147,6 +147,7 @@ class AnthropicPassthroughLoggingHandler:
             kwargs["model"] = model
             passthrough_logging_payload: Optional[PassthroughStandardLoggingPayload] = (  # type: ignore
                 kwargs.get("passthrough_logging_payload")
+                or logging_obj.model_call_details.get("passthrough_logging_payload")
             )
             if passthrough_logging_payload:
                 user = AnthropicPassthroughLoggingHandler._get_user_from_metadata(
