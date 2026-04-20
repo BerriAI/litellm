@@ -367,19 +367,20 @@ class ComplexityRouter(CustomLogger):
                         call_type = ct
                         break
 
-        if call_type is None:
-            return None
+        # 2. Fallback: try each mapped handler until one produces messages
+        handlers_to_try: List[Any] = []
+        if call_type is not None and call_type in mappings:
+            handlers_to_try.append(mappings[call_type]())
+        else:
+            handlers_to_try.extend(handler_cls() for handler_cls in mappings.values())
 
-        if call_type not in mappings:
-            return None
-
-        handler = mappings[call_type]()
-        structured = handler.get_structured_messages(request_kwargs)
-        if structured:
-            return [
-                msg if isinstance(msg, dict) else msg.model_dump()  # type: ignore
-                for msg in structured
-            ]
+        for handler in handlers_to_try:
+            structured = handler.get_structured_messages(request_kwargs)
+            if structured:
+                return [
+                    msg if isinstance(msg, dict) else msg.model_dump()  # type: ignore
+                    for msg in structured
+                ]
         return None
 
     @staticmethod
