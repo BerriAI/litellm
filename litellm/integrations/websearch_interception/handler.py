@@ -847,7 +847,9 @@ class WebSearchInterceptionLogger(CustomLogger):
         kwargs_for_followup = self._prepare_followup_kwargs(kwargs)
 
         if logging_obj is not None:
-            agentic_params = logging_obj.model_call_details.get("agentic_loop_params", {})
+            agentic_params = logging_obj.model_call_details.get(
+                "agentic_loop_params", {}
+            )
             full_model_name = agentic_params.get("model", model)
         verbose_logger.debug(
             "WebSearchInterception: Built anthropic request patch "
