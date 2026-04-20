@@ -54,7 +54,9 @@ class MockLiteLLMVerificationToken:
             return results
         return results[:take]
 
-    async def update(self, where: Dict[str, Any], data: Dict[str, Any]) -> Dict[str, Any]:
+    async def update(
+        self, where: Dict[str, Any], data: Dict[str, Any]
+    ) -> Dict[str, Any]:
         self.update_calls.append({"where": where, "data": data})
         return {"count": 1}
 
@@ -92,7 +94,9 @@ class MockLiteLLMTeamTable:
             return results
         return results[:take]
 
-    async def update(self, where: Dict[str, Any], data: Dict[str, Any]) -> Dict[str, Any]:
+    async def update(
+        self, where: Dict[str, Any], data: Dict[str, Any]
+    ) -> Dict[str, Any]:
         self.update_calls.append({"where": where, "data": data})
         return {"count": 1}
 
@@ -722,12 +726,13 @@ def test_reset_budget_windows_filters_null_budget_limits_in_python(
         [team_with_windows, team_without_windows]
     )
 
-    with patch(
-        "litellm.proxy.proxy_server.spend_counter_cache", new=MagicMock()
-    ), patch.object(
-        ResetBudgetJob,
-        "_reset_expired_window",
-        new=AsyncMock(return_value=True),
+    with (
+        patch("litellm.proxy.proxy_server.spend_counter_cache", new=MagicMock()),
+        patch.object(
+            ResetBudgetJob,
+            "_reset_expired_window",
+            new=AsyncMock(return_value=True),
+        ),
     ):
         asyncio.run(reset_budget_job.reset_budget_windows())
 
@@ -797,7 +802,9 @@ def test_reset_budget_windows_paginates_large_tables(
     ]
 
 
-def test_iter_budget_window_rows_uses_cursor_pagination(reset_budget_job, mock_prisma_client):
+def test_iter_budget_window_rows_uses_cursor_pagination(
+    reset_budget_job, mock_prisma_client
+):
     reset_budget_job._RESET_BUDGET_WINDOWS_BATCH_SIZE = 2
 
     keys = [
@@ -857,17 +864,19 @@ def test_reset_budget_windows_updates_items_across_cursor_pages(
     mock_prisma_client.db.litellm_verificationtoken.set_find_many_results(keys)
     mock_prisma_client.db.litellm_teamtable.set_find_many_results(teams)
 
-    with patch(
-        "litellm.proxy.proxy_server.spend_counter_cache", new=MagicMock()
-    ), patch.object(
-        ResetBudgetJob,
-        "_reset_expired_window",
-        new=AsyncMock(return_value=True),
+    with (
+        patch("litellm.proxy.proxy_server.spend_counter_cache", new=MagicMock()),
+        patch.object(
+            ResetBudgetJob,
+            "_reset_expired_window",
+            new=AsyncMock(return_value=True),
+        ),
     ):
         asyncio.run(reset_budget_job.reset_budget_windows())
 
     assert [
-        call["where"] for call in mock_prisma_client.db.litellm_verificationtoken.update_calls
+        call["where"]
+        for call in mock_prisma_client.db.litellm_verificationtoken.update_calls
     ] == [{"token": "sk-0"}, {"token": "sk-1"}]
     assert [
         call["where"] for call in mock_prisma_client.db.litellm_teamtable.update_calls
@@ -954,9 +963,9 @@ def test_reset_budget_resets_endusers_with_null_budget_id(
 
     # Both end users should have been reset
     updated = mock_prisma_client.updated_data["enduser"]
-    assert len(updated) == 2, (
-        f"Expected 2 endusers reset (1 explicit + 1 implicit), got {len(updated)}"
-    )
+    assert (
+        len(updated) == 2
+    ), f"Expected 2 endusers reset (1 explicit + 1 implicit), got {len(updated)}"
 
     user_ids = {u.user_id for u in updated}
     assert "enduser-explicit" in user_ids
