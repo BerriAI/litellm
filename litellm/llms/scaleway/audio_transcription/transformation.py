@@ -87,6 +87,16 @@ class ScalewayAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         if api_key is None:
             api_key = get_secret_str("SCW_SECRET_KEY")
 
+        if not api_key:
+            raise ScalewayAudioTranscriptionException(
+                message=(
+                    "Scaleway API key not found. Pass `api_key=...` or set the "
+                    "SCW_SECRET_KEY environment variable."
+                ),
+                status_code=401,
+                headers={},
+            )
+
         default_headers = {
             "Authorization": f"Bearer {api_key}",
             "accept": "application/json",
@@ -123,6 +133,10 @@ class ScalewayAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         self,
         raw_response: httpx.Response,
     ) -> TranscriptionResponse:
+        content_type = (raw_response.headers.get("content-type") or "").lower()
+        if "application/json" not in content_type:
+            return TranscriptionResponse(text=raw_response.text)
+
         try:
             response_json = raw_response.json()
         except Exception:
