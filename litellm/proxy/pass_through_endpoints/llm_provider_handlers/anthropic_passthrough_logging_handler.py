@@ -19,6 +19,8 @@ from litellm.types.passthrough_endpoints.pass_through_endpoints import (
 )
 from litellm.types.utils import LiteLLMBatch, ModelResponse, TextCompletionResponse
 
+from .base_passthrough_logging_handler import BasePassthroughLoggingHandler
+
 if TYPE_CHECKING:
     from litellm.types.passthrough_endpoints.pass_through_endpoints import EndpointType
 
@@ -157,6 +159,10 @@ class AnthropicPassthroughLoggingHandler:
                         {"proxy_server_request": {"body": {"user": user}}}
                     )
 
+                BasePassthroughLoggingHandler._apply_spend_logs_metadata(
+                    kwargs, passthrough_logging_payload
+                )
+
             # pretty print standard logging object
             verbose_proxy_logger.debug(
                 "kwargs= %s",
@@ -224,7 +230,9 @@ class AnthropicPassthroughLoggingHandler:
         kwargs = AnthropicPassthroughLoggingHandler._create_anthropic_response_logging_payload(
             litellm_model_response=complete_streaming_response,
             model=model,
-            kwargs={},
+            kwargs=BasePassthroughLoggingHandler._seed_streaming_kwargs_from_logging_obj(
+                litellm_logging_obj
+            ),
             start_time=start_time,
             end_time=end_time,
             logging_obj=litellm_logging_obj,

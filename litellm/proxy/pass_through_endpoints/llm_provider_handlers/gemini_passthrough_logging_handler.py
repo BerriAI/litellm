@@ -17,6 +17,8 @@ from litellm.types.utils import (
     TextCompletionResponse,
 )
 
+from .base_passthrough_logging_handler import BasePassthroughLoggingHandler
+
 if TYPE_CHECKING:
     from litellm.types.passthrough_endpoints.pass_through_endpoints import EndpointType
 
@@ -139,7 +141,11 @@ class GeminiPassthroughLoggingHandler:
         - Creates standard logging object
         - Logs in litellm callbacks
         """
-        kwargs: Dict[str, Any] = {}
+        kwargs: Dict[str, Any] = (
+            BasePassthroughLoggingHandler._seed_streaming_kwargs_from_logging_obj(
+                litellm_logging_obj
+            )
+        )
         model = model or GeminiPassthroughLoggingHandler.extract_model_from_url(
             url_route
         )
@@ -241,6 +247,10 @@ class GeminiPassthroughLoggingHandler:
         kwargs["response_cost"] = response_cost
         kwargs["model"] = model
         kwargs["custom_llm_provider"] = custom_llm_provider
+
+        BasePassthroughLoggingHandler._apply_spend_logs_metadata(
+            kwargs, kwargs.get("passthrough_logging_payload")
+        )
 
         # pretty print standard logging object
         verbose_proxy_logger.debug("kwargs= %s", kwargs)

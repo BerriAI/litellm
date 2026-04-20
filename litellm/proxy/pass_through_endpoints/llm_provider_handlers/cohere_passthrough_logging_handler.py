@@ -142,6 +142,10 @@ class CoherePassthroughLoggingHandler(BasePassthroughLoggingHandler):
                             {"proxy_server_request": {"body": {"user": user}}}
                         )
 
+                    BasePassthroughLoggingHandler._apply_spend_logs_metadata(
+                        kwargs, passthrough_logging_payload
+                    )
+
                 # Create standard logging object
                 if litellm_model_response is not None:
                     get_standard_logging_object_payload(

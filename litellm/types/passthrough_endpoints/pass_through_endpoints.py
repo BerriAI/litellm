@@ -46,3 +46,12 @@ class PassthroughStandardLoggingPayload(TypedDict, total=False):
 
     Optional field, we use this for cost tracking only if it's set.
     """
+
+    spend_logs_metadata: Optional[dict]
+    """
+    Parsed `x-litellm-spend-logs-metadata` request header, if present.
+
+    Propagated into `StandardLoggingPayload.metadata.spend_logs_metadata` so
+    pass-through traffic surfaces the same per-call metadata (e.g. `task`,
+    `issue`) that OpenAI-compatible endpoints already emit.
+    """
