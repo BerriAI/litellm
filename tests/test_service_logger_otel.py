@@ -8,11 +8,7 @@ from unittest.mock import patch, AsyncMock, MagicMock
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
 
 import litellm
-from litellm.integrations.langfuse.langfuse_otel import (
-    LANGFUSE_OTEL_INGESTION_VERSION,
-    LANGFUSE_OTEL_INGESTION_VERSION_HEADER,
-    LangfuseOtelLogger,
-)
+from litellm.integrations.langfuse.langfuse_otel import LangfuseOtelLogger
 from litellm.integrations.opentelemetry import OpenTelemetry
 from litellm.types.services import ServiceTypes
 from litellm._service_logger import ServiceLogging
@@ -124,8 +120,8 @@ class TestServiceLoggerOTEL(unittest.IsolatedAsyncioTestCase):
         headers = OpenTelemetry._get_headers_dictionary(logger.config.headers)
 
         self.assertEqual(
-            headers[LANGFUSE_OTEL_INGESTION_VERSION_HEADER],
-            LANGFUSE_OTEL_INGESTION_VERSION,
+            headers["x-langfuse-ingestion-version"],
+            "4",
         )
         self.assertTrue(headers["Authorization"].startswith("Basic "))
 
@@ -146,8 +142,8 @@ class TestServiceLoggerOTEL(unittest.IsolatedAsyncioTestCase):
 
         self.assertIsNotNone(headers)
         self.assertEqual(
-            headers[LANGFUSE_OTEL_INGESTION_VERSION_HEADER],
-            LANGFUSE_OTEL_INGESTION_VERSION,
+            headers["x-langfuse-ingestion-version"],
+            "4",
         )
         self.assertTrue(headers["Authorization"].startswith("Basic "))
 

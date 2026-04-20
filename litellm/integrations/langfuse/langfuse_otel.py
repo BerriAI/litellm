@@ -25,8 +25,6 @@ else:
 
 LANGFUSE_CLOUD_EU_ENDPOINT = "https://cloud.langfuse.com/api/public/otel"
 LANGFUSE_CLOUD_US_ENDPOINT = "https://us.cloud.langfuse.com/api/public/otel"
-LANGFUSE_OTEL_INGESTION_VERSION_HEADER = "x-langfuse-ingestion-version"
-LANGFUSE_OTEL_INGESTION_VERSION = "4"
 
 
 class LangfuseOtelLogger(OpenTelemetry):
@@ -375,7 +373,7 @@ class LangfuseOtelLogger(OpenTelemetry):
     def _build_langfuse_otel_headers(auth_header: str) -> dict[str, str]:
         return {
             "Authorization": auth_header,
-            LANGFUSE_OTEL_INGESTION_VERSION_HEADER: LANGFUSE_OTEL_INGESTION_VERSION,
+            "x-langfuse-ingestion-version": "4",
         }
 
     @staticmethod
