@@ -2431,3 +2431,276 @@ def test_reasoning_items_streaming_emitted_on_response_completed():
         ri["encrypted_content"] == encrypted
     ), "encrypted_content must be preserved in streaming"
     assert ri["summary"][0]["text"] == summary_text
+
+
+# =============================================================================
+# Tests for incomplete response with reasoning-only output
+# =============================================================================
+
+
+def test_transform_response_incomplete_reasoning_only():
+    """
+    Test that an incomplete Responses API response where all output tokens
+    were consumed by reasoning (no text output) produces a valid choice
+    with reasoning_content and finish_reason="length", instead of raising
+    ValueError.
+
+    This is a regression test for a bug where the transformation crashed
+    when the model used all tokens for reasoning and produced no message.
+    Edge case when reasoning_effort is high and max_tokens is low.
+    """
+    from unittest.mock import Mock
+
+    from openai.types.responses.response import IncompleteDetails
+    from openai.types.responses.response_reasoning_item import (
+        ResponseReasoningItem,
+        Summary,
+    )
+
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+    from litellm.types.llms.openai import (
+        InputTokensDetails,
+        OutputTokensDetails,
+        ResponseAPIUsage,
+        ResponsesAPIResponse,
+    )
+    from litellm.types.utils import ModelResponse, Usage
+
+    handler = LiteLLMResponsesTransformationHandler()
+
+    # Create reasoning item with summary (no output message follows)
+    summary_text = "**Analyzing the problem**\n\nThe model was reasoning about a complex topic but ran out of tokens."
+    reasoning_summary = Summary(text=summary_text, type="summary_text")
+    reasoning_item = ResponseReasoningItem(
+        id="rs_incomplete_001",
+        summary=[reasoning_summary],
+        type="reasoning",
+        content=None,
+        encrypted_content=None,
+        status=None,
+    )
+
+    # Usage shows all output tokens went to reasoning
+    usage = ResponseAPIUsage(
+        input_tokens=100,
+        input_tokens_details=InputTokensDetails(
+            audio_tokens=None, cached_tokens=0, text_tokens=None
+        ),
+        output_tokens=512,
+        output_tokens_details=OutputTokensDetails(
+            reasoning_tokens=512, text_tokens=None
+        ),
+        total_tokens=612,
+        cost=None,
+    )
+
+    # Incomplete response: status="incomplete", only reasoning in output
+    raw_response = ResponsesAPIResponse(
+        id="resp_incomplete_reasoning_only",
+        created_at=1760144904,
+        error=None,
+        incomplete_details=IncompleteDetails(reason="max_output_tokens"),
+        instructions=None,
+        metadata={},
+        model="o3-mini",
+        object="response",
+        output=[reasoning_item],
+        parallel_tool_calls=True,
+        temperature=1.0,
+        tool_choice="auto",
+        tools=[],
+        top_p=1.0,
+        max_output_tokens=512,
+        previous_response_id=None,
+        reasoning={"effort": "high", "summary": "detailed"},
+        status="incomplete",
+        text={"format": {"type": "text"}},
+        truncation="disabled",
+        usage=usage,
+        user=None,
+        store=True,
+        background=False,
+    )
+
+    model_response = ModelResponse(
+        id="chatcmpl-incomplete-001",
+        created=1760144904,
+        model=None,
+        object="chat.completion",
+        system_fingerprint=None,
+        choices=[],
+        usage=Usage(completion_tokens=0, prompt_tokens=0, total_tokens=0),
+    )
+
+    logging_obj = Mock()
+
+    # This should NOT raise ValueError
+    result = handler.transform_response(
+        model="o3-mini",
+        raw_response=raw_response,
+        model_response=model_response,
+        logging_obj=logging_obj,
+        request_data={"model": "o3-mini"},
+        messages=[{"role": "user", "content": "Solve this complex math problem."}],
+        optional_params={"reasoning_effort": "high"},
+        litellm_params={},
+        encoding=Mock(),
+    )
+
+    # Should have exactly one choice
+    assert len(result.choices) == 1, f"Expected 1 choice, got {len(result.choices)}"
+
+    choice = result.choices[0]
+
+    # finish_reason should be "length" (incomplete due to max_output_tokens)
+    assert (
+        choice.finish_reason == "length"
+    ), f"Expected finish_reason='length', got '{choice.finish_reason}'"
+
+    # Content should be empty string (no text was generated)
+    assert (
+        choice.message.content == ""
+    ), f"Expected empty content, got '{choice.message.content}'"
+
+    # Reasoning content should be preserved
+    assert (
+        choice.message.reasoning_content == summary_text
+    ), "Expected reasoning_content to be the summary text"
+
+    # Check usage
+    assert result.usage.prompt_tokens == 100
+    assert result.usage.completion_tokens == 512
+    assert result.usage.total_tokens == 612
+
+    assert result.model == "o3-mini"
+
+
+def test_transform_response_complete_with_reasoning_still_works():
+    """
+    Ensure that a normal completed response with reasoning + text output
+    still works correctly after the incomplete-reasoning-only fix.
+    """
+    from unittest.mock import Mock
+
+    from openai.types.responses import ResponseOutputMessage, ResponseOutputText
+    from openai.types.responses.response_reasoning_item import (
+        ResponseReasoningItem,
+        Summary,
+    )
+
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+    from litellm.types.llms.openai import (
+        InputTokensDetails,
+        OutputTokensDetails,
+        ResponseAPIUsage,
+        ResponsesAPIResponse,
+    )
+    from litellm.types.utils import ModelResponse, Usage
+
+    handler = LiteLLMResponsesTransformationHandler()
+
+    summary_text = (
+        "**Thinking about the answer**\n\nConsidering the question carefully."
+    )
+    reasoning_item = ResponseReasoningItem(
+        id="rs_complete_001",
+        summary=[Summary(text=summary_text, type="summary_text")],
+        type="reasoning",
+        content=None,
+        encrypted_content=None,
+        status=None,
+    )
+    output_message = ResponseOutputMessage(
+        id="msg_complete_001",
+        content=[
+            ResponseOutputText(
+                annotations=[],
+                text="The answer is 42.",
+                type="output_text",
+                logprobs=[],
+            )
+        ],
+        role="assistant",
+        status="completed",
+        type="message",
+    )
+
+    usage = ResponseAPIUsage(
+        input_tokens=50,
+        input_tokens_details=InputTokensDetails(
+            audio_tokens=None, cached_tokens=0, text_tokens=None
+        ),
+        output_tokens=100,
+        output_tokens_details=OutputTokensDetails(
+            reasoning_tokens=80, text_tokens=None
+        ),
+        total_tokens=150,
+        cost=None,
+    )
+
+    raw_response = ResponsesAPIResponse(
+        id="resp_complete_with_reasoning",
+        created_at=1760144904,
+        error=None,
+        incomplete_details=None,
+        instructions=None,
+        metadata={},
+        model="o3-mini",
+        object="response",
+        output=[reasoning_item, output_message],
+        parallel_tool_calls=True,
+        temperature=1.0,
+        tool_choice="auto",
+        tools=[],
+        top_p=1.0,
+        max_output_tokens=None,
+        previous_response_id=None,
+        reasoning={"effort": "high", "summary": "detailed"},
+        status="completed",
+        text={"format": {"type": "text"}},
+        truncation="disabled",
+        usage=usage,
+        user=None,
+        store=True,
+        background=False,
+    )
+
+    model_response = ModelResponse(
+        id="chatcmpl-complete-001",
+        created=1760144904,
+        model=None,
+        object="chat.completion",
+        system_fingerprint=None,
+        choices=[],
+        usage=Usage(completion_tokens=0, prompt_tokens=0, total_tokens=0),
+    )
+
+    result = handler.transform_response(
+        model="o3-mini",
+        raw_response=raw_response,
+        model_response=model_response,
+        logging_obj=Mock(),
+        request_data={"model": "o3-mini"},
+        messages=[{"role": "user", "content": "What is the answer?"}],
+        optional_params={"reasoning_effort": "high"},
+        litellm_params={},
+        encoding=Mock(),
+    )
+
+    assert len(result.choices) == 1
+    choice = result.choices[0]
+
+    # Normal case: finish_reason should be "stop"
+    assert choice.finish_reason == "stop"
+
+    # Content should be the actual text
+    assert choice.message.content == "The answer is 42."
+
+    # Reasoning content should be preserved
+    assert choice.message.reasoning_content == summary_text
+
+    assert result.model == "o3-mini"
