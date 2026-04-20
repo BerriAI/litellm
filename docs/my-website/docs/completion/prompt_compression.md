@@ -8,6 +8,7 @@ The function keeps high-relevance and recent context, replaces low-relevance con
 
 ```python
 import litellm
+from litellm.types.utils import CallTypes
 
 messages = [
     {"role": "system", "content": "You are a coding assistant."},
@@ -19,6 +20,7 @@ messages = [
 compressed = litellm.compress(
     messages=messages,
     model="gpt-4o",
+    call_type=CallTypes.completion,
     compression_trigger=1000,
     compression_target=500,
 )
@@ -45,6 +47,7 @@ response = litellm.completion(
 
 - `messages` (`List[dict]`, required): input conversation messages
 - `model` (`str`, required): model name used for token counting
+- `call_type` (`CallTypes`, default `CallTypes.completion`): the LiteLLM call type whose message schema these messages follow. Supported values: `CallTypes.completion` / `CallTypes.acompletion` (OpenAI chat-completions shape) and `CallTypes.anthropic_messages` (Anthropic Messages shape)
 - `compression_trigger` (`int`, default `200000`): compress only if input token count exceeds this
 - `compression_target` (`Optional[int]`, default `70% of compression_trigger`): desired post-compression token budget
 - `embedding_model` (`Optional[str]`): if set, combines BM25 + embedding relevance scoring
@@ -69,6 +72,28 @@ tool_call = response.choices[0].message.tool_calls[0]
 args = json.loads(tool_call.function.arguments)
 full_content = compressed["cache"][args["key"]]
 ```
+
+## Server-side Callback Loop (`/v1/messages`)
+
+You can enable callback-based compression interception to make retrieval loops
+transparent for Anthropic Messages calls:
+
+```yaml
+litellm_settings:
+  callbacks: ["compression_interception"]
+  compression_interception_params:
+    enabled: true
+    compression_trigger: 10000
+    compression_target: 7000
+```
+
+With this enabled, LiteLLM runs the following server-side flow:
+
+1. Compresses inbound messages before the first provider call.
+2. Injects the `litellm_content_retrieve` tool.
+3. Detects retrieval `tool_use` blocks in the model response.
+4. Resolves retrieval keys from the compression cache.
+5. Reruns the model via agentic loop and returns the final answer.
 
 ## Performance
 

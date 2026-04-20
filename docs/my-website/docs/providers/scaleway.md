@@ -60,3 +60,44 @@ curl http://localhost:4000/chat/completions \
 ## Supported features
 
 Scaleway provider supports all features in [Generative APIs reference documentation ↗](https://www.scaleway.com/en/developers/api/generative-apis/), such as streaming, structured outputs and tool calling.
+
+## Audio transcription
+
+Scaleway's `/audio/transcriptions` endpoint is OpenAI-compatible and works with Whisper models.
+
+### Python SDK
+
+```python
+import os
+from litellm import transcription
+
+os.environ["SCW_SECRET_KEY"] = "your-scaleway-secret-key"
+
+with open("speech.mp3", "rb") as audio_file:
+    response = transcription(
+        model="scaleway/whisper-large-v3",
+        file=audio_file,
+    )
+print(response.text)
+```
+
+### Proxy config
+
+```yaml
+model_list:
+  - model_name: scaleway-whisper
+    litellm_params:
+      model: scaleway/whisper-large-v3
+      api_key: "os.environ/SCW_SECRET_KEY"
+```
+
+### Proxy request
+
+```bash
+curl http://localhost:4000/v1/audio/transcriptions \
+  -H "Authorization: Bearer YOUR_LITELLM_MASTER_KEY" \
+  -F model="scaleway-whisper" \
+  -F file="@speech.mp3"
+```
+
+Supported optional params: `language`, `prompt`, `response_format`, `temperature`, `timestamp_granularities`.

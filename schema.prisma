@@ -17,8 +17,9 @@ model LiteLLM_BudgetTable {
   tpm_limit     BigInt?
   rpm_limit     BigInt?
   model_max_budget Json?
-  budget_duration String? 
+  budget_duration String?
   budget_reset_at DateTime?
+  allowed_models String[] @default([]) // per-member model scope; empty = inherit team models
   created_at    DateTime               @default(now()) @map("created_at")
   created_by String
   updated_at    DateTime               @default(now()) @updatedAt @map("updated_at")
@@ -140,6 +141,8 @@ model LiteLLM_TeamTable {
     team_member_permissions String[] @default([])
     access_group_ids String[] @default([])
     policies         String[] @default([])
+    default_team_member_models String[] @default([]) // default allowed_models for newly added team members; empty = no per-member restriction
+    budget_limits Json? // per-model budget limits for the team
     model_id Int? @unique // id for LiteLLM_ModelTable -> stores team-level model aliases
     allow_team_guardrail_config Boolean @default(false) // if true, team admin can configure guardrails for this team
     litellm_organization_table LiteLLM_OrganizationTable?   @relation(fields: [organization_id], references: [organization_id])
@@ -401,6 +404,7 @@ model LiteLLM_VerificationToken {
     rotation_interval String?   // How often to rotate (e.g., "30d", "90d")
     last_rotation_at DateTime?  // When this key was last rotated
     key_rotation_at  DateTime?  // When this key should next be rotated
+    budget_limits Json? // per-model budget limits for the key
     litellm_budget_table LiteLLM_BudgetTable?   @relation(fields: [budget_id], references: [budget_id])
     litellm_organization_table LiteLLM_OrganizationTable?   @relation(fields: [organization_id], references: [organization_id])
     litellm_project_table LiteLLM_ProjectTable?   @relation(fields: [project_id], references: [project_id])

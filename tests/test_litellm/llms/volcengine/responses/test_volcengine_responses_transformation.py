@@ -1,6 +1,7 @@
 """
 Tests for Volcengine Responses API transformation.
 """
+
 import os
 import sys
 
@@ -53,7 +54,9 @@ class TestVolcengineResponsesAPITransformation:
             drop_params=False,
         )
 
-        assert "parallel_tool_calls" not in mapped, "parallel_tool_calls must be dropped"
+        assert (
+            "parallel_tool_calls" not in mapped
+        ), "parallel_tool_calls must be dropped"
         assert mapped.get("temperature") == 0.5
         assert "metadata" not in mapped, "Undocumented params should not be included"
 
@@ -220,7 +223,9 @@ class TestVolcengineResponsesAPITransformation:
 
         # Use class name comparison instead of isinstance to avoid issues with
         # module reloading during parallel test execution (conftest reloads litellm)
-        assert type(error).__name__ == "VolcEngineError", f"Expected VolcEngineError, got {type(error).__name__}"
+        assert (
+            type(error).__name__ == "VolcEngineError"
+        ), f"Expected VolcEngineError, got {type(error).__name__}"
         assert error.status_code == 400
         assert error.message == "bad request"
         assert error.headers.get("x") == "y"

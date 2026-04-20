@@ -1058,8 +1058,15 @@ class TestModelsRouteExemptFromDisableLLMEndpoints:
 
         local_file = os.path.join(
             os.path.dirname(__file__),
-            "..", "..", "..", "..", "enterprise",
-            "litellm_enterprise", "proxy", "auth", "route_checks.py",
+            "..",
+            "..",
+            "..",
+            "..",
+            "enterprise",
+            "litellm_enterprise",
+            "proxy",
+            "auth",
+            "route_checks.py",
         )
         local_file = os.path.abspath(local_file)
 
@@ -1075,10 +1082,15 @@ class TestModelsRouteExemptFromDisableLLMEndpoints:
         """Test that /models is allowed even when LLM API routes are disabled"""
         EnterpriseRouteChecks = self._get_enterprise_route_checks()
 
-        with patch.object(
-            EnterpriseRouteChecks, "is_llm_api_route_disabled", return_value=True
-        ), patch.object(
-            EnterpriseRouteChecks, "is_management_routes_disabled", return_value=False
+        with (
+            patch.object(
+                EnterpriseRouteChecks, "is_llm_api_route_disabled", return_value=True
+            ),
+            patch.object(
+                EnterpriseRouteChecks,
+                "is_management_routes_disabled",
+                return_value=False,
+            ),
         ):
             # /models should NOT raise - it's exempt
             EnterpriseRouteChecks.should_call_route("/models")
@@ -1088,10 +1100,15 @@ class TestModelsRouteExemptFromDisableLLMEndpoints:
         """Test that /v1/models is allowed even when LLM API routes are disabled"""
         EnterpriseRouteChecks = self._get_enterprise_route_checks()
 
-        with patch.object(
-            EnterpriseRouteChecks, "is_llm_api_route_disabled", return_value=True
-        ), patch.object(
-            EnterpriseRouteChecks, "is_management_routes_disabled", return_value=False
+        with (
+            patch.object(
+                EnterpriseRouteChecks, "is_llm_api_route_disabled", return_value=True
+            ),
+            patch.object(
+                EnterpriseRouteChecks,
+                "is_management_routes_disabled",
+                return_value=False,
+            ),
         ):
             # /v1/models should NOT raise - it's exempt
             EnterpriseRouteChecks.should_call_route("/v1/models")
@@ -1101,10 +1118,15 @@ class TestModelsRouteExemptFromDisableLLMEndpoints:
         """Test that non-exempt LLM routes like /v1/chat/completions are still blocked"""
         EnterpriseRouteChecks = self._get_enterprise_route_checks()
 
-        with patch.object(
-            EnterpriseRouteChecks, "is_llm_api_route_disabled", return_value=True
-        ), patch.object(
-            EnterpriseRouteChecks, "is_management_routes_disabled", return_value=False
+        with (
+            patch.object(
+                EnterpriseRouteChecks, "is_llm_api_route_disabled", return_value=True
+            ),
+            patch.object(
+                EnterpriseRouteChecks,
+                "is_management_routes_disabled",
+                return_value=False,
+            ),
         ):
             with pytest.raises(HTTPException) as exc_info:
                 EnterpriseRouteChecks.should_call_route("/v1/chat/completions")
@@ -1119,10 +1141,15 @@ class TestModelsRouteExemptFromDisableLLMEndpoints:
         """Test that /v1/embeddings is still blocked when LLM API routes are disabled"""
         EnterpriseRouteChecks = self._get_enterprise_route_checks()
 
-        with patch.object(
-            EnterpriseRouteChecks, "is_llm_api_route_disabled", return_value=True
-        ), patch.object(
-            EnterpriseRouteChecks, "is_management_routes_disabled", return_value=False
+        with (
+            patch.object(
+                EnterpriseRouteChecks, "is_llm_api_route_disabled", return_value=True
+            ),
+            patch.object(
+                EnterpriseRouteChecks,
+                "is_management_routes_disabled",
+                return_value=False,
+            ),
         ):
             with pytest.raises(HTTPException) as exc_info:
                 EnterpriseRouteChecks.should_call_route("/v1/embeddings")
@@ -1134,10 +1161,15 @@ class TestModelsRouteExemptFromDisableLLMEndpoints:
         """Test that /models works normally when LLM API routes are not disabled"""
         EnterpriseRouteChecks = self._get_enterprise_route_checks()
 
-        with patch.object(
-            EnterpriseRouteChecks, "is_llm_api_route_disabled", return_value=False
-        ), patch.object(
-            EnterpriseRouteChecks, "is_management_routes_disabled", return_value=False
+        with (
+            patch.object(
+                EnterpriseRouteChecks, "is_llm_api_route_disabled", return_value=False
+            ),
+            patch.object(
+                EnterpriseRouteChecks,
+                "is_management_routes_disabled",
+                return_value=False,
+            ),
         ):
             # Should not raise
             EnterpriseRouteChecks.should_call_route("/models")
@@ -1359,6 +1391,38 @@ def test_non_org_admin_with_organizations_list():
     assert _user_is_org_admin({"organizations": ["org-1"]}, user_obj) is False
 
 
+def test_org_admin_cannot_escalate_to_other_org():
+    """Regression: admin of org-A requesting [org-A, org-B] must be rejected."""
+    user_obj = _make_org_admin_user("org-A")
+    assert _user_is_org_admin({"organizations": ["org-A", "org-B"]}, user_obj) is False
+
+
+def test_org_admin_of_multiple_orgs_can_operate_on_both():
+    """Admin of both org-A and org-B can operate on both."""
+    memberships = [
+        LiteLLM_OrganizationMembershipTable(
+            user_id="multi-admin",
+            organization_id="org-A",
+            user_role=LitellmUserRoles.ORG_ADMIN.value,
+            created_at=datetime(2024, 1, 1),
+            updated_at=datetime(2024, 1, 1),
+        ),
+        LiteLLM_OrganizationMembershipTable(
+            user_id="multi-admin",
+            organization_id="org-B",
+            user_role=LitellmUserRoles.ORG_ADMIN.value,
+            created_at=datetime(2024, 1, 1),
+            updated_at=datetime(2024, 1, 1),
+        ),
+    ]
+    user_obj = LiteLLM_UserTable(
+        user_id="multi-admin",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+        organization_memberships=memberships,
+    )
+    assert _user_is_org_admin({"organizations": ["org-A", "org-B"]}, user_obj) is True
+
+
 @pytest.mark.asyncio
 async def test_initialize_pass_through_registers_wildcard_for_auth_subpath():
     """
@@ -1389,15 +1453,19 @@ async def test_initialize_pass_through_registers_wildcard_for_auth_subpath():
 
     original_routes = LiteLLMRoutes.openai_routes.value[:]
     try:
-        with patch(
-            "litellm.proxy.proxy_server.app",
-            MagicMock(),
-        ), patch(
-            "litellm.proxy.proxy_server.premium_user",
-            True,
-        ), patch(
-            "litellm.proxy.proxy_server.config_passthrough_endpoints",
-            None,
+        with (
+            patch(
+                "litellm.proxy.proxy_server.app",
+                MagicMock(),
+            ),
+            patch(
+                "litellm.proxy.proxy_server.premium_user",
+                True,
+            ),
+            patch(
+                "litellm.proxy.proxy_server.config_passthrough_endpoints",
+                None,
+            ),
         ):
             await initialize_pass_through_endpoints([endpoint_config])
 
@@ -1417,7 +1485,9 @@ async def test_initialize_pass_through_registers_wildcard_for_auth_subpath():
             # Removing the endpoint should clean up openai_routes
             # remove_endpoint_routes takes endpoint_id (UUID portion of
             # the route key "{id}:exact:{path}:{methods}")
-            registered = InitPassThroughEndpointHelpers.get_all_registered_pass_through_routes()
+            registered = (
+                InitPassThroughEndpointHelpers.get_all_registered_pass_through_routes()
+            )
             endpoint_ids = {k.split(":")[0] for k in registered}
             for eid in endpoint_ids:
                 InitPassThroughEndpointHelpers.remove_endpoint_routes(eid)
@@ -1427,8 +1497,8 @@ async def test_initialize_pass_through_registers_wildcard_for_auth_subpath():
         LiteLLMRoutes.openai_routes.value[:] = original_routes
         # Clean up any routes registered during this test to avoid
         # polluting the module-level _registered_pass_through_routes
-        registered = InitPassThroughEndpointHelpers.get_all_registered_pass_through_routes()
+        registered = (
+            InitPassThroughEndpointHelpers.get_all_registered_pass_through_routes()
+        )
         for k in registered:
-            InitPassThroughEndpointHelpers.remove_endpoint_routes(
-                k.split(":")[0]
-            )
+            InitPassThroughEndpointHelpers.remove_endpoint_routes(k.split(":")[0])

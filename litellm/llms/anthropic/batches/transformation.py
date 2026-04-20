@@ -229,12 +229,12 @@ class AnthropicBatchesConfig(BaseBatchesConfig):
             completed_at=ended_at if processing_status == "ended" else None,
             failed_at=None,
             expired_at=archived_at if archived_at else None,
-            cancelling_at=cancel_initiated_at
-            if processing_status == "canceling"
-            else None,
-            cancelled_at=ended_at
-            if processing_status == "canceling" and ended_at
-            else None,
+            cancelling_at=(
+                cancel_initiated_at if processing_status == "canceling" else None
+            ),
+            cancelled_at=(
+                ended_at if processing_status == "canceling" and ended_at else None
+            ),
             request_counts=request_counts,
             metadata={},
         )
