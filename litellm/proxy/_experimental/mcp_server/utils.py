@@ -1,6 +1,7 @@
 """
 MCP Server Utilities
 """
+
 from typing import Any, Dict, Mapping, Optional, Tuple
 
 import os
@@ -98,6 +99,38 @@ def split_server_prefix_from_name(prefixed_name: str) -> Tuple[str, str]:
         if len(parts) == 2:
             return parts[1], parts[0]
     return prefixed_name, ""
+
+
+def get_tool_name_and_description(tool: Any) -> Tuple[str, str]:
+    """Return ``(name, description)`` for any tool shape the proxy sees.
+
+    Callers throughout the proxy receive tool definitions in one of three
+    shapes, depending on whether a request came from the Responses API, the
+    Chat Completions API, or the internal MCP registry:
+
+    - OpenAI Chat Completions wrapper: ``{"type": "function", "function": {"name": ..., "description": ...}}``
+    - Flat dict (Responses API / expanded MCP tools): ``{"name": ..., "description": ...}``
+    - ``MCPTool`` (or any object with ``.name`` / ``.description`` attributes)
+
+    ``name`` defaults to the empty string when absent. ``description``
+    falls back to ``name`` when the tool payload omits it or leaves it
+    empty, which matches the historical ``_extract_tool_info`` behaviour
+    (the semantic router requires a non-empty embedding input). Callers
+    that only need the name can unpack ``[0]``.
+    """
+    if isinstance(tool, dict):
+        fn = tool.get("function") if isinstance(tool.get("function"), dict) else None
+        # Prefer the nested ``function`` block when it actually carries a
+        # name; otherwise fall through to the outer dict so malformed
+        # wrappers (``{"function": {...}, "name": "outer"}``) still resolve.
+        source = fn if fn and fn.get("name") else tool
+        name = source.get("name", "") or ""
+        description = source.get("description", "") or name
+        return name, description
+    name = getattr(tool, "name", "") or ""
+    raw_description = getattr(tool, "description", None)
+    description = str(raw_description) if raw_description else name
+    return name, description
 
 
 def is_tool_name_prefixed(

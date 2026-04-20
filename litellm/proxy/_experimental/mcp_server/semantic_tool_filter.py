@@ -3,9 +3,11 @@ Semantic MCP Tool Filtering using semantic-router
 
 Filters MCP tools semantically for /chat/completions and /responses endpoints.
 """
+
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from litellm._logging import verbose_logger
+from litellm.proxy._experimental.mcp_server.utils import get_tool_name_and_description
 
 if TYPE_CHECKING:
     from semantic_router.routers import SemanticRouter
@@ -86,20 +88,13 @@ class SemanticMCPToolFilter:
             raise
 
     def _extract_tool_info(self, tool) -> tuple[str, str]:
-        """Extract name and description from MCP tool or OpenAI function dict."""
-        name: str
-        description: str
+        """Name + description used as the semantic-router embedding input.
 
-        if isinstance(tool, dict):
-            # OpenAI function format
-            name = tool.get("name", "")
-            description = tool.get("description", name)
-        else:
-            # MCPTool object
-            name = str(tool.name)
-            description = str(tool.description) if tool.description else str(tool.name)
-
-        return name, description
+        Description falls back to the name (handled inside
+        ``get_tool_name_and_description``) so the embedding text is never
+        empty for tools that omit a description.
+        """
+        return get_tool_name_and_description(tool)
 
     def _build_router(self, tools: List) -> None:
         """Build semantic router with tools (MCPTool objects or OpenAI function dicts)."""
@@ -216,16 +211,65 @@ class SemanticMCPToolFilter:
     def _get_tools_by_names(
         self, tool_names: List[str], available_tools: List[Any]
     ) -> List[Any]:
-        """Get tools from available_tools by their names, preserving order."""
-        # Match tools from available_tools (preserves format - dict or MCPTool)
-        matched_tools = []
-        for tool in available_tools:
-            tool_name, _ = self._extract_tool_info(tool)
-            if tool_name in tool_names:
-                matched_tools.append(tool)
+        """Get tools from ``available_tools`` by their names, preserving order.
 
-        # Reorder to match semantic router's ordering
-        tool_map = {self._extract_tool_info(t)[0]: t for t in matched_tools}
+        The semantic router emits canonical MCP names (e.g. ``<server>-<tool>``
+        produced by ``add_server_prefix_to_name``). Clients, however, may
+        send tools with their own extra prefix — for example opencode wraps
+        every MCP tool as ``litellm_<server>-<tool>`` and Responses-API
+        callers sometimes mirror the same pattern. Strict equality then
+        drops every tool and the downstream request is shipped with
+        ``tools=[]``, which upstream vLLM rejects when ``tool_choice`` is
+        set.
+
+        Matching rules (applied in order for every available tool):
+
+        1. Exact canonical match wins.
+        2. Otherwise, the longest canonical that appears as a suffix of the
+           client name, preceded by ``-`` or ``_``, wins. The separator
+           boundary avoids cross-server false matches such as
+           ``server_b-a-search`` aliasing into canonical ``a-search``. The
+           longest-wins property is emergent: we scan separator positions in
+           the client name left-to-right, and the first matching tail is the
+           longest canonical suffix by construction. Canonicals produced by
+           ``add_server_prefix_to_name`` always carry a ``<server>-<tool>``
+           shape, so the suffix relation combined with the separator check
+           is specific enough in practice.
+
+        Ordering from ``tool_names`` is preserved; unmatched canonicals are
+        skipped rather than fabricated. When no canonical resolves at all we
+        log a warning so the empty-``tools`` failure mode stays observable
+        instead of silently degrading into an upstream HTTP 400.
+        """
+        if not tool_names or not available_tools:
+            return []
+
+        canonical_set = set(tool_names)
+
+        tool_map: Dict[str, Any] = {}
+        for tool in available_tools:
+            tool_name, _ = get_tool_name_and_description(tool)
+            if not tool_name:
+                continue
+
+            if tool_name in canonical_set:
+                tool_map.setdefault(tool_name, tool)
+                continue
+
+            for i, ch in enumerate(tool_name):
+                if ch in ("-", "_"):
+                    candidate = tool_name[i + 1 :]
+                    if candidate in canonical_set:
+                        tool_map.setdefault(candidate, tool)
+                        break
+
+        if not tool_map:
+            verbose_logger.warning(
+                "Semantic filter matched 0 tools for canonicals=%s; check "
+                "whether client-side tool names diverge from the registry.",
+                tool_names,
+            )
+
         return [tool_map[name] for name in tool_names if name in tool_map]
 
     def extract_user_query(self, messages: List[Dict[str, Any]]) -> str:
