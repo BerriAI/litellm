@@ -183,22 +183,6 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         return tool_call
 
     @staticmethod
-    def _is_opus_4_6_model(model: str) -> bool:
-        """Check if the model is specifically Claude Opus 4.6."""
-        model_lower = model.lower()
-        return any(
-            v in model_lower for v in ("opus-4-6", "opus_4_6", "opus-4.6", "opus_4.6")
-        )
-
-    @staticmethod
-    def _is_opus_4_7_model(model: str) -> bool:
-        """Check if the model is specifically Claude Opus 4.7."""
-        model_lower = model.lower()
-        return any(
-            v in model_lower for v in ("opus-4-7", "opus_4_7", "opus-4.7", "opus_4.7")
-        )
-
-    @staticmethod
     def _supports_effort_level(model: str, level: str) -> bool:
         """Check ``supports_{level}_reasoning_effort`` in the model map.
 
@@ -1534,12 +1518,11 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 f"Invalid effort value: {effort}. Must be one of: "
                 f"'high', 'medium', 'low', 'xhigh', 'max'"
             )
-        # ``max`` is Claude Opus 4.6 only (not Sonnet 4.6, not Opus 4.5/4.7).
-        # Keep this hardcoded so the error message is specific and stable.
-        if effort == "max" and not self._is_opus_4_6_model(model):
+        # ``max`` support is model-map driven via ``supports_max_reasoning_effort``.
+        supports_max = self._supports_effort_level(model, "max")
+        if effort == "max" and not supports_max:
             raise ValueError(
-                f"effort='max' is only supported by Claude Opus 4.6. "
-                f"Got model: {model}"
+                f"effort='max' is not supported by this model. Got model: {model}"
             )
         # ``xhigh`` is data-driven via ``supports_xhigh_reasoning_effort`` so
         # enabling it for a new model is a pure model-map change.
