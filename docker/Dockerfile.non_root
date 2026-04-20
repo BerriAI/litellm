@@ -90,8 +90,7 @@ RUN --mount=type=cache,target=/app/.cache/uv,id=litellm-uv-cache \
         --python python3; \
     fi
 
-RUN prisma generate --schema=./schema.prisma && \
-    prisma --version
+RUN prisma generate --schema=./schema.prisma
 
 RUN sed -i 's/\r$//' docker/entrypoint.sh && chmod +x docker/entrypoint.sh && \
     sed -i 's/\r$//' docker/prod_entrypoint.sh && chmod +x docker/prod_entrypoint.sh
