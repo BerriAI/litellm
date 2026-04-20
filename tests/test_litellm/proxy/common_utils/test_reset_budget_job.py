@@ -40,7 +40,9 @@ class MockLiteLLMVerificationToken:
         self.find_many_calls.append({"where": where})
         return self._find_many_results
 
-    async def update(self, where: Dict[str, Any], data: Dict[str, Any]) -> Dict[str, Any]:
+    async def update(
+        self, where: Dict[str, Any], data: Dict[str, Any]
+    ) -> Dict[str, Any]:
         self.update_calls.append({"where": where, "data": data})
         return {"count": 1}
 
@@ -64,7 +66,9 @@ class MockLiteLLMTeamTable:
         self.find_many_calls.append({"where": where})
         return self._find_many_results
 
-    async def update(self, where: Dict[str, Any], data: Dict[str, Any]) -> Dict[str, Any]:
+    async def update(
+        self, where: Dict[str, Any], data: Dict[str, Any]
+    ) -> Dict[str, Any]:
         self.update_calls.append({"where": where, "data": data})
         return {"count": 1}
 
@@ -690,21 +694,20 @@ def test_reset_budget_windows_filters_null_budget_limits_in_python(
         [team_with_windows, team_without_windows]
     )
 
-    with patch(
-        "litellm.proxy.proxy_server.spend_counter_cache", new=MagicMock()
-    ), patch.object(
-        ResetBudgetJob,
-        "_reset_expired_window",
-        new=AsyncMock(return_value=True),
+    with (
+        patch("litellm.proxy.proxy_server.spend_counter_cache", new=MagicMock()),
+        patch.object(
+            ResetBudgetJob,
+            "_reset_expired_window",
+            new=AsyncMock(return_value=True),
+        ),
     ):
         asyncio.run(reset_budget_job.reset_budget_windows())
 
     assert mock_prisma_client.db.litellm_verificationtoken.find_many_calls == [
         {"where": None}
     ]
-    assert mock_prisma_client.db.litellm_teamtable.find_many_calls == [
-        {"where": None}
-    ]
+    assert mock_prisma_client.db.litellm_teamtable.find_many_calls == [{"where": None}]
 
     key_updates = mock_prisma_client.db.litellm_verificationtoken.update_calls
     assert len(key_updates) == 1
@@ -795,9 +798,9 @@ def test_reset_budget_resets_endusers_with_null_budget_id(
 
     # Both end users should have been reset
     updated = mock_prisma_client.updated_data["enduser"]
-    assert len(updated) == 2, (
-        f"Expected 2 endusers reset (1 explicit + 1 implicit), got {len(updated)}"
-    )
+    assert (
+        len(updated) == 2
+    ), f"Expected 2 endusers reset (1 explicit + 1 implicit), got {len(updated)}"
 
     user_ids = {u.user_id for u in updated}
     assert "enduser-explicit" in user_ids
