@@ -216,9 +216,11 @@ class AgenticAnthropicStreamingIterator:
                 return
 
             [
-                f"{b.get('type')}({b.get('name', '')})"
-                if b.get("type") == "tool_use"
-                else b.get("type")
+                (
+                    f"{b.get('type')}({b.get('name', '')})"
+                    if b.get("type") == "tool_use"
+                    else b.get("type")
+                )
                 for b in rebuilt.get("content", [])
             ]
 
