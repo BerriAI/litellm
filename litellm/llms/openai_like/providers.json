@@ -101,5 +101,10 @@
     "param_mappings": {
       "max_completion_tokens": "max_tokens"
     }
+  },
+  "eurouter": {
+    "base_url": "https://api.eurouter.ai/api/v1",
+    "api_key_env": "EUROUTER_API_KEY",
+    "api_base_env": "EUROUTER_API_BASE"
   }
 }
