@@ -10,8 +10,6 @@ import re
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Tuple
 
-from litellm._logging import verbose_proxy_logger
-
 # Try to import google-cloud-logging
 try:
     from google.cloud.logging import Client as LoggingClient
@@ -20,7 +18,7 @@ try:
     GCP_LOGGING_AVAILABLE = True
 except ImportError:
     GCP_LOGGING_AVAILABLE = False
-    verbose_proxy_logger.warning(
+    print(
         "[gcp_logs_query] google-cloud-logging not installed. "
         "Install with: pip install google-cloud-logging"
     )
@@ -48,7 +46,7 @@ def get_gcp_logging_client(project_id: Optional[str] = None):
         LoggingClient or None if not available
     """
     if not GCP_LOGGING_AVAILABLE:
-        verbose_proxy_logger.warning(
+        print(
             "[gcp_logs_query] Cannot create GCP logging client - "
             "google-cloud-logging is not installed"
         )
@@ -57,14 +55,14 @@ def get_gcp_logging_client(project_id: Optional[str] = None):
     try:
         # The client will use application default credentials (ADC)
         # Ensure GOOGLE_APPLICATION_CREDENTIALS env var is set, or running on GCP
-        verbose_proxy_logger.info("[gcp_logs_query] Creating LoggingClient...")
+        print("[gcp_logs_query] Creating LoggingClient...")
         client = LoggingClient(project=project_id)
-        verbose_proxy_logger.info("[gcp_logs_query] Successfully created LoggingClient")
+        print("[gcp_logs_query] Successfully created LoggingClient")
         return client
     except Exception as e:
         import traceback
-        verbose_proxy_logger.error(f"[gcp_logs_query] Failed to create GCP logging client: {e}")
-        verbose_proxy_logger.error(f"[gcp_logs_query] Stack trace: {traceback.format_exc()}")
+        print(f"[gcp_logs_query] Failed to create GCP logging client: {e}")
+        print(f"[gcp_logs_query] Stack trace: {traceback.format_exc()}")
         return None
 
 
@@ -92,7 +90,7 @@ def parse_metrics_log_line(text_payload: str) -> Optional[Dict]:
             "timestamp": float(match.group("timestamp")),
         }
     except (ValueError, IndexError) as e:
-        verbose_proxy_logger.warning(f"[gcp_logs_query] Failed to parse log line: {e}")
+        print(f"[gcp_logs_query] Failed to parse log line: {e}")
         return None
 
 
@@ -126,7 +124,7 @@ async def query_parallel_requests_metrics_last_n_seconds(
     if project_id is None:
         project_id = os.environ.get("GOOGLE_CLOUD_PROJECT") or os.environ.get("GCP_PROJECT")
     if project_id is None:
-        verbose_proxy_logger.error(
+        print(
             "[gcp_logs_query] No GCP project ID provided. "
             "Set GOOGLE_CLOUD_PROJECT or GCP_PROJECT env var"
         )
@@ -167,7 +165,7 @@ async def query_parallel_requests_metrics_last_n_seconds(
 
         filter_str = " AND ".join(filter_parts)
 
-        verbose_proxy_logger.debug(
+        print(
             f"[gcp_logs_query] Querying GCP logs from {start_rfc3339} to {end_rfc3339} "
             f"(last {time_window_seconds} second(s) before target)"
         )
@@ -183,12 +181,12 @@ async def query_parallel_requests_metrics_last_n_seconds(
         ):
             all_entries.append(entry)
             if len(all_entries) >= MAX_ENTRIES:
-                verbose_proxy_logger.debug(
+                print(
                     f"[gcp_logs_query] Hit max entries limit ({MAX_ENTRIES}), stopping"
                 )
                 break
 
-        verbose_proxy_logger.debug(
+        print(
             f"[gcp_logs_query] Found {len(all_entries)} log entries in last {time_window_seconds} second(s)"
         )
 
@@ -237,7 +235,7 @@ async def query_parallel_requests_metrics_last_n_seconds(
         # Convert to list and sort by token for consistent ordering
         results = sorted(token_latest_metrics.values(), key=lambda x: x["token"])
 
-        verbose_proxy_logger.debug(
+        print(
             f"[gcp_logs_query] Returning {len(results)} unique token metrics "
             f"(latest log entry per token from last 5 minutes)"
         )
@@ -245,7 +243,7 @@ async def query_parallel_requests_metrics_last_n_seconds(
         return results
 
     except Exception as e:
-        verbose_proxy_logger.error(f"[gcp_logs_query] Error querying GCP logs: {e}")
+        print(f"[gcp_logs_query] Error querying GCP logs: {e}")
         return []
 
 
@@ -276,7 +274,7 @@ async def get_concurrent_requests_from_gcp_logs(
         where metrics_concurrency is the Redis counter value from the latest log entry.
     """
     if not GCP_LOGGING_AVAILABLE:
-        verbose_proxy_logger.warning(
+        print(
             "[gcp_logs_query] google-cloud-logging not available. "
             "Cannot query GCP logs for concurrent requests."
         )
