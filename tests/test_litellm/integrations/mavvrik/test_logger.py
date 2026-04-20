@@ -1,4 +1,4 @@
-"""Unit tests for MavvrikUploader — upload_usage_data, dry_run, _validate_config."""
+"""Unit tests for Uploader — upload_usage_data, dry_run, _validate_config."""
 
 import os
 import sys
@@ -9,17 +9,17 @@ import pytest
 
 sys.path.insert(0, os.path.abspath("../../../.."))
 
-from litellm.integrations.mavvrik.uploader import MavvrikUploader
+from litellm.integrations.mavvrik.uploader import Uploader
 
 
-def _make_uploader(**kwargs) -> MavvrikUploader:
+def _make_uploader(**kwargs) -> Uploader:
     defaults = dict(
         api_key="mav_key",
         api_endpoint="https://api.mavvrik.dev/acme",
         connection_id="litellm-test",
     )
     defaults.update(kwargs)
-    return MavvrikUploader(**defaults)
+    return Uploader(**defaults)
 
 
 def _make_df(rows=1) -> pl.DataFrame:
@@ -74,7 +74,7 @@ class TestUploadUsageData:
         uploader._mavvrik_client = mock_client
 
         with patch(
-            "litellm.integrations.mavvrik.uploader.MavvrikExporter",
+            "litellm.integrations.mavvrik.uploader.Exporter",
             return_value=mock_exporter,
         ):
             count = await uploader.upload_usage_data(date_str="2026-04-10")
@@ -91,7 +91,7 @@ class TestUploadUsageData:
         mock_client.upload = AsyncMock()
 
         with patch(
-            "litellm.integrations.mavvrik.uploader.MavvrikExporter",
+            "litellm.integrations.mavvrik.uploader.Exporter",
             return_value=mock_exporter,
         ):
             count = await uploader.upload_usage_data(date_str="2026-04-10")
@@ -101,6 +101,6 @@ class TestUploadUsageData:
 
     @pytest.mark.asyncio
     async def test_raises_value_error_when_config_missing(self):
-        uploader = MavvrikUploader(api_key="", api_endpoint="", connection_id="")
+        uploader = Uploader(api_key="", api_endpoint="", connection_id="")
         with pytest.raises(ValueError, match="missing required config fields"):
             await uploader.upload_usage_data(date_str="2026-04-10")

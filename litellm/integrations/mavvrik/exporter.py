@@ -1,4 +1,4 @@
-"""MavvrikExporter — fetch spend data from Postgres and transform to CSV.
+"""Exporter — fetch spend data from Postgres and transform to CSV.
 
 Handles the "export" side of the pipeline: extracting data from LiteLLM's
 database and converting it into a CSV string ready for upload.
@@ -52,7 +52,7 @@ ORDER BY dus.date, dus.user_id, dus.model ASC
 _EARLIEST_DATE_QUERY = 'SELECT MIN(date) AS earliest FROM "LiteLLM_DailyUserSpend"'
 
 
-class MavvrikExporter:
+class Exporter:
     """Fetch LiteLLM spend data from Postgres and transform to CSV."""
 
     # ------------------------------------------------------------------
@@ -110,7 +110,7 @@ class MavvrikExporter:
             raise
         except Exception as exc:
             verbose_logger.warning(
-                "MavvrikExporter: get_earliest_date failed (non-fatal): %s", exc
+                "Exporter: get_earliest_date failed (non-fatal): %s", exc
             )
         return None
 
@@ -133,9 +133,7 @@ class MavvrikExporter:
             or all rows are filtered out.
         """
         if df.is_empty():
-            verbose_proxy_logger.debug(
-                "MavvrikExporter: empty DataFrame, nothing to export"
-            )
+            verbose_proxy_logger.debug("Exporter: empty DataFrame, nothing to export")
             return ""
 
         # Filter out rows with no successful requests when the column is present
@@ -143,7 +141,7 @@ class MavvrikExporter:
             df = df.filter(pl.col("successful_requests") > 0)
             if df.is_empty():
                 verbose_proxy_logger.debug(
-                    "MavvrikExporter: all rows have zero successful_requests, skipping"
+                    "Exporter: all rows have zero successful_requests, skipping"
                 )
                 return ""
 
@@ -156,6 +154,6 @@ class MavvrikExporter:
         csv_str = buf.getvalue()
 
         verbose_proxy_logger.debug(
-            "MavvrikExporter: %d rows → %d CSV bytes", len(df), len(csv_str)
+            "Exporter: %d rows → %d CSV bytes", len(df), len(csv_str)
         )
         return csv_str

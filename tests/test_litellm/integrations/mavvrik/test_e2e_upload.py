@@ -22,7 +22,7 @@ import pytest
 
 sys.path.insert(0, os.path.abspath("../../../.."))
 
-from litellm.integrations.mavvrik.client import MavvrikClient
+from litellm.integrations.mavvrik.client import Client
 
 # ---------------------------------------------------------------------------
 # Credentials — populated from env vars; test is skipped if any are absent.
@@ -61,7 +61,7 @@ _TEST_CSV = (
 
 @pytest.fixture(scope="module")
 def streamer():
-    return MavvrikClient(
+    return Client(
         api_key=API_KEY,
         api_endpoint=API_ENDPOINT,
         connection_id=CONNECTION_ID,

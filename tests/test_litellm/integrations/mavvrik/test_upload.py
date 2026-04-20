@@ -11,17 +11,17 @@ import pytest
 
 sys.path.insert(0, os.path.abspath("../../../.."))
 
-from litellm.integrations.mavvrik.client import MavvrikClient
+from litellm.integrations.mavvrik.client import Client
 
 
-def _make_streamer(**kwargs) -> MavvrikClient:
+def _make_streamer(**kwargs) -> Client:
     defaults = dict(
         api_key="test-key",
         api_endpoint="https://api.mavvrik.dev/acme",
         connection_id="litellm-001",
     )
     defaults.update(kwargs)
-    return MavvrikClient(**defaults)
+    return Client(**defaults)
 
 
 def _mock_async_client(method: str, mock_resp: MagicMock):
@@ -35,9 +35,9 @@ def _mock_async_client(method: str, mock_resp: MagicMock):
     return cm, client_mock, async_method
 
 
-class TestMavvrikClientInit:
+class TestClientInit:
     def test_init_strips_trailing_slash(self):
-        streamer = MavvrikClient(
+        streamer = Client(
             api_key="key",
             api_endpoint="https://api.mavvrik.dev/acme/",
             connection_id="litellm-001",
@@ -46,7 +46,7 @@ class TestMavvrikClientInit:
         assert streamer.api_endpoint == "https://api.mavvrik.dev/acme"
 
     def test_init_stores_attributes(self):
-        streamer = MavvrikClient(
+        streamer = Client(
             api_key="mvk-key",
             api_endpoint="https://api.mavvrik.dev/my-tenant",
             connection_id="inst-123",
@@ -55,7 +55,7 @@ class TestMavvrikClientInit:
         assert streamer.connection_id == "inst-123"
 
 
-class TestMavvrikClientGetSignedUrl:
+class TestClientGetSignedUrl:
     @pytest.mark.asyncio
     async def test_returns_signed_url_on_200(self):
         streamer = _make_streamer()
@@ -114,7 +114,7 @@ class TestMavvrikClientGetSignedUrl:
 
     @pytest.mark.asyncio
     async def test_builds_correct_url_with_connection_id(self):
-        streamer = MavvrikClient(
+        streamer = Client(
             api_key="key",
             api_endpoint="https://api.example.com/my-org",
             connection_id="prod-001",
@@ -165,7 +165,7 @@ class TestMavvrikClientGetSignedUrl:
         assert captured_headers[0].get("x-api-key") == "test-key"
 
 
-class TestMavvrikClientInitiateResumable:
+class TestClientInitiateResumable:
     @pytest.mark.asyncio
     async def test_returns_location_header_on_201(self):
         streamer = _make_streamer()
@@ -206,7 +206,7 @@ class TestMavvrikClientInitiateResumable:
                 await streamer._initiate_resumable_upload("https://signed-url")
 
 
-class TestMavvrikClientFinalizeUpload:
+class TestClientFinalizeUpload:
     @pytest.mark.asyncio
     async def test_accepts_200(self):
         streamer = _make_streamer()
@@ -240,7 +240,7 @@ class TestMavvrikClientFinalizeUpload:
                 await streamer._finalize_upload("https://session-uri", b"gzip-bytes")
 
 
-class TestMavvrikClientUpload:
+class TestClientUpload:
     @pytest.mark.asyncio
     async def test_upload_empty_payload_skips_all_steps(self):
         streamer = _make_streamer()
@@ -286,7 +286,7 @@ class TestMavvrikClientUpload:
         assert gzip.decompress(upload_bytes) == csv_payload.encode("utf-8")
 
 
-class TestMavvrikClientAdvanceMarker:
+class TestClientAdvanceMarker:
     @pytest.mark.asyncio
     async def test_accepts_204(self):
         streamer = _make_streamer()
@@ -344,7 +344,7 @@ class TestMavvrikClientAdvanceMarker:
 
     @pytest.mark.asyncio
     async def test_patches_agent_base_path_with_connection_id(self):
-        streamer = MavvrikClient(
+        streamer = Client(
             api_key="key",
             api_endpoint="https://api.example.com/my-org",
             connection_id="prod-001",
@@ -393,7 +393,7 @@ class TestMavvrikClientAdvanceMarker:
         assert captured_headers[0].get("x-api-key") == "test-key"
 
 
-class TestMavvrikClientRegister:
+class TestClientRegister:
     @pytest.mark.asyncio
     async def test_register_returns_iso_string_from_epoch(self):
         streamer = _make_streamer()
@@ -448,7 +448,7 @@ class TestMavvrikClientRegister:
 
     @pytest.mark.asyncio
     async def test_register_posts_to_agent_base_path(self):
-        streamer = MavvrikClient(
+        streamer = Client(
             api_key="key",
             api_endpoint="https://api.example.com/my-org",
             connection_id="prod-001",

@@ -17,7 +17,7 @@ from typing import AsyncIterator
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from litellm.integrations.mavvrik import MavvrikService
+from litellm.integrations.mavvrik import Service
 from litellm.proxy._types import CommonProxyErrors, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.types.proxy.mavvrik_endpoints import (
@@ -88,7 +88,7 @@ async def init_mavvrik_settings(
     """Initialize Mavvrik settings and register the background export job."""
     _require_admin(user_api_key_dict)
     async with _mavvrik_errors():
-        result = await MavvrikService().initialize(
+        result = await Service().initialize(
             api_key=request.api_key,
             api_endpoint=request.api_endpoint,
             connection_id=request.connection_id,
@@ -113,7 +113,7 @@ async def get_mavvrik_settings(
     """View current Mavvrik settings. The API key is masked in the response."""
     _require_admin(user_api_key_dict)
     async with _mavvrik_errors():
-        result = await MavvrikService().get_settings()
+        result = await Service().get_settings()
         return MavvrikSettingsView(**result)
 
 
@@ -145,7 +145,7 @@ async def update_mavvrik_settings(
         )
 
     async with _mavvrik_errors():
-        result = await MavvrikService().update_settings(
+        result = await Service().update_settings(
             api_key=request.api_key,
             api_endpoint=request.api_endpoint,
             connection_id=request.connection_id,
@@ -170,7 +170,7 @@ async def delete_mavvrik_settings(
     """Remove all Mavvrik settings and deregister the background job."""
     _require_admin(user_api_key_dict)
     async with _mavvrik_errors():
-        result = await MavvrikService().delete()
+        result = await Service().delete()
         return MavvrikDeleteResponse(**result)
 
 
@@ -192,7 +192,7 @@ async def dry_run_mavvrik_export(
     """Preview the CSV records that would be uploaded for a given date without sending data."""
     _require_admin(user_api_key_dict)
     async with _mavvrik_errors():
-        result = await MavvrikService().dry_run(
+        result = await Service().dry_run(
             date_str=request.date_str,
             limit=request.limit,
         )
@@ -217,7 +217,7 @@ async def export_mavvrik_data(
     """Manually trigger a Mavvrik export for a specific date."""
     _require_admin(user_api_key_dict)
     async with _mavvrik_errors():
-        result = await MavvrikService().export(
+        result = await Service().export(
             date_str=request.date_str,
             limit=request.limit,
         )

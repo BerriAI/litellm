@@ -1,4 +1,4 @@
-"""Unit tests for MavvrikOrchestrator — _resolve_first_run_start_date and run()."""
+"""Unit tests for Orchestrator — _resolve_first_run_start_date and run()."""
 
 import os
 import sys
@@ -9,22 +9,22 @@ import pytest
 
 sys.path.insert(0, os.path.abspath("../../../.."))
 
-from litellm.integrations.mavvrik.uploader import MavvrikUploader
-from litellm.integrations.mavvrik.orchestrator import MavvrikOrchestrator
+from litellm.integrations.mavvrik.uploader import Uploader
+from litellm.integrations.mavvrik.orchestrator import Orchestrator
 
 
-def _make_uploader(**kwargs) -> MavvrikUploader:
+def _make_uploader(**kwargs) -> Uploader:
     defaults = dict(
         api_key="mav_key",
         api_endpoint="https://api.mavvrik.dev/acme",
         connection_id="litellm-test",
     )
     defaults.update(kwargs)
-    return MavvrikUploader(**defaults)
+    return Uploader(**defaults)
 
 
-def _make_orchestrator(**kwargs) -> MavvrikOrchestrator:
-    return MavvrikOrchestrator(uploader=_make_uploader(**kwargs))
+def _make_orchestrator(**kwargs) -> Orchestrator:
+    return Orchestrator(uploader=_make_uploader(**kwargs))
 
 
 # ---------------------------------------------------------------------------
@@ -88,9 +88,7 @@ class TestResolveFirstRunStartDate:
         with patch(
             "litellm.integrations.mavvrik.orchestrator.MAVVRIK_LOOKBACK_START_DATE",
             None,
-        ), patch.object(
-            MavvrikOrchestrator, "_utc_today", return_value=date(2026, 4, 16)
-        ):
+        ), patch.object(Orchestrator, "_utc_today", return_value=date(2026, 4, 16)):
             result = await orc._resolve_first_run_start_date()
 
         assert result == date(2026, 4, 15)
@@ -135,9 +133,9 @@ class TestRunExportLoop:
         with patch.object(
             orc._uploader, "upload_usage_data", side_effect=fake_upload
         ), patch.object(
-            MavvrikOrchestrator, "_utc_today", return_value=date(2026, 4, 11)
+            Orchestrator, "_utc_today", return_value=date(2026, 4, 11)
         ), patch.object(
-            MavvrikOrchestrator, "_get_pod_lock_manager", return_value=None
+            Orchestrator, "_get_pod_lock_manager", return_value=None
         ):
             await orc.run()
 
@@ -162,9 +160,9 @@ class TestRunExportLoop:
         with patch.object(
             orc._uploader, "upload_usage_data", side_effect=fake_upload
         ), patch.object(
-            MavvrikOrchestrator, "_utc_today", return_value=date(2026, 4, 10)
+            Orchestrator, "_utc_today", return_value=date(2026, 4, 10)
         ), patch.object(
-            MavvrikOrchestrator, "_get_pod_lock_manager", return_value=None
+            Orchestrator, "_get_pod_lock_manager", return_value=None
         ):
             await orc.run()
 
@@ -184,9 +182,9 @@ class TestRunExportLoop:
         with patch.object(
             orc._uploader, "upload_usage_data"
         ) as mock_upload, patch.object(
-            MavvrikOrchestrator, "_utc_today", return_value=date(2026, 4, 11)
+            Orchestrator, "_utc_today", return_value=date(2026, 4, 11)
         ), patch.object(
-            MavvrikOrchestrator, "_get_pod_lock_manager", return_value=None
+            Orchestrator, "_get_pod_lock_manager", return_value=None
         ):
             await orc.run()
 
@@ -216,9 +214,9 @@ class TestRunExportLoop:
             "litellm.integrations.mavvrik.orchestrator.MAVVRIK_LOOKBACK_START_DATE",
             None,
         ), patch.object(
-            MavvrikOrchestrator, "_utc_today", return_value=date(2026, 4, 11)
+            Orchestrator, "_utc_today", return_value=date(2026, 4, 11)
         ), patch.object(
-            MavvrikOrchestrator, "_get_pod_lock_manager", return_value=None
+            Orchestrator, "_get_pod_lock_manager", return_value=None
         ):
             await orc.run()
 

@@ -1,9 +1,9 @@
-"""MavvrikUploader — export from Postgres, then upload to Mavvrik.
+"""Uploader — export from Postgres, then upload to Mavvrik.
 
-Upload flow (called by MavvrikOrchestrator or manual endpoints):
+Upload flow (called by Orchestrator or manual endpoints):
 
-  1. Export: query DB + transform to CSV via MavvrikExporter.
-  2. Upload: send gzipped CSV to Mavvrik via MavvrikClient.
+  1. Export: query DB + transform to CSV via Exporter.
+  2. Upload: send gzipped CSV to Mavvrik via Client.
 
 Environment variables (fallback when DB settings are absent):
     MAVVRIK_API_KEY              x-api-key sent to Mavvrik API
@@ -20,11 +20,11 @@ import polars as pl
 
 from litellm._logging import verbose_logger
 from litellm.constants import MAVVRIK_MAX_FETCHED_DATA_RECORDS
-from litellm.integrations.mavvrik.client import MavvrikClient
-from litellm.integrations.mavvrik.exporter import MavvrikExporter
+from litellm.integrations.mavvrik.client import Client
+from litellm.integrations.mavvrik.exporter import Exporter
 
 
-class MavvrikUploader:
+class Uploader:
     """Fetch LiteLLM spend data, transform to CSV, and upload to Mavvrik."""
 
     def __init__(
@@ -36,14 +36,14 @@ class MavvrikUploader:
         self._api_key = api_key or os.getenv("MAVVRIK_API_KEY")
         self._api_endpoint = api_endpoint or os.getenv("MAVVRIK_API_ENDPOINT", "")
         self._connection_id = connection_id or os.getenv("MAVVRIK_CONNECTION_ID", "")
-        self._mavvrik_client = MavvrikClient(
+        self._mavvrik_client = Client(
             api_key=self._api_key or "",
             api_endpoint=self._api_endpoint or "",
             connection_id=self._connection_id or "",
         )
 
         verbose_logger.debug(
-            "MavvrikUploader initialised: endpoint=%s connection_id=%s",
+            "Uploader initialised: endpoint=%s connection_id=%s",
             self._api_endpoint,
             self._connection_id,
         )
@@ -88,24 +88,24 @@ class MavvrikUploader:
         """
         self._validate_config()
 
-        verbose_logger.debug("MavvrikUploader: uploading date %s", date_str)
+        verbose_logger.debug("Uploader: uploading date %s", date_str)
 
-        exporter = MavvrikExporter()
+        exporter = Exporter()
         df = await exporter.get_usage_data(date_str=date_str, limit=limit)
 
         if df.is_empty():
             verbose_logger.debug(
-                "MavvrikUploader: no spend data for %s, nothing to upload", date_str
+                "Uploader: no spend data for %s, nothing to upload", date_str
             )
             return 0
 
-        verbose_logger.debug("MavvrikUploader: %d rows fetched, transforming…", len(df))
+        verbose_logger.debug("Uploader: %d rows fetched, transforming…", len(df))
 
         csv_payload = exporter.to_csv(df, connection_id=self._connection_id)
 
         if not csv_payload:
             verbose_logger.debug(
-                "MavvrikUploader: 0 rows after filter for %s, skipping upload",
+                "Uploader: 0 rows after filter for %s, skipping upload",
                 date_str,
             )
             return 0
@@ -116,7 +116,7 @@ class MavvrikUploader:
         await self._mavvrik_client.upload(csv_payload, date_str=date_str)
 
         verbose_logger.info(
-            "MavvrikUploader: uploaded %d records (%d CSV bytes) for date %s",
+            "Uploader: uploaded %d records (%d CSV bytes) for date %s",
             records_uploaded,
             len(csv_payload),
             date_str,
@@ -136,7 +136,7 @@ class MavvrikUploader:
         if not date_str:
             date_str = (_dt.now(timezone.utc).date() - timedelta(days=1)).isoformat()
 
-        exporter = MavvrikExporter()
+        exporter = Exporter()
         df = await exporter.get_usage_data(
             date_str=date_str,
             limit=limit or MAVVRIK_MAX_FETCHED_DATA_RECORDS,
@@ -200,6 +200,6 @@ class MavvrikUploader:
         ]
         if missing:
             raise ValueError(
-                f"MavvrikUploader: missing required config fields: {missing}. "
+                f"Uploader: missing required config fields: {missing}. "
                 "Set via /mavvrik/init or MAVVRIK_* environment variables."
             )

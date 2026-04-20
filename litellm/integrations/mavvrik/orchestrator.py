@@ -1,4 +1,4 @@
-"""MavvrikOrchestrator — export pipeline: register → fetch → upload → advance.
+"""Orchestrator — export pipeline: register → fetch → upload → advance.
 
 Owns all business orchestration for the Mavvrik export:
   - Acquiring/releasing the pod lock (Redis-backed, multi-pod safe)
@@ -23,16 +23,16 @@ from litellm.constants import (
     MAVVRIK_LOOKBACK_START_DATE,
     MAVVRIK_MAX_FETCHED_DATA_RECORDS,
 )
-from litellm.integrations.mavvrik.client import MavvrikClient
-from litellm.integrations.mavvrik.exporter import MavvrikExporter
+from litellm.integrations.mavvrik.client import Client
+from litellm.integrations.mavvrik.exporter import Exporter
 
 if TYPE_CHECKING:
-    from litellm.integrations.mavvrik.uploader import MavvrikUploader
+    from litellm.integrations.mavvrik.uploader import Uploader
 else:
-    MavvrikUploader = Any
+    Uploader = Any
 
 
-class MavvrikOrchestrator:
+class Orchestrator:
     """Pipeline orchestrator that drives the incremental Mavvrik export loop.
 
     The run() method reads as a high-level pipeline:
@@ -40,14 +40,14 @@ class MavvrikOrchestrator:
         pod lock  →  register  →  for each date:  upload  →  advance marker
     """
 
-    def __init__(self, uploader: "MavvrikUploader") -> None:
+    def __init__(self, uploader: "Uploader") -> None:
         self._uploader = uploader
-        self._client = MavvrikClient(
+        self._client = Client(
             api_key=uploader.api_key or "",
             api_endpoint=uploader.api_endpoint or "",
             connection_id=uploader.connection_id or "",
         )
-        self._exporter = MavvrikExporter()
+        self._exporter = Exporter()
 
     # ------------------------------------------------------------------
     # Helpers
@@ -102,7 +102,7 @@ class MavvrikOrchestrator:
                     )
             else:
                 verbose_logger.debug(
-                    "MavvrikOrchestrator: pod lock not acquired — another pod is running"
+                    "Orchestrator: pod lock not acquired — another pod is running"
                 )
         else:
             # Redis not available — no distributed locking possible.
@@ -119,9 +119,7 @@ class MavvrikOrchestrator:
             start_date = await self._register()
 
             if start_date > self._yesterday:
-                verbose_logger.debug(
-                    "MavvrikOrchestrator: up to date, nothing to export"
-                )
+                verbose_logger.debug("Orchestrator: up to date, nothing to export")
                 return
 
             for export_date in self._date_range(start_date):
@@ -129,7 +127,7 @@ class MavvrikOrchestrator:
                 await self._advance_marker(export_date)
 
         except Exception as exc:
-            verbose_logger.error("MavvrikOrchestrator: run failed: %s", exc)
+            verbose_logger.error("Orchestrator: run failed: %s", exc)
             await self._client.report_error(str(exc)[:500])
 
     # ------------------------------------------------------------------
@@ -146,10 +144,10 @@ class MavvrikOrchestrator:
         marker_str: Optional[str] = None
         try:
             marker_str = await self._client.register()
-            verbose_logger.debug("MavvrikOrchestrator: Mavvrik marker = %s", marker_str)
+            verbose_logger.debug("Orchestrator: Mavvrik marker = %s", marker_str)
         except Exception as exc:
             verbose_logger.warning(
-                "MavvrikOrchestrator: register() failed, "
+                "Orchestrator: register() failed, "
                 "falling back to first-run start date: %s",
                 exc,
             )
@@ -162,7 +160,7 @@ class MavvrikOrchestrator:
     async def _upload_date(self, export_date: date) -> None:
         """Step 2: Fetch usage data, transform to CSV, and upload to Mavvrik."""
         date_str = export_date.isoformat()
-        verbose_logger.info("MavvrikOrchestrator: uploading date %s", date_str)
+        verbose_logger.info("Orchestrator: uploading date %s", date_str)
 
         await self._uploader.upload_usage_data(
             date_str=date_str,
@@ -198,7 +196,7 @@ class MavvrikOrchestrator:
                 requested_start = date.fromisoformat(MAVVRIK_LOOKBACK_START_DATE)
             except ValueError:
                 verbose_logger.warning(
-                    "MavvrikOrchestrator: invalid MAVVRIK_LOOKBACK_START_DATE '%s' "
+                    "Orchestrator: invalid MAVVRIK_LOOKBACK_START_DATE '%s' "
                     "(expected YYYY-MM-DD), falling back to earliest DB date",
                     MAVVRIK_LOOKBACK_START_DATE,
                 )
@@ -214,19 +212,19 @@ class MavvrikOrchestrator:
         if requested_start is not None and earliest_db is not None:
             start_date = max(requested_start, earliest_db)
             verbose_logger.info(
-                "MavvrikOrchestrator: no marker found, starting from %s", start_date
+                "Orchestrator: no marker found, starting from %s", start_date
             )
         elif requested_start is not None:
             start_date = requested_start
             verbose_logger.info(
-                "MavvrikOrchestrator: no marker found, starting from "
+                "Orchestrator: no marker found, starting from "
                 "MAVVRIK_LOOKBACK_START_DATE %s",
                 start_date,
             )
         elif earliest_db is not None:
             start_date = earliest_db
             verbose_logger.info(
-                "MavvrikOrchestrator: no marker found, starting from earliest DB date %s",
+                "Orchestrator: no marker found, starting from earliest DB date %s",
                 start_date,
             )
         else:

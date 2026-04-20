@@ -23,7 +23,7 @@ from litellm.types.proxy.mavvrik_endpoints import (
 )
 
 # Patch target prefix — MavvrikService methods live in the integrations package.
-_SVC = "litellm.integrations.mavvrik.MavvrikService"
+_SVC = "litellm.integrations.mavvrik.Service"
 
 
 def _admin_user() -> UserAPIKeyAuth:
@@ -73,7 +73,7 @@ class TestAdminGate:
 # ---------------------------------------------------------------------------
 
 
-class TestInitMavvrikSettings:
+class TestInitSettings:
     @pytest.mark.asyncio
     async def test_init_stores_settings_and_returns_success(self):
         req = MavvrikInitRequest(
@@ -98,7 +98,7 @@ class TestInitMavvrikSettings:
     @pytest.mark.asyncio
     async def test_init_succeeds_even_when_scheduler_unavailable(self):
         """MavvrikService.initialize() succeeds even if scheduler is not available."""
-        from litellm.integrations.mavvrik.settings import MavvrikSettings
+        from litellm.integrations.mavvrik.settings import Settings
 
         req = MavvrikInitRequest(
             api_key="mav_key",
@@ -106,7 +106,7 @@ class TestInitMavvrikSettings:
             connection_id="litellm-prod",
         )
 
-        with patch.object(MavvrikSettings, "save", new=AsyncMock()), patch(
+        with patch.object(Settings, "save", new=AsyncMock()), patch(
             "litellm.proxy.proxy_server.scheduler", None
         ):
             resp = await init_mavvrik_settings(req, user_api_key_dict=_admin_user())
@@ -119,7 +119,7 @@ class TestInitMavvrikSettings:
 # ---------------------------------------------------------------------------
 
 
-class TestGetMavvrikSettings:
+class TestGetSettings:
     @pytest.mark.asyncio
     async def test_returns_not_configured_when_no_row(self):
         with patch(
@@ -178,7 +178,7 @@ class TestGetMavvrikSettings:
 # ---------------------------------------------------------------------------
 
 
-class TestUpdateMavvrikSettings:
+class TestUpdateSettings:
     @pytest.mark.asyncio
     async def test_update_rejects_empty_request(self):
         from fastapi import HTTPException
@@ -198,10 +198,10 @@ class TestUpdateMavvrikSettings:
 # ---------------------------------------------------------------------------
 
 
-class TestDeleteMavvrikSettings:
+class TestDeleteSettings:
     @pytest.mark.asyncio
     async def test_delete_returns_404_when_not_configured(self):
-        """MavvrikSettings.delete() raises LookupError → endpoint returns 404."""
+        """Settings.delete() raises LookupError → endpoint returns 404."""
         from fastapi import HTTPException
 
         with patch(
@@ -412,15 +412,15 @@ class TestLifecycleFlow:
 
 
 # ---------------------------------------------------------------------------
-# MavvrikSettings — setup detection
+# Settings — setup detection
 # ---------------------------------------------------------------------------
 
 
 class TestSettingsSetup:
     @pytest.mark.asyncio
     async def test_is_mavvrik_setup_true_when_env_vars_set(self):
-        """MavvrikSettings.is_setup returns True when all env vars are present."""
-        from litellm.integrations.mavvrik.settings import MavvrikSettings
+        """Settings.is_setup returns True when all env vars are present."""
+        from litellm.integrations.mavvrik.settings import Settings
 
         with patch.dict(
             "os.environ",
@@ -430,14 +430,14 @@ class TestSettingsSetup:
                 "MAVVRIK_CONNECTION_ID": "prod",
             },
         ):
-            result = await MavvrikSettings().is_setup()
+            result = await Settings().is_setup()
 
         assert result is True
 
     @pytest.mark.asyncio
     async def test_is_mavvrik_setup_false_when_no_env_and_no_db(self):
-        """MavvrikSettings.is_setup returns False when env vars missing and DB not connected."""
-        from litellm.integrations.mavvrik.settings import MavvrikSettings
+        """Settings.is_setup returns False when env vars missing and DB not connected."""
+        from litellm.integrations.mavvrik.settings import Settings
 
         env = {
             k: ""
@@ -449,9 +449,9 @@ class TestSettingsSetup:
         }
         with patch.dict("os.environ", env):
             with patch(
-                "litellm.integrations.mavvrik.settings.MavvrikSettings._prisma_client",
+                "litellm.integrations.mavvrik.settings.Settings._prisma_client",
                 new_callable=lambda: property(lambda self: None),
             ):
-                result = await MavvrikSettings().is_setup()
+                result = await Settings().is_setup()
 
         assert result is False

@@ -26,12 +26,12 @@ _ENV_VARS = (
 )
 
 
-class MavvrikSettings:
+class Settings:
     """Manages Mavvrik configuration: detection, persistence, and encryption.
 
     Usage::
 
-        settings = MavvrikSettings()
+        settings = Settings()
         if await settings.is_setup():
             data = await settings.load()  # api_key already decrypted
     """
@@ -83,7 +83,7 @@ class MavvrikSettings:
             )
             return row is not None and row.param_value is not None
         except Exception as exc:
-            verbose_logger.debug("MavvrikSettings.is_setup: DB check failed — %s", exc)
+            verbose_logger.debug("Settings.is_setup: DB check failed — %s", exc)
             return False
 
     # ------------------------------------------------------------------
@@ -157,7 +157,7 @@ class MavvrikSettings:
             raise LookupError("Mavvrik settings not found — nothing to delete.")
 
         await client.db.litellm_config.delete(where={"param_name": _CONFIG_KEY})
-        verbose_logger.info("MavvrikSettings: settings row deleted")
+        verbose_logger.info("Settings: settings row deleted")
 
     # ------------------------------------------------------------------
     # Encryption helpers (owned here so callers never touch utils directly)

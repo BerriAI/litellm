@@ -1,4 +1,4 @@
-"""Unit tests for MavvrikSettings — config detection, persistence, encryption."""
+"""Unit tests for Settings — config detection, persistence, encryption."""
 
 import json
 import os
@@ -9,7 +9,7 @@ import pytest
 
 sys.path.insert(0, os.path.abspath("../../../.."))
 
-from litellm.integrations.mavvrik.settings import MavvrikSettings
+from litellm.integrations.mavvrik.settings import Settings
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -43,7 +43,7 @@ class TestIsSetup:
     @pytest.mark.asyncio
     async def test_returns_true_via_env_vars(self):
         """is_setup() returns True when all three env vars are present."""
-        s = MavvrikSettings()
+        s = Settings()
         env = {
             "MAVVRIK_API_KEY": "mav_key",
             "MAVVRIK_API_ENDPOINT": "https://api.mavvrik.dev/acme",
@@ -57,7 +57,7 @@ class TestIsSetup:
     @pytest.mark.asyncio
     async def test_returns_true_via_db(self):
         """is_setup() returns True when a DB row exists (no env vars)."""
-        s = MavvrikSettings()
+        s = Settings()
         mock_row = _make_db_row(
             {"api_key": "enc", "api_endpoint": "https://e", "connection_id": "c"}
         )
@@ -83,7 +83,7 @@ class TestIsSetup:
     @pytest.mark.asyncio
     async def test_returns_false_when_neither_configured(self):
         """is_setup() returns False when env vars are missing and DB has no row."""
-        s = MavvrikSettings()
+        s = Settings()
         mock_client = _mock_prisma(row=None)
 
         env = {
@@ -106,7 +106,7 @@ class TestIsSetup:
     @pytest.mark.asyncio
     async def test_returns_false_when_prisma_client_is_none(self):
         """is_setup() returns False when no DB is connected and env vars absent."""
-        s = MavvrikSettings()
+        s = Settings()
         env = {
             k: ""
             for k in (
@@ -132,7 +132,7 @@ class TestSave:
     @pytest.mark.asyncio
     async def test_save_encrypts_api_key_and_persists(self):
         """save() encrypts the api_key before writing to the database."""
-        s = MavvrikSettings()
+        s = Settings()
         mock_client = _mock_prisma()
 
         with patch.object(
@@ -167,7 +167,7 @@ class TestLoad:
     @pytest.mark.asyncio
     async def test_load_decrypts_api_key(self):
         """load() returns settings with api_key already decrypted."""
-        s = MavvrikSettings()
+        s = Settings()
         row = _make_db_row(
             {
                 "api_key": "encrypted_key",
@@ -191,7 +191,7 @@ class TestLoad:
     @pytest.mark.asyncio
     async def test_load_returns_empty_dict_when_no_row(self):
         """load() returns {} when no row exists in the database."""
-        s = MavvrikSettings()
+        s = Settings()
         mock_client = _mock_prisma(row=None)
 
         with patch.object(
@@ -213,7 +213,7 @@ class TestDelete:
     @pytest.mark.asyncio
     async def test_delete_removes_config_row(self):
         """delete() calls prisma delete when the row exists."""
-        s = MavvrikSettings()
+        s = Settings()
         row = _make_db_row(
             {"api_key": "enc", "api_endpoint": "https://e", "connection_id": "c"}
         )
@@ -233,7 +233,7 @@ class TestDelete:
     @pytest.mark.asyncio
     async def test_delete_raises_lookup_error_when_not_configured(self):
         """delete() raises LookupError when no settings row exists."""
-        s = MavvrikSettings()
+        s = Settings()
         mock_client = _mock_prisma(row=None)
 
         with patch.object(

@@ -46,7 +46,7 @@ _MAX_RETRIES = 3
 _RETRY_BACKOFF_BASE = 1.0  # seconds; doubles each retry
 
 
-class MavvrikClient:
+class Client:
     """Upload gzip-compressed CSV spend data to Mavvrik via a signed URL upload."""
 
     def __init__(self, api_key: str, api_endpoint: str, connection_id: str) -> None:
@@ -102,9 +102,7 @@ class MavvrikClient:
             RuntimeError: if any upload step fails after retries.
         """
         if not csv_payload.strip():
-            verbose_proxy_logger.debug(
-                "Mavvrik uploader: empty payload, skipping upload"
-            )
+            verbose_proxy_logger.debug("uploader: empty payload, skipping upload")
             return
 
         upload_data = self._compress(csv_payload)
@@ -120,7 +118,7 @@ class MavvrikClient:
             await self._finalize_upload(session_uri, upload_data, client=client)
 
         verbose_proxy_logger.info(
-            "Mavvrik uploader: successfully uploaded %d bytes for date %s",
+            "uploader: successfully uploaded %d bytes for date %s",
             len(upload_data),
             date_str,
         )
@@ -164,14 +162,14 @@ class MavvrikClient:
 
         if not epoch:
             verbose_proxy_logger.info(
-                "Mavvrik register: remote epoch=%s → no marker (first run)",
+                "register: remote epoch=%s → no marker (first run)",
                 epoch,
             )
             return None
 
         marker_iso = _dt.fromtimestamp(float(epoch), tz=_tz.utc).isoformat()
         verbose_proxy_logger.info(
-            "Mavvrik register: remote epoch=%s → marker %s",
+            "register: remote epoch=%s → marker %s",
             epoch,
             marker_iso,
         )
@@ -199,12 +197,10 @@ class MavvrikClient:
 
         if resp.status_code not in (200, 204):
             raise RuntimeError(
-                f"Mavvrik advance_marker failed: {resp.status_code} {resp.text[:200]}"
+                f"advance_marker failed: {resp.status_code} {resp.text[:200]}"
             )
 
-        verbose_proxy_logger.info(
-            "Mavvrik uploader: marker advanced to epoch %d", epoch
-        )
+        verbose_proxy_logger.info("uploader: marker advanced to epoch %d", epoch)
 
     async def report_error(self, error_message: str) -> None:
         """PATCH the Mavvrik agent endpoint to report an export error.
@@ -229,19 +225,17 @@ class MavvrikClient:
 
             if resp.status_code not in (200, 204):
                 verbose_proxy_logger.warning(
-                    "Mavvrik report_error PATCH returned %d: %s",
+                    "report_error PATCH returned %d: %s",
                     resp.status_code,
                     resp.text[:200],
                 )
             else:
                 verbose_proxy_logger.debug(
-                    "Mavvrik report_error: error reported for connection %s",
+                    "report_error: error reported for connection %s",
                     self.connection_id,
                 )
         except Exception as exc:
-            verbose_proxy_logger.warning(
-                "Mavvrik report_error failed (non-fatal): %s", exc
-            )
+            verbose_proxy_logger.warning("report_error failed (non-fatal): %s", exc)
 
     # ------------------------------------------------------------------
     # Step 1: Get signed URL from Mavvrik API
@@ -272,7 +266,7 @@ class MavvrikClient:
                     signed_url = body.get("url")
                     if signed_url:
                         verbose_proxy_logger.debug(
-                            "Mavvrik uploader: got signed URL for date %s", date_str
+                            "uploader: got signed URL for date %s", date_str
                         )
                         return signed_url
                     raise RuntimeError(
@@ -290,7 +284,7 @@ class MavvrikClient:
 
             wait = _RETRY_BACKOFF_BASE * (2**attempt)
             verbose_proxy_logger.warning(
-                "Mavvrik uploader: signed URL attempt %d/%d failed for date %s, "
+                "uploader: signed URL attempt %d/%d failed for date %s, "
                 "retrying in %.1fs: %s",
                 attempt + 1,
                 _MAX_RETRIES,
@@ -337,7 +331,7 @@ class MavvrikClient:
                             "Mavvrik initiate upload response missing Location header"
                         )
                     verbose_proxy_logger.debug(
-                        "Mavvrik uploader: resumable upload session created"
+                        "uploader: resumable upload session created"
                     )
                     return session_uri
 
@@ -352,7 +346,7 @@ class MavvrikClient:
 
             wait = _RETRY_BACKOFF_BASE * (2**attempt)
             verbose_proxy_logger.warning(
-                "Mavvrik uploader: initiate attempt %d/%d failed, retrying in %.1fs: %s",
+                "uploader: initiate attempt %d/%d failed, retrying in %.1fs: %s",
                 attempt + 1,
                 _MAX_RETRIES,
                 wait,
@@ -395,7 +389,7 @@ class MavvrikClient:
 
                 if resp.status_code in (200, 201):
                     verbose_proxy_logger.debug(
-                        "Mavvrik uploader: finalize upload OK (%d)", resp.status_code
+                        "uploader: finalize upload OK (%d)", resp.status_code
                     )
                     return
 
@@ -410,7 +404,7 @@ class MavvrikClient:
 
             wait = _RETRY_BACKOFF_BASE * (2**attempt)
             verbose_proxy_logger.warning(
-                "Mavvrik uploader: finalize attempt %d/%d failed, retrying in %.1fs: %s",
+                "uploader: finalize attempt %d/%d failed, retrying in %.1fs: %s",
                 attempt + 1,
                 _MAX_RETRIES,
                 wait,

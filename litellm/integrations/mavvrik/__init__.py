@@ -1,14 +1,14 @@
 """Mavvrik cost-data integration for LiteLLM.
 
 Module layout:
-  exporter.py      — MavvrikExporter (DB queries + DataFrame → CSV transform)
-  uploader.py      — MavvrikUploader (export → upload pipeline)
-  client.py        — MavvrikClient (3-step signed URL upload + register/advance_marker)
-  settings.py      — MavvrikSettings (config detection and persistence)
-  orchestrator.py  — MavvrikOrchestrator (pod lock + register → date loop → upload → advance)
+  exporter.py      — Exporter (DB queries + DataFrame → CSV transform)
+  uploader.py      — Uploader (export → upload pipeline)
+  client.py        — Client (3-step signed URL upload + register/advance_marker)
+  settings.py      — Settings (config detection and persistence)
+  orchestrator.py  — Orchestrator (pod lock + register → date loop → upload → advance)
 
 Public facade:
-  MavvrikService — used by mavvrik_endpoints.py; all business logic lives here.
+  Service — used by mavvrik_endpoints.py; all business logic lives here.
 """
 
 from datetime import datetime, timedelta
@@ -16,10 +16,10 @@ from datetime import timezone as _tz
 from typing import Optional
 
 from litellm._logging import verbose_proxy_logger
-from litellm.integrations.mavvrik.settings import MavvrikSettings
+from litellm.integrations.mavvrik.settings import Settings
 
 
-class MavvrikService:
+class Service:
     """Public facade that mediates between the REST endpoints and the Mavvrik modules.
 
     Each method maps 1-to-1 with an endpoint action.  All methods return plain
@@ -33,14 +33,14 @@ class MavvrikService:
     """
 
     def __init__(self) -> None:
-        self._settings = MavvrikSettings()
+        self._settings = Settings()
 
     # ------------------------------------------------------------------
     # Properties
     # ------------------------------------------------------------------
 
     @property
-    def settings(self) -> MavvrikSettings:
+    def settings(self) -> Settings:
         return self._settings
 
     # ------------------------------------------------------------------
@@ -84,19 +84,19 @@ class MavvrikService:
                 MAVVRIK_EXPORT_INTERVAL_MINUTES,
                 MAVVRIK_EXPORT_USAGE_DATA_JOB_NAME,
             )
-            from litellm.integrations.mavvrik.orchestrator import MavvrikOrchestrator
-            from litellm.integrations.mavvrik.uploader import MavvrikUploader
+            from litellm.integrations.mavvrik.orchestrator import Orchestrator
+            from litellm.integrations.mavvrik.uploader import Uploader
 
             import litellm.proxy.proxy_server as _pserver
 
             _scheduler = getattr(_pserver, "scheduler", None)
             if _scheduler is not None:
-                uploader = MavvrikUploader(
+                uploader = Uploader(
                     api_key=api_key,
                     api_endpoint=api_endpoint,
                     connection_id=connection_id,
                 )
-                orchestrator = MavvrikOrchestrator(uploader=uploader)
+                orchestrator = Orchestrator(uploader=uploader)
                 _scheduler.add_job(
                     orchestrator.run,
                     "interval",
@@ -105,16 +105,16 @@ class MavvrikService:
                     replace_existing=True,
                 )
                 verbose_proxy_logger.info(
-                    "Mavvrik background export job scheduled every %d min",
+                    "mavvrik background export job scheduled every %d min",
                     MAVVRIK_EXPORT_INTERVAL_MINUTES,
                 )
             else:
                 verbose_proxy_logger.warning(
-                    "Mavvrik: scheduler not available, background job not registered"
+                    "mavvrik: scheduler not available, background job not registered"
                 )
         except Exception as sched_exc:
             verbose_proxy_logger.warning(
-                "Mavvrik: could not register background job after init (%s)", sched_exc
+                "mavvrik: could not register background job after init (%s)", sched_exc
             )
 
         return {
@@ -241,14 +241,14 @@ class MavvrikService:
                     _scheduler.remove_job(MAVVRIK_EXPORT_USAGE_DATA_JOB_NAME)
                 except Exception as exc:
                     verbose_proxy_logger.debug(
-                        "Mavvrik: scheduler job already removed or not found: %s", exc
+                        "mavvrik: scheduler job already removed or not found: %s", exc
                     )
         except Exception as exc:
             verbose_proxy_logger.debug(
-                "Mavvrik: could not access scheduler during delete: %s", exc
+                "mavvrik: could not access scheduler during delete: %s", exc
             )
 
-        verbose_proxy_logger.info("Mavvrik settings deleted")
+        verbose_proxy_logger.info("mavvrik settings deleted")
         return {"message": "Mavvrik settings deleted successfully", "status": "success"}
 
     # ------------------------------------------------------------------
@@ -272,7 +272,7 @@ class MavvrikService:
         Returns:
             {"message": str, "status": "success", "records_exported": int}
         """
-        from litellm.integrations.mavvrik.uploader import MavvrikUploader
+        from litellm.integrations.mavvrik.uploader import Uploader
 
         data = await self._settings.load()
 
@@ -282,7 +282,7 @@ class MavvrikService:
 
         date_str = date_str or self._yesterday()
 
-        uploader = MavvrikUploader(
+        uploader = Uploader(
             api_key=data.get("api_key") if data else None,
             api_endpoint=data.get("api_endpoint") if data else None,
             connection_id=data.get("connection_id") if data else None,
@@ -315,7 +315,7 @@ class MavvrikService:
         Returns:
             {"message": str, "status": "success", "dry_run_data": dict, "summary": dict}
         """
-        from litellm.integrations.mavvrik.uploader import MavvrikUploader
+        from litellm.integrations.mavvrik.uploader import Uploader
 
         data = await self._settings.load()
         if not data and not self._settings.has_env_vars:
@@ -323,7 +323,7 @@ class MavvrikService:
 
         date_str = date_str or self._yesterday()
 
-        uploader = MavvrikUploader(
+        uploader = Uploader(
             api_key=data.get("api_key") if data else None,
             api_endpoint=data.get("api_endpoint") if data else None,
             connection_id=data.get("connection_id") if data else None,
@@ -338,3 +338,12 @@ class MavvrikService:
             },
             "summary": result["summary"],
         }
+
+
+from litellm.integrations.mavvrik.client import Client
+from litellm.integrations.mavvrik.exporter import Exporter
+from litellm.integrations.mavvrik.orchestrator import Orchestrator
+from litellm.integrations.mavvrik.settings import Settings
+from litellm.integrations.mavvrik.uploader import Uploader
+
+__all__ = ["Client", "Exporter", "Orchestrator", "Service", "Settings", "Uploader"]
