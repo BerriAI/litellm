@@ -70,6 +70,7 @@ _RATIONALE_TRUNCATE_CHARS = 200
 _DEFAULT_POLICIES = [
     "Default_Policy_SystemPromptEnforcement",
     "Default_Policy_HarmfulContentProtection",
+    "Default_Policy_GeneralPromptAttackProtection",
 ]
 
 
@@ -207,6 +208,15 @@ class XecGuardGuardrail(CustomGuardrail):
         StandardLoggingGuardrailInformation entry so the scan decision
         reaches downstream loggers (Langfuse, DataDog, etc.).
         """
+        if (
+            isinstance(kwargs, dict)
+            and "litellm_params" in kwargs
+            and "metadata" in kwargs["litellm_params"]
+            and "standard_logging_guardrail_information"in kwargs["litellm_params"]["metadata"]
+            and kwargs["litellm_params"]["metadata"]["standard_logging_guardrail_information"]
+        ):
+            return kwargs, result
+
         start_time = datetime.now()
         try:
             assistant_text = self._extract_assistant_text_from_response(result)
