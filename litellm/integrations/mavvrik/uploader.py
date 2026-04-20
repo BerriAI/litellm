@@ -101,17 +101,20 @@ class Uploader:
 
         verbose_logger.debug("Uploader: %d rows fetched, transforming…", len(df))
 
-        csv_payload = exporter.to_csv(df, connection_id=self._connection_id)
+        # Apply the same filter as to_csv (successful_requests > 0) before
+        # serialising so the record count reflects what is actually uploaded.
+        if "successful_requests" in df.columns:
+            df = df.filter(pl.col("successful_requests") > 0)
 
-        if not csv_payload:
+        if df.is_empty():
             verbose_logger.debug(
                 "Uploader: 0 rows after filter for %s, skipping upload",
                 date_str,
             )
             return 0
 
-        # Count rows actually uploaded (post-filter, matches CSV content).
-        records_uploaded = csv_payload.count("\n") - 1  # subtract header row
+        records_uploaded = len(df)
+        csv_payload = exporter.to_csv(df, connection_id=self._connection_id)
 
         await self._mavvrik_client.upload(csv_payload, date_str=date_str)
 
@@ -155,7 +158,7 @@ class Uploader:
                 },
             }
 
-        csv_payload = exporter.to_csv(df)
+        csv_payload = exporter.to_csv(df, connection_id=self._connection_id)
 
         # Apply same filter as to_csv (successful_requests > 0) so preview and
         # summary stats match what would actually be uploaded.

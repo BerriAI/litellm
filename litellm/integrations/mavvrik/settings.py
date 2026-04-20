@@ -119,9 +119,13 @@ class Settings:
             return value
 
         decrypted = self.decrypt_value_helper(encrypted_key, key="mavvrik_api_key")
-        if decrypted is not None:
-            value["api_key"] = decrypted
+        if decrypted is None:
+            raise ValueError(
+                "Failed to decrypt stored Mavvrik API key — possible salt/master key mismatch. "
+                "Re-initialize via POST /mavvrik/init to store credentials with the current key."
+            )
 
+        value["api_key"] = decrypted
         return value
 
     async def save(
