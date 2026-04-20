@@ -1570,9 +1570,9 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         user_api_key_project_id = standard_logging_metadata.get(
             "user_api_key_project_id"
         )
-        user_api_key_end_user_id = kwargs.get(
-            "user"
-        ) or standard_logging_metadata.get("user_api_key_end_user_id")
+        user_api_key_end_user_id = kwargs.get("user") or standard_logging_metadata.get(
+            "user_api_key_end_user_id"
+        )
         model_group = get_model_group_from_litellm_kwargs(kwargs)
 
         # Get total tokens from response

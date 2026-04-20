@@ -132,7 +132,9 @@ class AdaptiveRouterUpdateQueue:
                         "update": {
                             "alpha": {"increment": payload["delta_alpha"]},
                             "beta": {"increment": payload["delta_beta"]},
-                            "total_samples": {"increment": int(payload["samples_added"])},
+                            "total_samples": {
+                                "increment": int(payload["samples_added"])
+                            },
                         },
                     },
                 )
