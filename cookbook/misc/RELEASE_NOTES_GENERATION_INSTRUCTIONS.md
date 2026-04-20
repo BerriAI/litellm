@@ -9,6 +9,32 @@ This document provides comprehensive instructions for AI agents to generate rele
 3. **Previous Version Commit Hash** - To compare model pricing changes
 4. **Reference Release Notes** - Use recent stable releases (v1.76.3-stable, v1.77.2-stable) as templates for consistent formatting
 
+### Resolving Staging PRs
+
+The GitHub release page (e.g. `https://github.com/BerriAI/litellm/releases/tag/v1.83.3-stable`) does **not** list the real changelog directly. The "What's Changed" section contains **staging PRs** that each bundle many individual commits/PRs. For example:
+
+- `Litellm oss staging 03 14 2026 by @RheagalFire in #23686`
+- `Litellm ryan march 16 by @ryan-crabbe in #23822`
+
+To get the real changelog, you MUST click into each staging PR (e.g. `#23686`, `#23822`), open its **Commits** tab, and extract every underlying commit/PR (look for the `(#NNNNN)` suffix on commit titles). Those underlying PRs — not the staging PRs — are what get categorized in the release notes. Never treat a staging PR title as a single changelog entry.
+
+**IMPORTANT — staging PRs are not the complete source.** Some PRs land on the release branch *before* the staging PRs and are therefore not reachable via `gh api /pulls/<staging>/commits`. GitHub's auto-generated "What's Changed" on the release page also misses these. To catch every PR in the release, you MUST additionally walk the full git log range between the previous release's commit and this release's commit:
+
+```bash
+git fetch origin --tags
+git log <prev_release_commit>..<this_release_commit> --oneline | grep -oE '#[0-9]+' | sort -u
+```
+
+Union the PR set from the staging-PR walk with the PR set from `git log`. Any PR in `git log` but missing from your staging-expanded set is almost certainly a content PR that merged directly to the release branch — fetch its title/body with `gh pr view <N>` and categorize it. Do not trust the GH release body or the staging PRs alone as the authoritative list.
+
+**Sanity check for new contributors.** The GH release body's "New Contributors" list is a *floor*, not authoritative. For every PR author who appears in the release (including underlying PRs from staging and PRs found only via `git log`), verify whether they are a first-time contributor by running:
+
+```bash
+gh api "search/issues?q=is:pr+author:<login>+repo:BerriAI/litellm+is:merged&sort=created&order=asc" --jq '.items[0] | {n:.number, merged:.closed_at}'
+```
+
+If the author's earliest merged PR number matches a PR in this release window, they are a new contributor. If their earliest merged PR predates the previous release tag, they are not. Do not copy the GH release body's list blindly — it can both miss contributors (PRs that merged via an older dev branch) and falsely include contributors whose "first" PR in this window was not actually their first ever.
+
 ## Step-by-Step Process
 
 ### 1. Initial Setup and Analysis

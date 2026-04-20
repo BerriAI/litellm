@@ -256,6 +256,11 @@ const sidebars = {
             },
             {
               type: "doc",
+              id: "completion/prompt_compression",
+              label: "compress()",
+            },
+            {
+              type: "doc",
               id: "audio_transcription",
               label: "transcription()",
             },
@@ -332,6 +337,13 @@ const sidebars = {
                   label: "MCP Troubleshooting Guide",
                   href: "/docs/mcp_troubleshoot"
                 },
+              ],
+            },
+            {
+              type: "category",
+              label: "Skills Gateway",
+              items: [
+                "skills_gateway",
               ],
             },
           ],
@@ -1144,6 +1156,7 @@ const sidebars = {
       label: "Troubleshooting",
       items: [
         "troubleshoot/ui_issues",
+        "troubleshoot/cost_discrepancy",
         "mcp_troubleshoot",
         {
           type: "category",
@@ -1280,6 +1293,7 @@ const learnSidebar = {
           items: [
             "completion/prefix",
             "completion/predict_outputs",
+            "completion/prompt_compression",
             "completion/message_trimming",
             "completion/prompt_caching",
             "completion/prompt_formatting",

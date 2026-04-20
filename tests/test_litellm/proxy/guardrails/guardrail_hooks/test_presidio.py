@@ -2230,3 +2230,171 @@ async def test_apply_to_output_streaming_bytes_only_logs_warning():
         mock_logger.warning.assert_called_once()
         warning_msg = mock_logger.warning.call_args[0][0]
         assert "Output PII masking was skipped" in warning_msg
+
+
+@pytest.mark.asyncio
+async def test_anonymize_text_uses_correct_positions_no_parse_pii():
+    """
+    Regression test for anonymizer offset bug (fixes #24160).
+
+    The Presidio anonymizer returns items with start/end positions that
+    reference the *anonymized output* text, not the original input text.
+    When output_parse_pii is False, anonymize_text must return
+    redacted_text["text"] directly instead of manually splicing the
+    original text using those positions, which produces garbled output
+    with remnants of original PII data.
+    """
+    original_text = (
+        "My name is John Smith, my email is john@example.com, phone 555-867-5309"
+    )
+    # Positions as returned by the analyzer (reference original text)
+    analyze_results = [
+        {"end": 51, "entity_type": "EMAIL_ADDRESS", "score": 1.0, "start": 35},
+        {"end": 21, "entity_type": "PERSON", "score": 0.85, "start": 11},
+        {"end": 71, "entity_type": "PHONE_NUMBER", "score": 0.75, "start": 59},
+    ]
+    # Anonymizer response — positions reference the *anonymized* text
+    anonymizer_response = {
+        "text": "My name is <PERSON>, my email is <EMAIL_ADDRESS>, phone <PHONE_NUMBER>",
+        "items": [
+            {
+                "start": 56,
+                "end": 70,
+                "entity_type": "PHONE_NUMBER",
+                "text": "<PHONE_NUMBER>",
+                "operator": "replace",
+            },
+            {
+                "start": 33,
+                "end": 48,
+                "entity_type": "EMAIL_ADDRESS",
+                "text": "<EMAIL_ADDRESS>",
+                "operator": "replace",
+            },
+            {
+                "start": 11,
+                "end": 19,
+                "entity_type": "PERSON",
+                "text": "<PERSON>",
+                "operator": "replace",
+            },
+        ],
+    }
+
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        presidio_analyzer_api_base="http://test-analyzer/",
+        presidio_anonymizer_api_base="http://test-anonymizer/",
+        mock_testing=False,
+    )
+
+    mock_iterator = _make_mock_session_iterator(
+        json_response=anonymizer_response,
+    )
+
+    masked_entity_count = {}
+    with patch.object(guardrail, "_get_session_iterator", mock_iterator):
+        result = await guardrail.anonymize_text(
+            text=original_text,
+            analyze_results=analyze_results,
+            output_parse_pii=False,
+            masked_entity_count=masked_entity_count,
+        )
+
+    expected = "My name is <PERSON>, my email is <EMAIL_ADDRESS>, phone <PHONE_NUMBER>"
+    assert result == expected, (
+        f"anonymize_text produced garbled output with PII remnants.\n"
+        f"Expected: {expected!r}\n"
+        f"Got:      {result!r}"
+    )
+    assert masked_entity_count == {
+        "PERSON": 1,
+        "EMAIL_ADDRESS": 1,
+        "PHONE_NUMBER": 1,
+    }
+
+
+@pytest.mark.asyncio
+async def test_anonymize_text_uses_correct_positions_with_parse_pii():
+    """
+    Regression test for anonymizer offset bug with output_parse_pii=True
+    (fixes #24160).
+
+    When output_parse_pii is True, anonymize_text must use positions from
+    analyze_results (which reference the original text) to build numbered
+    tokens and the pii_tokens mapping, not positions from anonymizer items
+    (which reference the anonymized output text).
+    """
+    original_text = (
+        "My name is John Smith, my email is john@example.com, phone 555-867-5309"
+    )
+    analyze_results = [
+        {"end": 51, "entity_type": "EMAIL_ADDRESS", "score": 1.0, "start": 35},
+        {"end": 21, "entity_type": "PERSON", "score": 0.85, "start": 11},
+        {"end": 71, "entity_type": "PHONE_NUMBER", "score": 0.75, "start": 59},
+    ]
+    anonymizer_response = {
+        "text": "My name is <PERSON>, my email is <EMAIL_ADDRESS>, phone <PHONE_NUMBER>",
+        "items": [
+            {
+                "start": 56,
+                "end": 70,
+                "entity_type": "PHONE_NUMBER",
+                "text": "<PHONE_NUMBER>",
+                "operator": "replace",
+            },
+            {
+                "start": 33,
+                "end": 48,
+                "entity_type": "EMAIL_ADDRESS",
+                "text": "<EMAIL_ADDRESS>",
+                "operator": "replace",
+            },
+            {
+                "start": 11,
+                "end": 19,
+                "entity_type": "PERSON",
+                "text": "<PERSON>",
+                "operator": "replace",
+            },
+        ],
+    }
+
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        presidio_analyzer_api_base="http://test-analyzer/",
+        presidio_anonymizer_api_base="http://test-anonymizer/",
+        mock_testing=False,
+        output_parse_pii=True,
+    )
+
+    mock_iterator = _make_mock_session_iterator(
+        json_response=anonymizer_response,
+    )
+
+    masked_entity_count = {}
+    request_data = {"metadata": {}}
+    with patch.object(guardrail, "_get_session_iterator", mock_iterator):
+        result = await guardrail.anonymize_text(
+            text=original_text,
+            analyze_results=analyze_results,
+            output_parse_pii=True,
+            masked_entity_count=masked_entity_count,
+            request_data=request_data,
+        )
+
+    # Result must not contain any remnants of original PII
+    assert "John" not in result
+    assert "john@example.com" not in result
+    assert "555-867-5309" not in result
+
+    # pii_tokens must map numbered tokens back to correct original values
+    pii_tokens = request_data["metadata"]["pii_tokens"]
+    token_values = set(pii_tokens.values())
+    assert "John Smith" in token_values
+    assert "john@example.com" in token_values
+    assert "555-867-5309" in token_values
+
+    # Tokens must be numbered in left-to-right order of appearance:
+    # PERSON (pos 11) → _1, EMAIL_ADDRESS (pos 35) → _2, PHONE_NUMBER (pos 59) → _3
+    assert pii_tokens.get("<PERSON_1>") == "John Smith"
+    assert pii_tokens.get("<EMAIL_ADDRESS_2>") == "john@example.com"
+    assert pii_tokens.get("<PHONE_NUMBER_3>") == "555-867-5309"

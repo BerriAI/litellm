@@ -171,19 +171,17 @@ async def test_over_budget_user_gets_budget_applied():
     mock_cache.async_get_cache = AsyncMock(return_value=None)
     mock_cache.async_set_cache = AsyncMock()
 
-    result = await get_end_user_object(
-        end_user_id=end_user_id,
-        prisma_client=mock_prisma_client,
-        user_api_key_cache=mock_cache,
-        route="/chat/completions",
-    )
+    # Should raise BudgetExceededError
+    with pytest.raises(litellm.BudgetExceededError) as exc_info:
+        await get_end_user_object(
+            end_user_id=end_user_id,
+            prisma_client=mock_prisma_client,
+            user_api_key_cache=mock_cache,
+            route="/chat/completions",
+        )
 
-    # Verify default budget was applied (even though user is over budget)
-    # Budget check happens later in user_api_key_auth.py after model resolution
-    assert result is not None
-    assert result.litellm_budget_table is not None
-    assert result.litellm_budget_table.max_budget == 10.0
-    assert result.spend == 15.0  # Over budget, but no error raised here
+    assert "ExceededBudget" in str(exc_info.value)
+    assert end_user_id in str(exc_info.value)
 
     litellm.max_end_user_budget_id = None
 
