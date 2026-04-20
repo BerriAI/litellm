@@ -86,6 +86,53 @@ def test_check_if_part_exists_in_parts_camel_case_snake_case():
     assert check_if_part_exists_in_parts(parts_mixed, part_mixed_casing)
 
 
+def test_cached_content_omits_system_instruction_tools_toolconfig():
+    """Regression: #26014 / #17304 — cachedContent must not ship with tools/system/toolConfig."""
+    cache_name = "projects/p/locations/us-central1/cachedContents/abc123"
+    messages = [
+        {"role": "system", "content": "You are helpful"},
+        {"role": "user", "content": "hi"},
+    ]
+    optional_params = {
+        "tools": [
+            {
+                "functionDeclarations": [
+                    {"name": "get_weather", "description": "Get weather"},
+                ]
+            }
+        ],
+        "tool_choice": {"functionCallingConfig": {"mode": "AUTO"}},
+    }
+
+    result = _transform_request_body(
+        messages=list(messages),
+        model="gemini-2.5-pro",
+        optional_params=dict(optional_params),
+        custom_llm_provider="vertex_ai",
+        litellm_params={},
+        cached_content=cache_name,
+    )
+
+    assert result.get("cachedContent") == cache_name
+    assert "system_instruction" not in result
+    assert "tools" not in result
+    assert "toolConfig" not in result
+    assert "contents" in result
+
+    # Without cache, conflicting fields are included as before
+    result_no_cache = _transform_request_body(
+        messages=list(messages),
+        model="gemini-2.5-pro",
+        optional_params=dict(optional_params),
+        custom_llm_provider="vertex_ai",
+        litellm_params={},
+        cached_content=None,
+    )
+    assert "system_instruction" in result_no_cache
+    assert "tools" in result_no_cache
+    assert "toolConfig" in result_no_cache
+
+
 # Tests for issue #14556: Labels field provider-aware filtering
 def test_google_genai_excludes_labels():
     """Test that Google GenAI/AI Studio endpoints exclude labels when custom_llm_provider='gemini'"""
