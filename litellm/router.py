@@ -7029,6 +7029,7 @@ class Router:
         # stale routers pointing at the old model_list.
         self.quality_routers = {}
         self.complexity_routers = {}
+        self.auto_routers = {}
         self._invalidate_model_group_info_cache()
         self._invalidate_access_groups_cache()
         # we add api_base/api_key each model so load balancing between azure/gpt on api_base1 and api_base2 works
