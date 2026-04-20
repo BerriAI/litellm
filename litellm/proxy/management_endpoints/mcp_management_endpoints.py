@@ -19,7 +19,6 @@ import functools
 import importlib
 import json
 import os
-from urllib.parse import urlparse
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Iterable, List, Literal, Optional
@@ -1379,15 +1378,6 @@ if MCP_AVAILABLE:
         response_type: Optional[str] = None,
         scope: Optional[str] = None,
     ):
-        parsed_redirect = urlparse(redirect_uri)
-        if parsed_redirect.scheme not in ("http", "https"):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail={
-                    "error": "invalid_redirect_uri",
-                    "message": "redirect_uri must use http or https scheme",
-                },
-            )
         mcp_server = _get_cached_temporary_mcp_server_or_404(server_id, request=request)
         # Use the server's stored client_id when the caller doesn't supply one
         resolved_client_id = mcp_server.client_id or client_id or ""
