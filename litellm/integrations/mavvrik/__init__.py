@@ -1,10 +1,9 @@
 """Mavvrik cost-data integration for LiteLLM.
 
 Module layout:
-  uploader.py      — MavvrikUploader (fetch → transform → upload pipeline)
+  exporter.py      — MavvrikExporter (DB queries + DataFrame → CSV transform)
+  uploader.py      — MavvrikUploader (export → upload pipeline)
   client.py        — MavvrikClient (3-step signed URL upload + register/advance_marker)
-  database.py      — MavvrikDatabase (DB queries)
-  transform.py     — MavvrikTransformer (DataFrame → CSV)
   settings.py      — MavvrikSettings (config detection and persistence)
   orchestrator.py  — MavvrikOrchestrator (pod lock + register → date loop → upload → advance)
 

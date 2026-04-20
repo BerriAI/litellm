@@ -37,8 +37,8 @@ class TestResolveFirstRunStartDate:
     async def test_uses_lookback_start_date_when_set(self):
         """MAVVRIK_LOOKBACK_START_DATE takes priority over MIN(date) in DB."""
         orc = _make_orchestrator()
-        orc._db = MagicMock()
-        orc._db.get_earliest_date = AsyncMock(return_value="2026-01-01")
+        orc._exporter = MagicMock()
+        orc._exporter.get_earliest_date = AsyncMock(return_value="2026-01-01")
 
         with patch(
             "litellm.integrations.mavvrik.orchestrator.MAVVRIK_LOOKBACK_START_DATE",
@@ -52,8 +52,8 @@ class TestResolveFirstRunStartDate:
     async def test_clamps_lookback_to_earliest_db_date(self):
         """If LOOKBACK_START_DATE is before MIN(date), use MIN(date)."""
         orc = _make_orchestrator()
-        orc._db = MagicMock()
-        orc._db.get_earliest_date = AsyncMock(return_value="2026-04-01")
+        orc._exporter = MagicMock()
+        orc._exporter.get_earliest_date = AsyncMock(return_value="2026-04-01")
 
         with patch(
             "litellm.integrations.mavvrik.orchestrator.MAVVRIK_LOOKBACK_START_DATE",
@@ -67,8 +67,8 @@ class TestResolveFirstRunStartDate:
     async def test_falls_back_to_earliest_db_date_when_no_lookback(self):
         """Without LOOKBACK_START_DATE, use MIN(date) from DB."""
         orc = _make_orchestrator()
-        orc._db = MagicMock()
-        orc._db.get_earliest_date = AsyncMock(return_value="2026-02-15")
+        orc._exporter = MagicMock()
+        orc._exporter.get_earliest_date = AsyncMock(return_value="2026-02-15")
 
         with patch(
             "litellm.integrations.mavvrik.orchestrator.MAVVRIK_LOOKBACK_START_DATE",
@@ -82,8 +82,8 @@ class TestResolveFirstRunStartDate:
     async def test_falls_back_to_yesterday_when_db_empty(self):
         """When DB is empty and no LOOKBACK_START_DATE, use yesterday."""
         orc = _make_orchestrator()
-        orc._db = MagicMock()
-        orc._db.get_earliest_date = AsyncMock(return_value=None)
+        orc._exporter = MagicMock()
+        orc._exporter.get_earliest_date = AsyncMock(return_value=None)
 
         with patch(
             "litellm.integrations.mavvrik.orchestrator.MAVVRIK_LOOKBACK_START_DATE",
@@ -99,8 +99,8 @@ class TestResolveFirstRunStartDate:
     async def test_invalid_lookback_date_falls_back_to_db(self):
         """Invalid LOOKBACK_START_DATE string falls back to DB date."""
         orc = _make_orchestrator()
-        orc._db = MagicMock()
-        orc._db.get_earliest_date = AsyncMock(return_value="2026-03-10")
+        orc._exporter = MagicMock()
+        orc._exporter.get_earliest_date = AsyncMock(return_value="2026-03-10")
 
         with patch(
             "litellm.integrations.mavvrik.orchestrator.MAVVRIK_LOOKBACK_START_DATE",
@@ -207,8 +207,8 @@ class TestRunExportLoop:
         orc._client.register = AsyncMock(side_effect=RuntimeError("register failed"))
         orc._client.advance_marker = AsyncMock()
         orc._client.report_error = AsyncMock()
-        orc._db = MagicMock()
-        orc._db.get_earliest_date = AsyncMock(return_value="2026-04-09")
+        orc._exporter = MagicMock()
+        orc._exporter.get_earliest_date = AsyncMock(return_value="2026-04-09")
 
         with patch.object(
             orc._uploader, "upload_usage_data", side_effect=fake_upload

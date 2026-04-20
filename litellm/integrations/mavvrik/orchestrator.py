@@ -24,7 +24,7 @@ from litellm.constants import (
     MAVVRIK_MAX_FETCHED_DATA_RECORDS,
 )
 from litellm.integrations.mavvrik.client import MavvrikClient
-from litellm.integrations.mavvrik.database import MavvrikDatabase
+from litellm.integrations.mavvrik.exporter import MavvrikExporter
 
 if TYPE_CHECKING:
     from litellm.integrations.mavvrik.uploader import MavvrikUploader
@@ -47,7 +47,7 @@ class MavvrikOrchestrator:
             api_endpoint=uploader.api_endpoint or "",
             connection_id=uploader.connection_id or "",
         )
-        self._db = MavvrikDatabase()
+        self._exporter = MavvrikExporter()
 
     # ------------------------------------------------------------------
     # Helpers
@@ -203,7 +203,7 @@ class MavvrikOrchestrator:
                     MAVVRIK_LOOKBACK_START_DATE,
                 )
 
-        earliest_str = await self._db.get_earliest_date()
+        earliest_str = await self._exporter.get_earliest_date()
         earliest_db: Optional[date] = None
         if earliest_str:
             try:

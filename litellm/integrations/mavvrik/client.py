@@ -94,7 +94,7 @@ class MavvrikClient:
         """Upload a CSV string to Mavvrik for the given date.
 
         Args:
-            csv_payload: CSV string (header + rows) from MavvrikTransformer.to_csv().
+            csv_payload: CSV string (header + rows) from MavvrikExporter.to_csv().
             date_str:    Date string "YYYY-MM-DD". Re-uploading the same date
                          overwrites the previous upload — idempotent.
 

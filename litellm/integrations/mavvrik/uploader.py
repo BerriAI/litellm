@@ -1,11 +1,9 @@
-"""MavvrikUploader — fetch, transform, and upload spend data to Mavvrik.
+"""MavvrikUploader — export from Postgres, then upload to Mavvrik.
 
 Upload flow (called by MavvrikOrchestrator or manual endpoints):
 
-  1. Query MavvrikDatabase for rows on a given date.
-  2. Filter rows with successful_requests > 0.
-  3. Transform rows to CSV via MavvrikTransformer.
-  4. Upload via MavvrikClient (3-step signed URL upload).
+  1. Export: query DB + transform to CSV via MavvrikExporter.
+  2. Upload: send gzipped CSV to Mavvrik via MavvrikClient.
 
 Environment variables (fallback when DB settings are absent):
     MAVVRIK_API_KEY              x-api-key sent to Mavvrik API
@@ -23,8 +21,7 @@ import polars as pl
 from litellm._logging import verbose_logger
 from litellm.constants import MAVVRIK_MAX_FETCHED_DATA_RECORDS
 from litellm.integrations.mavvrik.client import MavvrikClient
-from litellm.integrations.mavvrik.database import MavvrikDatabase
-from litellm.integrations.mavvrik.transform import MavvrikTransformer
+from litellm.integrations.mavvrik.exporter import MavvrikExporter
 
 
 class MavvrikUploader:
@@ -93,8 +90,8 @@ class MavvrikUploader:
 
         verbose_logger.debug("MavvrikUploader: uploading date %s", date_str)
 
-        db = MavvrikDatabase()
-        df = await db.get_usage_data(date_str=date_str, limit=limit)
+        exporter = MavvrikExporter()
+        df = await exporter.get_usage_data(date_str=date_str, limit=limit)
 
         if df.is_empty():
             verbose_logger.debug(
@@ -104,21 +101,17 @@ class MavvrikUploader:
 
         verbose_logger.debug("MavvrikUploader: %d rows fetched, transforming…", len(df))
 
-        # Filter to match what MavvrikTransformer produces.
-        if "successful_requests" in df.columns:
-            df = df.filter(pl.col("successful_requests") > 0)
+        csv_payload = exporter.to_csv(df, connection_id=self._connection_id)
 
-        if df.is_empty():
+        if not csv_payload:
             verbose_logger.debug(
                 "MavvrikUploader: 0 rows after filter for %s, skipping upload",
                 date_str,
             )
             return 0
 
-        records_uploaded = len(df)
-
-        transformer = MavvrikTransformer()
-        csv_payload = transformer.to_csv(df, connection_id=self._connection_id)
+        # Count rows actually uploaded (post-filter, matches CSV content).
+        records_uploaded = csv_payload.count("\n") - 1  # subtract header row
 
         await self._mavvrik_client.upload(csv_payload, date_str=date_str)
 
@@ -143,8 +136,8 @@ class MavvrikUploader:
         if not date_str:
             date_str = (_dt.now(timezone.utc).date() - timedelta(days=1)).isoformat()
 
-        db = MavvrikDatabase()
-        df = await db.get_usage_data(
+        exporter = MavvrikExporter()
+        df = await exporter.get_usage_data(
             date_str=date_str,
             limit=limit or MAVVRIK_MAX_FETCHED_DATA_RECORDS,
         )
@@ -162,8 +155,7 @@ class MavvrikUploader:
                 },
             }
 
-        transformer = MavvrikTransformer()
-        csv_payload = transformer.to_csv(df)
+        csv_payload = exporter.to_csv(df)
 
         # Apply same filter as to_csv (successful_requests > 0) so preview and
         # summary stats match what would actually be uploaded.

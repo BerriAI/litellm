@@ -55,20 +55,27 @@ def _make_df(rows=1) -> pl.DataFrame:
 # ---------------------------------------------------------------------------
 
 
+def _csv_header_plus(rows: int) -> str:
+    """Return a fake CSV string with a header and N data rows."""
+    header = "date,model,spend\n"
+    return header + "".join(f"2026-04-10,gpt-4o,0.015\n" for _ in range(rows))
+
+
 class TestUploadUsageData:
     @pytest.mark.asyncio
     async def test_returns_record_count_on_success(self):
         uploader = _make_uploader()
-        mock_db = MagicMock()
-        mock_db.get_usage_data = AsyncMock(return_value=_make_df(rows=5))
+        mock_exporter = MagicMock()
+        mock_exporter.get_usage_data = AsyncMock(return_value=_make_df(rows=5))
+        mock_exporter.to_csv = MagicMock(return_value=_csv_header_plus(5))
         mock_client = MagicMock()
         mock_client.upload = AsyncMock()
 
         uploader._mavvrik_client = mock_client
 
         with patch(
-            "litellm.integrations.mavvrik.uploader.MavvrikDatabase",
-            return_value=mock_db,
+            "litellm.integrations.mavvrik.uploader.MavvrikExporter",
+            return_value=mock_exporter,
         ):
             count = await uploader.upload_usage_data(date_str="2026-04-10")
 
@@ -78,17 +85,14 @@ class TestUploadUsageData:
     @pytest.mark.asyncio
     async def test_returns_zero_when_no_data(self):
         uploader = _make_uploader()
-        mock_db = MagicMock()
-        mock_db.get_usage_data = AsyncMock(return_value=pl.DataFrame())
+        mock_exporter = MagicMock()
+        mock_exporter.get_usage_data = AsyncMock(return_value=pl.DataFrame())
         mock_client = MagicMock()
         mock_client.upload = AsyncMock()
 
         with patch(
-            "litellm.integrations.mavvrik.uploader.MavvrikDatabase",
-            return_value=mock_db,
-        ), patch(
-            "litellm.integrations.mavvrik.uploader.MavvrikClient",
-            return_value=mock_client,
+            "litellm.integrations.mavvrik.uploader.MavvrikExporter",
+            return_value=mock_exporter,
         ):
             count = await uploader.upload_usage_data(date_str="2026-04-10")
 

@@ -1,15 +1,22 @@
-"""Database extraction layer for the Mavvrik integration.
+"""MavvrikExporter — fetch spend data from Postgres and transform to CSV.
 
-Queries LiteLLM_DailyUserSpend joined with VerificationToken, TeamTable,
-and UserTable, returning a Polars DataFrame.
+Handles the "export" side of the pipeline: extracting data from LiteLLM's
+database and converting it into a CSV string ready for upload.
+
+SQL queries:
+  get_usage_data()   — 4-table LEFT JOIN on LiteLLM_DailyUserSpend
+  get_earliest_date() — MIN(date) for first-run start date resolution
+
+Transform:
+  to_csv()  — filter rows, add connection_id, serialise to CSV string
 """
 
+import io
 from typing import Any, List, Optional
 
 import polars as pl
 
-from litellm._logging import verbose_logger
-
+from litellm._logging import verbose_logger, verbose_proxy_logger
 
 # query_raw is used here instead of Prisma model methods because the query
 # requires a 4-table LEFT JOIN (DailyUserSpend → VerificationToken →
@@ -45,8 +52,12 @@ ORDER BY dus.date, dus.user_id, dus.model ASC
 _EARLIEST_DATE_QUERY = 'SELECT MIN(date) AS earliest FROM "LiteLLM_DailyUserSpend"'
 
 
-class MavvrikDatabase:
-    """Handle LiteLLM database queries for the Mavvrik integration."""
+class MavvrikExporter:
+    """Fetch LiteLLM spend data from Postgres and transform to CSV."""
+
+    # ------------------------------------------------------------------
+    # Database access
+    # ------------------------------------------------------------------
 
     @property
     def _prisma_client(self):
@@ -99,6 +110,52 @@ class MavvrikDatabase:
             raise
         except Exception as exc:
             verbose_logger.warning(
-                "MavvrikDatabase: get_earliest_date failed (non-fatal): %s", exc
+                "MavvrikExporter: get_earliest_date failed (non-fatal): %s", exc
             )
         return None
+
+    # ------------------------------------------------------------------
+    # Transform
+    # ------------------------------------------------------------------
+
+    def to_csv(self, df: pl.DataFrame, connection_id: Optional[str] = None) -> str:
+        """Return the DataFrame as a CSV string with connection_id added.
+
+        Rows where successful_requests == 0 are excluded — they represent
+        API calls that produced no billable output and add no value to the export.
+
+        Args:
+            df: Polars DataFrame with all columns from the DB query.
+            connection_id: Optional connection identifier to add as a column.
+
+        Returns:
+            CSV string (header + data rows). Empty string if DataFrame is empty
+            or all rows are filtered out.
+        """
+        if df.is_empty():
+            verbose_proxy_logger.debug(
+                "MavvrikExporter: empty DataFrame, nothing to export"
+            )
+            return ""
+
+        # Filter out rows with no successful requests when the column is present
+        if "successful_requests" in df.columns:
+            df = df.filter(pl.col("successful_requests") > 0)
+            if df.is_empty():
+                verbose_proxy_logger.debug(
+                    "MavvrikExporter: all rows have zero successful_requests, skipping"
+                )
+                return ""
+
+        # Add connection_id column if provided
+        if connection_id:
+            df = df.with_columns(pl.lit(connection_id).alias("connection_id"))
+
+        buf = io.StringIO()
+        df.write_csv(buf)
+        csv_str = buf.getvalue()
+
+        verbose_proxy_logger.debug(
+            "MavvrikExporter: %d rows → %d CSV bytes", len(df), len(csv_str)
+        )
+        return csv_str
