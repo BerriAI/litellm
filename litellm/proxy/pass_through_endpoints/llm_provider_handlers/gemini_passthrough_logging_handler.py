@@ -17,7 +17,6 @@ from litellm.types.utils import (
     TextCompletionResponse,
 )
 
-from .base_passthrough_logging_handler import BasePassthroughLoggingHandler
 
 if TYPE_CHECKING:
     from litellm.types.passthrough_endpoints.pass_through_endpoints import EndpointType
@@ -141,6 +140,7 @@ class GeminiPassthroughLoggingHandler:
         - Creates standard logging object
         - Logs in litellm callbacks
         """
+        from .base_passthrough_logging_handler import BasePassthroughLoggingHandler  # noqa: PLC0415
         kwargs: Dict[str, Any] = (
             BasePassthroughLoggingHandler._seed_streaming_kwargs_from_logging_obj(
                 litellm_logging_obj
@@ -248,6 +248,7 @@ class GeminiPassthroughLoggingHandler:
         kwargs["model"] = model
         kwargs["custom_llm_provider"] = custom_llm_provider
 
+        from .base_passthrough_logging_handler import BasePassthroughLoggingHandler  # noqa: PLC0415
         BasePassthroughLoggingHandler._apply_spend_logs_metadata(
             kwargs, kwargs.get("passthrough_logging_payload")
         )

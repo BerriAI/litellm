@@ -16,9 +16,6 @@ from litellm.llms.vertex_ai.vector_stores.search_api.transformation import (
 )
 from litellm.llms.vertex_ai.videos.transformation import VertexAIVideoConfig
 from litellm.proxy._types import PassThroughEndpointLoggingTypedDict
-from litellm.proxy.pass_through_endpoints.llm_provider_handlers.base_passthrough_logging_handler import (
-    BasePassthroughLoggingHandler,
-)
 from litellm.types.utils import (
     Choices,
     EmbeddingResponse,
@@ -344,6 +341,7 @@ class VertexPassthroughLoggingHandler:
         - Creates standard logging object
         - Logs in litellm callbacks
         """
+        from litellm.proxy.pass_through_endpoints.llm_provider_handlers.base_passthrough_logging_handler import BasePassthroughLoggingHandler  # noqa: PLC0415
         kwargs: Dict[str, Any] = (
             BasePassthroughLoggingHandler._seed_streaming_kwargs_from_logging_obj(
                 litellm_logging_obj
@@ -554,6 +552,7 @@ class VertexPassthroughLoggingHandler:
         kwargs["response_cost"] = response_cost
         kwargs["model"] = model
 
+        from litellm.proxy.pass_through_endpoints.llm_provider_handlers.base_passthrough_logging_handler import BasePassthroughLoggingHandler  # noqa: PLC0415
         BasePassthroughLoggingHandler._apply_spend_logs_metadata(
             kwargs, kwargs.get("passthrough_logging_payload")
         )
