@@ -213,20 +213,69 @@ class SemanticMCPToolFilter:
 
         return []
 
+    @staticmethod
+    def _name_matches_canonical(client_name: str, canonical: str) -> bool:
+        """
+        Return True if a client-side tool name refers to the given canonical
+        MCP tool name.
+
+        MCP clients (e.g. opencode) commonly wrap the proxy's canonical tool
+        name with an additive namespace prefix of their own
+        (``<client_alias><sep><canonical>``). The prefix can use either a
+        dash or an underscore as separator regardless of what
+        ``MCP_TOOL_PREFIX_SEPARATOR`` is set to on the proxy, because the
+        client doesn't know the proxy's separator.
+
+        The match is anchored: ``canonical`` must form the complete suffix
+        of ``client_name`` and be preceded by a separator character, so
+        ``rain_gear`` does not match canonical ``ear``.
+        """
+        if client_name == canonical:
+            return True
+        if len(client_name) <= len(canonical):
+            return False
+        if not client_name.endswith(canonical):
+            return False
+        separator = client_name[-len(canonical) - 1]
+        return separator in ("_", "-")
+
     def _get_tools_by_names(
         self, tool_names: List[str], available_tools: List[Any]
     ) -> List[Any]:
-        """Get tools from available_tools by their names, preserving order."""
-        # Match tools from available_tools (preserves format - dict or MCPTool)
-        matched_tools = []
-        for tool in available_tools:
-            tool_name, _ = self._extract_tool_info(tool)
-            if tool_name in tool_names:
-                matched_tools.append(tool)
+        """
+        Get tools from available_tools by their names, preserving the
+        semantic router's ordering.
 
-        # Reorder to match semantic router's ordering
-        tool_map = {self._extract_tool_info(t)[0]: t for t in matched_tools}
-        return [tool_map[name] for name in tool_names if name in tool_map]
+        Matching is tolerant of client-side namespace prefixes: if an
+        incoming tool arrived as ``<client_alias>_<canonical>`` while the
+        router returned ``<canonical>`` (see
+        ``_name_matches_canonical``), that tool is still selected. The
+        returned tool object is the original from ``available_tools``, so
+        the client-facing name is preserved for tool-call round-trips.
+        """
+        # Build an index of incoming tools by their client-facing name.
+        # Exact matches win over suffix matches when both are present, and
+        # each incoming tool is returned at most once even if two canonical
+        # names happen to be tail-compatible with the same incoming name.
+        available_by_name: Dict[str, Any] = {}
+        for tool in available_tools:
+            client_name, _ = self._extract_tool_info(tool)
+            if client_name and client_name not in available_by_name:
+                available_by_name[client_name] = tool
+
+        matched: List[Any] = []
+        used_ids: set = set()
+        for canonical in tool_names:
+            tool = available_by_name.get(canonical)
+            if tool is None:
+                for client_name, candidate in available_by_name.items():
+                    if self._name_matches_canonical(client_name, canonical):
+                        tool = candidate
+                        break
+            if tool is not None and id(tool) not in used_ids:
+                matched.append(tool)
+                used_ids.add(id(tool))
+        return matched
 
     def extract_user_query(self, messages: List[Dict[str, Any]]) -> str:
         """
