@@ -21,6 +21,7 @@ from litellm.proxy.auth.route_checks import RouteChecks
 
 class MockRequest:
     """Mock FastAPI Request object"""
+
     def __init__(self, method: str = "POST"):
         self.method = method
 
@@ -33,7 +34,7 @@ def get_mock_user_token():
         team_id="test-team",
         org_id="test-org",
         models=["*"],
-        metadata={}
+        metadata={},
     )
 
 
@@ -47,10 +48,14 @@ class TestEnforceUserParamPostGetFiltering:
         general_settings = {"enforce_user_param": True}
         request_body = {
             "model": "gpt-3.5-turbo",
-            "messages": [{"role": "user", "content": "Hello"}]
+            "messages": [{"role": "user", "content": "Hello"}],
         }
-        
-        with patch('litellm.proxy.auth.auth_checks._is_api_route_allowed', new_callable=AsyncMock, return_value=True):
+
+        with patch(
+            "litellm.proxy.auth.auth_checks._is_api_route_allowed",
+            new_callable=AsyncMock,
+            return_value=True,
+        ):
             with pytest.raises(Exception) as exc_info:
                 await common_checks(
                     request_body=request_body,
@@ -65,7 +70,7 @@ class TestEnforceUserParamPostGetFiltering:
                     valid_token=get_mock_user_token(),
                     request=request,
                 )
-            
+
             assert "user" in str(exc_info.value).lower()
 
     @pytest.mark.asyncio
@@ -76,10 +81,14 @@ class TestEnforceUserParamPostGetFiltering:
         request_body = {
             "model": "gpt-3.5-turbo",
             "messages": [{"role": "user", "content": "Hello"}],
-            "user": "user123"
+            "user": "user123",
         }
-        
-        with patch('litellm.proxy.auth.auth_checks._is_api_route_allowed', new_callable=AsyncMock, return_value=True):
+
+        with patch(
+            "litellm.proxy.auth.auth_checks._is_api_route_allowed",
+            new_callable=AsyncMock,
+            return_value=True,
+        ):
             # Should not raise exception
             result = await common_checks(
                 request_body=request_body,
@@ -94,7 +103,7 @@ class TestEnforceUserParamPostGetFiltering:
                 valid_token=get_mock_user_token(),
                 request=request,
             )
-            
+
             assert result is True
 
     @pytest.mark.asyncio
@@ -103,8 +112,12 @@ class TestEnforceUserParamPostGetFiltering:
         request = MockRequest(method="GET")
         general_settings = {"enforce_user_param": True}
         request_body = {}  # GET requests typically don't have body
-        
-        with patch('litellm.proxy.auth.auth_checks._is_api_route_allowed', new_callable=AsyncMock, return_value=True):
+
+        with patch(
+            "litellm.proxy.auth.auth_checks._is_api_route_allowed",
+            new_callable=AsyncMock,
+            return_value=True,
+        ):
             # Should not raise exception
             result = await common_checks(
                 request_body=request_body,
@@ -119,7 +132,7 @@ class TestEnforceUserParamPostGetFiltering:
                 valid_token=get_mock_user_token(),
                 request=request,
             )
-            
+
             assert result is True
 
     @pytest.mark.asyncio
@@ -128,8 +141,12 @@ class TestEnforceUserParamPostGetFiltering:
         request = MockRequest(method="GET")
         general_settings = {"enforce_user_param": True}
         request_body = {}
-        
-        with patch('litellm.proxy.auth.auth_checks._is_api_route_allowed', new_callable=AsyncMock, return_value=True):
+
+        with patch(
+            "litellm.proxy.auth.auth_checks._is_api_route_allowed",
+            new_callable=AsyncMock,
+            return_value=True,
+        ):
             result = await common_checks(
                 request_body=request_body,
                 team_object=None,
@@ -143,7 +160,7 @@ class TestEnforceUserParamPostGetFiltering:
                 valid_token=get_mock_user_token(),
                 request=request,
             )
-            
+
             assert result is True
 
     @pytest.mark.asyncio
@@ -151,12 +168,13 @@ class TestEnforceUserParamPostGetFiltering:
         """POST to /v1/embeddings without user param should raise error"""
         request = MockRequest(method="POST")
         general_settings = {"enforce_user_param": True}
-        request_body = {
-            "model": "text-embedding-ada-002",
-            "input": "test"
-        }
-        
-        with patch('litellm.proxy.auth.auth_checks._is_api_route_allowed', new_callable=AsyncMock, return_value=True):
+        request_body = {"model": "text-embedding-ada-002", "input": "test"}
+
+        with patch(
+            "litellm.proxy.auth.auth_checks._is_api_route_allowed",
+            new_callable=AsyncMock,
+            return_value=True,
+        ):
             with pytest.raises(Exception) as exc_info:
                 await common_checks(
                     request_body=request_body,
@@ -171,7 +189,7 @@ class TestEnforceUserParamPostGetFiltering:
                     valid_token=get_mock_user_token(),
                     request=request,
                 )
-            
+
             assert "user" in str(exc_info.value).lower()
 
     @pytest.mark.asyncio
@@ -182,10 +200,14 @@ class TestEnforceUserParamPostGetFiltering:
         request_body = {
             "model": "text-embedding-ada-002",
             "input": "test",
-            "user": "user123"
+            "user": "user123",
         }
-        
-        with patch('litellm.proxy.auth.auth_checks._is_api_route_allowed', new_callable=AsyncMock, return_value=True):
+
+        with patch(
+            "litellm.proxy.auth.auth_checks._is_api_route_allowed",
+            new_callable=AsyncMock,
+            return_value=True,
+        ):
             result = await common_checks(
                 request_body=request_body,
                 team_object=None,
@@ -199,7 +221,7 @@ class TestEnforceUserParamPostGetFiltering:
                 valid_token=get_mock_user_token(),
                 request=request,
             )
-            
+
             assert result is True
 
 
@@ -212,8 +234,12 @@ class TestEnforceUserParamMCPExclusion:
         request = MockRequest(method="POST")
         general_settings = {"enforce_user_param": True}
         request_body = {"action": "list_tools"}
-        
-        with patch('litellm.proxy.auth.auth_checks._is_api_route_allowed', new_callable=AsyncMock, return_value=True):
+
+        with patch(
+            "litellm.proxy.auth.auth_checks._is_api_route_allowed",
+            new_callable=AsyncMock,
+            return_value=True,
+        ):
             # Should not raise exception for MCP routes
             result = await common_checks(
                 request_body=request_body,
@@ -228,7 +254,7 @@ class TestEnforceUserParamMCPExclusion:
                 valid_token=get_mock_user_token(),
                 request=request,
             )
-            
+
             assert result is True
 
     @pytest.mark.asyncio
@@ -237,8 +263,12 @@ class TestEnforceUserParamMCPExclusion:
         request = MockRequest(method="POST")
         general_settings = {"enforce_user_param": True}
         request_body = {"data": "test"}
-        
-        with patch('litellm.proxy.auth.auth_checks._is_api_route_allowed', new_callable=AsyncMock, return_value=True):
+
+        with patch(
+            "litellm.proxy.auth.auth_checks._is_api_route_allowed",
+            new_callable=AsyncMock,
+            return_value=True,
+        ):
             result = await common_checks(
                 request_body=request_body,
                 team_object=None,
@@ -252,7 +282,7 @@ class TestEnforceUserParamMCPExclusion:
                 valid_token=get_mock_user_token(),
                 request=request,
             )
-            
+
             assert result is True
 
 
@@ -266,10 +296,14 @@ class TestEnforceUserParamDisabled:
         general_settings = {"enforce_user_param": False}
         request_body = {
             "model": "gpt-3.5-turbo",
-            "messages": [{"role": "user", "content": "Hello"}]
+            "messages": [{"role": "user", "content": "Hello"}],
         }
-        
-        with patch('litellm.proxy.auth.auth_checks._is_api_route_allowed', new_callable=AsyncMock, return_value=True):
+
+        with patch(
+            "litellm.proxy.auth.auth_checks._is_api_route_allowed",
+            new_callable=AsyncMock,
+            return_value=True,
+        ):
             result = await common_checks(
                 request_body=request_body,
                 team_object=None,
@@ -283,7 +317,7 @@ class TestEnforceUserParamDisabled:
                 valid_token=get_mock_user_token(),
                 request=request,
             )
-            
+
             assert result is True
 
     @pytest.mark.asyncio
@@ -293,10 +327,14 @@ class TestEnforceUserParamDisabled:
         general_settings = {}  # enforce_user_param not set
         request_body = {
             "model": "gpt-3.5-turbo",
-            "messages": [{"role": "user", "content": "Hello"}]
+            "messages": [{"role": "user", "content": "Hello"}],
         }
-        
-        with patch('litellm.proxy.auth.auth_checks._is_api_route_allowed', new_callable=AsyncMock, return_value=True):
+
+        with patch(
+            "litellm.proxy.auth.auth_checks._is_api_route_allowed",
+            new_callable=AsyncMock,
+            return_value=True,
+        ):
             result = await common_checks(
                 request_body=request_body,
                 team_object=None,
@@ -310,7 +348,7 @@ class TestEnforceUserParamDisabled:
                 valid_token=get_mock_user_token(),
                 request=request,
             )
-            
+
             assert result is True
 
 
@@ -323,14 +361,18 @@ class TestEnforceUserParamEdgeCases:
         request = MagicMock()
         del request.method  # Remove method attribute
         request.__hasattr__ = MagicMock(return_value=False)
-        
+
         general_settings = {"enforce_user_param": True}
         request_body = {
             "model": "gpt-3.5-turbo",
-            "messages": [{"role": "user", "content": "Hello"}]
+            "messages": [{"role": "user", "content": "Hello"}],
         }
-        
-        with patch('litellm.proxy.auth.auth_checks._is_api_route_allowed', new_callable=AsyncMock, return_value=True):
+
+        with patch(
+            "litellm.proxy.auth.auth_checks._is_api_route_allowed",
+            new_callable=AsyncMock,
+            return_value=True,
+        ):
             # Should not raise error even without method
             result = await common_checks(
                 request_body=request_body,
@@ -345,7 +387,7 @@ class TestEnforceUserParamEdgeCases:
                 valid_token=get_mock_user_token(),
                 request=request,
             )
-            
+
             assert result is True
 
     @pytest.mark.asyncio
@@ -355,10 +397,14 @@ class TestEnforceUserParamEdgeCases:
         general_settings = {"enforce_user_param": True}
         request_body = {
             "model": "gpt-3.5-turbo",
-            "messages": [{"role": "user", "content": "Hello"}]
+            "messages": [{"role": "user", "content": "Hello"}],
         }
-        
-        with patch('litellm.proxy.auth.auth_checks._is_api_route_allowed', new_callable=AsyncMock, return_value=True):
+
+        with patch(
+            "litellm.proxy.auth.auth_checks._is_api_route_allowed",
+            new_callable=AsyncMock,
+            return_value=True,
+        ):
             with pytest.raises(Exception) as exc_info:
                 await common_checks(
                     request_body=request_body,
@@ -373,7 +419,7 @@ class TestEnforceUserParamEdgeCases:
                     valid_token=get_mock_user_token(),
                     request=request,
                 )
-            
+
             assert "user" in str(exc_info.value).lower()
 
     @pytest.mark.asyncio
@@ -383,10 +429,14 @@ class TestEnforceUserParamEdgeCases:
         general_settings = {"enforce_user_param": True}
         request_body = {
             "model": "gpt-3.5-turbo",
-            "messages": [{"role": "user", "content": "Hello"}]
+            "messages": [{"role": "user", "content": "Hello"}],
         }
-        
-        with patch('litellm.proxy.auth.auth_checks._is_api_route_allowed', new_callable=AsyncMock, return_value=True):
+
+        with patch(
+            "litellm.proxy.auth.auth_checks._is_api_route_allowed",
+            new_callable=AsyncMock,
+            return_value=True,
+        ):
             # Should not raise for PUT method
             result = await common_checks(
                 request_body=request_body,
@@ -401,7 +451,7 @@ class TestEnforceUserParamEdgeCases:
                 valid_token=get_mock_user_token(),
                 request=request,
             )
-            
+
             assert result is True
 
     @pytest.mark.asyncio
@@ -411,10 +461,14 @@ class TestEnforceUserParamEdgeCases:
         general_settings = {"enforce_user_param": True}
         request_body = {
             "model": "gpt-3.5-turbo",
-            "messages": [{"role": "user", "content": "Hello"}]
+            "messages": [{"role": "user", "content": "Hello"}],
         }
-        
-        with patch('litellm.proxy.auth.auth_checks._is_api_route_allowed', new_callable=AsyncMock, return_value=True):
+
+        with patch(
+            "litellm.proxy.auth.auth_checks._is_api_route_allowed",
+            new_callable=AsyncMock,
+            return_value=True,
+        ):
             # Should not raise for PATCH method
             result = await common_checks(
                 request_body=request_body,
@@ -429,7 +483,7 @@ class TestEnforceUserParamEdgeCases:
                 valid_token=get_mock_user_token(),
                 request=request,
             )
-            
+
             assert result is True
 
 

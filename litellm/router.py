@@ -8818,6 +8818,8 @@ class Router:
                 and self.routing_strategy == "latency-based-routing"
             ):
                 _settings_to_return[var] = self.lowestlatency_logger.routing_args.json()
+            elif var == "routing_strategy_args":
+                _settings_to_return[var] = None
         return _settings_to_return
 
     def update_settings(self, **kwargs):

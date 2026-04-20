@@ -69,7 +69,8 @@ def check_complete_credentials(request_body: dict) -> bool:
         # complex credentials - easier to make a malicious request
         return False
 
-    if "api_key" in request_body:
+    api_key_value = request_body.get("api_key")
+    if api_key_value and isinstance(api_key_value, str) and api_key_value.strip():
         return True
 
     return False
@@ -663,7 +664,9 @@ def get_key_model_tpm_limit(
 
 def get_model_rate_limit_from_metadata(
     user_api_key_dict: UserAPIKeyAuth,
-    metadata_accessor_key: Literal["team_metadata", "organization_metadata"],
+    metadata_accessor_key: Literal[
+        "team_metadata", "organization_metadata", "project_metadata"
+    ],
     rate_limit_key: Literal["model_rpm_limit", "model_tpm_limit"],
 ) -> Optional[Dict[str, int]]:
     if getattr(user_api_key_dict, metadata_accessor_key):
@@ -684,6 +687,22 @@ def get_team_model_tpm_limit(
 ) -> Optional[Dict[str, int]]:
     if user_api_key_dict.team_metadata:
         return user_api_key_dict.team_metadata.get("model_tpm_limit")
+    return None
+
+
+def get_project_model_rpm_limit(
+    user_api_key_dict: UserAPIKeyAuth,
+) -> Optional[Dict[str, int]]:
+    if user_api_key_dict.project_metadata:
+        return user_api_key_dict.project_metadata.get("model_rpm_limit")
+    return None
+
+
+def get_project_model_tpm_limit(
+    user_api_key_dict: UserAPIKeyAuth,
+) -> Optional[Dict[str, int]]:
+    if user_api_key_dict.project_metadata:
+        return user_api_key_dict.project_metadata.get("model_tpm_limit")
     return None
 
 
@@ -823,19 +842,30 @@ def get_end_user_id_from_request_body(
         user_from_body_user_field = request_body["user"]
         return str(user_from_body_user_field)
 
+    def _as_dict(value: Any) -> dict:
+        # metadata / litellm_metadata can arrive as JSON strings from
+        # multipart/form-data or extra_body; coerce so string-encoded
+        # payloads can't evade end-user attribution.
+        if isinstance(value, dict):
+            return value
+        if isinstance(value, str):
+            from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
+
+            parsed = safe_json_loads(value)
+            return parsed if isinstance(parsed, dict) else {}
+        return {}
+
     # Check 4: 'litellm_metadata.user' in request_body (commonly Anthropic)
-    litellm_metadata = request_body.get("litellm_metadata")
-    if isinstance(litellm_metadata, dict):
-        user_from_litellm_metadata = litellm_metadata.get("user")
-        if user_from_litellm_metadata is not None:
-            return str(user_from_litellm_metadata)
+    litellm_metadata = _as_dict(request_body.get("litellm_metadata"))
+    user_from_litellm_metadata = litellm_metadata.get("user")
+    if user_from_litellm_metadata is not None:
+        return str(user_from_litellm_metadata)
 
     # Check 5: 'metadata.user_id' in request_body (another common pattern)
-    metadata_dict = request_body.get("metadata")
-    if isinstance(metadata_dict, dict):
-        user_id_from_metadata_field = metadata_dict.get("user_id")
-        if user_id_from_metadata_field is not None:
-            return str(user_id_from_metadata_field)
+    metadata_dict = _as_dict(request_body.get("metadata"))
+    user_id_from_metadata_field = metadata_dict.get("user_id")
+    if user_id_from_metadata_field is not None:
+        return str(user_id_from_metadata_field)
 
     # Check 6: 'safety_identifier' in request body (OpenAI Responses API parameter)
     # SECURITY NOTE: safety_identifier can be set by any caller in the request body.
