@@ -1,5 +1,5 @@
 import moment from "moment";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { SettingOutlined } from "@ant-design/icons";
 import { Tab, TabGroup, TabList, TabPanel, TabPanels } from "@tremor/react";
 import { Button } from "antd";
@@ -133,74 +133,90 @@ export default function SpendLogsTable({
     setCurrentPage(1);
   }, [handleFilterResetFromHook]);
 
+  const handleSortChange = useCallback(
+    (newSortBy: LogsSortField, newSortOrder: "asc" | "desc") => {
+      setSortBy(newSortBy);
+      setSortOrder(newSortOrder);
+      setCurrentPage(1);
+    },
+    [],
+  );
+
+  const columns = useMemo(
+    () => createColumns({ sortBy, sortOrder, onSortChange: handleSortChange }),
+    [sortBy, sortOrder, handleSortChange],
+  );
+
+  const filteredData = useMemo(() => {
+    const searchedLogs = filteredLogs.data.filter((log) => {
+      const matchesSearch =
+        !searchTerm ||
+        log.request_id.includes(searchTerm) ||
+        log.model.includes(searchTerm) ||
+        (log.user && log.user.includes(searchTerm));
+
+      // No need for additional filtering since we're now handling this in the API call
+      return matchesSearch;
+    });
+
+    const sessionCompositionById = searchedLogs.reduce<Record<string, { llm: number; agent: number; mcp: number }>>((acc, log) => {
+      if (!log.session_id) return acc;
+      if (!acc[log.session_id]) {
+        acc[log.session_id] = { llm: 0, agent: 0, mcp: 0 };
+      }
+      if (MCP_CALL_TYPES.includes(log.call_type)) {
+        acc[log.session_id].mcp += 1;
+      } else if (AGENT_CALL_TYPES.includes(log.call_type)) {
+        acc[log.session_id].agent += 1;
+      } else {
+        acc[log.session_id].llm += 1;
+      }
+      return acc;
+    }, {});
+
+    // Build a single-pass map of session_id → representative request_id.
+    // Prefers an LLM row over an MCP row as the representative.
+    const sessionRepresentativeMap = new Map<string, { requestId: string; isMcp: boolean }>();
+    for (const log of searchedLogs) {
+      if (!log.session_id || (log.session_total_count || 1) <= 1) continue;
+      const isMcp = MCP_CALL_TYPES.includes(log.call_type);
+      const existing = sessionRepresentativeMap.get(log.session_id);
+      if (!existing || (existing.isMcp && !isMcp)) {
+        sessionRepresentativeMap.set(log.session_id, { requestId: log.request_id, isMcp });
+      }
+    }
+
+    return (
+      searchedLogs
+        .map((log) => {
+          const sessionComposition = log.session_id ? sessionCompositionById[log.session_id] : undefined;
+          return {
+            ...log,
+            request_duration_ms: log.request_duration_ms,
+            session_llm_count: sessionComposition?.llm ?? undefined,
+            session_mcp_count: sessionComposition?.mcp ?? undefined,
+            session_agent_count: sessionComposition?.agent ?? undefined,
+            onKeyHashClick: (keyHash: string) => setSelectedKeyIdInfoView(keyHash),
+            onSessionClick: (sessionId: string) => {
+              if (sessionId) {
+                setSelectedSessionId(sessionId);
+                setSelectedLog(log);
+                setIsDrawerOpen(true);
+              }
+            },
+          };
+        })
+        // Deduplicate multi-call sessions using the pre-built map (O(1) per row).
+        .filter((log) => {
+          if (!log.session_id || (log.session_total_count || 1) <= 1) return true;
+          return sessionRepresentativeMap.get(log.session_id)?.requestId === log.request_id;
+        })
+    );
+  }, [filteredLogs.data, searchTerm]);
 
   if (!accessToken || !token || !userRole || !userID) {
     return null;
   }
-
-  const searchedLogs = filteredLogs.data.filter((log) => {
-    const matchesSearch =
-      !searchTerm ||
-      log.request_id.includes(searchTerm) ||
-      log.model.includes(searchTerm) ||
-      (log.user && log.user.includes(searchTerm));
-
-    // No need for additional filtering since we're now handling this in the API call
-    return matchesSearch;
-  });
-
-  const sessionCompositionById = searchedLogs.reduce<Record<string, { llm: number; agent: number; mcp: number }>>((acc, log) => {
-    if (!log.session_id) return acc;
-    if (!acc[log.session_id]) {
-      acc[log.session_id] = { llm: 0, agent: 0, mcp: 0 };
-    }
-    if (MCP_CALL_TYPES.includes(log.call_type)) {
-      acc[log.session_id].mcp += 1;
-    } else if (AGENT_CALL_TYPES.includes(log.call_type)) {
-      acc[log.session_id].agent += 1;
-    } else {
-      acc[log.session_id].llm += 1;
-    }
-    return acc;
-  }, {});
-
-  // Build a single-pass map of session_id → representative request_id.
-  // Prefers an LLM row over an MCP row as the representative.
-  const sessionRepresentativeMap = new Map<string, { requestId: string; isMcp: boolean }>();
-  for (const log of searchedLogs) {
-    if (!log.session_id || (log.session_total_count || 1) <= 1) continue;
-    const isMcp = MCP_CALL_TYPES.includes(log.call_type);
-    const existing = sessionRepresentativeMap.get(log.session_id);
-    if (!existing || (existing.isMcp && !isMcp)) {
-      sessionRepresentativeMap.set(log.session_id, { requestId: log.request_id, isMcp });
-    }
-  }
-
-  const filteredData =
-    searchedLogs
-      .map((log) => {
-        const sessionComposition = log.session_id ? sessionCompositionById[log.session_id] : undefined;
-        return {
-          ...log,
-          request_duration_ms: log.request_duration_ms,
-          session_llm_count: sessionComposition?.llm ?? undefined,
-          session_mcp_count: sessionComposition?.mcp ?? undefined,
-          session_agent_count: sessionComposition?.agent ?? undefined,
-          onKeyHashClick: (keyHash: string) => setSelectedKeyIdInfoView(keyHash),
-          onSessionClick: (sessionId: string) => {
-            if (sessionId) {
-              setSelectedSessionId(sessionId);
-              setSelectedLog(log);
-              setIsDrawerOpen(true);
-            }
-          },
-        };
-      })
-      // Deduplicate multi-call sessions using the pre-built map (O(1) per row).
-      .filter((log) => {
-        if (!log.session_id || (log.session_total_count || 1) <= 1) return true;
-        return sessionRepresentativeMap.get(log.session_id)?.requestId === log.request_id;
-      }) || [];
 
   const handleRowClick = (log: LogEntry) => {
     // Multi-call session row: open in the same right-side drawer (session mode)
@@ -278,15 +294,7 @@ export default function SpendLogsTable({
                     filteredLogs={filteredLogs}
                   />
                   <DataTable
-                    columns={createColumns({
-                      sortBy,
-                      sortOrder,
-                      onSortChange: (newSortBy, newSortOrder) => {
-                        setSortBy(newSortBy);
-                        setSortOrder(newSortOrder);
-                        setCurrentPage(1);
-                      },
-                    })}
+                    columns={columns}
                     data={filteredData}
                     onRowClick={handleRowClick}
                     isLoading={logsQuery.isLoading}
