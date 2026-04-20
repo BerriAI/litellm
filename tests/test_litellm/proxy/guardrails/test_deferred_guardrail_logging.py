@@ -684,6 +684,60 @@ class TestDeferredStreamingClosure:
         ), "apply_guardrail guardrails must be SKIPPED in deferred path"
 
     @pytest.mark.asyncio
+    async def test_streaming_iterator_hook_skipped_in_deferred_path(self):
+        """regression test: guardrails that define async_post_call_streaming_iterator_hook must be SKIPPED in _run_deferred_stream_guardrails.
+        The iterator hook already scanned the assembled response in the streaming
+        pipeline"""
+        success_hook_called = False
+
+        class IteratorHookGuardrail(CustomGuardrail):
+            def __init__(self):
+                super().__init__(
+                    guardrail_name="iterator-hook",
+                    default_on=True,
+                    event_hook=GuardrailEventHooks.post_call,
+                )
+
+            async def async_post_call_streaming_iterator_hook(
+                self, user_api_key_dict, response, request_data
+            ):
+                async for chunk in response:
+                    yield chunk
+
+            async def async_post_call_success_hook(
+                self, data: dict, user_api_key_dict: UserAPIKeyAuth, response: Any
+            ) -> Any:
+                nonlocal success_hook_called
+                success_hook_called = True
+                return response
+
+        mock_logging_obj = MagicMock()
+        mock_logging_obj.model_call_details = {"metadata": {}}
+
+        async def track_async_success(*args, **kwargs):
+            pass
+
+        mock_logging_obj.async_success_handler = track_async_success
+
+        guardrail = IteratorHookGuardrail()
+
+        with patch("litellm.callbacks", [guardrail]):
+            await ProxyBaseLLMRequestProcessing._run_deferred_stream_guardrails(
+                captured_data={"model": "gpt-4", "metadata": {}},
+                captured_user_api_key_dict=UserAPIKeyAuth(api_key="test"),
+                captured_logging_obj=mock_logging_obj,
+                assembled_response=MagicMock(),
+                cache_hit=False,
+            )
+
+        await asyncio.sleep(0)
+
+        assert success_hook_called is False, (
+            "Guardrails that implement async_post_call_streaming_iterator_hook "
+            "must be SKIPPED in deferred path — the iterator hook already ran"
+        )
+ 
+    @pytest.mark.asyncio
     async def test_hooks_receive_merged_guardrail_data(self):
         """Hooks must receive guardrail_data (the merged dict from
         _check_and_merge_model_level_guardrails), not the original
