@@ -43,6 +43,14 @@ class LiteLLM_ManagedVectorStore(TypedDict, total=False):
     team_id: Optional[str]
     user_id: Optional[str]
 
+    # provenance
+    # True when this entry came from proxy_config.yaml's vector_store_registry
+    # rather than from the database or a runtime API call. Consumers that
+    # reconcile in-memory state against the DB should treat config-loaded
+    # entries as valid even when absent from the DB table, otherwise they get
+    # silently pruned on every list call and never appear to the user.
+    from_litellm_config: Optional[bool]
+
 
 class LiteLLM_ManagedVectorStoreListResponse(TypedDict, total=False):
     """Response format for listing vector stores"""

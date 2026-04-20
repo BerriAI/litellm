@@ -180,3 +180,52 @@ def test_search_uses_registry_credentials():
             assert getattr(called_params, "aws_region_name") == "us-east-1"
     finally:
         litellm.vector_store_registry = original_registry
+
+
+def test_load_vector_stores_from_config_marks_from_litellm_config():
+    """
+    load_vector_stores_from_config must tag each loaded entry with
+    from_litellm_config=True so downstream code can distinguish
+    config-declared stores from DB/runtime stores (issue #25947).
+    """
+    # Pass an explicit empty list — VectorStoreRegistry's __init__ has a
+    # mutable default argument ([]) that is shared across instances within
+    # the same process.
+    registry = VectorStoreRegistry(vector_stores=[])
+    registry.load_vector_stores_from_config(
+        [
+            {
+                "vector_store_name": "demo",
+                "litellm_params": {
+                    "custom_llm_provider": "pg_vector",
+                    "vector_store_id": "vs-demo",
+                },
+            }
+        ]
+    )
+
+    assert len(registry.vector_stores) == 1
+    loaded = registry.vector_stores[0]
+    assert loaded["vector_store_id"] == "vs-demo"
+    assert loaded.get("from_litellm_config") is True
+
+
+def test_add_vector_store_to_registry_does_not_mark_from_litellm_config():
+    """
+    Programmatic inserts (DB reload, API create) must NOT be tagged
+    as from_litellm_config. Only entries declared in proxy_config.yaml
+    should carry the flag.
+    """
+    registry = VectorStoreRegistry(vector_stores=[])
+    registry.add_vector_store_to_registry(
+        LiteLLM_ManagedVectorStore(
+            vector_store_id="vs-runtime",
+            custom_llm_provider="openai",
+            vector_store_name="runtime-store",
+            created_at=datetime.now(timezone.utc),
+            updated_at=datetime.now(timezone.utc),
+        )
+    )
+
+    assert len(registry.vector_stores) == 1
+    assert registry.vector_stores[0].get("from_litellm_config") is not True

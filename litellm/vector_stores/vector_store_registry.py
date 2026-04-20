@@ -470,6 +470,7 @@ class VectorStoreRegistry:
                 ),
                 created_at=datetime.now(timezone.utc),
                 updated_at=datetime.now(timezone.utc),
+                from_litellm_config=True,
             )
             self.vector_stores.append(litellm_managed_vector_store)
 

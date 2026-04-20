@@ -537,6 +537,16 @@ async def list_vector_stores(
                 if not vector_store_id:
                     continue
 
+                # Vector stores declared in proxy_config.yaml live only in
+                # memory — they are never persisted to the DB table, so the
+                # "in memory but not in DB => deleted" heuristic does not
+                # apply to them. Surface them in the response and leave the
+                # in-memory registry alone.
+                if vector_store.get("from_litellm_config") is True:
+                    if vector_store_id not in vector_store_map:
+                        vector_store_map[vector_store_id] = vector_store
+                    continue
+
                 # If vector store is in memory but NOT in database, it was deleted
                 if vector_store_id not in db_vector_store_ids:
                     verbose_proxy_logger.info(

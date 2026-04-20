@@ -1837,3 +1837,187 @@ async def test_create_vector_store_in_db_raises_when_no_db():
     
     assert exc_info.value.status_code == 500
     assert "database not connected" in exc_info.value.detail.lower()
+
+
+# ---------------------------------------------------------------------------
+# Regression coverage for issue #25947 — vector stores declared only in
+# proxy_config.yaml must survive the list endpoint's DB-vs-memory reconcile
+# step (they are never written to the DB, so the old
+# "in memory but not in DB => delete" rule silently erased them every time).
+# ---------------------------------------------------------------------------
+
+from litellm.proxy.vector_store_endpoints.management_endpoints import (
+    list_vector_stores,
+)
+from litellm.vector_stores.vector_store_registry import VectorStoreRegistry
+
+
+class _TestVectorStoreListConfigLoaded:
+    # Prefixed with underscore so pytest does not collect the helper — tests
+    # live as module-level functions below.
+    pass
+
+
+@pytest.fixture
+def _isolated_registry():
+    """Swap litellm.vector_store_registry for the duration of the test."""
+    original = litellm.vector_store_registry
+    litellm.vector_store_registry = VectorStoreRegistry(vector_stores=[])
+    try:
+        yield litellm.vector_store_registry
+    finally:
+        litellm.vector_store_registry = original
+
+
+@pytest.fixture
+def _permissive_user():
+    """A user key that passes every feature-access / team check."""
+    return UserAPIKeyAuth(
+        api_key="sk-test",
+        user_id="u",
+        team_id=None,
+        metadata={},
+        user_role="proxy_admin",
+    )
+
+
+@pytest.mark.asyncio
+async def test_list_vector_stores_returns_config_loaded_even_when_db_empty(
+    _isolated_registry, _permissive_user
+):
+    """
+    Reproduces #25947: a vector store declared in proxy_config.yaml sits
+    only in the in-memory registry (never in the DB table), yet
+    /vector_store/list must still surface it to the UI.
+    """
+    _isolated_registry.load_vector_stores_from_config(
+        [
+            {
+                "vector_store_name": "pgvector-config",
+                "litellm_params": {
+                    "custom_llm_provider": "pg_vector",
+                    "vector_store_id": "vs-from-config",
+                },
+            }
+        ]
+    )
+    assert _isolated_registry.vector_stores[0]["from_litellm_config"] is True
+
+    with patch(
+        "litellm.proxy.vector_store_endpoints.management_endpoints"
+        ".check_feature_access_for_user",
+        new=AsyncMock(return_value=None),
+    ), patch(
+        "litellm.proxy.vector_store_endpoints.management_endpoints"
+        ".VectorStoreRegistry._get_vector_stores_from_db",
+        new=AsyncMock(return_value=[]),
+    ), patch(
+        "litellm.proxy.vector_store_endpoints.management_endpoints"
+        "._check_vector_store_access",
+        return_value=True,
+    ):
+        response = await list_vector_stores(user_api_key_dict=_permissive_user)
+
+    ids_returned = [vs.get("vector_store_id") for vs in response["data"]]
+    assert "vs-from-config" in ids_returned, (
+        "config-loaded vector store was missing from the listing response"
+    )
+
+    # And crucially it must still be in the in-memory registry —
+    # before the fix the reconcile step would have evicted it.
+    in_memory_ids = [
+        vs.get("vector_store_id") for vs in _isolated_registry.vector_stores
+    ]
+    assert "vs-from-config" in in_memory_ids
+
+
+@pytest.mark.asyncio
+async def test_list_vector_stores_still_prunes_stale_runtime_entries(
+    _isolated_registry, _permissive_user
+):
+    """
+    Guardrail for the fix: a store that was NOT config-loaded and is no
+    longer in the DB must still be evicted from the in-memory cache —
+    the old behaviour was correct for that case and must not regress.
+    """
+    _isolated_registry.add_vector_store_to_registry(
+        LiteLLM_ManagedVectorStore(
+            vector_store_id="vs-stale-runtime",
+            custom_llm_provider="openai",
+            vector_store_name="stale",
+            created_at=datetime.now(timezone.utc),
+            updated_at=datetime.now(timezone.utc),
+        )
+    )
+
+    with patch(
+        "litellm.proxy.vector_store_endpoints.management_endpoints"
+        ".check_feature_access_for_user",
+        new=AsyncMock(return_value=None),
+    ), patch(
+        "litellm.proxy.vector_store_endpoints.management_endpoints"
+        ".VectorStoreRegistry._get_vector_stores_from_db",
+        new=AsyncMock(return_value=[]),
+    ), patch(
+        "litellm.proxy.vector_store_endpoints.management_endpoints"
+        "._check_vector_store_access",
+        return_value=True,
+    ):
+        response = await list_vector_stores(user_api_key_dict=_permissive_user)
+
+    ids_returned = [vs.get("vector_store_id") for vs in response["data"]]
+    assert "vs-stale-runtime" not in ids_returned
+
+    in_memory_ids = [
+        vs.get("vector_store_id") for vs in _isolated_registry.vector_stores
+    ]
+    assert "vs-stale-runtime" not in in_memory_ids, (
+        "stale runtime entries should still be pruned from memory"
+    )
+
+
+@pytest.mark.asyncio
+async def test_list_vector_stores_mixed_config_and_db(
+    _isolated_registry, _permissive_user
+):
+    """
+    Both DB-resident and config-declared stores should appear in the
+    response simultaneously; the config entry must not mask or be
+    masked by the DB one.
+    """
+    _isolated_registry.load_vector_stores_from_config(
+        [
+            {
+                "vector_store_name": "config-store",
+                "litellm_params": {
+                    "custom_llm_provider": "pg_vector",
+                    "vector_store_id": "vs-config",
+                },
+            }
+        ]
+    )
+    db_only = LiteLLM_ManagedVectorStore(
+        vector_store_id="vs-db",
+        custom_llm_provider="openai",
+        vector_store_name="db-store",
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+
+    with patch(
+        "litellm.proxy.vector_store_endpoints.management_endpoints"
+        ".check_feature_access_for_user",
+        new=AsyncMock(return_value=None),
+    ), patch(
+        "litellm.proxy.vector_store_endpoints.management_endpoints"
+        ".VectorStoreRegistry._get_vector_stores_from_db",
+        new=AsyncMock(return_value=[db_only]),
+    ), patch(
+        "litellm.proxy.vector_store_endpoints.management_endpoints"
+        "._check_vector_store_access",
+        return_value=True,
+    ):
+        response = await list_vector_stores(user_api_key_dict=_permissive_user)
+
+    ids_returned = {vs.get("vector_store_id") for vs in response["data"]}
+    assert ids_returned == {"vs-config", "vs-db"}
