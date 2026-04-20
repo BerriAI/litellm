@@ -421,11 +421,12 @@ class TestOpenTelemetry(unittest.TestCase):
         otel.tracer = MagicMock()
 
         # Mock the dynamic header extraction and tracer creation
-        with patch.object(
-            otel, "_get_dynamic_otel_headers_from_kwargs"
-        ) as mock_get_headers, patch.object(
-            otel, "_get_tracer_with_dynamic_headers"
-        ) as mock_get_tracer:
+        with (
+            patch.object(
+                otel, "_get_dynamic_otel_headers_from_kwargs"
+            ) as mock_get_headers,
+            patch.object(otel, "_get_tracer_with_dynamic_headers") as mock_get_tracer,
+        ):
 
             # Test case 1: With dynamic headers
             mock_get_headers.return_value = {
@@ -2751,3 +2752,26 @@ class TestResponseIdFallback(unittest.TestCase):
         mock_span.set_attribute.assert_any_call(
             "gen_ai.response.id", "litellm-img-call-101"
         )
+
+    def test_litellm_call_id_emitted_as_span_attribute(self):
+        """litellm.call_id must be set on the span from standard_logging_payload."""
+        otel = OpenTelemetry()
+        mock_span = MagicMock()
+
+        call_id = "my-litellm-call-uuid-456"
+        kwargs = {
+            "model": "gpt-4o",
+            "optional_params": {},
+            "litellm_params": {"custom_llm_provider": "openai"},
+            "standard_logging_object": {
+                "id": "chatcmpl-provider-id",
+                "litellm_call_id": call_id,
+                "call_type": "completion",
+                "metadata": {},
+            },
+        }
+        response_obj = {"id": "chatcmpl-provider-id", "model": "gpt-4o"}
+
+        otel.set_attributes(mock_span, kwargs, response_obj)
+
+        mock_span.set_attribute.assert_any_call("litellm.call_id", call_id)
