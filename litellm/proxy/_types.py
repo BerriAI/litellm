@@ -4733,7 +4733,44 @@ class ActivationStatusReportResponse(LiteLLMPydanticObjectBase):
     bookings: List[PlaygroundBookingResponse]
 
 
+class TeardownStatusReportItem(LiteLLMPydanticObjectBase):
+    booking_id: str
+    # Worker reports success ("terminated") or a leave-alone failure that
+    # will be retried on the next poll ("teardown_failed" — DB stays in
+    # cancelled state with container_id set). Restricted set so a
+    # compromised cron key can't arbitrarily flip bookings.
+    status: Literal["terminated", "teardown_failed"]
+    error: Optional[str] = None
+
+
+class TeardownStatusReportRequest(LiteLLMPydanticObjectBase):
+    # Per-booking mode when populated (spark-activator worker flow).
+    # When omitted or empty, the endpoint falls back to sweep mode: flip
+    # every `active` booking + every `cancelled`-with-container_id booking
+    # to `terminated` and clear their container_id. The nightly teardown
+    # cron already POSTs with `{}` (no results) to trigger sweep mode.
+    results: Optional[List[TeardownStatusReportItem]] = None
+
+
 class TeardownStatusResponse(LiteLLMPydanticObjectBase):
     night_of: date
     terminated_count: int
     bookings: List[PlaygroundBookingResponse]
+
+
+class PlaygroundPendingTeardownBooking(LiteLLMPydanticObjectBase):
+    booking_id: str
+    user_id: str
+    user_email: Optional[str] = None
+    gpu_devices: str
+    container_id: str
+
+
+class PlaygroundPendingTeardownNode(LiteLLMPydanticObjectBase):
+    node_ip: str
+    ssh_user: str
+    bookings: List[PlaygroundPendingTeardownBooking]
+
+
+class PlaygroundPendingTeardownsResponse(LiteLLMPydanticObjectBase):
+    nodes: List[PlaygroundPendingTeardownNode]
