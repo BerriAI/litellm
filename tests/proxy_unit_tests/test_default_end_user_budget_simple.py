@@ -15,9 +15,15 @@ import pytest
 sys.path.insert(0, os.path.abspath("../.."))
 
 import litellm
-from litellm.proxy._types import LiteLLM_BudgetTable, LiteLLM_EndUserTable
-from litellm.proxy.auth.auth_checks import get_end_user_object
+from litellm.proxy._types import (
+    LiteLLM_BudgetTable,
+    LiteLLM_EndUserTable,
+    UserAPIKeyAuth,
+)
+from litellm.proxy.auth.auth_checks import get_end_user_object, common_checks
 from litellm.caching import DualCache
+from litellm.router import Router
+from litellm.proxy.utils import ProxyLogging
 
 
 @pytest.mark.asyncio
@@ -134,53 +140,130 @@ async def test_explicit_budget_not_overridden_by_default():
 @pytest.mark.asyncio
 async def test_budget_enforcement_blocks_over_budget_users():
     """
-    Core scenario: Budget limits are actually enforced.
-    Users who exceed their budget should be blocked.
+    Core scenario: Budget limits are actually enforced for paid models.
+    Users who exceed their budget should be blocked from paid models.
     """
     end_user_id = f"test_user_{uuid.uuid4().hex}"
-    default_budget_id = str(uuid.uuid4())
-    litellm.max_end_user_budget_id = default_budget_id
+    budget_id = str(uuid.uuid4())
+    litellm.max_end_user_budget_id = budget_id
 
-    default_budget = LiteLLM_BudgetTable(
-        budget_id=default_budget_id,
+    budget = LiteLLM_BudgetTable(
+        budget_id=budget_id,
         max_budget=10.0,
-        rpm_limit=2,
     )
 
-    # Mock end user who has already spent more than budget
-    mock_end_user_data = {
-        "user_id": end_user_id,
-        "spend": 15.0,  # Exceeds budget of 10.0
-        "litellm_budget_table": None,
-        "alias": None,
-        "allowed_model_region": None,
-        "default_model": None,
-        "blocked": False,
-    }
-
-    mock_prisma_client = MagicMock()
-    mock_prisma_client.db.litellm_endusertable.find_unique = AsyncMock(
-        return_value=MagicMock(dict=lambda: mock_end_user_data)
-    )
-    mock_prisma_client.db.litellm_budgettable.find_unique = AsyncMock(
-        return_value=MagicMock(dict=lambda: default_budget.dict())
+    end_user = LiteLLM_EndUserTable(
+        user_id=end_user_id,
+        spend=15.0,  # Over budget
+        litellm_budget_table=budget,
+        blocked=False,
     )
 
-    mock_cache = AsyncMock(spec=DualCache)
-    mock_cache.async_get_cache = AsyncMock(return_value=None)
-    mock_cache.async_set_cache = AsyncMock()
+    router = Router(
+        model_list=[
+            {
+                "model_name": "paid-model",
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo",
+                    "api_key": "sk-test",
+                },
+                "model_info": {
+                    "id": "paid-model-id",
+                },
+            }
+        ]
+    )
 
-    # Should raise BudgetExceededError
-    with pytest.raises(litellm.BudgetExceededError) as exc_info:
-        await get_end_user_object(
-            end_user_id=end_user_id,
-            prisma_client=mock_prisma_client,
-            user_api_key_cache=mock_cache,
-            route="/chat/completions",
-        )
+    proxy_logging = ProxyLogging(user_api_key_cache=None)
+    proxy_logging.budget_alerts = AsyncMock(return_value=None)
 
-    assert "ExceededBudget" in str(exc_info.value)
-    assert end_user_id in str(exc_info.value)
+    with patch("litellm.get_model_info") as mock_get_model_info:
+        mock_get_model_info.return_value = {
+            "input_cost_per_token": 0.0000015,
+            "output_cost_per_token": 0.000002,
+        }
+        with pytest.raises(litellm.BudgetExceededError) as exc_info:
+            await common_checks(
+                request_body={"model": "paid-model", "user": end_user_id},
+                team_object=None,
+                user_object=None,
+                end_user_object=end_user,
+                global_proxy_spend=None,
+                general_settings={},
+                route="/v1/chat/completions",
+                llm_router=router,
+                proxy_logging_obj=proxy_logging,
+                valid_token=UserAPIKeyAuth(token="test-token"),
+                request=MagicMock(),
+            )
+
+        assert exc_info.value.current_cost == 15.0
+        assert exc_info.value.max_budget == 10.0
+        assert end_user_id in str(exc_info.value)
+
+    litellm.max_end_user_budget_id = None
+
+
+@pytest.mark.asyncio
+async def test_zero_cost_model_allowed_for_overbudget_user():
+    """
+    Zero-cost models should be accessible even for users who exceeded their budget.
+    This is the fix for GitHub issue #14004.
+    """
+    end_user_id = f"test_user_{uuid.uuid4().hex}"
+    budget_id = str(uuid.uuid4())
+    litellm.max_end_user_budget_id = budget_id
+
+    budget = LiteLLM_BudgetTable(
+        budget_id=budget_id,
+        max_budget=10.0,
+    )
+
+    end_user = LiteLLM_EndUserTable(
+        user_id=end_user_id,
+        spend=15.0,  # Over budget
+        litellm_budget_table=budget,
+        blocked=False,
+    )
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "zero-cost-model",
+                "litellm_params": {
+                    "model": "ollama/llama2",
+                    "api_base": "http://localhost:11434",
+                    "input_cost_per_token": 0.0,
+                    "output_cost_per_token": 0.0,
+                },
+                "model_info": {
+                    "id": "zero-cost-model-id",
+                    "input_cost_per_token": 0.0,
+                    "output_cost_per_token": 0.0,
+                },
+            }
+        ]
+    )
+
+    proxy_logging = ProxyLogging(user_api_key_cache=None)
+    proxy_logging.budget_alerts = AsyncMock(return_value=None)
+
+    result = await common_checks(
+        request_body={"model": "zero-cost-model", "user": end_user_id},
+        team_object=None,
+        user_object=None,
+        end_user_object=end_user,
+        global_proxy_spend=None,
+        general_settings={},
+        route="/v1/chat/completions",
+        llm_router=router,
+        proxy_logging_obj=proxy_logging,
+        valid_token=UserAPIKeyAuth(token="test-token"),
+        request=MagicMock(),
+        skip_budget_checks=True,  # Set by user_api_key_auth for zero-cost models
+    )
+
+    assert result is True
 
     litellm.max_end_user_budget_id = None
 

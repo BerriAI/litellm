@@ -38,7 +38,7 @@ from litellm.proxy.utils import CallInfo
 async def test_get_end_user_object(customer_spend, customer_budget):
     """
     Scenario 1: normal
-    Scenario 2: user over budget
+    Scenario 2: user over budget - budget check is done in common_checks(), not here
     """
     end_user_id = "my-test-customer"
     _budget = LiteLLM_BudgetTable(max_budget=customer_budget)
@@ -51,31 +51,16 @@ async def test_get_end_user_object(customer_spend, customer_budget):
     _cache = DualCache()
     _key = "end_user_id:{}".format(end_user_id)
     _cache.set_cache(key=_key, value=end_user_obj.model_dump())
-    try:
-        await get_end_user_object(
-            end_user_id=end_user_id,
-            prisma_client="RANDOM VALUE",  # type: ignore
-            user_api_key_cache=_cache,
-            route="/v1/chat/completions",
-        )
-        if customer_spend > customer_budget:
-            pytest.fail(
-                "Expected call to fail. Customer Spend={}, Customer Budget={}".format(
-                    customer_spend, customer_budget
-                )
-            )
-    except Exception as e:
-        if (
-            isinstance(e, litellm.BudgetExceededError)
-            and customer_spend > customer_budget
-        ):
-            pass
-        else:
-            pytest.fail(
-                "Expected call to work. Customer Spend={}, Customer Budget={}, Error={}".format(
-                    customer_spend, customer_budget, str(e)
-                )
-            )
+    result = await get_end_user_object(
+        end_user_id=end_user_id,
+        prisma_client="RANDOM VALUE",  # type: ignore
+        user_api_key_cache=_cache,
+        route="/v1/chat/completions",
+    )
+    # Budget check is now done in common_checks(), not in get_end_user_object()
+    # So this should always return the end user object without raising BudgetExceededError
+    assert result is not None
+    assert result.user_id == end_user_id
 
 
 @pytest.mark.parametrize(

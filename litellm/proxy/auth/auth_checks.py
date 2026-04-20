@@ -986,6 +986,9 @@ async def get_end_user_object(
     If end user exists but has no budget_id, applies the default budget
     (if configured via litellm.max_end_user_budget_id).
 
+    Note: Budget checks are NOT performed here. They are done in common_checks()
+    which respects the skip_budget_checks flag for zero-cost models.
+
     Args:
         end_user_id: The ID of the end user
         prisma_client: Database client instance
@@ -1018,9 +1021,6 @@ async def get_end_user_object(
             parent_otel_span=parent_otel_span,
         )
 
-        # Check budget limits
-        _check_end_user_budget(end_user_obj=return_obj, route=route)
-
         return return_obj
 
     # Fetch from database
@@ -1048,9 +1048,6 @@ async def get_end_user_object(
         await user_api_key_cache.async_set_cache(
             key="end_user_id:{}".format(end_user_id), value=_response.dict()
         )
-
-        # Check budget limits
-        _check_end_user_budget(end_user_obj=_response, route=route)
 
         return _response
 
@@ -3126,9 +3123,7 @@ async def _virtual_key_max_budget_alert_check(
         alert_email_config: Optional[Dict[str, List[str]]] = (
             _merge_budget_alert_email_configs(
                 global_cfg=litellm.default_key_max_budget_alert_emails,
-                per_key_cfg=(valid_token.metadata or {}).get(
-                    "max_budget_alert_emails"
-                ),
+                per_key_cfg=(valid_token.metadata or {}).get("max_budget_alert_emails"),
             )
         )
 
@@ -3138,7 +3133,9 @@ async def _virtual_key_max_budget_alert_check(
                 (int(k) for k in alert_email_config if k.isdigit()),
                 default=None,
             )
-            if min_pct is None or valid_token.spend < valid_token.max_budget * (min_pct / 100.0):
+            if min_pct is None or valid_token.spend < valid_token.max_budget * (
+                min_pct / 100.0
+            ):
                 return
 
             call_info = CallInfo(
@@ -3164,8 +3161,7 @@ async def _virtual_key_max_budget_alert_check(
         else:
             # Old path: existing single 80% threshold — completely unchanged
             alert_threshold = (
-                valid_token.max_budget
-                * EMAIL_BUDGET_ALERT_MAX_SPEND_ALERT_PERCENTAGE
+                valid_token.max_budget * EMAIL_BUDGET_ALERT_MAX_SPEND_ALERT_PERCENTAGE
             )
 
             if (
