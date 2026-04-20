@@ -439,7 +439,14 @@ jobs:
         auth:
           username: ${DOCKERHUB_USERNAME}
           password: ${DOCKERHUB_PASSWORD}
+      - image: cimg/postgres:16.0
+        environment:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: litellm_test
     working_directory: ~/project
+    environment:
+      DATABASE_URL: "postgresql://postgres:postgres@localhost:5432/litellm_test"
 
     steps:
       - checkout
@@ -463,12 +470,14 @@ jobs:
           paths:
             - ./.venv
           key: v2-dependencies-{{ checksum "uv.lock" }}-{{ checksum ".circleci/config.yml" }}
+      - wait_for_service:
+          url: tcp://localhost:5432
+          timeout: "60"
       - run:
-          name: Run prisma ./docker/entrypoint.sh
+          name: Seed DB schema via prisma db push
           command: |
             set +e
-            chmod +x docker/entrypoint.sh
-            ./docker/entrypoint.sh
+            uv run --no-sync litellm --skip_server_startup --use_prisma_db_push
             set -e
       - run:
           name: Generate Prisma Client
