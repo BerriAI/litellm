@@ -7000,10 +7000,13 @@ class Router:
 
         model_to_prefs: Dict[str, AdaptiveRouterPreferences] = {}
         model_to_cost: Dict[str, float] = {}
-        for d in self.model_list or []:
-            name = d.get("model_name") if isinstance(d, dict) else d.model_name
-            if name not in config.available_models:
+        # O(k) via the name→indices map: only touch deployments whose name
+        # is listed in `available_models`, instead of scanning model_list.
+        for name in config.available_models:
+            indices = self.model_name_to_deployment_indices.get(name, [])
+            if not indices:
                 continue
+            d = (self.model_list or [])[indices[0]]
             mi = d.get("model_info") if isinstance(d, dict) else d.model_info
             mi_dict: Dict[str, Any] = (
                 mi if isinstance(mi, dict) else (mi.model_dump() if mi else {})
@@ -7034,7 +7037,7 @@ class Router:
             model_to_cost=model_to_cost,
         )
         self.adaptive_routers[deployment.model_name] = adaptive_router
-        litellm.callbacks.append(
+        litellm.logging_callback_manager.add_litellm_callback(
             AdaptiveRouterPostCallHook(adaptive_router=adaptive_router)
         )
         verbose_router_logger.info(
@@ -7137,7 +7140,7 @@ class Router:
         # by _create_deployment -> _add_model_to_list_and_index_map
 
         # Deferred: build the AdaptiveRouter strategy now that all underlying
-        # deployments are visible in self.model_list.
+        # deployments have been registered.
         self._finalize_adaptive_router_if_configured()
 
     def _add_deployment(self, deployment: Deployment) -> Deployment:
