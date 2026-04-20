@@ -38,7 +38,7 @@ export MAVVRIK_CONNECTION_ID="litellm-prod"
 litellm --config /path/to/config.yaml
 ```
 
-LiteLLM will automatically register with the Mavvrik API on startup and begin scheduling hourly exports. The initial export window is determined by the marker returned by Mavvrik during registration.
+LiteLLM will schedule hourly exports automatically. Registration with the Mavvrik API (and the initial export window determination) happens when the first scheduled job fires, not immediately at process start. If you need exports to begin immediately, use the API-based initialization flow below.
 
 ## Environment Variables
 
@@ -150,12 +150,11 @@ curl -X GET "http://localhost:4000/mavvrik/settings" \
   "api_key_masked": "mav_****xxxx",
   "api_endpoint": "https://api.mavvrik.dev/<TENANT_ID>",
   "connection_id": "litellm-prod",
-  "marker": "2024-01-14",
   "status": "configured"
 }
 ```
 
-The `marker` field shows the last successfully exported date. The next scheduled run will export from `(marker + 1 day)` onwards.
+The export cursor (marker) is owned by the Mavvrik API — it is retrieved from Mavvrik at the start of each scheduled run and is not stored locally.
 
 ## Data Export Details
 
@@ -187,20 +186,13 @@ Only rows with `successful_requests > 0` are exported — zero-request rows are 
 
 ## Advanced Configuration
 
-### Reset Export Cursor
+### Re-export Historical Data
 
-If Mavvrik asks you to re-export from an earlier date (e.g. after a data reset), update the marker via the settings endpoint:
+The export cursor (marker) is owned exclusively by the Mavvrik API and is not settable via `PUT /mavvrik/settings`.
 
-```bash
-curl -X PUT "http://localhost:4000/mavvrik/settings" \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer sk-admin-key" \
-  -d '{
-    "marker": "2024-01-01"
-  }' | jq
-```
+If Mavvrik asks you to re-export from an earlier date (e.g. after a data reset), contact Mavvrik support to reset the `metricsMarker` on their side. Once reset, the next scheduled run will retrieve the updated marker via `register()` and automatically back-fill all days from that point onwards.
 
-The next scheduled run will export from `2024-01-02` onwards, re-uploading all days since that date.
+For a fresh first-run backfill, set `MAVVRIK_LOOKBACK_START_DATE` before starting the proxy to control how far back LiteLLM exports historical data.
 
 ### Custom Export Frequency
 

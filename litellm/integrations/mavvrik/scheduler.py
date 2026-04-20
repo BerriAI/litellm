@@ -71,6 +71,8 @@ class MavvrikScheduler:
                     self.job_name,
                 )
         else:
+            # Redis not available — no distributed locking possible.
+            # Run directly; single-node deployments don't need a pod lock.
             await orchestrator.run()
 
     # ------------------------------------------------------------------

@@ -48,7 +48,7 @@ class MavvrikSettings:
     @property
     def has_env_vars(self) -> bool:
         """Return True when all three required env vars are non-empty."""
-        return all(os.getenv(v) for v in _ENV_VARS)
+        return all(os.getenv(v, "").strip() for v in _ENV_VARS)
 
     @property
     def _prisma_client(self):

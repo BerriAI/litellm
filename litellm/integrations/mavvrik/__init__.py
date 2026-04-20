@@ -109,14 +109,29 @@ class MavvrikService:
     async def get_settings(self) -> dict:
         """Load and mask Mavvrik settings.
 
+        Falls back to env vars when no DB settings exist, so operators using
+        the env-var-only setup see ``status: "configured"`` rather than
+        ``status: "not_configured"`` while exports are running.
+
         Returns:
             A dict with keys: api_key_masked, api_endpoint, connection_id, status.
-            ``status`` is ``"not_configured"`` when no settings exist, otherwise ``"configured"``.
+            ``status`` is ``"not_configured"`` when neither DB nor env vars are set.
             The export marker is owned by the Mavvrik API and is not stored locally.
         """
+        import os
+
         from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 
         data = await self._settings.load()
+
+        # Fall back to env vars for operators who never called /mavvrik/init.
+        if not data and self._settings.has_env_vars:
+            data = {
+                "api_key": os.getenv("MAVVRIK_API_KEY", ""),
+                "api_endpoint": os.getenv("MAVVRIK_API_ENDPOINT", ""),
+                "connection_id": os.getenv("MAVVRIK_CONNECTION_ID", ""),
+            }
+
         if not data:
             return {
                 "api_key_masked": None,
@@ -148,19 +163,32 @@ class MavvrikService:
 
         The export marker is owned by the Mavvrik API and cannot be set here.
 
+        Raises:
+            LookupError: when no existing settings are found (use POST /mavvrik/init instead).
+            ValueError: when a merge would leave a required field empty.
+
         Returns:
             {"message": str, "status": "success"}
         """
         current = await self._settings.load()
+        if not current:
+            raise LookupError(
+                "Mavvrik settings not found. Use POST /mavvrik/init to create them first."
+            )
 
         def _pick(new: Optional[str], key: str) -> str:
             return new if new is not None else current.get(key, "")
 
-        await self._settings.save(
-            api_key=_pick(api_key, "api_key"),
-            api_endpoint=_pick(api_endpoint, "api_endpoint"),
-            connection_id=_pick(connection_id, "connection_id"),
-        )
+        merged = {
+            "api_key": _pick(api_key, "api_key"),
+            "api_endpoint": _pick(api_endpoint, "api_endpoint"),
+            "connection_id": _pick(connection_id, "connection_id"),
+        }
+        missing = [k for k, v in merged.items() if not v]
+        if missing:
+            raise ValueError(f"Missing required Mavvrik settings after merge: {missing}")
+
+        await self._settings.save(**merged)
         return {"message": "Mavvrik settings updated successfully", "status": "success"}
 
     # ------------------------------------------------------------------
@@ -225,15 +253,19 @@ class MavvrikService:
         from litellm.integrations.mavvrik.exporter import MavvrikExporter
 
         data = await self._settings.load()
-        if not data:
+
+        # Allow export when credentials come from env vars (zero-config setup).
+        if not data and not self._settings.has_env_vars:
             raise ValueError("Mavvrik not configured. Call POST /mavvrik/init first.")
 
         date_str = date_str or self._yesterday()
 
+        # MavvrikExporter already falls back to MAVVRIK_* env vars when
+        # constructor args are None/empty, so pass None for missing DB fields.
         exporter = MavvrikExporter(
-            api_key=data.get("api_key"),
-            api_endpoint=data.get("api_endpoint"),
-            connection_id=data.get("connection_id"),
+            api_key=data.get("api_key") if data else None,
+            api_endpoint=data.get("api_endpoint") if data else None,
+            connection_id=data.get("connection_id") if data else None,
         )
         records_exported = await exporter.export_usage_data(
             date_str=date_str,

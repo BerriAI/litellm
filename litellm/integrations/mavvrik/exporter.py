@@ -18,6 +18,8 @@ from datetime import timedelta, timezone
 from datetime import datetime as _dt
 from typing import Any, Optional
 
+import polars as pl
+
 from litellm._logging import verbose_logger
 from litellm.constants import MAVVRIK_MAX_FETCHED_DATA_RECORDS
 from litellm.integrations.custom_logger import CustomLogger
@@ -107,9 +109,8 @@ class MavvrikExporter(CustomLogger):
             )
             return 0
 
-        record_count = len(df)
         verbose_logger.debug(
-            "MavvrikExporter: %d rows fetched, transforming…", record_count
+            "MavvrikExporter: %d rows fetched, transforming…", len(df)
         )
 
         transformer = MavvrikTransformer()
@@ -122,15 +123,19 @@ class MavvrikExporter(CustomLogger):
             )
             return 0
 
+        # Count rows actually exported (post-filter, matches what was uploaded).
+        records_exported = csv_payload.count("\n") - 1  # subtract header row
+
         client = self._client
         await client.upload(csv_payload, date_str=date_str)
 
         verbose_logger.info(
-            "MavvrikExporter: uploaded %d CSV bytes for date %s",
+            "MavvrikExporter: uploaded %d records (%d CSV bytes) for date %s",
+            records_exported,
             len(csv_payload),
             date_str,
         )
-        return record_count
+        return records_exported
 
     # ------------------------------------------------------------------
     # Dry run (preview without uploading)
@@ -166,10 +171,15 @@ class MavvrikExporter(CustomLogger):
                 },
             }
 
-        usage_sample = df.head(50).to_dicts()
         transformer = MavvrikTransformer()
         csv_payload = transformer.to_csv(df)
 
+        # Apply same filter as to_csv (successful_requests > 0) so preview and
+        # summary stats match what would actually be uploaded.
+        if "successful_requests" in df.columns:
+            df = df.filter(pl.col("successful_requests") > 0)
+
+        usage_sample = df.head(50).to_dicts()
         total_cost = float(df["spend"].sum()) if "spend" in df.columns else 0.0
         total_tokens = (
             int((df["prompt_tokens"].sum() or 0) + (df["completion_tokens"].sum() or 0))

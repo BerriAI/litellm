@@ -3,13 +3,18 @@
 Owns all business orchestration for the Mavvrik export:
   - Retrieving the current marker from the Mavvrik API via client.register()
   - Resolving the first-run start date (env var / earliest DB date / yesterday)
-  - Iterating over complete calendar days since the last exported marker
+  - Iterating over complete calendar days from the marker to yesterday
   - Exporting each day via MavvrikExporter.export_usage_data()
-  - Advancing the remote marker after each successful upload
+  - Advancing the remote marker to the next day after each successful upload
   - Reporting errors to Mavvrik for visibility
 
 Infrastructure concerns (pod lock, APScheduler registration) live in
 MavvrikScheduler, which delegates to this class.
+
+Marker semantics:
+  metricsMarker returned by register() is the START of the window to export,
+  not the last exported date. After exporting a date, advance_marker() is
+  called with (export_date + 1 day) so the next run starts from there.
 """
 
 from datetime import date, datetime, timedelta, timezone
@@ -20,6 +25,8 @@ from litellm.constants import (
     MAVVRIK_LOOKBACK_START_DATE,
     MAVVRIK_MAX_FETCHED_DATA_RECORDS,
 )
+from litellm.integrations.mavvrik.client import MavvrikClient
+from litellm.integrations.mavvrik.database import MavvrikDatabase
 
 if TYPE_CHECKING:
     from litellm.integrations.mavvrik.exporter import MavvrikExporter
@@ -32,6 +39,12 @@ class MavvrikOrchestrator:
 
     def __init__(self, exporter: "MavvrikExporter") -> None:
         self._exporter = exporter
+        self._client = MavvrikClient(
+            api_key=exporter.api_key or "",
+            api_endpoint=exporter.api_endpoint or "",
+            connection_id=exporter.connection_id or "",
+        )
+        self._db = MavvrikDatabase()
 
     # ------------------------------------------------------------------
     # Helpers
@@ -39,7 +52,7 @@ class MavvrikOrchestrator:
 
     @staticmethod
     def _utc_today() -> date:
-        """Return today's date in UTC.  Extracted so tests can patch it."""
+        """Return today's date in UTC. Extracted so tests can patch it."""
         return datetime.now(timezone.utc).date()
 
     @property
@@ -51,127 +64,86 @@ class MavvrikOrchestrator:
     # ------------------------------------------------------------------
 
     async def run(self) -> None:
-        """Export every complete calendar day since the Mavvrik-side marker.
+        """Export every complete calendar day starting from the Mavvrik marker.
 
-        The marker (cursor) is owned by the Mavvrik API.  We call register()
-        at the start of every run to retrieve it — no local marker needed.
+        Single outer try/catch — any failure is reported to Mavvrik and logged.
         """
-        from litellm.integrations.mavvrik.client import MavvrikClient
-        from litellm.integrations.mavvrik.database import MavvrikDatabase
+        try:
+            start_date = await self._get_start_date()
+            if start_date > self._yesterday:
+                verbose_logger.debug(
+                    "MavvrikOrchestrator: up to date, nothing to export"
+                )
+                return
+            await self._export_date_range(start_date)
+        except Exception as exc:
+            verbose_logger.error("MavvrikOrchestrator: run failed: %s", exc)
+            await self._client.report_error(str(exc)[:500])
 
-        db = MavvrikDatabase()
-        yesterday = self._yesterday
+    # ------------------------------------------------------------------
+    # Private helpers
+    # ------------------------------------------------------------------
 
-        # Retrieve the current export marker from Mavvrik (source of truth).
-        # Falls back to _resolve_first_run_start_date if the call fails or
-        # returns None (brand-new connection, no marker yet).
+    async def _get_start_date(self) -> date:
+        """Return the start date for this export run.
+
+        Calls register() to get the metricsMarker from Mavvrik (source of truth).
+        Falls back to first-run resolution if register() fails or returns None.
+        """
         marker_str: Optional[str] = None
         try:
-            client = MavvrikClient(
-                api_key=self._exporter.api_key or "",
-                api_endpoint=self._exporter.api_endpoint or "",
-                connection_id=self._exporter.connection_id or "",
-            )
-            marker_str = await client.register()
+            marker_str = await self._client.register()
             verbose_logger.debug("MavvrikOrchestrator: Mavvrik marker = %s", marker_str)
         except Exception as exc:
             verbose_logger.warning(
-                "MavvrikOrchestrator: register() failed (non-fatal), "
-                "falling back to first-run start date: %s",
+                "MavvrikOrchestrator: register() failed, falling back to first-run start date: %s",
                 exc,
             )
 
-        # Determine start date from the Mavvrik marker or first-run logic.
         if marker_str:
-            try:
-                last_exported = date.fromisoformat(marker_str[:10])
-                start_date = last_exported + timedelta(days=1)
-            except ValueError:
-                verbose_logger.warning(
-                    "MavvrikOrchestrator: invalid marker '%s', starting from yesterday",
-                    marker_str,
-                )
-                start_date = yesterday
-        else:
-            start_date = await self._resolve_first_run_start_date(db, yesterday)
+            return date.fromisoformat(marker_str[:10])
 
-        if start_date > yesterday:
-            verbose_logger.debug(
-                "MavvrikOrchestrator: marker=%s is up to date, nothing to export",
-                marker_str,
-            )
-            return
+        return await self._resolve_first_run_start_date()
 
+    async def _export_date_range(self, start_date: date) -> None:
+        """Export each calendar day from start_date to yesterday (inclusive).
+
+        After each successful upload, advances the Mavvrik marker to
+        (export_date + 1 day) so the next run picks up from there.
+        """
         export_date = start_date
-        while export_date <= yesterday:
+        while export_date <= self._yesterday:
             date_str = export_date.isoformat()
             verbose_logger.info("MavvrikOrchestrator: exporting date %s", date_str)
 
-            try:
-                await self._exporter.export_usage_data(
-                    date_str=date_str,
-                    limit=MAVVRIK_MAX_FETCHED_DATA_RECORDS,
-                )
-            except ValueError as exc:
-                # Config error (missing credentials) — stop the entire loop;
-                # no point trying remaining dates with a broken config.
-                verbose_logger.error(
-                    "MavvrikOrchestrator: export stopped for %s — config error: %s",
-                    date_str,
-                    exc,
-                )
-                await client.report_error(f"Config error for date {date_str}: {exc}")
-                return
-            except Exception as exc:
-                # Transient error (network, upload failure) — log and skip
-                # this date so remaining days still get exported.
-                verbose_logger.warning(
-                    "MavvrikOrchestrator: export failed for %s "
-                    "(skipping, will retry next run): %s",
-                    date_str,
-                    exc,
-                )
-                await client.report_error(f"Export failed for date {date_str}: {exc}")
-                export_date += timedelta(days=1)
-                continue
+            await self._exporter.export_usage_data(
+                date_str=date_str,
+                limit=MAVVRIK_MAX_FETCHED_DATA_RECORDS,
+            )
 
-            # Advance the marker on the Mavvrik side (source of truth).
-            # No local marker is stored — the next run retrieves the
-            # updated marker from Mavvrik via register().
-            try:
-                export_epoch = int(
-                    datetime(
-                        export_date.year,
-                        export_date.month,
-                        export_date.day,
-                        tzinfo=timezone.utc,
-                    ).timestamp()
-                )
-                await client.advance_marker(export_epoch)
-            except Exception as exc:
-                verbose_logger.warning(
-                    "MavvrikOrchestrator: advance_marker PATCH failed (non-fatal): %s",
-                    exc,
-                )
+            # metricsMarker is the start of the next export window.
+            next_date = export_date + timedelta(days=1)
+            next_epoch = int(
+                datetime(
+                    next_date.year,
+                    next_date.month,
+                    next_date.day,
+                    tzinfo=timezone.utc,
+                ).timestamp()
+            )
+            await self._client.advance_marker(next_epoch)
+            export_date = next_date
 
-            export_date += timedelta(days=1)
-
-    # ------------------------------------------------------------------
-    # First-run start date resolution
-    # ------------------------------------------------------------------
-
-    async def _resolve_first_run_start_date(
-        self,
-        db: Any,  # MavvrikDatabase — Any to avoid circular import at class level
-        yesterday: date,
-    ) -> date:
-        """Determine the export start date on the very first run (no marker yet).
+    async def _resolve_first_run_start_date(self) -> date:
+        """Determine the export start date on the very first run (no Mavvrik marker yet).
 
         Priority:
           1. MAVVRIK_LOOKBACK_START_DATE env var (clamped to MIN(date) in DB)
           2. MIN(date) in LiteLLM_DailyUserSpend
           3. Yesterday as a last-resort fallback
         """
+        yesterday = self._yesterday
+
         requested_start: Optional[date] = None
         if MAVVRIK_LOOKBACK_START_DATE is not None:
             try:
@@ -183,7 +155,7 @@ class MavvrikOrchestrator:
                     MAVVRIK_LOOKBACK_START_DATE,
                 )
 
-        earliest_str = await db.get_earliest_date()
+        earliest_str = await self._db.get_earliest_date()
         earliest_db: Optional[date] = None
         if earliest_str:
             try:
@@ -193,25 +165,14 @@ class MavvrikOrchestrator:
 
         if requested_start is not None and earliest_db is not None:
             start_date = max(requested_start, earliest_db)
-            if start_date != requested_start:
-                verbose_logger.info(
-                    "MavvrikOrchestrator: MAVVRIK_LOOKBACK_START_DATE=%s is before "
-                    "earliest DB date %s — starting from %s",
-                    requested_start,
-                    earliest_db,
-                    start_date,
-                )
-            else:
-                verbose_logger.info(
-                    "MavvrikOrchestrator: no marker found, starting from "
-                    "MAVVRIK_LOOKBACK_START_DATE %s",
-                    start_date,
-                )
+            verbose_logger.info(
+                "MavvrikOrchestrator: no marker found, starting from %s", start_date
+            )
         elif requested_start is not None:
             start_date = requested_start
             verbose_logger.info(
-                "MavvrikOrchestrator: no marker found, no DB data yet, "
-                "starting from MAVVRIK_LOOKBACK_START_DATE %s",
+                "MavvrikOrchestrator: no marker found, starting from "
+                "MAVVRIK_LOOKBACK_START_DATE %s",
                 start_date,
             )
         elif earliest_db is not None:
