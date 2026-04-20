@@ -3,6 +3,7 @@ Secret Manager Handler
 
 Handles retrieving secrets from different secret management systems.
 """
+
 import base64
 import os
 from typing import Any, Optional
@@ -162,9 +163,11 @@ def get_secret_from_manager(  # noqa: PLR0915
         if isinstance(client, CustomSecretManager):
             secret = client.sync_read_secret(
                 secret_name=secret_name,
-                optional_params=key_management_settings.model_dump()
-                if key_management_settings
-                else None,
+                optional_params=(
+                    key_management_settings.model_dump()
+                    if key_management_settings
+                    else None
+                ),
             )
             if secret is None:
                 raise ValueError(

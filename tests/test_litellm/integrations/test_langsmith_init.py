@@ -127,12 +127,16 @@ class TestLangsmithLoggerInit:
         mock_start_periodic_flush_task.assert_called_once()
         assert logger._flush_task is None
 
-    @patch("asyncio.get_running_loop", side_effect=RuntimeError("no running event loop"))
+    @patch(
+        "asyncio.get_running_loop", side_effect=RuntimeError("no running event loop")
+    )
     def test_start_periodic_flush_task_returns_none_without_running_loop(
         self, mock_get_running_loop
     ):
         """Test that helper returns None when no running event loop exists."""
-        with patch.object(LangsmithLogger, "_start_periodic_flush_task", return_value=None):
+        with patch.object(
+            LangsmithLogger, "_start_periodic_flush_task", return_value=None
+        ):
             logger = LangsmithLogger(
                 langsmith_api_key="test-key",
                 langsmith_project="test-project",
@@ -165,7 +169,9 @@ class TestLangsmithLoggerInit:
     @pytest.mark.asyncio
     async def test_async_log_success_event_lazily_starts_periodic_flush(self):
         """Test that async logging lazily starts periodic flush after sync init."""
-        with patch.object(LangsmithLogger, "_start_periodic_flush_task", return_value=None):
+        with patch.object(
+            LangsmithLogger, "_start_periodic_flush_task", return_value=None
+        ):
             logger = LangsmithLogger(
                 langsmith_api_key="test-key",
                 langsmith_project="test-project",
@@ -185,7 +191,9 @@ class TestLangsmithLoggerInit:
     @pytest.mark.asyncio
     async def test_async_log_failure_event_lazily_starts_periodic_flush(self):
         """Test that async failure logging lazily starts periodic flush after sync init."""
-        with patch.object(LangsmithLogger, "_start_periodic_flush_task", return_value=None):
+        with patch.object(
+            LangsmithLogger, "_start_periodic_flush_task", return_value=None
+        ):
             logger = LangsmithLogger(
                 langsmith_api_key="test-key",
                 langsmith_project="test-project",
@@ -201,6 +209,7 @@ class TestLangsmithLoggerInit:
 
         logger._start_periodic_flush_task.assert_called_once()
         assert len(logger.log_queue) == 1
+
 
 class TestLangsmithPrepareLogData:
     """Regression test for #24001: _prepare_log_data must inject

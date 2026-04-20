@@ -48,7 +48,9 @@ def engine_client(mock_proxy_logging) -> PrismaClient:
     Minimal PrismaClient fixture for engine watchdog tests.
     Uses the real constructor pattern from PR #21706 (database_url).
     """
-    client = PrismaClient(database_url="mock://test", proxy_logging_obj=mock_proxy_logging)
+    client = PrismaClient(
+        database_url="mock://test", proxy_logging_obj=mock_proxy_logging
+    )
     client.db = MagicMock()
     client.db.recreate_prisma_client = AsyncMock()
     client.db.disconnect = AsyncMock(return_value=None)
@@ -216,7 +218,9 @@ async def test_run_reconnect_cycle_uses_heavy_path_when_engine_dead(
     ):
         await engine_client._run_reconnect_cycle(timeout_seconds=5.0)
 
-    engine_client.db.recreate_prisma_client.assert_awaited_once_with("postgresql://test")
+    engine_client.db.recreate_prisma_client.assert_awaited_once_with(
+        "postgresql://test"
+    )
     engine_client._start_engine_watcher.assert_awaited_once()
     engine_client.db.connect.assert_not_awaited()
 
@@ -241,7 +245,9 @@ async def test_run_reconnect_cycle_uses_heavy_path_when_confirmed_dead(
     ):
         await engine_client._run_reconnect_cycle(timeout_seconds=5.0)
 
-    engine_client.db.recreate_prisma_client.assert_awaited_once_with("postgresql://test")
+    engine_client.db.recreate_prisma_client.assert_awaited_once_with(
+        "postgresql://test"
+    )
     engine_client._start_engine_watcher.assert_awaited_once()
     engine_client.db.connect.assert_not_awaited()
     assert engine_client._engine_confirmed_dead is False  # Reset after use
@@ -522,12 +528,16 @@ async def test_successful_reconnect_resets_failure_counter(engine_client):
 def test_escalation_threshold_env_var(mock_proxy_logging):
     """PRISMA_RECONNECT_ESCALATION_THRESHOLD env var is respected."""
     with patch.dict(os.environ, {"PRISMA_RECONNECT_ESCALATION_THRESHOLD": "5"}):
-        client = PrismaClient(database_url="mock://test", proxy_logging_obj=mock_proxy_logging)
+        client = PrismaClient(
+            database_url="mock://test", proxy_logging_obj=mock_proxy_logging
+        )
     assert client._reconnect_escalation_threshold == 5
 
 
 def test_escalation_threshold_min_guard(mock_proxy_logging):
     """Escalation threshold cannot be set below 1."""
     with patch.dict(os.environ, {"PRISMA_RECONNECT_ESCALATION_THRESHOLD": "0"}):
-        client = PrismaClient(database_url="mock://test", proxy_logging_obj=mock_proxy_logging)
+        client = PrismaClient(
+            database_url="mock://test", proxy_logging_obj=mock_proxy_logging
+        )
     assert client._reconnect_escalation_threshold == 1

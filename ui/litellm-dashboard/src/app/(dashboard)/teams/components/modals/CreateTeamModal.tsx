@@ -13,9 +13,11 @@ import AgentSelector from "@/components/agent_management/AgentSelector";
 import PremiumLoggingSettings from "@/components/common_components/PremiumLoggingSettings";
 import ModelAliasManager from "@/components/common_components/ModelAliasManager";
 import React, { useEffect, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import NotificationsManager from "@/components/molecules/notifications_manager";
 import { fetchMCPAccessGroups, getGuardrailsList, getPoliciesList, Organization, Team, teamCreateCall } from "@/components/networking";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
+import { organizationKeys } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 import MCPToolPermissions from "@/components/mcp_server_management/MCPToolPermissions";
 
 interface ModelAliases {
@@ -71,6 +73,7 @@ const CreateTeamModal = ({
   setIsTeamModalVisible,
 }: CreateTeamModalProps) => {
   const { userId: userID, userRole, accessToken, premiumUser } = useAuthorized();
+  const queryClient = useQueryClient();
   const [form] = Form.useForm();
   const [userModels, setUserModels] = useState<string[]>([]);
   const [currentOrgForCreateTeam, setCurrentOrgForCreateTeam] = useState<Organization | null>(null);
@@ -273,6 +276,7 @@ const CreateTeamModal = ({
         }
 
         const response: any = await teamCreateCall(accessToken, formValues);
+        queryClient.invalidateQueries({ queryKey: organizationKeys.all });
         if (teams !== null) {
           setTeams([...teams, response]);
         } else {
@@ -391,6 +395,80 @@ const CreateTeamModal = ({
             </Select2>
           </Form.Item>
 
+          <Accordion className="mt-8 mb-8">
+            <AccordionHeader>
+              <b>Team Member Settings</b>
+            </AccordionHeader>
+            <AccordionBody>
+              <Text className="text-xs text-gray-500 mb-4">
+                Optional defaults applied when members join this team. All fields can be overridden per member.
+              </Text>
+              <Form.Item
+                noStyle
+                shouldUpdate={(prev, cur) => prev.models !== cur.models}
+              >
+                {({ getFieldValue }) => {
+                  const teamModels: string[] = getFieldValue("models") || [];
+                  const opts = teamModels.length > 0 ? teamModels : modelsToPick;
+                  return (
+                    <Form.Item
+                      label={
+                        <span>
+                          Default Model Access{" "}
+                          <Tooltip title="Optional. If set, new members can only access these models by default. Must be a subset of the team's models. Leave empty to give all members access to all team models.">
+                            <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                          </Tooltip>
+                        </span>
+                      }
+                      name="default_team_member_models"
+                    >
+                      <Select2
+                        mode="multiple"
+                        placeholder="Leave empty — all team models accessible to every member"
+                        style={{ width: "100%" }}
+                      >
+                        {opts.map((m) => (
+                          <Select2.Option key={m} value={m}>
+                            {getModelDisplayName(m)}
+                          </Select2.Option>
+                        ))}
+                      </Select2>
+                    </Form.Item>
+                  );
+                }}
+              </Form.Item>
+              <Form.Item
+                label="Default Member Budget (USD)"
+                name="team_member_budget"
+                normalize={(value) => (value ? Number(value) : undefined)}
+                tooltip="Default spend budget for each member in this team."
+              >
+                <NumericalInput step={0.01} precision={2} width={200} />
+              </Form.Item>
+              <Form.Item
+                label="Default Key Duration (eg: 1d, 1mo)"
+                name="team_member_key_duration"
+                tooltip="Set a limit to the duration of a team member's key. Format: 30s (seconds), 30m (minutes), 30h (hours), 30d (days), 1mo (month)"
+              >
+                <TextInput placeholder="e.g., 30d" />
+              </Form.Item>
+              <Form.Item
+                label="Default RPM Limit"
+                name="team_member_rpm_limit"
+                tooltip="Default requests per minute limit for each member. Can be overridden per member."
+              >
+                <NumericalInput step={1} width={400} />
+              </Form.Item>
+              <Form.Item
+                label="Default TPM Limit"
+                name="team_member_tpm_limit"
+                tooltip="Default tokens per minute limit for each member. Can be overridden per member."
+              >
+                <NumericalInput step={1} width={400} />
+              </Form.Item>
+            </AccordionBody>
+          </Accordion>
+
           <Form.Item label="Max Budget (USD)" name="max_budget">
             <NumericalInput step={0.01} precision={2} width={200} />
           </Form.Item>
@@ -409,7 +487,7 @@ const CreateTeamModal = ({
           </Form.Item>
 
           <Accordion
-            className="mt-20 mb-8"
+            className="mt-8 mb-8"
             onClick={() => {
               if (!mcpAccessGroupsLoaded) {
                 fetchMcpAccessGroups();
@@ -431,35 +509,6 @@ const CreateTeamModal = ({
                     e.target.value = e.target.value.trim();
                   }}
                 />
-              </Form.Item>
-              <Form.Item
-                label="Team Member Budget (USD)"
-                name="team_member_budget"
-                normalize={(value) => (value ? Number(value) : undefined)}
-                tooltip="This is the individual budget for a user in the team."
-              >
-                <NumericalInput step={0.01} precision={2} width={200} />
-              </Form.Item>
-              <Form.Item
-                label="Team Member Key Duration (eg: 1d, 1mo)"
-                name="team_member_key_duration"
-                tooltip="Set a limit to the duration of a team member's key. Format: 30s (seconds), 30m (minutes), 30h (hours), 30d (days), 1mo (month)"
-              >
-                <TextInput placeholder="e.g., 30d" />
-              </Form.Item>
-              <Form.Item
-                label="Team Member RPM Limit"
-                name="team_member_rpm_limit"
-                tooltip="The RPM (Requests Per Minute) limit for individual team members"
-              >
-                <NumericalInput step={1} width={400} />
-              </Form.Item>
-              <Form.Item
-                label="Team Member TPM Limit"
-                name="team_member_tpm_limit"
-                tooltip="The TPM (Tokens Per Minute) limit for individual team members"
-              >
-                <NumericalInput step={1} width={400} />
               </Form.Item>
               <Form.Item
                 label="Metadata"

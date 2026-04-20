@@ -47,7 +47,10 @@ class TestAgentCoreAcceptHeader:
         headers = {}
         # SigV4 path requires AWS credentials — mock _sign_request to avoid needing them
         with patch.object(config, "_sign_request") as mock_sign:
-            mock_sign.return_value = ({"Authorization": "AWS4-HMAC-SHA256 ..."}, b'{"prompt":"test"}')
+            mock_sign.return_value = (
+                {"Authorization": "AWS4-HMAC-SHA256 ..."},
+                b'{"prompt":"test"}',
+            )
             result_headers, body = config.sign_request(
                 headers=headers,
                 optional_params={},
@@ -56,7 +59,9 @@ class TestAgentCoreAcceptHeader:
             )
             # Verify _sign_request was called with Accept header already set
             call_args = mock_sign.call_args
-            passed_headers = call_args.kwargs.get("headers") or call_args[1].get("headers", {})
+            passed_headers = call_args.kwargs.get("headers") or call_args[1].get(
+                "headers", {}
+            )
             assert "Accept" in passed_headers
             assert passed_headers["Accept"] == "application/json, text/event-stream"
 
@@ -307,9 +312,7 @@ class TestAgentCoreStreamingJsonFallback:
         mock_response = Mock(spec=httpx.Response)
         mock_response.status_code = 200
         mock_response.headers = {"content-type": "application/json"}
-        mock_response.aread = AsyncMock(
-            return_value=json.dumps(json_body).encode()
-        )
+        mock_response.aread = AsyncMock(return_value=json.dumps(json_body).encode())
 
         with patch.object(
             client, "post", new_callable=AsyncMock, return_value=mock_response
@@ -346,7 +349,9 @@ class TestAgentCoreStreamingJsonFallback:
         mock_response.read.return_value = b"not valid json {{"
 
         with patch.object(client, "post", return_value=mock_response):
-            with pytest.raises(Exception, match="Failed to read/parse JSON response body"):
+            with pytest.raises(
+                Exception, match="Failed to read/parse JSON response body"
+            ):
                 litellm.completion(
                     model="bedrock/agentcore/arn:aws:bedrock-agentcore:us-west-2:888602223428:runtime/test_agent",
                     messages=[{"role": "user", "content": "test"}],
@@ -374,7 +379,9 @@ class TestAgentCoreStreamingJsonFallback:
         with patch.object(
             client, "post", new_callable=AsyncMock, return_value=mock_response
         ):
-            with pytest.raises(Exception, match="Failed to read/parse JSON response body"):
+            with pytest.raises(
+                Exception, match="Failed to read/parse JSON response body"
+            ):
                 await litellm.acompletion(
                     model="bedrock/agentcore/arn:aws:bedrock-agentcore:us-west-2:888602223428:runtime/test_agent",
                     messages=[{"role": "user", "content": "test"}],

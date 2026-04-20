@@ -158,7 +158,7 @@ def test_extra_body_cache_not_forwarded_to_vertex_ai():
     optional_params = {
         "extra_body": {
             "cache": {"use-cache": True, "ttl": 86400},  # LiteLLM-internal
-            "some_vertex_param": "value",                 # legitimate provider extra
+            "some_vertex_param": "value",  # legitimate provider extra
         },
     }
     litellm_params = {}
@@ -175,7 +175,7 @@ def test_extra_body_cache_not_forwarded_to_vertex_ai():
     # 'cache' must be stripped — Vertex AI has no such field
     assert "cache" not in result, (
         "extra_body.cache must not be forwarded to Vertex AI. "
-        "Vertex AI rejects it with 400: Unknown name \"cache\": Cannot find field."
+        'Vertex AI rejects it with 400: Unknown name "cache": Cannot find field.'
     )
 
     # Other legitimate extra_body keys should still pass through
@@ -221,10 +221,7 @@ def test_metadata_to_labels_vertex_only():
     optional_params = {}
     litellm_params = {
         "metadata": {
-            "requester_metadata": {
-                "user": "john_doe",
-                "project": "test-project"
-            }
+            "requester_metadata": {"user": "john_doe", "project": "test-project"}
         }
     }
 
@@ -255,15 +252,10 @@ def test_metadata_to_labels_vertex_only():
 def test_empty_content_handling():
     """Test that empty content strings are properly handled in Gemini message transformation"""
     # Test with empty content in user message
-    messages = [
-        {
-            "content": "",
-            "role": "user"
-        }
-    ]
-    
+    messages = [{"content": "", "role": "user"}]
+
     contents = _gemini_convert_messages_with_history(messages=messages)
-    
+
     # Verify that the content was properly transformed
     assert len(contents) == 1
     assert contents[0]["role"] == "user"
@@ -281,7 +273,7 @@ def test_thought_signature_extraction_from_response():
 
     # Test case: Single function call with thought signature
     test_signature = "Co4CAdHtim/rWgXbz2Ghp4tShzLeMASrPw6JJyYIC3cbVyZnKzU3uv8/wVzyS2sKRPL2m8QQHHXbNQhEEz500G7n/4ZMmksdTtfQcJMoT76S1DGwhnAiLwTgWCNXs3lEb4M19EVYoWFxhrH5Lr9YMIquoU9U4paydGwvZyIyigamIg4B6WnxrRsf0KZV12gJed0DZuKczvOFtHz3zUnmZRlOiTzd5gBVyQM+5jv1VI8m4WUKd6cN/5a5ZvaA0ggiO6kdVhlpIVs7GczSEVJD8KH4u02X7VSnb7CvykqDntZzV0y8rZFBEFGKrChmeHlWXP4D1IB3F9KQyhuLgWImMzg4BajKVxxMU737JGnNISy5"
-    
+
     parts_with_signature = [
         HttpxPartType(
             functionCall={
@@ -313,15 +305,21 @@ def test_thought_signature_parallel_function_calls():
     from litellm.types.llms.vertex_ai import HttpxPartType
 
     test_signature = "Co4CAdHtim/rWgXbz2Ghp4tShzLeMASrPw6JJyYIC3cbVyZnKzU3uv8/wVzyS2sKRPL2m8QQHHXbNQhEEz500G7n/4ZMmksdTtfQcJMoT76S1DGwhnAiLwTgWCNXs3lEb4M19EVYoWFxhrH5Lr9YMIquoU9U4paydGwvZyIyigamIg4B6WnxrRsf0KZV12gJed0DZuKczvOFtHz3zUnmZRlOiTzd5gBVyQM+5jv1VI8m4WUKd6cN/5a5ZvaA0ggiO6kdVhlpIVs7GczSEVJD8KH4u02X7VSnb7CvykqDntZzV0y8rZFBEFGKrChmeHlWXP4D1IB3F9KQyhuLgWImMzg4BajKVxxMU737JGnNISy5"
-    
+
     # Parallel function calls - only first has signature
     parts_parallel = [
         HttpxPartType(
-            functionCall={"name": "get_current_temperature", "args": {"location": "Paris"}},
+            functionCall={
+                "name": "get_current_temperature",
+                "args": {"location": "Paris"},
+            },
             thoughtSignature=test_signature,  # First FC has signature
         ),
         HttpxPartType(
-            functionCall={"name": "get_current_temperature", "args": {"location": "London"}},
+            functionCall={
+                "name": "get_current_temperature",
+                "args": {"location": "London"},
+            },
             # Second FC has no signature (parallel call)
         ),
     ]
@@ -338,7 +336,9 @@ def test_thought_signature_parallel_function_calls():
     assert "provider_specific_fields" in tools[0]
     assert tools[0]["provider_specific_fields"]["thought_signature"] == test_signature
     # Second tool call should not have thought signature
-    assert "provider_specific_fields" not in tools[1] or "thought_signature" not in tools[1].get("provider_specific_fields", {})
+    assert "provider_specific_fields" not in tools[
+        1
+    ] or "thought_signature" not in tools[1].get("provider_specific_fields", {})
 
 
 def test_thought_signature_preservation_in_conversion():
@@ -348,7 +348,7 @@ def test_thought_signature_preservation_in_conversion():
     )
 
     test_signature = "Co4CAdHtim/rWgXbz2Ghp4tShzLeMASrPw6JJyYIC3cbVyZnKzU3uv8/wVzyS2sKRPL2m8QQHHXbNQhEEz500G7n/4ZMmksdTtfQcJMoT76S1DGwhnAiLwTgWCNXs3lEb4M19EVYoWFxhrH5Lr9YMIquoU9U4paydGwvZyIyigamIg4B6WnxrRsf0KZV12gJed0DZuKczvOFtHz3zUnmZRlOiTzd5gBVyQM+5jv1VI8m4WUKd6cN/5a5ZvaA0ggiO6kdVhlpIVs7GczSEVJD8KH4u02X7VSnb7CvykqDntZzV0y8rZFBEFGKrChmeHlWXP4D1IB3F9KQyhuLgWImMzg4BajKVxxMU737JGnNISy5"
-    
+
     # Assistant message with tool calls containing thought signatures
     assistant_message = {
         "role": "assistant",
@@ -386,7 +386,7 @@ def test_thought_signature_preservation_in_conversion():
     assert "function_call" in gemini_parts[0]
     assert "thoughtSignature" in gemini_parts[0]
     assert gemini_parts[0]["thoughtSignature"] == test_signature
-    
+
     # Verify second function call part does not have thought signature
     assert "function_call" in gemini_parts[1]
     assert "thoughtSignature" not in gemini_parts[1]
@@ -400,7 +400,7 @@ def test_thought_signature_sequential_function_calls():
 
     signature_1 = "Co4CAdHtim/rWgXbz2Ghp4tShzLeMASrPw6JJyYIC3cbVyZnKzU3uv8/wVzyS2sKRPL2m8QQHHXbNQhEEz500G7n/4ZMmksdTtfQcJMoT76S1DGwhnAiLwTgWCNXs3lEb4M19EVYoWFxhrH5Lr9YMIquoU9U4paydGwvZyIyigamIg4B6WnxrRsf0KZV12gJed0DZuKczvOFtHz3zUnmZRlOiTzd5gBVyQM+5jv1VI8m4WUKd6cN/5a5ZvaA0ggiO6kdVhlpIVs7GczSEVJD8KH4u02X7VSnb7CvykqDntZzV0y8rZFBEFGKrChmeHlWXP4D1IB3F9KQyhuLgWImMzg4BajKVxxMU737JGnNISy5"
     signature_2 = "DifferentSignatureForSecondCall1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-    
+
     # Sequential function calls - each has its own signature
     # This simulates a multi-step conversation where each step has a signature
     assistant_message_step1 = {
@@ -447,7 +447,7 @@ def test_thought_signature_sequential_function_calls():
     # Verify each step preserves its own signature
     assert len(gemini_parts_step1) == 1
     assert gemini_parts_step1[0]["thoughtSignature"] == signature_1
-    
+
     assert len(gemini_parts_step2) == 1
     assert gemini_parts_step2[0]["thoughtSignature"] == signature_2
 
@@ -460,7 +460,7 @@ def test_thought_signature_with_function_call_mode():
     from litellm.types.llms.vertex_ai import HttpxPartType
 
     test_signature = "Co4CAdHtim/rWgXbz2Ghp4tShzLeMASrPw6JJyYIC3cbVyZnKzU3uv8/wVzyS2sKRPL2m8QQHHXbNQhEEz500G7n/4ZMmksdTtfQcJMoT76S1DGwhnAiLwTgWCNXs3lEb4M19EVYoWFxhrH5Lr9YMIquoU9U4paydGwvZyIyigamIg4B6WnxrRsf0KZV12gJed0DZuKczvOFtHz3zUnmZRlOiTzd5gBVyQM+5jv1VI8m4WUKd6cN/5a5ZvaA0ggiO6kdVhlpIVs7GczSEVJD8KH4u02X7VSnb7CvykqDntZzV0y8rZFBEFGKrChmeHlWXP4D1IB3F9KQyhuLgWImMzg4BajKVxxMU737JGnNISy5"
-    
+
     parts_with_signature = [
         HttpxPartType(
             functionCall={
@@ -521,9 +521,11 @@ def test_dummy_signature_added_for_gemini_3_conversation_history():
     assert len(gemini_parts) == 1
     assert "function_call" in gemini_parts[0]
     assert "thoughtSignature" in gemini_parts[0]
-    
+
     # Verify it's the expected dummy signature (base64 encoded "skip_thought_signature_validator")
-    expected_dummy = base64.b64encode(b"skip_thought_signature_validator").decode("utf-8")
+    expected_dummy = base64.b64encode(b"skip_thought_signature_validator").decode(
+        "utf-8"
+    )
     assert gemini_parts[0]["thoughtSignature"] == expected_dummy
 
 
@@ -569,7 +571,7 @@ def test_dummy_signature_not_added_when_signature_exists():
     )
 
     real_signature = "Co4CAdHtim/rWgXbz2Ghp4tShzLeMASrPw6JJyYIC3cbVyZnKzU3uv8/wVzyS2sKRPL2m8QQHHXbNQhEEz500G7n/4ZMmksdTtfQcJMoT76S1DGwhnAiLwTgWCNXs3lEb4M19EVYoWFxhrH5Lr9YMIquoU9U4paydGwvZyIyigamIg4B6WnxrRsf0KZV12gJed0DZuKczvOFtHz3zUnmZRlOiTzd5gBVyQM+5jv1VI8m4WUKd6cN/5a5ZvaA0ggiO6kdVhlpIVs7GczSEVJD8KH4u02X7VSnb7CvykqDntZzV0y8rZFBEFGKrChmeHlWXP4D1IB3F9KQyhuLgWImMzg4BajKVxxMU737JGnNISy5"
-    
+
     # Assistant message with existing thought signature
     assistant_message_with_signature = {
         "role": "assistant",
@@ -630,9 +632,11 @@ def test_dummy_signature_with_function_call_mode():
     assert len(gemini_parts) == 1
     assert "function_call" in gemini_parts[0]
     assert "thoughtSignature" in gemini_parts[0]
-    
+
     # Verify it's the expected dummy signature
-    expected_dummy = base64.b64encode(b"skip_thought_signature_validator").decode("utf-8")
+    expected_dummy = base64.b64encode(b"skip_thought_signature_validator").decode(
+        "utf-8"
+    )
     assert gemini_parts[0]["thoughtSignature"] == expected_dummy
 
 
@@ -685,7 +689,10 @@ class TestMediaResolution:
                     {"type": "text", "text": "What is this?"},
                     {
                         "type": "image_url",
-                        "image_url": {"url": "data:image/png;base64,abc123", "detail": "high"},
+                        "image_url": {
+                            "url": "data:image/png;base64,abc123",
+                            "detail": "high",
+                        },
                     },
                 ],
             }
@@ -701,7 +708,10 @@ class TestMediaResolution:
                     {"type": "text", "text": "What is this?"},
                     {
                         "type": "image_url",
-                        "image_url": {"url": "data:image/png;base64,abc123", "detail": "low"},
+                        "image_url": {
+                            "url": "data:image/png;base64,abc123",
+                            "detail": "low",
+                        },
                     },
                 ],
             }
@@ -733,11 +743,17 @@ class TestMediaResolution:
                     {"type": "text", "text": "Compare these images"},
                     {
                         "type": "image_url",
-                        "image_url": {"url": "data:image/png;base64,abc123", "detail": "low"},
+                        "image_url": {
+                            "url": "data:image/png;base64,abc123",
+                            "detail": "low",
+                        },
                     },
                     {
                         "type": "image_url",
-                        "image_url": {"url": "data:image/png;base64,def456", "detail": "high"},
+                        "image_url": {
+                            "url": "data:image/png;base64,def456",
+                            "detail": "high",
+                        },
                     },
                 ],
             }
@@ -761,7 +777,10 @@ class TestMediaResolution:
                     {"type": "text", "text": "What is this?"},
                     {
                         "type": "image_url",
-                        "image_url": {"url": "data:image/png;base64,iVBORw0KGgo=", "detail": "high"},
+                        "image_url": {
+                            "url": "data:image/png;base64,iVBORw0KGgo=",
+                            "detail": "high",
+                        },
                     },
                 ],
             }
@@ -789,7 +808,10 @@ class TestMediaResolution:
                     {"type": "text", "text": "What is this?"},
                     {
                         "type": "image_url",
-                        "image_url": {"url": "data:image/png;base64,iVBORw0KGgo=", "detail": "low"},
+                        "image_url": {
+                            "url": "data:image/png;base64,iVBORw0KGgo=",
+                            "detail": "low",
+                        },
                     },
                 ],
             }
@@ -817,7 +839,10 @@ class TestMediaResolution:
                     {"type": "text", "text": "What is this?"},
                     {
                         "type": "image_url",
-                        "image_url": {"url": "data:image/png;base64,iVBORw0KGgo=", "detail": "high"},
+                        "image_url": {
+                            "url": "data:image/png;base64,iVBORw0KGgo=",
+                            "detail": "high",
+                        },
                     },
                 ],
             }
@@ -874,7 +899,10 @@ class TestMediaResolution:
                     {"type": "text", "text": "What is in this file?"},
                     {
                         "type": "file",
-                        "file": {"url": "data:image/png;base64,abc123", "detail": "high"},
+                        "file": {
+                            "url": "data:image/png;base64,abc123",
+                            "detail": "high",
+                        },
                     },
                 ],
             }
@@ -890,11 +918,17 @@ class TestMediaResolution:
                     {"type": "text", "text": "Compare these"},
                     {
                         "type": "image_url",
-                        "image_url": {"url": "data:image/png;base64,abc123", "detail": "low"},
+                        "image_url": {
+                            "url": "data:image/png;base64,abc123",
+                            "detail": "low",
+                        },
                     },
                     {
                         "type": "file",
-                        "file": {"url": "data:image/png;base64,def456", "detail": "high"},
+                        "file": {
+                            "url": "data:image/png;base64,def456",
+                            "detail": "high",
+                        },
                     },
                 ],
             }
@@ -910,7 +944,10 @@ class TestMediaResolution:
                     {"type": "text", "text": "What is this?"},
                     {
                         "type": "image_url",
-                        "image_url": {"url": "data:image/png;base64,iVBORw0KGgo=", "detail": "high"},
+                        "image_url": {
+                            "url": "data:image/png;base64,iVBORw0KGgo=",
+                            "detail": "high",
+                        },
                     },
                 ],
             }
@@ -943,13 +980,10 @@ def test_convert_tool_response_with_base64_image():
         "content": [
             {
                 "type": "text",
-                "text": '{"url": "https://example.com", "status": "success"}'
+                "text": '{"url": "https://example.com", "status": "success"}',
             },
-            {
-                "type": "input_image",
-                "image_url": image_data_uri
-            }
-        ]
+            {"type": "input_image", "image_url": image_data_uri},
+        ],
     }
 
     # Mock last message with tool calls
@@ -957,10 +991,7 @@ def test_convert_tool_response_with_base64_image():
         "tool_calls": [
             {
                 "id": "call_test123",
-                "function": {
-                    "name": "click_at",
-                    "arguments": '{"x": 100, "y": 200}'
-                }
+                "function": {"name": "click_at", "arguments": '{"x": 100, "y": 200}'},
             }
         ]
     }
@@ -971,7 +1002,9 @@ def test_convert_tool_response_with_base64_image():
     )
 
     # Verify results - should be a list with 2 parts (function_response + inline_data)
-    assert isinstance(result, list), f"Expected list when image present, got {type(result)}"
+    assert isinstance(
+        result, list
+    ), f"Expected list when image present, got {type(result)}"
     assert len(result) == 2, f"Expected 2 parts, got {len(result)}"
 
     # Find function_response part and inline_data part
@@ -1012,15 +1045,9 @@ def test_convert_tool_response_with_url_image():
         "role": "tool",
         "tool_call_id": "call_test456",
         "content": [
-            {
-                "type": "text",
-                "text": '{"url": "https://example.com"}'
-            },
-            {
-                "type": "input_image",
-                "image_url": test_image_url
-            }
-        ]
+            {"type": "text", "text": '{"url": "https://example.com"}'},
+            {"type": "input_image", "image_url": test_image_url},
+        ],
     }
 
     last_message_with_tool_calls = {
@@ -1029,8 +1056,8 @@ def test_convert_tool_response_with_url_image():
                 "id": "call_test456",
                 "function": {
                     "name": "type_text_at",
-                    "arguments": '{"x": 300, "y": 400, "text": "hello"}'
-                }
+                    "arguments": '{"x": 300, "y": 400, "text": "hello"}',
+                },
             }
         ]
     }
@@ -1041,7 +1068,9 @@ def test_convert_tool_response_with_url_image():
         )
 
         # Should be a list with 2 parts when image is present
-        assert isinstance(result, list), f"Expected list when image present, got {type(result)}"
+        assert isinstance(
+            result, list
+        ), f"Expected list when image present, got {type(result)}"
         assert len(result) == 2, f"Expected 2 parts, got {len(result)}"
 
         # Find parts
@@ -1069,21 +1098,15 @@ def test_convert_tool_response_text_only():
         "role": "tool",
         "tool_call_id": "call_test789",
         "content": [
-            {
-                "type": "text",
-                "text": '{"status": "completed", "result": "success"}'
-            }
-        ]
+            {"type": "text", "text": '{"status": "completed", "result": "success"}'}
+        ],
     }
 
     last_message_with_tool_calls = {
         "tool_calls": [
             {
                 "id": "call_test789",
-                "function": {
-                    "name": "wait_5_seconds",
-                    "arguments": "{}"
-                }
+                "function": {"name": "wait_5_seconds", "arguments": "{}"},
             }
         ]
     }
@@ -1141,15 +1164,17 @@ def test_file_data_field_order():
     # Verify field order by checking dictionary keys
     # In Python 3.7+, dict maintains insertion order
     file_data_keys = list(file_data.keys())
-    assert file_data_keys.index("mime_type") < file_data_keys.index("file_uri"), \
-        "mime_type must come before file_uri in the file_data dict"
+    assert file_data_keys.index("mime_type") < file_data_keys.index(
+        "file_uri"
+    ), "mime_type must come before file_uri in the file_data dict"
 
     # Also verify by serializing to JSON string
     json_str = json.dumps(file_data)
     mime_type_pos = json_str.find('"mime_type"')
     file_uri_pos = json_str.find('"file_uri"')
-    assert mime_type_pos < file_uri_pos, \
-        "mime_type must appear before file_uri in JSON serialization"
+    assert (
+        mime_type_pos < file_uri_pos
+    ), "mime_type must appear before file_uri in JSON serialization"
 
 
 def test_file_data_field_order_gcs_urls():
@@ -1173,8 +1198,9 @@ def test_file_data_field_order_gcs_urls():
 
     # Verify field order
     file_data_keys = list(file_data.keys())
-    assert file_data_keys.index("mime_type") < file_data_keys.index("file_uri"), \
-        "mime_type must come before file_uri in the file_data dict"
+    assert file_data_keys.index("mime_type") < file_data_keys.index(
+        "file_uri"
+    ), "mime_type must come before file_uri in the file_data dict"
 
 
 def test_extract_file_data_with_path_object():
@@ -1211,8 +1237,9 @@ def test_extract_file_data_with_path_object():
         assert extracted["filename"].endswith(".mp3")
 
         # Verify MIME type was correctly detected
-        assert extracted["content_type"] == "audio/mpeg", \
-            f"Expected 'audio/mpeg' but got '{extracted['content_type']}'"
+        assert (
+            extracted["content_type"] == "audio/mpeg"
+        ), f"Expected 'audio/mpeg' but got '{extracted['content_type']}'"
 
         # Verify content was read
         assert extracted["content"] == b"fake mp3 content"
@@ -1245,8 +1272,10 @@ def test_extract_file_data_with_string_path():
         assert extracted["filename"].endswith(".wav")
 
         # Verify MIME type was correctly detected (can be audio/wav or audio/x-wav depending on system)
-        assert extracted["content_type"] in ["audio/wav", "audio/x-wav"], \
-            f"Expected 'audio/wav' or 'audio/x-wav' but got '{extracted['content_type']}'"
+        assert extracted["content_type"] in [
+            "audio/wav",
+            "audio/x-wav",
+        ], f"Expected 'audio/wav' or 'audio/x-wav' but got '{extracted['content_type']}'"
 
         # Verify content was read
         assert extracted["content"] == b"fake wav content"
@@ -1298,8 +1327,9 @@ def test_extract_file_data_fallback_to_octet_stream():
         assert extracted["filename"].endswith(".xyz123")
 
         # Verify MIME type falls back to octet-stream
-        assert extracted["content_type"] == "application/octet-stream", \
-            f"Expected 'application/octet-stream' for unknown type, got '{extracted['content_type']}'"
+        assert (
+            extracted["content_type"] == "application/octet-stream"
+        ), f"Expected 'application/octet-stream' for unknown type, got '{extracted['content_type']}'"
 
     finally:
         # Clean up temporary file
@@ -1317,15 +1347,9 @@ def test_convert_tool_response_with_pdf_file():
         "role": "tool",
         "tool_call_id": "call_pdf_test",
         "content": [
-            {
-                "type": "text",
-                "text": '{"status": "success", "pages": 1}'
-            },
-            {
-                "type": "file",
-                "file_data": file_data_uri
-            }
-        ]
+            {"type": "text", "text": '{"status": "success", "pages": 1}'},
+            {"type": "file", "file_data": file_data_uri},
+        ],
     }
 
     # Mock last message with tool calls
@@ -1335,8 +1359,8 @@ def test_convert_tool_response_with_pdf_file():
                 "id": "call_pdf_test",
                 "function": {
                     "name": "analyze_document",
-                    "arguments": '{"path": "/tmp/doc.pdf"}'
-                }
+                    "arguments": '{"path": "/tmp/doc.pdf"}',
+                },
             }
         ]
     }
@@ -1347,7 +1371,9 @@ def test_convert_tool_response_with_pdf_file():
     )
 
     # Verify results - should be a list with 2 parts (function_response + inline_data)
-    assert isinstance(result, list), f"Expected list when file present, got {type(result)}"
+    assert isinstance(
+        result, list
+    ), f"Expected list when file present, got {type(result)}"
     assert len(result) == 2, f"Expected 2 parts, got {len(result)}"
 
     # Find function_response part and inline_data part
@@ -1387,12 +1413,7 @@ def test_convert_tool_response_with_input_file_type():
     tool_message = {
         "role": "tool",
         "tool_call_id": "call_input_file_test",
-        "content": [
-            {
-                "type": "input_file",
-                "file_data": file_data_uri
-            }
-        ]
+        "content": [{"type": "input_file", "file_data": file_data_uri}],
     }
 
     # Mock last message with tool calls
@@ -1400,10 +1421,7 @@ def test_convert_tool_response_with_input_file_type():
         "tool_calls": [
             {
                 "id": "call_input_file_test",
-                "function": {
-                    "name": "read_file",
-                    "arguments": "{}"
-                }
+                "function": {"name": "read_file", "arguments": "{}"},
             }
         ]
     }
@@ -1414,7 +1432,9 @@ def test_convert_tool_response_with_input_file_type():
     )
 
     # Verify results
-    assert isinstance(result, list), f"Expected list when file present, got {type(result)}"
+    assert isinstance(
+        result, list
+    ), f"Expected list when file present, got {type(result)}"
     assert len(result) == 2, f"Expected 2 parts, got {len(result)}"
 
     # Find inline_data part
@@ -1438,14 +1458,7 @@ def test_convert_tool_response_with_nested_file_object():
     tool_message = {
         "role": "tool",
         "tool_call_id": "call_nested_test",
-        "content": [
-            {
-                "type": "file",
-                "file": {
-                    "file_data": file_data_uri
-                }
-            }
-        ]
+        "content": [{"type": "file", "file": {"file_data": file_data_uri}}],
     }
 
     # Mock last message with tool calls
@@ -1453,10 +1466,7 @@ def test_convert_tool_response_with_nested_file_object():
         "tool_calls": [
             {
                 "id": "call_nested_test",
-                "function": {
-                    "name": "process_document",
-                    "arguments": "{}"
-                }
+                "function": {"name": "process_document", "arguments": "{}"},
             }
         ]
     }
@@ -1467,7 +1477,9 @@ def test_convert_tool_response_with_nested_file_object():
     )
 
     # Verify results - should be a list with 2 parts
-    assert isinstance(result, list), f"Expected list when file present, got {type(result)}"
+    assert isinstance(
+        result, list
+    ), f"Expected list when file present, got {type(result)}"
     assert len(result) == 2, f"Expected 2 parts, got {len(result)}"
 
     # Find inline_data part
@@ -1484,10 +1496,11 @@ def test_convert_tool_response_with_nested_file_object():
     assert inline_data["mime_type"] == "application/pdf"
     assert inline_data["data"] == test_pdf_base64
 
+
 def test_assistant_message_with_images_field():
     """
     Test that assistant messages with images field are properly converted to Gemini format.
-    
+
     This handles the case where an assistant message contains generated images in the
     `images` field (e.g., from image generation models like gemini-2.5-flash-image).
     The images should be converted to inline_data parts in the Gemini format.
@@ -1495,44 +1508,46 @@ def test_assistant_message_with_images_field():
     # Create a small test image (1x1 red pixel PNG)
     test_image_base64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
     image_data_uri = f"data:image/png;base64,{test_image_base64}"
-    
+
     # Create messages with assistant message containing images field
     messages = [
         {
             "role": "user",
-            "content": "Generate an image of a banana wearing a costume that says LiteLLM"
+            "content": "Generate an image of a banana wearing a costume that says LiteLLM",
         },
         {
             "role": "assistant",
             "content": "Here's your banana in a LiteLLM costume!",
             "images": [
                 {
-                    "image_url": {
-                        "url": image_data_uri,
-                        "detail": "auto"
-                    },
+                    "image_url": {"url": image_data_uri, "detail": "auto"},
                     "index": 0,
-                    "type": "image_url"
+                    "type": "image_url",
                 }
-            ]
-        }
+            ],
+        },
     ]
-    
+
     # Convert messages to Gemini format
     contents = _gemini_convert_messages_with_history(messages=messages)
-    
+
     # Verify structure
     assert len(contents) == 2, f"Expected 2 content blocks, got {len(contents)}"
-    
+
     # Verify user message
     assert contents[0]["role"] == "user"
     assert len(contents[0]["parts"]) == 1
-    assert contents[0]["parts"][0]["text"] == "Generate an image of a banana wearing a costume that says LiteLLM"
-    
+    assert (
+        contents[0]["parts"][0]["text"]
+        == "Generate an image of a banana wearing a costume that says LiteLLM"
+    )
+
     # Verify assistant message
     assert contents[1]["role"] == "model"
-    assert len(contents[1]["parts"]) == 2, f"Expected 2 parts (text + image), got {len(contents[1]['parts'])}"
-    
+    assert (
+        len(contents[1]["parts"]) == 2
+    ), f"Expected 2 parts (text + image), got {len(contents[1]['parts'])}"
+
     # Find text part and inline_data part
     text_part = None
     inline_data_part = None
@@ -1541,11 +1556,11 @@ def test_assistant_message_with_images_field():
             text_part = part
         elif "inline_data" in part:
             inline_data_part = part
-    
+
     # Verify text part
     assert text_part is not None, "Missing text part in assistant message"
     assert text_part["text"] == "Here's your banana in a LiteLLM costume!"
-    
+
     # Verify inline_data part (image)
     assert inline_data_part is not None, "Missing inline_data part in assistant message"
     inline_data: BlobType = inline_data_part["inline_data"]
@@ -1562,51 +1577,46 @@ def test_assistant_message_with_multiple_images():
     test_image2_base64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg=="
     image1_data_uri = f"data:image/png;base64,{test_image1_base64}"
     image2_data_uri = f"data:image/jpeg;base64,{test_image2_base64}"
-    
+
     messages = [
-        {
-            "role": "user",
-            "content": "Generate two images"
-        },
+        {"role": "user", "content": "Generate two images"},
         {
             "role": "assistant",
             "content": "Here are your images:",
             "images": [
                 {
-                    "image_url": {
-                        "url": image1_data_uri,
-                        "detail": "auto"
-                    },
+                    "image_url": {"url": image1_data_uri, "detail": "auto"},
                     "index": 0,
-                    "type": "image_url"
+                    "type": "image_url",
                 },
                 {
-                    "image_url": {
-                        "url": image2_data_uri,
-                        "detail": "high"
-                    },
+                    "image_url": {"url": image2_data_uri, "detail": "high"},
                     "index": 1,
-                    "type": "image_url"
-                }
-            ]
-        }
+                    "type": "image_url",
+                },
+            ],
+        },
     ]
-    
+
     # Convert messages to Gemini format
     contents = _gemini_convert_messages_with_history(messages=messages)
-    
+
     # Verify assistant message has 3 parts (1 text + 2 images)
     assert contents[1]["role"] == "model"
-    assert len(contents[1]["parts"]) == 3, f"Expected 3 parts (text + 2 images), got {len(contents[1]['parts'])}"
-    
+    assert (
+        len(contents[1]["parts"]) == 3
+    ), f"Expected 3 parts (text + 2 images), got {len(contents[1]['parts'])}"
+
     # Count inline_data parts
     inline_data_parts = [part for part in contents[1]["parts"] if "inline_data" in part]
-    assert len(inline_data_parts) == 2, f"Expected 2 inline_data parts, got {len(inline_data_parts)}"
-    
+    assert (
+        len(inline_data_parts) == 2
+    ), f"Expected 2 inline_data parts, got {len(inline_data_parts)}"
+
     # Verify first image
     assert inline_data_parts[0]["inline_data"]["mime_type"] == "image/png"
     assert inline_data_parts[0]["inline_data"]["data"] == test_image1_base64
-    
+
     # Verify second image
     assert inline_data_parts[1]["inline_data"]["mime_type"] == "image/jpeg"
     assert inline_data_parts[1]["inline_data"]["data"] == test_image2_base64
@@ -1617,13 +1627,10 @@ def test_assistant_message_with_images_using_message_object():
     # Create a small test image
     test_image_base64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
     image_data_uri = f"data:image/png;base64,{test_image_base64}"
-    
+
     # Create messages using Message object (as returned by LiteLLM)
-    user_message = {
-        "role": "user",
-        "content": "Generate an image"
-    }
-    
+    user_message = {"role": "user", "content": "Generate an image"}
+
     assistant_message = Message(
         content="Here's your image!",
         role="assistant",
@@ -1631,25 +1638,22 @@ def test_assistant_message_with_images_using_message_object():
         function_call=None,
         images=[
             {
-                "image_url": {
-                    "url": image_data_uri,
-                    "detail": "auto"
-                },
+                "image_url": {"url": image_data_uri, "detail": "auto"},
                 "index": 0,
-                "type": "image_url"
+                "type": "image_url",
             }
-        ]
+        ],
     )
-    
+
     messages = [user_message, assistant_message]
-    
+
     # Convert messages to Gemini format
     contents = _gemini_convert_messages_with_history(messages=messages)
-    
+
     # Verify assistant message has both text and image
     assert contents[1]["role"] == "model"
     assert len(contents[1]["parts"]) == 2
-    
+
     # Verify image was converted
     inline_data_parts = [part for part in contents[1]["parts"] if "inline_data" in part]
     assert len(inline_data_parts) == 1
@@ -1660,7 +1664,7 @@ def test_assistant_message_with_images_using_message_object():
 def test_assistant_message_with_images_in_conversation_history():
     """
     Test multi-turn conversation where assistant message with images is in history.
-    
+
     This simulates the real use case where:
     1. User asks for image generation
     2. Assistant generates image (with images field)
@@ -1668,41 +1672,32 @@ def test_assistant_message_with_images_in_conversation_history():
     """
     test_image_base64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
     image_data_uri = f"data:image/png;base64,{test_image_base64}"
-    
+
     messages = [
-        {
-            "role": "user",
-            "content": "Generate an image of a cat"
-        },
+        {"role": "user", "content": "Generate an image of a cat"},
         {
             "role": "assistant",
             "content": "Here's a cat image:",
             "images": [
                 {
-                    "image_url": {
-                        "url": image_data_uri,
-                        "detail": "auto"
-                    },
+                    "image_url": {"url": image_data_uri, "detail": "auto"},
                     "index": 0,
-                    "type": "image_url"
+                    "type": "image_url",
                 }
-            ]
+            ],
         },
-        {
-            "role": "user",
-            "content": "Can you make it more colorful?"
-        }
+        {"role": "user", "content": "Can you make it more colorful?"},
     ]
-    
+
     # Convert messages to Gemini format
     contents = _gemini_convert_messages_with_history(messages=messages)
-    
+
     # Verify structure: user -> model (with image) -> user
     assert len(contents) == 3
     assert contents[0]["role"] == "user"
     assert contents[1]["role"] == "model"
     assert contents[2]["role"] == "user"
-    
+
     # Verify assistant message has image in history
     inline_data_parts = [part for part in contents[1]["parts"] if "inline_data" in part]
     assert len(inline_data_parts) == 1

@@ -398,9 +398,7 @@ class TestAzureContainerKnownFailureRegressions:
         assert "containers?api-version=v1/cntr_" not in url_fc
 
         parsed = urlparse(url_fc)
-        assert parsed.path == (
-            f"/openai/v1/containers/{cid}/files/{fid}/content"
-        )
+        assert parsed.path == (f"/openai/v1/containers/{cid}/files/{fid}/content")
         assert parse_qs(parsed.query).get("api-version") == ["v1"]
         assert url_fc.index("/content") < url_fc.index("?")
 
@@ -414,7 +412,10 @@ class TestAzureContainerKnownFailureRegressions:
             litellm_params={},
         )
         assert "openai.azure.com" in container_base
-        assert "openai/v1/containers" in container_base or "/openai/containers" in container_base
+        assert (
+            "openai/v1/containers" in container_base
+            or "/openai/containers" in container_base
+        )
 
         cid = "cntr_livepath123"
         fid = "cfile_live456"

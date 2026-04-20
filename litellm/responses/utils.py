@@ -356,10 +356,10 @@ class ResponsesAPIRequestUtils:
 
                 if encrypted_content and isinstance(encrypted_content, str):
                     # Always wrap encrypted_content with model_id for redundancy
-                    item[
-                        "encrypted_content"
-                    ] = ResponsesAPIRequestUtils._wrap_encrypted_content_with_model_id(
-                        encrypted_content, model_id
+                    item["encrypted_content"] = (
+                        ResponsesAPIRequestUtils._wrap_encrypted_content_with_model_id(
+                            encrypted_content, model_id
+                        )
                     )
                     # Also encode the ID if present
                     if item_id and isinstance(item_id, str):
@@ -539,20 +539,22 @@ class ResponsesAPIRequestUtils:
         container_id: str,
     ) -> str:
         """Build a managed container ID with provider and model info encoded.
-        
+
         Format: cntr_{base64("litellm:custom_llm_provider:{provider};model_id:{model};container_id:{original}")}
         """
         # Avoid serializing Python None as the literal string "None" (breaks router affinity).
         provider_part = "" if custom_llm_provider is None else custom_llm_provider
         model_part = "" if model_id is None else model_id
         assembled_id = f"litellm:custom_llm_provider:{provider_part};model_id:{model_part};container_id:{container_id}"
-        base64_encoded_id = base64.b64encode(assembled_id.encode("utf-8")).decode("utf-8")
+        base64_encoded_id = base64.b64encode(assembled_id.encode("utf-8")).decode(
+            "utf-8"
+        )
         return f"cntr_{base64_encoded_id}"
 
     @staticmethod
     def _decode_container_id(container_id: str) -> DecodedResponseId:
         """Decode a managed container ID to extract provider, model, and original container ID.
-        
+
         Returns:
             DecodedResponseId with custom_llm_provider, model_id, and response_id (original container_id)
         """
@@ -564,11 +566,11 @@ class ResponsesAPIRequestUtils:
                     model_id=None,
                     response_id=container_id,
                 )
-            
+
             # Remove prefix and decode
             cleaned_id = container_id.replace("cntr_", "")
             decoded_id = base64.b64decode(cleaned_id.encode("utf-8")).decode("utf-8")
-            
+
             # Parse components using regex to handle semicolons in the container_id
             if not decoded_id.startswith("litellm:"):
                 return DecodedResponseId(
@@ -576,28 +578,26 @@ class ResponsesAPIRequestUtils:
                     model_id=None,
                     response_id=container_id,
                 )
-            
+
             # Use regex to extract the three parts, allowing semicolons in container_id
             # Format: litellm:custom_llm_provider:{provider};model_id:{model};container_id:{container}
             # * for provider/model allows empty segments (missing router model_id).
             pattern = r"^litellm:custom_llm_provider:([^;]*);model_id:([^;]*);container_id:(.+)$"
             match = re.match(pattern, decoded_id)
-            
+
             if not match:
                 return DecodedResponseId(
                     custom_llm_provider=None,
                     model_id=None,
                     response_id=container_id,
                 )
-            
+
             raw_provider = match.group(1)
             raw_model_id = match.group(2)
-            custom_llm_provider = (
-                None if raw_provider in ("", "None") else raw_provider
-            )
+            custom_llm_provider = None if raw_provider in ("", "None") else raw_provider
             model_id = None if raw_model_id in ("", "None") else raw_model_id
             original_container_id = match.group(3)
-            
+
             return DecodedResponseId(
                 custom_llm_provider=custom_llm_provider,
                 model_id=model_id,
@@ -614,7 +614,7 @@ class ResponsesAPIRequestUtils:
     @staticmethod
     def decode_container_id_to_original(container_id: str) -> str:
         """Decode a managed container ID to get the original provider-issued ID.
-        
+
         This is used when making upstream API calls - we need to send the original
         container ID that the provider issued, not our encoded version.
         """
@@ -745,30 +745,30 @@ class ResponsesAPIRequestUtils:
         litellm_metadata: Optional[Dict[str, Any]] = None,
     ) -> Union[ResponsesAPIResponse, Dict[str, Any]]:
         """Encode container IDs in the response output with provider/model info.
-        
+
         This walks through all output items and encodes any container_id fields
         so that follow-up container API calls can auto-route to the correct provider.
         """
         litellm_metadata = litellm_metadata or {}
         model_info: Dict[str, Any] = litellm_metadata.get("model_info", {}) or {}
         model_id = model_info.get("id")
-        
+
         # Get the output list
         if isinstance(responses_api_response, dict):
             output = responses_api_response.get("output", [])
         else:
             output = getattr(responses_api_response, "output", [])
-        
+
         if not output:
             return responses_api_response
-        
+
         for item in output:
             ResponsesAPIRequestUtils._encode_container_id_on_output_item(
                 item=item,
                 custom_llm_provider=custom_llm_provider,
                 model_id=model_id,
             )
-        
+
         return responses_api_response
 
     @staticmethod

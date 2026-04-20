@@ -9,7 +9,11 @@ from litellm.proxy._experimental.mcp_server import rest_endpoints
 from litellm.proxy._experimental.mcp_server.auth import (
     user_api_key_auth_mcp as auth_mcp,
 )
-from litellm.proxy._types import NewMCPServerRequest, UpdateMCPServerRequest, UserAPIKeyAuth
+from litellm.proxy._types import (
+    NewMCPServerRequest,
+    UpdateMCPServerRequest,
+    UserAPIKeyAuth,
+)
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.types.mcp import MCPAuth
 

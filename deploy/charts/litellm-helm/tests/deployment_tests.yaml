@@ -319,3 +319,61 @@ tests:
     asserts:
       - notExists:
           path: spec.minReadySeconds
+  - it: should work with extraInitContainers
+    template: deployment.yaml
+    set:
+      extraInitContainers:
+        - name: init-test
+          image: busybox:latest
+          command: ["echo", "hello"]
+    asserts:
+      - contains:
+          path: spec.template.spec.initContainers
+          content:
+            name: init-test
+            image: busybox:latest
+            command: ["echo", "hello"]
+  - it: should support tpl in extraInitContainers
+    template: deployment.yaml
+    set:
+      image:
+        repository: ghcr.io/berriai/litellm-database
+        tag: test
+      extraInitContainers:
+        - name: init-tpl
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          command: ["echo", "hello"]
+    asserts:
+      - contains:
+          path: spec.template.spec.initContainers
+          content:
+            name: init-tpl
+            image: "ghcr.io/berriai/litellm-database:test"
+            command: ["echo", "hello"]
+  - it: should work with extraContainers
+    template: deployment.yaml
+    set:
+      extraContainers:
+        - name: sidecar
+          image: busybox:latest
+    asserts:
+      - contains:
+          path: spec.template.spec.containers
+          content:
+            name: sidecar
+            image: busybox:latest
+  - it: should support tpl in extraContainers
+    template: deployment.yaml
+    set:
+      image:
+        repository: ghcr.io/berriai/litellm-database
+        tag: test
+      extraContainers:
+        - name: sidecar-tpl
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+    asserts:
+      - contains:
+          path: spec.template.spec.containers
+          content:
+            name: sidecar-tpl
+            image: "ghcr.io/berriai/litellm-database:test"

@@ -317,7 +317,9 @@ class TestFilterWebSearchDeployments:
         deployments = [
             {"model_info": {"id": "d1"}},  # No supports_web_search - defaults to True
             {"model_info": {"id": "d2"}},  # No supports_web_search - defaults to True
-            {"model_info": {"id": "d3", "supports_web_search": False}},  # Explicit False
+            {
+                "model_info": {"id": "d3", "supports_web_search": False}
+            },  # Explicit False
         ]
         request_kwargs = {"tools": [{"type": "web_search"}]}
         result = filter_web_search_deployments(deployments, request_kwargs)

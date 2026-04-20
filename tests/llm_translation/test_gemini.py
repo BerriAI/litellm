@@ -364,6 +364,7 @@ def test_gemini_flash_image_preview_models(model_name: str):
             "TEXT",
         ]
 
+
 def test_gemini_imagen_models_use_predict_endpoint():
     """
     Test that Imagen models still use :predict endpoint (not broken by gemini-2.5-flash-image-preview fix)
@@ -726,7 +727,8 @@ async def test_claude_tool_use_with_gemini():
                         # Check for usage in message_delta with stop_reason
                         if (
                             chunk_data.get("type") == "message_delta"
-                            and chunk_data.get("delta", {}).get("stop_reason") is not None
+                            and chunk_data.get("delta", {}).get("stop_reason")
+                            is not None
                             and "usage" in chunk_data
                         ):
                             has_usage_in_message_delta = True
@@ -831,10 +833,14 @@ async def test_gemini_image_generation_async():
     CONTENT = response.choices[0].message.content
 
     # Check if images list exists and has items before accessing
-    assert hasattr(response.choices[0].message, "images"), "Response message should have images attribute"
+    assert hasattr(
+        response.choices[0].message, "images"
+    ), "Response message should have images attribute"
     assert response.choices[0].message.images is not None, "Images should not be None"
-    assert len(response.choices[0].message.images) > 0, "Images list should not be empty"
-    
+    assert (
+        len(response.choices[0].message.images) > 0
+    ), "Images list should not be empty"
+
     IMAGE_URL = response.choices[0].message.images[0]["image_url"]
     print("IMAGE_URL: ", IMAGE_URL)
 
@@ -1253,7 +1259,8 @@ def test_reasoning_effort_none_mapping():
     assert result is not None
     assert result["thinkingBudget"] == 0
     assert result["includeThoughts"] is False
-    
+
+
 def test_gemini_function_args_preserve_unicode():
     """
     Test for Issue #16533: Gemini function call arguments should preserve non-ASCII characters
@@ -1262,7 +1269,9 @@ def test_gemini_function_args_preserve_unicode():
     Before fix: "や" becomes "\u3084"
     After fix: "や" stays as "や"
     """
-    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexGeminiConfig
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        VertexGeminiConfig,
+    )
 
     # Test Japanese characters
     parts = [
@@ -1271,50 +1280,49 @@ def test_gemini_function_args_preserve_unicode():
                 "name": "send_message",
                 "args": {
                     "message": "やあ",  # Japanese "hello"
-                    "recipient": "たけし"  # Japanese name
-                }
+                    "recipient": "たけし",  # Japanese name
+                },
             }
         }
     ]
 
     function, tools, _ = VertexGeminiConfig._transform_parts(
-        parts=parts,
-        cumulative_tool_call_idx=0,
-        is_function_call=False
+        parts=parts, cumulative_tool_call_idx=0, is_function_call=False
     )
 
-    arguments_str = tools[0]['function']['arguments']
+    arguments_str = tools[0]["function"]["arguments"]
     parsed_args = json.loads(arguments_str)
 
     # Verify characters are preserved
     assert parsed_args["message"] == "やあ", "Japanese characters should be preserved"
-    assert parsed_args["recipient"] == "たけし", "Japanese characters should be preserved"
+    assert (
+        parsed_args["recipient"] == "たけし"
+    ), "Japanese characters should be preserved"
 
     # Verify no Unicode escape sequences in raw string
     assert "\\u" not in arguments_str, "Should not contain Unicode escape sequences"
-    assert "やあ" in arguments_str, "Original Japanese characters should be in the string"
-    assert "たけし" in arguments_str, "Original Japanese characters should be in the string"
+    assert (
+        "やあ" in arguments_str
+    ), "Original Japanese characters should be in the string"
+    assert (
+        "たけし" in arguments_str
+    ), "Original Japanese characters should be in the string"
 
     # Test Spanish characters
     parts_spanish = [
         {
             "functionCall": {
                 "name": "send_message",
-                "args": {
-                    "message": "¡Hola! ¿Cómo estás?",
-                    "recipient": "José"
-                }
+                "args": {"message": "¡Hola! ¿Cómo estás?", "recipient": "José"},
             }
         }
     ]
 
     function, tools, _ = VertexGeminiConfig._transform_parts(
-        parts=parts_spanish,
-        cumulative_tool_call_idx=0,
-        is_function_call=False
+        parts=parts_spanish, cumulative_tool_call_idx=0, is_function_call=False
     )
 
-    arguments_str = tools[0]['function']['arguments']
+    arguments_str = tools[0]["function"]["arguments"]
     parsed_args = json.loads(arguments_str)
 
     assert parsed_args["message"] == "¡Hola! ¿Cómo estás?"
@@ -1327,11 +1335,11 @@ def test_anthropic_thinking_param_to_gemini_3_thinkingLevel():
     """
     Test that Anthropic thinking parameters are correctly transformed to Gemini 3 thinkingLevel
     instead of thinkingBudget.
-    
+
     For Gemini 3+ models (gemini-3-flash, gemini-3-pro, gemini-3-flash-preview):
     - Should use thinkingLevel instead of thinkingBudget
     - budget_tokens should map to thinkingLevel
-    
+
     Related issue: https://github.com/BerriAI/litellm/issues/XXXX
     """
     from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
@@ -1344,54 +1352,66 @@ def test_anthropic_thinking_param_to_gemini_3_thinkingLevel():
         "type": "enabled",
         "budget_tokens": 10000,
     }
-    
+
     result = VertexGeminiConfig._map_thinking_param(
         thinking_param=thinking_param,
         model="gemini-3-flash",
     )
-    
+
     # For Gemini 3, should use thinkingLevel, not thinkingBudget
     assert "thinkingLevel" in result, "Should have thinkingLevel for Gemini 3"
     assert "thinkingBudget" not in result, "Should NOT have thinkingBudget for Gemini 3"
     assert result["includeThoughts"] is True
-    assert result["thinkingLevel"] in ["minimal", "low"], "thinkingLevel should be 'minimal' or 'low'"
-    
+    assert result["thinkingLevel"] in [
+        "minimal",
+        "low",
+    ], "thinkingLevel should be 'minimal' or 'low'"
+
     # Test 2: Anthropic thinking disabled for Gemini 3
     thinking_param_disabled: AnthropicThinkingParam = {
         "type": "disabled",
         "budget_tokens": None,
     }
-    
+
     result_disabled = VertexGeminiConfig._map_thinking_param(
         thinking_param=thinking_param_disabled,
         model="gemini-3-pro-preview",
     )
-    
+
     assert result_disabled.get("includeThoughts") is False
-    assert "thinkingLevel" not in result_disabled or result_disabled.get("thinkingLevel") is None
-    
+    assert (
+        "thinkingLevel" not in result_disabled
+        or result_disabled.get("thinkingLevel") is None
+    )
+
     # Test 3: Budget tokens = 0 for Gemini 3
     thinking_param_zero: AnthropicThinkingParam = {
         "type": "enabled",
         "budget_tokens": 0,
     }
-    
+
     result_zero = VertexGeminiConfig._map_thinking_param(
         thinking_param=thinking_param_zero,
         model="gemini-3-flash",
     )
-    
+
     assert result_zero["includeThoughts"] is False
-    assert "thinkingLevel" not in result_zero or result_zero.get("thinkingLevel") is None
-    
+    assert (
+        "thinkingLevel" not in result_zero or result_zero.get("thinkingLevel") is None
+    )
+
     # Test 4: Fiercefalcon model (Gemini 3 Flash checkpoint) should use thinkingLevel
     result_gemini3flashpreview = VertexGeminiConfig._map_thinking_param(
         thinking_param=thinking_param,
         model="gemini-3-flash-preview",
     )
-    
-    assert "thinkingLevel" in result_gemini3flashpreview, "Should have thinkingLevel for gemini-3-flash-preview"
-    assert "thinkingBudget" not in result_gemini3flashpreview, "Should NOT have thinkingBudget for gemini-3-flash-preview"
+
+    assert (
+        "thinkingLevel" in result_gemini3flashpreview
+    ), "Should have thinkingLevel for gemini-3-flash-preview"
+    assert (
+        "thinkingBudget" not in result_gemini3flashpreview
+    ), "Should NOT have thinkingBudget for gemini-3-flash-preview"
     assert result_gemini3flashpreview["includeThoughts"] is True
 
 
@@ -1399,11 +1419,11 @@ def test_anthropic_thinking_param_to_gemini_2_thinkingBudget():
     """
     Test that Anthropic thinking parameters are correctly transformed to Gemini 2 thinkingBudget
     (not thinkingLevel).
-    
+
     For Gemini 2.x models (gemini-2.5-flash, gemini-2.0-flash):
     - Should continue using thinkingBudget
     - thinkingLevel should NOT be used
-    
+
     Related issue: https://github.com/BerriAI/litellm/issues/XXXX
     """
     from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
@@ -1416,26 +1436,28 @@ def test_anthropic_thinking_param_to_gemini_2_thinkingBudget():
         "type": "enabled",
         "budget_tokens": 10000,
     }
-    
+
     result = VertexGeminiConfig._map_thinking_param(
         thinking_param=thinking_param,
         model="gemini-2.5-flash",
     )
-    
+
     # For Gemini 2, should use thinkingBudget, not thinkingLevel
     assert "thinkingBudget" in result, "Should have thinkingBudget for Gemini 2"
     assert "thinkingLevel" not in result, "Should NOT have thinkingLevel for Gemini 2"
     assert result["includeThoughts"] is True
     assert result["thinkingBudget"] == 10000
-    
+
     # Test 2: Anthropic thinking enabled for gemini-2.0-flash model
     result_gemini2 = VertexGeminiConfig._map_thinking_param(
         thinking_param=thinking_param,
         model="gemini-2.0-flash-thinking-exp-01-21",
     )
-    
+
     assert "thinkingBudget" in result_gemini2, "Should have thinkingBudget for Gemini 2"
-    assert "thinkingLevel" not in result_gemini2, "Should NOT have thinkingLevel for Gemini 2"
+    assert (
+        "thinkingLevel" not in result_gemini2
+    ), "Should NOT have thinkingLevel for Gemini 2"
     assert result_gemini2["includeThoughts"] is True
     assert result_gemini2["thinkingBudget"] == 10000
 
@@ -1444,7 +1466,7 @@ def test_anthropic_thinking_param_via_map_openai_params():
     """
     Test that the thinking parameter is correctly transformed through the full map_openai_params flow
     for Gemini 3 models, resulting in thinkingConfig with thinkingLevel.
-    
+
     This tests the full integration from Anthropic API format to Gemini format.
     """
     from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
@@ -1453,7 +1475,7 @@ def test_anthropic_thinking_param_via_map_openai_params():
     from litellm.types.llms.anthropic import AnthropicThinkingParam
 
     config = VertexGeminiConfig()
-    
+
     # Test with Gemini 3 model
     non_default_params = {
         "thinking": {
@@ -1462,21 +1484,23 @@ def test_anthropic_thinking_param_via_map_openai_params():
         }
     }
     optional_params: dict = {}
-    
+
     result = config.map_openai_params(
         non_default_params=non_default_params,
         optional_params=optional_params,
         model="gemini-3-flash",
         drop_params=False,
     )
-    
+
     # Check that thinkingConfig was created with thinkingLevel
     assert "thinkingConfig" in result, "Should have thinkingConfig in optional_params"
     thinking_config = result["thinkingConfig"]
     assert "thinkingLevel" in thinking_config, "Should have thinkingLevel for Gemini 3"
-    assert "thinkingBudget" not in thinking_config, "Should NOT have thinkingBudget for Gemini 3"
+    assert (
+        "thinkingBudget" not in thinking_config
+    ), "Should NOT have thinkingBudget for Gemini 3"
     assert thinking_config["includeThoughts"] is True
-    
+
     # Test with Gemini 2 model
     optional_params_2 = {}
     result_2 = config.map_openai_params(
@@ -1485,12 +1509,16 @@ def test_anthropic_thinking_param_via_map_openai_params():
         model="gemini-2.5-flash",
         drop_params=False,
     )
-    
+
     # Check that thinkingConfig was created with thinkingBudget
     assert "thinkingConfig" in result_2, "Should have thinkingConfig in optional_params"
     thinking_config_2 = result_2["thinkingConfig"]
-    assert "thinkingBudget" in thinking_config_2, "Should have thinkingBudget for Gemini 2"
-    assert "thinkingLevel" not in thinking_config_2, "Should NOT have thinkingLevel for Gemini 2"
+    assert (
+        "thinkingBudget" in thinking_config_2
+    ), "Should have thinkingBudget for Gemini 2"
+    assert (
+        "thinkingLevel" not in thinking_config_2
+    ), "Should NOT have thinkingLevel for Gemini 2"
     assert thinking_config_2["includeThoughts"] is True
     assert thinking_config_2["thinkingBudget"] == 10000
 
@@ -1511,9 +1539,9 @@ def test_gemini_31_flash_lite_reasoning_effort_minimal():
         reasoning_effort="minimal",
         model="gemini-3.1-flash-lite-preview",
     )
-    assert result["thinkingLevel"] == "minimal", (
-        f"Expected thinkingLevel='minimal' for gemini-3.1-flash-lite-preview, got '{result['thinkingLevel']}'"
-    )
+    assert (
+        result["thinkingLevel"] == "minimal"
+    ), f"Expected thinkingLevel='minimal' for gemini-3.1-flash-lite-preview, got '{result['thinkingLevel']}'"
     assert result["includeThoughts"] is True
 
     # Also verify via the full map_openai_params flow
@@ -1530,18 +1558,18 @@ def test_gemini_31_flash_lite_reasoning_effort_minimal():
     )
     generation_config = raw_request["raw_request_body"]["generationConfig"]
     thinking_config = generation_config["thinkingConfig"]
-    assert thinking_config.get("thinkingLevel") == "minimal", (
-        f"Expected thinkingLevel='minimal' via full flow, got {thinking_config}"
-    )
-    assert "thinkingBudget" not in thinking_config, (
-        "gemini-3.1-flash-lite-preview should use thinkingLevel, not thinkingBudget"
-    )
+    assert (
+        thinking_config.get("thinkingLevel") == "minimal"
+    ), f"Expected thinkingLevel='minimal' via full flow, got {thinking_config}"
+    assert (
+        "thinkingBudget" not in thinking_config
+    ), "gemini-3.1-flash-lite-preview should use thinkingLevel, not thinkingBudget"
 
 
 def test_gemini_image_size_limit_exceeded():
     """
     Test that large images exceeding MAX_IMAGE_URL_DOWNLOAD_SIZE_MB are rejected.
-    
+
     This validates that the 50MB default limit prevents downloading very large images
     that could cause memory issues and pod crashes.
     """
@@ -1549,27 +1577,22 @@ def test_gemini_image_size_limit_exceeded():
         {
             "role": "user",
             "content": [
-                {
-                    "type": "text",
-                    "text": "What is in this image?"
-                },
+                {"type": "text", "text": "What is in this image?"},
                 {
                     "type": "image_url",
-                    "image_url": "https://upload.wikimedia.org/wikipedia/commons/5/51/Blue_Marble_2002.jpg"
-                }
-            ]
+                    "image_url": "https://upload.wikimedia.org/wikipedia/commons/5/51/Blue_Marble_2002.jpg",
+                },
+            ],
         }
     ]
-    
+
     with pytest.raises(litellm.ImageFetchError) as excinfo:
-        completion(
-            model="gemini/gemini-2.5-flash-lite",
-            messages=messages
-        )
-    
+        completion(model="gemini/gemini-2.5-flash-lite", messages=messages)
+
     error_message = str(excinfo.value)
     assert "Image size" in error_message
     assert "exceeds maximum allowed size" in error_message
+
 
 @pytest.mark.asyncio
 async def test_gemini_openai_web_search_tool_to_google_search():

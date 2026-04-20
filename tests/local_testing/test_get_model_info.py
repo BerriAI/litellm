@@ -6,7 +6,6 @@ import traceback
 import json
 
 
-
 from typing import List, Dict, Any
 
 sys.path.insert(
@@ -115,8 +114,6 @@ def test_get_model_info_ollama_chat():
         assert mock_client.call_args.kwargs["json"]["name"] == "unknown-model"
 
 
-
-
 def test_get_model_info_bedrock_region():
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
@@ -156,7 +153,6 @@ def test_get_model_info_ft_model_with_provider_prefix():
     info = litellm.get_model_info(**args)
     print("info", info)
     assert info["key"] == "ft:gpt-3.5-turbo"
-
 
 
 def _enforce_bedrock_converse_models(
@@ -281,7 +277,7 @@ def test_get_model_info_custom_model_router():
                 },
                 "model_info": {
                     "id": "c20d603e-1166-4e0f-aa65-ed9c476ad4ca",
-                }
+                },
             }
         ]
     )

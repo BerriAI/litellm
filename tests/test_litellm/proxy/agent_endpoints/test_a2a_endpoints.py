@@ -121,34 +121,44 @@ async def test_invoke_agent_a2a_adds_litellm_data():
     # Patch at the source modules
     # Note: add_litellm_data_to_request is called from common_request_processing,
     # so we need to patch it there, not at litellm_pre_call_utils
-    with patch(
-        "litellm.proxy.agent_endpoints.a2a_endpoints._get_agent",
-        return_value=mock_agent,
-    ), patch(
-        "litellm.proxy.common_request_processing.add_litellm_data_to_request",
-        side_effect=mock_add_litellm_data,
-    ) as mock_add_data, patch(
-        "litellm.a2a_protocol.create_a2a_client",
-        new_callable=AsyncMock,
-    ), patch(
-        "litellm.a2a_protocol.asend_message",
-        new_callable=AsyncMock,
-        return_value=mock_response,
-    ), patch(
-        "litellm.proxy.proxy_server.general_settings",
-        {},
-    ), patch(
-        "litellm.proxy.proxy_server.proxy_config",
-        MagicMock(),
-    ), patch(
-        "litellm.proxy.proxy_server.version",
-        "1.0.0",
-    ), patch.dict(
-        sys.modules,
-        {"a2a": MagicMock(), "a2a.types": mock_a2a_types},
-    ), patch(
-        "litellm.a2a_protocol.main.A2A_SDK_AVAILABLE",
-        True,
+    with (
+        patch(
+            "litellm.proxy.agent_endpoints.a2a_endpoints._get_agent",
+            return_value=mock_agent,
+        ),
+        patch(
+            "litellm.proxy.common_request_processing.add_litellm_data_to_request",
+            side_effect=mock_add_litellm_data,
+        ) as mock_add_data,
+        patch(
+            "litellm.a2a_protocol.create_a2a_client",
+            new_callable=AsyncMock,
+        ),
+        patch(
+            "litellm.a2a_protocol.asend_message",
+            new_callable=AsyncMock,
+            return_value=mock_response,
+        ),
+        patch(
+            "litellm.proxy.proxy_server.general_settings",
+            {},
+        ),
+        patch(
+            "litellm.proxy.proxy_server.proxy_config",
+            MagicMock(),
+        ),
+        patch(
+            "litellm.proxy.proxy_server.version",
+            "1.0.0",
+        ),
+        patch.dict(
+            sys.modules,
+            {"a2a": MagicMock(), "a2a.types": mock_a2a_types},
+        ),
+        patch(
+            "litellm.a2a_protocol.main.A2A_SDK_AVAILABLE",
+            True,
+        ),
     ):
         from litellm.proxy.agent_endpoints.a2a_endpoints import invoke_agent_a2a
 

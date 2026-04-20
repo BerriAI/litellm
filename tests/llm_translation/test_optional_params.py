@@ -144,6 +144,45 @@ def test_get_optional_params_with_allowed_openai_params():
     assert optional_params["reasoning_effort"] == reasoning_effort
 
 
+def test_allowed_openai_params_does_not_forward_unset_params():
+    """
+    Regression test for https://github.com/BerriAI/litellm/issues/25697
+
+    When a user lists a param in ``allowed_openai_params`` but does not
+    actually send that param in the request, litellm must not forward it
+    to the provider SDK as ``None``. The openai SDK rejects unknown
+    top-level kwargs with
+    ``AsyncCompletions.create() got an unexpected keyword argument 'enable_thinking'``.
+
+    Reproduces the reported config where the user listed both
+    ``chat_template_kwargs`` and ``enable_thinking`` in
+    ``allowed_openai_params`` and only sent ``chat_template_kwargs``
+    (with ``enable_thinking`` nested inside it). Previously the loop
+    added ``optional_params["enable_thinking"] = None`` which then
+    crashed the openai client.
+    """
+    from litellm.utils import _apply_openai_param_overrides
+
+    chat_template_kwargs = {"enable_thinking": False}
+    optional_params: dict = {}
+    non_default_params = {"chat_template_kwargs": chat_template_kwargs}
+
+    result = _apply_openai_param_overrides(
+        optional_params=optional_params,
+        non_default_params=non_default_params,
+        allowed_openai_params=["chat_template_kwargs", "enable_thinking"],
+    )
+
+    assert result["chat_template_kwargs"] == chat_template_kwargs
+    # enable_thinking was NOT sent as a top-level param — it must not be
+    # forwarded to the provider SDK (openai AsyncCompletions.create would
+    # reject an unknown kwarg, even if its value is None).
+    assert "enable_thinking" not in result
+    # And the only entry actually moved out of non_default_params is
+    # the one the caller sent.
+    assert "chat_template_kwargs" not in non_default_params
+
+
 def test_bedrock_optional_params_embeddings():
     litellm.drop_params = True
     optional_params = get_optional_params_embeddings(

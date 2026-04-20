@@ -116,9 +116,9 @@ async def test_basic_s3_v2_logging(streaming):
     await asyncio.sleep(5)
 
     assert len(uploaded_keys) > 0, "S3 upload was never called"
-    assert any(response_id in key for key in uploaded_keys), (
-        f"Expected response_id={response_id} in one of the uploaded S3 keys: {uploaded_keys}"
-    )
+    assert any(
+        response_id in key for key in uploaded_keys
+    ), f"Expected response_id={response_id} in one of the uploaded S3 keys: {uploaded_keys}"
 
 
 @pytest.mark.asyncio

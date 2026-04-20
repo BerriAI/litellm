@@ -71,7 +71,9 @@ async def test_register_plugin_git_subdir_success():
     setattr(litellm.proxy.proxy_server, "prisma_client", _make_mock_prisma())
     setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
 
-    request = RegisterPluginRequest(name="my-monorepo-plugin", source=_GIT_SUBDIR_SOURCE)
+    request = RegisterPluginRequest(
+        name="my-monorepo-plugin", source=_GIT_SUBDIR_SOURCE
+    )
 
     response = await register_plugin(request=request, user_api_key_dict=_USER)
 
@@ -163,7 +165,11 @@ async def test_register_plugin_git_subdir_empty_path():
 
     request = RegisterPluginRequest(
         name="bad-plugin",
-        source={"source": "git-subdir", "url": "https://github.com/org/monorepo.git", "path": ""},
+        source={
+            "source": "git-subdir",
+            "url": "https://github.com/org/monorepo.git",
+            "path": "",
+        },
     )
 
     with pytest.raises(HTTPException) as exc_info:
@@ -184,8 +190,8 @@ async def test_register_plugin_git_subdir_path_traversal():
         "../secrets",
         "/absolute/path",
         "plugins\\..\\..\\secrets",  # backslash traversal
-        "plugins/%2e%2e/secrets",   # percent-encoded traversal
-        "plugins/%2E%2E/secrets",   # uppercase percent-encoded traversal
+        "plugins/%2e%2e/secrets",  # percent-encoded traversal
+        "plugins/%2E%2E/secrets",  # uppercase percent-encoded traversal
         "plugins/%252e%252e/secrets",  # double-encoded traversal
     ]:
         request = RegisterPluginRequest(

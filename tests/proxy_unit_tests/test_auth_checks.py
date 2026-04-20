@@ -609,17 +609,56 @@ async def test_virtual_key_soft_budget_check(spend, soft_budget, expect_alert):
 @pytest.mark.parametrize(
     "spend, soft_budget, expect_alert, metadata, expected_alert_emails",
     [
-        (100, 50, False, None, None),  # Over soft budget, no metadata - no alert_emails configured, so no alert
-        (50, 50, False, None, None),  # At soft budget, no metadata - no alert_emails configured, so no alert
+        (
+            100,
+            50,
+            False,
+            None,
+            None,
+        ),  # Over soft budget, no metadata - no alert_emails configured, so no alert
+        (
+            50,
+            50,
+            False,
+            None,
+            None,
+        ),  # At soft budget, no metadata - no alert_emails configured, so no alert
         (25, 50, False, None, None),  # Under soft budget
         (100, None, False, None, None),  # No soft budget set
-        (100, 50, True, {"soft_budget_alerting_emails": ["team1@example.com", "team2@example.com"]}, ["team1@example.com", "team2@example.com"]),  # Over soft budget with list of emails
-        (100, 50, True, {"soft_budget_alerting_emails": "team1@example.com,team2@example.com"}, ["team1@example.com", "team2@example.com"]),  # Over soft budget with comma-separated emails
-        (100, 50, True, {"soft_budget_alerting_emails": ["team1@example.com", "", "  ", "team2@example.com"]}, ["team1@example.com", "team2@example.com"]),  # Over soft budget with empty strings filtered
+        (
+            100,
+            50,
+            True,
+            {"soft_budget_alerting_emails": ["team1@example.com", "team2@example.com"]},
+            ["team1@example.com", "team2@example.com"],
+        ),  # Over soft budget with list of emails
+        (
+            100,
+            50,
+            True,
+            {"soft_budget_alerting_emails": "team1@example.com,team2@example.com"},
+            ["team1@example.com", "team2@example.com"],
+        ),  # Over soft budget with comma-separated emails
+        (
+            100,
+            50,
+            True,
+            {
+                "soft_budget_alerting_emails": [
+                    "team1@example.com",
+                    "",
+                    "  ",
+                    "team2@example.com",
+                ]
+            },
+            ["team1@example.com", "team2@example.com"],
+        ),  # Over soft budget with empty strings filtered
     ],
 )
 @pytest.mark.asyncio
-async def test_team_soft_budget_check(spend, soft_budget, expect_alert, metadata, expected_alert_emails):
+async def test_team_soft_budget_check(
+    spend, soft_budget, expect_alert, metadata, expected_alert_emails
+):
     """
     Test cases for _team_soft_budget_check:
     1. Spend over soft budget, no alert_emails configured - should NOT trigger alert (alerts only sent when alert_emails configured)
@@ -681,7 +720,10 @@ async def test_team_soft_budget_check(spend, soft_budget, expect_alert, metadata
         if expected_alert_emails is not None:
             assert captured_call_info.alert_emails == expected_alert_emails
         else:
-            assert captured_call_info.alert_emails is None or captured_call_info.alert_emails == []
+            assert (
+                captured_call_info.alert_emails is None
+                or captured_call_info.alert_emails == []
+            )
 
 
 @pytest.mark.asyncio
@@ -959,7 +1001,9 @@ async def test_delete_cache_access_object():
     ],
 )
 @pytest.mark.asyncio
-async def test_get_resources_from_access_groups(resource_field, access_group_data, expected):
+async def test_get_resources_from_access_groups(
+    resource_field, access_group_data, expected
+):
     """Test _get_resources_from_access_groups returns correct resource list from access groups."""
     from unittest.mock import AsyncMock, MagicMock, patch
 

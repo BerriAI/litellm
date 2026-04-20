@@ -688,18 +688,22 @@ def test_embedding(mock_aembedding, client_no_auth):
         async def _post_call_success_side_effect(**kwargs):
             return kwargs["response"]
 
-        with patch.object(
-            litellm.proxy.proxy_server.proxy_logging_obj,
-            "pre_call_hook",
-            new=AsyncMock(side_effect=_pre_call_hook_side_effect),
-        ) as mock_pre_call_hook, patch.object(
-            litellm.proxy.proxy_server.proxy_logging_obj,
-            "during_call_hook",
-            new=AsyncMock(return_value=None),
-        ) as mock_during_hook, patch.object(
-            litellm.proxy.proxy_server.proxy_logging_obj,
-            "post_call_success_hook",
-            new=AsyncMock(side_effect=_post_call_success_side_effect),
+        with (
+            patch.object(
+                litellm.proxy.proxy_server.proxy_logging_obj,
+                "pre_call_hook",
+                new=AsyncMock(side_effect=_pre_call_hook_side_effect),
+            ) as mock_pre_call_hook,
+            patch.object(
+                litellm.proxy.proxy_server.proxy_logging_obj,
+                "during_call_hook",
+                new=AsyncMock(return_value=None),
+            ) as mock_during_hook,
+            patch.object(
+                litellm.proxy.proxy_server.proxy_logging_obj,
+                "post_call_success_hook",
+                new=AsyncMock(side_effect=_post_call_success_side_effect),
+            ),
         ):
             response = client_no_auth.post("/v1/embeddings", json=test_data)
 
@@ -1202,16 +1206,20 @@ async def test_create_team_member_add(prisma_client, new_member_method):
         }
     team_member_add_request = TeamMemberAddRequest(**data)
 
-    with patch(
-        "litellm.proxy.proxy_server.prisma_client.db.litellm_usertable",
-        new_callable=AsyncMock,
-    ) as mock_litellm_usertable, patch(
-        "litellm.proxy.auth.auth_checks._get_team_object_from_user_api_key_cache",
-        new=AsyncMock(return_value=team_obj),
-    ) as mock_team_obj, patch(
-        "litellm.proxy.proxy_server.prisma_client.get_data",
-        new=AsyncMock(return_value=[]),
-    ) as mock_get_data:
+    with (
+        patch(
+            "litellm.proxy.proxy_server.prisma_client.db.litellm_usertable",
+            new_callable=AsyncMock,
+        ) as mock_litellm_usertable,
+        patch(
+            "litellm.proxy.auth.auth_checks._get_team_object_from_user_api_key_cache",
+            new=AsyncMock(return_value=team_obj),
+        ) as mock_team_obj,
+        patch(
+            "litellm.proxy.proxy_server.prisma_client.get_data",
+            new=AsyncMock(return_value=[]),
+        ) as mock_get_data,
+    ):
 
         mock_client = AsyncMock(
             return_value=LiteLLM_UserTable(
@@ -1391,16 +1399,20 @@ async def test_create_team_member_add_team_admin(
         }
     team_member_add_request = TeamMemberAddRequest(**data)
 
-    with patch(
-        "litellm.proxy.proxy_server.prisma_client.db.litellm_usertable",
-        new_callable=AsyncMock,
-    ) as mock_litellm_usertable, patch(
-        "litellm.proxy.auth.auth_checks._get_team_object_from_user_api_key_cache",
-        new=AsyncMock(return_value=team_obj),
-    ) as mock_team_obj, patch(
-        "litellm.proxy.proxy_server.prisma_client.get_data",
-        new=AsyncMock(return_value=[]),
-    ) as mock_get_data:
+    with (
+        patch(
+            "litellm.proxy.proxy_server.prisma_client.db.litellm_usertable",
+            new_callable=AsyncMock,
+        ) as mock_litellm_usertable,
+        patch(
+            "litellm.proxy.auth.auth_checks._get_team_object_from_user_api_key_cache",
+            new=AsyncMock(return_value=team_obj),
+        ) as mock_team_obj,
+        patch(
+            "litellm.proxy.proxy_server.prisma_client.get_data",
+            new=AsyncMock(return_value=[]),
+        ) as mock_get_data,
+    ):
         mock_client = AsyncMock(
             return_value=LiteLLM_UserTable(
                 user_id="1234", max_budget=100, user_email="1234"
@@ -2788,7 +2800,10 @@ async def test_update_config_success_callback_normalization():
     # Update config with mixed-case callbacks - expect normalization to lowercase
     config_update = ConfigYAML(litellm_settings={"success_callback": ["SQS", "sQs"]})
     from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
-    admin_user = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-test")
+
+    admin_user = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-test"
+    )
     await proxy_server.update_config(config_update, user_api_key_dict=admin_user)
 
     saved = mock_proxy_config.saved_config

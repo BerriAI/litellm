@@ -54,9 +54,11 @@ def test_misconfigured_queue_thresholds_warns():
     """
     import litellm.proxy.db.db_transaction_queue.base_update_queue as bq_module
 
-    with patch.object(bq_module, "MAX_SIZE_IN_MEMORY_QUEUE", 2000), patch.object(
-        bq_module, "LITELLM_ASYNCIO_QUEUE_MAXSIZE", 1000
-    ), patch.object(bq_module.verbose_proxy_logger, "warning") as mock_warning:
+    with (
+        patch.object(bq_module, "MAX_SIZE_IN_MEMORY_QUEUE", 2000),
+        patch.object(bq_module, "LITELLM_ASYNCIO_QUEUE_MAXSIZE", 1000),
+        patch.object(bq_module.verbose_proxy_logger, "warning") as mock_warning,
+    ):
         BaseUpdateQueue()
         mock_warning.assert_called_once()
         assert "Misconfigured queue thresholds" in mock_warning.call_args[0][0]

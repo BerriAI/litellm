@@ -543,7 +543,12 @@ def test_convert_gemini_tool_call_result_with_image_url():
     message_dict_format = ChatCompletionToolMessage(
         role="tool",
         tool_call_id="call_456",
-        content=[{"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,/9j/4AAQ"}}],
+        content=[
+            {
+                "type": "image_url",
+                "image_url": {"url": "data:image/jpeg;base64,/9j/4AAQ"},
+            }
+        ],
     )
     last_message_with_tool_calls["tool_calls"][0]["id"] = "call_456"
 
@@ -617,11 +622,19 @@ def test_convert_gemini_tool_call_result_with_multiple_anthropic_image_blocks():
             {"type": "text", "text": "here are two images"},
             {
                 "type": "image",
-                "source": {"type": "base64", "media_type": "image/png", "data": png_b64},
+                "source": {
+                    "type": "base64",
+                    "media_type": "image/png",
+                    "data": png_b64,
+                },
             },
             {
                 "type": "image",
-                "source": {"type": "base64", "media_type": "image/jpeg", "data": jpeg_b64},
+                "source": {
+                    "type": "base64",
+                    "media_type": "image/jpeg",
+                    "data": jpeg_b64,
+                },
             },
         ],
     )
@@ -644,7 +657,9 @@ def test_convert_gemini_tool_call_result_with_multiple_anthropic_image_blocks():
     )
     assert isinstance(result, list), "expected a list of parts"
     inline_parts = [p for p in result if "inline_data" in p]
-    assert len(inline_parts) == 2, f"expected 2 inline_data parts, got {len(inline_parts)}"
+    assert (
+        len(inline_parts) == 2
+    ), f"expected 2 inline_data parts, got {len(inline_parts)}"
     mime_types = {p["inline_data"]["mime_type"] for p in inline_parts}
     assert mime_types == {"image/png", "image/jpeg"}
 
@@ -681,7 +696,9 @@ def test_convert_gemini_tool_call_result_with_data_url_string():
     )
     assert isinstance(result, list), "expected a list of parts"
     inline_parts = [p for p in result if "inline_data" in p]
-    assert len(inline_parts) == 1, "data-URL image string was not converted to inline_data"
+    assert (
+        len(inline_parts) == 1
+    ), "data-URL image string was not converted to inline_data"
     assert inline_parts[0]["inline_data"]["mime_type"] == "image/png"
     assert inline_parts[0]["inline_data"]["data"] == tiny_png_b64
 
@@ -718,9 +735,9 @@ def test_convert_gemini_tool_call_result_with_data_url_extra_params():
     assert isinstance(result, list), "expected a list of parts"
     inline_parts = [p for p in result if "inline_data" in p]
     assert len(inline_parts) == 1
-    assert inline_parts[0]["inline_data"]["mime_type"] == "image/png", (
-        f"expected clean 'image/png', got '{inline_parts[0]['inline_data']['mime_type']}'"
-    )
+    assert (
+        inline_parts[0]["inline_data"]["mime_type"] == "image/png"
+    ), f"expected clean 'image/png', got '{inline_parts[0]['inline_data']['mime_type']}'"
 
 
 def test_bedrock_tools_unpack_defs():
@@ -1007,8 +1024,14 @@ def test_bedrock_image_processor_content_type_document_formats():
     test_cases = [
         ("https://example.com/doc.pdf", "application/pdf"),
         ("https://example.com/sheet.csv", "text/csv"),
-        ("https://example.com/doc.docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"),
-        ("https://example.com/sheet.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
+        (
+            "https://example.com/doc.docx",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        ),
+        (
+            "https://example.com/sheet.xlsx",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        ),
         ("https://example.com/page.html", "text/html"),
         ("https://example.com/readme.txt", "text/plain"),
     ]
@@ -1017,7 +1040,9 @@ def test_bedrock_image_processor_content_type_document_formats():
         _, content_type = BedrockImageProcessor._post_call_image_processing(
             mock_response, url
         )
-        assert content_type == expected_mime, f"Expected {expected_mime} for {url}, got {content_type}"
+        assert (
+            content_type == expected_mime
+        ), f"Expected {expected_mime} for {url}, got {content_type}"
 
 
 def test_bedrock_image_processor_content_type_s3_pdf_with_query():
@@ -1083,6 +1108,7 @@ def test_bedrock_tools_pt_empty_description():
     assert tool_spec is not None
     assert tool_spec.get("name") == "get_weather"
     assert tool_spec.get("description") == "get_weather"
+
 
 def test_bedrock_create_bedrock_block_deterministic_document_hash():
     """
@@ -1283,7 +1309,9 @@ def test_bedrock_create_bedrock_block_document_name_format():
 
     # Check format: DocumentPDFmessages_{16_hex_chars}_{format}
     pattern = r"^DocumentPDFmessages_[0-9a-f]{16}_pdf$"
-    assert re.match(pattern, document_name), f"Document name format mismatch: {document_name}"
+    assert re.match(
+        pattern, document_name
+    ), f"Document name format mismatch: {document_name}"
 
 
 def test_bedrock_create_bedrock_block_different_document_formats():
@@ -1313,6 +1341,7 @@ def test_bedrock_create_bedrock_block_different_document_formats():
         assert block["document"]["name"].endswith(f"_{format_type}")
         assert block["document"]["format"] == format_type
 
+
 def test_bedrock_nova_web_search_options_mapping():
     """
     Test that web_search_options is correctly mapped to Nova grounding.
@@ -1336,8 +1365,7 @@ def test_bedrock_nova_web_search_options_mapping():
 
     # Test with search_context_size (should be ignored for Nova)
     result2 = config._map_web_search_options(
-        {"search_context_size": "high"},
-        "us.amazon.nova-premier-v1:0"
+        {"search_context_size": "high"}, "us.amazon.nova-premier-v1:0"
     )
 
     assert result2 is not None
@@ -1345,6 +1373,7 @@ def test_bedrock_nova_web_search_options_mapping():
     assert system_tool2 is not None
     assert system_tool2["name"] == "nova_grounding"
     # Nova doesn't support search_context_size, so it's just ignored
+
 
 def test_bedrock_tools_pt_does_not_handle_system_tool():
     """
@@ -1365,12 +1394,10 @@ def test_bedrock_tools_pt_does_not_handle_system_tool():
                 "description": "Get the current weather",
                 "parameters": {
                     "type": "object",
-                    "properties": {
-                        "location": {"type": "string"}
-                    },
-                    "required": ["location"]
-                }
-            }
+                    "properties": {"location": {"type": "string"}},
+                    "required": ["location"],
+                },
+            },
         }
     ]
 
@@ -1380,6 +1407,7 @@ def test_bedrock_tools_pt_does_not_handle_system_tool():
     tool_spec = result[0].get("toolSpec")
     assert tool_spec is not None
     assert tool_spec["name"] == "get_weather"
+
 
 def test_convert_to_anthropic_tool_result_image_with_cache_control():
     """
@@ -1545,6 +1573,8 @@ def test_convert_to_anthropic_tool_result_image_url_as_http():
     assert result["content"][0]["source"]["type"] == "url"
     assert result["content"][0]["source"]["url"] == "https://example.com/image.jpg"
     assert result["content"][0]["cache_control"]["type"] == "ephemeral"
+
+
 def test_anthropic_messages_pt_server_tool_use_passthrough():
     """
     Test that anthropic_messages_pt passes through server_tool_use and
@@ -1555,13 +1585,12 @@ def test_anthropic_messages_pt_server_tool_use_passthrough():
 
     Fixes: https://github.com/BerriAI/litellm/issues/XXXXX
     """
-    from litellm.litellm_core_utils.prompt_templates.factory import anthropic_messages_pt
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        anthropic_messages_pt,
+    )
 
     messages = [
-        {
-            "role": "user",
-            "content": "I need help with time information."
-        },
+        {"role": "user", "content": "I need help with time information."},
         {
             "role": "assistant",
             "content": [
@@ -1569,7 +1598,7 @@ def test_anthropic_messages_pt_server_tool_use_passthrough():
                     "type": "server_tool_use",
                     "id": "srvtoolu_01ABC123",
                     "name": "tool_search_tool_regex",
-                    "input": {"query": ".*time.*"}
+                    "input": {"query": ".*time.*"},
                 },
                 {
                     "type": "tool_search_tool_result",
@@ -1578,19 +1607,13 @@ def test_anthropic_messages_pt_server_tool_use_passthrough():
                         "type": "tool_search_tool_search_result",
                         "tool_references": [
                             {"type": "tool_reference", "tool_name": "get_time"}
-                        ]
-                    }
+                        ],
+                    },
                 },
-                {
-                    "type": "text",
-                    "text": "I found the time tool. How can I help you?"
-                }
+                {"type": "text", "text": "I found the time tool. How can I help you?"},
             ],
         },
-        {
-            "role": "user",
-            "content": "What's the time in New York?"
-        },
+        {"role": "user", "content": "What's the time in New York?"},
     ]
 
     result = anthropic_messages_pt(
@@ -1622,7 +1645,9 @@ def test_anthropic_messages_pt_server_tool_use_passthrough():
     # Verify tool_search_tool_result block is preserved
     assert "tool_search_tool_result" in content_types
     tool_result_block = next(
-        b for b in assistant_msg["content"] if b.get("type") == "tool_search_tool_result"
+        b
+        for b in assistant_msg["content"]
+        if b.get("type") == "tool_search_tool_result"
     )
     assert tool_result_block["tool_use_id"] == "srvtoolu_01ABC123"
     assert tool_result_block["content"]["type"] == "tool_search_tool_search_result"
@@ -1630,9 +1655,7 @@ def test_anthropic_messages_pt_server_tool_use_passthrough():
 
     # Verify text block is also preserved
     assert "text" in content_types
-    text_block = next(
-        b for b in assistant_msg["content"] if b.get("type") == "text"
-    )
+    text_block = next(b for b in assistant_msg["content"] if b.get("type") == "text")
     assert text_block["text"] == "I found the time tool. How can I help you?"
 
 
@@ -1663,7 +1686,10 @@ def test_bedrock_tools_unpack_defs_no_oom_with_nested_refs():
             "Expression": {
                 "type": "object",
                 "properties": {
-                    "type": {"type": "string", "enum": ["and", "or", "not", "comparison"]},
+                    "type": {
+                        "type": "string",
+                        "enum": ["and", "or", "not", "comparison"],
+                    },
                     "left": {"$ref": "#/$defs/Operand"},
                     "right": {"$ref": "#/$defs/Operand"},
                     "operator": {"$ref": "#/$defs/Operator"},
@@ -1674,7 +1700,9 @@ def test_bedrock_tools_unpack_defs_no_oom_with_nested_refs():
                 "anyOf": [
                     {"$ref": "#/$defs/Literal"},
                     {"$ref": "#/$defs/FieldRef"},
-                    {"$ref": "#/$defs/Expression"},  # Circular: Operand -> Expression -> Operand
+                    {
+                        "$ref": "#/$defs/Expression"
+                    },  # Circular: Operand -> Expression -> Operand
                 ],
             },
             "Literal": {
@@ -1808,9 +1836,9 @@ def test_anthropic_messages_pt_file_block_preserves_cache_control():
 
     file_block = content_blocks[0]
     assert file_block["type"] == "document"
-    assert "cache_control" in file_block, (
-        "cache_control should be preserved on file/document content blocks"
-    )
+    assert (
+        "cache_control" in file_block
+    ), "cache_control should be preserved on file/document content blocks"
     assert file_block["cache_control"]["type"] == "ephemeral"
 
     text_block = content_blocks[1]
@@ -2056,7 +2084,9 @@ def test_sanitize_messages_deduplicates_tool_results():
 
         # Count tool messages with this ID — should be exactly 1
         tool_results = [
-            m for m in result if m.get("role") == "tool" and m.get("tool_call_id") == "call_abc123"
+            m
+            for m in result
+            if m.get("role") == "tool" and m.get("tool_call_id") == "call_abc123"
         ]
         assert len(tool_results) == 1
         # Should keep the LAST occurrence (most complete)
@@ -2193,7 +2223,8 @@ def test_sanitize_messages_dedup_scoped_per_turn_preserves_cross_turn():
 
         # Both tool results must survive — one per turn
         tool_results = [
-            m for m in result
+            m
+            for m in result
             if m.get("role") == "tool" and m.get("tool_call_id") == "call_X"
         ]
         assert len(tool_results) == 2, (
@@ -2252,38 +2283,35 @@ def test_sanitize_messages_combined_case_a_and_case_d():
         missing_results = [
             m for m in tool_results if m.get("tool_call_id") == "call_missing"
         ]
-        assert len(missing_results) == 1, (
-            f"Expected 1 dummy result for call_missing (Case A), got {len(missing_results)}"
-        )
+        assert (
+            len(missing_results) == 1
+        ), f"Expected 1 dummy result for call_missing (Case A), got {len(missing_results)}"
 
         # Case D: call_duped should have exactly 1 result (the fresh one)
         duped_results = [
             m for m in tool_results if m.get("tool_call_id") == "call_duped"
         ]
-        assert len(duped_results) == 1, (
-            f"Expected 1 result for call_duped after dedup (Case D), got {len(duped_results)}"
-        )
-        assert duped_results[0]["content"] == "fresh_result", (
-            f"Expected last-wins 'fresh_result', got '{duped_results[0]['content']}'"
-        )
+        assert (
+            len(duped_results) == 1
+        ), f"Expected 1 result for call_duped after dedup (Case D), got {len(duped_results)}"
+        assert (
+            duped_results[0]["content"] == "fresh_result"
+        ), f"Expected last-wins 'fresh_result', got '{duped_results[0]['content']}'"
 
         # Verify tool results immediately follow the assistant message
-        asst_idx = next(
-            i for i, m in enumerate(result) if m.get("role") == "assistant"
-        )
+        asst_idx = next(i for i, m in enumerate(result) if m.get("role") == "assistant")
         tool_msgs_after_asst = [
-            m
-            for m in result[asst_idx + 1 :]
-            if m.get("role") in ("tool", "function")
+            m for m in result[asst_idx + 1 :] if m.get("role") in ("tool", "function")
         ]
-        assert len(tool_msgs_after_asst) == 2, (
-            f"Expected 2 tool results after assistant, got {len(tool_msgs_after_asst)}"
-        )
+        assert (
+            len(tool_msgs_after_asst) == 2
+        ), f"Expected 2 tool results after assistant, got {len(tool_msgs_after_asst)}"
         # Both tool_call_ids should be present (order may vary)
         tool_ids = {m["tool_call_id"] for m in tool_msgs_after_asst}
-        assert tool_ids == {"call_missing", "call_duped"}, (
-            f"Expected tool_call_ids {{call_missing, call_duped}}, got {tool_ids}"
-        )
+        assert tool_ids == {
+            "call_missing",
+            "call_duped",
+        }, f"Expected tool_call_ids {{call_missing, call_duped}}, got {tool_ids}"
     finally:
         litellm.modify_params = original
 
@@ -2329,9 +2357,9 @@ def test_anthropic_messages_pt_file_block_preserves_cache_control():
     # Document block (from file) should preserve cache_control
     doc_block = content_blocks[0]
     assert doc_block["type"] == "document"
-    assert "cache_control" in doc_block, (
-        "cache_control was dropped from file/document block"
-    )
+    assert (
+        "cache_control" in doc_block
+    ), "cache_control was dropped from file/document block"
     assert doc_block["cache_control"]["type"] == "ephemeral"
 
     # Text block should also preserve cache_control

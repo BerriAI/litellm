@@ -88,4 +88,3 @@ class TestRAGBedrock(BaseRAGTest):
             # Return results even if exact match not found
             return response
         return None
-

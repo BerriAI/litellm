@@ -1,5 +1,6 @@
 from typing import List, Optional, Tuple
 
+import os
 
 from litellm.exceptions import AuthenticationError
 from litellm.llms.openai.openai import OpenAIConfig
@@ -7,7 +8,7 @@ from litellm.types.llms.openai import AllMessageValues
 
 from ..authenticator import Authenticator
 from ..common_utils import (
-    GITHUB_COPILOT_API_BASE,
+    DEFAULT_GITHUB_COPILOT_API_BASE,
     GetAPIKeyError,
     get_copilot_default_headers,
 )
@@ -30,7 +31,12 @@ class GithubCopilotConfig(OpenAIConfig):
         api_key: Optional[str],
         custom_llm_provider: str,
     ) -> Tuple[Optional[str], Optional[str], str]:
-        dynamic_api_base = self.authenticator.get_api_base() or GITHUB_COPILOT_API_BASE
+        dynamic_api_base = (
+            api_base
+            or self.authenticator.get_api_base()
+            or os.getenv("GITHUB_COPILOT_API_BASE")
+            or DEFAULT_GITHUB_COPILOT_API_BASE
+        )
         try:
             dynamic_api_key = self.authenticator.get_api_key()
         except GetAPIKeyError as e:

@@ -11,6 +11,7 @@ interface ScoreChartProps {
 
 export function ScoreChart({ data }: ScoreChartProps) {
   const chartData = data && data.length > 0 ? data : [];
+
   return (
     <Card className="bg-white border border-gray-200">
       <Title className="text-base font-semibold text-gray-900 mb-4">

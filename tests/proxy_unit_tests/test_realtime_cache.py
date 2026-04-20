@@ -20,8 +20,8 @@ def test_realtime_request_body_returns_immutable_bytes():
 
     with pytest.raises(TypeError):
         cast(Any, cached_body)[0] = ord("x")
-        
-        
+
+
 def test_realtime_query_params_template_returns_immutable_tuples():
     cached_tuple = _realtime_query_params_template("gpt-4o", "intent-a")
 
@@ -59,4 +59,3 @@ def test_realtime_query_params_dict_copies_do_not_leak_state():
 
     assert "new" not in params_dict_two
     assert params_dict_two == {"model": "gpt-4o", "intent": "intent-a"}
-

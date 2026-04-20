@@ -20,7 +20,7 @@ from litellm.types.vector_stores import LiteLLM_ManagedVectorStore
 
 def test_check_vector_store_access():
     """Test core access control logic for team-based vector store access"""
-    
+
     # Test 1: Legacy vector stores (no team_id) are accessible to all
     vector_store: LiteLLM_ManagedVectorStore = {
         "vector_store_id": "vs_legacy",
@@ -29,7 +29,7 @@ def test_check_vector_store_access():
     }
     user = UserAPIKeyAuth(team_id="team_456")
     assert _check_vector_store_access(vector_store, user) is True
-    
+
     # Test 2: User can access their team's vector stores
     vector_store = {
         "vector_store_id": "vs_team",
@@ -38,7 +38,7 @@ def test_check_vector_store_access():
     }
     user = UserAPIKeyAuth(team_id="team_456")
     assert _check_vector_store_access(vector_store, user) is True
-    
+
     # Test 3: User cannot access other teams' vector stores
     vector_store = {
         "vector_store_id": "vs_team",

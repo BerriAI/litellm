@@ -83,9 +83,9 @@ class LangsmithLogger(CustomBatchLogger):
         if _batch_size:
             self.batch_size = int(_batch_size)
         self.log_queue: List[LangsmithQueueObject] = []
-        self._flush_task: Optional[
-            asyncio.Task[Any]
-        ] = self._start_periodic_flush_task()
+        self._flush_task: Optional[asyncio.Task[Any]] = (
+            self._start_periodic_flush_task()
+        )
 
     def _start_periodic_flush_task(self) -> Optional[asyncio.Task[Any]]:
         """Start the periodic flush task only when an event loop is already running."""
@@ -501,9 +501,9 @@ class LangsmithLogger(CustomBatchLogger):
         return log_queue_by_credentials
 
     def _get_sampling_rate_to_use_for_request(self, kwargs: Dict[str, Any]) -> float:
-        standard_callback_dynamic_params: Optional[
-            StandardCallbackDynamicParams
-        ] = kwargs.get("standard_callback_dynamic_params", None)
+        standard_callback_dynamic_params: Optional[StandardCallbackDynamicParams] = (
+            kwargs.get("standard_callback_dynamic_params", None)
+        )
         sampling_rate: float = self.sampling_rate
         if standard_callback_dynamic_params is not None:
             _sampling_rate = standard_callback_dynamic_params.get(
@@ -523,9 +523,9 @@ class LangsmithLogger(CustomBatchLogger):
 
         Otherwise, use the default credentials.
         """
-        standard_callback_dynamic_params: Optional[
-            StandardCallbackDynamicParams
-        ] = kwargs.get("standard_callback_dynamic_params", None)
+        standard_callback_dynamic_params: Optional[StandardCallbackDynamicParams] = (
+            kwargs.get("standard_callback_dynamic_params", None)
+        )
         if standard_callback_dynamic_params is not None:
             credentials = self.get_credentials_from_env(
                 langsmith_api_key=standard_callback_dynamic_params.get(

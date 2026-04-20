@@ -6,7 +6,7 @@ This requires websockets, and is currently only supported on LiteLLM Proxy.
 
 from typing import Any, Optional, cast
 
-from litellm._logging import verbose_proxy_logger
+from litellm._logging import _redact_string, verbose_proxy_logger
 from litellm.constants import REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
 
 from ....litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
@@ -118,7 +118,7 @@ class AzureOpenAIRealtime(AzureChatCompletion):
                 await realtime_streaming.bidirectional_forward()
 
         except websockets.exceptions.InvalidStatusCode as e:  # type: ignore
-            await websocket.close(code=e.status_code, reason=str(e))
+            await websocket.close(code=e.status_code, reason=_redact_string(str(e)))
         except Exception:
             verbose_proxy_logger.exception(
                 "Error in AzureOpenAIRealtime.async_realtime"

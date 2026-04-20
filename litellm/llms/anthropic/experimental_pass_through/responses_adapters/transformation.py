@@ -337,10 +337,10 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         # tool_choice
         tool_choice = anthropic_request.get("tool_choice")
         if tool_choice:
-            responses_kwargs[
-                "tool_choice"
-            ] = self.translate_tool_choice_to_responses_api(
-                cast(AnthropicMessagesToolChoice, tool_choice)
+            responses_kwargs["tool_choice"] = (
+                self.translate_tool_choice_to_responses_api(
+                    cast(AnthropicMessagesToolChoice, tool_choice)
+                )
             )
 
         # thinking -> reasoning

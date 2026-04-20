@@ -248,9 +248,9 @@ class LicenseChecker:
                     lock_data = tomllib.load(f)
 
                 requirement_lines = list(pyproject["project"].get("dependencies", []))
-                for extra_reqs in pyproject["project"].get(
-                    "optional-dependencies", {}
-                ).values():
+                for extra_reqs in (
+                    pyproject["project"].get("optional-dependencies", {}).values()
+                ):
                     requirement_lines.extend(extra_reqs)
                 for group_reqs in pyproject.get("dependency-groups", {}).values():
                     requirement_lines.extend(group_reqs)
@@ -286,7 +286,9 @@ class LicenseChecker:
             ]
         except Exception as e:
             source = requirements_file or "pyproject.toml + uv.lock"
-            raise RuntimeError(f"Error parsing requirements from {source}: {str(e)}") from e
+            raise RuntimeError(
+                f"Error parsing requirements from {source}: {str(e)}"
+            ) from e
 
     def check_requirements(self, requirements_file: Optional[Path] = None) -> bool:
         """Check all packages from a requirements file or the default repo deps."""
@@ -303,9 +305,7 @@ class LicenseChecker:
 
         for req in requirements:
             try:
-                version = (
-                    next(iter(req.specifier)).version if req.specifier else None
-                )
+                version = next(iter(req.specifier)).version if req.specifier else None
             except StopIteration:
                 version = None
 
@@ -348,7 +348,8 @@ def main():
         unhandled_packages = [
             p
             for p in (unverified + invalid)
-            if checker._normalize_package_name(p.name) not in checker.authorized_packages
+            if checker._normalize_package_name(p.name)
+            not in checker.authorized_packages
         ]
 
         if unhandled_packages:

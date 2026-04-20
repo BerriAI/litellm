@@ -82,7 +82,9 @@ class TestProxyBaseLLMRequestProcessing:
             pytest.fail("litellm_call_id is not a valid UUID")
         assert data_passed["litellm_call_id"] == returned_data["litellm_call_id"]
 
-    def test_add_dd_apm_tags_for_litellm_call_id_uses_dd_tracing_helper(self, monkeypatch):
+    def test_add_dd_apm_tags_for_litellm_call_id_uses_dd_tracing_helper(
+        self, monkeypatch
+    ):
         mock_set_active_span_tag = MagicMock(return_value=True)
         import litellm.proxy.dd_span_tagger
 
@@ -1661,7 +1663,10 @@ class TestIsAzureModelRouterRequest:
 
     def test_detects_model_router_with_underscore(self):
         assert _is_azure_model_router_request("azure_ai/model_router") is True
-        assert _is_azure_model_router_request("azure_ai/model_router/my-deployment") is True
+        assert (
+            _is_azure_model_router_request("azure_ai/model_router/my-deployment")
+            is True
+        )
 
     def test_detects_model_router_with_hyphen(self):
         assert _is_azure_model_router_request("azure_ai/model-router") is True
@@ -1885,11 +1890,11 @@ class TestDDSpanTaggerTagRequest:
 
     def test_tags_key_alias_and_model(self):
         """key_alias and requested_model are set on the span when present."""
-        user_key = self._make_user_api_key_dict(key_alias="my-prod-key", token="hashed123")
+        user_key = self._make_user_api_key_dict(
+            key_alias="my-prod-key", token="hashed123"
+        )
 
-        with patch(
-            "litellm.proxy.dd_span_tagger.set_active_span_tag"
-        ) as mock_set_tag:
+        with patch("litellm.proxy.dd_span_tagger.set_active_span_tag") as mock_set_tag:
             DDSpanTagger.tag_request(
                 user_api_key_dict=user_key,
                 requested_model="gpt-4o",
@@ -1903,9 +1908,7 @@ class TestDDSpanTaggerTagRequest:
         """No key tags are set when key_alias and token are None (e.g. 401 path)."""
         user_key = self._make_user_api_key_dict(key_alias=None, token=None)
 
-        with patch(
-            "litellm.proxy.dd_span_tagger.set_active_span_tag"
-        ) as mock_set_tag:
+        with patch("litellm.proxy.dd_span_tagger.set_active_span_tag") as mock_set_tag:
             DDSpanTagger.tag_request(
                 user_api_key_dict=user_key,
                 requested_model=None,
@@ -1917,15 +1920,15 @@ class TestDDSpanTaggerTagRequest:
         """requested_model is tagged even when there's no key info."""
         user_key = self._make_user_api_key_dict(key_alias=None, token=None)
 
-        with patch(
-            "litellm.proxy.dd_span_tagger.set_active_span_tag"
-        ) as mock_set_tag:
+        with patch("litellm.proxy.dd_span_tagger.set_active_span_tag") as mock_set_tag:
             DDSpanTagger.tag_request(
                 user_api_key_dict=user_key,
                 requested_model="claude-3-5-sonnet",
             )
 
-        mock_set_tag.assert_called_once_with("litellm.requested_model", "claude-3-5-sonnet")
+        mock_set_tag.assert_called_once_with(
+            "litellm.requested_model", "claude-3-5-sonnet"
+        )
 
 
 class TestHasAttributeErrorInChain:
@@ -2015,8 +2018,7 @@ class TestHandleLLMApiExceptionDictDetail:
         proxy_exc = await self._invoke(exc)
         assert proxy_exc.message == "Violated guardrail policy"
         assert (
-            proxy_exc.provider_specific_fields["guardrail_name"]
-            == "bedrock-pii-guard"
+            proxy_exc.provider_specific_fields["guardrail_name"] == "bedrock-pii-guard"
         )
         # No Python repr leakage of the dict into the message field.
         assert "{'error':" not in proxy_exc.message

@@ -61,12 +61,12 @@ class TestInitLitellmCallbacks:
             c for c in litellm.callbacks if isinstance(c, FakeCustomLogger)
         ]
 
-        assert len(string_entries) == 0, (
-            f"String callbacks should have been replaced, but found: {string_entries}"
-        )
-        assert len(instance_entries) == 1, (
-            f"Expected exactly one FakeCustomLogger instance, found {len(instance_entries)}"
-        )
+        assert (
+            len(string_entries) == 0
+        ), f"String callbacks should have been replaced, but found: {string_entries}"
+        assert (
+            len(instance_entries) == 1
+        ), f"Expected exactly one FakeCustomLogger instance, found {len(instance_entries)}"
         assert instance_entries[0] is fake_logger
 
         # Clean up
@@ -162,12 +162,12 @@ class TestInitLitellmCallbacks:
             c for c in litellm.callbacks if isinstance(c, FakeCustomLogger)
         ]
 
-        assert len(string_entries) == 0, (
-            f"All string callbacks should have been replaced: {string_entries}"
-        )
-        assert len(instance_entries) == 2, (
-            f"Expected 2 FakeCustomLogger instances, found {len(instance_entries)}"
-        )
+        assert (
+            len(string_entries) == 0
+        ), f"All string callbacks should have been replaced: {string_entries}"
+        assert (
+            len(instance_entries) == 2
+        ), f"Expected 2 FakeCustomLogger instances, found {len(instance_entries)}"
         assert instance_entries[0] is fake_logger_a
         assert instance_entries[1] is fake_logger_b
 

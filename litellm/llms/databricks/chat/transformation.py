@@ -353,8 +353,7 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
     @overload
     def _transform_messages(
         self, messages: List[AllMessageValues], model: str, is_async: Literal[True]
-    ) -> Coroutine[Any, Any, List[AllMessageValues]]:
-        ...
+    ) -> Coroutine[Any, Any, List[AllMessageValues]]: ...
 
     @overload
     def _transform_messages(
@@ -362,8 +361,7 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         messages: List[AllMessageValues],
         model: str,
         is_async: Literal[False] = False,
-    ) -> List[AllMessageValues]:
-        ...
+    ) -> List[AllMessageValues]: ...
 
     def _transform_messages(
         self, messages: List[AllMessageValues], model: str, is_async: bool = False

@@ -136,10 +136,12 @@ class TestTransformation:
             "litellm.llms.bedrock.chat.agentcore.transformation.AmazonAgentCoreConfig._sign_request",
             return_value=(fake_sigv4_headers, fake_body),
         ):
-            _, headers, _ = BedrockAgentCoreA2ATransformation.get_url_and_signed_request(
-                request_id="req-001",
-                params=SAMPLE_PARAMS,
-                litellm_params=litellm_params_no_key,
+            _, headers, _ = (
+                BedrockAgentCoreA2ATransformation.get_url_and_signed_request(
+                    request_id="req-001",
+                    params=SAMPLE_PARAMS,
+                    litellm_params=litellm_params_no_key,
+                )
             )
         # SigV4 produces an Authorization header starting with "AWS4-HMAC-SHA256"
         assert "Authorization" in headers

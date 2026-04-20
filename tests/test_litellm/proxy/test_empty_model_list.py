@@ -93,9 +93,7 @@ class TestEmptyModelListHandling:
         assert data["total_pages"] == 0
         assert data["size"] == 50  # default page size
 
-    def test_v2_model_info_pagination_with_empty_results(
-        self, client, monkeypatch
-    ):
+    def test_v2_model_info_pagination_with_empty_results(self, client, monkeypatch):
         """
         Test that /v2/model/info pagination parameters work correctly
         when there are no models (empty results).

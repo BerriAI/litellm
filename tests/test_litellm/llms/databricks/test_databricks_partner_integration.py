@@ -123,9 +123,7 @@ class TestRedactSensitiveData:
     def test_redact_pat_token(self):
         """Databricks PAT tokens are redacted."""
         test_token = "dapiTESTTOKENFAKEVALUEFORTESTINGPURPOSESONLY123"
-        result = DatabricksBase.redact_sensitive_data(
-            f"Using token {test_token}"
-        )
+        result = DatabricksBase.redact_sensitive_data(f"Using token {test_token}")
         assert test_token not in result
         assert "[REDACTED_PAT]" in result
 
@@ -355,12 +353,11 @@ class TestSDKPartnerTelemetry:
         mock_sdk_module = MagicMock()
         mock_sdk_module.WorkspaceClient = MagicMock(return_value=mock_workspace_client)
         mock_sdk_module.useragent = mock_useragent
-        
+
         # Mock both databricks and databricks.sdk modules to ensure the import works
-        with patch.dict(sys.modules, {
-            "databricks": MagicMock(),
-            "databricks.sdk": mock_sdk_module
-        }):
+        with patch.dict(
+            sys.modules, {"databricks": MagicMock(), "databricks.sdk": mock_sdk_module}
+        ):
             databricks_base._get_databricks_credentials(
                 api_key=None,
                 api_base=None,
@@ -609,12 +606,11 @@ class TestAuthenticationPriority:
         mock_sdk_module = MagicMock()
         mock_sdk_module.WorkspaceClient = MagicMock(return_value=mock_workspace_client)
         mock_sdk_module.useragent = MagicMock()
-        
+
         # Mock both databricks and databricks.sdk modules to ensure the import works
-        with patch.dict(sys.modules, {
-            "databricks": MagicMock(),
-            "databricks.sdk": mock_sdk_module
-        }):
+        with patch.dict(
+            sys.modules, {"databricks": MagicMock(), "databricks.sdk": mock_sdk_module}
+        ):
             api_base, headers = databricks_base.databricks_validate_environment(
                 api_key=None,
                 api_base=None,

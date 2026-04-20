@@ -3,6 +3,7 @@ Calls SearXNG's /search endpoint to search the web.
 
 SearXNG API Reference: https://docs.searxng.org/dev/search_api.html
 """
+
 from typing import Dict, List, Optional, TypedDict, Union
 
 import httpx

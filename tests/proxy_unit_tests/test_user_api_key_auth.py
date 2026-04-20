@@ -1093,12 +1093,15 @@ async def test_jwt_non_admin_team_route_access(monkeypatch):
     # Mock enterprise license check and JWTAuthManager.auth_builder
     # License check must be mocked to avoid environment variable pollution
     # in parallel test execution
-    with patch(
-        "litellm.proxy.proxy_server.premium_user",
-        True,
-    ), patch(
-        "litellm.proxy.auth.handle_jwt.JWTAuthManager.auth_builder",
-        return_value=mock_jwt_response,
+    with (
+        patch(
+            "litellm.proxy.proxy_server.premium_user",
+            True,
+        ),
+        patch(
+            "litellm.proxy.auth.handle_jwt.JWTAuthManager.auth_builder",
+            return_value=mock_jwt_response,
+        ),
     ):
         try:
             await user_api_key_auth(request=request, api_key="Bearer fake.jwt.token")

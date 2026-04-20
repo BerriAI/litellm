@@ -4,6 +4,7 @@ Simple E2E test for Bedrock with advanced-tool-use beta header.
 Tests that LiteLLM correctly filters out the advanced-tool-use-2025-11-20 beta header
 for Bedrock Invoke API, which doesn't support it and returns a 400 "invalid beta flag" error.
 """
+
 import os
 import sys
 import pytest
@@ -65,5 +66,3 @@ async def test_bedrock_sonnet_4_5_with_advanced_tool_use_beta_header():
 #     assert response is not None
 #     assert "content" in response
 #     print(f"✅ Test passed! Claude 3.5 response (beta header filtered): {response}")
-
-

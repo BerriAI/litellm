@@ -1,6 +1,7 @@
 import ast
 import os
 
+
 class EnterpriseImportFinder(ast.NodeVisitor):
     def __init__(self):
         self.unsafe_imports = []
@@ -34,25 +35,32 @@ class EnterpriseImportFinder(ast.NodeVisitor):
         for name in node.names:
             if "litellm_enterprise" in name.name or "enterprise" in name.name:
                 if not self.in_try_block:
-                    self.unsafe_imports.append({
-                        "file": self.current_file,
-                        "line": node.lineno,
-                        "import": name.name,
-                        "context": "direct import"
-                    })
+                    self.unsafe_imports.append(
+                        {
+                            "file": self.current_file,
+                            "line": node.lineno,
+                            "import": name.name,
+                            "context": "direct import",
+                        }
+                    )
         self.generic_visit(node)
 
     def visit_ImportFrom(self, node):
         # Check for from litellm_enterprise imports
-        if node.module and ("litellm_enterprise" in node.module or "enterprise" in node.module):
+        if node.module and (
+            "litellm_enterprise" in node.module or "enterprise" in node.module
+        ):
             if not self.in_try_block:
-                self.unsafe_imports.append({
-                    "file": self.current_file,
-                    "line": node.lineno,
-                    "import": f"from {node.module}",
-                    "context": "from import"
-                })
+                self.unsafe_imports.append(
+                    {
+                        "file": self.current_file,
+                        "line": node.lineno,
+                        "import": f"from {node.module}",
+                        "context": "from import",
+                    }
+                )
         self.generic_visit(node)
+
 
 def find_unsafe_enterprise_imports_in_file(file_path):
     with open(file_path, "r") as file:
@@ -61,6 +69,7 @@ def find_unsafe_enterprise_imports_in_file(file_path):
     finder.current_file = file_path
     finder.visit(tree)
     return finder.unsafe_imports
+
 
 def find_unsafe_enterprise_imports_in_directory(directory):
     unsafe_imports = []
@@ -73,11 +82,12 @@ def find_unsafe_enterprise_imports_in_directory(directory):
                     unsafe_imports.extend(imports)
     return unsafe_imports
 
+
 if __name__ == "__main__":
     # Check for unsafe enterprise imports in the litellm directory
     directory_path = "./litellm"
     unsafe_imports = find_unsafe_enterprise_imports_in_directory(directory_path)
-    
+
     if unsafe_imports:
         print("🚨 UNSAFE ENTERPRISE IMPORTS FOUND (not in try-except blocks):")
         for imp in unsafe_imports:
@@ -86,7 +96,7 @@ if __name__ == "__main__":
             print(f"Import: {imp['import']}")
             print(f"Context: {imp['context']}")
             print("---")
-        
+
         # Raise exception to fail CI/CD
         raise Exception(
             "🚨 Unsafe enterprise imports found. All enterprise imports must be wrapped in try-except blocks."

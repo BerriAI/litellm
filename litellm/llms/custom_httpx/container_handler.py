@@ -76,13 +76,13 @@ def _build_url(
 
     # Parse the api_base to extract existing query params
     parsed_base = httpx.URL(api_base)
-    
+
     # Append the path to the existing path (before query params)
     new_path = f"{parsed_base.path.rstrip('/')}{path_template}"
-    
+
     # Rebuild URL with new path, preserving query params
     final_url = parsed_base.copy_with(path=new_path)
-    
+
     return str(final_url)
 
 

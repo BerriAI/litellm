@@ -3,7 +3,7 @@ name: "Unit Tests: Security"
 # Uses DATABASE_URL secret — only runs on trusted branches, not PRs.
 on:
   push:
-    branches: [main, "litellm_*"]
+    branches: [main, "litellm_**"]
 
 permissions:
   contents: read

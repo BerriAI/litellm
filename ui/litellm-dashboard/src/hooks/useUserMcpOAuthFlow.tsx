@@ -23,6 +23,7 @@ import {
 } from "@/components/networking";
 import NotificationsManager from "@/components/molecules/notifications_manager";
 import { extractErrorMessage } from "@/utils/errorUtils";
+import { generateCodeChallenge, generateCodeVerifier } from "@/utils/pkce";
 import { getSecureItem, setSecureItem } from "@/utils/secureStorage";
 
 export type UserMcpOAuthStatus = "idle" | "authorizing" | "exchanging" | "success" | "error";
@@ -58,25 +59,6 @@ type StoredFlowState = {
   clientId?: string;
   clientSecret?: string;
   scopes?: string[];
-};
-
-const b64url = (buf: ArrayBuffer) => {
-  const bytes = new Uint8Array(buf);
-  let s = "";
-  bytes.forEach((b) => (s += String.fromCharCode(b)));
-  return btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-};
-
-const genVerifier = () => {
-  const arr = new Uint8Array(32);
-  window.crypto.getRandomValues(arr);
-  return b64url(arr.buffer);
-};
-
-const genChallenge = async (verifier: string) => {
-  const data = new TextEncoder().encode(verifier);
-  const digest = await window.crypto.subtle.digest("SHA-256", data);
-  return b64url(digest);
 };
 
 const setStorage = (key: string, value: string) => {
@@ -144,8 +126,8 @@ export const useUserMcpOAuthFlow = ({
         }
       }
 
-      const verifier = genVerifier();
-      const challenge = await genChallenge(verifier);
+      const verifier = generateCodeVerifier();
+      const challenge = await generateCodeChallenge(verifier);
       const state = crypto.randomUUID();
       const redirectUri = buildCallbackUrl();
       const scopeString = scopes?.filter((s) => s.trim()).join(" ");

@@ -36,9 +36,7 @@ class TestUIPathEnvironmentVariable:
 
     def test_default_ui_path_non_root(self):
         """Test default UI path in non-root mode."""
-        with mock.patch.dict(
-            os.environ, {"LITELLM_NON_ROOT": "true"}, clear=False
-        ):
+        with mock.patch.dict(os.environ, {"LITELLM_NON_ROOT": "true"}, clear=False):
             # Clear LITELLM_UI_PATH if it exists
             env_copy = os.environ.copy()
             if "LITELLM_UI_PATH" in env_copy:
@@ -47,13 +45,9 @@ class TestUIPathEnvironmentVariable:
             with mock.patch.dict(os.environ, env_copy, clear=True):
                 is_non_root = os.getenv("LITELLM_NON_ROOT", "").lower() == "true"
                 default_runtime_ui_path = (
-                    "/var/lib/litellm/ui"
-                    if is_non_root
-                    else "/default/packaged/path"
+                    "/var/lib/litellm/ui" if is_non_root else "/default/packaged/path"
                 )
-                runtime_ui_path = os.getenv(
-                    "LITELLM_UI_PATH", default_runtime_ui_path
-                )
+                runtime_ui_path = os.getenv("LITELLM_UI_PATH", default_runtime_ui_path)
 
                 assert runtime_ui_path == "/var/lib/litellm/ui"
 

@@ -237,7 +237,9 @@ def test_circuit_breaker_half_open_concurrent_calls_are_fast_failed():
 
     # All subsequent concurrent callers: HALF_OPEN → fast-fail (return True)
     for _ in range(10):
-        assert cb.is_open() is True, "concurrent callers should be fast-failed in HALF_OPEN"
+        assert (
+            cb.is_open() is True
+        ), "concurrent callers should be fast-failed in HALF_OPEN"
 
 
 @pytest.mark.asyncio

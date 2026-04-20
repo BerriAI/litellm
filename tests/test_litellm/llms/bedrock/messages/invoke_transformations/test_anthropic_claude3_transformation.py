@@ -18,6 +18,7 @@ from litellm.llms.bedrock.common_utils import (
     normalize_tool_input_schema_types_for_bedrock_invoke,
     remove_custom_field_from_tools,
 )
+from litellm.constants import BEDROCK_MIN_THINKING_BUDGET_TOKENS
 from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation import (
     AmazonAnthropicClaudeMessagesConfig,
     AmazonAnthropicClaudeMessagesStreamDecoder,
@@ -315,7 +316,10 @@ def test_normalize_tool_input_schema_types_for_bedrock_invoke():
                     "type": "custom",
                     "additionalProperties": False,
                     "properties": {
-                        "nested": {"type": "custom", "properties": {"x": {"type": "string"}}}
+                        "nested": {
+                            "type": "custom",
+                            "properties": {"x": {"type": "string"}},
+                        }
                     },
                     "required": ["nested"],
                 },
@@ -382,6 +386,33 @@ def test_bedrock_invoke_messages_transform_adds_name_when_tool_missing_name():
         headers={},
     )
     assert result["tools"][0]["name"] == "litellm_unnamed_tool_0"
+
+
+def test_bedrock_invoke_messages_skips_thinking_injection_when_already_enabled():
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    optional_params = {
+        "max_tokens": 32000,
+        "stream": False,
+        "thinking": {"type": "enabled", "budget_tokens": 2048},
+        "context_management": {
+            "edits": [{"type": "clear_thinking_20251015", "keep": "all"}]
+        },
+    }
+    result = cfg.transform_anthropic_messages_request(
+        model="global.anthropic.claude-sonnet-4-6-v1:0",
+        messages=[{"role": "user", "content": "hi"}],
+        anthropic_messages_optional_request_params=copy.deepcopy(optional_params),
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+    # Claude 4.6/4.7 reject ``thinking.type=enabled``; legacy ``enabled`` is
+    # translated to ``adaptive`` (budget_tokens => output_config.effort) and the
+    # pre-4.6 ``interleaved-thinking-2025-05-14`` beta must not be attached.
+    assert result["thinking"]["type"] == "adaptive"
+    betas = result.get("anthropic_beta") or []
+    assert "interleaved-thinking-2025-05-14" not in betas
 
 
 def test_bedrock_invoke_messages_transform_converts_custom_tool_schema_type_to_object():
@@ -585,6 +616,147 @@ async def test_promote_message_stop_usage_preserves_message_delta_output_tokens(
     assert delta_out["usage"]["cache_creation_input_tokens"] == 10553
     assert delta_out["usage"]["cache_read_input_tokens"] == 25490
     assert delta_out["usage"]["input_tokens"] == 3
+
+
+@pytest.mark.asyncio
+async def test_promote_message_start_cache_when_message_stop_omits_cache_fields():
+    """
+    GovCloud / some Bedrock streams put cache_read only on message_start; delta and
+    stop repeat uncached input_tokens only. Merging start cache onto message_delta
+    avoids inconsistent usage and negative input costs (LIT-2411).
+    """
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+
+    async def _stream():  # type: ignore[return-type]
+        yield {
+            "type": "message_start",
+            "message": {
+                "id": "msg_1",
+                "type": "message",
+                "role": "assistant",
+                "content": [],
+                "model": "claude-sonnet-4-5-20250929",
+                "usage": {
+                    "input_tokens": 10,
+                    "cache_creation_input_tokens": 0,
+                    "cache_read_input_tokens": 22167,
+                    "cache_creation": {
+                        "ephemeral_5m_input_tokens": 0,
+                        "ephemeral_1h_input_tokens": 0,
+                    },
+                    "output_tokens": 4,
+                },
+            },
+        }
+        yield {
+            "type": "message_delta",
+            "delta": {"stop_reason": "end_turn", "stop_sequence": None},
+            "usage": {"input_tokens": 10, "output_tokens": 181},
+        }
+        yield {"type": "message_stop", "usage": {"input_tokens": 10, "output_tokens": 181}}
+
+    merged: list[dict] = []
+    async for chunk in cfg._promote_message_stop_usage(_stream()):
+        if isinstance(chunk, dict):
+            merged.append(chunk)
+
+    delta_chunks = [c for c in merged if c.get("type") == "message_delta"]
+    assert len(delta_chunks) == 1
+    u = delta_chunks[0]["usage"]
+    assert u["input_tokens"] == 10
+    assert u["output_tokens"] == 181
+    assert u["cache_read_input_tokens"] == 22167
+    assert u["cache_creation_input_tokens"] == 0
+
+
+@pytest.mark.asyncio
+async def test_unified_bedrock_messages_cache_on_start_only_never_negative_cost():
+    """
+    Regression guard for LIT-2411:
+    If cache usage is present only on message_start (and omitted from
+    message_delta/message_stop), final reconstructed usage + cost must still
+    be consistent and non-negative.
+    """
+    from litellm import completion_cost
+    from litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler import (
+        AnthropicPassthroughLoggingHandler,
+    )
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+
+    async def _stream():  # type: ignore[return-type]
+        yield {
+            "type": "message_start",
+            "message": {
+                "id": "msg_bdrk_01WuFzkDbE9KWgiWakMRNKcA",
+                "type": "message",
+                "role": "assistant",
+                "content": [],
+                "model": "claude-sonnet-4-5-20250929",
+                "stop_reason": None,
+                "stop_sequence": None,
+                "usage": {
+                    "input_tokens": 10,
+                    "cache_creation_input_tokens": 0,
+                    "cache_read_input_tokens": 22167,
+                    "cache_creation": {
+                        "ephemeral_5m_input_tokens": 0,
+                        "ephemeral_1h_input_tokens": 0,
+                    },
+                    "output_tokens": 4,
+                },
+            },
+        }
+        yield {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}}
+        yield {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "text_delta", "text": "Hello from regression test"},
+        }
+        yield {"type": "content_block_stop", "index": 0}
+        yield {
+            "type": "message_delta",
+            "delta": {"stop_reason": "end_turn", "stop_sequence": None},
+            "usage": {"output_tokens": 181, "input_tokens": 10},
+        }
+        yield {"type": "message_stop", "usage": {"input_tokens": 10, "output_tokens": 181}}
+
+    logging_obj = LiteLLMLoggingObj(
+        model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+        messages=[{"role": "user", "content": "Hi"}],
+        stream=True,
+        call_type="chat",
+        start_time=datetime.now(),
+        litellm_call_id="test_cache_on_start_only_never_negative_cost",
+        function_id="test_cache_on_start_only_never_negative_cost",
+    )
+
+    collected: list[bytes] = []
+    async for sse in cfg.bedrock_sse_wrapper(
+        completion_stream=_stream(),
+        litellm_logging_obj=logging_obj,
+        request_body={"model": "anthropic.claude-3-5-sonnet-20240620-v1:0"},
+    ):
+        collected.append(sse)
+
+    built = AnthropicPassthroughLoggingHandler._build_complete_streaming_response(
+        all_chunks=collected,
+        model="anthropic.claude-3-5-sonnet-20240620-v1:0",
+        litellm_logging_obj=Mock(),
+    )
+    assert built.usage is not None
+    assert built.usage.prompt_tokens == 22177
+    assert built.usage.completion_tokens == 181
+    assert built.usage.cache_creation_input_tokens == 0
+    assert built.usage.cache_read_input_tokens == 22167
+
+    cost = completion_cost(
+        completion_response=built,
+        model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+        custom_llm_provider="bedrock",
+    )
+    assert cost > 0
+    assert cost == pytest.approx(0.0093951, rel=0, abs=1e-9)
 
 
 @pytest.mark.asyncio

@@ -24,7 +24,8 @@ from litellm import completion
 
 
 # Large document for caching tests (needs 1024+ tokens for Claude models)
-LARGE_DOCUMENT_FOR_CACHING = """
+LARGE_DOCUMENT_FOR_CACHING = (
+    """
 This is a comprehensive legal agreement between Party A and Party B.
 
 ARTICLE 1: DEFINITIONS
@@ -76,13 +77,15 @@ ARTICLE 9: GENERAL PROVISIONS
 9.5 Waiver of any provision shall not constitute ongoing waiver.
 
 IN WITNESS WHEREOF, the parties have executed this Agreement.
-""" * 8  # Repeat to ensure we have enough tokens (need 1024+ for Claude models)
+"""
+    * 8
+)  # Repeat to ensure we have enough tokens (need 1024+ for Claude models)
 
 
 class TestBedrockAnthropicPromptCachingRegression:
     """
     Regression tests for prompt caching support across bedrock/invoke and bedrock/converse.
-    
+
     Issue: Prompt caching broke between invoke and converse routing due to:
     - Different cache_control syntax expectations
     - Incorrect beta header handling
@@ -96,12 +99,10 @@ class TestBedrockAnthropicPromptCachingRegression:
             "bedrock/converse/",
         ],
     )
-    def test_prompt_caching_cache_control_transforms_correctly(
-        self, model_prefix
-    ):
+    def test_prompt_caching_cache_control_transforms_correctly(self, model_prefix):
         """
         Test that cache_control in messages is correctly transformed for both invoke and converse APIs.
-        
+
         Regression test: Ensure cache_control works the same way for both routing methods.
         - bedrock/invoke uses cache_control directly in the Anthropic Messages API format
         - bedrock/converse should transform to cachePoint format
@@ -139,21 +140,24 @@ class TestBedrockAnthropicPromptCachingRegression:
                 litellm_params={},
                 headers={},
             )
-            
-            print(f"\n{model_prefix} Request body: {json.dumps(result, indent=2, default=str)}")
-            
+
+            print(
+                f"\n{model_prefix} Request body: {json.dumps(result, indent=2, default=str)}"
+            )
+
             # For converse, cache_control should be transformed to cachePoint
             assert "messages" in result
             user_msg = result["messages"][0]
             assert "content" in user_msg
-            
+
             # Check that cachePoint is present (Bedrock Converse format)
             has_cache_point = any(
-                isinstance(c, dict) and "cachePoint" in c
-                for c in user_msg["content"]
+                isinstance(c, dict) and "cachePoint" in c for c in user_msg["content"]
             )
             # The transformation should preserve the cache marking in some form
-            assert "messages" in result, "messages should be present in converse request"
+            assert (
+                "messages" in result
+            ), "messages should be present in converse request"
 
         else:
             config = AmazonAnthropicClaudeConfig()
@@ -164,20 +168,24 @@ class TestBedrockAnthropicPromptCachingRegression:
                 litellm_params={},
                 headers={},
             )
-            
-            print(f"\n{model_prefix} Request body: {json.dumps(result, indent=2, default=str)}")
-            
+
+            print(
+                f"\n{model_prefix} Request body: {json.dumps(result, indent=2, default=str)}"
+            )
+
             # For invoke, cache_control should be preserved in messages content
             assert "messages" in result
             user_msg = result["messages"][0]
             assert "content" in user_msg
-            
+
             # Check that cache_control is preserved
             has_cache_control = any(
                 isinstance(c, dict) and "cache_control" in c
                 for c in user_msg["content"]
             )
-            assert has_cache_control, "cache_control should be present in invoke messages"
+            assert (
+                has_cache_control
+            ), "cache_control should be present in invoke messages"
 
     @pytest.mark.parametrize(
         "model_prefix",
@@ -189,10 +197,10 @@ class TestBedrockAnthropicPromptCachingRegression:
     def test_prompt_caching_no_beta_header_added(self, model_prefix):
         """
         Test that prompt-caching-2024-07-31 beta header is NOT added for Bedrock.
-        
+
         Regression test: Bedrock recognizes prompt caching via cache_control in the
         request body, NOT through beta headers. Adding the beta header breaks requests.
-        
+
         This was a critical bug where litellm was incorrectly adding the Anthropic API
         beta header to Bedrock requests.
         """
@@ -246,13 +254,16 @@ class TestBedrockAnthropicPromptCachingRegression:
         if "converse" in model_prefix and "additionalModelRequestFields" in result:
             additional_fields = result["additionalModelRequestFields"]
             if "anthropic_beta" in additional_fields:
-                assert "prompt-caching-2024-07-31" not in additional_fields["anthropic_beta"]
+                assert (
+                    "prompt-caching-2024-07-31"
+                    not in additional_fields["anthropic_beta"]
+                )
 
 
 class TestBedrockAnthropic1MContextRegression:
     """
     Regression tests for 1M context window support across bedrock/invoke and bedrock/converse.
-    
+
     Issue: 1M context support broke between invoke and converse routing due to:
     - Missing anthropic-beta header passthrough in converse
     - Incorrect handling of context-1m-2025-08-07 beta header
@@ -268,10 +279,10 @@ class TestBedrockAnthropic1MContextRegression:
     def test_1m_context_beta_header_is_passed_via_transformation(self, model_prefix):
         """
         Test that the 1M context beta header is correctly passed to Bedrock API.
-        
+
         Regression test: Ensure anthropic-beta: context-1m-2025-08-07 header
         is correctly included in the request for both invoke and converse.
-        
+
         This test verifies the transformation layer directly to avoid async complexity.
         """
         from litellm.llms.bedrock.chat.converse_transformation import (
@@ -294,19 +305,21 @@ class TestBedrockAnthropic1MContextRegression:
                 headers=headers,
             )
 
-            print(f"\n{model_prefix} Request body: {json.dumps(result, indent=2, default=str)}")
+            print(
+                f"\n{model_prefix} Request body: {json.dumps(result, indent=2, default=str)}"
+            )
 
             # For converse, beta header should be in additionalModelRequestFields
-            assert "additionalModelRequestFields" in result, (
-                f"{model_prefix}: additionalModelRequestFields should be present for anthropic-beta headers"
-            )
+            assert (
+                "additionalModelRequestFields" in result
+            ), f"{model_prefix}: additionalModelRequestFields should be present for anthropic-beta headers"
             additional_fields = result["additionalModelRequestFields"]
-            assert "anthropic_beta" in additional_fields, (
-                f"{model_prefix}: anthropic_beta should be in additionalModelRequestFields"
-            )
-            assert "context-1m-2025-08-07" in additional_fields["anthropic_beta"], (
-                f"{model_prefix}: context-1m-2025-08-07 should be in anthropic_beta array"
-            )
+            assert (
+                "anthropic_beta" in additional_fields
+            ), f"{model_prefix}: anthropic_beta should be in additionalModelRequestFields"
+            assert (
+                "context-1m-2025-08-07" in additional_fields["anthropic_beta"]
+            ), f"{model_prefix}: context-1m-2025-08-07 should be in anthropic_beta array"
         else:
             config = AmazonAnthropicClaudeConfig()
             result = config.transform_request(
@@ -317,15 +330,17 @@ class TestBedrockAnthropic1MContextRegression:
                 headers=headers,
             )
 
-            print(f"\n{model_prefix} Request body: {json.dumps(result, indent=2, default=str)}")
+            print(
+                f"\n{model_prefix} Request body: {json.dumps(result, indent=2, default=str)}"
+            )
 
             # For invoke, beta header should be in top-level request
-            assert "anthropic_beta" in result, (
-                f"{model_prefix}: anthropic_beta should be in request body"
-            )
-            assert "context-1m-2025-08-07" in result["anthropic_beta"], (
-                f"{model_prefix}: context-1m-2025-08-07 should be in anthropic_beta array"
-            )
+            assert (
+                "anthropic_beta" in result
+            ), f"{model_prefix}: anthropic_beta should be in request body"
+            assert (
+                "context-1m-2025-08-07" in result["anthropic_beta"]
+            ), f"{model_prefix}: context-1m-2025-08-07 should be in anthropic_beta array"
 
     @pytest.mark.parametrize(
         "model_prefix",
@@ -337,7 +352,7 @@ class TestBedrockAnthropic1MContextRegression:
     def test_1m_context_beta_header_transformation(self, model_prefix):
         """
         Test that the 1M context beta header is correctly transformed at the config level.
-        
+
         This is a unit test that verifies the transformation logic directly without
         making actual API calls.
         """
@@ -391,7 +406,7 @@ class TestBedrockAnthropic1MContextRegression:
     def test_1m_context_with_multiple_beta_headers(self, model_prefix):
         """
         Test that 1M context header works alongside other beta headers.
-        
+
         Ensures that multiple anthropic-beta values (comma-separated) are all
         correctly passed through.
         """
@@ -403,9 +418,7 @@ class TestBedrockAnthropic1MContextRegression:
         )
 
         # Multiple beta headers including 1M context
-        headers = {
-            "anthropic-beta": "context-1m-2025-08-07,computer-use-2024-10-22"
-        }
+        headers = {"anthropic-beta": "context-1m-2025-08-07,computer-use-2024-10-22"}
         messages = [{"role": "user", "content": "Test"}]
 
         if "converse" in model_prefix:
@@ -453,7 +466,7 @@ class TestBedrockAnthropicCombinedRegressions:
     def test_1m_context_with_prompt_caching(self, model_prefix):
         """
         Test that 1M context and prompt caching work together.
-        
+
         This is a real-world scenario where a user might want to use both features
         simultaneously.
         """
@@ -498,7 +511,9 @@ class TestBedrockAnthropicCombinedRegressions:
             assert "context-1m-2025-08-07" in additional_fields["anthropic_beta"]
 
             # Should NOT have prompt-caching header
-            assert "prompt-caching-2024-07-31" not in additional_fields["anthropic_beta"]
+            assert (
+                "prompt-caching-2024-07-31" not in additional_fields["anthropic_beta"]
+            )
 
         else:
             config = AmazonAnthropicClaudeConfig()

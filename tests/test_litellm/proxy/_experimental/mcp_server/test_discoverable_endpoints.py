@@ -1,4 +1,5 @@
 """Tests for MCP OAuth discoverable endpoints"""
+
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -10,7 +11,7 @@ from fastapi import HTTPException
 @pytest.fixture(autouse=True)
 def mock_mcp_client_ip():
     """Mock IPAddressUtils.get_mcp_client_ip to return None for all tests.
-    
+
     This bypasses IP-based access control in tests, since the MCP server's
     available_on_public_internet defaults to False and mock requests don't
     have proper client IP context.
@@ -145,9 +146,9 @@ async def test_authorize_endpoint_preserves_existing_query_params():
     location = response.headers["location"]
 
     # Must NOT have double '?' — existing params must be merged correctly
-    assert location.count("?") == 1, (
-        f"Expected exactly one '?' in URL but got {location.count('?')}: {location}"
-    )
+    assert (
+        location.count("?") == 1
+    ), f"Expected exactly one '?' in URL but got {location.count('?')}: {location}"
     assert "tenant=system" in location
     assert "client_id=test_client_id" in location
     assert "response_type=code" in location
@@ -465,12 +466,15 @@ async def test_register_client_remote_registration_success():
     mock_async_client.post = AsyncMock(return_value=mock_response)
 
     try:
-        with patch(
-            "litellm.proxy._experimental.mcp_server.discoverable_endpoints._read_request_body",
-            new=AsyncMock(return_value=request_payload),
-        ), patch(
-            "litellm.proxy._experimental.mcp_server.discoverable_endpoints.get_async_httpx_client",
-            return_value=mock_async_client,
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.discoverable_endpoints._read_request_body",
+                new=AsyncMock(return_value=request_payload),
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.discoverable_endpoints.get_async_httpx_client",
+                return_value=mock_async_client,
+            ),
         ):
             response = await register_client(
                 request=mock_request, mcp_server_name=oauth2_server.server_name
@@ -1521,7 +1525,10 @@ async def test_oauth_callback_redirects_with_state():
 
         # Should redirect to the client callback URL with code and original state
         assert response.status_code == 302
-        assert "http://localhost:3000/ui/mcp/oauth/callback" in response.headers["location"]
+        assert (
+            "http://localhost:3000/ui/mcp/oauth/callback"
+            in response.headers["location"]
+        )
         assert "code=test_authorization_code_12345" in response.headers["location"]
         assert "state=test-uuid-state-123" in response.headers["location"]
 
@@ -1609,7 +1616,10 @@ async def test_oauth_authorize_includes_scopes_from_server_config():
         # Should redirect with scopes from server config
         assert response.status_code in (307, 302)
         redirect_url = response.headers["location"]
-        assert "scope=api+read_user+ai_workflows" in redirect_url or "scope=api%20read_user%20ai_workflows" in redirect_url
+        assert (
+            "scope=api+read_user+ai_workflows" in redirect_url
+            or "scope=api%20read_user%20ai_workflows" in redirect_url
+        )
 
 
 @pytest.mark.asyncio
@@ -1664,7 +1674,10 @@ async def test_oauth_authorize_prefers_request_scope_over_server_config():
         # Should use the explicit scope, not server config
         assert response.status_code in (307, 302)
         redirect_url = response.headers["location"]
-        assert "scope=custom_scope1+custom_scope2" in redirect_url or "scope=custom_scope1%20custom_scope2" in redirect_url
+        assert (
+            "scope=custom_scope1+custom_scope2" in redirect_url
+            or "scope=custom_scope1%20custom_scope2" in redirect_url
+        )
         assert "default_scope" not in redirect_url
 
 

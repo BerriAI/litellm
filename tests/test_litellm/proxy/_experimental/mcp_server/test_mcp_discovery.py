@@ -27,7 +27,9 @@ class TestMCPRegistryFile:
         )
 
     def test_registry_file_exists(self, registry_path):
-        assert os.path.exists(registry_path), f"Registry file not found at {registry_path}"
+        assert os.path.exists(
+            registry_path
+        ), f"Registry file not found at {registry_path}"
 
     def test_registry_file_is_valid_json(self, registry_path):
         with open(registry_path, "r") as f:
@@ -44,40 +46,44 @@ class TestMCPRegistryFile:
         required_fields = ["name", "title", "description", "category", "transport"]
         for server in servers:
             for field in required_fields:
-                assert field in server, f"Server {server.get('name', '?')} missing field '{field}'"
+                assert (
+                    field in server
+                ), f"Server {server.get('name', '?')} missing field '{field}'"
 
     def test_registry_server_names_are_unique(self, registry_path):
         with open(registry_path, "r") as f:
             data = json.load(f)
         names = [s["name"] for s in data["servers"]]
-        assert len(names) == len(set(names)), f"Duplicate server names found: {[n for n in names if names.count(n) > 1]}"
+        assert len(names) == len(
+            set(names)
+        ), f"Duplicate server names found: {[n for n in names if names.count(n) > 1]}"
 
     def test_registry_transport_values_are_valid(self, registry_path):
         with open(registry_path, "r") as f:
             data = json.load(f)
         valid_transports = {"stdio", "http", "sse"}
         for server in data["servers"]:
-            assert server["transport"] in valid_transports, (
-                f"Server {server['name']} has invalid transport '{server['transport']}'"
-            )
+            assert (
+                server["transport"] in valid_transports
+            ), f"Server {server['name']} has invalid transport '{server['transport']}'"
 
     def test_stdio_servers_have_command(self, registry_path):
         with open(registry_path, "r") as f:
             data = json.load(f)
         for server in data["servers"]:
             if server["transport"] == "stdio":
-                assert "command" in server and server["command"], (
-                    f"stdio server {server['name']} missing 'command'"
-                )
+                assert (
+                    "command" in server and server["command"]
+                ), f"stdio server {server['name']} missing 'command'"
 
     def test_http_servers_have_url(self, registry_path):
         with open(registry_path, "r") as f:
             data = json.load(f)
         for server in data["servers"]:
             if server["transport"] in ("http", "sse"):
-                assert "url" in server and server["url"], (
-                    f"HTTP/SSE server {server['name']} missing 'url'"
-                )
+                assert (
+                    "url" in server and server["url"]
+                ), f"HTTP/SSE server {server['name']} missing 'url'"
 
     def test_well_known_servers_present(self, registry_path):
         """Ensure key well-known MCPs are in the registry."""

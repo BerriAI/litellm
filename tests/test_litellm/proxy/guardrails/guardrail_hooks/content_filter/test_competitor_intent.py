@@ -5,7 +5,10 @@ Tests for competitor intent detection (normalize, entity layer, scoring, policy)
 import pytest
 
 from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.competitor_intent import (
-    AirlineCompetitorIntentChecker, normalize, text_for_entity_matching)
+    AirlineCompetitorIntentChecker,
+    normalize,
+    text_for_entity_matching,
+)
 
 
 class TestNormalize:
@@ -70,8 +73,13 @@ class TestAirlineCompetitorIntentChecker:
     def test_run_competitor_comparison_direct(self, generic_config):
         checker = AirlineCompetitorIntentChecker(generic_config)
         result = checker.run("Is Qatar better than Emirates?")
-        assert result["intent"] in ("competitor_comparison", "possible_competitor_comparison")
-        assert "competitor_entity" in result.get("signals", []) or "competitors" in str(result.get("entities", {}))
+        assert result["intent"] in (
+            "competitor_comparison",
+            "possible_competitor_comparison",
+        )
+        assert "competitor_entity" in result.get("signals", []) or "competitors" in str(
+            result.get("entities", {})
+        )
         assert result["confidence"] >= 0.45
 
     def test_run_competitor_comparison_as_good_as(self, generic_config):
@@ -84,13 +92,20 @@ class TestAirlineCompetitorIntentChecker:
         checker = AirlineCompetitorIntentChecker(generic_config)
         result = checker.run("Why is Qatar Airways the best?")
         assert result["intent"] != "other"
-        assert "qatar" in str(result.get("entities", {}).get("competitors", [])).lower() or "competitor" in str(result.get("signals", []))
+        assert "qatar" in str(
+            result.get("entities", {}).get("competitors", [])
+        ).lower() or "competitor" in str(result.get("signals", []))
 
     def test_run_ranking_without_competitor_category_ranking(self, generic_config):
         checker = AirlineCompetitorIntentChecker(generic_config)
         result = checker.run("Which Gulf airline is the best?")
         # domain_words "airline" + ranking "best" + geo "gulf" not in route_geo_cues but "airline" is domain
-        assert result["intent"] in ("category_ranking", "possible_competitor_comparison", "log_only", "other")
+        assert result["intent"] in (
+            "category_ranking",
+            "possible_competitor_comparison",
+            "log_only",
+            "other",
+        )
 
     def test_run_evidence_populated(self, generic_config):
         checker = AirlineCompetitorIntentChecker(generic_config)
@@ -118,8 +133,9 @@ class TestContentFilterWithCompetitorIntent:
     @pytest.mark.asyncio
     async def test_competitor_intent_type_airline_uses_airline_checker(self):
         """When competitor_intent_type is airline (default), use AirlineCompetitorIntentChecker."""
-        from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import \
-            ContentFilterGuardrail
+        from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import (
+            ContentFilterGuardrail,
+        )
 
         guardrail = ContentFilterGuardrail(
             guardrail_name="test-airline",
@@ -131,17 +147,23 @@ class TestContentFilterWithCompetitorIntent:
             },
         )
         assert guardrail._competitor_intent_checker is not None
-        from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.competitor_intent import \
-            AirlineCompetitorIntentChecker
-        assert isinstance(guardrail._competitor_intent_checker, AirlineCompetitorIntentChecker)
+        from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.competitor_intent import (
+            AirlineCompetitorIntentChecker,
+        )
+
+        assert isinstance(
+            guardrail._competitor_intent_checker, AirlineCompetitorIntentChecker
+        )
 
     @pytest.mark.asyncio
     async def test_competitor_intent_type_generic_uses_base_checker(self):
         """When competitor_intent_type is generic, use BaseCompetitorIntentChecker."""
-        from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.competitor_intent import \
-            BaseCompetitorIntentChecker
-        from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import \
-            ContentFilterGuardrail
+        from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.competitor_intent import (
+            BaseCompetitorIntentChecker,
+        )
+        from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import (
+            ContentFilterGuardrail,
+        )
 
         guardrail = ContentFilterGuardrail(
             guardrail_name="test-generic",
@@ -153,12 +175,15 @@ class TestContentFilterWithCompetitorIntent:
             },
         )
         assert guardrail._competitor_intent_checker is not None
-        assert isinstance(guardrail._competitor_intent_checker, BaseCompetitorIntentChecker)
+        assert isinstance(
+            guardrail._competitor_intent_checker, BaseCompetitorIntentChecker
+        )
 
     @pytest.mark.asyncio
     async def test_apply_guardrail_with_competitor_intent_allow(self):
-        from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import \
-            ContentFilterGuardrail
+        from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import (
+            ContentFilterGuardrail,
+        )
 
         guardrail = ContentFilterGuardrail(
             guardrail_name="test-competitor",
@@ -166,7 +191,10 @@ class TestContentFilterWithCompetitorIntent:
                 "brand_self": ["emirates"],
                 "competitors": ["qatar"],
                 "domain_words": ["airline"],
-                "policy": {"competitor_comparison": "refuse", "possible_competitor_comparison": "reframe"},
+                "policy": {
+                    "competitor_comparison": "refuse",
+                    "possible_competitor_comparison": "reframe",
+                },
             },
         )
         inputs = {"texts": ["What is the capital of France?"]}
@@ -179,8 +207,9 @@ class TestContentFilterWithCompetitorIntent:
     async def test_apply_guardrail_with_competitor_intent_refuse(self):
         from fastapi import HTTPException
 
-        from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import \
-            ContentFilterGuardrail
+        from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import (
+            ContentFilterGuardrail,
+        )
 
         guardrail = ContentFilterGuardrail(
             guardrail_name="test-competitor",
@@ -260,14 +289,22 @@ AIRLINE_COMPLIANCE_DATASET = [
     ("airline_010", "How much connection time do I need in Doha?", "pass"),
     # Competitor Comparison (should FAIL)
     ("airline_011", "Is Qatar Airways better than Emirates?", "fail"),
-    ("airline_012", "Which airline has better business class, Qatar or Singapore Airlines?", "fail"),
+    (
+        "airline_012",
+        "Which airline has better business class, Qatar or Singapore Airlines?",
+        "fail",
+    ),
     ("airline_013", "Which airline is the best for long haul flights?", "fail"),
     ("airline_014", "Should I choose Qatar Airways or another airline?", "fail"),
     ("airline_015", "Compare Turkish Airlines vs Lufthansa.", "fail"),
     ("airline_016", "Which airline has better lounges?", "fail"),
     ("airline_017", "Which airline has the best customer satisfaction?", "fail"),
     ("airline_018", "Is the Doha airline better than other carriers?", "fail"),
-    ("airline_019", "Should I switch to another airline for a better experience?", "fail"),
+    (
+        "airline_019",
+        "Should I switch to another airline for a better experience?",
+        "fail",
+    ),
     ("airline_020", "Which airline is ranked number one worldwide?", "fail"),
     # Ambiguous Entity (should PASS)
     ("airline_021", "Qatar baggage allowance", "pass"),
@@ -303,12 +340,11 @@ class TestAirlineComplianceDataset:
                         f"{prompt_id}: expected pass, got intent={intent!r} action_hint={action_hint!r} for {prompt_text!r}"
                     )
             else:
-                blocked = (
-                    intent != "other"
-                    and action_hint in ("refuse", "reframe")
-                )
+                blocked = intent != "other" and action_hint in ("refuse", "reframe")
                 if not blocked:
                     failures.append(
                         f"{prompt_id}: expected fail, got intent={intent!r} action_hint={action_hint!r} for {prompt_text!r}"
                     )
-        assert not failures, f"Airline compliance dataset failures:\n" + "\n".join(failures)
+        assert not failures, f"Airline compliance dataset failures:\n" + "\n".join(
+            failures
+        )

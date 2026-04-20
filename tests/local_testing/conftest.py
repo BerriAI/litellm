@@ -35,7 +35,9 @@ _SCALAR_DEFAULTS = {
     "cache": getattr(litellm, "cache", None),
     "allowed_fails": getattr(litellm, "allowed_fails", 3),
     "default_fallbacks": getattr(litellm, "default_fallbacks", None),
-    "enable_azure_ad_token_refresh": getattr(litellm, "enable_azure_ad_token_refresh", None),
+    "enable_azure_ad_token_refresh": getattr(
+        litellm, "enable_azure_ad_token_refresh", None
+    ),
     "tag_budget_config": getattr(litellm, "tag_budget_config", None),
     "model_cost": getattr(litellm, "model_cost", None),
     "token_counter": getattr(litellm, "token_counter", None),

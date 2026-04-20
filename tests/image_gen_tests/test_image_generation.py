@@ -199,12 +199,15 @@ class TestAimlImageGeneration(BaseImageGenTest):
         mock_response.text = json.dumps(mock_aiml_response)
         mock_response.headers = {}
 
-        with patch(
-            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
-            new_callable=AsyncMock,
-        ) as mock_async_post, patch(
-            "litellm.llms.custom_httpx.http_handler.HTTPHandler.post",
-        ) as mock_sync_post:
+        with (
+            patch(
+                "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+                new_callable=AsyncMock,
+            ) as mock_async_post,
+            patch(
+                "litellm.llms.custom_httpx.http_handler.HTTPHandler.post",
+            ) as mock_sync_post,
+        ):
             mock_async_post.return_value = mock_response
             mock_sync_post.return_value = mock_response
 

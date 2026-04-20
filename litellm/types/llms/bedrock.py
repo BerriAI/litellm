@@ -203,7 +203,9 @@ class ConverseResponseBlock(TypedDict, total=False):
         str
     ]  # end_turn | tool_use | max_tokens | stop_sequence | content_filtered
     usage: Required[ConverseTokenUsageBlock]
-    serviceTier: ServiceTierBlock  # Optional - only present when serviceTier was sent in request
+    serviceTier: (
+        ServiceTierBlock  # Optional - only present when serviceTier was sent in request
+    )
 
 
 class ToolJsonSchemaBlock(TypedDict, total=False):

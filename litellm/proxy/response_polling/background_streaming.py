@@ -7,6 +7,7 @@ with partial results for polling.
 Follows OpenAI Response Streaming format:
 https://platform.openai.com/docs/api-reference/responses-streaming
 """
+
 import asyncio
 import json
 from typing import Any, Optional, cast
@@ -118,9 +119,9 @@ async def background_streaming_task(  # noqa: PLR0915
         UPDATE_INTERVAL = 0.150  # 150ms batching interval
 
         # Track the terminal event from the stream (may not be "completed")
-        terminal_status: Optional[
-            ResponsesAPIStatus
-        ] = None  # Will be set by response.completed/failed/incomplete/cancelled
+        terminal_status: Optional[ResponsesAPIStatus] = (
+            None  # Will be set by response.completed/failed/incomplete/cancelled
+        )
         terminal_error = None
         _event_to_status = {
             "response.completed": "completed",
@@ -211,9 +212,9 @@ async def background_streaming_task(  # noqa: PLR0915
                                         if isinstance(
                                             content_list[content_index], dict
                                         ):
-                                            content_list[content_index][
-                                                "text"
-                                            ] = accumulated_text[key]
+                                            content_list[content_index]["text"] = (
+                                                accumulated_text[key]
+                                            )
                                 state_dirty = True
 
                         elif event_type == "response.content_part.done":

@@ -116,7 +116,9 @@ class TestDigestMode(unittest.IsolatedAsyncioTestCase):
 
         # Manually backdate the start_time to simulate interval expiration
         key = list(self.slack_alerting.digest_buckets.keys())[0]
-        self.slack_alerting.digest_buckets[key]["start_time"] = datetime.now() - timedelta(seconds=120)
+        self.slack_alerting.digest_buckets[key][
+            "start_time"
+        ] = datetime.now() - timedelta(seconds=120)
 
         # Flush digest buckets
         await self.slack_alerting._flush_digest_buckets()
@@ -165,7 +167,9 @@ class TestDigestMode(unittest.IsolatedAsyncioTestCase):
 
         # Backdate and flush
         key = list(self.slack_alerting.digest_buckets.keys())[0]
-        self.slack_alerting.digest_buckets[key]["start_time"] = datetime.now() - timedelta(seconds=120)
+        self.slack_alerting.digest_buckets[key][
+            "start_time"
+        ] = datetime.now() - timedelta(seconds=120)
 
         await self.slack_alerting._flush_digest_buckets()
 
@@ -217,7 +221,9 @@ class TestAlertTypeConfig(unittest.TestCase):
         self.assertIn("llm_requests_hanging", sa.alert_type_config)
         self.assertIn("llm_too_slow", sa.alert_type_config)
         self.assertTrue(sa.alert_type_config["llm_requests_hanging"].digest)
-        self.assertEqual(sa.alert_type_config["llm_requests_hanging"].digest_interval, 7200)
+        self.assertEqual(
+            sa.alert_type_config["llm_requests_hanging"].digest_interval, 7200
+        )
         self.assertEqual(sa.alert_type_config["llm_too_slow"].digest_interval, 86400)
 
     def test_update_values_with_config(self):
@@ -225,7 +231,9 @@ class TestAlertTypeConfig(unittest.TestCase):
         self.assertEqual(len(sa.alert_type_config), 0)
 
         sa.update_values(
-            alert_type_config={"llm_exceptions": {"digest": True, "digest_interval": 1800}},
+            alert_type_config={
+                "llm_exceptions": {"digest": True, "digest_interval": 1800}
+            },
         )
         self.assertIn("llm_exceptions", sa.alert_type_config)
         self.assertTrue(sa.alert_type_config["llm_exceptions"].digest)

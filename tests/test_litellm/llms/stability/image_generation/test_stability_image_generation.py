@@ -303,12 +303,21 @@ class TestStabilityGenerationModels:
         """Test that SD3 models use the SD3 endpoint"""
         sd3_models = ["sd3", "sd3-large", "sd3-medium", "sd3.5-large"]
         for model in sd3_models:
-            assert STABILITY_GENERATION_MODELS[model] == "/v2beta/stable-image/generate/sd3"
+            assert (
+                STABILITY_GENERATION_MODELS[model]
+                == "/v2beta/stable-image/generate/sd3"
+            )
 
     def test_ultra_model_uses_ultra_endpoint(self):
         """Test that Ultra model uses ultra endpoint"""
-        assert STABILITY_GENERATION_MODELS["stable-image-ultra"] == "/v2beta/stable-image/generate/ultra"
+        assert (
+            STABILITY_GENERATION_MODELS["stable-image-ultra"]
+            == "/v2beta/stable-image/generate/ultra"
+        )
 
     def test_core_model_uses_core_endpoint(self):
         """Test that Core model uses core endpoint"""
-        assert STABILITY_GENERATION_MODELS["stable-image-core"] == "/v2beta/stable-image/generate/core"
+        assert (
+            STABILITY_GENERATION_MODELS["stable-image-core"]
+            == "/v2beta/stable-image/generate/core"
+        )
