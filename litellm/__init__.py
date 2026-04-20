@@ -274,6 +274,8 @@ use_client: bool = False
 ssl_verify: Union[str, bool] = True
 ssl_security_level: Optional[str] = None
 ssl_certificate: Optional[str] = None
+user_url_validation: bool = True
+user_url_allowed_hosts: List[str] = []
 ssl_ecdh_curve: Optional[str] = (
     None  # Set to 'X25519' to disable PQC and improve performance
 )
@@ -382,6 +384,7 @@ datadog_params: Optional[Union[DatadogInitParams, Dict]] = None
 aws_sqs_callback_params: Optional[Dict] = None
 generic_logger_headers: Optional[Dict] = None
 default_key_generate_params: Optional[Dict] = None
+default_key_max_budget_alert_emails: Optional[Dict[str, list]] = None
 upperbound_key_generate_params: Optional[LiteLLM_UpperboundKeyGenerateParams] = None
 key_generation_settings: Optional["StandardKeyGenerationConfig"] = None
 default_internal_user_params: Optional[Dict] = None

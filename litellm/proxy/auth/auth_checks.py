@@ -32,6 +32,7 @@ from litellm.constants import (
 )
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.proxy._types import (
     RBAC_ROLES,
     CallInfo,
@@ -328,14 +329,62 @@ def _global_proxy_budget_check(
             )
 
 
+_GUARDRAIL_MODIFICATION_KEYS: tuple = (
+    "guardrails",
+    "disable_global_guardrails",
+    "disable_global_guardrail",
+    "opted_out_global_guardrails",
+)
+
+
 def _guardrail_modification_check(
     request_body: dict, team_object: Optional[LiteLLM_TeamTable]
 ) -> None:
-    _request_metadata: dict = request_body.get("metadata", {}) or {}
-    if not _request_metadata.get("guardrails"):
-        return
+    """
+    Reject user-supplied metadata flags that would modify guardrail behavior
+    unless the team has explicit permission. Checked keys include the plural
+    ``guardrails`` list plus the per-request toggles that influence whether
+    default-on guardrails run (``disable_global_guardrails``,
+    ``disable_global_guardrail`` singular, and ``opted_out_global_guardrails``).
 
+    User-supplied values for the bypass toggles are also silently ignored by
+    ``_get_admin_metadata`` at read time; this check adds defense in depth by
+    failing loudly at the auth layer so operators see an explicit 403 instead
+    of a confusing silent-ignore.
+    """
     from litellm.proxy.guardrails.guardrail_helpers import can_modify_guardrails
+
+    def _coerce_to_dict(container: Any) -> Optional[dict]:
+        """Accept dict or JSON-string (from multipart/form-data or extra_body).
+
+        Without this, an attacker can smuggle guardrail keys past the check by
+        sending ``{"metadata": "{\\"disable_global_guardrails\\": true}"}`` —
+        ``isinstance(dict)`` on the string returns False, the check returns
+        no-modification, and ``add_litellm_data_to_request`` parses the string
+        to a dict downstream.
+        """
+        if isinstance(container, dict):
+            return container
+        if isinstance(container, str):
+            parsed = safe_json_loads(container)
+            return parsed if isinstance(parsed, dict) else None
+        return None
+
+    def _user_requested_modification(container: Any) -> bool:
+        coerced = _coerce_to_dict(container)
+        if coerced is None:
+            return False
+        return any(coerced.get(key) for key in _GUARDRAIL_MODIFICATION_KEYS)
+
+    # Check both metadata keys — callers can populate either depending on the
+    # endpoint. Cover the top-level too so root-level injection is rejected.
+    modifies = (
+        _user_requested_modification(request_body.get("metadata"))
+        or _user_requested_modification(request_body.get("litellm_metadata"))
+        or _user_requested_modification(request_body)
+    )
+    if not modifies:
+        return
 
     if not can_modify_guardrails(team_object):
         raise HTTPException(
@@ -3010,6 +3059,52 @@ async def _virtual_key_soft_budget_check(
         )
 
 
+def _parse_email_list(raw: Any) -> List[str]:
+    """Parse emails from a list or comma-separated string."""
+    if isinstance(raw, list):
+        return [e.strip() for e in raw if isinstance(e, str) and e.strip()]
+    elif isinstance(raw, str):
+        return [e.strip() for e in raw.split(",") if e.strip()]
+    return []
+
+
+def _normalize_alert_emails(
+    cfg: Optional[Dict[str, Any]],
+) -> Dict[str, List[str]]:
+    """Coerce user-supplied threshold→recipients mapping to Dict[str, List[str]].
+
+    Values may legitimately arrive as list, comma-separated string, or None
+    from YAML/metadata; _parse_email_list tolerates all three.
+    """
+    if not cfg:
+        return {}
+    return {k: _parse_email_list(v) for k, v in cfg.items()}
+
+
+def _merge_budget_alert_email_configs(
+    global_cfg: Optional[Dict[str, Any]],
+    per_key_cfg: Optional[Dict[str, Any]],
+) -> Optional[Dict[str, List[str]]]:
+    """
+    Per-threshold additive merge: each threshold's recipient list is the union
+    of global + per-key entries (deduped, global-first ordering). Missing
+    thresholds on one side are inherited from the other.
+    """
+    global_cfg_normalized = _normalize_alert_emails(global_cfg)
+    per_key_cfg_normalized = _normalize_alert_emails(per_key_cfg)
+    if not global_cfg_normalized and not per_key_cfg_normalized:
+        return None
+    thresholds = set(global_cfg_normalized) | set(per_key_cfg_normalized)
+    return {
+        t: list(
+            dict.fromkeys(
+                global_cfg_normalized.get(t, []) + per_key_cfg_normalized.get(t, [])
+            )
+        )
+        for t in thresholds
+    }
+
+
 async def _virtual_key_max_budget_alert_check(
     valid_token: UserAPIKeyAuth,
     proxy_logging_obj: ProxyLogging,
@@ -3027,22 +3122,25 @@ async def _virtual_key_max_budget_alert_check(
         and valid_token.spend is not None
         and valid_token.spend > 0
     ):
-        alert_threshold = (
-            valid_token.max_budget * EMAIL_BUDGET_ALERT_MAX_SPEND_ALERT_PERCENTAGE
+        owner_email = user_obj.user_email if user_obj else None
+        alert_email_config: Optional[Dict[str, List[str]]] = (
+            _merge_budget_alert_email_configs(
+                global_cfg=litellm.default_key_max_budget_alert_emails,
+                per_key_cfg=(valid_token.metadata or {}).get(
+                    "max_budget_alert_emails"
+                ),
+            )
         )
 
-        # Only alert if we've crossed the threshold but haven't exceeded max_budget yet
-        if (
-            valid_token.spend >= alert_threshold
-            and valid_token.spend < valid_token.max_budget
-        ):
-            verbose_proxy_logger.debug(
-                "Reached Max Budget Alert Threshold for token %s, spend %s, max_budget %s, alert_threshold %s",
-                valid_token.token,
-                valid_token.spend,
-                valid_token.max_budget,
-                alert_threshold,
+        if isinstance(alert_email_config, dict) and alert_email_config:
+            # New path: only create task if spend has crossed the lowest threshold
+            min_pct = min(
+                (int(k) for k in alert_email_config if k.isdigit()),
+                default=None,
             )
+            if min_pct is None or valid_token.spend < valid_token.max_budget * (min_pct / 100.0):
+                return
+
             call_info = CallInfo(
                 token=valid_token.token,
                 spend=valid_token.spend,
@@ -3052,17 +3150,55 @@ async def _virtual_key_max_budget_alert_check(
                 team_id=valid_token.team_id,
                 team_alias=valid_token.team_alias,
                 organization_id=valid_token.org_id,
-                user_email=user_obj.user_email if user_obj else None,
+                user_email=owner_email,
                 key_alias=valid_token.key_alias,
                 event_group=Litellm_EntityType.KEY,
+                max_budget_alert_emails=alert_email_config,
             )
-
             asyncio.create_task(
                 proxy_logging_obj.budget_alerts(
                     type="max_budget_alert",
                     user_info=call_info,
                 )
             )
+        else:
+            # Old path: existing single 80% threshold — completely unchanged
+            alert_threshold = (
+                valid_token.max_budget
+                * EMAIL_BUDGET_ALERT_MAX_SPEND_ALERT_PERCENTAGE
+            )
+
+            if (
+                valid_token.spend >= alert_threshold
+                and valid_token.spend < valid_token.max_budget
+            ):
+                verbose_proxy_logger.debug(
+                    "Reached Max Budget Alert Threshold for token %s, spend %s, max_budget %s, alert_threshold %s",
+                    valid_token.token,
+                    valid_token.spend,
+                    valid_token.max_budget,
+                    alert_threshold,
+                )
+                call_info = CallInfo(
+                    token=valid_token.token,
+                    spend=valid_token.spend,
+                    max_budget=valid_token.max_budget,
+                    soft_budget=valid_token.soft_budget,
+                    user_id=valid_token.user_id,
+                    team_id=valid_token.team_id,
+                    team_alias=valid_token.team_alias,
+                    organization_id=valid_token.org_id,
+                    user_email=owner_email,
+                    key_alias=valid_token.key_alias,
+                    event_group=Litellm_EntityType.KEY,
+                )
+
+                asyncio.create_task(
+                    proxy_logging_obj.budget_alerts(
+                        type="max_budget_alert",
+                        user_info=call_info,
+                    )
+                )
 
 
 async def _check_team_member_budget(

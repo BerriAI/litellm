@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import Request
+from starlette.datastructures import Headers
 
 import litellm
 from litellm.proxy._types import TeamCallbackMetadata, UserAPIKeyAuth
@@ -23,6 +24,7 @@ from litellm.proxy.litellm_pre_call_utils import (
     add_guardrails_from_policy_engine,
     add_litellm_data_to_request,
     check_if_token_is_service_account,
+    clean_headers,
 )
 from litellm.types.utils import CredentialItem
 
@@ -208,6 +210,580 @@ async def test_add_litellm_data_to_request_parses_string_metadata():
 
 
 @pytest.mark.asyncio
+async def test_add_litellm_data_to_request_strips_admin_injection_slots():
+    """User-supplied user_api_key_metadata / user_api_key_team_metadata /
+    _pipeline_managed_guardrails must be stripped from both metadata keys
+    before the proxy writes its own admin-populated values. Otherwise a
+    caller can shadow admin config via the non-`_metadata_variable_name`
+    metadata key (e.g. litellm_metadata while the proxy writes to metadata).
+    """
+    from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+
+    request_mock = MagicMock(spec=Request)
+    request_mock.url.path = "/v1/chat/completions"
+    request_mock.url = MagicMock()
+    request_mock.url.__str__.return_value = "http://localhost/v1/chat/completions"
+    request_mock.method = "POST"
+    request_mock.query_params = {}
+    request_mock.headers = {"Content-Type": "application/json"}
+    request_mock.client = MagicMock()
+    request_mock.client.host = "127.0.0.1"
+
+    # Caller tries to inject admin config into BOTH metadata keys
+    attacker_admin_payload = {"disable_global_guardrails": True}
+    data = {
+        "model": "gpt-3.5-turbo",
+        "metadata": {
+            "user_api_key_metadata": attacker_admin_payload,
+            "user_api_key_team_metadata": attacker_admin_payload,
+            "_pipeline_managed_guardrails": ["evaded"],
+        },
+        "litellm_metadata": {
+            "user_api_key_metadata": attacker_admin_payload,
+            "user_api_key_team_metadata": attacker_admin_payload,
+            "_pipeline_managed_guardrails": ["evaded"],
+        },
+    }
+
+    real_admin_metadata = {"admin_flag": "from_proxy"}
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="hashed-key",
+        metadata=real_admin_metadata,
+        team_metadata=real_admin_metadata,
+        spend=0.0,
+        max_budget=100.0,
+        model_max_budget={},
+        team_spend=0.0,
+        team_max_budget=200.0,
+    )
+
+    updated = await add_litellm_data_to_request(
+        data=data,
+        request=request_mock,
+        user_api_key_dict=user_api_key_dict,
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    # The key that matches `_metadata_variable_name` gets proxy-populated
+    # with the real admin payload; the OTHER key must not retain the
+    # attacker's injection.
+    populated = updated["metadata"]
+    assert populated["user_api_key_metadata"] == real_admin_metadata
+    assert populated["user_api_key_team_metadata"] == real_admin_metadata
+    assert "_pipeline_managed_guardrails" not in populated or populated[
+        "_pipeline_managed_guardrails"
+    ] != ["evaded"]
+
+    other = updated.get("litellm_metadata") or {}
+    assert other.get("user_api_key_metadata") in (None, {}, real_admin_metadata)
+    assert other.get("user_api_key_team_metadata") in (None, {}, real_admin_metadata)
+    assert "_pipeline_managed_guardrails" not in other
+
+
+@pytest.mark.asyncio
+async def test_add_litellm_data_to_request_strips_all_user_api_key_prefix_keys():
+    """Strip must cover the full user_api_key_* family, not a hand-maintained
+    list of 2-3 names. Proxy writes a dozen such fields (user_id, alias,
+    spend, team_id, request_route, …) and an attacker populating any of them
+    in the non-authoritative metadata key would otherwise forge identity /
+    spend in audit logs and guardrails."""
+    from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+
+    request_mock = MagicMock(spec=Request)
+    request_mock.url.path = "/v1/chat/completions"
+    request_mock.url = MagicMock()
+    request_mock.url.__str__.return_value = "http://localhost/v1/chat/completions"
+    request_mock.method = "POST"
+    request_mock.query_params = {}
+    request_mock.headers = {"Content-Type": "application/json"}
+    request_mock.client = MagicMock()
+    request_mock.client.host = "127.0.0.1"
+
+    attacker_injected = {
+        "user_api_key_user_id": "victim",
+        "user_api_key_alias": "admin-key",
+        "user_api_key_spend": 0.0,
+        "user_api_key_team_id": "victim-team",
+        "user_api_key_end_user_id": "victim-user",
+        "user_api_key_request_route": "/fake/route",
+        "user_api_key_hash": "fake-hash",
+    }
+    data = {
+        "model": "gpt-3.5-turbo",
+        "metadata": {**attacker_injected},
+        "litellm_metadata": {**attacker_injected},
+    }
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="hashed-key",
+        user_id="real-user",
+        metadata={},
+        team_metadata={},
+        spend=42.0,
+        max_budget=100.0,
+        model_max_budget={},
+        team_spend=0.0,
+        team_max_budget=200.0,
+    )
+
+    updated = await add_litellm_data_to_request(
+        data=data,
+        request=request_mock,
+        user_api_key_dict=user_api_key_dict,
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    # The non-authoritative metadata dict must not retain ANY attacker-injected
+    # user_api_key_* key.
+    other = updated.get("litellm_metadata") or {}
+    attacker_leaks = [k for k in other if k.startswith("user_api_key_")]
+    assert attacker_leaks == [], f"Unexpected leaked keys: {attacker_leaks}"
+
+
+@pytest.mark.asyncio
+async def test_add_litellm_data_to_request_string_metadata_does_not_crash():
+    """Regression: pre-strip code that pre-populated data['metadata'][k]=v
+    before the string-to-dict parse would crash on JSON-string metadata.
+    The snapshot / strip / admin-population pipeline must survive metadata
+    arriving as a string."""
+    import json as _json
+
+    from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+
+    request_mock = MagicMock(spec=Request)
+    request_mock.url.path = "/v1/chat/completions"
+    request_mock.url = MagicMock()
+    request_mock.url.__str__.return_value = "http://localhost/v1/chat/completions"
+    request_mock.method = "POST"
+    request_mock.query_params = {}
+    request_mock.headers = {"Content-Type": "multipart/form-data"}
+    request_mock.client = MagicMock()
+    request_mock.client.host = "127.0.0.1"
+
+    data = {
+        "model": "gpt-3.5-turbo",
+        "metadata": _json.dumps({"generation_name": "test"}),
+    }
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="hashed-key",
+        metadata={},
+        team_metadata={},
+        spend=0.0,
+        max_budget=100.0,
+        model_max_budget={},
+        team_spend=0.0,
+        team_max_budget=200.0,
+    )
+
+    # Must not raise TypeError / AttributeError.
+    updated = await add_litellm_data_to_request(
+        data=data,
+        request=request_mock,
+        user_api_key_dict=user_api_key_dict,
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    # The parsed metadata should be a dict and the proxy snapshot body
+    # should have been taken AFTER the strip (so no leaked user_api_key_*
+    # from a raw string snapshot).
+    assert isinstance(updated["metadata"], dict)
+    assert updated["metadata"].get("generation_name") == "test"
+
+
+@pytest.mark.asyncio
+async def test_add_litellm_data_to_request_proxy_server_request_body_is_post_strip():
+    """Regression: proxy_server_request['body'] used to be snapshotted before
+    the admin-slot strip, so standard_logging_object and spend-tracking
+    readers saw attacker-injected payload. Snapshot must now be post-strip."""
+    from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+
+    request_mock = MagicMock(spec=Request)
+    request_mock.url.path = "/v1/chat/completions"
+    request_mock.url = MagicMock()
+    request_mock.url.__str__.return_value = "http://localhost/v1/chat/completions"
+    request_mock.method = "POST"
+    request_mock.query_params = {}
+    request_mock.headers = {"Content-Type": "application/json"}
+    request_mock.client = MagicMock()
+    request_mock.client.host = "127.0.0.1"
+
+    data = {
+        "model": "gpt-3.5-turbo",
+        "metadata": {"user_api_key_user_id": "victim"},
+    }
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="hashed-key",
+        user_id="real-user",
+        metadata={},
+        team_metadata={},
+        spend=0.0,
+        max_budget=100.0,
+        model_max_budget={},
+        team_spend=0.0,
+        team_max_budget=200.0,
+    )
+
+    updated = await add_litellm_data_to_request(
+        data=data,
+        request=request_mock,
+        user_api_key_dict=user_api_key_dict,
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    snapshot_body = updated["proxy_server_request"]["body"]
+    assert snapshot_body is not None
+    snapshot_metadata = snapshot_body.get("metadata") or {}
+    assert "user_api_key_user_id" not in snapshot_metadata or (
+        snapshot_metadata["user_api_key_user_id"] != "victim"
+    )
+
+
+@pytest.mark.asyncio
+async def test_add_litellm_data_to_request_strips_string_encoded_admin_injection():
+    """Regression: metadata arriving as a JSON string (multipart/form-data or
+    extra_body) must not bypass the admin-injection strip. The parse happens
+    AFTER receipt, so the strip has to run after the parse, not before.
+    """
+    from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+
+    request_mock = MagicMock(spec=Request)
+    request_mock.url.path = "/v1/chat/completions"
+    request_mock.url = MagicMock()
+    request_mock.url.__str__.return_value = "http://localhost/v1/chat/completions"
+    request_mock.method = "POST"
+    request_mock.query_params = {}
+    request_mock.headers = {"Content-Type": "multipart/form-data"}
+    request_mock.client = MagicMock()
+    request_mock.client.host = "127.0.0.1"
+
+    # Attacker encodes an admin-injection payload inside a JSON string.
+    attacker_payload = {
+        "user_api_key_metadata": {"disable_global_guardrails": True},
+        "user_api_key_team_metadata": {"disable_global_guardrails": True},
+        "_pipeline_managed_guardrails": ["evaded"],
+    }
+    data = {
+        "model": "gpt-3.5-turbo",
+        "metadata": json.dumps(attacker_payload),
+        "litellm_metadata": json.dumps(attacker_payload),
+    }
+
+    real_admin_metadata = {"admin_flag": "from_proxy"}
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="hashed-key",
+        metadata=real_admin_metadata,
+        team_metadata=real_admin_metadata,
+        spend=0.0,
+        max_budget=100.0,
+        model_max_budget={},
+        team_spend=0.0,
+        team_max_budget=200.0,
+    )
+
+    updated = await add_litellm_data_to_request(
+        data=data,
+        request=request_mock,
+        user_api_key_dict=user_api_key_dict,
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    populated = updated["metadata"]
+    # The real admin payload from user_api_key_dict wins.
+    assert populated["user_api_key_metadata"] == real_admin_metadata
+    assert populated["user_api_key_team_metadata"] == real_admin_metadata
+    assert populated.get("_pipeline_managed_guardrails") != ["evaded"]
+
+    other = updated.get("litellm_metadata") or {}
+    # After the strip, litellm_metadata has no admin-injection slots.
+    assert "user_api_key_metadata" not in other
+    assert "user_api_key_team_metadata" not in other
+    assert "_pipeline_managed_guardrails" not in other
+
+
+@pytest.mark.asyncio
+async def test_add_litellm_data_to_request_ignores_x_litellm_tags_header_without_permission():
+    """Regression: the `x-litellm-tags` header bypassed the body-metadata
+    tag strip. Header tags must also be gated by `allow_client_tags`."""
+    from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+
+    request_mock = MagicMock(spec=Request)
+    request_mock.url.path = "/v1/chat/completions"
+    request_mock.url = MagicMock()
+    request_mock.url.__str__.return_value = "http://localhost/v1/chat/completions"
+    request_mock.method = "POST"
+    request_mock.query_params = {}
+    request_mock.headers = {
+        "Content-Type": "application/json",
+        "x-litellm-tags": "restricted-tier,victim-team",
+    }
+    request_mock.client = MagicMock()
+    request_mock.client.host = "127.0.0.1"
+
+    data = {"model": "gpt-3.5-turbo"}
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="hashed-key",
+        metadata={},
+        team_metadata={},
+        spend=0.0,
+        max_budget=100.0,
+        model_max_budget={},
+        team_spend=0.0,
+        team_max_budget=200.0,
+    )
+
+    updated = await add_litellm_data_to_request(
+        data=data,
+        request=request_mock,
+        user_api_key_dict=user_api_key_dict,
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    assert "tags" not in (updated.get("metadata") or {})
+
+
+@pytest.mark.asyncio
+async def test_add_litellm_data_to_request_ignores_root_level_tags_without_permission():
+    """Regression: root-level `data["tags"]` bypassed the body-metadata
+    tag strip. Root-level tags must also be gated by `allow_client_tags`."""
+    from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+
+    request_mock = MagicMock(spec=Request)
+    request_mock.url.path = "/v1/chat/completions"
+    request_mock.url = MagicMock()
+    request_mock.url.__str__.return_value = "http://localhost/v1/chat/completions"
+    request_mock.method = "POST"
+    request_mock.query_params = {}
+    request_mock.headers = {"Content-Type": "application/json"}
+    request_mock.client = MagicMock()
+    request_mock.client.host = "127.0.0.1"
+
+    data = {
+        "model": "gpt-3.5-turbo",
+        "tags": ["restricted-tier", "victim-team"],
+    }
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="hashed-key",
+        metadata={},
+        team_metadata={},
+        spend=0.0,
+        max_budget=100.0,
+        model_max_budget={},
+        team_spend=0.0,
+        team_max_budget=200.0,
+    )
+
+    updated = await add_litellm_data_to_request(
+        data=data,
+        request=request_mock,
+        user_api_key_dict=user_api_key_dict,
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    assert "tags" not in (updated.get("metadata") or {})
+    # Also ensure the root-level tags are removed. get_tags_from_request_body
+    # reads request_body["tags"] directly, so leaving it in place would let
+    # the policy engine see caller-supplied tags even after the metadata
+    # strip.
+    assert "tags" not in updated
+
+
+@pytest.mark.asyncio
+async def test_add_litellm_data_to_request_honors_header_tags_when_opted_in():
+    """When allow_client_tags=True, header-supplied tags flow through."""
+    from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+
+    request_mock = MagicMock(spec=Request)
+    request_mock.url.path = "/v1/chat/completions"
+    request_mock.url = MagicMock()
+    request_mock.url.__str__.return_value = "http://localhost/v1/chat/completions"
+    request_mock.method = "POST"
+    request_mock.query_params = {}
+    request_mock.headers = {
+        "Content-Type": "application/json",
+        "x-litellm-tags": "production,ab-test",
+    }
+    request_mock.client = MagicMock()
+    request_mock.client.host = "127.0.0.1"
+
+    data = {"model": "gpt-3.5-turbo"}
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="hashed-key",
+        metadata={"allow_client_tags": True},
+        team_metadata={},
+        spend=0.0,
+        max_budget=100.0,
+        model_max_budget={},
+        team_spend=0.0,
+        team_max_budget=200.0,
+    )
+
+    updated = await add_litellm_data_to_request(
+        data=data,
+        request=request_mock,
+        user_api_key_dict=user_api_key_dict,
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    assert updated["metadata"].get("tags") == ["production", "ab-test"]
+
+
+@pytest.mark.asyncio
+async def test_add_litellm_data_to_request_strips_user_tags_without_permission():
+    """Caller-supplied metadata.tags must be stripped when the key/team
+    metadata does not opt in via allow_client_tags=True. Otherwise an
+    attacker can reach restricted tag-routed deployments or attribute
+    spend to a victim team's tag."""
+    from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+
+    request_mock = MagicMock(spec=Request)
+    request_mock.url.path = "/v1/chat/completions"
+    request_mock.url = MagicMock()
+    request_mock.url.__str__.return_value = "http://localhost/v1/chat/completions"
+    request_mock.method = "POST"
+    request_mock.query_params = {}
+    request_mock.headers = {"Content-Type": "application/json"}
+    request_mock.client = MagicMock()
+    request_mock.client.host = "127.0.0.1"
+
+    data = {
+        "model": "gpt-3.5-turbo",
+        "metadata": {"tags": ["restricted-tier", "victim-team"]},
+        "litellm_metadata": {"tags": ["also-stripped"]},
+    }
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="hashed-key",
+        metadata={},
+        team_metadata={},
+        spend=0.0,
+        max_budget=100.0,
+        model_max_budget={},
+        team_spend=0.0,
+        team_max_budget=200.0,
+    )
+
+    updated = await add_litellm_data_to_request(
+        data=data,
+        request=request_mock,
+        user_api_key_dict=user_api_key_dict,
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    assert "tags" not in (updated.get("metadata") or {})
+    assert "tags" not in (updated.get("litellm_metadata") or {})
+
+
+@pytest.mark.asyncio
+async def test_add_litellm_data_to_request_preserves_user_tags_when_key_opts_in():
+    """When key.metadata.allow_client_tags=True, caller-supplied tags are
+    preserved and reach the router."""
+    from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+
+    request_mock = MagicMock(spec=Request)
+    request_mock.url.path = "/v1/chat/completions"
+    request_mock.url = MagicMock()
+    request_mock.url.__str__.return_value = "http://localhost/v1/chat/completions"
+    request_mock.method = "POST"
+    request_mock.query_params = {}
+    request_mock.headers = {"Content-Type": "application/json"}
+    request_mock.client = MagicMock()
+    request_mock.client.host = "127.0.0.1"
+
+    data = {
+        "model": "gpt-3.5-turbo",
+        "metadata": {"tags": ["opted-in-tag"]},
+    }
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="hashed-key",
+        metadata={"allow_client_tags": True},
+        team_metadata={},
+        spend=0.0,
+        max_budget=100.0,
+        model_max_budget={},
+        team_spend=0.0,
+        team_max_budget=200.0,
+    )
+
+    updated = await add_litellm_data_to_request(
+        data=data,
+        request=request_mock,
+        user_api_key_dict=user_api_key_dict,
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    assert updated["metadata"].get("tags") == ["opted-in-tag"]
+
+
+@pytest.mark.asyncio
+async def test_add_litellm_data_to_request_preserves_user_tags_when_team_opts_in():
+    """Team-level allow_client_tags is also honored (not just key-level)."""
+    from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+
+    request_mock = MagicMock(spec=Request)
+    request_mock.url.path = "/v1/chat/completions"
+    request_mock.url = MagicMock()
+    request_mock.url.__str__.return_value = "http://localhost/v1/chat/completions"
+    request_mock.method = "POST"
+    request_mock.query_params = {}
+    request_mock.headers = {"Content-Type": "application/json"}
+    request_mock.client = MagicMock()
+    request_mock.client.host = "127.0.0.1"
+
+    data = {
+        "model": "gpt-3.5-turbo",
+        "metadata": {"tags": ["team-allowed"]},
+    }
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="hashed-key",
+        metadata={},
+        team_metadata={"allow_client_tags": True},
+        spend=0.0,
+        max_budget=100.0,
+        model_max_budget={},
+        team_spend=0.0,
+        team_max_budget=200.0,
+    )
+
+    updated = await add_litellm_data_to_request(
+        data=data,
+        request=request_mock,
+        user_api_key_dict=user_api_key_dict,
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    assert updated["metadata"].get("tags") == ["team-allowed"]
+
+
+@pytest.mark.asyncio
 async def test_add_litellm_data_to_request_user_spend_and_budget():
     from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
 
@@ -278,9 +854,11 @@ async def test_add_litellm_data_to_request_audio_transcription_multipart():
         "file": b"Fake audio bytes",
     }
 
+    # Opt the key in to client-supplied tags so the parsed tags from the
+    # JSON-string multipart body aren't stripped by the admin-injection strip.
     user_api_key_dict = UserAPIKeyAuth(
         api_key="hashed-key",
-        metadata={},
+        metadata={"allow_client_tags": True},
         team_metadata={},
         spend=0.0,
         max_budget=100.0,
@@ -2487,3 +3065,79 @@ def test_resolve_provider_hint_from_model_name():
         "azure/gpt-4", config, None, pre_alias_model_name="gpt-4", provider="azure"
     )
     assert result == "azure-cred"
+
+
+def test_clean_headers_preserves_x_api_key_when_byok_enabled():
+    """
+    Regression test: when forward_llm_provider_auth_headers=True,
+    clean_headers() must preserve the client-supplied x-api-key header
+    so it can be forwarded to the upstream Anthropic API (BYOK flow).
+    """
+    headers = Headers(
+        {
+            "x-api-key": "sk-ant-api03-client-key",
+            "x-litellm-api-key": "sk-proxy-virtual-key",
+            "content-type": "application/json",
+        }
+    )
+
+    result = clean_headers(
+        headers=headers,
+        litellm_key_header_name="x-litellm-api-key",
+        forward_llm_provider_auth_headers=True,
+        authenticated_with_header="x-litellm-api-key",
+    )
+
+    # x-api-key must be preserved for BYOK
+    assert result.get("x-api-key") == "sk-ant-api03-client-key"
+    # x-litellm-api-key must NOT leak to the upstream
+    assert "x-litellm-api-key" not in result
+
+
+def test_clean_headers_strips_x_api_key_when_byok_disabled():
+    """
+    Regression test: with forward_llm_provider_auth_headers=False (default),
+    x-api-key must be stripped so proxy-configured keys are not overridden
+    by a client-supplied one.
+    """
+    headers = Headers(
+        {
+            "x-api-key": "sk-ant-api03-client-key",
+            "x-litellm-api-key": "sk-proxy-virtual-key",
+        }
+    )
+
+    result = clean_headers(
+        headers=headers,
+        litellm_key_header_name="x-litellm-api-key",
+        forward_llm_provider_auth_headers=False,
+        authenticated_with_header="x-litellm-api-key",
+    )
+
+    assert "x-api-key" not in result
+
+
+def test_clean_headers_strips_x_api_key_when_byok_enabled_but_x_api_key_was_auth_header():
+    """
+    Anti-replay regression: even when forward_llm_provider_auth_headers=True,
+    if the client authenticated TO the proxy using x-api-key (i.e., the proxy
+    key arrived as x-api-key), clean_headers() must NOT forward that header
+    upstream. Otherwise a proxy-auth key would leak to the LLM provider.
+    """
+    headers = Headers(
+        {
+            "x-api-key": "sk-proxy-auth-key-masquerading-as-anthropic-key",
+            "content-type": "application/json",
+        }
+    )
+
+    result = clean_headers(
+        headers=headers,
+        litellm_key_header_name="x-litellm-api-key",
+        forward_llm_provider_auth_headers=True,
+        authenticated_with_header="x-api-key",
+    )
+
+    # Even with BYOK enabled, x-api-key must be stripped when it was used
+    # as the LiteLLM auth header (anti-replay guard).
+    assert "x-api-key" not in result

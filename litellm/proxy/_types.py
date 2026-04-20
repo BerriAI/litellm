@@ -691,6 +691,13 @@ class LiteLLMRoutes(enum.Enum):
         "/organization/delete",
         "/organization/member_add",
         "/organization/member_update",
+        # member_delete is equally destructive as member_add / member_update
+        # and must be scoped the same way — otherwise it falls through to
+        # the management_routes / self_managed_routes path and lets any
+        # non-PROXY_ADMIN caller that reaches the route delete arbitrary
+        # org memberships without the organization_role_based_access_check
+        # that member_add / member_update trigger.
+        "/organization/member_delete",
     ]
 
     # Routes accessible by Admin Viewer (read-only admin access)
@@ -3127,6 +3134,10 @@ class CallInfo(LiteLLMPydanticObjectBase):
     alert_emails: Optional[List[str]] = Field(
         default=None,
         description="Additional email addresses to send alerts to (e.g., from team metadata)",
+    )
+    max_budget_alert_emails: Optional[Dict[str, List[str]]] = Field(
+        default=None,
+        description="Map of threshold percentage to email recipients (e.g., {'50': ['a@co.com'], '75': ['a@co.com', 'b@co.com']})",
     )
 
 
