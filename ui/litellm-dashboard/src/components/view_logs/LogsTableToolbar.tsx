@@ -226,7 +226,7 @@ export function LogsTableToolbar({
         </div>
       </div>
       {isLiveTail && currentPage === 1 && (
-        <div className="mb-4 px-4 py-2 bg-green-50 border border-greem-200 rounded-md flex items-center justify-between">
+        <div className="mb-4 px-4 py-2 bg-green-50 border border-green-200 rounded-md flex items-center justify-between">
           <div className="flex items-center gap-2">
             <span className="text-sm text-green-700">Auto-refreshing every 15 seconds</span>
           </div>
