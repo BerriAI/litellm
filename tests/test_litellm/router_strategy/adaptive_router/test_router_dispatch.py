@@ -378,3 +378,56 @@ def test_init_adaptive_router_rejects_duplicate_model_name():
     r.init_adaptive_router_deployment(deployment=deployment)
     with pytest.raises(ValueError, match="already exists"):
         r.init_adaptive_router_deployment(deployment=deployment)
+
+
+def test_finalize_adaptive_router_if_configured_initializes_and_is_idempotent():
+    """`_finalize_adaptive_router_if_configured` walks the model_list, builds an
+    AdaptiveRouter for each adaptive deployment, and is a safe no-op on
+    re-entry (models already in self.adaptive_routers are skipped)."""
+    r = Router(
+        model_list=[
+            {
+                "model_name": "fast",
+                "litellm_params": {"model": "openai/gpt-4o-mini"},
+                "model_info": {"input_cost_per_token": 0.00000015},
+            },
+            {
+                "model_name": "smart",
+                "litellm_params": {"model": "openai/gpt-4o"},
+                "model_info": {"input_cost_per_token": 0.0000025},
+            },
+            {
+                "model_name": "my-router",
+                "litellm_params": {
+                    "model": "auto_router/adaptive_router",
+                    "adaptive_router_config": {
+                        "available_models": ["fast", "smart"],
+                    },
+                },
+            },
+        ]
+    )
+
+    # Router __init__ already called _finalize_adaptive_router_if_configured.
+    assert "my-router" in r.adaptive_routers
+    original = r.adaptive_routers["my-router"]
+
+    # Calling again must be idempotent: the existing AdaptiveRouter instance
+    # is preserved, not rebuilt.
+    r._finalize_adaptive_router_if_configured()
+    assert r.adaptive_routers["my-router"] is original
+
+
+def test_finalize_adaptive_router_if_configured_noop_when_none_configured():
+    """With no adaptive deployments in model_list, the finalizer leaves
+    `adaptive_routers` empty."""
+    r = Router(
+        model_list=[
+            {
+                "model_name": "fast",
+                "litellm_params": {"model": "openai/gpt-4o-mini"},
+            }
+        ]
+    )
+    r._finalize_adaptive_router_if_configured()
+    assert r.adaptive_routers == {}
