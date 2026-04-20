@@ -728,6 +728,102 @@ tools=[
 
 ---
 
+## Remapping the advisor model
+
+Some clients (e.g. Claude Code) hardcode the advisor tool's `model` field — you cannot change what the client sends. If you still want the advisor sub-call to hit a different model (for cost, availability, or routing reasons), remap the advisor model using `model_group_alias` on the router.
+
+When the advisor tool's `model` resolves through `model_group_alias` to a **non-native Anthropic advisor model**, LiteLLM automatically takes over the orchestration loop — even when the executor is direct Anthropic — and routes the advisor sub-call through the router. The client keeps seeing the original alias in every response surface (`iterations[].model`), so the remap stays opaque to the caller.
+
+```yaml showLineNumbers title="config.yaml — remap claude-opus-4-7 advisor to o3"
+model_list:
+  - model_name: o3
+    litellm_params:
+      model: openai/o3
+      api_key: os.environ/OPENAI_API_KEY
+
+  - model_name: claude-sonnet
+    litellm_params:
+      model: anthropic/claude-sonnet-4-6
+      api_key: os.environ/ANTHROPIC_API_KEY
+
+router_settings:
+  model_group_alias:
+    claude-opus-4-7: o3
+```
+
+With the config above, a client request that includes:
+
+```json
+{
+  "type": "advisor_20260301",
+  "name": "advisor",
+  "model": "claude-opus-4-7"
+}
+```
+
+will:
+
+1. Run the executor against Anthropic as usual.
+2. When the executor calls the advisor, route the sub-call through the router to `openai/o3` using the `o3` deployment's credentials.
+3. Emit `iterations[].model == "claude-opus-4-7"` in the response so the client never sees `o3`.
+
+:::info When does the remap trigger?
+
+Only when the resolved model is **not** a native Anthropic advisor (currently `claude-opus-4-6` and `claude-opus-4-7`). If you alias one native advisor model to another (e.g. `claude-opus-4-7 -> claude-opus-4-6`), Anthropic's server-side advisor still handles the request.
+
+:::
+
+### Claude Code quickstart: use any advisor model
+
+If you are using Claude Code and want to run the advisor on a non-Claude model (for example `openai/o3`, Gemini, Bedrock, etc.), use this pattern:
+
+1. Keep Claude Code's advisor tool unchanged:
+
+```json
+{
+  "type": "advisor_20260301",
+  "name": "advisor",
+  "model": "claude-opus-4-7"
+}
+```
+
+2. Map that model name to your actual advisor deployment in LiteLLM:
+
+```yaml showLineNumbers title="config.yaml — Claude Code advisor alias"
+model_list:
+  - model_name: my-real-advisor
+    litellm_params:
+      model: openai/o3
+      api_key: os.environ/OPENAI_API_KEY
+
+  - model_name: claude-sonnet
+    litellm_params:
+      model: anthropic/claude-sonnet-4-6
+      api_key: os.environ/ANTHROPIC_API_KEY
+
+router_settings:
+  model_group_alias:
+    claude-opus-4-7: my-real-advisor
+```
+
+3. Send requests through `/v1/messages` as usual from Claude Code.
+
+What happens at runtime:
+
+- Claude Code sends `model: "claude-opus-4-7"` in the advisor tool.
+- LiteLLM resolves it to `my-real-advisor` and routes the sub-call to `openai/o3`.
+- Claude Code still sees `claude-opus-4-7` in response-visible fields (alias stays opaque).
+
+:::tip Troubleshooting (Claude Code + non-native advisor)
+
+- If you see `Invalid value: 'thinking'` from OpenAI, upgrade to a LiteLLM build that includes advisor sub-call message translation for non-Anthropic providers.
+- If advisor output appears blank in streamed UI, use a build with `advisor_tool_result` text included in `content_block_start` for fake-streamed advisor responses.
+- If spend logs are missing for streamed advisor calls, use a build with deferred logging support for non-`CustomStreamWrapper` anthropic streams.
+
+:::
+
+---
+
 ## Additional resources
 
 - [Anthropic Advisor Tool Documentation](https://platform.claude.com/docs/en/agents-and-tools/tool-use/advisor-tool)

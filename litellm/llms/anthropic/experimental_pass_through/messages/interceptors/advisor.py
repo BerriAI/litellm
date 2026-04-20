@@ -16,18 +16,25 @@ How it works:
 
 import asyncio
 import uuid
-from typing import Any, AsyncIterator, Dict, List, Optional, Union, cast
+from typing import Any, AsyncIterator, Dict, List, Optional, Union
 
 import litellm
 import litellm.constants as _c
+from litellm._internal_context import is_internal_call
 from litellm._logging import verbose_logger
 from litellm.llms.anthropic.common_utils import strip_advisor_blocks_from_messages
+from litellm.llms.anthropic.experimental_pass_through.adapters.handler import (
+    LiteLLMMessagesToCompletionTransformationHandler,
+)
 from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
     AnthropicUsageIteration,
 )
-from litellm.types.llms.openai import AllMessageValues
 from litellm.types.llms.anthropic import ANTHROPIC_ADVISOR_TOOL_TYPE
+from litellm.utils import (
+    resolve_proxy_model_alias_to_litellm_model,
+    supports_native_advisor_tool,
+)
 
 ADVISOR_MAX_USES: int = _c.ADVISOR_MAX_USES
 ADVISOR_TOOL_DESCRIPTION: str = _c.ADVISOR_TOOL_DESCRIPTION
@@ -49,12 +56,20 @@ class AdvisorOrchestrationHandler(MessagesInterceptor):
     ) -> bool:
         if not tools:
             return False
-        has_advisor = any(t.get("type") == ANTHROPIC_ADVISOR_TOOL_TYPE for t in tools)
-        if not has_advisor:
+        advisor_tools = [
+            t for t in tools if t.get("type") == ANTHROPIC_ADVISOR_TOOL_TYPE
+        ]
+        if not advisor_tools:
             return False
-        # Direct Anthropic /messages: the API handles advisor_20260301 natively;
-        # do not run the LiteLLM orchestration loop here.
+        # Direct Anthropic /messages: the API handles advisor_20260301 natively
+        # *only* when the tool's model resolves to a native Anthropic advisor
+        # model. When an operator remaps the tool's model via model_group_alias
+        # to a non-native model (e.g. claude-opus-4-7 -> o3) we must take over
+        # the loop here so the sub-call is routed through litellm.
         if custom_llm_provider == "anthropic":
+            for advisor_tool in advisor_tools:
+                if not _advisor_tool_uses_native_anthropic_model(advisor_tool):
+                    return True
             return False
         return True
 
@@ -82,15 +97,24 @@ class AdvisorOrchestrationHandler(MessagesInterceptor):
             raise ValueError(
                 f"handle() called but no {ANTHROPIC_ADVISOR_TOOL_TYPE} tool found in tools list"
             )
-        advisor_model: str = advisor_tool.get("model") or ""
-        if not advisor_model:
-            advisor_model = _resolve_default_advisor_model()
-        if not advisor_model:
+        advisor_model_alias: str = advisor_tool.get("model") or ""
+        if not advisor_model_alias:
+            advisor_model_alias = _resolve_default_advisor_model()
+        if not advisor_model_alias:
             raise ValueError(
                 "No advisor model specified. Either:\n"
                 "  1. Set 'default_advisor_model' in advisor_interception_params in your proxy config YAML, or\n"
                 "  2. Include a 'model' field in the advisor tool definition."
             )
+        # Resolve the tool's ``model`` (which may be a proxy model_group_alias
+        # like ``claude-opus-4-7`` pointing at ``o3``) to the actual underlying
+        # litellm model for the sub-call. Keep the alias separate so every
+        # client-visible surface (iterations[].model) continues to show the
+        # original name the caller sent — the remap is opaque to the caller.
+        resolved_advisor_model: str = (
+            resolve_proxy_model_alias_to_litellm_model(advisor_model_alias)
+            or advisor_model_alias
+        )
         _raw_max_uses = advisor_tool.get("max_uses")
         max_uses: int = ADVISOR_MAX_USES if _raw_max_uses is None else int(_raw_max_uses)
         # Optional routing overrides for the advisor sub-call (e.g. proxy routing).
@@ -127,10 +151,13 @@ class AdvisorOrchestrationHandler(MessagesInterceptor):
         # their inner @client wrappers (aresponses/acompletion) still populate
         # ``custom_llm_provider``, ``api_base``, ``model_id`` on this shared
         # model_call_details via ``update_environment_variables`` — fields the
-        # outer anthropic_messages path never sets on its own. We mark the
-        # sub-calls ``_is_litellm_internal_call=True`` so their @client skips
-        # emitting a duplicate log row; only the outer call emits a single
-        # aggregated entry.
+        # outer anthropic_messages path never sets on its own.
+        #
+        # NOTE: ``_is_litellm_internal_call`` in kwargs is not sufficient to
+        # suppress @client logging; wrapper_async checks the ContextVar
+        # ``is_internal_call``. Keep the kwarg for compatibility, but also set
+        # the ContextVar around the orchestration loop so nested sub-calls do
+        # not emit separate proxy billing rows.
         litellm_logging_obj = kwargs.get("litellm_logging_obj", None)
         kwargs["_is_litellm_internal_call"] = True
         iteration = 0
@@ -139,110 +166,138 @@ class AdvisorOrchestrationHandler(MessagesInterceptor):
         advisor_first_call_cost: float = 0.0
         advisor_subcall_cost: float = 0.0
 
-        while True:
-            # --- Executor call (always non-streaming) ---
-            executor_response: AnthropicMessagesResponse = await _call_messages_handler(
-                model=model,
-                messages=current_messages,
-                tools=executor_tools,
-                stream=False,
-                max_tokens=max_tokens,
-                custom_llm_provider=custom_llm_provider,
-                metadata={
-                    **metadata_base,
-                    "advisor_sub_call": False,
-                    "parent_request_id": parent_request_id,
-                },
-                **kwargs,
-            )
-
-            executor_cost = _get_response_cost(executor_response, model=model)
-            iterations.append(
-                _build_iteration_entry(
-                    response=executor_response, iteration_type="message"
-                )
-            )
-
-            advisor_use_block = _find_advisor_tool_use(executor_response)
-
-            if advisor_use_block is None:
-                # No more advisor calls — this is the final response.
-                # Inject advisor_tool_result blocks to match Anthropic native format.
-                _inject_advisor_blocks_into_response(
-                    executor_response, advisor_interactions
-                )
-                total_cost = (
-                    advisor_first_call_cost + advisor_subcall_cost + executor_cost
-                )
-                _finalize_orchestrated_response(
-                    response=executor_response,
-                    iterations=iterations,
-                    total_cost=total_cost,
-                    final_executor_cost=executor_cost,
-                    advisor_first_call_cost=advisor_first_call_cost,
-                    advisor_subcall_cost=advisor_subcall_cost,
-                    litellm_logging_obj=litellm_logging_obj,
-                )
-                if stream:
-                    return FakeAnthropicMessagesStreamIterator(executor_response)
-                return executor_response
-
-            # Executor response triggered another advisor call → count it as a
-            # "first/intermediate" executor turn. Only the terminating turn is
-            # treated as the base response.
-            advisor_first_call_cost += executor_cost
-
-            iteration += 1
-            if iteration > max_uses:
-                raise AdvisorMaxIterationsError(
-                    f"Advisor orchestration loop exceeded max_uses={max_uses}. "
-                    "Increase max_uses in the advisor tool definition or cap the request."
+        _prev_internal = is_internal_call.get()
+        is_internal_call.set(True)
+        try:
+            while True:
+                # --- Executor call (always non-streaming) ---
+                executor_response: AnthropicMessagesResponse = await _call_messages_handler(
+                    model=model,
+                    messages=current_messages,
+                    tools=executor_tools,
+                    stream=False,
+                    max_tokens=max_tokens,
+                    custom_llm_provider=custom_llm_provider,
+                    metadata={
+                        **metadata_base,
+                        "advisor_sub_call": False,
+                        "parent_request_id": parent_request_id,
+                    },
+                    **kwargs,
                 )
 
-            # --- Build advisor context ---
-            advisor_messages = _build_advisor_context(
-                current_messages, executor_response, advisor_use_block
-            )
-
-            # --- Advisor sub-call (always non-streaming, no tools) ---
-            advisor_response: AnthropicMessagesResponse = await _call_advisor_with_router(
-                model=advisor_model,
-                messages=advisor_messages,
-                max_tokens=max_tokens,
-                metadata={
-                    **metadata_base,
-                    "advisor_sub_call": True,
-                    "parent_request_id": parent_request_id,
-                },
-                api_key=advisor_api_key,
-                api_base=advisor_api_base,
-            )
-
-            advisor_call_cost = _get_response_cost(advisor_response, model=advisor_model)
-            advisor_subcall_cost += advisor_call_cost
-            iterations.append(
-                _build_iteration_entry(
-                    response=advisor_response,
-                    iteration_type="advisor_message",
-                    model=advisor_model,
+                executor_cost = _get_response_cost(executor_response, model=model)
+                iterations.append(
+                    _build_iteration_entry(
+                        response=executor_response, iteration_type="message"
+                    )
                 )
-            )
 
-            advisor_text = _extract_response_text(advisor_response)
+                advisor_use_block = _find_advisor_tool_use(executor_response)
 
-            # Record the interaction for later injection into the final response.
-            advisor_interactions.append({
-                "tool_use_id": advisor_use_block.get("id", f"srvtoolu_{uuid.uuid4().hex[:24]}"),
-                "advisor_text": advisor_text,
-            })
+                if advisor_use_block is None:
+                    # No more advisor calls — this is the final response.
+                    # Inject advisor_tool_result blocks to match Anthropic native format.
+                    _inject_advisor_blocks_into_response(
+                        executor_response, advisor_interactions
+                    )
+                    total_cost = (
+                        advisor_first_call_cost + advisor_subcall_cost + executor_cost
+                    )
+                    _finalize_orchestrated_response(
+                        response=executor_response,
+                        iterations=iterations,
+                        total_cost=total_cost,
+                        final_executor_cost=executor_cost,
+                        advisor_first_call_cost=advisor_first_call_cost,
+                        advisor_subcall_cost=advisor_subcall_cost,
+                        litellm_logging_obj=litellm_logging_obj,
+                    )
+                    if stream:
+                        # The outer ``@client`` async wrapper skips
+                        # ``_client_async_logging_helper`` for streaming
+                        # requests — it assumes a ``CustomStreamWrapper`` will
+                        # fire logging on iteration. ``FakeAnthropicMessagesStreamIterator``
+                        # is a plain iterator over pre-built SSE bytes and
+                        # does not know about the logging obj, so nothing fires
+                        # the proxy log row. We've already aggregated the full
+                        # response into ``executor_response`` (same dict shape
+                        # the non-streaming path uses for logging), so fire
+                        # the success handler ourselves with that dict before
+                        # wrapping — this mirrors the non-streaming flow and
+                        # avoids double-logging (the @client path is skipped).
+                        _fire_async_success_logging(
+                            litellm_logging_obj=litellm_logging_obj,
+                            result=executor_response,
+                        )
+                        return FakeAnthropicMessagesStreamIterator(executor_response)
+                    return executor_response
 
-            # --- Inject advisor result and continue loop ---
-            current_messages = _inject_advisor_turn(
-                current_messages,
-                executor_response,
-                advisor_use_block,
-                advisor_text,
-            )
+                # Executor response triggered another advisor call → count it as a
+                # "first/intermediate" executor turn. Only the terminating turn is
+                # treated as the base response.
+                advisor_first_call_cost += executor_cost
+
+                iteration += 1
+                if iteration > max_uses:
+                    raise AdvisorMaxIterationsError(
+                        f"Advisor orchestration loop exceeded max_uses={max_uses}. "
+                        "Increase max_uses in the advisor tool definition or cap the request."
+                    )
+
+                # --- Build advisor context ---
+                advisor_messages = _build_advisor_context(
+                    current_messages, executor_response, advisor_use_block
+                )
+
+                # --- Advisor sub-call (always non-streaming, no tools) ---
+                # Use the resolved model so router routing / cost lookup hit the
+                # real underlying deployment; the alias is kept only for the
+                # client-visible iteration entry below.
+                advisor_response: AnthropicMessagesResponse = await _call_advisor_with_router(
+                    model=resolved_advisor_model,
+                    messages=advisor_messages,
+                    max_tokens=max_tokens,
+                    metadata={
+                        **metadata_base,
+                        "advisor_sub_call": True,
+                        "parent_request_id": parent_request_id,
+                    },
+                    api_key=advisor_api_key,
+                    api_base=advisor_api_base,
+                )
+
+                advisor_call_cost = _get_response_cost(
+                    advisor_response, model=resolved_advisor_model
+                )
+                advisor_subcall_cost += advisor_call_cost
+                iterations.append(
+                    _build_iteration_entry(
+                        response=advisor_response,
+                        iteration_type="advisor_message",
+                        model=advisor_model_alias,
+                    )
+                )
+
+                advisor_text = _extract_response_text(advisor_response)
+
+                # Record the interaction for later injection into the final response.
+                advisor_interactions.append({
+                    "tool_use_id": advisor_use_block.get(
+                        "id", f"srvtoolu_{uuid.uuid4().hex[:24]}"
+                    ),
+                    "advisor_text": advisor_text,
+                })
+
+                # --- Inject advisor result and continue loop ---
+                current_messages = _inject_advisor_turn(
+                    current_messages,
+                    executor_response,
+                    advisor_use_block,
+                    advisor_text,
+                )
+        finally:
+            is_internal_call.set(_prev_internal)
 
 
 # ---------------------------------------------------------------------------
@@ -256,6 +311,31 @@ def _resolve_default_advisor_model() -> str:
 
     params = getattr(litellm, "advisor_interception_params", None) or {}
     return params.get("default_advisor_model", "") or ""
+
+
+def _advisor_tool_uses_native_anthropic_model(advisor_tool: Dict) -> bool:
+    """
+    Return True iff the advisor tool's ``model`` (after proxy alias resolution)
+    is a native Anthropic advisor model.
+
+    Used by :class:`AdvisorOrchestrationHandler.can_handle` to decide whether
+    to let Anthropic's server-side advisor handle the tool or to intercept it
+    and route the sub-call through LiteLLM.
+    """
+    advisor_model = advisor_tool.get("model") or _resolve_default_advisor_model()
+    if not advisor_model:
+        # No model specified — let native Anthropic handle it (or fail there
+        # with its own error). This path should not be hit in practice because
+        # advisor_interception_params enforces a default upstream.
+        return True
+    resolved_model = (
+        resolve_proxy_model_alias_to_litellm_model(advisor_model) or advisor_model
+    )
+    if resolved_model.startswith("anthropic/"):
+        resolved_model = resolved_model.split("/", 1)[1]
+    return supports_native_advisor_tool(
+        model=resolved_model, custom_llm_provider="anthropic"
+    )
 
 
 _SYNTHETIC_ADVISOR_TOOL_NAME = "consult_advisor"
@@ -443,6 +523,55 @@ def _finalize_orchestrated_response(
                 )
 
 
+def _fire_async_success_logging(
+    litellm_logging_obj: Any,
+    result: Any,
+) -> None:
+    """
+    Manually enqueue the ``async_success_handler`` for a streaming advisor
+    response.
+
+    The outer ``@client`` async wrapper only calls
+    ``_client_async_logging_helper`` for non-streaming results; streaming
+    results are expected to log from inside a ``CustomStreamWrapper``. Our
+    synthetic :class:`FakeAnthropicMessagesStreamIterator` has no logging
+    hook, so without this helper the proxy UI would never get a row for
+    streaming advisor calls. We already built the aggregated response dict
+    (same shape the non-streaming path logs from), so we can fire logging
+    exactly once here with the same arguments the non-streaming path uses.
+    """
+    if litellm_logging_obj is None:
+        return
+    try:
+        import datetime as _dt
+
+        from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+
+        start_time = getattr(litellm_logging_obj, "start_time", None) or _dt.datetime.now()
+        end_time = _dt.datetime.now()
+        GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
+            async_coroutine=litellm_logging_obj.async_success_handler(
+                result=result, start_time=start_time, end_time=end_time
+            )
+        )
+        try:
+            litellm_logging_obj.handle_sync_success_callbacks_for_async_calls(
+                result=result,
+                start_time=start_time,
+                end_time=end_time,
+            )
+        except Exception as sync_cb_error:
+            verbose_logger.debug(
+                "AdvisorOrchestration: sync success callbacks failed: %s",
+                str(sync_cb_error),
+            )
+    except Exception as logging_error:
+        verbose_logger.debug(
+            "AdvisorOrchestration: failed to fire async success logging: %s",
+            str(logging_error),
+        )
+
+
 def _find_advisor_tool_use(response: Any) -> Optional[Dict]:
     """Return the first tool_use block whose name matches our synthetic advisor."""
     content = response.get("content") if isinstance(response, dict) else []
@@ -607,6 +736,12 @@ def _build_advisor_context(
 
     tool_use blocks are excluded because Anthropic requires tool_use to be
     immediately followed by tool_result — not the advisor question.
+
+    Messages stay in Anthropic ``/v1/messages`` shape here; ``_call_advisor_with_router``
+    runs the same ``LiteLLMMessagesToCompletionTransformationHandler`` path used when
+    a client calls the messages endpoint with a non-Anthropic model, so provider
+    translation (including interleaved ``thinking`` blocks) matches the rest of
+    the stack.
     """
     question = (advisor_use_block.get("input") or {}).get("question") or (
         "Please provide guidance on the current task."
@@ -772,18 +907,26 @@ async def _call_advisor_with_router(
     if api_base is not None:
         kwargs["api_base"] = api_base
 
-    openai_messages: List[AllMessageValues] = cast(List[AllMessageValues], messages)
+    # Same translation path as ``/v1/messages`` → non-Anthropic model: Anthropic
+    # request shape → Chat Completions kwargs for the target provider.
+    (
+        completion_kwargs,
+        _tool_name_mapping,
+    ) = LiteLLMMessagesToCompletionTransformationHandler._prepare_completion_kwargs(
+        max_tokens=max_tokens,
+        messages=messages,
+        model=model,
+        metadata=metadata,
+        stream=False,
+        extra_kwargs=kwargs,
+    )
+    # Inner advisor call is always a plain completion (no tools).
+    completion_kwargs["tools"] = None
 
     openai_response = None
     if llm_router is not None:
         try:
-            openai_response = await llm_router.acompletion(
-                model=model,
-                messages=openai_messages,
-                tools=None,
-                max_tokens=max_tokens,
-                **kwargs,
-            )
+            openai_response = await llm_router.acompletion(**completion_kwargs)
         except Exception:
             verbose_logger.debug(
                 "AdvisorOrchestration: Router call for advisor model '%s' failed, "
@@ -792,12 +935,6 @@ async def _call_advisor_with_router(
             )
 
     if openai_response is None:
-        openai_response = await _litellm.acompletion(
-            model=model,
-            messages=openai_messages,
-            tools=None,
-            max_tokens=max_tokens,
-            **kwargs,
-        )
+        openai_response = await _litellm.acompletion(**completion_kwargs)
 
     return _openai_response_to_anthropic_dict(openai_response)

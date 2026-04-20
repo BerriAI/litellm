@@ -300,6 +300,61 @@ async def test_loop_streaming_wraps_response():
     assert "message_start" in first
 
 
+@pytest.mark.asyncio
+async def test_loop_streaming_advisor_block_start_contains_text():
+    """
+    Regression: when advisor orchestration is streamed via FakeAnthropicMessagesStreamIterator,
+    ``advisor_tool_result`` must carry the full advisor text in content_block_start.
+    Claude Code renders the advisor panel from that payload.
+    """
+    from litellm.llms.anthropic.experimental_pass_through.messages.interceptors.advisor import (
+        AdvisorOrchestrationHandler,
+    )
+
+    executor_first = _make_advisor_tool_use_response(
+        question="Please confirm integration status.", tool_id="toolu_advisor_123"
+    )
+    advisor_response = _make_text_response("Integration test: working correctly.")
+    executor_final = _make_text_response("All set.")
+
+    with patch(
+        "litellm.llms.anthropic.experimental_pass_through.messages.interceptors.advisor._call_messages_handler",
+        new_callable=AsyncMock,
+        side_effect=[executor_first, executor_final],
+    ), patch(
+        "litellm.llms.anthropic.experimental_pass_through.messages.interceptors.advisor._call_advisor_with_router",
+        new_callable=AsyncMock,
+        return_value=advisor_response,
+    ):
+        h = AdvisorOrchestrationHandler()
+        stream_iter = await h.handle(
+            model="openai/gpt-4o-mini",
+            messages=MESSAGES,
+            tools=[ADVISOR_TOOL],
+            stream=True,
+            max_tokens=512,
+            custom_llm_provider="openai",
+        )
+
+    chunks = []
+    async for chunk in stream_iter:
+        chunks.append(chunk.decode() if isinstance(chunk, bytes) else str(chunk))
+
+    advisor_start_events = [
+        c
+        for c in chunks
+        if '"type": "content_block_start"' in c
+        and '"type": "advisor_tool_result"' in c
+    ]
+    assert advisor_start_events, "Expected advisor_tool_result content_block_start event"
+    assert (
+        '"text": "Integration test: working correctly."' in advisor_start_events[0]
+    )
+
+    # advisor_tool_result should be complete in content_block_start (no extra delta needed)
+    assert not any('"type": "advisor_result_delta"' in c for c in chunks)
+
+
 # ---------------------------------------------------------------------------
 # 7. Multi-turn: prior advisor blocks replaced with text in history
 # ---------------------------------------------------------------------------

@@ -143,29 +143,29 @@ class FakeAnthropicMessagesStreamIterator:
             )
 
         elif block_type == "advisor_tool_result":
+            advisor_content = block_dict.get("content") or {}
+            advisor_text = ""
+            if isinstance(advisor_content, dict):
+                advisor_text = advisor_content.get("text", "") or ""
+            elif isinstance(advisor_content, str):
+                advisor_text = advisor_content
+
+            # Keep advisor result payload fully populated in content_block_start.
+            # Anthropic tool_result-like blocks are treated as complete in start
+            # events (no follow-up delta required), and Claude Code renders the
+            # advisor panel from this payload.
             content_block_start = {
                 "type": "content_block_start",
                 "index": index,
                 "content_block": {
                     "type": "advisor_tool_result",
                     "tool_use_id": block_dict.get("tool_use_id"),
-                    "content": {"type": "advisor_result", "text": ""},
+                    "content": {"type": "advisor_result", "text": advisor_text},
                 },
             }
             chunks.append(
                 f"event: content_block_start\ndata: {json.dumps(content_block_start)}\n\n".encode()
             )
-            advisor_content = block_dict.get("content") or {}
-            advisor_text = advisor_content.get("text", "") if isinstance(advisor_content, dict) else ""
-            if advisor_text:
-                content_block_delta = {
-                    "type": "content_block_delta",
-                    "index": index,
-                    "delta": {"type": "advisor_result_delta", "text": advisor_text},
-                }
-                chunks.append(
-                    f"event: content_block_delta\ndata: {json.dumps(content_block_delta)}\n\n".encode()
-                )
 
         content_block_stop = {"type": "content_block_stop", "index": index}
         chunks.append(
