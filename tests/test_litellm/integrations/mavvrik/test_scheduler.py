@@ -193,7 +193,7 @@ class TestRunExportLoop:
 
     @pytest.mark.asyncio
     async def test_first_run_uses_earliest_db_date(self):
-        """First run with register() failure starts from MIN(date) in DB."""
+        """First run with register() returning None starts from MIN(date) in DB."""
         orc = _make_orchestrator()
         uploaded_dates = []
 
@@ -202,7 +202,7 @@ class TestRunExportLoop:
             return 3
 
         orc._client = MagicMock()
-        orc._client.register = AsyncMock(side_effect=RuntimeError("register failed"))
+        orc._client.register = AsyncMock(return_value=None)
         orc._client.advance_marker = AsyncMock()
         orc._client.report_error = AsyncMock()
         orc._exporter = MagicMock()

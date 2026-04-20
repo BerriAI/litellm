@@ -79,42 +79,37 @@ class Service:
         )
 
         # Step 2 — schedule the background export job.
-        try:
-            from litellm.constants import (
-                MAVVRIK_EXPORT_INTERVAL_MINUTES,
-                MAVVRIK_EXPORT_USAGE_DATA_JOB_NAME,
+        from litellm.constants import (
+            MAVVRIK_EXPORT_INTERVAL_MINUTES,
+            MAVVRIK_EXPORT_USAGE_DATA_JOB_NAME,
+        )
+        from litellm.integrations.mavvrik.orchestrator import Orchestrator
+        from litellm.integrations.mavvrik.uploader import Uploader
+
+        import litellm.proxy.proxy_server as _pserver
+
+        _scheduler = getattr(_pserver, "scheduler", None)
+        if _scheduler is not None:
+            uploader = Uploader(
+                api_key=api_key,
+                api_endpoint=api_endpoint,
+                connection_id=connection_id,
             )
-            from litellm.integrations.mavvrik.orchestrator import Orchestrator
-            from litellm.integrations.mavvrik.uploader import Uploader
-
-            import litellm.proxy.proxy_server as _pserver
-
-            _scheduler = getattr(_pserver, "scheduler", None)
-            if _scheduler is not None:
-                uploader = Uploader(
-                    api_key=api_key,
-                    api_endpoint=api_endpoint,
-                    connection_id=connection_id,
-                )
-                orchestrator = Orchestrator(uploader=uploader)
-                _scheduler.add_job(
-                    orchestrator.run,
-                    "interval",
-                    minutes=MAVVRIK_EXPORT_INTERVAL_MINUTES,
-                    id=MAVVRIK_EXPORT_USAGE_DATA_JOB_NAME,
-                    replace_existing=True,
-                )
-                verbose_proxy_logger.info(
-                    "mavvrik background export job scheduled every %d min",
-                    MAVVRIK_EXPORT_INTERVAL_MINUTES,
-                )
-            else:
-                verbose_proxy_logger.warning(
-                    "mavvrik: scheduler not available, background job not registered"
-                )
-        except Exception as sched_exc:
+            orchestrator = Orchestrator(uploader=uploader)
+            _scheduler.add_job(
+                orchestrator.run,
+                "interval",
+                minutes=MAVVRIK_EXPORT_INTERVAL_MINUTES,
+                id=MAVVRIK_EXPORT_USAGE_DATA_JOB_NAME,
+                replace_existing=True,
+            )
+            verbose_proxy_logger.info(
+                "mavvrik background export job scheduled every %d min",
+                MAVVRIK_EXPORT_INTERVAL_MINUTES,
+            )
+        else:
             verbose_proxy_logger.warning(
-                "mavvrik: could not register background job after init (%s)", sched_exc
+                "mavvrik: scheduler not available, background job not registered"
             )
 
         return {
@@ -228,25 +223,14 @@ class Service:
         """
         from litellm.constants import MAVVRIK_EXPORT_USAGE_DATA_JOB_NAME
 
+        import litellm.proxy.proxy_server as _pserver
+
         # Raises LookupError if not configured.
         await self._settings.delete()
 
-        # Best-effort scheduler cleanup.
-        try:
-            import litellm.proxy.proxy_server as _pserver
-
-            _scheduler = getattr(_pserver, "scheduler", None)
-            if _scheduler is not None:
-                try:
-                    _scheduler.remove_job(MAVVRIK_EXPORT_USAGE_DATA_JOB_NAME)
-                except Exception as exc:
-                    verbose_proxy_logger.debug(
-                        "mavvrik: scheduler job already removed or not found: %s", exc
-                    )
-        except Exception as exc:
-            verbose_proxy_logger.debug(
-                "mavvrik: could not access scheduler during delete: %s", exc
-            )
+        _scheduler = getattr(_pserver, "scheduler", None)
+        if _scheduler is not None:
+            _scheduler.remove_job(MAVVRIK_EXPORT_USAGE_DATA_JOB_NAME)
 
         verbose_proxy_logger.info("mavvrik settings deleted")
         return {"message": "Mavvrik settings deleted successfully", "status": "success"}

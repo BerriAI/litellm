@@ -17,7 +17,7 @@ Marker semantics:
 from datetime import date, datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Iterator, Optional
 
-from litellm._logging import verbose_logger, verbose_proxy_logger
+from litellm._logging import verbose_logger
 from litellm.constants import (
     MAVVRIK_EXPORT_USAGE_DATA_JOB_NAME,
     MAVVRIK_LOOKBACK_START_DATE,
@@ -138,19 +138,11 @@ class Orchestrator:
         """Step 1: Register with Mavvrik and return the export start date.
 
         Calls client.register() to get the metricsMarker (source of truth).
-        Falls back to first-run resolution if register() fails or returns
-        None (brand-new connection, no marker yet).
+        Falls back to first-run resolution when register() returns None
+        (brand-new connection, no marker yet).
         """
-        marker_str: Optional[str] = None
-        try:
-            marker_str = await self._client.register()
-            verbose_logger.debug("Orchestrator: Mavvrik marker = %s", marker_str)
-        except Exception as exc:
-            verbose_logger.warning(
-                "Orchestrator: register() failed, "
-                "falling back to first-run start date: %s",
-                exc,
-            )
+        marker_str = await self._client.register()
+        verbose_logger.debug("Orchestrator: marker = %s", marker_str)
 
         if marker_str:
             return date.fromisoformat(marker_str[:10])
@@ -239,13 +231,11 @@ class Orchestrator:
     @staticmethod
     def _get_pod_lock_manager():
         """Return the pod lock manager from the proxy, or None if unavailable."""
-        try:
-            from litellm.proxy.proxy_server import proxy_logging_obj
+        from litellm.proxy.proxy_server import proxy_logging_obj
 
-            if proxy_logging_obj is not None:
-                writer = getattr(proxy_logging_obj, "db_spend_update_writer", None)
-                if writer is not None:
-                    return getattr(writer, "pod_lock_manager", None)
-        except Exception:
-            pass
-        return None
+        if proxy_logging_obj is None:
+            return None
+        writer = getattr(proxy_logging_obj, "db_spend_update_writer", None)
+        if writer is None:
+            return None
+        return getattr(writer, "pod_lock_manager", None)

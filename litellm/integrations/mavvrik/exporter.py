@@ -16,7 +16,7 @@ from typing import Any, List, Optional
 
 import polars as pl
 
-from litellm._logging import verbose_logger, verbose_proxy_logger
+from litellm._logging import verbose_proxy_logger
 
 # query_raw is used here instead of Prisma model methods because the query
 # requires a 4-table LEFT JOIN (DailyUserSpend → VerificationToken →
@@ -85,33 +85,18 @@ class Exporter:
         params: List[Any] = [date_str]
 
         if limit is not None:
-            try:
-                params.append(int(limit))
-            except (TypeError, ValueError):
-                raise ValueError("limit must be an integer")
+            params.append(int(limit))
             query += " LIMIT $2"
 
-        try:
-            db_response = await client.db.query_raw(query, *params)
-            return pl.DataFrame(db_response, infer_schema_length=None)
-        except RuntimeError:
-            raise
-        except Exception as exc:
-            raise RuntimeError(f"Error retrieving Mavvrik usage data: {exc}") from exc
+        db_response = await client.db.query_raw(query, *params)
+        return pl.DataFrame(db_response, infer_schema_length=None)
 
     async def get_earliest_date(self) -> Optional[str]:
         """Return the earliest date string (YYYY-MM-DD) in LiteLLM_DailyUserSpend, or None."""
         client = self._prisma_client
-        try:
-            rows = await client.db.query_raw(_EARLIEST_DATE_QUERY)
-            if rows and rows[0].get("earliest") is not None:
-                return str(rows[0]["earliest"])[:10]
-        except RuntimeError:
-            raise
-        except Exception as exc:
-            verbose_logger.warning(
-                "Exporter: get_earliest_date failed (non-fatal): %s", exc
-            )
+        rows = await client.db.query_raw(_EARLIEST_DATE_QUERY)
+        if rows and rows[0].get("earliest") is not None:
+            return str(rows[0]["earliest"])[:10]
         return None
 
     # ------------------------------------------------------------------
