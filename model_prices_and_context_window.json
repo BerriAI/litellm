@@ -33221,7 +33221,6 @@
         "mode": "chat",
         "output_cost_per_token": 1e-05,
         "supports_function_calling": true,
-        "supports_prompt_caching": true,
         "supports_tool_choice": true,
         "supports_web_search": true
     },
@@ -33234,7 +33233,6 @@
         "mode": "chat",
         "output_cost_per_token": 1e-05,
         "supports_function_calling": true,
-        "supports_prompt_caching": true,
         "supports_tool_choice": true,
         "supports_web_search": true
     },
@@ -33247,7 +33245,6 @@
         "mode": "chat",
         "output_cost_per_token": 1e-05,
         "supports_function_calling": true,
-        "supports_prompt_caching": true,
         "supports_tool_choice": true,
         "supports_web_search": true
     },
@@ -33261,7 +33258,6 @@
         "mode": "chat",
         "output_cost_per_token": 1e-05,
         "supports_function_calling": true,
-        "supports_prompt_caching": true,
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_web_search": true
@@ -33277,7 +33273,6 @@
         "mode": "chat",
         "output_cost_per_token": 1e-05,
         "supports_function_calling": true,
-        "supports_prompt_caching": true,
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_web_search": true
@@ -33292,7 +33287,6 @@
         "mode": "chat",
         "output_cost_per_token": 1e-05,
         "supports_function_calling": true,
-        "supports_prompt_caching": true,
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_web_search": true
@@ -33491,7 +33485,6 @@
         "output_cost_per_token": 1.5e-05,
         "source": "https://docs.x.ai/docs/models",
         "supports_function_calling": true,
-        "supports_prompt_caching": true,
         "supports_tool_choice": true,
         "supports_web_search": true
     },
@@ -33541,7 +33534,6 @@
         "output_cost_per_token_above_128k_tokens": 3e-05,
         "source": "https://docs.x.ai/docs/models",
         "supports_function_calling": true,
-        "supports_prompt_caching": true,
         "supports_tool_choice": true,
         "supports_web_search": true
     },
@@ -33557,7 +33549,6 @@
         "output_cost_per_token_above_128k_tokens": 3e-05,
         "source": "https://docs.x.ai/docs/models",
         "supports_function_calling": true,
-        "supports_prompt_caching": true,
         "supports_tool_choice": true,
         "supports_web_search": true
     },
@@ -33723,7 +33714,6 @@
         "mode": "chat",
         "output_cost_per_token": 1.5e-05,
         "supports_function_calling": true,
-        "supports_prompt_caching": true,
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_web_search": true
@@ -33783,7 +33773,6 @@
         "mode": "chat",
         "output_cost_per_token": 1.5e-05,
         "supports_function_calling": true,
-        "supports_prompt_caching": true,
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_web_search": true
