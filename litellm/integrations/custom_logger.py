@@ -874,9 +874,9 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
                     model_response_dict = model_response.model_dump()
                     standard_logging_object_copy["response"] = model_response_dict
 
-        model_call_details_copy[
-            "standard_logging_object"
-        ] = standard_logging_object_copy
+        model_call_details_copy["standard_logging_object"] = (
+            standard_logging_object_copy
+        )
         return model_call_details_copy
 
     async def get_proxy_server_request_from_cold_storage_with_object_key(
