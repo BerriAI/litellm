@@ -81,7 +81,11 @@ def _build_responses_kwargs(
         )
 
         effort = reasoning["effort"]
-        normalized = normalize_reasoning_effort_value(effort, model=model)
+        normalized = normalize_reasoning_effort_value(
+            effort,
+            model=model,
+            custom_llm_provider=(extra_kwargs or {}).get("custom_llm_provider"),
+        )
         if normalized != effort:
             responses_kwargs["reasoning"] = {**reasoning, "effort": normalized}
 
