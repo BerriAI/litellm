@@ -603,3 +603,53 @@ def test_stream_chunk_builder_dict_snapshot_preserves_hidden_provider_fields():
     response = stream_chunk_builder(chunks=[chunk_dict])
     assert response is not None
     assert response._hidden_params["provider_specific_fields"]["traffic_type"] == "default"
+
+
+def test_stream_chunk_builder_coerces_server_tool_use_dict_to_object():
+    """Regression test for https://github.com/BerriAI/litellm/issues/26153.
+
+    stream_chunk_builder must coerce usage.server_tool_use from dict to
+    ServerToolUse so that completion_cost() can access .web_search_requests
+    without AttributeError.
+    """
+    from litellm.litellm_core_utils.streaming_chunk_builder_utils import (
+        ChunkProcessor,
+    )
+    from litellm.types.utils import ServerToolUse, Usage
+
+    # Simulate a usage chunk where server_tool_use arrives as a plain dict
+    # (as happens during Anthropic streaming JSON deserialization).
+    usage_with_dict = Usage(
+        prompt_tokens=10,
+        completion_tokens=5,
+        total_tokens=15,
+    )
+    object.__setattr__(
+        usage_with_dict,
+        "server_tool_use",
+        {"web_search_requests": 2, "tool_search_requests": None},
+    )
+
+    chunks = [
+        {
+            "id": "msg_01",
+            "created": 1,
+            "model": "claude-sonnet-4-6",
+            "object": "chat.completion.chunk",
+            "choices": [{
+                "finish_reason": "stop",
+                "index": 0,
+                "delta": {"content": "The otter", "role": "assistant"},
+            }],
+            "usage": usage_with_dict,
+        }
+    ]
+
+    processor = ChunkProcessor(chunks)
+    result = processor.get_combined_usage(chunks)
+
+    assert result is not None
+    assert isinstance(result.server_tool_use, ServerToolUse), (
+        f"Expected ServerToolUse, got {type(result.server_tool_use)}"
+    )
+    assert result.server_tool_use.web_search_requests == 2
