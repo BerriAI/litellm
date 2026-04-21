@@ -52,6 +52,10 @@ from litellm.proxy._experimental.mcp_server.utils import (
 from litellm.proxy._experimental.mcp_server.utils import (
     validate_and_normalize_mcp_server_payload as _base_validate_and_normalize_mcp_server_payload,
 )
+from litellm.proxy.common_utils.encrypt_decrypt_utils import (
+    decrypt_value_helper,
+    encrypt_value_helper,
+)
 
 router = APIRouter(prefix="/v1/mcp", tags=["mcp"])
 
@@ -344,11 +348,25 @@ if MCP_AVAILABLE:
             return
 
         payload: Dict[str, Any] = server.model_dump(mode="json")
+        payload_json = json.dumps(payload)
+        try:
+            encrypted_payload = encrypt_value_helper(payload_json)
+        except Exception as e:
+            verbose_proxy_logger.debug(
+                f"Failed to encrypt temporary MCP server payload for Redis cache: {str(e)}"
+            )
+            return
+
+        if not isinstance(encrypted_payload, str):
+            verbose_proxy_logger.debug(
+                "Encrypted temporary MCP payload is not a string; skipping Redis cache write"
+            )
+            return
 
         try:
             await cache_backend.async_set_cache(
                 key=f"{TEMPORARY_MCP_SERVER_REDIS_KEY_PREFIX}:{server.server_id}",
-                value=payload,
+                value=encrypted_payload,
                 ttl=max(1, ttl_seconds),
             )
         except Exception as e:
@@ -376,11 +394,31 @@ if MCP_AVAILABLE:
             )
             return None
 
-        if not isinstance(cached_server, dict):
+        if isinstance(cached_server, dict):
+            payload_dict: Dict[str, Any] = cached_server
+        elif isinstance(cached_server, str):
+            decrypted_json = decrypt_value_helper(
+                value=cached_server,
+                key="temporary_mcp_server",
+                exception_type="debug",
+            )
+            if decrypted_json is None:
+                return None
+            try:
+                loaded = json.loads(decrypted_json)
+            except Exception as e:
+                verbose_proxy_logger.debug(
+                    f"Invalid decrypted temporary MCP payload in Redis cache: {str(e)}"
+                )
+                return None
+            if not isinstance(loaded, dict):
+                return None
+            payload_dict = loaded
+        else:
             return None
 
         try:
-            return MCPServer(**cached_server)
+            return MCPServer(**payload_dict)
         except Exception as e:
             verbose_proxy_logger.debug(
                 f"Invalid temporary MCP server payload in Redis cache: {str(e)}"

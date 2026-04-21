@@ -1,6 +1,7 @@
 import os
 import sys
 import types
+import json
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 from typing import List, Optional
@@ -1687,7 +1688,11 @@ class TestTemporaryMCPSessionEndpoints:
         original_cache = mgmt_endpoints.litellm.cache
         mgmt_endpoints.litellm.cache = SimpleNamespace(cache=mock_cache_backend)
         try:
-            await _cache_temporary_mcp_server_in_redis(server, ttl_seconds=123)
+            with patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.encrypt_value_helper",
+                return_value="encrypted-payload",
+            ):
+                await _cache_temporary_mcp_server_in_redis(server, ttl_seconds=123)
         finally:
             mgmt_endpoints.litellm.cache = original_cache
 
@@ -1695,6 +1700,57 @@ class TestTemporaryMCPSessionEndpoints:
         call_kwargs = mock_cache_backend.async_set_cache.await_args.kwargs
         assert call_kwargs["key"] == "litellm:mcp:temporary_server:to-redis"
         assert call_kwargs["ttl"] == 123
+
+    @pytest.mark.asyncio
+    async def test_cache_temporary_mcp_server_in_redis_encrypts_payload(self):
+        from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+            _cache_temporary_mcp_server_in_redis,
+        )
+
+        server = generate_mock_mcp_server_config_record(server_id="to-redis-encrypted")
+        mock_cache_backend = SimpleNamespace(async_set_cache=AsyncMock())
+        original_cache = mgmt_endpoints.litellm.cache
+        mgmt_endpoints.litellm.cache = SimpleNamespace(cache=mock_cache_backend)
+        try:
+            with patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.encrypt_value_helper",
+                return_value="encrypted-payload",
+            ) as encrypt_mock:
+                await _cache_temporary_mcp_server_in_redis(server, ttl_seconds=60)
+        finally:
+            mgmt_endpoints.litellm.cache = original_cache
+
+        encrypt_mock.assert_called_once()
+        call_kwargs = mock_cache_backend.async_set_cache.await_args.kwargs
+        assert call_kwargs["value"] == "encrypted-payload"
+
+    @pytest.mark.asyncio
+    async def test_get_temporary_mcp_server_from_redis_decrypts_payload(self):
+        from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+            _get_temporary_mcp_server_from_redis,
+        )
+
+        server = generate_mock_mcp_server_config_record(server_id="from-redis-encrypted")
+        serialized = json.dumps(server.model_dump(mode="json"))
+        mock_cache_backend = SimpleNamespace(
+            async_get_cache=AsyncMock(return_value="encrypted-payload")
+        )
+        original_cache = mgmt_endpoints.litellm.cache
+        mgmt_endpoints.litellm.cache = SimpleNamespace(cache=mock_cache_backend)
+        try:
+            with patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.decrypt_value_helper",
+                return_value=serialized,
+            ) as decrypt_mock:
+                result = await _get_temporary_mcp_server_from_redis(
+                    "from-redis-encrypted"
+                )
+        finally:
+            mgmt_endpoints.litellm.cache = original_cache
+
+        assert result is not None
+        assert result.server_id == "from-redis-encrypted"
+        decrypt_mock.assert_called_once()
 
 
 class TestUpdateMCPServer:
