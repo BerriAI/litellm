@@ -1452,9 +1452,11 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
             else:
                 _team_obj = None
 
-            await user_api_key_cache.async_set_cache(
-                key=valid_token.team_id, value=_team_obj
-            )  # save team table in cache - used for tpm/rpm limiting - tpm_rpm_limiter.py
+            # Only cache when the key is a real team_id (non-team keys must not use key=None).
+            if valid_token.team_id is not None and _team_obj is not None:
+                await user_api_key_cache.async_set_cache(
+                    key=valid_token.team_id, value=_team_obj
+                )  # save team table in cache - used for tpm/rpm limiting - tpm_rpm_limiter.py
 
             # Fetch project object if key belongs to a project
             _project_obj = None
