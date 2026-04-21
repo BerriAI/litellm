@@ -4350,10 +4350,10 @@ def get_custom_logger_compatible_class(  # noqa: PLR0915
                 if isinstance(callback, GalileoObserve):
                     return callback
         elif logging_integration == "mavvrik":
-            from litellm.integrations.mavvrik.uploader import Uploader as MavvrikUploader
+            from litellm.integrations.mavvrik.logger import Logger as MavvrikLogger
 
             for callback in _in_memory_loggers:
-                if isinstance(callback, MavvrikUploader):
+                if isinstance(callback, MavvrikLogger):
                     return callback
         elif logging_integration == "cloudzero":
             from litellm.integrations.cloudzero.cloudzero import CloudZeroLogger
