@@ -1005,7 +1005,13 @@ class LiteLLMAnthropicMessagesAdapter:
                 regular_tools.append(cast(AllAnthropicToolsValues, tool))
 
         if web_search_tools:
-            new_kwargs["web_search_options"] = {}  # type: ignore
+            web_search_options: Dict[str, Any] = {}
+            for wst in web_search_tools:
+                wst_dict = cast(Dict[str, Any], wst)
+                allowed = wst_dict.get("allowed_domains")
+                if allowed:
+                    web_search_options.setdefault("filters", {})["allowed_domains"] = allowed
+            new_kwargs["web_search_options"] = web_search_options  # type: ignore
 
         if not regular_tools:
             # No regular tools left — drop tool_choice to avoid
