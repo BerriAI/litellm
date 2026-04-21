@@ -9,6 +9,7 @@ from typing import (
     Any,
     AsyncGenerator,
     Callable,
+    Dict,
     Literal,
     Optional,
     Tuple,
@@ -21,7 +22,7 @@ from fastapi import HTTPException, Request, status
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 import litellm
-from litellm._logging import verbose_proxy_logger
+from litellm._logging import _redact_string, verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.constants import (
     DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE,
@@ -63,6 +64,37 @@ else:
     ProxyConfig = Any
 from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
 from litellm.types.utils import ModelResponse, ModelResponseStream, Usage
+
+
+def _serialize_http_exception_detail(
+    detail: Any,
+) -> Tuple[str, Optional[dict]]:
+    """
+    Convert an HTTPException.detail value into (message, structured_fields)
+    for ProxyException / SSE error frames.
+
+    Dict-detail HTTPExceptions raised by guardrails were previously str()-mangled
+    into a Python repr blob, producing unparseable error responses on both the
+    streaming and non-streaming proxy surfaces. This helper extracts a clean
+    human-readable message while preserving the full payload as structured
+    fields, so the dominant guardrail shapes (`{"error": "..."}` flat and
+    `{"error": {"message": "..."}}` nested) both round-trip cleanly.
+    """
+    if isinstance(detail, str):
+        return detail, None
+    if isinstance(detail, dict):
+        err = detail.get("error")
+        if isinstance(err, str):
+            return err, detail
+        if isinstance(err, dict):
+            nested_msg = err.get("message")
+            if isinstance(nested_msg, str):
+                return nested_msg, detail
+        msg = detail.get("message")
+        if isinstance(msg, str):
+            return msg, detail
+        return json.dumps(detail), detail
+    return str(detail), None
 
 
 async def _parse_event_data_for_error(event_line: Union[str, bytes]) -> Optional[int]:
@@ -223,12 +255,28 @@ async def create_response(
 
         # Preserve status code from HTTPException (e.g., guardrail blocks)
         error_status = getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR)
-        error_detail = getattr(e, "detail", "Error processing stream start")
-        if not isinstance(error_detail, str):
-            error_detail = str(error_detail)
+        raw_detail = getattr(e, "detail", "Error processing stream start")
+        message, structured_fields = _serialize_http_exception_detail(raw_detail)
+
+        existing_fields = getattr(e, "provider_specific_fields", None) or {}
+        if structured_fields:
+            merged_fields: Optional[dict] = {**existing_fields, **structured_fields}
+        else:
+            merged_fields = existing_fields or None
+
+        # Match ProxyException.to_dict() shape so streaming and non-streaming
+        # error frames are byte-identical.
+        error_obj: Dict[str, Any] = {
+            "message": message,
+            "type": getattr(e, "type", "None"),
+            "param": getattr(e, "param", "None"),
+            "code": str(error_status),
+        }
+        if merged_fields:
+            error_obj["provider_specific_fields"] = merged_fields
 
         async def error_gen_message() -> AsyncGenerator[str, None]:
-            yield f"data: {json.dumps({'error': {'message': error_detail, 'code': error_status}})}\n\n"
+            yield f"data: {json.dumps({'error': error_obj})}\n\n"
             yield "data: [DONE]\n\n"
 
         return StreamingResponse(
@@ -818,9 +866,11 @@ class ProxyBaseLLMRequestProcessing:
                 "Request received by LiteLLM: payload too large to log (%d bytes, limit %d). Keys: %s",
                 len(_payload_str),
                 MAX_PAYLOAD_SIZE_FOR_DEBUG_LOG,
-                list(self.data.keys())
-                if isinstance(self.data, dict)
-                else type(self.data).__name__,
+                (
+                    list(self.data.keys())
+                    if isinstance(self.data, dict)
+                    else type(self.data).__name__
+                ),
             )
         else:
             verbose_proxy_logger.debug(
@@ -1006,6 +1056,7 @@ class ProxyBaseLLMRequestProcessing:
             route_type=route_type,
             llm_router=llm_router,
             user_model=user_model,
+            user_api_key_dict=user_api_key_dict,
         )
         tasks.append(llm_call)
 
@@ -1080,9 +1131,9 @@ class ProxyBaseLLMRequestProcessing:
                 # aliasing/routing, but the OpenAI-compatible response `model` field should reflect
                 # what the client sent.
                 if requested_model_from_client:
-                    self.data[
-                        "_litellm_client_requested_model"
-                    ] = requested_model_from_client
+                    self.data["_litellm_client_requested_model"] = (
+                        requested_model_from_client
+                    )
 
                 # Streaming: attach a closure that fires after all guardrail
                 # end-of-stream blocks complete.  CSW.__anext__ stores the
@@ -1593,12 +1644,19 @@ class ProxyBaseLLMRequestProcessing:
             pass
 
         if isinstance(e, HTTPException):
+            raw_detail = getattr(e, "detail", str(e))
+            message, structured_fields = _serialize_http_exception_detail(raw_detail)
+            existing_fields = getattr(e, "provider_specific_fields", None) or {}
+            if structured_fields:
+                merged_fields: Optional[dict] = {**existing_fields, **structured_fields}
+            else:
+                merged_fields = existing_fields or None
             raise ProxyException(
-                message=getattr(e, "detail", str(e)),
+                message=message,
                 type=getattr(e, "type", "None"),
                 param=getattr(e, "param", "None"),
                 code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
-                provider_specific_fields=getattr(e, "provider_specific_fields", None),
+                provider_specific_fields=merged_fields,
                 headers=headers,
             )
         elif isinstance(e, httpx.HTTPStatusError):
@@ -1676,7 +1734,9 @@ class ProxyBaseLLMRequestProcessing:
         verbose_proxy_logger.debug("inside generator")
         try:
             str_so_far = ""
-            async for chunk in proxy_logging_obj.async_post_call_streaming_iterator_hook(
+            async for (
+                chunk
+            ) in proxy_logging_obj.async_post_call_streaming_iterator_hook(
                 user_api_key_dict=user_api_key_dict,
                 response=response,
                 request_data=request_data,
@@ -1730,7 +1790,7 @@ class ProxyBaseLLMRequestProcessing:
 
             if isinstance(e, HTTPException):
                 raise e
-            error_traceback = traceback.format_exc()
+            error_traceback = _redact_string(traceback.format_exc())
             error_msg = f"{str(e)}\n\n{error_traceback}"
             proxy_exception = ProxyException(
                 message=getattr(e, "message", error_msg),
@@ -1904,9 +1964,9 @@ class ProxyBaseLLMRequestProcessing:
 
             # Add cache-related fields to **params (handled by Usage.__init__)
             if cache_creation_input_tokens is not None:
-                usage_kwargs[
-                    "cache_creation_input_tokens"
-                ] = cache_creation_input_tokens
+                usage_kwargs["cache_creation_input_tokens"] = (
+                    cache_creation_input_tokens
+                )
             if cache_read_input_tokens is not None:
                 usage_kwargs["cache_read_input_tokens"] = cache_read_input_tokens
 

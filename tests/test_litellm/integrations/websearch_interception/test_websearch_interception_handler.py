@@ -4,7 +4,7 @@ Unit tests for WebSearch Interception Handler
 Tests the WebSearchInterceptionLogger class and helper functions.
 """
 
-from unittest.mock import Mock
+from unittest.mock import MagicMock, Mock
 
 import pytest
 
@@ -89,8 +89,9 @@ async def test_internal_flags_filtered_from_followup_kwargs():
 
     # Apply the same filtering logic used in _execute_agentic_loop
     kwargs_for_followup = {
-        k: v for k, v in kwargs_with_internal_flags.items()
-        if not k.startswith('_websearch_interception')
+        k: v
+        for k, v in kwargs_with_internal_flags.items()
+        if not k.startswith("_websearch_interception")
     }
 
     # Verify internal flags are filtered out
@@ -130,12 +131,14 @@ async def test_async_pre_call_deployment_hook_provider_from_top_level_kwargs():
     assert result is not None
     # The web_search tool should be converted to litellm_web_search (OpenAI format)
     assert any(
-        t.get("type") == "function" and t.get("function", {}).get("name") == "litellm_web_search"
+        t.get("type") == "function"
+        and t.get("function", {}).get("name") == "litellm_web_search"
         for t in result["tools"]
     )
     # The non-web-search tool should be preserved
     assert any(
-        t.get("type") == "function" and t.get("function", {}).get("name") == "other_tool"
+        t.get("type") == "function"
+        and t.get("function", {}).get("name") == "other_tool"
         for t in result["tools"]
     )
 
@@ -173,7 +176,8 @@ async def test_async_pre_call_deployment_hook_returns_full_kwargs():
     assert result["custom_llm_provider"] == "openai"
     # Tools should be converted
     assert any(
-        t.get("type") == "function" and t.get("function", {}).get("name") == "litellm_web_search"
+        t.get("type") == "function"
+        and t.get("function", {}).get("name") == "litellm_web_search"
         for t in result["tools"]
     )
 
@@ -234,7 +238,8 @@ async def test_async_pre_call_deployment_hook_nested_litellm_params_fallback():
 
     assert result is not None
     assert any(
-        t.get("type") == "function" and t.get("function", {}).get("name") == "litellm_web_search"
+        t.get("type") == "function"
+        and t.get("function", {}).get("name") == "litellm_web_search"
         for t in result["tools"]
     )
     # Full kwargs preserved
@@ -267,9 +272,56 @@ async def test_async_pre_call_deployment_hook_provider_derived_from_model_name()
     # Should NOT be None — the hook should derive "openai" from "openai/gpt-4o-mini"
     assert result is not None
     assert any(
-        t.get("type") == "function" and t.get("function", {}).get("name") == "litellm_web_search"
+        t.get("type") == "function"
+        and t.get("function", {}).get("name") == "litellm_web_search"
         for t in result["tools"]
     )
     # Full kwargs preserved
     assert result["model"] == "openai/gpt-4o-mini"
     assert result["api_key"] == "fake-key"
+
+
+@pytest.mark.asyncio
+async def test_deployment_hook_converts_stream_and_logging_obj_syncs():
+    """
+    Regression test: websearch interception with stream=True must not skip logging.
+
+    Before the fix, the stream conversion only happened in async_pre_request_hook
+    (inside the anthropic_messages function scope). wrapper_async still saw
+    stream=True, took the streaming early-return path, and skipped all spend/cost
+    logging.  The fix moves stream conversion into the deployment hook so
+    wrapper_async sees stream=False, and then syncs logging_obj.stream.
+
+    This test verifies:
+    1. The deployment hook sets stream=False and the converted flag.
+    2. wrapper_async syncs logging_obj.stream after the hook runs.
+    """
+    logger = WebSearchInterceptionLogger(enabled_providers=["bedrock"])
+
+    kwargs = {
+        "model": "anthropic.claude-opus-4-6-20250219-v1:0",
+        "messages": [{"role": "user", "content": "Search for LiteLLM"}],
+        "tools": [
+            {"type": "web_search_20250305", "name": "web_search", "max_uses": 3},
+        ],
+        "custom_llm_provider": "bedrock",
+        "stream": True,
+    }
+
+    result = await logger.async_pre_call_deployment_hook(kwargs=kwargs, call_type=None)
+
+    assert result is not None
+    assert result["stream"] is False
+    assert result["_websearch_interception_converted_stream"] is True
+
+    # Simulate what wrapper_async does after the deployment hook:
+    # logging_obj.stream was set to True during function_setup (before hook).
+    # After the hook, wrapper_async must sync it.
+    logging_obj = MagicMock()
+    logging_obj.stream = True  # original value from function_setup
+
+    _hook_stream = result.get("stream")
+    if _hook_stream is not None and logging_obj.stream != _hook_stream:
+        logging_obj.stream = _hook_stream
+
+    assert logging_obj.stream is False

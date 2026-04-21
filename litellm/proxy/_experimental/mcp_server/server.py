@@ -7,6 +7,7 @@ LiteLLM MCP Server Routes
 import asyncio
 import contextlib
 import time
+import types
 import traceback
 import uuid
 from datetime import datetime
@@ -37,7 +38,10 @@ from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
 from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
     get_request_base_url,
 )
-from litellm.proxy._experimental.mcp_server.mcp_context import _mcp_active_toolset_id
+from litellm.proxy._experimental.mcp_server.mcp_context import (
+    _mcp_active_toolset_id,
+    _mcp_gateway_initialize_instructions,
+)
 from litellm.proxy._experimental.mcp_server.mcp_debug import MCPDebug
 from litellm.proxy._experimental.mcp_server.utils import (
     LITELLM_MCP_SERVER_DESCRIPTION,
@@ -122,6 +126,8 @@ _INITIALIZATION_LOCK = asyncio.Lock()
 
 if MCP_AVAILABLE:
     from mcp.server import Server
+    from mcp.server.lowlevel.server import NotificationOptions
+    from mcp.server.models import InitializationOptions
 
     # Import auth context variables and middleware
     from mcp.server.auth.middleware.auth_context import (
@@ -200,12 +206,30 @@ if MCP_AVAILABLE:
                 )
         return normalized
 
+    def _gateway_create_initialization_options(
+        self,
+        notification_options: Optional[NotificationOptions] = None,
+        experimental_capabilities: Optional[Dict[str, Dict[str, Any]]] = None,
+    ) -> InitializationOptions:
+        opts = Server.create_initialization_options(
+            self,
+            notification_options=notification_options,
+            experimental_capabilities=experimental_capabilities or {},
+        )
+        merged = _mcp_gateway_initialize_instructions.get()
+        if merged is not None:
+            return opts.model_copy(update={"instructions": merged})
+        return opts
+
     ########################################################
     ############ Initialize the MCP Server #################
     ########################################################
     server: Server = Server(
         name=LITELLM_MCP_SERVER_NAME,
         version=LITELLM_MCP_SERVER_VERSION,
+    )
+    server.create_initialization_options = types.MethodType(  # type: ignore[method-assign]
+        _gateway_create_initialization_options, server
     )
     sse: SseServerTransport = SseServerTransport("/mcp/sse/messages")
 
@@ -896,11 +920,17 @@ if MCP_AVAILABLE:
         user_api_key_auth: Optional[UserAPIKeyAuth],
         prefetched_creds: Optional[Dict[str, Dict[str, Any]]] = None,
     ) -> Optional[Dict[str, str]]:
-        """Look up stored OAuth2 token for (user, server) from DB and return as extra_headers dict.
+        """Look up stored OAuth2 token for (user, server) and return as extra_headers dict.
+
+        Lookup order:
+        1. Redis cache (fast path, NaCl-decrypted) — skipped when prefetched_creds supplied
+        2. prefetched_creds dict (pre-fetched batch DB query) or fresh DB query
+        3. Auto-refresh when the stored token is expired and a refresh_token exists
 
         Args:
             prefetched_creds: Optional dict keyed by server_id with credential payloads.
-                              When provided, avoids a per-server DB round-trip.
+                              When provided, the Redis and individual DB lookups are
+                              skipped in favour of the pre-fetched batch result.
         """
         if server.auth_type != MCPAuth.oauth2:
             return None
@@ -914,8 +944,27 @@ if MCP_AVAILABLE:
             from litellm.proxy._experimental.mcp_server.db import (  # noqa: PLC0415
                 get_user_oauth_credential,
                 is_oauth_credential_expired,
+                refresh_user_oauth_token,
+            )
+            from litellm.proxy._experimental.mcp_server.oauth2_token_cache import (  # noqa: PLC0415
+                _compute_per_user_token_ttl,
+                mcp_per_user_token_cache,
             )
 
+            # ── Fast path: Redis cache ────────────────────────────────────────
+            # Only used when prefetched_creds is not supplied (individual lookup).
+            if prefetched_creds is None:
+                cached_token = await mcp_per_user_token_cache.get(user_id, server_id)
+                if cached_token is not None:
+                    verbose_logger.debug(
+                        "_get_user_oauth_extra_headers_from_db: Redis hit for "
+                        "user=%s server=%s",
+                        user_id,
+                        server_id,
+                    )
+                    return {"Authorization": f"Bearer {cached_token}"}
+
+            # ── Slow path: DB lookup ──────────────────────────────────────────
             if prefetched_creds is not None:
                 cred = prefetched_creds.get(server_id)
             else:
@@ -929,18 +978,85 @@ if MCP_AVAILABLE:
                 cred = await get_user_oauth_credential(
                     prisma_client, user_id, server_id
                 )
-            if cred and cred.get("access_token"):
-                if is_oauth_credential_expired(cred):
-                    verbose_logger.debug(
-                        f"_get_user_oauth_extra_headers_from_db: token expired for "
-                        f"user={user_id} server={server_id}"
-                    )
+
+            if not cred or not cred.get("access_token"):
+                return None
+
+            if is_oauth_credential_expired(cred):
+                verbose_logger.debug(
+                    "_get_user_oauth_extra_headers_from_db: token expired for "
+                    "user=%s server=%s — attempting refresh",
+                    user_id,
+                    server_id,
+                )
+                # Attempt token refresh; requires a DB client (not available from prefetch)
+                if cred.get("refresh_token"):
+                    try:
+                        from litellm.proxy.utils import (  # noqa: PLC0415
+                            get_prisma_client_or_throw,
+                        )
+
+                        prisma_client = get_prisma_client_or_throw(
+                            "Database not connected. Cannot refresh OAuth token."
+                        )
+                        cred = await refresh_user_oauth_token(
+                            prisma_client=prisma_client,
+                            user_id=user_id,
+                            server=server,
+                            cred=cred,
+                        )
+                    except Exception as refresh_exc:
+                        verbose_logger.warning(
+                            "_get_user_oauth_extra_headers_from_db: refresh failed "
+                            "for user=%s server=%s: %s",
+                            user_id,
+                            server_id,
+                            refresh_exc,
+                        )
+                        cred = None
+
+                if not cred or not cred.get("access_token"):
+                    # Clear stale Redis/cache entry so we don't serve it again.
+                    # Do this for both the individual and prefetch paths so the
+                    # next request doesn't get a stale cache hit.
+                    await mcp_per_user_token_cache.delete(user_id, server_id)
                     return None
-                return {"Authorization": f"Bearer {cred['access_token']}"}
+
+            access_token: str = cred["access_token"]
+
+            # Warm (or re-warm) the Redis cache from the DB result.
+            # Always write regardless of whether expires_at is present — tokens
+            # without an expiry are still valid and should be cached using the
+            # server/default TTL so subsequent requests are fast.
+            if prefetched_creds is None:
+                raw_expires = None
+                expires_at = cred.get("expires_at")
+                if expires_at:
+                    from datetime import datetime, timezone  # noqa: PLC0415
+
+                    try:
+                        exp_dt = datetime.fromisoformat(expires_at)
+                        if exp_dt.tzinfo is None:
+                            exp_dt = exp_dt.replace(tzinfo=timezone.utc)
+                        remaining = int(
+                            (exp_dt - datetime.now(timezone.utc)).total_seconds()
+                        )
+                        raw_expires = max(remaining, 0) if remaining > 0 else None
+                    except (ValueError, TypeError):
+                        pass
+                ttl = _compute_per_user_token_ttl(server, raw_expires)
+                await mcp_per_user_token_cache.set(
+                    user_id, server_id, access_token, ttl
+                )
+
+            return {"Authorization": f"Bearer {access_token}"}
         except Exception as e:
             verbose_logger.warning(
-                f"_get_user_oauth_extra_headers_from_db: failed to retrieve credential for "
-                f"user={user_id} server={server_id}: {e}"
+                "_get_user_oauth_extra_headers_from_db: failed to retrieve credential for "
+                "user=%s server=%s: %s",
+                user_id,
+                server_id,
+                e,
             )
         return None
 
@@ -1012,6 +1128,57 @@ if MCP_AVAILABLE:
             server_auth_header = mcp_auth_header
 
         return server_auth_header, extra_headers
+
+    def _merge_gateway_initialize_instructions(
+        allowed_mcp_servers: List[MCPServer],
+    ) -> Optional[str]:
+        """YAML/DB override, else in-memory upstream text from list_tools / health_check / call_tool."""
+        if not allowed_mcp_servers:
+            return None
+
+        texts: List[Tuple[str, str]] = []
+        for server in allowed_mcp_servers:
+            label = (
+                server.alias
+                or server.server_name
+                or server.name
+                or server.server_id
+                or "mcp"
+            )
+            if server.instructions and server.instructions.strip():
+                texts.append((label, server.instructions.strip()))
+                continue
+            if server.spec_path:
+                continue
+            cached = global_mcp_server_manager._upstream_initialize_instructions_by_server_id.get(
+                server.server_id
+            )
+            if cached and cached.strip():
+                texts.append((label, cached.strip()))
+
+        if not texts:
+            return None
+        if len(texts) == 1:
+            return texts[0][1]
+        return "\n\n---\n\n".join(f"[{lbl}]\n{txt}" for lbl, txt in texts)
+
+    @contextlib.asynccontextmanager
+    async def _gateway_initialize_instructions_request_scope(
+        user_api_key_auth: Optional[UserAPIKeyAuth],
+        mcp_servers: Optional[List[str]],
+        client_ip: Optional[str],
+    ) -> AsyncIterator[None]:
+        allowed = await _get_allowed_mcp_servers(
+            user_api_key_auth=user_api_key_auth,
+            mcp_servers=mcp_servers,
+            client_ip=client_ip,
+        )
+        merged = _merge_gateway_initialize_instructions(allowed_mcp_servers=allowed)
+        tok = _mcp_gateway_initialize_instructions.set(merged)
+        try:
+            yield
+        finally:
+            _mcp_gateway_initialize_instructions.reset(tok)
 
     async def _get_tools_from_mcp_servers(  # noqa: PLR0915
         user_api_key_auth: Optional[UserAPIKeyAuth],
@@ -2504,6 +2671,20 @@ if MCP_AVAILABLE:
                     server_name, client_ip=_client_ip
                 )
                 if server and server.auth_type == MCPAuth.oauth2 and not oauth2_headers:
+                    # For per-user OAuth servers, only skip the pre-emptive 401 when
+                    # a stored token actually exists for this user+server pair.
+                    # If no stored token exists, fail fast with 401 so clients can
+                    # kick off PKCE/interactive OAuth flow immediately.
+                    if server.needs_user_oauth_token:
+                        stored_oauth_headers = (
+                            await _get_user_oauth_extra_headers_from_db(
+                                server=server,
+                                user_api_key_auth=user_api_key_auth,
+                            )
+                        )
+                        if stored_oauth_headers:
+                            continue
+
                     request = StarletteRequest(scope)
                     base_url = get_request_base_url(request)
 
@@ -2572,7 +2753,12 @@ if MCP_AVAILABLE:
                 # Request was fully handled (e.g., DELETE on non-existent session)
                 return
 
-            await session_manager.handle_request(scope, receive, send)
+            async with _gateway_initialize_instructions_request_scope(
+                user_api_key_auth,
+                mcp_servers,
+                _client_ip,
+            ):
+                await session_manager.handle_request(scope, receive, send)
         except HTTPException:
             # Re-raise HTTP exceptions to preserve status codes and details
             raise
@@ -2631,7 +2817,12 @@ if MCP_AVAILABLE:
                 await initialize_session_managers()
                 await asyncio.sleep(0.1)
 
-            await sse_session_manager.handle_request(scope, receive, send)
+            async with _gateway_initialize_instructions_request_scope(
+                user_api_key_auth,
+                mcp_servers,
+                _sse_client_ip,
+            ):
+                await sse_session_manager.handle_request(scope, receive, send)
         except Exception as e:
             verbose_logger.exception(f"Error handling MCP request: {e}")
             # Instead of re-raising, try to send a graceful error response
