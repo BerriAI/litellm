@@ -29,7 +29,7 @@ class MockImageEditConfig(BaseImageEditConfig):
         self,
         headers: dict,
         model: str,
-        api_key: str = None,
+        api_key: Optional[str] = None,
         litellm_params: Optional[dict] = None,
         api_base: Optional[str] = None,
     ) -> dict:
@@ -340,6 +340,34 @@ class TestImageEditHandlerCredentialsForwarding:
 
             assert call_kwargs["credentials"] == "/path/to/creds.json"
             assert call_kwargs["project_id"] == "test-project-from-params"
+
+    def test_vertex_imagen_get_complete_url_reads_project_and_location_from_litellm_params(
+        self,
+    ):
+        """
+        VertexAIImagenImageEditConfig.get_complete_url should read
+        vertex_ai_project and vertex_ai_location from litellm_params,
+        not only from env vars / global settings.
+        """
+        from litellm.llms.vertex_ai.image_edit.vertex_imagen_transformation import (
+            VertexAIImagenImageEditConfig,
+        )
+
+        config = VertexAIImagenImageEditConfig()
+
+        litellm_params = {
+            "vertex_ai_project": "param-project",
+            "vertex_ai_location": "us-east1",
+        }
+
+        url = config.get_complete_url(
+            model="vertex_ai/imagegeneration@002",
+            api_base=None,
+            litellm_params=litellm_params,
+        )
+
+        assert "param-project" in url
+        assert "us-east1" in url
 
     def test_validate_environment_signature_includes_litellm_params(self):
         """
