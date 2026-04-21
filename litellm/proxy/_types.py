@@ -3704,9 +3704,7 @@ class LiteLLM_TeamMembership(LiteLLMPydanticObjectBase):
     # Union so Pydantic picks Full when data has server-managed fields
     # (/team/info) and Base when callers/tests construct with only
     # user-settable fields.
-    litellm_budget_table: Optional[
-        Union[LiteLLM_BudgetTableFull, LiteLLM_BudgetTable]
-    ]
+    litellm_budget_table: Optional[Union[LiteLLM_BudgetTableFull, LiteLLM_BudgetTable]]
 
     def safe_get_team_member_rpm_limit(self) -> Optional[int]:
         if self.litellm_budget_table is not None:
