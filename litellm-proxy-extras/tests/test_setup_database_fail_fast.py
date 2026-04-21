@@ -132,6 +132,18 @@ def test_v1_default_still_calls_resolve_all_migrations(monkeypatch, tmp_path):
     assert resolve_called["n"] == 1, "v1 default should still invoke the legacy path"
 
 
+def test_v2_db_push_wraps_subprocess_error_as_runtime_error(monkeypatch, tmp_path):
+    """v2: a failing `prisma db push` must raise RuntimeError, not leak
+    CalledProcessError past proxy_cli.py's `except RuntimeError`."""
+    monkeypatch.setattr(ProxyExtrasDBManager, "_get_prisma_dir", lambda: str(tmp_path))
+    (tmp_path / "schema.prisma").write_text("// stub")
+
+    stderr = "db push error"
+    with patch("subprocess.run", side_effect=_fake_migrate_deploy_failure(1, stderr)):
+        with pytest.raises(RuntimeError, match="prisma db push failed"):
+            ProxyExtrasDBManager.setup_database(use_migrate=False, use_v2_resolver=True)
+
+
 def test_v2_does_not_call_resolve_all_migrations(monkeypatch, tmp_path):
     """v2 must never call _resolve_all_migrations — that's the bug it fixes."""
     monkeypatch.setattr(
