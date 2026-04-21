@@ -4,6 +4,7 @@ from unittest.mock import Mock
 import pytest
 
 from litellm import Router
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.router_utils.common_utils import (
     _deployment_supports_web_search,
     filter_team_based_models,
@@ -362,3 +363,46 @@ def test_invalidate_model_group_info_cache():
     # Invalidate and verify cache is cleared
     router._invalidate_model_group_info_cache()
     assert router._cached_get_model_group_info.cache_info().currsize == 0
+
+
+def test_filter_deployments_by_model_access_groups_access_group_only_key():
+    """
+    Access-group-only keys should only route to deployments in allowed groups,
+    even when multiple deployments share the same public model name.
+    """
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-5",
+                "litellm_params": {"model": "openai/gpt-5.1", "api_key": "key-1"},
+                "model_info": {"access_groups": ["AG1"]},
+            },
+            {
+                "model_name": "gpt-5",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "key-2"},
+                "model_info": {"access_groups": ["AG2"]},
+            },
+        ]
+    )
+
+    scoped_key = UserAPIKeyAuth(
+        api_key="hashed-key",
+        team_id="team-2",
+        models=["AG2"],
+        team_models=["AG2"],
+    )
+
+    filtered = router._filter_deployments_by_model_access_groups(
+        model="gpt-5",
+        healthy_deployments=router._get_all_deployments(model_name="gpt-5"),
+        request_kwargs={
+            "metadata": {
+                "user_api_key_team_id": "team-2",
+                "user_api_key_auth": scoped_key,
+            }
+        },
+        request_team_id="team-2",
+    )
+
+    assert len(filtered) == 1
+    assert filtered[0].get("model_info", {}).get("access_groups") == ["AG2"]
