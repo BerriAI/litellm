@@ -15,7 +15,7 @@ DEFAULT_BASE_BRANCH = "litellm_internal_staging"
 
 
 def _find_destructive_statements(sql: str) -> list:
-    """Return SQL lines containing DROP COLUMN or DROP TABLE."""
+    """Return SQL lines containing DROP COLUMN, DROP TABLE, or DROP INDEX."""
     return [
         line.strip() for line in sql.splitlines() if DESTRUCTIVE_PATTERN.search(line)
     ]
@@ -210,7 +210,8 @@ def create_migration(
         allow_destructive (bool): Required to write a migration that contains
             DROP COLUMN, DROP TABLE, or DROP INDEX statements. Without this
             flag, the script exits non-zero and prints guidance.
-        base_branch (str): Branch to check freshness against (default: "main").
+        base_branch (str): Branch to check freshness against
+            (default: "litellm_internal_staging").
         skip_freshness_check (bool): Skip the "branch is up to date" check.
             Only for intentional migrations against an older base.
     """
