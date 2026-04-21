@@ -567,8 +567,12 @@ def anthropic_messages_handler(
             custom_llm_provider=custom_llm_provider,
             **kwargs,
         )
-        if _should_route_to_responses_api(custom_llm_provider, kwargs.get("model_info")):
-            return LiteLLMMessagesToResponsesAPIHandler.anthropic_messages_handler(**_shared_kwargs)
+        if _should_route_to_responses_api(
+            custom_llm_provider, kwargs.get("model_info")
+        ):
+            return LiteLLMMessagesToResponsesAPIHandler.anthropic_messages_handler(
+                **_shared_kwargs
+            )
 
         # The in-gateway context_management polyfill runs inside
         # ``async_anthropic_messages_handler`` so it can ``await`` the
