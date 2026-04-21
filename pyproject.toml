@@ -29,8 +29,9 @@ Homepage = "https://litellm.ai"
 Repository = "https://github.com/BerriAI/litellm"
 Documentation = "https://docs.litellm.ai"
 
-# Dependencies pinned from the published `litellm[proxy]==1.83.0` resolution.
-# Docker and CI should prefer `uv.lock` rather than maintaining parallel installers.
+# Optional extras retain exact pins because they are consumed by Docker images
+# where exact reproducibility matters. The core SDK uses ranges so downstream
+# consumers can coexist with other packages without forced downgrades.
 [project.optional-dependencies]
 proxy = [
     "gunicorn==23.0.0",
@@ -208,7 +209,7 @@ build-backend = "uv_build"
 
 [tool.uv]
 default-groups = ["dev"]
-required-version = ">=0.10.9"
+required-version = "==0.10.9"
 exclude-newer = "3 days"
 
 [tool.uv.sources]
@@ -264,3 +265,4 @@ filterwarnings = [
 [tool.coverage.run]
 source = ["litellm"]
 relative_files = true
+
