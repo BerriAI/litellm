@@ -1547,6 +1547,9 @@ class ProxyLogging:
                     and not getattr(callback, "use_native_during_call_hook", False)
                 )
                 if use_unified_during:
+                    assert (
+                        user_api_key_dict is not None
+                    )  # guaranteed by use_unified_during condition
                     data["guardrail_to_apply"] = callback
                     guardrail_task = self._run_guardrail_task_with_enrichment(
                         callback,
