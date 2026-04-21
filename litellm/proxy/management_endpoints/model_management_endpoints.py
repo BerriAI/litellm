@@ -45,7 +45,10 @@ from litellm.proxy.management_endpoints.team_endpoints import (
 from litellm.proxy.management_endpoints.team_endpoints import (
     update_team as _legacy_update_team,
 )
-from litellm.proxy.management_helpers.audit_logs import create_object_audit_log
+from litellm.proxy.management_helpers.audit_logs import (
+    create_object_audit_log,
+    write_audit_log,
+)
 from litellm.proxy.utils import PrismaClient
 from litellm.types.proxy.management_endpoints.model_management_endpoints import (
     UpdateUsefulLinksRequest,
@@ -264,6 +267,16 @@ async def patch_model(
                 after_value=updated_model.model_dump_json(exclude_none=True),
                 litellm_changed_by=user_api_key_dict.user_id,
                 litellm_proxy_admin_name=LITELLM_PROXY_ADMIN_NAME,
+            )
+        )
+        asyncio.create_task(
+            write_audit_log(
+                object_id=model_id,
+                action="updated",
+                user_api_key_dict=user_api_key_dict,
+                table_name=LitellmTableNames.PROXY_MODEL_TABLE_NAME,
+                before_value=db_model.model_dump_json(exclude_none=True),
+                after_value=updated_model.model_dump_json(exclude_none=True),
             )
         )
 
@@ -842,6 +855,15 @@ async def delete_model(
                     litellm_proxy_admin_name=LITELLM_PROXY_ADMIN_NAME,
                 )
             )
+            asyncio.create_task(
+                write_audit_log(
+                    object_id=model_info.id,
+                    action="deleted",
+                    user_api_key_dict=user_api_key_dict,
+                    table_name=LitellmTableNames.PROXY_MODEL_TABLE_NAME,
+                    before_value=result.model_dump_json(exclude_none=True),
+                )
+            )
             return {"message": f"Model: {result.model_id} deleted successfully"}
         else:
             raise HTTPException(
@@ -1052,6 +1074,19 @@ async def add_new_model(
                 litellm_proxy_admin_name=LITELLM_PROXY_ADMIN_NAME,
             )
         )
+        asyncio.create_task(
+            write_audit_log(
+                object_id=model_response.model_id,
+                action="created",
+                user_api_key_dict=user_api_key_dict,
+                table_name=LitellmTableNames.PROXY_MODEL_TABLE_NAME,
+                after_value=(
+                    model_response.model_dump_json(exclude_none=True)
+                    if isinstance(model_response, BaseModel)
+                    else None
+                ),
+            )
+        )
 
         return model_response
 
@@ -1209,6 +1244,24 @@ async def update_model(
                     ),
                     litellm_changed_by=user_api_key_dict.user_id,
                     litellm_proxy_admin_name=LITELLM_PROXY_ADMIN_NAME,
+                )
+            )
+            asyncio.create_task(
+                write_audit_log(
+                    object_id=_model_id,
+                    action="updated",
+                    user_api_key_dict=user_api_key_dict,
+                    table_name=LitellmTableNames.PROXY_MODEL_TABLE_NAME,
+                    before_value=(
+                        _existing_litellm_params.model_dump_json(exclude_none=True)
+                        if isinstance(_existing_litellm_params, BaseModel)
+                        else None
+                    ),
+                    after_value=(
+                        model_response.model_dump_json(exclude_none=True)
+                        if isinstance(model_response, BaseModel)
+                        else None
+                    ),
                 )
             )
 

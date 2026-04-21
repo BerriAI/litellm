@@ -88,6 +88,7 @@ from litellm.proxy.management_helpers.object_permission_utils import (
 from litellm.proxy.management_helpers.team_member_permission_checks import (
     TeamMemberPermissionChecks,
 )
+from litellm.proxy.management_helpers.audit_logs import write_audit_log
 from litellm.proxy.management_helpers.utils import (
     add_new_member,
     management_endpoint_wrapper,
@@ -1041,6 +1042,16 @@ async def new_team(  # noqa: PLR0915
                 )
             )
 
+        asyncio.create_task(
+            write_audit_log(
+                object_id=data.team_id or "",
+                action="created",
+                user_api_key_dict=user_api_key_dict,
+                table_name=LitellmTableNames.TEAM_TABLE_NAME,
+                after_value=data.model_dump_json(exclude_none=True),
+            )
+        )
+
         try:
             return team_row.model_dump()
         except Exception:
@@ -1579,6 +1590,17 @@ async def update_team(  # noqa: PLR0915
                 user_api_key_dict=user_api_key_dict,
                 litellm_proxy_admin_name=litellm_proxy_admin_name,
             )
+
+        asyncio.create_task(
+            write_audit_log(
+                object_id=team_row.team_id or "",
+                action="updated",
+                user_api_key_dict=user_api_key_dict,
+                table_name=LitellmTableNames.TEAM_TABLE_NAME,
+                before_value=existing_team_row.model_dump_json(exclude_none=True) if existing_team_row else None,
+                after_value=data.model_dump_json(exclude_none=True),
+            )
+        )
 
         return {"team_id": team_row.team_id, "data": team_row}
     except Exception as e:
@@ -2123,6 +2145,18 @@ async def team_member_add(
         raise HTTPException(
             status_code=404, detail={"error": f"Team with id {data.team_id} not found"}
         )
+
+    asyncio.create_task(
+        write_audit_log(
+            object_id=data.team_id or "",
+            action="updated",
+            user_api_key_dict=user_api_key_dict,
+            table_name=LitellmTableNames.TEAM_TABLE_NAME,
+            before_value=complete_team_data.model_dump_json(exclude_none=True),
+            after_value=data.model_dump_json(exclude_none=True),
+        )
+    )
+
     return TeamAddMemberResponse(
         **updated_team.model_dump(),
         updated_users=updated_users,
@@ -2320,6 +2354,17 @@ async def team_member_delete(
                 "team_id": data.team_id,
             }
         )
+
+    asyncio.create_task(
+        write_audit_log(
+            object_id=data.team_id or "",
+            action="updated",
+            user_api_key_dict=user_api_key_dict,
+            table_name=LitellmTableNames.TEAM_TABLE_NAME,
+            before_value=existing_team_row.model_dump_json(exclude_none=True),
+            after_value=data.model_dump_json(exclude_none=True),
+        )
+    )
 
     return existing_team_row
 
@@ -2788,6 +2833,23 @@ async def delete_team(
     deleted_teams = await prisma_client.delete_data(
         team_id_list=data.team_ids, table_name="team"
     )
+
+    _team_before_map = {
+        tr.team_id: tr.model_dump_json(exclude_none=True)
+        for tr in team_rows
+        if tr.team_id
+    }
+    for team_id in data.team_ids:
+        asyncio.create_task(
+            write_audit_log(
+                object_id=team_id,
+                action="deleted",
+                user_api_key_dict=user_api_key_dict,
+                table_name=LitellmTableNames.TEAM_TABLE_NAME,
+                before_value=_team_before_map.get(team_id),
+            )
+        )
+
     return deleted_teams
 
 

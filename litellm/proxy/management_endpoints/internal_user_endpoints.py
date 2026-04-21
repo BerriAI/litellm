@@ -40,6 +40,7 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (
     generate_key_helper_fn,
     prepare_metadata_fields,
 )
+from litellm.proxy.management_helpers.audit_logs import write_audit_log
 from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
 from litellm.proxy.utils import handle_exception_on_proxy, hash_password
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
@@ -533,6 +534,16 @@ async def new_user(
         #########################################################
         ########## END USER CREATED HOOK ################
         #########################################################
+
+        asyncio.create_task(
+            write_audit_log(
+                object_id=new_user_response.user_id or "",
+                action="created",
+                user_api_key_dict=user_api_key_dict,
+                table_name=LitellmTableNames.USER_TABLE_NAME,
+                after_value=new_user_response.model_dump_json(exclude_none=True),
+            )
+        )
 
         return new_user_response
     except Exception as e:
@@ -1356,10 +1367,32 @@ async def user_update(
     try:
         verbose_proxy_logger.debug("/user/update: Received data = %s", data)
 
+        _user_before: Optional[str] = None
+        if data.user_id:
+            from litellm.proxy.proxy_server import prisma_client as _pc
+            if _pc is not None:
+                _user_row = await _pc.db.litellm_usertable.find_unique(
+                    where={"user_id": data.user_id}
+                )
+                if _user_row is not None:
+                    _user_before = _user_row.model_dump_json(exclude_none=True)
+
         response = await _update_single_user_helper(
             user_request=data,
             user_api_key_dict=user_api_key_dict,
         )
+
+        asyncio.create_task(
+            write_audit_log(
+                object_id=data.user_id or "",
+                action="updated",
+                user_api_key_dict=user_api_key_dict,
+                table_name=LitellmTableNames.USER_TABLE_NAME,
+                before_value=_user_before,
+                after_value=data.model_dump_json(exclude_none=True),
+            )
+        )
+
         return response
     except Exception as e:
         verbose_proxy_logger.exception(
@@ -2239,6 +2272,7 @@ async def delete_user(
         )
 
     # check that all teams passed exist
+    _user_before_map: dict = {}
     for user_id in data.user_ids:
         user_row = await prisma_client.db.litellm_usertable.find_unique(
             where={"user_id": user_id}
@@ -2250,6 +2284,7 @@ async def delete_user(
                 detail={"error": f"User not found, passed user_id={user_id}"},
             )
         else:
+            _user_before_map[user_id] = user_row.model_dump_json(exclude_none=True)
             # Enterprise Feature - Audit Logging. Enable with litellm.store_audit_logs = True
             # we do this after the first for loop, since first for loop is for validation. we only want this inserted after validation passes
             if litellm.store_audit_logs is True:
@@ -2334,6 +2369,17 @@ async def delete_user(
     deleted_users = await prisma_client.db.litellm_usertable.delete_many(
         where={"user_id": {"in": data.user_ids}}
     )
+
+    for user_id in data.user_ids:
+        asyncio.create_task(
+            write_audit_log(
+                object_id=user_id,
+                action="deleted",
+                user_api_key_dict=user_api_key_dict,
+                table_name=LitellmTableNames.USER_TABLE_NAME,
+                before_value=_user_before_map.get(user_id),
+            )
+        )
 
     return deleted_users
 

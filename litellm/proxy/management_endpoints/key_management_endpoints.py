@@ -68,6 +68,7 @@ from litellm.proxy.management_helpers.object_permission_utils import (
 from litellm.proxy.management_helpers.team_member_permission_checks import (
     TeamMemberPermissionChecks,
 )
+from litellm.proxy.management_helpers.audit_logs import write_audit_log
 from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
 from litellm.proxy.spend_tracking.spend_tracking_utils import _is_master_key
 from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import (
@@ -1315,12 +1316,24 @@ async def generate_key_fn(
                 user_api_key_cache=user_api_key_cache,
             )
 
-        return await _common_key_generation_helper(
+        result = await _common_key_generation_helper(
             data=data,
             user_api_key_dict=user_api_key_dict,
             litellm_changed_by=litellm_changed_by,
             team_table=team_table,
         )
+
+        asyncio.create_task(
+            write_audit_log(
+                object_id=getattr(result, "token", None) or "",
+                action="created",
+                user_api_key_dict=user_api_key_dict,
+                table_name=LitellmTableNames.KEY_TABLE_NAME,
+                after_value=data.model_dump_json(exclude_none=True),
+            )
+        )
+
+        return result
 
     except Exception as e:
         verbose_proxy_logger.exception(
@@ -2220,6 +2233,17 @@ async def update_key_fn(  # noqa: PLR0915
         if response is None:
             raise ValueError("Failed to update key got response = None")
 
+        asyncio.create_task(
+            write_audit_log(
+                object_id=key,
+                action="updated",
+                user_api_key_dict=user_api_key_dict,
+                table_name=LitellmTableNames.KEY_TABLE_NAME,
+                before_value=existing_key_row.model_dump_json(exclude_none=True),
+                after_value=data.model_dump_json(exclude_none=True),
+            )
+        )
+
         return {"key": key, **response["data"]}
         # update based on remaining passed in values
     except Exception as e:
@@ -2587,6 +2611,22 @@ async def delete_key_fn(
                 response=number_deleted_keys,
             )
         )
+
+        _key_before_map = {
+            k.token: k.model_dump_json(exclude_none=True)
+            for k in (_keys_being_deleted or [])
+            if k.token
+        }
+        for _key in deleted_keys:
+            asyncio.create_task(
+                write_audit_log(
+                    object_id=_key,
+                    action="deleted",
+                    user_api_key_dict=user_api_key_dict,
+                    table_name=LitellmTableNames.KEY_TABLE_NAME,
+                    before_value=_key_before_map.get(_key),
+                )
+            )
 
         return {"deleted_keys": deleted_keys}
     except Exception as e:
@@ -5074,6 +5114,17 @@ async def block_key(
         proxy_logging_obj=proxy_logging_obj,
     )
 
+    asyncio.create_task(
+        write_audit_log(
+            object_id=hashed_token,
+            action="updated",
+            user_api_key_dict=user_api_key_dict,
+            table_name=LitellmTableNames.KEY_TABLE_NAME,
+            before_value=_record_before_block.model_dump_json(exclude_none=True),
+            after_value='{"blocked": true}',
+        )
+    )
+
     return record
 
 
@@ -5174,6 +5225,17 @@ async def unblock_key(
 
     record = await prisma_client.db.litellm_verificationtoken.update(
         where={"token": hashed_token}, data={"blocked": False}  # type: ignore
+    )
+
+    asyncio.create_task(
+        write_audit_log(
+            object_id=hashed_token,
+            action="updated",
+            user_api_key_dict=user_api_key_dict,
+            table_name=LitellmTableNames.KEY_TABLE_NAME,
+            before_value=existing_record.model_dump_json(exclude_none=True),
+            after_value='{"blocked": false}',
+        )
     )
 
     ## UPDATE KEY CACHE - invalidate so next read re-fetches from DB
