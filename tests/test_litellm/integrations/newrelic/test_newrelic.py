@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-# newrelic is a container-only dependency (requirements.txt) and is not installed
+# newrelic is a proxy-runtime dependency (pyproject.toml) and is not installed
 # in the CI Python environment. Mock it in sys.modules before importing the
 # integration so that deferred `import newrelic.agent` calls inside NewRelicLogger
 # methods resolve to these mocks rather than failing with ModuleNotFoundError.
@@ -106,9 +106,7 @@ class TestNewRelicLoggerInit:
 
     def test_disabled_when_app_name_missing(self):
         with patch("newrelic.agent.register_application"):
-            with patch.dict(
-                os.environ, {"NEW_RELIC_LICENSE_KEY": "key"}, clear=True
-            ):
+            with patch.dict(os.environ, {"NEW_RELIC_LICENSE_KEY": "key"}, clear=True):
                 logger = NewRelicLogger()
         assert logger.enabled is False
 
@@ -225,7 +223,9 @@ class TestGetTraceContext:
         kwargs = make_kwargs()
         trace_id, span_id = self.logger._get_trace_context(kwargs)
         assert trace_id is not None
-        assert len(trace_id) == 32  # 32-char lowercase hex, matches W3C traceparent format
+        assert (
+            len(trace_id) == 32
+        )  # 32-char lowercase hex, matches W3C traceparent format
 
     def test_generates_uuid_when_traceparent_malformed(self):
         kwargs = make_kwargs(traceparent="not-valid")
@@ -273,7 +273,12 @@ class TestExtractMessageContent:
         assert "call_1" in result
 
     def test_multimodal_list_serialized_as_json(self):
-        msg = {"content": [{"type": "text", "text": "describe this"}, {"type": "image_url"}]}
+        msg = {
+            "content": [
+                {"type": "text", "text": "describe this"},
+                {"type": "image_url"},
+            ]
+        }
         result = self.logger._extract_message_content(msg)
         assert "describe this" in result
         assert "image_url" in result
@@ -340,7 +345,9 @@ class TestExtractAllMessagesTimestamps:
             logger._process_success(kwargs, response, start_time=1.0, end_time=2.5)
 
         calls = mock_app.record_custom_event.call_args_list
-        message_events = [c[0][1] for c in calls if c[0][0] == "LlmChatCompletionMessage"]
+        message_events = [
+            c[0][1] for c in calls if c[0][0] == "LlmChatCompletionMessage"
+        ]
         for event in message_events:
             assert "timestamp" in event
 
@@ -381,7 +388,9 @@ class TestExplicitNoneValues:
 
     # _get_model_names
     def test_model_names_model_none_in_kwargs(self):
-        request_model, _ = self.logger._get_model_names({"model": None}, make_response())
+        request_model, _ = self.logger._get_model_names(
+            {"model": None}, make_response()
+        )
         assert request_model == "unknown"
 
     def test_model_names_model_none_in_response(self):
@@ -625,7 +634,9 @@ class TestEmitSupportabilityMetric:
         mock_app = MagicMock()
         mock_app.enabled = True
         with patch("newrelic.agent.application", return_value=mock_app):
-            with patch.object(self.logger, "_get_litellm_version", return_value="1.80.0"):
+            with patch.object(
+                self.logger, "_get_litellm_version", return_value="1.80.0"
+            ):
                 self.logger._emit_supportability_metric()
         mock_app.record_custom_metric.assert_called_once_with(
             "Supportability/Python/ML/LiteLLM/1.80.0", 1
@@ -636,7 +647,10 @@ class TestEmitSupportabilityMetric:
         mock_app.enabled = True
         fake_now = 9_999_999.0
         with patch("newrelic.agent.application", return_value=mock_app):
-            with patch("litellm.integrations.newrelic.newrelic.time.time", return_value=fake_now):
+            with patch(
+                "litellm.integrations.newrelic.newrelic.time.time",
+                return_value=fake_now,
+            ):
                 self.logger._emit_supportability_metric()
         assert nr_module._last_metric_emission_time == fake_now
 
@@ -671,7 +685,8 @@ class TestCheckAndEmitPeriodicMetric:
         """_last_metric_emission_time starts at 0.0; any real time satisfies 27-hour window."""
         with patch.object(self.logger, "_emit_supportability_metric") as mock_emit:
             with patch(
-                "litellm.integrations.newrelic.newrelic.time.time", return_value=100_000.0
+                "litellm.integrations.newrelic.newrelic.time.time",
+                return_value=100_000.0,
             ):
                 self.logger._check_and_emit_periodic_metric()
         mock_emit.assert_called_once()
