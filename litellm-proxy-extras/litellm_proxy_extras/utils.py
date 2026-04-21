@@ -456,7 +456,13 @@ class ProxyExtrasDBManager:
         known = set(ProxyExtrasDBManager._get_migration_names(migrations_dir))
 
         try:
-            with psycopg.connect(cleaned_url, connect_timeout=10) as conn:
+            # autocommit=True keeps the SELECT outside a transaction. Without
+            # it, psycopg3's `with conn` calls COMMIT on clean exit — which
+            # fails after `UndefinedTable` (fresh DB) leaves the transaction
+            # in an aborted state.
+            with psycopg.connect(
+                cleaned_url, connect_timeout=10, autocommit=True
+            ) as conn:
                 try:
                     rows = conn.execute(
                         "SELECT migration_name FROM _prisma_migrations "
@@ -521,6 +527,13 @@ class ProxyExtrasDBManager:
                     env=_get_prisma_env(),
                 )
                 return True
+            except (
+                subprocess.CalledProcessError,
+                subprocess.TimeoutExpired,
+            ) as e:
+                # Re-raise as RuntimeError so proxy_cli.py's
+                # `except RuntimeError` catches it and exits cleanly.
+                raise RuntimeError(f"prisma db push failed.\n\nDetail: {e}") from e
             finally:
                 os.chdir(original_dir)
 
@@ -624,8 +637,10 @@ class ProxyExtrasDBManager:
                     ) from e
 
             raise RuntimeError(
-                "Database migration failed after 4 attempts (persistent timeouts). "
-                "Check database connectivity and load."
+                "Database migration failed after 4 attempts (retry loop "
+                "exhausted by timeouts or repeated idempotent-recovery "
+                "continues). Check database connectivity, load, and "
+                "_prisma_migrations ledger state."
             )
         finally:
             os.chdir(original_dir)
