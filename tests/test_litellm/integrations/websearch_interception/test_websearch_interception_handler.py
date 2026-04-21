@@ -4,7 +4,7 @@ Unit tests for WebSearch Interception Handler
 Tests the WebSearchInterceptionLogger class and helper functions.
 """
 
-from unittest.mock import MagicMock, Mock
+from unittest.mock import AsyncMock, MagicMock, Mock
 
 import pytest
 
@@ -67,6 +67,61 @@ async def test_async_should_run_agentic_loop():
 
     assert should_run is False
     assert tools_dict == {}
+
+
+@pytest.mark.asyncio
+async def test_async_build_agentic_loop_plan_returns_request_patch():
+    """Callback should return a typed patch for base handler reruns."""
+    logger = WebSearchInterceptionLogger(enabled_providers=["bedrock"])
+    logger._execute_search = AsyncMock(  # type: ignore
+        return_value="Title: LiteLLM\nURL: docs\nSnippet: test"
+    )
+
+    tools_dict = {
+        "tool_calls": [
+            {
+                "id": "toolu_123",
+                "type": "tool_use",
+                "name": "litellm_web_search",
+                "input": {"query": "what is litellm"},
+            }
+        ],
+        "response_format": "anthropic",
+    }
+    logging_obj = MagicMock()
+    logging_obj.model_call_details = {
+        "agentic_loop_params": {"model": "bedrock/invoke/claude-3-5-sonnet"}
+    }
+    kwargs = {
+        "temperature": 0.2,
+        "_websearch_interception_converted_stream": True,
+        "litellm_logging_obj": object(),
+    }
+
+    plan = await logger.async_build_agentic_loop_plan(
+        tools=tools_dict,
+        model="claude-3-5-sonnet",
+        messages=[{"role": "user", "content": "search LiteLLM"}],
+        response=None,
+        anthropic_messages_provider_config=None,
+        anthropic_messages_optional_request_params={
+            "max_tokens": 1024,
+            "tools": [{"name": "litellm_web_search"}],
+        },
+        logging_obj=logging_obj,
+        stream=False,
+        kwargs=kwargs,
+    )
+
+    assert plan.run_agentic_loop is True
+    assert plan.request_patch is not None
+    assert plan.request_patch.model == "bedrock/invoke/claude-3-5-sonnet"
+    assert plan.request_patch.max_tokens == 1024
+    assert plan.request_patch.messages is not None
+    assert len(plan.request_patch.messages) == 3
+    assert "_websearch_interception_converted_stream" not in plan.request_patch.kwargs
+    assert "litellm_logging_obj" not in plan.request_patch.kwargs
+    assert plan.request_patch.kwargs["temperature"] == 0.2
 
 
 @pytest.mark.asyncio
