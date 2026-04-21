@@ -224,6 +224,9 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     # adaptive-router params
     adaptive_router_default_model: Optional[str] = None
     adaptive_router_config: Optional[Dict] = None
+    # quality-router params
+    quality_router_config: Optional[Dict] = None
+    quality_router_default_model: Optional[str] = None
 
     # Batch/File API Params
     s3_bucket_name: Optional[str] = None

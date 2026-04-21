@@ -579,6 +579,155 @@ def test_bedrock_messages_strips_output_config_with_output_format():
     assert "output_format" not in result
 
 
+def test_bedrock_messages_strips_context_management():
+    """
+    Ensure context_management is stripped from the request before sending to
+    Bedrock Invoke, which doesn't support this Anthropic-specific parameter.
+
+    Claude Code sends context_management on every request; leaving it in the body
+    causes a 400 "context_management: Extra inputs are not permitted" from Bedrock.
+    """
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    messages = [{"role": "user", "content": [{"type": "text", "text": "Hello"}]}]
+    optional_params = {
+        "max_tokens": 4096,
+        "context_management": {
+            "edits": [{"type": "clear_thinking_20251015", "keep": "all"}]
+        },
+    }
+
+    result = cfg.transform_anthropic_messages_request(
+        model="anthropic.claude-3-haiku-20240307-v1:0",
+        messages=messages,
+        anthropic_messages_optional_request_params=optional_params,
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert (
+        "context_management" not in result
+    ), "context_management should be stripped — Bedrock Invoke rejects it"
+    assert result.get("max_tokens") == 4096
+
+
+def test_bedrock_messages_allowlist_filters_anthropic_only_fields():
+    """
+    Bedrock Invoke rejects any top-level body field it doesn't recognize with
+    "Extra inputs are not permitted". Defend against that by filtering the
+    outgoing body to a Bedrock-supported allowlist — catches Anthropic-only
+    extensions (speed, mcp_servers, container, ...) and any future additions
+    Claude Code starts sending before we learn about them.
+    """
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    messages = [{"role": "user", "content": [{"type": "text", "text": "Hello"}]}]
+    optional_params = {
+        "max_tokens": 4096,
+        "temperature": 0.5,
+        "speed": "fast",
+        "mcp_servers": [{"type": "url", "url": "https://example.com"}],
+        "container": {"skills": []},
+        "inference_geo": "us",
+        "output_config": {"effort": "low"},
+        "context_management": {"edits": []},
+    }
+
+    result = cfg.transform_anthropic_messages_request(
+        model="anthropic.claude-3-haiku-20240307-v1:0",
+        messages=messages,
+        anthropic_messages_optional_request_params=optional_params,
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    for bad in (
+        "speed",
+        "mcp_servers",
+        "container",
+        "inference_geo",
+        "output_config",
+        "context_management",
+        "model",
+        "stream",
+    ):
+        assert bad not in result, f"{bad} should be stripped by the allowlist"
+
+    # Supported fields pass through.
+    assert result["max_tokens"] == 4096
+    assert result["temperature"] == 0.5
+    assert result["anthropic_version"] == cfg.DEFAULT_BEDROCK_ANTHROPIC_API_VERSION
+    # Every surviving key is in the allowlist.
+    assert set(result).issubset(cfg.BEDROCK_INVOKE_ALLOWED_TOP_LEVEL_FIELDS)
+
+
+def test_bedrock_messages_filters_user_provided_unsupported_beta_header():
+    """
+    In proxy deployments the client (e.g. Claude Code) doesn't know the backend
+    is Bedrock and may send Anthropic-direct beta headers Bedrock can't handle.
+    All betas must go through the provider mapping, not just auto-injected ones
+    — otherwise Bedrock 400s on the unsupported value.
+    """
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    messages = [{"role": "user", "content": [{"type": "text", "text": "Hello"}]}]
+    optional_params = {"max_tokens": 128}
+    # `advisor-tool-2026-03-01` has no bedrock mapping entry → must be dropped.
+    # `context-1m-2025-08-07` does → must pass through.
+    headers = {
+        "anthropic-beta": "advisor-tool-2026-03-01,context-1m-2025-08-07",
+    }
+
+    result = cfg.transform_anthropic_messages_request(
+        model="anthropic.claude-3-haiku-20240307-v1:0",
+        messages=messages,
+        anthropic_messages_optional_request_params=optional_params,
+        litellm_params=GenericLiteLLMParams(),
+        headers=headers,
+    )
+
+    betas = result.get("anthropic_beta") or []
+    assert (
+        "advisor-tool-2026-03-01" not in betas
+    ), "user-provided beta not in the Bedrock mapping must be dropped"
+    assert (
+        "context-1m-2025-08-07" in betas
+    ), "user-provided beta that IS in the Bedrock mapping should survive"
+
+
+def test_bedrock_messages_renames_user_provided_aliased_beta_header():
+    """
+    Bedrock's config maps `advanced-tool-use-2025-11-20` to
+    `tool-search-tool-2025-10-19`. User-provided betas must go through the
+    rename too, not be forwarded under their Anthropic-direct spelling.
+    """
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    messages = [{"role": "user", "content": [{"type": "text", "text": "Hello"}]}]
+    optional_params = {"max_tokens": 128}
+    headers = {"anthropic-beta": "advanced-tool-use-2025-11-20"}
+
+    result = cfg.transform_anthropic_messages_request(
+        model="anthropic.claude-3-haiku-20240307-v1:0",
+        messages=messages,
+        anthropic_messages_optional_request_params=optional_params,
+        litellm_params=GenericLiteLLMParams(),
+        headers=headers,
+    )
+
+    betas = result.get("anthropic_beta") or []
+    assert (
+        "advanced-tool-use-2025-11-20" not in betas
+    ), "Anthropic-direct spelling should be rewritten, not forwarded verbatim"
+    assert (
+        "tool-search-tool-2025-10-19" in betas
+    ), "user-provided beta should be renamed to the Bedrock-side spelling"
+
+
 @pytest.mark.asyncio
 async def test_promote_message_stop_usage_preserves_message_delta_output_tokens():
     """

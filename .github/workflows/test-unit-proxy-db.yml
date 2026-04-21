@@ -31,8 +31,15 @@ jobs:
             test-path: "tests/proxy_unit_tests/test_auth_checks.py tests/proxy_unit_tests/test_user_api_key_auth.py"
             workers: 8
             timeout: 20
+          # test_proxy_utils.py is large (168+ parametrized tests) — run it on its
+          # own matrix so --dist=loadscope doesn't pin all of it to a single xdist
+          # worker and push the "remaining" group past the job timeout.
+          - test-group: proxy-utils
+            test-path: "tests/proxy_unit_tests/test_proxy_utils.py"
+            workers: 8
+            timeout: 20
           - test-group: remaining
-            test-path: "tests/proxy_unit_tests --ignore=tests/proxy_unit_tests/test_key_generate_prisma.py --ignore=tests/proxy_unit_tests/test_auth_checks.py --ignore=tests/proxy_unit_tests/test_user_api_key_auth.py"
+            test-path: "tests/proxy_unit_tests --ignore=tests/proxy_unit_tests/test_key_generate_prisma.py --ignore=tests/proxy_unit_tests/test_auth_checks.py --ignore=tests/proxy_unit_tests/test_user_api_key_auth.py --ignore=tests/proxy_unit_tests/test_proxy_utils.py"
             workers: 8
             timeout: 30
     uses: ./.github/workflows/_test-unit-services-base.yml
