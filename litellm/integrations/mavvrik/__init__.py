@@ -88,8 +88,7 @@ class Service:
             MAVVRIK_EXPORT_INTERVAL_MINUTES,
             MAVVRIK_EXPORT_USAGE_DATA_JOB_NAME,
         )
-        from litellm.integrations.mavvrik.orchestrator import Orchestrator
-        from litellm.integrations.mavvrik.uploader import Uploader
+        from litellm.integrations.mavvrik import Orchestrator, Uploader
 
         import litellm.proxy.proxy_server as _pserver
 
@@ -109,6 +108,10 @@ class Service:
             connection_id=connection_id,
         )
         orchestrator = Orchestrator(uploader=uploader)
+        # replace_existing=True ensures repeated calls to /mavvrik/init are safe —
+        # the existing job is replaced with the new orchestrator instance rather
+        # than accumulating duplicate jobs. The same job id is also used at
+        # startup in proxy_server.py; whichever runs last wins, which is correct.
         _scheduler.add_job(
             orchestrator.run,
             "interval",
