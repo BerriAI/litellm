@@ -776,7 +776,7 @@ def test_ensure_alternating_roles(
 
 
 def test_ensure_alternating_roles_with_tool_calls():
-    """Fixes Regression in #18685 """
+    """Fixes Regression in #18685"""
     messages = [
         {"role": "user", "content": "What's the weather?"},
         {
@@ -1675,7 +1675,7 @@ def test_anthropic_messages_pt_raw_bash_tool_result_passthrough():
                     "type": "server_tool_use",
                     "id": "srvtoolu_01BASH",
                     "name": "bash_code_execution",
-                    "input": {"command": "python3 -c \"print(1+1)\""},
+                    "input": {"command": 'python3 -c "print(1+1)"'},
                 },
                 {
                     "type": "bash_code_execution_tool_result",
@@ -1867,10 +1867,16 @@ def test_attempt_json_repair_missing_closing_brace():
         _attempt_json_repair,
     )
 
-    truncated = '{"command": ["bash","-lc","find /x/repos -name \'messages.py\' -type f"]'
+    truncated = (
+        '{"command": ["bash","-lc","find /x/repos -name \'messages.py\' -type f"]'
+    )
     result = _attempt_json_repair(truncated)
     assert result is not None
-    assert result["command"] == ["bash", "-lc", "find /x/repos -name 'messages.py' -type f"]
+    assert result["command"] == [
+        "bash",
+        "-lc",
+        "find /x/repos -name 'messages.py' -type f",
+    ]
 
 
 def test_attempt_json_repair_missing_bracket_and_brace():
@@ -1966,7 +1972,7 @@ def test_parse_tool_call_arguments_non_object_json():
         parse_tool_call_arguments,
     )
 
-    result = parse_tool_call_arguments('[1, 2, 3]')
+    result = parse_tool_call_arguments("[1, 2, 3]")
     assert result == [1, 2, 3]
 
 
@@ -1999,7 +2005,6 @@ def test_parse_tool_call_arguments_still_raises_for_unrepairable():
     error_msg = str(exc_info.value)
     assert "test_tool" in error_msg
     assert "test context" in error_msg
-
 
 
 def test_anthropic_messages_pt_interleave_thinking_with_server_tool_calls():
@@ -2176,7 +2181,11 @@ def test_anthropic_messages_pt_thinking_blocks_no_server_tools_unchanged():
     types = [c.get("type") for c in content]
 
     # Original behavior: thinking first, then text, then tool_use
-    assert types == ["thinking", "text", "tool_use"], f"Expected sequential order but got: {types}"
+    assert types == [
+        "thinking",
+        "text",
+        "tool_use",
+    ], f"Expected sequential order but got: {types}"
 
 
 def test_anthropic_messages_pt_interleave_more_thinking_than_tool_groups():
@@ -2221,7 +2230,14 @@ def test_anthropic_messages_pt_interleave_more_thinking_than_tool_groups():
                     {
                         "type": "web_search_tool_result",
                         "tool_use_id": "srvtoolu_01ONLY",
-                        "content": [{"type": "web_search_result", "url": "https://example.com", "title": "Test", "snippet": "result"}],
+                        "content": [
+                            {
+                                "type": "web_search_result",
+                                "url": "https://example.com",
+                                "title": "Test",
+                                "snippet": "result",
+                            }
+                        ],
                     },
                 ]
             },
@@ -2238,11 +2254,11 @@ def test_anthropic_messages_pt_interleave_more_thinking_than_tool_groups():
 
     # thinking_1 paired with tool group, thinking_2 and thinking_3 before text
     assert types == [
-        "thinking",            # paired with tool group
+        "thinking",  # paired with tool group
         "server_tool_use",
         "web_search_tool_result",
-        "thinking",            # extra - before text
-        "thinking",            # extra - before text
+        "thinking",  # extra - before text
+        "thinking",  # extra - before text
         "text",
     ], f"Expected order but got: {types}"
 
@@ -2337,7 +2353,9 @@ def test_anthropic_messages_pt_list_content_with_thinking_preserves_order():
 
     # Verify no duplicate thinking blocks
     thinking_count = sum(1 for t in types if t == "thinking")
-    assert thinking_count == 2, f"Expected 2 thinking blocks, got {thinking_count} (duplication detected)"
+    assert (
+        thinking_count == 2
+    ), f"Expected 2 thinking blocks, got {thinking_count} (duplication detected)"
 
     # Verify signatures preserved in correct positions
     assert content[0]["signature"] == "sig_1"

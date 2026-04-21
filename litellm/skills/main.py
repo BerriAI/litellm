@@ -173,10 +173,10 @@ def create_skill(
             )
 
         # Get provider config for external providers (Anthropic, etc.)
-        skills_api_provider_config: Optional[
-            BaseSkillsAPIConfig
-        ] = ProviderConfigManager.get_provider_skills_api_config(
-            provider=litellm.LlmProviders(custom_llm_provider),
+        skills_api_provider_config: Optional[BaseSkillsAPIConfig] = (
+            ProviderConfigManager.get_provider_skills_api_config(
+                provider=litellm.LlmProviders(custom_llm_provider),
+            )
         )
 
         if skills_api_provider_config is None:
@@ -354,10 +354,10 @@ def list_skills(
             )
 
         # Get provider config for external providers (Anthropic, etc.)
-        skills_api_provider_config: Optional[
-            BaseSkillsAPIConfig
-        ] = ProviderConfigManager.get_provider_skills_api_config(
-            provider=litellm.LlmProviders(custom_llm_provider),
+        skills_api_provider_config: Optional[BaseSkillsAPIConfig] = (
+            ProviderConfigManager.get_provider_skills_api_config(
+                provider=litellm.LlmProviders(custom_llm_provider),
+            )
         )
 
         if skills_api_provider_config is None:
@@ -529,10 +529,10 @@ def get_skill(
             )
 
         # Get provider config for external providers (Anthropic, etc.)
-        skills_api_provider_config: Optional[
-            BaseSkillsAPIConfig
-        ] = ProviderConfigManager.get_provider_skills_api_config(
-            provider=litellm.LlmProviders(custom_llm_provider),
+        skills_api_provider_config: Optional[BaseSkillsAPIConfig] = (
+            ProviderConfigManager.get_provider_skills_api_config(
+                provider=litellm.LlmProviders(custom_llm_provider),
+            )
         )
 
         if skills_api_provider_config is None:
@@ -696,10 +696,10 @@ def delete_skill(
             )
 
         # Get provider config for external providers (Anthropic, etc.)
-        skills_api_provider_config: Optional[
-            BaseSkillsAPIConfig
-        ] = ProviderConfigManager.get_provider_skills_api_config(
-            provider=litellm.LlmProviders(custom_llm_provider),
+        skills_api_provider_config: Optional[BaseSkillsAPIConfig] = (
+            ProviderConfigManager.get_provider_skills_api_config(
+                provider=litellm.LlmProviders(custom_llm_provider),
+            )
         )
 
         if skills_api_provider_config is None:

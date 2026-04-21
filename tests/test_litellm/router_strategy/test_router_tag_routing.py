@@ -252,7 +252,6 @@ async def test_default_tagged_deployments():
         assert response_extra_info["model_id"] == "default-model"
 
 
-
 @pytest.mark.asyncio()
 async def test_error_from_tag_routing():
     """
@@ -325,6 +324,7 @@ def test_tag_routing_with_list_of_tags():
     assert not is_valid_deployment_tag(["teamA", "teamB"], [])
     assert not is_valid_deployment_tag(["default"], ["teamA"])
 
+
 def test_tag_routing_with_list_of_tags_match_all():
     """
     Test that the router can handle a list of tags with match_all behavior
@@ -332,12 +332,19 @@ def test_tag_routing_with_list_of_tags_match_all():
     from litellm.router_strategy.tag_based_routing import is_valid_deployment_tag
 
     assert is_valid_deployment_tag(["teamA", "teamB"], ["teamA"], match_any=False)
-    assert is_valid_deployment_tag(["teamA", "teamB"], ["teamA", "teamB"], match_any=False)
-    assert not is_valid_deployment_tag(["teamA", "teamB", "teamC"], ["teamA", "teamD"], match_any=False)
+    assert is_valid_deployment_tag(
+        ["teamA", "teamB"], ["teamA", "teamB"], match_any=False
+    )
+    assert not is_valid_deployment_tag(
+        ["teamA", "teamB", "teamC"], ["teamA", "teamD"], match_any=False
+    )
     assert not is_valid_deployment_tag(["teamA"], ["teamA", "teamB"], match_any=False)
-    assert not is_valid_deployment_tag(["teamA", "teamB"], ["teamA", "teamC"], match_any=False)
+    assert not is_valid_deployment_tag(
+        ["teamA", "teamB"], ["teamA", "teamC"], match_any=False
+    )
     assert not is_valid_deployment_tag(["teamA", "teamB"], [], match_any=False)
     assert not is_valid_deployment_tag(["default"], ["teamA"], match_any=False)
+
 
 @pytest.mark.asyncio()
 async def test_router_free_paid_tier_with_responses_api():
@@ -401,6 +408,7 @@ async def test_router_free_paid_tier_with_responses_api():
 
         assert response_extra_info["model_id"] == "very-expensive-model"
 
+
 def test_get_tags_from_request_kwargs_none():
     from litellm.router_strategy.tag_based_routing import _get_tags_from_request_kwargs
 
@@ -419,30 +427,21 @@ def test_get_tags_from_request_kwargs_various_inputs():
     assert _get_tags_from_request_kwargs({"metadata": None}) == []
 
     # Indirect via "litellm_params" - metadata inside
-    assert (
-        _get_tags_from_request_kwargs(
-            {"litellm_params": {"metadata": {"tags": ["paid"]}}}
-        )
-        == ["paid"]
-    )
+    assert _get_tags_from_request_kwargs(
+        {"litellm_params": {"metadata": {"tags": ["paid"]}}}
+    ) == ["paid"]
     assert _get_tags_from_request_kwargs({"litellm_params": {"metadata": None}}) == []
     assert _get_tags_from_request_kwargs({"litellm_params": {}}) == []
 
     # Alternate metadata variable name: "litellm_metadata"
-    assert (
-        _get_tags_from_request_kwargs(
-            {"litellm_metadata": {"tags": ["alt"]}},
-            metadata_variable_name="litellm_metadata",
-        )
-        == ["alt"]
-    )
-    assert (
-        _get_tags_from_request_kwargs(
-            {"litellm_params": {"litellm_metadata": {"tags": ["nested-alt"]}}},
-            metadata_variable_name="litellm_metadata",
-        )
-        == ["nested-alt"]
-    )
+    assert _get_tags_from_request_kwargs(
+        {"litellm_metadata": {"tags": ["alt"]}},
+        metadata_variable_name="litellm_metadata",
+    ) == ["alt"]
+    assert _get_tags_from_request_kwargs(
+        {"litellm_params": {"litellm_metadata": {"tags": ["nested-alt"]}}},
+        metadata_variable_name="litellm_metadata",
+    ) == ["nested-alt"]
 
     # No relevant keys present
     assert _get_tags_from_request_kwargs({"foo": "bar"}) == []

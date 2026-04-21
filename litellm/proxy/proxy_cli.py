@@ -577,6 +577,12 @@ class ProxyInitializationHelpers:
     help="Exit with error if database migration fails on startup.",
     envvar="ENFORCE_PRISMA_MIGRATION_CHECK",
 )
+@click.option(
+    "--reload",
+    is_flag=True,
+    default=False,
+    help="Enable uvicorn hot reload (dev only). Incompatible with --num_workers>1, --run_gunicorn, and --run_hypercorn.",
+)
 def run_server(  # noqa: PLR0915
     host,
     port,
@@ -618,6 +624,7 @@ def run_server(  # noqa: PLR0915
     keepalive_timeout,
     max_requests_before_restart,
     enforce_prisma_migration_check: bool,
+    reload: bool,
 ):
     if setup:
         from litellm.setup_wizard import run_setup_wizard
@@ -953,6 +960,9 @@ def run_server(  # noqa: PLR0915
             loop_type = ProxyInitializationHelpers._get_loop_type()
             if loop_type:
                 uvicorn_args["loop"] = loop_type
+
+            if reload:
+                uvicorn_args["reload"] = True
 
             uvicorn.run(
                 **uvicorn_args,

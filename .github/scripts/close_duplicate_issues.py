@@ -42,7 +42,9 @@ def gh(*args: str) -> str:
 def fetch_open_issues(repo: str | None) -> list[dict]:
     """Fetch all open issues (excluding PRs) via gh api --paginate."""
     if repo:
-        endpoint = f"repos/{repo}/issues?state=open&per_page=100&sort=created&direction=asc"
+        endpoint = (
+            f"repos/{repo}/issues?state=open&per_page=100&sort=created&direction=asc"
+        )
     else:
         endpoint = "repos/{owner}/{repo}/issues?state=open&per_page=100&sort=created&direction=asc"
     cmd = ["api", "--paginate", endpoint]
@@ -71,7 +73,9 @@ def close_as_duplicate(
     repo_args = ["--repo", repo] if repo else []
 
     if dry_run:
-        print(f"  [DRY RUN] Would close #{issue_number} as duplicate of #{duplicate_of}")
+        print(
+            f"  [DRY RUN] Would close #{issue_number} as duplicate of #{duplicate_of}"
+        )
         return
 
     # Add comment
@@ -115,7 +119,9 @@ def find_duplicate(
     return None
 
 
-def scan_all(issues: list[dict], threshold: float, repo: str | None, dry_run: bool) -> int:
+def scan_all(
+    issues: list[dict], threshold: float, repo: str | None, dry_run: bool
+) -> int:
     """Compare every issue against all older issues. Returns count of duplicates found."""
     # Sort oldest first
     issues.sort(key=lambda i: i["number"])
@@ -144,7 +150,11 @@ def scan_all(issues: list[dict], threshold: float, repo: str | None, dry_run: bo
 
 
 def check_single(
-    issue_number: int, issues: list[dict], threshold: float, repo: str | None, dry_run: bool
+    issue_number: int,
+    issues: list[dict],
+    threshold: float,
+    repo: str | None,
+    dry_run: bool,
 ) -> bool:
     """Check a single issue against all older open issues. Returns True if duplicate found."""
     target = None
@@ -178,13 +188,23 @@ def check_single(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Detect and close duplicate GitHub issues")
+    parser = argparse.ArgumentParser(
+        description="Detect and close duplicate GitHub issues"
+    )
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--scan", action="store_true", help="Scan all open issues")
     mode.add_argument("--issue-number", type=int, help="Check a single issue number")
-    parser.add_argument("--threshold", type=float, default=0.85, help="Similarity threshold (0-1)")
-    parser.add_argument("--close", action="store_true", help="Actually close duplicates (default is dry-run)")
-    parser.add_argument("--repo", type=str, help="Repository (owner/repo). Auto-detected if omitted.")
+    parser.add_argument(
+        "--threshold", type=float, default=0.85, help="Similarity threshold (0-1)"
+    )
+    parser.add_argument(
+        "--close",
+        action="store_true",
+        help="Actually close duplicates (default is dry-run)",
+    )
+    parser.add_argument(
+        "--repo", type=str, help="Repository (owner/repo). Auto-detected if omitted."
+    )
     args = parser.parse_args()
 
     dry_run = not args.close
@@ -200,7 +220,9 @@ def main() -> None:
         count = scan_all(issues, args.threshold, args.repo, dry_run)
         print(f"\nTotal duplicates {'found' if dry_run else 'closed'}: {count}")
     else:
-        found = check_single(args.issue_number, issues, args.threshold, args.repo, dry_run)
+        found = check_single(
+            args.issue_number, issues, args.threshold, args.repo, dry_run
+        )
         sys.exit(0 if found else 0)  # Always exit 0; finding no dup is not an error
 
 

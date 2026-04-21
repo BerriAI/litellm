@@ -134,7 +134,9 @@ class TestOpenAIChatCompletionsHandlerToolsInput:
         tool = guardrail.last_inputs["tools"][0]
         assert tool["type"] == "function"
         assert tool["function"]["name"] == "get_weather"
-        assert tool["function"]["description"] == "Get the current weather in a location"
+        assert (
+            tool["function"]["description"] == "Get the current weather in a location"
+        )
         assert "parameters" in tool["function"]
 
     @pytest.mark.asyncio
@@ -189,7 +191,10 @@ class TestOpenAIChatCompletionsHandlerToolsInput:
 
         assert guardrail.last_inputs is not None
         # tools should not be in inputs if not provided
-        assert "tools" not in guardrail.last_inputs or guardrail.last_inputs.get("tools") is None
+        assert (
+            "tools" not in guardrail.last_inputs
+            or guardrail.last_inputs.get("tools") is None
+        )
 
     @pytest.mark.asyncio
     async def test_tools_and_tool_calls_both_passed(self):
@@ -220,7 +225,10 @@ class TestOpenAIChatCompletionsHandlerToolsInput:
                     "type": "function",
                     "function": {
                         "name": "get_weather",
-                        "parameters": {"type": "object", "properties": {"location": {"type": "string"}}},
+                        "parameters": {
+                            "type": "object",
+                            "properties": {"location": {"type": "string"}},
+                        },
                     },
                 }
             ],
@@ -833,7 +841,9 @@ class TestOpenAIChatCompletionsHandlerStreamingOutput:
         assert result == responses_so_far
 
     @pytest.mark.asyncio
-    async def test_process_output_streaming_response_mixed_empty_and_valid_choices_no_finish(self):
+    async def test_process_output_streaming_response_mixed_empty_and_valid_choices_no_finish(
+        self,
+    ):
         """Test streaming response with mix of empty and valid choices chunks (stream not finished)
 
         This tests the has_stream_ended check when iterating through chunks with mixed choices.
@@ -879,6 +889,61 @@ class TestOpenAIChatCompletionsHandlerStreamingOutput:
 
         # Should return the responses
         assert result == responses_so_far
+
+
+class TestGetStructuredMessages:
+    """Test the get_structured_messages method."""
+
+    def test_should_return_messages_from_chat_completions_request(self):
+        """Test that messages are returned from a chat completions request."""
+        handler = OpenAIChatCompletionsHandler()
+        data = {
+            "messages": [
+                {"role": "system", "content": "You are helpful."},
+                {"role": "user", "content": "Hello"},
+            ]
+        }
+        result = handler.get_structured_messages(data)
+        assert result is not None
+        assert len(result) == 2
+        assert result[0]["role"] == "system"
+        assert result[1]["role"] == "user"
+
+    def test_should_return_none_when_no_messages(self):
+        """Test that None is returned when no messages key exists."""
+        handler = OpenAIChatCompletionsHandler()
+        data = {"model": "gpt-4"}
+        result = handler.get_structured_messages(data)
+        assert result is None
+
+    def test_should_return_none_for_none_messages(self):
+        """Test that None is returned when messages is explicitly None."""
+        handler = OpenAIChatCompletionsHandler()
+        data = {"messages": None}
+        result = handler.get_structured_messages(data)
+        assert result is None
+
+    def test_should_handle_multimodal_content(self):
+        """Test that messages with multimodal content are returned."""
+        handler = OpenAIChatCompletionsHandler()
+        data = {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "What's in this image?"},
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": "https://example.com/image.png"},
+                        },
+                    ],
+                }
+            ]
+        }
+        result = handler.get_structured_messages(data)
+        assert result is not None
+        assert len(result) == 1
+        assert isinstance(result[0]["content"], list)
 
 
 if __name__ == "__main__":

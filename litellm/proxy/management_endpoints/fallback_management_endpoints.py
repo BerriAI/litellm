@@ -7,6 +7,7 @@ POST /fallback - Create or update fallbacks for a specific model
 GET /fallback/{model} - Get fallbacks for a specific model
 DELETE /fallback/{model} - Delete fallbacks for a specific model
 """
+
 # pyright: reportMissingImports=false
 
 import json

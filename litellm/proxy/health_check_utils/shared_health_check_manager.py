@@ -84,7 +84,7 @@ class SharedHealthCheckManager:
                     "Pod %s failed to acquire health check lock", self.pod_id
                 )
 
-            return acquired
+            return bool(acquired)
         except Exception as e:
             verbose_proxy_logger.error("Error acquiring health check lock: %s", str(e))
             return False
