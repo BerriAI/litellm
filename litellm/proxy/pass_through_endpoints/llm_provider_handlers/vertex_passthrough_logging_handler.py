@@ -136,6 +136,7 @@ class VertexPassthroughLoggingHandler:
                 logging_obj=logging_obj,
                 url_route=url_route,
                 kwargs=kwargs,
+                request_body=request_body,
             )
         elif "predict" in url_route:
             return VertexPassthroughLoggingHandler._handle_predict_response(
@@ -330,11 +331,27 @@ class VertexPassthroughLoggingHandler:
         }
 
     @staticmethod
+    def _extract_embed_content_input(request_body: Optional[dict], batch: bool) -> str:
+        """Extract raw input text from an :embedContent or :batchEmbedContents request body for token counting."""
+        if not request_body:
+            return ""
+        if batch:
+            texts = []
+            for req in request_body.get("requests", []):
+                for part in req.get("content", {}).get("parts", []):
+                    texts.append(part.get("text", ""))
+            return " ".join(texts)
+        else:
+            parts = request_body.get("content", {}).get("parts", [])
+            return " ".join(part.get("text", "") for part in parts)
+
+    @staticmethod
     def _handle_embed_content_response(
         httpx_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
         url_route: str,
         kwargs: dict,
+        request_body: Optional[dict] = None,
     ) -> PassThroughEndpointLoggingTypedDict:
         """Handle Vertex :embedContent and :batchEmbedContents endpoint responses."""
         from litellm.llms.vertex_ai.gemini_embeddings.batch_embed_content_transformation import (
@@ -344,18 +361,23 @@ class VertexPassthroughLoggingHandler:
 
         model = VertexPassthroughLoggingHandler.extract_model_from_url(url_route)
         response_json = httpx_response.json()
+        is_batch = "batchEmbedContents" in url_route
+
+        input_text = VertexPassthroughLoggingHandler._extract_embed_content_input(
+            request_body=request_body, batch=is_batch
+        )
 
         model_response = litellm.EmbeddingResponse()
-        if "batchEmbedContents" in url_route:
+        if is_batch:
             litellm_embedding_response = process_batch_embed_response(
-                input="",
+                input=input_text,
                 model_response=model_response,
                 model=model,
                 _predictions=response_json,
             )
         else:
             litellm_embedding_response = process_embed_content_response(
-                input="",
+                input=input_text,
                 model_response=model_response,
                 model=model,
                 response_json=response_json,
