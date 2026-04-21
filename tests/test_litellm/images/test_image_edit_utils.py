@@ -267,3 +267,113 @@ class TestImageEditCustomPricing:
     def test_custom_pricing_not_detected_without_model_info(self):
         litellm_params = {"litellm_call_id": "test-call-id"}
         assert use_custom_pricing_for_model(litellm_params) is False
+
+
+class TestImageEditHandlerCredentialsForwarding:
+    """
+    Regression tests for Vertex AI image_edit credentials bug.
+
+    image_edit handler must forward litellm_params to validate_environment,
+    so that credentials passed via YAML config (vertex_ai_project,
+    vertex_ai_credentials, etc.) reach the auth layer instead of falling
+    through to Application Default Credentials.
+    """
+
+    def test_vertex_gemini_image_edit_reads_credentials_from_litellm_params(self):
+        """
+        VertexAIGeminiImageEditConfig.validate_environment should read
+        vertex_ai_project/vertex_ai_credentials from litellm_params first.
+        """
+        from litellm.llms.vertex_ai.image_edit.vertex_gemini_transformation import (
+            VertexAIGeminiImageEditConfig,
+        )
+
+        config = VertexAIGeminiImageEditConfig()
+
+        litellm_params = {
+            "vertex_ai_project": "test-project-from-params",
+            "vertex_ai_credentials": "/path/to/creds.json",
+        }
+
+        with patch.object(
+            config, "_ensure_access_token", return_value=("token", "project")
+        ) as mock_ensure:
+            config.validate_environment(
+                headers={},
+                model="test-model",
+                litellm_params=litellm_params,
+            )
+
+            mock_ensure.assert_called_once()
+            call_kwargs = mock_ensure.call_args[1]
+
+            assert call_kwargs["credentials"] == "/path/to/creds.json"
+            assert call_kwargs["project_id"] == "test-project-from-params"
+
+    def test_vertex_imagen_image_edit_reads_credentials_from_litellm_params(self):
+        """
+        VertexAIImagenImageEditConfig.validate_environment should read
+        vertex_ai_project/vertex_ai_credentials from litellm_params first.
+        """
+        from litellm.llms.vertex_ai.image_edit.vertex_imagen_transformation import (
+            VertexAIImagenImageEditConfig,
+        )
+
+        config = VertexAIImagenImageEditConfig()
+
+        litellm_params = {
+            "vertex_ai_project": "test-project-from-params",
+            "vertex_ai_credentials": "/path/to/creds.json",
+        }
+
+        with patch.object(
+            config, "_ensure_access_token", return_value=("token", "project")
+        ) as mock_ensure:
+            config.validate_environment(
+                headers={},
+                model="test-model",
+                litellm_params=litellm_params,
+            )
+
+            mock_ensure.assert_called_once()
+            call_kwargs = mock_ensure.call_args[1]
+
+            assert call_kwargs["credentials"] == "/path/to/creds.json"
+            assert call_kwargs["project_id"] == "test-project-from-params"
+
+    def test_validate_environment_signature_includes_litellm_params(self):
+        """
+        All image_edit config validate_environment methods should accept
+        litellm_params to allow credentials to be forwarded from the handler.
+        """
+        import inspect
+
+        from litellm.llms.vertex_ai.image_edit.vertex_gemini_transformation import (
+            VertexAIGeminiImageEditConfig,
+        )
+        from litellm.llms.vertex_ai.image_edit.vertex_imagen_transformation import (
+            VertexAIImagenImageEditConfig,
+        )
+        from litellm.llms.openai.image_edit.transformation import (
+            OpenAIImageEditConfig,
+        )
+
+        configs = [
+            VertexAIGeminiImageEditConfig(),
+            VertexAIImagenImageEditConfig(),
+            OpenAIImageEditConfig(),
+            MockImageEditConfig(),
+        ]
+
+        for config in configs:
+            sig = inspect.signature(config.validate_environment)
+            params = list(sig.parameters.keys())
+
+            assert "litellm_params" in params, (
+                f"{config.__class__.__name__}.validate_environment "
+                "missing litellm_params parameter"
+            )
+            assert "api_base" in params, (
+                f"{config.__class__.__name__}.validate_environment "
+                "missing api_base parameter"
+            )
