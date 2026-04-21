@@ -630,7 +630,7 @@ async def user_info(
             user_id is None
             and user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
         ):
-            return await _get_user_info_for_proxy_admin()
+            return await _get_user_info_for_proxy_admin(user_api_key_dict=user_api_key_dict)
         elif user_id is None:
             user_id = user_api_key_dict.user_id
         ## GET USER ROW ##
@@ -732,7 +732,7 @@ async def user_info(
         raise handle_exception_on_proxy(e)
 
 
-async def _get_user_info_for_proxy_admin():
+async def _get_user_info_for_proxy_admin(user_api_key_dict: UserAPIKeyAuth):
     """
     Admin UI Endpoint - Returns All Teams and Keys when Proxy Admin is querying
 
@@ -790,8 +790,8 @@ async def _get_user_info_for_proxy_admin():
 
 
     return UserInfoResponse(
-        user_id=None,
-        user_info=None,
+        user_id=admin_user_id,
+        user_info=admin_user_info,
         keys=returned_keys,
         teams=_teams_in_db,
     )
