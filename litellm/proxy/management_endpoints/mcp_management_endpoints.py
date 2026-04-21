@@ -374,7 +374,9 @@ if MCP_AVAILABLE:
                 f"Failed to write temporary MCP server to Redis cache: {str(e)}"
             )
 
-    async def _get_temporary_mcp_server_from_redis(server_id: str) -> Optional[MCPServer]:
+    async def _get_temporary_mcp_server_from_redis(
+        server_id: str,
+    ) -> Optional[MCPServer]:
         """
         Best-effort read from Redis shared cache. Returns None on miss/errors.
         """
