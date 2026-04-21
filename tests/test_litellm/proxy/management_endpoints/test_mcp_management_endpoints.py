@@ -1657,8 +1657,9 @@ class TestTemporaryMCPSessionEndpoints:
         )
 
         server = generate_mock_mcp_server_config_record(server_id="from-redis")
+        serialized = json.dumps(server.model_dump(mode="json"))
         mock_cache_backend = SimpleNamespace(
-            async_get_cache=AsyncMock(return_value=server.model_dump(mode="json"))
+            async_get_cache=AsyncMock(return_value="encrypted-payload")
         )
         original_cache = mgmt_endpoints.litellm.cache
         mgmt_endpoints.litellm.cache = SimpleNamespace(cache=mock_cache_backend)
@@ -1666,6 +1667,9 @@ class TestTemporaryMCPSessionEndpoints:
             with patch(
                 "litellm.proxy.management_endpoints.mcp_management_endpoints._temporary_mcp_servers",
                 {},
+            ), patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.decrypt_value_helper",
+                return_value=serialized,
             ):
                 result = await get_cached_temporary_mcp_server("from-redis")
         finally:
@@ -1833,6 +1837,26 @@ class TestTemporaryMCPSessionEndpoints:
                 return_value=None,
             ):
                 result = await _get_temporary_mcp_server_from_redis("decrypt-none")
+        finally:
+            mgmt_endpoints.litellm.cache = original_cache
+
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_get_temporary_mcp_server_from_redis_rejects_plain_dict_payload(self):
+        """Plain dict values in Redis are not accepted (write path is encrypted-only)."""
+        from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+            _get_temporary_mcp_server_from_redis,
+        )
+
+        server = generate_mock_mcp_server_config_record(server_id="legacy-dict")
+        mock_cache_backend = SimpleNamespace(
+            async_get_cache=AsyncMock(return_value=server.model_dump(mode="json"))
+        )
+        original_cache = mgmt_endpoints.litellm.cache
+        mgmt_endpoints.litellm.cache = SimpleNamespace(cache=mock_cache_backend)
+        try:
+            result = await _get_temporary_mcp_server_from_redis("legacy-dict")
         finally:
             mgmt_endpoints.litellm.cache = original_cache
 

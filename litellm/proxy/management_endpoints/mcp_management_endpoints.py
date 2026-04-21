@@ -379,6 +379,9 @@ if MCP_AVAILABLE:
     ) -> Optional[MCPServer]:
         """
         Best-effort read from Redis shared cache. Returns None on miss/errors.
+
+        Values must be encrypted strings (same contract as _cache_temporary_mcp_server_in_redis);
+        legacy plaintext dict payloads are rejected.
         """
         if litellm.cache is None or not hasattr(litellm.cache, "cache"):
             return None
@@ -396,28 +399,29 @@ if MCP_AVAILABLE:
             )
             return None
 
-        if isinstance(cached_server, dict):
-            payload_dict: Dict[str, Any] = cached_server
-        elif isinstance(cached_server, str):
-            decrypted_json = decrypt_value_helper(
-                value=cached_server,
-                key="temporary_mcp_server",
-                exception_type="debug",
+        if not isinstance(cached_server, str):
+            verbose_proxy_logger.debug(
+                "Temporary MCP Redis cache value must be an encrypted string; rejecting non-string payload"
             )
-            if decrypted_json is None:
-                return None
-            try:
-                loaded = json.loads(decrypted_json)
-            except Exception as e:
-                verbose_proxy_logger.debug(
-                    f"Invalid decrypted temporary MCP payload in Redis cache: {str(e)}"
-                )
-                return None
-            if not isinstance(loaded, dict):
-                return None
-            payload_dict = loaded
-        else:
             return None
+
+        decrypted_json = decrypt_value_helper(
+            value=cached_server,
+            key="temporary_mcp_server",
+            exception_type="debug",
+        )
+        if decrypted_json is None:
+            return None
+        try:
+            loaded = json.loads(decrypted_json)
+        except Exception as e:
+            verbose_proxy_logger.debug(
+                f"Invalid decrypted temporary MCP payload in Redis cache: {str(e)}"
+            )
+            return None
+        if not isinstance(loaded, dict):
+            return None
+        payload_dict: Dict[str, Any] = loaded
 
         try:
             return MCPServer(**payload_dict)
