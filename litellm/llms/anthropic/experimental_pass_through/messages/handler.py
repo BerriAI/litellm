@@ -429,7 +429,9 @@ def anthropic_messages_handler(
             custom_llm_provider=custom_llm_provider,
             **kwargs,
         )
-        if _should_route_to_responses_api(custom_llm_provider, kwargs.get("model_info")):
+        if _should_route_to_responses_api(
+            custom_llm_provider, kwargs.get("model_info")
+        ):
             return LiteLLMMessagesToResponsesAPIHandler.anthropic_messages_handler(
                 **_shared_kwargs
             )
