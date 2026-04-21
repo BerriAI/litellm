@@ -217,7 +217,7 @@ class TestGithubCopilotResponsesAPITransformation:
         assert has_vision is False, "Should return False for string input"
 
     @patch("litellm.llms.github_copilot.responses.transformation.Authenticator")
-    def test_validate_environment_with_vision_header(self, mock_authenticator_class):
+    def test_transform_request_with_vision_header(self, mock_authenticator_class):
         """Test that copilot-vision-request header is added for vision input"""
         mock_auth_instance = MagicMock()
         mock_auth_instance.get_api_key.return_value = "test-api-key"
@@ -225,17 +225,21 @@ class TestGithubCopilotResponsesAPITransformation:
 
         config = GithubCopilotResponsesAPIConfig()
 
-        # Create mock litellm_params with input attribute
-        mock_litellm_params = MagicMock()
-        mock_litellm_params.input = [
+        # Vision input with input_image type
+        input_with_vision = [
             {
                 "role": "user",
                 "content": [{"type": "input_image", "data": "base64..."}],
             }
         ]
 
-        headers = config.validate_environment(
-            headers={}, model="gpt-5.1-codex", litellm_params=mock_litellm_params
+        headers = {}
+        config.transform_responses_api_request(
+            model="gpt-5.1-codex",
+            input=input_with_vision,
+            response_api_optional_request_params={},
+            litellm_params={},
+            headers=headers,
         )
 
         assert (
@@ -243,7 +247,7 @@ class TestGithubCopilotResponsesAPITransformation:
         ), "Should add copilot-vision-request header for vision input"
 
     @patch("litellm.llms.github_copilot.responses.transformation.Authenticator")
-    def test_validate_environment_with_x_initiator(self, mock_authenticator_class):
+    def test_transform_request_with_x_initiator(self, mock_authenticator_class):
         """Test that X-Initiator header is set based on input"""
         mock_auth_instance = MagicMock()
         mock_auth_instance.get_api_key.return_value = "test-api-key"
@@ -251,15 +255,19 @@ class TestGithubCopilotResponsesAPITransformation:
 
         config = GithubCopilotResponsesAPIConfig()
 
-        # Create mock litellm_params with input attribute
-        mock_litellm_params = MagicMock()
-        mock_litellm_params.input = [
+        # Multi-turn input with assistant role
+        input_with_assistant = [
             {"role": "user", "content": "Hello"},
             {"role": "assistant", "content": "Hi"},
         ]
 
-        headers = config.validate_environment(
-            headers={}, model="gpt-5.1-codex", litellm_params=mock_litellm_params
+        headers = {}
+        config.transform_responses_api_request(
+            model="gpt-5.1-codex",
+            input=input_with_assistant,
+            response_api_optional_request_params={},
+            litellm_params={},
+            headers=headers,
         )
 
         assert (
