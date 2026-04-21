@@ -72,7 +72,7 @@ class AWSEventStreamDecoder:
         from botocore.eventstream import EventStreamBuffer
 
         event_stream_buffer = EventStreamBuffer()
-        accumulated_json = ""
+        accumulated_json_chunks: list = []
 
         for chunk in iterator:
             event_stream_buffer.add_data(chunk)
@@ -86,34 +86,32 @@ class AWSEventStreamDecoder:
                     )
                     message = message.replace("\n\n", "")
 
-                    # Accumulate JSON data
-                    accumulated_json += message
-
-                    # Try to parse the accumulated JSON
+                    accumulated_json_chunks.append(message)
+                    _stripped = message.rstrip()
+                    if not _stripped or _stripped[-1] not in ('}', ']'):
+                        continue
+                    _full_json = "".join(accumulated_json_chunks)
                     try:
-                        _data = json.loads(accumulated_json)
+                        _data = json.loads(_full_json)
                         if self.is_messages_api:
                             yield self._chunk_parser_messages_api(chunk_data=_data)
                         else:
                             yield self._chunk_parser(chunk_data=_data)
-                        # Reset accumulated_json after successful parsing
-                        accumulated_json = ""
+                        accumulated_json_chunks = []
                     except json.JSONDecodeError:
-                        # If it's not valid JSON yet, continue to the next event
                         continue
 
-        # Handle any remaining data after the iterator is exhausted
-        if accumulated_json:
+        if accumulated_json_chunks:
+            _full_json = "".join(accumulated_json_chunks)
             try:
-                _data = json.loads(accumulated_json)
+                _data = json.loads(_full_json)
                 if self.is_messages_api:
                     yield self._chunk_parser_messages_api(chunk_data=_data)
                 else:
                     yield self._chunk_parser(chunk_data=_data)
             except json.JSONDecodeError:
-                # Handle or log any unparseable data at the end
                 verbose_logger.error(
-                    f"Warning: Unparseable JSON data remained: {accumulated_json}"
+                    f"Warning: Unparseable JSON data remained: {_full_json}"
                 )
                 yield None
 
@@ -124,7 +122,7 @@ class AWSEventStreamDecoder:
         from botocore.eventstream import EventStreamBuffer
 
         event_stream_buffer = EventStreamBuffer()
-        accumulated_json = ""
+        accumulated_json_chunks: list = []
 
         async for chunk in iterator:
             event_stream_buffer.add_data(chunk)
@@ -144,17 +142,17 @@ class AWSEventStreamDecoder:
                         )
                         message = message.replace("\n\n", "")
 
-                        # Accumulate JSON data
-                        accumulated_json += message
-
-                        # Try to parse the accumulated JSON
-                        _data = json.loads(accumulated_json)
+                        accumulated_json_chunks.append(message)
+                        _stripped = message.rstrip()
+                        if not _stripped or _stripped[-1] not in ('}', ']'):
+                            continue
+                        _full_json = "".join(accumulated_json_chunks)
+                        _data = json.loads(_full_json)
                         if self.is_messages_api:
                             yield self._chunk_parser_messages_api(chunk_data=_data)
                         else:
                             yield self._chunk_parser(chunk_data=_data)
-                        # Reset accumulated_json after successful parsing
-                        accumulated_json = ""
+                        accumulated_json_chunks = []
                 except json.JSONDecodeError:
                     # If it's not valid JSON yet, continue to the next event
                     continue
@@ -169,18 +167,17 @@ class AWSEventStreamDecoder:
                     )
                     continue
 
-        # Handle any remaining data after the iterator is exhausted
-        if accumulated_json:
+        if accumulated_json_chunks:
+            _full_json = "".join(accumulated_json_chunks)
             try:
-                _data = json.loads(accumulated_json)
+                _data = json.loads(_full_json)
                 if self.is_messages_api:
                     yield self._chunk_parser_messages_api(chunk_data=_data)
                 else:
                     yield self._chunk_parser(chunk_data=_data)
             except json.JSONDecodeError:
-                # Handle or log any unparseable data at the end
                 verbose_logger.error(
-                    f"Warning: Unparseable JSON data remained: {accumulated_json}"
+                    f"Warning: Unparseable JSON data remained: {_full_json}"
                 )
                 yield None
             except Exception as e:
