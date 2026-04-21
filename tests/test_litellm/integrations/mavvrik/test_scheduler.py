@@ -34,79 +34,27 @@ def _make_orchestrator(**kwargs) -> Orchestrator:
 
 class TestResolveFirstRunStartDate:
     @pytest.mark.asyncio
-    async def test_uses_lookback_start_date_when_set(self):
-        """MAVVRIK_LOOKBACK_START_DATE takes priority over MIN(date) in DB."""
-        orc = _make_orchestrator()
-        orc._exporter = MagicMock()
-        orc._exporter.get_earliest_date = AsyncMock(return_value="2026-01-01")
-
-        with patch(
-            "litellm.integrations.mavvrik.orchestrator.MAVVRIK_LOOKBACK_START_DATE",
-            "2026-03-01",
-        ):
-            result = await orc._resolve_first_run_start_date()
-
-        assert result == date(2026, 3, 1)
-
-    @pytest.mark.asyncio
-    async def test_clamps_lookback_to_earliest_db_date(self):
-        """If LOOKBACK_START_DATE is before MIN(date), use MIN(date)."""
-        orc = _make_orchestrator()
-        orc._exporter = MagicMock()
-        orc._exporter.get_earliest_date = AsyncMock(return_value="2026-04-01")
-
-        with patch(
-            "litellm.integrations.mavvrik.orchestrator.MAVVRIK_LOOKBACK_START_DATE",
-            "2026-01-01",
-        ):
-            result = await orc._resolve_first_run_start_date()
-
-        assert result == date(2026, 4, 1)
-
-    @pytest.mark.asyncio
-    async def test_falls_back_to_earliest_db_date_when_no_lookback(self):
-        """Without LOOKBACK_START_DATE, use MIN(date) from DB."""
+    async def test_uses_earliest_db_date(self):
+        """Start from MIN(date) in LiteLLM_DailyUserSpend."""
         orc = _make_orchestrator()
         orc._exporter = MagicMock()
         orc._exporter.get_earliest_date = AsyncMock(return_value="2026-02-15")
 
-        with patch(
-            "litellm.integrations.mavvrik.orchestrator.MAVVRIK_LOOKBACK_START_DATE",
-            None,
-        ):
-            result = await orc._resolve_first_run_start_date()
+        result = await orc._resolve_first_run_start_date()
 
         assert result == date(2026, 2, 15)
 
     @pytest.mark.asyncio
     async def test_falls_back_to_yesterday_when_db_empty(self):
-        """When DB is empty and no LOOKBACK_START_DATE, use yesterday."""
+        """When DB is empty, fall back to yesterday."""
         orc = _make_orchestrator()
         orc._exporter = MagicMock()
         orc._exporter.get_earliest_date = AsyncMock(return_value=None)
 
-        with patch(
-            "litellm.integrations.mavvrik.orchestrator.MAVVRIK_LOOKBACK_START_DATE",
-            None,
-        ), patch.object(Orchestrator, "_utc_today", return_value=date(2026, 4, 16)):
+        with patch.object(Orchestrator, "_utc_today", return_value=date(2026, 4, 16)):
             result = await orc._resolve_first_run_start_date()
 
         assert result == date(2026, 4, 15)
-
-    @pytest.mark.asyncio
-    async def test_invalid_lookback_date_falls_back_to_db(self):
-        """Invalid LOOKBACK_START_DATE string falls back to DB date."""
-        orc = _make_orchestrator()
-        orc._exporter = MagicMock()
-        orc._exporter.get_earliest_date = AsyncMock(return_value="2026-03-10")
-
-        with patch(
-            "litellm.integrations.mavvrik.orchestrator.MAVVRIK_LOOKBACK_START_DATE",
-            "not-a-date",
-        ):
-            result = await orc._resolve_first_run_start_date()
-
-        assert result == date(2026, 3, 10)
 
 
 # ---------------------------------------------------------------------------
@@ -210,9 +158,6 @@ class TestRunExportLoop:
 
         with patch.object(
             orc._uploader, "upload_usage_data", side_effect=fake_upload
-        ), patch(
-            "litellm.integrations.mavvrik.orchestrator.MAVVRIK_LOOKBACK_START_DATE",
-            None,
         ), patch.object(
             Orchestrator, "_utc_today", return_value=date(2026, 4, 11)
         ), patch.object(

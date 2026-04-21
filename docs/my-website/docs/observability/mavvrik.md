@@ -47,7 +47,7 @@ LiteLLM will schedule hourly exports automatically. Registration with the Mavvri
 | `MAVVRIK_API_KEY` | Yes | Your Mavvrik API key (`x-api-key` header) | `mav_xxxxxxxxxx` |
 | `MAVVRIK_API_ENDPOINT` | Yes | Mavvrik API base URL including your tenant path | `https://api.mavvrik.dev/<TENANT_ID>` |
 | `MAVVRIK_CONNECTION_ID` | Yes | Connection/instance ID assigned by Mavvrik | `litellm-prod` |
-| `MAVVRIK_LOOKBACK_START_DATE` | No | First-run start date (`YYYY-MM-DD`). Default: export all data since the earliest row in `LiteLLM_DailyUserSpend` | `2024-01-01` |
+
 | `MAVVRIK_EXPORT_INTERVAL_MINUTES` | No | Scheduler check frequency in minutes (default: `60`) | `60` |
 | `MAVVRIK_MAX_FETCHED_DATA_RECORDS` | No | Max spend rows to fetch per export cycle (default: `50000`) | `50000` |
 
@@ -162,7 +162,7 @@ The export cursor (marker) is owned by the Mavvrik API — it is retrieved from 
 
 - **Frequency**: Scheduler runs every 60 minutes (configurable via `MAVVRIK_EXPORT_INTERVAL_MINUTES`)
 - **Scope**: Each run exports all complete calendar days since the last marker — never today's partial data
-- **First run**: If no marker exists, the start date is determined by `MAVVRIK_LOOKBACK_START_DATE`. If unset, LiteLLM starts from the earliest date present in `LiteLLM_DailyUserSpend` (i.e. all available history)
+- **First run**: If no marker exists, LiteLLM starts from the earliest date present in `LiteLLM_DailyUserSpend` (i.e. all available history)
 - **Catch-up**: If the proxy was offline for multiple days, the scheduler automatically back-fills all missed days on the next run
 - **Idempotency**: Each day's data is uploaded to an object named by date (e.g. `2024-01-15`). Re-exporting the same date safely overwrites the previous upload
 
@@ -192,8 +192,6 @@ The export cursor (marker) is owned exclusively by the Mavvrik API and is not se
 
 If Mavvrik asks you to re-export from an earlier date (e.g. after a data reset), contact Mavvrik support to reset the `metricsMarker` on their side. Once reset, the next scheduled run will retrieve the updated marker via `register()` and automatically back-fill all days from that point onwards.
 
-For a fresh first-run backfill, set `MAVVRIK_LOOKBACK_START_DATE` before starting the proxy to control how far back LiteLLM exports historical data.
-
 ### Custom Export Frequency
 
 Change how often the scheduler checks for new days to export:
@@ -201,16 +199,6 @@ Change how often the scheduler checks for new days to export:
 ```bash
 export MAVVRIK_EXPORT_INTERVAL_MINUTES=120  # Check every 2 hours
 ```
-
-### Custom First-Run Start Date
-
-By default, the first export back-fills every day present in `LiteLLM_DailyUserSpend`. To control where the first export begins, set `MAVVRIK_LOOKBACK_START_DATE`:
-
-```bash
-export MAVVRIK_LOOKBACK_START_DATE=2024-01-01  # Only export data from 2024-01-01 onwards on first run
-```
-
-This applies only when no marker exists yet. Once a marker is stored, subsequent runs always resume from `(marker + 1 day)`.
 
 ### Remove Mavvrik Integration
 

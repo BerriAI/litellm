@@ -1375,10 +1375,7 @@ MAVVRIK_EXPORT_USAGE_DATA_JOB_NAME = "mavvrik_export_usage_data"
 MAVVRIK_MAX_FETCHED_DATA_RECORDS = int(
     os.getenv("MAVVRIK_MAX_FETCHED_DATA_RECORDS", 50000)
 )
-# Start date for the very first export (when no marker exists yet).
-# Unset (None) → start from the earliest date present in LiteLLM_DailyUserSpend (MIN(date)).
-# Set to YYYY-MM-DD → start from that specific date.
-MAVVRIK_LOOKBACK_START_DATE: Optional[str] = os.getenv("MAVVRIK_LOOKBACK_START_DATE")
+
 SPEND_LOG_CLEANUP_JOB_NAME = "spend_log_cleanup"
 KEY_ROTATION_JOB_NAME = "litellm_key_rotation_job"
 SPEND_LOG_RUN_LOOPS = int(os.getenv("SPEND_LOG_RUN_LOOPS", 500))

@@ -20,7 +20,6 @@ from typing import TYPE_CHECKING, Any, Iterator, Optional
 from litellm._logging import verbose_logger
 from litellm.constants import (
     MAVVRIK_EXPORT_USAGE_DATA_JOB_NAME,
-    MAVVRIK_LOOKBACK_START_DATE,
     MAVVRIK_MAX_FETCHED_DATA_RECORDS,
 )
 from litellm.integrations.mavvrik.client import Client
@@ -201,51 +200,20 @@ class Orchestrator:
     async def _resolve_first_run_start_date(self) -> date:
         """Determine the export start date on the very first run (no Mavvrik marker yet).
 
-        Priority:
-          1. MAVVRIK_LOOKBACK_START_DATE env var (clamped to MIN(date) in DB)
-          2. MIN(date) in LiteLLM_DailyUserSpend
-          3. Yesterday as a last-resort fallback
+        Uses MIN(date) from LiteLLM_DailyUserSpend — exports all available history.
+        Falls back to yesterday if the table is empty.
         """
-        requested_start: Optional[date] = None
-        if MAVVRIK_LOOKBACK_START_DATE is not None:
-            try:
-                requested_start = date.fromisoformat(MAVVRIK_LOOKBACK_START_DATE)
-            except ValueError:
-                verbose_logger.warning(
-                    "Orchestrator: invalid MAVVRIK_LOOKBACK_START_DATE '%s' "
-                    "(expected YYYY-MM-DD), falling back to earliest DB date",
-                    MAVVRIK_LOOKBACK_START_DATE,
-                )
-
         earliest_str = await self._exporter.get_earliest_date()
-        earliest_db: Optional[date] = None
         if earliest_str:
             try:
                 earliest_db = date.fromisoformat(earliest_str)
+                verbose_logger.warning(
+                    "Mavvrik Orchestrator: no marker found, starting from earliest DB date %s",
+                    earliest_db,
+                )
+                return earliest_db
             except ValueError:
                 pass
-
-        if requested_start is not None and earliest_db is not None:
-            start_date = max(requested_start, earliest_db)
-            verbose_logger.info(
-                "Orchestrator: no marker found, starting from %s", start_date
-            )
-            return start_date
-
-        if requested_start is not None:
-            verbose_logger.info(
-                "Orchestrator: no marker found, starting from "
-                "MAVVRIK_LOOKBACK_START_DATE %s",
-                requested_start,
-            )
-            return requested_start
-
-        if earliest_db is not None:
-            verbose_logger.info(
-                "Orchestrator: no marker found, starting from earliest DB date %s",
-                earliest_db,
-            )
-            return earliest_db
 
         return self._yesterday
 
