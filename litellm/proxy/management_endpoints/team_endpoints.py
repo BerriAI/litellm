@@ -1570,8 +1570,7 @@ async def update_team(  # noqa: PLR0915
             current_org_id = getattr(existing_team_row, "organization_id", None)
             if (
                 data.organization_id != current_org_id
-                and user_api_key_dict.user_role
-                != LitellmUserRoles.PROXY_ADMIN.value
+                and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value
             ):
                 # Is the caller org_admin of the destination org?
                 caller_memberships = (
