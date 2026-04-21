@@ -137,8 +137,14 @@ class VertexAIImagenImageEditConfig(BaseImageEditConfig, VertexLLM):
         """
         Get the complete URL for Vertex AI Imagen predict API
         """
-        vertex_project = self._resolve_vertex_project()
-        vertex_location = self._resolve_vertex_location()
+        vertex_project = (
+            self.safe_get_vertex_ai_project(litellm_params)
+            or self._resolve_vertex_project()
+        )
+        vertex_location = (
+            self.safe_get_vertex_ai_location(litellm_params)
+            or self._resolve_vertex_location()
+        )
 
         if not vertex_project or not vertex_location:
             raise ValueError(
