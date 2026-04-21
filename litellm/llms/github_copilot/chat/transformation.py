@@ -1,5 +1,6 @@
 from typing import List, Optional, Tuple
 
+import os
 
 from litellm.exceptions import AuthenticationError
 from litellm.llms.openai.openai import OpenAIConfig
@@ -7,8 +8,9 @@ from litellm.types.llms.openai import AllMessageValues
 
 from ..authenticator import Authenticator
 from ..common_utils import (
-    GITHUB_COPILOT_API_BASE,
+    DEFAULT_GITHUB_COPILOT_API_BASE,
     GetAPIKeyError,
+    determine_x_initiator,
     get_copilot_default_headers,
 )
 
@@ -30,7 +32,12 @@ class GithubCopilotConfig(OpenAIConfig):
         api_key: Optional[str],
         custom_llm_provider: str,
     ) -> Tuple[Optional[str], Optional[str], str]:
-        dynamic_api_base = self.authenticator.get_api_base() or GITHUB_COPILOT_API_BASE
+        dynamic_api_base = (
+            api_base
+            or self.authenticator.get_api_base()
+            or os.getenv("GITHUB_COPILOT_API_BASE")
+            or DEFAULT_GITHUB_COPILOT_API_BASE
+        )
         try:
             dynamic_api_key = self.authenticator.get_api_key()
         except GetAPIKeyError as e:
@@ -50,8 +57,8 @@ class GithubCopilotConfig(OpenAIConfig):
 
         # Check if system-to-assistant conversion is disabled
         if litellm.disable_copilot_system_to_assistant:
-            # GitHub Copilot API now supports system prompts for all models (Claude, GPT, etc.)
-            # No conversion needed - just return messages as-is
+            # GitHub Copilot API now supports system prompts for all models
+            # (Claude, GPT, etc.) - no conversion needed
             return messages
 
         # Default behavior: convert system messages to assistant for compatibility
@@ -82,16 +89,25 @@ class GithubCopilotConfig(OpenAIConfig):
             headers, model, messages, optional_params, litellm_params, api_key, api_base
         )
 
+        # Extract optional conversation key for session-scoped billing (FIX-01/FIX-02)
+        metadata = litellm_params.get("metadata") or {}
+        conversation_key = metadata.get(
+            "copilot_conversation_id"
+        )  # None if not provided
+
         # Add Copilot-specific headers (editor-version, user-agent, etc.)
         try:
             copilot_api_key = self.authenticator.get_api_key()
-            copilot_headers = get_copilot_default_headers(copilot_api_key)
+            copilot_headers = get_copilot_default_headers(
+                copilot_api_key, conversation_key=conversation_key
+            )
             validated_headers = {**copilot_headers, **validated_headers}
         except GetAPIKeyError:
             pass  # Will be handled later in the request flow
 
         # Add X-Initiator header based on message roles
-        initiator = self._determine_initiator(messages)
+        # Uses shared helper from common_utils (FIX-03)
+        initiator = determine_x_initiator(messages)
         validated_headers["X-Initiator"] = initiator
 
         # Add Copilot-Vision-Request header if request contains images
@@ -104,8 +120,10 @@ class GithubCopilotConfig(OpenAIConfig):
         """
         Get supported OpenAI parameters for GitHub Copilot.
 
-        For Claude models that support extended thinking (Claude 4 family and Claude 3-7), includes thinking and reasoning_effort parameters.
-        For other models, returns standard OpenAI parameters (which may include reasoning_effort for o-series models).
+        For Claude models with extended thinking (Claude 4, Claude 3-7),
+        includes thinking and reasoning_effort parameters.
+        For other models, returns standard OpenAI parameters
+        (which may include reasoning_effort for o-series models).
         """
         from litellm.utils import supports_reasoning
 
@@ -123,17 +141,6 @@ class GithubCopilotConfig(OpenAIConfig):
                 base_params.append("reasoning_effort")
 
         return base_params
-
-    def _determine_initiator(self, messages: List[AllMessageValues]) -> str:
-        """
-        Determine if request is user or agent initiated based on message roles.
-        Returns 'agent' if any message has role 'tool' or 'assistant', otherwise 'user'.
-        """
-        for message in messages:
-            role = message.get("role")
-            if role in ["tool", "assistant"]:
-                return "agent"
-        return "user"
 
     def _has_vision_content(self, messages: List[AllMessageValues]) -> bool:
         """

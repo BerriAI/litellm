@@ -192,6 +192,13 @@ export GITHUB_COPILOT_ACCESS_TOKEN_FILE="access-token"
 
 # Optional: Custom API key file name
 export GITHUB_COPILOT_API_KEY_FILE="api-key.json"
+
+# Optional: Custom Copilot endpoints for authentication and usage
+# (needed when using GitHub Enterprise subscriptions with custom endpoints or self-hosted GitHub servers
+export GITHUB_COPILOT_API_BASE="https://copilot-api.my-company.ghe.com"
+export GITHUB_COPILOT_DEVICE_CODE_URL="https://my-company.ghe.com/login/device/code"
+export GITHUB_COPILOT_ACCESS_TOKEN_URL="https://my-company.ghe.com/login/oauth/access_token"
+export GITHUB_COPILOT_API_KEY_URL="https://my-company.ghe.com/api/v3/copilot_internal/v2/token"
 ```
 
 ### Headers
@@ -208,4 +215,124 @@ extra_headers = {
     "user-agent": "GithubCopilot/1.155.0"        # User agent
 }
 ```
+
+## Premium Request Billing
+
+GitHub Copilot charges a **premium request** for each conversation that starts with only user or system messages. LiteLLM's adapter handles billing automatically by setting the `X-Initiator` header on every outbound request.
+
+### How Billing Works
+
+| Turn | Messages Sent | X-Initiator | Charged? |
+|------|---------------|-------------|----------|
+| 1 | `[{"role": "user", ...}]` | `user` | Yes — 1 premium request |
+| 2+ | `[..., {"role": "assistant", ...}, {"role": "user", ...}]` | `agent` | No — continuation |
+
+**Rule:** Once the messages list contains an `assistant` (or `tool`) role, LiteLLM sets `X-Initiator: agent` on all subsequent turns. GitHub Copilot treats those turns as free continuations of the same conversation.
+
+This applies equally to both the `/chat/completions` endpoint (e.g., `claude-sonnet-4.5`, `gpt-4o`) and the Responses API endpoint (e.g., `gpt-5.1-codex`).
+
+:::note
+
+The `disable_copilot_system_to_assistant` setting does **not** affect premium request billing. `X-Initiator` is determined from the original message roles before any system-to-assistant transformation occurs.
+
+:::
+
+### Recommended Configuration
+
+For multi-turn agentic workflows (Claude Code, Codex CLI, agent plans), the following proxy configuration is recommended:
+
+```yaml showLineNumbers title="config.yaml — recommended for agentic workflows"
+model_list:
+  - model_name: "claude-sonnet-4.5"
+    litellm_params:
+      model: "github_copilot/claude-sonnet-4.5"
+      api_key: "os.environ/GITHUB_COPILOT_API_KEY"
+
+  - model_name: "gpt-5.1-codex"
+    litellm_params:
+      model: "github_copilot/gpt-5.1-codex"
+      api_key: "os.environ/GITHUB_COPILOT_API_KEY"
+
+litellm_settings:
+  drop_params: true                           # Recommended: drops unsupported params silently
+  disable_copilot_system_to_assistant: false  # Default: converts system→assistant messages
+```
+
+No configuration changes are required from existing LiteLLM GitHub Copilot users — the default settings produce correct billing behavior.
+
+**If you use native system messages** (GitHub Copilot now supports the `system` role natively):
+
+```yaml showLineNumbers title="config.yaml — disable system→assistant conversion"
+litellm_settings:
+  disable_copilot_system_to_assistant: true  # Keep system role as-is
+```
+
+### Troubleshooting: Verifying Premium Request Consumption
+
+Use this 5-step procedure to confirm LiteLLM is billing correctly for multi-turn conversations:
+
+**Step 1 — Record "Before" count**
+
+Open https://github.com/settings/copilot → **Usage and billing** tab. Note the current premium request count and timestamp.
+
+**Step 2 — Start proxy with debug logging**
+
+```bash showLineNumbers title="Start proxy with debug logging"
+GITHUB_COPILOT_API_KEY=$GITHUB_COPILOT_API_KEY LITELLM_LOG=DEBUG \
+  litellm --config config.yaml --port 4000
+```
+
+**Step 3 — Send a 2-turn test conversation**
+
+Turn 1 (charges 1 premium — user-only messages):
+
+```bash showLineNumbers title="Turn 1 — should charge 1 premium request"
+curl -s -X POST http://localhost:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer test-key" \
+  -d '{
+    "model": "claude-sonnet-4.5",
+    "messages": [{"role": "user", "content": "Write a Python Fibonacci function."}],
+    "max_tokens": 300
+  }' | python3 -m json.tool
+```
+
+Turn 2 (no charge — includes assistant history). Replace `<REPLY>` with the `content` from Turn 1:
+
+```bash showLineNumbers title="Turn 2 — should NOT charge (agent continuation)"
+curl -s -X POST http://localhost:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer test-key" \
+  -d '{
+    "model": "claude-sonnet-4.5",
+    "messages": [
+      {"role": "user", "content": "Write a Python Fibonacci function."},
+      {"role": "assistant", "content": "<REPLY>"},
+      {"role": "user", "content": "Add memoization."}
+    ],
+    "max_tokens": 300
+  }' | python3 -m json.tool
+```
+
+**Step 4 — Check proxy logs**
+
+In the proxy terminal, look for these log lines:
+
+```
+[<id>] X-Initiator determined: user (message_count=1)        ← Turn 1 (PREMIUM)
+[<id>] X-Initiator determined: agent (message_count=3, ...)  ← Turn 2 (FREE)
+```
+
+If Turn 2 also shows `user`, the fix is not applied — check your LiteLLM version.
+
+**Step 5 — Record "After" count**
+
+Wait ~30 seconds, then refresh https://github.com/settings/copilot → **Usage and billing**.
+
+```
+Delta = After − Before
+Expected: 1 (Turn 1 only)
+```
+
+If the delta is greater than 1 for this 2-turn test, open an issue at https://github.com/BerriAI/litellm with the proxy log output.
 
