@@ -1323,6 +1323,37 @@ def test_lm_studio_completion(monkeypatch):
         print(e)
 
 
+@pytest.mark.parametrize("model", ["ollama/phi", "ollama_chat/phi"])
+def test_ollama_completion_explicit_api_base_takes_precedence(monkeypatch, model):
+    monkeypatch.setattr(litellm, "api_base", "https://api.deepseek.com")
+
+    with patch("litellm.main.base_llm_http_handler.completion") as mock_completion:
+        mock_completion.return_value = MagicMock()
+
+        litellm.completion(
+            model=model,
+            messages=[{"role": "user", "content": "Hello"}],
+            api_base="http://localhost:11434",
+        )
+
+        assert mock_completion.call_args.kwargs["api_base"] == "http://localhost:11434"
+
+
+def test_ollama_embedding_explicit_api_base_takes_precedence(monkeypatch):
+    monkeypatch.setattr(litellm, "api_base", "https://api.deepseek.com")
+
+    with patch("litellm.main.ollama.ollama_embeddings") as mock_embeddings:
+        mock_embeddings.return_value = MagicMock()
+
+        litellm.embedding(
+            model="ollama/qwen3-embedding:0.6b",
+            input="hello",
+            api_base="http://localhost:11434",
+        )
+
+        assert mock_embeddings.call_args.kwargs["api_base"] == "http://localhost:11434"
+
+
 # ################### Hugging Face Conversational models ########################
 # def hf_test_completion_conv():
 #     try:
