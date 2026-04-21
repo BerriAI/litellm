@@ -205,18 +205,18 @@ class Client:
     async def report_error(self, error_message: str) -> None:
         """PATCH the Mavvrik agent endpoint to report an export error.
 
-        Uses the same endpoint as advance_marker but sends errorMessage
+        Uses the same endpoint as advance_marker but sends error
         instead of metricsMarker so Mavvrik can track failures on their side.
 
           PATCH {api_endpoint}/metrics/agent/ai/{connection_id}
-          Body: { "errorMessage": <str> }
+          Body: { "error": <str> }
           Response: 204 No Content
 
         This is best-effort — failures are logged but not raised.
         """
         headers = self._auth_headers
         body = {
-            "errorMessage": error_message[:500]
+            "error": error_message[:500]
         }  # truncate to avoid oversized payloads
 
         try:

@@ -2,6 +2,10 @@
 .venv
 .venv_policy_test
 .env
+.env.test
+docker-compose-test.yml
+config.test.yaml
+Dockerfile.test
 .claude
 .newenv
 newenv/*
