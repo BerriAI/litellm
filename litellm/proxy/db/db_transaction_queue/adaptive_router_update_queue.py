@@ -166,6 +166,14 @@ class AdaptiveRouterUpdateQueue:
                 # NOTE: Prisma client lower-cases model names, so
                 # `LiteLLM_AdaptiveRouterSession` -> `litellm_adaptiveroutersession`
                 # (single 's', not 'litellm_adaptiverouterssession').
+                # Strip PK fields from the update payload — Prisma rejects
+                # writes to fields that are part of the @@id. asdict(state)
+                # always carries them, so build a separate update dict.
+                update_payload = {
+                    k: v
+                    for k, v in payload.items()
+                    if k not in ("session_id", "router_name", "model_name")
+                }
                 await prisma_client.db.litellm_adaptiveroutersession.upsert(
                     where={
                         "session_id_router_name_model_name": {
@@ -179,9 +187,9 @@ class AdaptiveRouterUpdateQueue:
                             "session_id": session_id,
                             "router_name": router,
                             "model_name": model,
-                            **payload,
+                            **update_payload,
                         },
-                        "update": payload,
+                        "update": update_payload,
                     },
                 )
             except Exception as e:
