@@ -1163,9 +1163,9 @@ def test_managed_files_with_loadbalancing(
     import litellm.proxy.proxy_server as ps
     from litellm.proxy._types import LitellmUserRoles
 
-    proxy_logging_obj.proxy_hook_mapping[
-        "managed_files"
-    ] = ManagedFilesWithLoadbalancing()
+    proxy_logging_obj.proxy_hook_mapping["managed_files"] = (
+        ManagedFilesWithLoadbalancing()
+    )
     monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", llm_router)
     monkeypatch.setattr(
         "litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging_obj
@@ -1295,7 +1295,6 @@ def test_create_file_with_nested_litellm_metadata(
             "target_model_names": "gpt-3.5-turbo",
             "litellm_metadata[spend_logs_metadata][owner]": "john_doe",
             "litellm_metadata[spend_logs_metadata][team]": "engineering",
-            "litellm_metadata[tags]": "production",
             "litellm_metadata[environment]": "prod",
         },
         headers={"Authorization": "Bearer test-key"},
@@ -1306,11 +1305,12 @@ def test_create_file_with_nested_litellm_metadata(
     result = response.json()
     assert result["id"] == "file-test-123"
 
-    # Verify nested metadata was correctly parsed
+    # Verify nested metadata was correctly parsed.
+    # Note: caller-supplied `tags` is stripped by default; test removed
+    # to keep the parsing test focused on parser correctness.
     assert "spend_logs_metadata" in captured_litellm_metadata
     assert captured_litellm_metadata["spend_logs_metadata"]["owner"] == "john_doe"
     assert captured_litellm_metadata["spend_logs_metadata"]["team"] == "engineering"
-    assert captured_litellm_metadata["tags"] == "production"
     assert captured_litellm_metadata["environment"] == "prod"
 
 

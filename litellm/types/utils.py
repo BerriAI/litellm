@@ -3291,6 +3291,7 @@ class LlmProviders(str, Enum):
     MANUS = "manus"
     WANDB = "wandb"
     OVHCLOUD = "ovhcloud"
+    SCALEWAY = "scaleway"
     LEMONADE = "lemonade"
     AMAZON_NOVA = "amazon_nova"
     A2A_AGENT = "a2a_agent"

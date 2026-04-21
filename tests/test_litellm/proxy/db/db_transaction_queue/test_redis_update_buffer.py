@@ -28,7 +28,9 @@ def redis_update_buffer(mock_redis_cache):
 
 
 @pytest.mark.asyncio
-async def test_store_in_memory_spend_updates_uses_pipeline(redis_update_buffer, mock_redis_cache):
+async def test_store_in_memory_spend_updates_uses_pipeline(
+    redis_update_buffer, mock_redis_cache
+):
     """
     Verify store_in_memory_spend_updates_in_redis calls async_rpush_pipeline once
     with the correct operations and skips empty queues.
@@ -37,34 +39,34 @@ async def test_store_in_memory_spend_updates_uses_pipeline(redis_update_buffer, 
 
     # Create mock queues - only 3 of 6 have data
     spend_update_queue = AsyncMock()
-    spend_update_queue.flush_and_get_aggregated_db_spend_update_transactions = AsyncMock(
-        return_value={"key_list_transactions": {"key1": 1.0}}
+    spend_update_queue.flush_and_get_aggregated_db_spend_update_transactions = (
+        AsyncMock(return_value={"key_list_transactions": {"key1": 1.0}})
     )
 
     daily_spend_queue = AsyncMock()
-    daily_spend_queue.flush_and_get_aggregated_daily_spend_update_transactions = AsyncMock(
-        return_value={"user_key1": {"spend": 1.0}}
+    daily_spend_queue.flush_and_get_aggregated_daily_spend_update_transactions = (
+        AsyncMock(return_value={"user_key1": {"spend": 1.0}})
     )
 
     daily_team_queue = AsyncMock()
-    daily_team_queue.flush_and_get_aggregated_daily_spend_update_transactions = AsyncMock(
-        return_value={"team_key1": {"spend": 2.0}}
+    daily_team_queue.flush_and_get_aggregated_daily_spend_update_transactions = (
+        AsyncMock(return_value={"team_key1": {"spend": 2.0}})
     )
 
     # Empty queues
     daily_org_queue = AsyncMock()
-    daily_org_queue.flush_and_get_aggregated_daily_spend_update_transactions = AsyncMock(
-        return_value={}
+    daily_org_queue.flush_and_get_aggregated_daily_spend_update_transactions = (
+        AsyncMock(return_value={})
     )
 
     daily_end_user_queue = AsyncMock()
-    daily_end_user_queue.flush_and_get_aggregated_daily_spend_update_transactions = AsyncMock(
-        return_value=None
+    daily_end_user_queue.flush_and_get_aggregated_daily_spend_update_transactions = (
+        AsyncMock(return_value=None)
     )
 
     daily_agent_queue = AsyncMock()
-    daily_agent_queue.flush_and_get_aggregated_daily_spend_update_transactions = AsyncMock(
-        return_value={}
+    daily_agent_queue.flush_and_get_aggregated_daily_spend_update_transactions = (
+        AsyncMock(return_value={})
     )
 
     await redis_update_buffer.store_in_memory_spend_updates_in_redis(
@@ -100,8 +102,8 @@ async def test_store_in_memory_spend_updates_all_empty_returns_early(
         return_value={}
     )
     empty_daily_queue = AsyncMock()
-    empty_daily_queue.flush_and_get_aggregated_daily_spend_update_transactions = AsyncMock(
-        return_value={}
+    empty_daily_queue.flush_and_get_aggregated_daily_spend_update_transactions = (
+        AsyncMock(return_value={})
     )
 
     await redis_update_buffer.store_in_memory_spend_updates_in_redis(
@@ -141,12 +143,12 @@ async def test_get_all_transactions_from_redis_buffer_pipeline(
 
     mock_redis_cache.async_lpop_pipeline = AsyncMock(
         return_value=[
-            [db_spend_json],        # slot 0: db spend updates
-            [daily_user_json],      # slot 1: daily user
-            [daily_team_json],      # slot 2: daily team
-            None,                    # slot 3: daily org (empty)
-            None,                    # slot 4: daily end-user (empty)
-            None,                    # slot 5: daily agent (empty)
+            [db_spend_json],  # slot 0: db spend updates
+            [daily_user_json],  # slot 1: daily user
+            [daily_team_json],  # slot 2: daily team
+            None,  # slot 3: daily org (empty)
+            None,  # slot 4: daily end-user (empty)
+            None,  # slot 5: daily agent (empty)
         ]
     )
 
