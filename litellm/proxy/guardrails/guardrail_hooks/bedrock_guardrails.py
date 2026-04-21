@@ -62,6 +62,7 @@ from litellm.types.utils import (
     CallTypesLiteral,
     Choices,
     GuardrailStatus,
+    Message,
     ModelResponse,
     ModelResponseStream,
     StreamingChoices,
@@ -1563,11 +1564,43 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
 
             # Bedrock will throw an error if there is no text to process
             if filtered_messages:
-                bedrock_response = await self.make_bedrock_api_request(
-                    source="INPUT",
-                    messages=filtered_messages,
-                    request_data=request_data,
+                # Map the abstract input_type to the Bedrock source parameter.
+                # "request"  -> INPUT  (scan user-supplied content)
+                # "response" -> OUTPUT (scan model-generated content)
+                # Bedrock guardrail policies are often configured differently
+                # for Input vs Output (e.g. PII blocking only on Output), so
+                # the source MUST match where the text originated.
+                bedrock_source: Literal["INPUT", "OUTPUT"] = (
+                    "OUTPUT" if input_type == "response" else "INPUT"
                 )
+                if bedrock_source == "OUTPUT":
+                    # Build a synthetic ModelResponse whose choices carry the
+                    # text(s) to scan, so _create_bedrock_output_content_request
+                    # can produce the correct Bedrock OUTPUT payload.
+                    synthetic_response = ModelResponse(
+                        choices=[
+                            Choices(
+                                index=_idx,
+                                message=Message(
+                                    role="assistant",
+                                    content=str(_msg.get("content") or ""),
+                                ),
+                                finish_reason="stop",
+                            )
+                            for _idx, _msg in enumerate(filtered_messages)
+                        ]
+                    )
+                    bedrock_response = await self.make_bedrock_api_request(
+                        source="OUTPUT",
+                        response=synthetic_response,
+                        request_data=request_data,
+                    )
+                else:
+                    bedrock_response = await self.make_bedrock_api_request(
+                        source="INPUT",
+                        messages=filtered_messages,
+                        request_data=request_data,
+                    )
 
                 # Apply any masking that was applied by the guardrail
                 output_list = bedrock_response.get("output")
