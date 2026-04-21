@@ -2281,6 +2281,12 @@ class OpenTelemetry(CustomLogger):
         # Remove trailing slash
         endpoint = endpoint.rstrip("/")
 
+        # Splunk Observability Cloud OTLP/HTTP uses /v2/trace/otlp (not /v1/traces). Do not rewrite.
+        if signal_type == "traces" and (
+            "/v2/trace/otlp" in endpoint or endpoint.endswith("/trace/otlp")
+        ):
+            return endpoint
+
         # Check if endpoint already ends with the correct signal path
         target_path = f"/v1/{signal_type}"
         if endpoint.endswith(target_path):
