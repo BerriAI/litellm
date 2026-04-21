@@ -47,6 +47,8 @@ from litellm.router_strategy.adaptive_router.config import (
 # Sweep session-state cache when it exceeds this many live entries. Expired
 # entries are dropped in bulk; amortizes to O(1) per insert.
 _SESSION_STATE_SWEEP_THRESHOLD: int = 1024
+# Same pattern for the owner cache.
+_OWNER_CACHE_SWEEP_THRESHOLD: int = 1024
 from litellm.router_strategy.adaptive_router.signals import (
     SessionState,
     SignalDelta,
@@ -228,12 +230,23 @@ class AdaptiveRouter:
             self._skipped_updates_total += 1
             return False
 
+        # Opportunistic bulk sweep — sessions that never come back would
+        # otherwise pile up here forever. Same threshold pattern as the
+        # session-state cache.
+        if len(self._owner_cache) >= _OWNER_CACHE_SWEEP_THRESHOLD:
+            self._evict_expired_owner_cache(now)
+
         # No live owner -> claim for current_model.
         self._owner_cache[session_key] = (
             current_model,
             now + OWNER_CACHE_TTL_SECONDS,
         )
         return True
+
+    def _evict_expired_owner_cache(self, now: float) -> None:
+        expired = [k for k, (_, exp) in self._owner_cache.items() if exp <= now]
+        for k in expired:
+            self._owner_cache.pop(k, None)
 
     async def get_state_snapshot(self) -> Dict[str, Any]:
         """In-memory snapshot for the introspection endpoint. Cheap; no DB hit."""
@@ -361,7 +374,20 @@ class AdaptiveRouter:
             "AdaptiveRouter[%s]: record_turn delta=%s", self.router_name, delta
         )
 
+        # Strip the raw conversation content before persisting. The
+        # last_user/assistant_content and tool_call_history fields are only
+        # needed in-memory for the next turn's incremental signal detection;
+        # writing user prompts and tool payloads to the DB would store PII
+        # for every adaptive-router conversation. Counts + bookkeeping is
+        # all the persisted row needs.
         snapshot = asdict(state)
+        for sensitive in (
+            "last_user_content",
+            "last_assistant_content",
+            "tool_call_history",
+            "pending_tool_calls",
+        ):
+            snapshot.pop(sensitive, None)
         await self.queue.add_session_state(
             session_id, self.router_name, model_name, snapshot
         )

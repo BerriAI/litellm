@@ -118,6 +118,25 @@ def test_claim_or_check_owner_expired_owner_reclaims_for_new_model(monkeypatch):
     assert r._skipped_updates_total == 0
 
 
+def test_owner_cache_evicts_expired_entries_when_threshold_crossed(monkeypatch):
+    """Past _OWNER_CACHE_SWEEP_THRESHOLD live entries, new claims sweep stale."""
+    r = _make_router()
+    monkeypatch.setattr(ar_module, "_OWNER_CACHE_SWEEP_THRESHOLD", 5)
+    monkeypatch.setattr(ar_module.time, "time", lambda: 1_000.0)
+    for i in range(5):
+        r.claim_or_check_owner(f"old-{i}", "fast")
+    assert len(r._owner_cache) == 5
+
+    # Jump past TTL so all "old-*" entries are now expired.
+    monkeypatch.setattr(
+        ar_module.time, "time", lambda: 1_000.0 + OWNER_CACHE_TTL_SECONDS + 1
+    )
+    r.claim_or_check_owner("new-1", "fast")
+    # Sweep ran -> only the new entry remains.
+    assert "new-1" in r._owner_cache
+    assert all(k.startswith("new-") for k in r._owner_cache)
+
+
 # ---- record_turn --------------------------------------------------------
 
 
@@ -148,6 +167,16 @@ async def test_record_turn_pushes_to_queue():
     r.queue.add_session_state.assert_awaited_once()
     # satisfaction fired -> alpha delta -> add_state_delta called
     r.queue.add_state_delta.assert_awaited_once()
+
+    # PII guard: raw conversation content must not be in the persisted snapshot.
+    snapshot = r.queue.add_session_state.call_args.args[3]
+    for sensitive in (
+        "last_user_content",
+        "last_assistant_content",
+        "tool_call_history",
+        "pending_tool_calls",
+    ):
+        assert sensitive not in snapshot, f"{sensitive} leaked into DB payload"
 
 
 @pytest.mark.asyncio
