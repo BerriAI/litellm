@@ -15,12 +15,17 @@ import litellm
 import litellm.proxy.proxy_server
 
 
-def _snapshot_mutable_state(module):
-    """Deep-copy every list/dict/set module attribute for later restore.
+_SNAPSHOT_TYPES = (list, dict, set, tuple, str, int, float, bool, bytes)
 
-    Classes, functions, submodules and primitives are skipped — only the
-    collections that tests mutate (callbacks, caches, routers, etc.) need
-    per-test isolation.
+
+def _snapshot_mutable_state(module):
+    """Snapshot every module attribute that importlib.reload would have reset.
+
+    Covers the top-level assignments that tests mutate — collections
+    (callbacks, caches, general_settings) plus scalar flags (master_key,
+    premium_user, etc.) that gate auth and feature behavior. Classes,
+    functions, submodules and complex object instances are skipped: those
+    either aren't meant to be reset or can't round-trip through deepcopy.
     """
     snapshot = {}
     for attr in list(vars(module)):
@@ -30,12 +35,12 @@ def _snapshot_mutable_state(module):
             value = getattr(module, attr)
         except Exception:
             continue
-        if isinstance(value, (list, dict, set)):
+        if value is None or isinstance(value, _SNAPSHOT_TYPES):
             try:
                 snapshot[attr] = copy.deepcopy(value)
             except Exception:
-                # Unpickleable collections (e.g. holding open clients) can't
-                # round-trip through deepcopy; skip them rather than crash.
+                # Skip anything that can't round-trip through deepcopy
+                # rather than crash collection.
                 pass
     return snapshot
 
