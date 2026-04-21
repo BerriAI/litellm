@@ -1390,6 +1390,60 @@ class TestOpenTelemetryProtocolSelection(unittest.TestCase):
         self.assertIsInstance(processor, BatchSpanProcessor)
         self.assertIsInstance(processor.span_exporter, OTLPSpanExporterGRPC)
 
+    @patch.dict(
+        os.environ,
+        {
+            "OTEL_EXPORTER": "otlp_http",
+            "OTEL_EXPORTER_OTLP_ENDPOINT": "http://collector:4318",
+        },
+        clear=False,
+    )
+    def test_protocol_selection_from_otel_exporter_fallback_http(self):
+        """OTEL_EXPORTER drives protocol when OTEL_EXPORTER_OTLP_PROTOCOL is unset."""
+        from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
+            OTLPSpanExporter as OTLPSpanExporterHTTP,
+        )
+        from opentelemetry.sdk.trace.export import BatchSpanProcessor
+
+        popped_protocol = os.environ.pop("OTEL_EXPORTER_OTLP_PROTOCOL", None)
+        try:
+            config = OpenTelemetryConfig.from_env()
+            self.assertEqual(config.exporter, "otlp_http")
+            otel = OpenTelemetry(config=config)
+            processor = otel._get_span_processor()
+            self.assertIsInstance(processor, BatchSpanProcessor)
+            self.assertIsInstance(processor.span_exporter, OTLPSpanExporterHTTP)
+        finally:
+            if popped_protocol is not None:
+                os.environ["OTEL_EXPORTER_OTLP_PROTOCOL"] = popped_protocol
+
+    @patch.dict(
+        os.environ,
+        {
+            "OTEL_EXPORTER": "otlp_grpc",
+            "OTEL_EXPORTER_OTLP_ENDPOINT": "http://collector:4317",
+        },
+        clear=False,
+    )
+    def test_protocol_selection_from_otel_exporter_fallback_grpc(self):
+        """OTEL_EXPORTER drives protocol when OTEL_EXPORTER_OTLP_PROTOCOL is unset."""
+        from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import (
+            OTLPSpanExporter as OTLPSpanExporterGRPC,
+        )
+        from opentelemetry.sdk.trace.export import BatchSpanProcessor
+
+        popped_protocol = os.environ.pop("OTEL_EXPORTER_OTLP_PROTOCOL", None)
+        try:
+            config = OpenTelemetryConfig.from_env()
+            self.assertEqual(config.exporter, "otlp_grpc")
+            otel = OpenTelemetry(config=config)
+            processor = otel._get_span_processor()
+            self.assertIsInstance(processor, BatchSpanProcessor)
+            self.assertIsInstance(processor.span_exporter, OTLPSpanExporterGRPC)
+        finally:
+            if popped_protocol is not None:
+                os.environ["OTEL_EXPORTER_OTLP_PROTOCOL"] = popped_protocol
+
     def test_http_exporter_endpoint_normalization_for_traces(self):
         """Test that HTTP trace exporter gets properly normalized endpoint"""
         config = OpenTelemetryConfig(
