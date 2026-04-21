@@ -103,10 +103,24 @@ class VertexAIImagenImageEditConfig(BaseImageEditConfig, VertexLLM):
         headers: dict,
         model: str,
         api_key: Optional[str] = None,
+        litellm_params: Optional[dict] = None,
+        api_base: Optional[str] = None,
     ) -> dict:
         headers = headers or {}
-        vertex_project = self._resolve_vertex_project()
-        vertex_credentials = self._resolve_vertex_credentials()
+        litellm_params = litellm_params or {}
+
+        _api_base = litellm_params.get("api_base") or api_base
+        if _api_base is not None:
+            return headers
+
+        vertex_project = (
+            self.safe_get_vertex_ai_project(litellm_params)
+            or self._resolve_vertex_project()
+        )
+        vertex_credentials = (
+            self.safe_get_vertex_ai_credentials(litellm_params)
+            or self._resolve_vertex_credentials()
+        )
         access_token, _ = self._ensure_access_token(
             credentials=vertex_credentials,
             project_id=vertex_project,
