@@ -543,7 +543,7 @@ class ModelResponseIterator:
 
         # For handling partial JSON chunks from fragmentation
         # See: https://github.com/BerriAI/litellm/issues/17473
-        self.accumulated_json: str = ""
+        self.accumulated_json_chunks: list = []
         self.chunk_type: Literal["valid_json", "accumulated_json"] = "valid_json"
 
         # Track current content block type to avoid emitting tool calls for non-tool blocks
@@ -1100,16 +1100,16 @@ class ModelResponseIterator:
         Returns:
             ModelResponseStream if JSON is complete, None if still accumulating
         """
-        # Accumulate JSON data
-        self.accumulated_json += data_str
-
-        # Try to parse the accumulated JSON
+        self.accumulated_json_chunks.append(data_str)
+        _stripped = data_str.rstrip()
+        if not _stripped or _stripped[-1] not in ('}', ']'):
+            return None
+        _full_json = "".join(self.accumulated_json_chunks)
         try:
-            data_json = json.loads(self.accumulated_json)
-            self.accumulated_json = ""  # Reset after successful parsing
+            data_json = json.loads(_full_json)
+            self.accumulated_json_chunks = []
             return self.chunk_parser(chunk=data_json)
         except json.JSONDecodeError:
-            # If it's not valid JSON yet, continue to the next chunk
             return None
 
     def _parse_sse_data(self, str_line: str) -> Optional[ModelResponseStream]:
@@ -1147,10 +1147,11 @@ class ModelResponseIterator:
                 chunk = self.response_iterator.__next__()
             except StopIteration:
                 # If we have accumulated JSON when stream ends, try to parse it
-                if self.accumulated_json:
+                if self.accumulated_json_chunks:
+                    _full_json = "".join(self.accumulated_json_chunks)
                     try:
-                        data_json = json.loads(self.accumulated_json)
-                        self.accumulated_json = ""
+                        data_json = json.loads(_full_json)
+                        self.accumulated_json_chunks = []
                         return self.chunk_parser(chunk=data_json)
                     except json.JSONDecodeError:
                         pass
@@ -1198,10 +1199,11 @@ class ModelResponseIterator:
                 chunk = await self.async_response_iterator.__anext__()
             except StopAsyncIteration:
                 # If we have accumulated JSON when stream ends, try to parse it
-                if self.accumulated_json:
+                if self.accumulated_json_chunks:
+                    _full_json = "".join(self.accumulated_json_chunks)
                     try:
-                        data_json = json.loads(self.accumulated_json)
-                        self.accumulated_json = ""
+                        data_json = json.loads(_full_json)
+                        self.accumulated_json_chunks = []
                         return self.chunk_parser(chunk=data_json)
                     except json.JSONDecodeError:
                         pass
