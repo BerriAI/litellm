@@ -3,7 +3,7 @@ name: "Unit Tests: Proxy DB Operations"
 # Uses DATABASE_URL secret — only runs on trusted branches, not PRs.
 on:
   push:
-    branches: [main, "litellm_*"]
+    branches: [main, "litellm_**"]
 
 permissions:
   contents: read
@@ -34,7 +34,7 @@ jobs:
           - test-group: remaining
             test-path: "tests/proxy_unit_tests --ignore=tests/proxy_unit_tests/test_key_generate_prisma.py --ignore=tests/proxy_unit_tests/test_auth_checks.py --ignore=tests/proxy_unit_tests/test_user_api_key_auth.py"
             workers: 8
-            timeout: 20
+            timeout: 30
     uses: ./.github/workflows/_test-unit-services-base.yml
     with:
       test-path: ${{ matrix.test-path }}

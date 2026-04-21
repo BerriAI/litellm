@@ -4,7 +4,7 @@ Here's how you can implement model fallbacks across 3 LLM providers (OpenAI, Ant
 
 ## 1. Install LiteLLM
 ```python 
-!pip install litellm
+!uv add litellm
 ```
 
 ## 2. Basic Fallbacks Code 

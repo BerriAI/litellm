@@ -2297,10 +2297,13 @@ async def view_spend_logs(  # noqa: PLR0915
             }
 
             if api_key is not None and isinstance(api_key, str):
-                filter_query["api_key"] = api_key  # type: ignore
-            elif request_id is not None and isinstance(request_id, str):
+                if api_key.startswith("sk-"):
+                    filter_query["api_key"] = prisma_client.hash_token(token=api_key)  # type: ignore
+                else:
+                    filter_query["api_key"] = api_key  # type: ignore
+            if request_id is not None and isinstance(request_id, str):
                 filter_query["request_id"] = request_id  # type: ignore
-            elif user_id is not None and isinstance(user_id, str):
+            if user_id is not None and isinstance(user_id, str):
                 filter_query["user"] = user_id  # type: ignore
 
             # Check if user wants unsummarized data
@@ -2375,49 +2378,30 @@ async def view_spend_logs(  # noqa: PLR0915
 
             return response
 
-        elif api_key is not None and isinstance(api_key, str):
-            if api_key.startswith("sk-"):
-                hashed_token = prisma_client.hash_token(token=api_key)
-            else:
-                hashed_token = api_key
-            spend_log = await prisma_client.get_data(
-                table_name="spend",
-                query_type="find_all",
-                key_val={"key": "api_key", "value": hashed_token},
-            )
-            if spend_log is None:
-                return []
-            if isinstance(spend_log, list):
-                return spend_log
-            else:
-                return [spend_log]
-        elif request_id is not None:
-            spend_log = await prisma_client.get_data(
-                table_name="spend",
-                query_type="find_unique",
-                key_val={"key": "request_id", "value": request_id},
-            )
-            if spend_log is None:
-                return []
-            return [spend_log]
-        elif user_id is not None:
-            spend_log = await prisma_client.get_data(
-                table_name="spend",
-                query_type="find_all",
-                key_val={"key": "user", "value": user_id},
-            )
-            if spend_log is None:
-                return []
-            if isinstance(spend_log, list):
-                return spend_log
-            else:
-                return [spend_log]
         else:
-            spend_logs = await prisma_client.get_data(
-                table_name="spend", query_type="find_all"
-            )
+            scoped_filter: Dict[str, Any] = {}
+            if api_key is not None and isinstance(api_key, str):
+                if api_key.startswith("sk-"):
+                    hashed_token = prisma_client.hash_token(token=api_key)
+                else:
+                    hashed_token = api_key
+                scoped_filter["api_key"] = hashed_token
+            if request_id is not None and isinstance(request_id, str):
+                scoped_filter["request_id"] = request_id
+            if user_id is not None and isinstance(user_id, str):
+                scoped_filter["user"] = user_id
 
-            return spend_logs
+            if not scoped_filter:
+                spend_logs = await prisma_client.get_data(
+                    table_name="spend", query_type="find_all"
+                )
+                return spend_logs
+
+            data = await prisma_client.db.litellm_spendlogs.find_many(
+                where=scoped_filter,  # type: ignore
+                order={"startTime": "desc"},
+            )
+            return data
 
         return None
 

@@ -3,57 +3,75 @@ ARG LITELLM_BUILD_IMAGE=cgr.dev/chainguard/wolfi-base@sha256:a5a619c1793039dcf92
 
 # Runtime image
 ARG LITELLM_RUNTIME_IMAGE=cgr.dev/chainguard/wolfi-base@sha256:a5a619c1793039dcf92f02178f37c94bb3d6001403716da59d6092dfe8d9b502
+ARG UV_IMAGE=ghcr.io/astral-sh/uv:0.10.9@sha256:10902f58a1606787602f303954cea099626a4adb02acbac4c69920fe9d278f82
+
+FROM $UV_IMAGE AS uvbin
 
 # Builder stage
 FROM $LITELLM_BUILD_IMAGE AS builder
 
-# Set the working directory to /app
 WORKDIR /app
-
 USER root
 
-# Install build dependencies
-RUN apk add --no-cache bash gcc py3-pip python3 python3-dev openssl openssl-dev
+COPY --from=uvbin /uv /usr/local/bin/uv
+COPY --from=uvbin /uvx /usr/local/bin/uvx
 
-RUN python -m pip install build==1.4.2
+RUN apk add --no-cache \
+    bash \
+    gcc \
+    python3 \
+    python3-dev \
+    openssl \
+    openssl-dev \
+    nodejs \
+    npm \
+    libsndfile
 
-# Copy the current directory contents into the container at /app
+ENV PRISMA_BINARY_CACHE_DIR=/app/.cache/prisma-python/binaries \
+    UV_PROJECT_ENVIRONMENT=/app/.venv \
+    UV_LINK_MODE=copy \
+    XDG_CACHE_HOME=/app/.cache \
+    PATH="/app/.venv/bin:${PATH}"
+
+# Copy dependency metadata first for layer caching
+COPY pyproject.toml uv.lock ./
+COPY enterprise/pyproject.toml enterprise/
+COPY litellm-proxy-extras/pyproject.toml litellm-proxy-extras/
+
+# Install third-party dependencies (cached unless pyproject.toml/uv.lock change)
+RUN uv sync --frozen --no-install-project --no-install-workspace --no-default-groups --no-editable \
+    --extra proxy \
+    --extra proxy-runtime \
+    --extra extra_proxy \
+    --extra semantic-router \
+    --python python3
+
+# Copy full source tree
 COPY . .
 
-# Build Admin UI
-# Convert Windows line endings to Unix and make executable
+# Build Admin UI before final sync
 RUN sed -i 's/\r$//' docker/build_admin_ui.sh && chmod +x docker/build_admin_ui.sh && ./docker/build_admin_ui.sh
 
-# Build the package
-RUN rm -rf dist/* && python -m build
+# Install project and workspace packages (fast - deps already cached)
+RUN uv sync --frozen --no-default-groups --no-editable \
+    --extra proxy \
+    --extra proxy-runtime \
+    --extra extra_proxy \
+    --extra semantic-router \
+    --python python3
 
-# There should be only one wheel file now, assume the build only creates one
-RUN ls -1 dist/*.whl | head -1
+RUN prisma generate --schema=./schema.prisma
 
-# Install the package
-RUN pip install dist/*.whl
-
-# install dependencies as wheels
-RUN pip wheel --no-cache-dir --wheel-dir=/wheels/ -r requirements.txt
-
-# ensure pyjwt is used, not jwt
-RUN pip uninstall jwt -y
-RUN pip uninstall PyJWT -y
-RUN pip install PyJWT==2.12.0 --no-cache-dir
+RUN sed -i 's/\r$//' docker/entrypoint.sh && chmod +x docker/entrypoint.sh && \
+    sed -i 's/\r$//' docker/prod_entrypoint.sh && chmod +x docker/prod_entrypoint.sh
 
 # Runtime stage
 FROM $LITELLM_RUNTIME_IMAGE AS runtime
 
-# Ensure runtime stage runs as root
 USER root
 
-# Install runtime dependencies (libsndfile needed for audio processing on ARM64)
-RUN apk add --no-cache bash openssl tzdata nodejs npm python3 py3-pip libsndfile && \
+RUN apk add --no-cache bash openssl tzdata nodejs npm python3 libsndfile supervisor && \
     npm install -g npm@11.12.1 tar@7.5.11 glob@11.1.0 @isaacs/brace-expansion@5.0.1 minimatch@10.2.4 diff@8.0.3 && \
-    # SECURITY FIX: npm bundles tar, glob, and brace-expansion at multiple nested
-    # levels inside its dependency tree. `npm install -g <pkg>` only creates a
-    # SEPARATE global package, it does NOT replace npm's internal copies.
-    # We must find and replace EVERY copy inside npm's directory.
     GLOBAL="$(npm root -g)" && \
     find "$GLOBAL/npm" -type d -name "tar" -path "*/node_modules/tar" | while read d; do \
         rm -rf "$d" && cp -rL "$GLOBAL/tar" "$d"; \
@@ -70,73 +88,24 @@ RUN apk add --no-cache bash openssl tzdata nodejs npm python3 py3-pip libsndfile
     find "$GLOBAL/npm" -type d -name "diff" -path "*/node_modules/diff" | while read d; do \
         rm -rf "$d" && cp -rL "$GLOBAL/diff" "$d"; \
     done && \
-    # SECURITY FIX: patch npm's own package.json metadata so scanners see the
-    # actual installed versions instead of the stale declared dependencies.
     find /usr/local/lib /usr/lib -path "*/node_modules/npm/package.json" -exec \
         sed -i 's/"tar": "\^7\.5\.[0-9]*"/"tar": "^7.5.10"/g; s/"minimatch": "\^10\.[0-9.]*"/"minimatch": "^10.2.4"/g' {} + 2>/dev/null && \
     npm cache clean --force && \
-    # Remove the apk-tracked npm so its stale SBOM metadata (tar 7.5.9) is
-    # no longer visible to image scanners.  The globally installed npm@latest
-    # at /usr/local/lib/node_modules/npm/ remains fully functional.
     { apk del --no-cache npm 2>/dev/null || true; }
 
 WORKDIR /app
-# Copy the current directory contents into the container at /app
-COPY . .
-RUN ls -la /app
+ENV PRISMA_BINARY_CACHE_DIR=/app/.cache/prisma-python/binaries \
+    XDG_CACHE_HOME=/app/.cache \
+    PATH="/app/.venv/bin:${PATH}"
 
-# Copy the built wheel from the builder stage to the runtime stage; assumes only one wheel file is present
-COPY --from=builder /app/dist/*.whl .
-COPY --from=builder /wheels/ /wheels/
+COPY --from=builder /app /app
 
-# Install the built wheel using pip; again using a wildcard if it's the only file
-RUN pip install *.whl /wheels/* --no-index --find-links=/wheels/ --no-deps && rm -f *.whl && rm -rf /wheels
-
-# Replace the nodejs-wheel-binaries bundled node with the system node (fixes CVE-2025-55130)
-RUN NODEJS_WHEEL_NODE=$(find /usr/lib -path "*/nodejs_wheel/bin/node" 2>/dev/null) && \
-    if [ -n "$NODEJS_WHEEL_NODE" ]; then cp /usr/bin/node "$NODEJS_WHEEL_NODE"; fi
-
-# Remove test files and keys from dependencies
-RUN find /usr/lib -type f -path "*/tornado/test/*" -delete && \
-    find /usr/lib -type d -path "*/tornado/test" -delete
-
-# SECURITY FIX: nodejs-wheel-binaries (pip package used by Prisma) bundles a complete
-# npm with old vulnerable deps at /usr/lib/python3.*/site-packages/nodejs_wheel/.
-# Patch every copy of tar, glob, and brace-expansion inside that tree.
-RUN GLOBAL="$(npm root -g)" && \
-    [ -n "$GLOBAL" ] || { echo "ERROR: npm root -g returned empty; aborting"; exit 1; } && \
-    find /usr/lib -type d -name "tar" -path "*/node_modules/tar" | while read d; do \
-        rm -rf "$d" && cp -rL "$GLOBAL/tar" "$d"; \
-    done && \
-    find /usr/lib -type d -name "glob" -path "*/node_modules/glob" | while read d; do \
-        rm -rf "$d" && cp -rL "$GLOBAL/glob" "$d"; \
-    done && \
-    find /usr/lib -type d -name "brace-expansion" -path "*/node_modules/@isaacs/brace-expansion" | while read d; do \
-        rm -rf "$d" && cp -rL "$GLOBAL/@isaacs/brace-expansion" "$d"; \
-    done && \
-    find /usr/lib -type d -name "minimatch" -path "*/node_modules/minimatch" | while read d; do \
-        rm -rf "$d" && cp -rL "$GLOBAL/minimatch" "$d"; \
-    done && \
-    find /usr/lib -type d -name "diff" -path "*/node_modules/diff" | while read d; do \
-        rm -rf "$d" && cp -rL "$GLOBAL/diff" "$d"; \
-    done
-
-# Install semantic_router and aurelio-sdk using script
-# Convert Windows line endings to Unix and make executable
-RUN sed -i 's/\r$//' docker/install_auto_router.sh && chmod +x docker/install_auto_router.sh && ./docker/install_auto_router.sh
-
-# Generate prisma client using the correct schema
-RUN prisma generate --schema=./litellm/proxy/schema.prisma
-# Convert Windows line endings to Unix for entrypoint scripts
-RUN sed -i 's/\r$//' docker/entrypoint.sh && chmod +x docker/entrypoint.sh
-RUN sed -i 's/\r$//' docker/prod_entrypoint.sh && chmod +x docker/prod_entrypoint.sh
+RUN find /app/.venv -type f -path "*/tornado/test/*" -delete && \
+    find /app/.venv -type d -path "*/tornado/test" -delete
 
 EXPOSE 4000/tcp
 
-RUN apk add --no-cache supervisor
 COPY docker/supervisord.conf /etc/supervisord.conf
 
 ENTRYPOINT ["docker/prod_entrypoint.sh"]
-
-# Append "--detailed_debug" to the end of CMD to view detailed debug logs
 CMD ["--port", "4000"]

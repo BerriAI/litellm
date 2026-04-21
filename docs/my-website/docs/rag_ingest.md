@@ -287,7 +287,7 @@ When `vector_store_id` is omitted, LiteLLM automatically creates:
 1. Create a RAG corpus in Vertex AI console or via API
 2. Create a GCS bucket for file uploads
 3. Authenticate via `gcloud auth application-default login`
-4. Install: `pip install 'google-cloud-aiplatform>=1.60.0'`
+4. Install: `uv add 'google-cloud-aiplatform>=1.60.0'`
 :::
 
 ### vector_store (AWS S3 Vectors)

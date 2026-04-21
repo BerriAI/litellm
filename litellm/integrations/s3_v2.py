@@ -404,11 +404,14 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
             # Prepare the signed headers
             signed_headers = dict(aws_request.headers.items())
 
+            # Use prepared URL so path segments match SigV4 canonical request (e.g. %20 for spaces).
+            request_url = prepped.url or url
+
             # Make the request with retry for transient S3 errors (500/503)
             max_retries = 3
             for attempt in range(max_retries):
                 response = await self.async_httpx_client.put(
-                    url, data=json_string, headers=signed_headers
+                    request_url, data=json_string, headers=signed_headers
                 )
                 if response.status_code in (500, 503) and attempt < max_retries - 1:
                     wait_time = 2**attempt  # 1s, 2s
@@ -590,16 +593,21 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
             # Prepare the signed headers
             signed_headers = dict(aws_request.headers.items())
 
+            # Use prepared URL so path segments match SigV4 canonical request (e.g. %20 for spaces).
+            request_url = prepped.url or url
+
             httpx_client = _get_httpx_client(
-                params={"ssl_verify": self.s3_verify}
-                if self.s3_verify is not None
-                else None
+                params=(
+                    {"ssl_verify": self.s3_verify}
+                    if self.s3_verify is not None
+                    else None
+                )
             )
             # Make the request with retry for transient S3 errors (500/503)
             max_retries = 3
             for attempt in range(max_retries):
                 response = httpx_client.put(
-                    url, data=json_string, headers=signed_headers
+                    request_url, data=json_string, headers=signed_headers
                 )
                 if response.status_code in (500, 503) and attempt < max_retries - 1:
                     wait_time = 2**attempt  # 1s, 2s
@@ -701,8 +709,10 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
             # Prepare the signed headers
             signed_headers = dict(aws_request.headers.items())
 
-            # Make the request
-            response = await self.async_httpx_client.get(url, headers=signed_headers)
+            request_url = prepped.url or url
+            response = await self.async_httpx_client.get(
+                request_url, headers=signed_headers
+            )
 
             if response.status_code != 200:
                 verbose_logger.exception(

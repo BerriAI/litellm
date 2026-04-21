@@ -14,12 +14,48 @@ The advisor tool is in beta. Include `anthropic-beta: advisor-tool-2026-03-01` i
 
 ## Supported Providers
 
-| Provider | Chat Completions API | Messages API |
-|----------|---------------------|--------------|
-| **Anthropic API** | ✅ | ✅ |
-| **Azure Anthropic** | ❌ (coming soon) | ❌ (coming soon) |
-| **Google Cloud Vertex AI** | ❌ (coming soon) | ❌ (coming soon) |
-| **Amazon Bedrock** | ❌ (coming soon) | ❌ (coming soon) |
+| Provider | Chat Completions API | Messages API | Notes |
+|----------|---------------------|--------------|-------|
+| **Anthropic API** | ✅ | ✅ | Native — runs server-side |
+| **OpenAI / Azure OpenAI** | ✅ | ✅ | LiteLLM orchestration loop |
+| **Amazon Bedrock** | ✅ | ✅ | LiteLLM orchestration loop |
+| **Google Vertex AI** | ✅ | ✅ | LiteLLM orchestration loop |
+| **Groq / Mistral / others** | ✅ | ✅ | LiteLLM orchestration loop |
+
+## How it works (LiteLLM native orchestration)
+
+For non-Anthropic providers, LiteLLM implements the advisor loop itself. The API you call is identical — LiteLLM handles everything transparently.
+
+When a request arrives with an `advisor_20260301` tool and a non-Anthropic provider, `AdvisorOrchestrationHandler` intercepts it. It translates the advisor tool into a regular function tool the provider understands, then runs an orchestration loop:
+
+```mermaid
+flowchart TD
+    A["Your request\ntools: advisor_20260301\nmodel: e.g. openai/gpt-4.1-mini"] --> B["AdvisorOrchestrationHandler\ntranslates advisor → regular fn tool"]
+
+    B --> C["EXECUTOR CALL\nopenai / bedrock / vertex / etc."]
+
+    C --> D{"executor calls\nadvisor tool?"}
+
+    D -->|"yes — tool_use\nname=advisor"| E{"max_uses\nexceeded?"}
+
+    E -->|no| F["ADVISOR SUB-CALL\nclaude-opus-4-6\nfull transcript forwarded\nno tools"]
+
+    F --> G["Inject advice as\ntool_result into history"]
+
+    G --> C
+
+    E -->|yes| H["AdvisorMaxIterationsError"]
+
+    D -->|"no — end_turn\nor other stop reason"| I["Clean final response\nno advisor blocks in output"]
+```
+
+**What LiteLLM does for you:**
+
+- Strips `advisor_20260301` from the outgoing request — the provider only sees a standard function tool named `advisor`
+- When the executor calls it, intercepts before the result reaches you, runs the advisor sub-call, and injects the advice
+- Strips any `advisor_tool_result` / `server_tool_use` blocks from message history on re-send so non-Anthropic providers never see Anthropic-specific types
+- Wraps the final response in an SSE stream if you requested `stream=True`
+- Enforces `max_uses` as a hard cap — `AdvisorMaxIterationsError` is raised if exceeded; `max_uses=0` disables the advisor entirely
 
 ## Model Compatibility
 
@@ -303,6 +339,37 @@ response = client.beta.messages.create(
     ],
 )
 print(response)
+```
+
+#### Non-Anthropic Provider (LiteLLM orchestration loop)
+
+```python showLineNumbers title="Advisor Tool with OpenAI executor"
+import asyncio
+import litellm
+
+async def main():
+    # executor: openai/gpt-4.1-mini  |  advisor: claude-opus-4-6
+    # LiteLLM runs the orchestration loop automatically
+    response = await litellm.anthropic.messages.acreate(
+        model="openai/gpt-4.1-mini",
+        messages=[
+            {"role": "user", "content": "Implement a Python LRU cache with O(1) get and put."}
+        ],
+        tools=[
+            {
+                "type": "advisor_20260301",
+                "name": "advisor",
+                "model": "claude-opus-4-6",
+                "max_uses": 3,
+            }
+        ],
+        max_tokens=1024,
+        custom_llm_provider="openai",
+    )
+    # Final response is clean — no advisor tool_use blocks
+    print(response["content"][0]["text"])
+
+asyncio.run(main())
 ```
 
 ---

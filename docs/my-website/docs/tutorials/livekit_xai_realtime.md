@@ -12,7 +12,7 @@ The LiveKit Agents framework provides tools for building real-time voice and vid
 ### 1. Install Dependencies
 
 ```bash
-pip install livekit-agents[xai]
+uv add livekit-agents[xai]
 ```
 
 ### 2. Start LiteLLM Proxy

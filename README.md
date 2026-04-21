@@ -39,8 +39,45 @@
 
 <img width="2688" height="1600" alt="Group 7154 (1)" src="https://github.com/user-attachments/assets/c5ee0412-6fb5-4fb6-ab5b-bafae4209ca6" />
 
+---
 
-## Use LiteLLM for
+## What is LiteLLM
+
+LiteLLM is an open source AI Gateway that gives you a single, unified interface to call 100+ LLM providers — OpenAI, Anthropic, Gemini, Bedrock, Azure, and more — using the OpenAI format.
+
+Use it as a **Python SDK** for direct library integration, or deploy the **AI Gateway (Proxy Server)** as a centralized service for your team or organization.
+
+[**Jump to LiteLLM Proxy (LLM Gateway) Docs**](https://docs.litellm.ai/docs/simple_proxy) <br>
+[**Jump to Supported LLM Providers**](https://docs.litellm.ai/docs/providers)
+
+---
+
+## Why LiteLLM
+
+Managing LLM calls across providers gets complicated fast — different SDKs, auth patterns, request formats, and error types for every model. LiteLLM removes that friction:
+
+- **Unified API** — one interface for 100+ LLMs, no provider-specific SDK juggling
+- **Drop-in OpenAI compatibility** — swap providers without rewriting your code
+- **Production-ready gateway** — virtual keys, spend tracking, guardrails, load balancing, and an admin dashboard out of the box
+- **8ms P95 latency** at 1k RPS ([benchmarks](https://docs.litellm.ai/docs/benchmarks))
+
+### OSS Adopters
+
+<table>
+  <tr>
+    <td><img height="60" alt="Stripe" src="https://github.com/user-attachments/assets/f7296d4f-9fbd-460d-9d05-e4df31697c4b" /></td>
+    <td><img height="60" alt="image" src="https://github.com/user-attachments/assets/436fca71-988b-40bb-b5fe-8450c80fdbd0" /></td>
+    <td><img height="60" alt="Google ADK" src="https://github.com/user-attachments/assets/caf270a2-5aee-45c4-8222-41a2070c4f19" /></td>
+    <td><img height="60" alt="Greptile" src="https://github.com/user-attachments/assets/0be4bd8a-7cfa-48d3-9090-f415fe948280" /></td>
+    <td><img height="60" alt="OpenHands" src="https://github.com/user-attachments/assets/a6150c4c-149e-4cae-888b-8b92be6e003f" /></td>
+    <td><h2>Netflix</h2></td>
+    <td><img height="60" alt="OpenAI Agents SDK" src="https://github.com/user-attachments/assets/c02f7be0-8c2e-4d27-aea7-7c024bfaebc0" /></td>
+  </tr>
+</table>
+
+---
+
+## Features
 
 <details open>
 <summary><b>LLMs</b> - Call 100+ LLMs (Python SDK + AI Gateway)</summary>
@@ -50,7 +87,7 @@
 ### Python SDK
 
 ```shell
-pip install litellm
+uv add litellm
 ```
 
 ```python
@@ -72,7 +109,7 @@ response = completion(model="anthropic/claude-sonnet-4-20250514", messages=[{"ro
 [**Getting Started - E2E Tutorial**](https://docs.litellm.ai/docs/proxy/docker_quick_start) - Setup virtual keys, make your first request
 
 ```shell
-pip install 'litellm[proxy]'
+uv tool install 'litellm[proxy]'
 litellm --model gpt-4o
 ```
 
@@ -223,63 +260,7 @@ curl -X POST 'http://0.0.0.0:4000/v1/chat/completions' \
 
 </details>
 
----
-
-## How to use LiteLLM
-
-You can use LiteLLM through either the Proxy Server or Python SDK. Both gives you a unified interface to access multiple LLMs (100+ LLMs). Choose the option that best fits your needs:
-
-<table style={{width: '100%', tableLayout: 'fixed'}}>
-<thead>
-<tr>
-<th style={{width: '14%'}}></th>
-<th style={{width: '43%'}}><strong><a href="https://docs.litellm.ai/docs/simple_proxy">LiteLLM AI Gateway</a></strong></th>
-<th style={{width: '43%'}}><strong><a href="https://docs.litellm.ai/docs/">LiteLLM Python SDK</a></strong></th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td style={{width: '14%'}}><strong>Use Case</strong></td>
-<td style={{width: '43%'}}>Central service (LLM Gateway) to access multiple LLMs</td>
-<td style={{width: '43%'}}>Use LiteLLM directly in your Python code</td>
-</tr>
-<tr>
-<td style={{width: '14%'}}><strong>Who Uses It?</strong></td>
-<td style={{width: '43%'}}>Gen AI Enablement / ML Platform Teams</td>
-<td style={{width: '43%'}}>Developers building LLM projects</td>
-</tr>
-<tr>
-<td style={{width: '14%'}}><strong>Key Features</strong></td>
-<td style={{width: '43%'}}>Centralized API gateway with authentication and authorization, multi-tenant cost tracking and spend management per project/user, per-project customization (logging, guardrails, caching), virtual keys for secure access control, admin dashboard UI for monitoring and management</td>
-<td style={{width: '43%'}}>Direct Python library integration in your codebase, Router with retry/fallback logic across multiple deployments (e.g. Azure/OpenAI) - <a href="https://docs.litellm.ai/docs/routing">Router</a>, application-level load balancing and cost tracking, exception handling with OpenAI-compatible errors, observability callbacks (Lunary, MLflow, Langfuse, etc.)</td>
-</tr>
-</tbody>
-</table>
-
-LiteLLM Performance: **8ms P95 latency** at 1k RPS (See benchmarks [here](https://docs.litellm.ai/docs/benchmarks))
-
-[**Jump to LiteLLM Proxy (LLM Gateway) Docs**](https://docs.litellm.ai/docs/simple_proxy) <br>
-[**Jump to Supported LLM Providers**](https://docs.litellm.ai/docs/providers)
-
-**Stable Release:** Use docker images with the `-stable` tag. These have undergone 12 hour load tests, before being published. [More information about the release cycle here](https://docs.litellm.ai/docs/proxy/release_cycle)
-
-Support for more providers. Missing a provider or LLM Platform, raise a [feature request](https://github.com/BerriAI/litellm/issues/new?assignees=&labels=enhancement&projects=&template=feature_request.yml&title=%5BFeature%5D%3A+).
-
-## OSS Adopters 
-
-<table>
-  <tr>
-    <td><img height="60" alt="Stripe" src="https://github.com/user-attachments/assets/f7296d4f-9fbd-460d-9d05-e4df31697c4b" /></td>
-    <td><img height="60" alt="image" src="https://github.com/user-attachments/assets/436fca71-988b-40bb-b5fe-8450c80fdbd0" /></td>
-    <td><img height="60" alt="Google ADK" src="https://github.com/user-attachments/assets/caf270a2-5aee-45c4-8222-41a2070c4f19" /></td>
-    <td><img height="60" alt="Greptile" src="https://github.com/user-attachments/assets/0be4bd8a-7cfa-48d3-9090-f415fe948280" /></td>
-    <td><img height="60" alt="OpenHands" src="https://github.com/user-attachments/assets/a6150c4c-149e-4cae-888b-8b92be6e003f" /></td>
-    <td><h2>Netflix</h2></td>
-    <td><img height="60" alt="OpenAI Agents SDK" src="https://github.com/user-attachments/assets/c02f7be0-8c2e-4d27-aea7-7c024bfaebc0" /></td>
-  </tr>
-</table>
-
-## Supported Providers ([Website Supported Models](https://models.litellm.ai/) | [Docs](https://docs.litellm.ai/docs/providers))
+### Supported Providers ([Website Supported Models](https://models.litellm.ai/) | [Docs](https://docs.litellm.ai/docs/providers))
 
 | Provider                                                                            | `/chat/completions` | `/messages` | `/responses` | `/embeddings` | `/image/generations` | `/audio/transcriptions` | `/audio/speech` | `/moderations` | `/batches` | `/rerank` |
 |-------------------------------------------------------------------------------------|---------------------|-------------|--------------|---------------|----------------------|-------------------------|-----------------|----------------|-----------|-----------|
@@ -386,25 +367,62 @@ Support for more providers. Missing a provider or LLM Platform, raise a [feature
 
 [**Read the Docs**](https://docs.litellm.ai/docs/)
 
-## Run in Developer mode
-### Services
+---
+
+## Get Started
+
+You can use LiteLLM through either the Proxy Server or Python SDK. Both give you a unified interface to access multiple LLMs (100+ LLMs). Choose the option that best fits your needs:
+
+<table style={{width: '100%', tableLayout: 'fixed'}}>
+<thead>
+<tr>
+<th style={{width: '14%'}}></th>
+<th style={{width: '43%'}}><strong><a href="https://docs.litellm.ai/docs/simple_proxy">LiteLLM AI Gateway</a></strong></th>
+<th style={{width: '43%'}}><strong><a href="https://docs.litellm.ai/docs/">LiteLLM Python SDK</a></strong></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style={{width: '14%'}}><strong>Use Case</strong></td>
+<td style={{width: '43%'}}>Central service (LLM Gateway) to access multiple LLMs</td>
+<td style={{width: '43%'}}>Use LiteLLM directly in your Python code</td>
+</tr>
+<tr>
+<td style={{width: '14%'}}><strong>Who Uses It?</strong></td>
+<td style={{width: '43%'}}>Gen AI Enablement / ML Platform Teams</td>
+<td style={{width: '43%'}}>Developers building LLM projects</td>
+</tr>
+<tr>
+<td style={{width: '14%'}}><strong>Key Features</strong></td>
+<td style={{width: '43%'}}>Centralized API gateway with authentication and authorization, multi-tenant cost tracking and spend management per project/user, per-project customization (logging, guardrails, caching), virtual keys for secure access control, admin dashboard UI for monitoring and management</td>
+<td style={{width: '43%'}}>Direct Python library integration in your codebase, Router with retry/fallback logic across multiple deployments (e.g. Azure/OpenAI) - <a href="https://docs.litellm.ai/docs/routing">Router</a>, application-level load balancing and cost tracking, exception handling with OpenAI-compatible errors, observability callbacks (Lunary, MLflow, Langfuse, etc.)</td>
+</tr>
+</tbody>
+</table>
+
+**Stable Release:** Use docker images with the `-stable` tag. These have undergone 12 hour load tests, before being published. [More information about the release cycle here](https://docs.litellm.ai/docs/proxy/release_cycle)
+
+Support for more providers. Missing a provider or LLM Platform, raise a [feature request](https://github.com/BerriAI/litellm/issues/new?assignees=&labels=enhancement&projects=&template=feature_request.yml&title=%5BFeature%5D%3A+).
+
+### Run in Developer Mode
+#### Services
 1. Setup .env file in root
 2. Run dependant services `docker-compose up db prometheus`
 
-### Backend
+#### Backend
 1. (In root) create virtual environment `python -m venv .venv`
 2. Activate virtual environment `source .venv/bin/activate`
-3. Install dependencies `pip install -e ".[all]"`
-4. `pip install prisma`
+3. Install dependencies `uv sync --all-extras --group proxy-dev`
+4. `uv run prisma generate`
 5. `prisma generate`
 6. Start proxy backend `python litellm/proxy/proxy_cli.py`
 
-### Frontend
+#### Frontend
 1. Navigate to `ui/litellm-dashboard`
 2. Install dependencies `npm install`
 3. Run `npm run dev` to start the dashboard
 
-# Verify Docker Image Signatures
+### Verify Docker Image Signatures
 
 All LiteLLM Docker images published to GHCR are signed with [cosign](https://docs.sigstore.dev/cosign/overview/). Every release is signed with the same key introduced in [commit `0112e53`](https://github.com/BerriAI/litellm/commit/0112e53046018d726492c814b3644b7d376029d0).
 
@@ -430,6 +448,8 @@ cosign verify \
 
 Replace `<release-tag>` with the version you are deploying (e.g. `v1.83.0-stable`).
 
+---
+
 # Enterprise
 For companies that need better security, user management and professional support
 
@@ -450,7 +470,7 @@ We welcome contributions to LiteLLM! Whether you're fixing bugs, adding features
 
 ## Quick Start for Contributors
 
-This requires poetry to be installed.
+This requires uv to be installed.
 
 ```bash
 git clone https://github.com/BerriAI/litellm.git
@@ -486,10 +506,6 @@ All these checks must pass before your PR can be merged.
 - [Community Slack 💭](https://www.litellm.ai/support)
 - Our emails ✉️ ishaan@berri.ai / krrish@berri.ai
 
-# Why did we build this
-
-- **Need for simplicity**: Our code started to get extremely complicated managing & translating calls between Azure, OpenAI and Cohere.
-
 # Contributors
 
 <!-- ALL-CONTRIBUTORS-LIST:START - Do not remove or modify this section -->
@@ -504,4 +520,3 @@ All these checks must pass before your PR can be merged.
 <a href="https://github.com/BerriAI/litellm/graphs/contributors">
   <img src="https://contrib.rocks/image?repo=BerriAI/litellm" />
 </a>
-
