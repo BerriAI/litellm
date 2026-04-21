@@ -1,4 +1,5 @@
 """Tests for the /public/litellm_blog_posts endpoint."""
+
 from unittest.mock import patch
 
 import pytest

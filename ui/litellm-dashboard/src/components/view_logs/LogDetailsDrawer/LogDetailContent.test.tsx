@@ -113,6 +113,35 @@ describe("LogDetailContent", () => {
     expect(screen.getAllByText("$0.00200000").length).toBeGreaterThanOrEqual(1);
   });
 
+  it("should show Input Tokens and Output Tokens for anthropic_messages when uncached text_tokens exist", () => {
+    render(
+      <LogDetailContent
+        logEntry={createLogEntry({
+          call_type: "anthropic_messages",
+          prompt_tokens: 34548,
+          completion_tokens: 28,
+          total_tokens: 34576,
+          spend: 0.01107885,
+          metadata: {
+            status: "success",
+            additional_usage_values: {
+              prompt_tokens_details: { text_tokens: 3 },
+              cache_read_input_tokens: 34462,
+              cache_creation_input_tokens: 83,
+            },
+          },
+        })}
+      />,
+    );
+
+    expect(screen.getByText("Input Tokens")).toBeInTheDocument();
+    expect(screen.getByText("Output Tokens")).toBeInTheDocument();
+    expect(screen.getByText("3")).toBeInTheDocument();
+    expect(screen.getByText("28")).toBeInTheDocument();
+    // Combined TokenFlow line should not appear (would include "prompt tokens")
+    expect(screen.queryByText(/prompt tokens \+ .* completion tokens/)).not.toBeInTheDocument();
+  });
+
   it("should display ConfigInfoMessage when no messages, response, or error and not loading", () => {
     render(
       <LogDetailContent
