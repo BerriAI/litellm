@@ -3051,10 +3051,19 @@ jobs:
             - ui/litellm-dashboard/node_modules
       - run:
           name: Build UI from source
+          # Prior version used `cp -r out/ ../../litellm/proxy/_experimental/out/`.
+          # GNU cp (used on CircleCI's Ubuntu image) interprets that as "copy the
+          # source directory as a child of the destination" when the destination
+          # already exists — silently creating `_experimental/out/out/` instead of
+          # replacing the served bundle. The proxy continued serving whatever was
+          # checked into `_experimental/out/*`, so this job was effectively testing
+          # the pre-build bundle on every run. Replace-and-move guarantees the
+          # freshly built bundle is what the proxy actually serves.
           command: |
             cd ui/litellm-dashboard
             npm run build
-            cp -r out/ ../../litellm/proxy/_experimental/out/
+            rm -rf ../../litellm/proxy/_experimental/out
+            mv out ../../litellm/proxy/_experimental/out
             # Restructure HTML so extensionless routes work (login.html -> login/index.html)
             find ../../litellm/proxy/_experimental/out -name '*.html' ! -name 'index.html' | while read -r f; do
               d="${f%.html}"; mkdir -p "$d"; mv "$f" "$d/index.html"
