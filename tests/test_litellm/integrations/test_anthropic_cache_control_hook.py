@@ -97,7 +97,9 @@ async def test_anthropic_cache_control_hook_system_message():
                 for item in request_body["system"]
                 if isinstance(item, dict) and "cachePoint" in item
             )
-            assert cache_control_count == 1, f"Expected exactly 1 cache control point, found {cache_control_count}"
+            assert (
+                cache_control_count == 1
+            ), f"Expected exactly 1 cache control point, found {cache_control_count}"
 
 
 @pytest.mark.asyncio
@@ -806,13 +808,14 @@ async def test_anthropic_cache_control_hook_multiple_content_items_last_only():
                             {"type": "text", "text": "Second piece of context"},
                             {"type": "text", "text": "Third piece of context"},
                             {"type": "text", "text": "Fourth piece of context"},
-                            {"type": "text", "text": "Fifth piece of context - should be cached"},
+                            {
+                                "type": "text",
+                                "text": "Fifth piece of context - should be cached",
+                            },
                         ],
                     }
                 ],
-                cache_control_injection_points=[
-                    {"location": "message", "index": -1}
-                ],
+                cache_control_injection_points=[{"location": "message", "index": -1}],
                 client=client,
             )
 
@@ -829,7 +832,9 @@ async def test_anthropic_cache_control_hook_multiple_content_items_last_only():
                 for item in message_content
                 if isinstance(item, dict) and "cachePoint" in item
             )
-            assert cache_control_count == 1, f"Expected exactly 1 cache control point, found {cache_control_count}. This test verifies the fix for issue 15696 where cache_control was incorrectly applied to ALL content items."
+            assert (
+                cache_control_count == 1
+            ), f"Expected exactly 1 cache control point, found {cache_control_count}. This test verifies the fix for issue 15696 where cache_control was incorrectly applied to ALL content items."
 
 
 @pytest.mark.asyncio
@@ -879,7 +884,10 @@ async def test_anthropic_cache_control_hook_document_analysis_multiple_pages():
                             {"type": "text", "text": "Page 2 content"},
                             {"type": "text", "text": "Page 3 content"},
                             {"type": "text", "text": "Page 4 content"},
-                            {"type": "text", "text": "Page 5 content - final page to cache"},
+                            {
+                                "type": "text",
+                                "text": "Page 5 content - final page to cache",
+                            },
                         ],
                     }
                 ],
@@ -892,7 +900,9 @@ async def test_anthropic_cache_control_hook_document_analysis_multiple_pages():
             mock_post.assert_called_once()
             request_body = json.loads(mock_post.call_args.kwargs["data"])
 
-            print("Document analysis request_body: ", json.dumps(request_body, indent=4))
+            print(
+                "Document analysis request_body: ", json.dumps(request_body, indent=4)
+            )
 
             message_content = request_body["messages"][0]["content"]
             assert isinstance(message_content, list)
@@ -902,7 +912,9 @@ async def test_anthropic_cache_control_hook_document_analysis_multiple_pages():
                 for item in message_content
                 if isinstance(item, dict) and "cachePoint" in item
             )
-            assert cache_control_count == 1, f"Expected exactly 1 cache control point (last item only), found {cache_control_count}. Before fix, this would be 6 (one for each content item)."
+            assert (
+                cache_control_count == 1
+            ), f"Expected exactly 1 cache control point (last item only), found {cache_control_count}. Before fix, this would be 6 (one for each content item)."
 
 
 def test_gemini_cache_control_injection_points_detected():
@@ -1003,6 +1015,8 @@ def test_gemini_cache_control_injection_list_content_detected():
     cached, non_cached = separate_cached_messages(messages)
     assert len(cached) == 1
     assert len(non_cached) == 1
+
+
 @pytest.mark.asyncio
 async def test_anthropic_cache_control_hook_string_negative_index():
     """
@@ -1062,9 +1076,9 @@ async def test_anthropic_cache_control_hook_string_negative_index():
             # The last user message should have cache control applied
             last_message = request_body["messages"][-1]
             last_message_content = last_message["content"]
-            assert isinstance(last_message_content, list), (
-                f"Expected list content, got {type(last_message_content)}"
-            )
+            assert isinstance(
+                last_message_content, list
+            ), f"Expected list content, got {type(last_message_content)}"
             has_cache_point = any(
                 isinstance(item, dict) and "cachePoint" in item
                 for item in last_message_content
