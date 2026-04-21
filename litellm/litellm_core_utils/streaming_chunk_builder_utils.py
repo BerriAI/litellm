@@ -587,7 +587,10 @@ class ChunkProcessor:
                     hasattr(usage_chunk, "server_tool_use")
                     and usage_chunk.server_tool_use is not None
                 ):
-                    server_tool_use = usage_chunk.server_tool_use
+                    stu = usage_chunk.server_tool_use
+                    server_tool_use = (
+                        ServerToolUse(**stu) if isinstance(stu, dict) else stu
+                    )
                 if (
                     usage_chunk_dict["prompt_tokens_details"] is not None
                     and getattr(
