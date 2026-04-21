@@ -4,6 +4,7 @@ import pytest
 
 from litellm.llms.sap.embed.transformation import GenAIHubEmbeddingConfig
 
+
 @pytest.fixture
 def fake_token_creator():
     return (lambda: "Bearer FAKE_TOKEN", "https://api.ai.moke-sap.com", "fake-group")
@@ -13,85 +14,95 @@ def fake_token_creator():
 def fake_deployment_url():
     return "https://api.ai.moke-sap.com/v2/inference/deployments/mokeid"
 
+
 def test_basic_config_transform(fake_token_creator, fake_deployment_url):
     expected_dict = {
-        'config': {
-            'modules': {
-                'embeddings': {
-                    'model': {
-                        'name': 'text-embedding-3-small',
-                        'version': 'latest',
-                        'params': {}
+        "config": {
+            "modules": {
+                "embeddings": {
+                    "model": {
+                        "name": "text-embedding-3-small",
+                        "version": "latest",
+                        "params": {},
                     }
                 }
             }
         },
-        'input': {
-            'text': 'Hi'
-        }
+        "input": {"text": "Hi"},
     }
-    with patch(
+    with (
+        patch(
             "litellm.llms.sap.embed.transformation.GenAIHubEmbeddingConfig.deployment_url",
             new_callable=PropertyMock,
             return_value=fake_deployment_url,
-    ), patch(
-        "litellm.llms.sap.embed.transformation.get_token_creator",
-        return_value=fake_token_creator,
+        ),
+        patch(
+            "litellm.llms.sap.embed.transformation.get_token_creator",
+            return_value=fake_token_creator,
+        ),
     ):
         body = GenAIHubEmbeddingConfig().transform_embedding_request(
-            model="text-embedding-3-small",
-            input="Hi",
-            optional_params={},
-            headers={}
+            model="text-embedding-3-small", input="Hi", optional_params={}, headers={}
         )
         assert body == expected_dict
 
+
 def test_model_params(fake_token_creator, fake_deployment_url):
-    with patch(
+    with (
+        patch(
             "litellm.llms.sap.embed.transformation.GenAIHubEmbeddingConfig.deployment_url",
             new_callable=PropertyMock,
             return_value=fake_deployment_url,
-    ), patch(
-        "litellm.llms.sap.embed.transformation.get_token_creator",
-        return_value=fake_token_creator,
+        ),
+        patch(
+            "litellm.llms.sap.embed.transformation.get_token_creator",
+            return_value=fake_token_creator,
+        ),
     ):
         body = GenAIHubEmbeddingConfig().transform_embedding_request(
             model="text-embedding-3-small",
             input="Hi",
             optional_params={"parameters": {"truncate": "END"}},
-            headers={}
+            headers={},
         )
-        assert body["config"]["modules"]["embeddings"]["model"]["params"] == {"truncate": "END"}
+        assert body["config"]["modules"]["embeddings"]["model"]["params"] == {
+            "truncate": "END"
+        }
+
 
 def test_embed_with_masking(fake_token_creator, fake_deployment_url):
     masking_config = {
-        'providers':
-            [
-                {
-                    'type': 'sap_data_privacy_integration',
-                    'method': 'anonymization',
-                    'entities': [
-                        {'type': 'profile-address'},
-                        {'type': 'profile-phone'},
-                        {'type': 'profile-person'},
-                        {'type': 'profile-location'}
-                    ]
-                }
-            ]
+        "providers": [
+            {
+                "type": "sap_data_privacy_integration",
+                "method": "anonymization",
+                "entities": [
+                    {"type": "profile-address"},
+                    {"type": "profile-phone"},
+                    {"type": "profile-person"},
+                    {"type": "profile-location"},
+                ],
+            }
+        ]
     }
-    with patch(
+    with (
+        patch(
             "litellm.llms.sap.embed.transformation.GenAIHubEmbeddingConfig.deployment_url",
             new_callable=PropertyMock,
             return_value=fake_deployment_url,
-    ), patch(
-        "litellm.llms.sap.embed.transformation.get_token_creator",
-        return_value=fake_token_creator,
+        ),
+        patch(
+            "litellm.llms.sap.embed.transformation.get_token_creator",
+            return_value=fake_token_creator,
+        ),
     ):
         body = GenAIHubEmbeddingConfig().transform_embedding_request(
             model="text-embedding-3-small",
             input="Hi",
-            optional_params={"parameters": {"truncate": "END"},
-                             "masking": masking_config},
-            headers={}
+            optional_params={
+                "parameters": {"truncate": "END"},
+                "masking": masking_config,
+            },
+            headers={},
         )
         assert body["config"]["modules"]["masking"] == masking_config
