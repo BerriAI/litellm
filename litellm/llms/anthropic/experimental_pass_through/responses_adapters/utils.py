@@ -64,12 +64,18 @@ def build_web_search_results_from_annotations(
         start = ann.get("start_index", 0) or 0
         end = ann.get("end_index", 0) or 0
 
-        citations.append((start, end, {
-            "type": "web_search_result_location",
-            "url": url,
-            "title": title,
-            "cited_text": title,
-        }))
+        citations.append(
+            (
+                start,
+                end,
+                {
+                    "type": "web_search_result_location",
+                    "url": url,
+                    "title": title,
+                    "cited_text": title,
+                },
+            )
+        )
 
         if url and url not in seen_urls:
             seen_urls[url] = {
@@ -105,9 +111,7 @@ def build_text_blocks_with_citations(
     text[start:end] is the cited range; everything else is uncited.
     """
     if not citations:
-        return [
-            AnthropicResponseContentBlockText(type="text", text=text).model_dump()
-        ]
+        return [AnthropicResponseContentBlockText(type="text", text=text).model_dump()]
 
     blocks: List[Dict[str, Any]] = []
     pos = 0
@@ -129,9 +133,7 @@ def build_text_blocks_with_citations(
 
     if pos < len(text):
         blocks.append(
-            AnthropicResponseContentBlockText(
-                type="text", text=text[pos:]
-            ).model_dump()
+            AnthropicResponseContentBlockText(type="text", text=text[pos:]).model_dump()
         )
 
     return blocks
