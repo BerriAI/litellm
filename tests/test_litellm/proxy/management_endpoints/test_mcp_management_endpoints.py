@@ -1752,6 +1752,92 @@ class TestTemporaryMCPSessionEndpoints:
         assert result.server_id == "from-redis-encrypted"
         decrypt_mock.assert_called_once()
 
+    @pytest.mark.asyncio
+    async def test_cache_temporary_mcp_server_in_redis_skips_on_encrypt_failure(self):
+        from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+            _cache_temporary_mcp_server_in_redis,
+        )
+
+        server = generate_mock_mcp_server_config_record(server_id="encrypt-fail")
+        mock_cache_backend = SimpleNamespace(async_set_cache=AsyncMock())
+        original_cache = mgmt_endpoints.litellm.cache
+        mgmt_endpoints.litellm.cache = SimpleNamespace(cache=mock_cache_backend)
+        try:
+            with patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.encrypt_value_helper",
+                side_effect=Exception("boom"),
+            ):
+                await _cache_temporary_mcp_server_in_redis(server, ttl_seconds=60)
+        finally:
+            mgmt_endpoints.litellm.cache = original_cache
+
+        mock_cache_backend.async_set_cache.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_cache_temporary_mcp_server_in_redis_skips_non_string_encryption_result(
+        self,
+    ):
+        from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+            _cache_temporary_mcp_server_in_redis,
+        )
+
+        server = generate_mock_mcp_server_config_record(server_id="encrypt-non-string")
+        mock_cache_backend = SimpleNamespace(async_set_cache=AsyncMock())
+        original_cache = mgmt_endpoints.litellm.cache
+        mgmt_endpoints.litellm.cache = SimpleNamespace(cache=mock_cache_backend)
+        try:
+            with patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.encrypt_value_helper",
+                return_value={"not": "a-string"},
+            ):
+                await _cache_temporary_mcp_server_in_redis(server, ttl_seconds=60)
+        finally:
+            mgmt_endpoints.litellm.cache = original_cache
+
+        mock_cache_backend.async_set_cache.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_get_temporary_mcp_server_from_redis_returns_none_on_invalid_decrypt_json(
+        self,
+    ):
+        from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+            _get_temporary_mcp_server_from_redis,
+        )
+
+        mock_cache_backend = SimpleNamespace(async_get_cache=AsyncMock(return_value="enc"))
+        original_cache = mgmt_endpoints.litellm.cache
+        mgmt_endpoints.litellm.cache = SimpleNamespace(cache=mock_cache_backend)
+        try:
+            with patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.decrypt_value_helper",
+                return_value="{not json}",
+            ):
+                result = await _get_temporary_mcp_server_from_redis("bad-json")
+        finally:
+            mgmt_endpoints.litellm.cache = original_cache
+
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_get_temporary_mcp_server_from_redis_returns_none_on_decrypt_none(self):
+        from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+            _get_temporary_mcp_server_from_redis,
+        )
+
+        mock_cache_backend = SimpleNamespace(async_get_cache=AsyncMock(return_value="enc"))
+        original_cache = mgmt_endpoints.litellm.cache
+        mgmt_endpoints.litellm.cache = SimpleNamespace(cache=mock_cache_backend)
+        try:
+            with patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.decrypt_value_helper",
+                return_value=None,
+            ):
+                result = await _get_temporary_mcp_server_from_redis("decrypt-none")
+        finally:
+            mgmt_endpoints.litellm.cache = original_cache
+
+        assert result is None
+
 
 class TestUpdateMCPServer:
     """Test suite for update MCP server functionality"""
