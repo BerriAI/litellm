@@ -255,26 +255,44 @@ class CustomGuardrail(CustomLogger):
                     f"Event hook {event_hook} is not in the supported event hooks {supported_event_hooks}"
                 )
 
+    @staticmethod
+    def _get_admin_metadata(data: dict) -> dict:
+        """Return merged admin-configured key and team metadata from the request data.
+
+        The proxy may inject admin metadata (user_api_key_metadata,
+        user_api_key_team_metadata) into either ``metadata`` or
+        ``litellm_metadata`` depending on endpoint. Check both so a caller
+        cannot shadow admin config by pre-populating the other key.
+        Key-level settings override team-level.
+        """
+        team_meta: dict = {}
+        key_meta: dict = {}
+        for key in ("metadata", "litellm_metadata"):
+            # Defensive: an unparsed JSON-string metadata could leak past the
+            # proxy's normal parse path; don't AttributeError on .get().
+            meta = data.get(key)
+            if not isinstance(meta, dict):
+                continue
+            team_meta = meta.get("user_api_key_team_metadata") or team_meta
+            key_meta = meta.get("user_api_key_metadata") or key_meta
+        return {**team_meta, **key_meta}
+
     def get_disable_global_guardrail(self, data: dict) -> Optional[bool]:
         """
-        Returns True if the global guardrail should be disabled
+        Returns True if the global guardrail should be disabled.
+
+        Reads from admin-configured key/team metadata only, not from
+        the request body, to prevent callers from disabling guardrails.
         """
-        if "disable_global_guardrails" in data:
-            return data["disable_global_guardrails"]
-        metadata = data.get("litellm_metadata") or data.get("metadata", {})
-        if "disable_global_guardrails" in metadata:
-            return metadata["disable_global_guardrails"]
-        return False
+        return self._get_admin_metadata(data).get("disable_global_guardrails", False)
 
     def get_opted_out_global_guardrails_from_metadata(self, data: dict) -> List[str]:
         """
         Returns the list of global guardrail names the team/key has opted out of.
+
+        Reads from admin-configured key/team metadata only.
         """
-        if "opted_out_global_guardrails" in data:
-            value = data["opted_out_global_guardrails"]
-            return value if isinstance(value, list) else []
-        metadata = data.get("litellm_metadata") or data.get("metadata", {})
-        value = metadata.get("opted_out_global_guardrails")
+        value = self._get_admin_metadata(data).get("opted_out_global_guardrails")
         return value if isinstance(value, list) else []
 
     def _is_valid_response_type(self, result: Any) -> bool:
@@ -417,7 +435,9 @@ class CustomGuardrail(CustomLogger):
         """
         requested_guardrails = self.get_guardrail_from_metadata(data)
         disable_global_guardrail = self.get_disable_global_guardrail(data)
-        opted_out_global_guardrails = self.get_opted_out_global_guardrails_from_metadata(data)
+        opted_out_global_guardrails = (
+            self.get_opted_out_global_guardrails_from_metadata(data)
+        )
         verbose_logger.debug(
             "inside should_run_guardrail for guardrail=%s event_type= %s guardrail_supported_event_hooks= %s requested_guardrails= %s self.default_on= %s",
             self.guardrail_name,
@@ -426,7 +446,10 @@ class CustomGuardrail(CustomLogger):
             requested_guardrails,
             self.default_on,
         )
-        if self.default_on is True and self.guardrail_name in opted_out_global_guardrails:
+        if (
+            self.default_on is True
+            and self.guardrail_name in opted_out_global_guardrails
+        ):
             return False
 
         if self.default_on is True and disable_global_guardrail is not True:

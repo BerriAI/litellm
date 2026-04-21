@@ -866,9 +866,11 @@ class ProxyBaseLLMRequestProcessing:
                 "Request received by LiteLLM: payload too large to log (%d bytes, limit %d). Keys: %s",
                 len(_payload_str),
                 MAX_PAYLOAD_SIZE_FOR_DEBUG_LOG,
-                list(self.data.keys())
-                if isinstance(self.data, dict)
-                else type(self.data).__name__,
+                (
+                    list(self.data.keys())
+                    if isinstance(self.data, dict)
+                    else type(self.data).__name__
+                ),
             )
         else:
             verbose_proxy_logger.debug(
@@ -1054,6 +1056,7 @@ class ProxyBaseLLMRequestProcessing:
             route_type=route_type,
             llm_router=llm_router,
             user_model=user_model,
+            user_api_key_dict=user_api_key_dict,
         )
         tasks.append(llm_call)
 
@@ -1128,9 +1131,9 @@ class ProxyBaseLLMRequestProcessing:
                 # aliasing/routing, but the OpenAI-compatible response `model` field should reflect
                 # what the client sent.
                 if requested_model_from_client:
-                    self.data[
-                        "_litellm_client_requested_model"
-                    ] = requested_model_from_client
+                    self.data["_litellm_client_requested_model"] = (
+                        requested_model_from_client
+                    )
 
                 # Streaming: attach a closure that fires after all guardrail
                 # end-of-stream blocks complete.  CSW.__anext__ stores the
@@ -1731,7 +1734,9 @@ class ProxyBaseLLMRequestProcessing:
         verbose_proxy_logger.debug("inside generator")
         try:
             str_so_far = ""
-            async for chunk in proxy_logging_obj.async_post_call_streaming_iterator_hook(
+            async for (
+                chunk
+            ) in proxy_logging_obj.async_post_call_streaming_iterator_hook(
                 user_api_key_dict=user_api_key_dict,
                 response=response,
                 request_data=request_data,
@@ -1959,9 +1964,9 @@ class ProxyBaseLLMRequestProcessing:
 
             # Add cache-related fields to **params (handled by Usage.__init__)
             if cache_creation_input_tokens is not None:
-                usage_kwargs[
-                    "cache_creation_input_tokens"
-                ] = cache_creation_input_tokens
+                usage_kwargs["cache_creation_input_tokens"] = (
+                    cache_creation_input_tokens
+                )
             if cache_read_input_tokens is not None:
                 usage_kwargs["cache_read_input_tokens"] = cache_read_input_tokens
 
