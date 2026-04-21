@@ -1795,6 +1795,7 @@ async def increment_spend_counters(
     team_id: Optional[str],
     user_id: Optional[str],
     response_cost: Optional[float],
+    org_id: Optional[str] = None,
 ):
     """
     Atomically increment spend counters for budget enforcement.
@@ -1878,6 +1879,20 @@ async def increment_spend_counters(
         await _init_and_increment_spend_counter(
             counter_key=f"spend:team_member:{user_id}:{team_id}",
             source_cache_key=f"team_membership:{user_id}:{team_id}",
+            increment=response_cost,
+        )
+
+    if user_id is not None:
+        await _init_and_increment_spend_counter(
+            counter_key=f"spend:user:{user_id}",
+            source_cache_key=user_id,
+            increment=response_cost,
+        )
+
+    if org_id is not None:
+        await _init_and_increment_spend_counter(
+            counter_key=f"spend:org:{org_id}",
+            source_cache_key=f"org_id:{org_id}",
             increment=response_cost,
         )
 
