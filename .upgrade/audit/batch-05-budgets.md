@@ -50,8 +50,8 @@
 - **files:** `auth_checks.py` (+82/−~), `db_spend_update_writer.py` (+121/−~), `proxy_track_cost_callback.py` (+76/−~)
 - **intent:** Multi-pod-safe user budget enforcement — reconciles in-memory spend against DB/Redis state before enforcing.
 - **upstream overlap:** `d533b432fd` adds exactly this for keys/teams/team-members (files: `auth_checks.py`, `user_api_key_auth.py`, `reset_budget_job.py`, `proxy_track_cost_callback.py`). User-scope absent from upstream's fix.
-- **decision:** **REWORK (high effort)**
-- **rationale:** Highest-value rework in the upgrade. Upstream's `spend_counter_cache` infrastructure is exactly what we want to piggyback on. Instead of carrying our parallel infrastructure, port our logic to use upstream's helpers (`increment_spend_counters`, `get_current_spend`) with counter key `spend:user:{user_id}`.
+- **decision:** **REWORK — re-plumb onto upstream `spend_counter_cache`** ← *decision locked 2026-04-21 by @shriharsha*
+- **rationale:** Highest-value rework in the upgrade. Upstream's `spend_counter_cache` infrastructure is exactly what we want to piggyback on. Carrying our parallel infrastructure would mean a large long-term diff; re-plumbing converts our patch into a thin user-scope extension over upstream's existing three scopes (key/team/team-member).
 - **replay plan:** 
   1. Read upstream's `d533b432fd` end-to-end.
   2. Rewrite our hunks to call upstream's helpers with user-scope counter key.

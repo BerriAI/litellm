@@ -43,7 +43,9 @@
 | VLLM context-window error pattern | No | No |
 | Routing fixes / Prometheus metric | No | No |
 
-**No DROPs in batch 03.** Upstream's sticky-sessions is adjacent but not a replacement — we could in principle adopt upstream's `deployment_affinity_check` pattern as a substrate for our sticky-least-busy, but that's a REWORK, not a DROP.
+**No DROPs in batch 03.** Upstream's sticky-sessions is adjacent but not a replacement.
+
+**Decision locked 2026-04-21 by @shriharsha:** Keep `router_strategy/sticky_least_busy*.py` **independent** from upstream's `deployment_affinity_check.py`. Rationale: our strategy is working in production; substrate migration adds risk without immediate benefit. Flagged as a future refactor candidate (revisit after the v1.83.3 upgrade stabilizes).
 
 ---
 
@@ -85,7 +87,7 @@
 
 **Theme C verification:** MUST-SURVIVE items #3, #4.
 
-**Replay plan for Theme C:** The `router.py` integration is the hard part. Find the current routing-strategy dispatch logic in v1.83.3's `router.py` and re-register `sticky-least-busy` and `sticky-least-busy-redis` routing strategies alongside upstream's. Consider whether to piggyback on upstream's `deployment_affinity_check` — note in audit, discuss with reviewer.
+**Replay plan for Theme C:** The `router.py` integration is the hard part. Find the current routing-strategy dispatch logic in v1.83.3's `router.py` and re-register `sticky-least-busy` and `sticky-least-busy-redis` routing strategies alongside upstream's. Per locked decision, do NOT migrate onto `deployment_affinity_check.py` — keep our strategies as independent routing strategies. Future refactor tracked separately.
 
 ### Theme D — Simple shuffle + exception mapping (2 commits)
 
@@ -121,7 +123,7 @@
 ## Replay notes
 
 - **`router.py` is the hardest file in the whole upgrade.** Three commits in this batch modify it: `03a998194b`, `e6e49c5069`, `2608c008fa`, `7d332c090f`. Plan to resolve these with a dedicated session.
-- For sticky-least-busy registration, study upstream's `deployment_affinity_check.py` first — it may be the cleanest pattern to mount our strategy on top of.
+- Sticky-least-busy stays independent (decision locked 2026-04-21). No substrate migration to `deployment_affinity_check.py` in this upgrade.
 - **Do not split this batch across sessions.** Routing logic has cross-references between files; partial replays create confusing intermediate states.
 - After replay, run:
   - `tests/local_testing/test_least_busy_routing.py`

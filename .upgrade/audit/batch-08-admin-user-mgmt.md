@@ -27,7 +27,7 @@
 
 | Custom feature | Upstream equivalent? | Safe to DROP? |
 |---|---|---|
-| `/user/bulk_cost_update` (#75) | Adjacent — `/user/bulk_update` | No. Dropping breaks clients using our endpoint path; semantic regression. |
+| `/user/update/batch` (#75) | Adjacent — `/user/bulk_update` | No. Spec comparison (2026-04-21) shows upstream lacks team-targeting, spend-reset, and email-lookup. KEEP-AS-IS; future refactor candidate. |
 | Alternative team update (#97) | No | No. |
 | USER_DELETE_ALLOWED_USER_IDS (#128) | No | No. |
 | Audit logging hooks (#129) | Additive only — different scope | No. |
@@ -41,12 +41,23 @@
 ### 9eaa3ea353 — bulk cost update endpoint (#75) (#79)
 
 - **files:** `internal_user_endpoints.py` (+195 new, +56 modified), `test_internal_user_endpoints.py` (+412)
-- **intent:** Add `/user/bulk_cost_update` endpoint — bulk-update `spend` across many users in one call.
-- **upstream overlap:** Upstream shipped `/user/bulk_update` (general user-field bulk update). Different endpoint, adjacent purpose.
-- **decision:** **REWORK**
-- **rationale:** 37 upstream commits on `internal_user_endpoints.py`, including the `/user/bulk_update` addition near lines 1373–1631. Our endpoint must co-exist without name conflict.
-- **replay plan:** Cherry-pick; expect conflicts on router registrations and imports. Ensure our endpoint is registered at a distinct path.
-- **verification:** Smoke test — `POST /user/bulk_cost_update` with 10 users, verify spend field updated.
+- **intent:** Add `/user/update/batch` endpoint — bulk budget update across users, with three target modes (all / user_emails list / team_ids list) and `reset_spend=true` support. Admin-only.
+- **upstream overlap:** Upstream shipped `/user/bulk_update` (different path, generic field update). **Spec comparison (verified 2026-04-21):**
+
+  | Feature | Ours (`/user/update/batch`) | Upstream (`/user/bulk_update`) |
+  |---|---|---|
+  | Target: all users | ✓ | ✓ (via `all_users=true`) |
+  | Target: specific users | by `user_emails` | by `user_id` only |
+  | Target: users in teams | ✓ `target_type: "team"` | ✗ missing |
+  | `reset_spend: true` | ✓ | ✗ missing |
+  | Update scope | budget-only | arbitrary UpdateUserRequest fields |
+  | Auth | `PROXY_ADMIN` only | `user_api_key_auth` |
+
+  Three of our features (team-targeting, spend reset, email lookup) have no upstream equivalent.
+- **decision:** **KEEP-AS-IS** ← *decision locked 2026-04-21 by @shriharsha after spec comparison. Migration to upstream would lose functionality; revisit as a future standalone refactor.*
+- **rationale:** Spec does not match closely enough to DROP. Migrating callers to `/user/bulk_update` would drop team-targeting, spend-reset, and email-lookup features. Endpoint paths differ (`/user/update/batch` vs `/user/bulk_update`), so both can coexist without conflict.
+- **replay plan:** Cherry-pick; expect conflicts on router registrations and imports in `internal_user_endpoints.py` (37 upstream commits). Apply our endpoint at its original path. Consider future PR to merge the two endpoints (extend upstream's with our three missing modes), but **out of scope for this upgrade**.
+- **verification:** Smoke test — `POST /user/update/batch` with `target_type: "team"` + `team_ids: [...]`, verify budget updates applied across all team members.
 - **reviewer:** TBD
 
 ### 09d73a2528 — alternative team update endpoint (#97)
@@ -91,7 +102,7 @@
 
 | # | SHA | Decision | Risk |
 |---|---|---|---|
-| 1 | 9eaa3ea353 | REWORK | MED |
+| 1 | 9eaa3ea353 | KEEP-AS-IS (spec mismatch w/ upstream) | LOW |
 | 2 | 09d73a2528 | KEEP + REWORK (split) | LOW-MED |
 | 3 | 8bf7d3bb64 | REWORK | LOW |
 | 4 | a41df42b80 | REWORK | HIGH |

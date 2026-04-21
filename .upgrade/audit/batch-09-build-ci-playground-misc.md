@@ -71,9 +71,10 @@ No DROPs in batch 09.
 - **files:** migration `.sql` (new), 3 `schema.prisma` files (53/57/68 upstream commits), `_types.py` (145), `playground_endpoints.py` (new), `proxy_server.py` (183)
 - **decision:** **REWORK (high effort)**
 - **rationale:** Biggest commit in batch 09. New-file additions are clean (migration, endpoint module). But `schema.prisma` changes will conflict — upstream ran many migrations on the same schema. `_types.py` and `proxy_server.py` are very-high-churn.
+- **migration timestamp check (verified 2026-04-21):** our migration `20260409000000_add_playground_tables` is newer than the latest upstream migration `20260331000000` shipped in v1.83.3. **No clash.** Ordering is safe.
 - **replay plan:**
   1. Cherry-pick the new migration + `playground_endpoints.py` clean.
-  2. Re-apply schema.prisma additions — the new playground-booking tables — after upstream's schema state. Ensure migration timestamps sequence correctly.
+  2. Re-apply schema.prisma additions — the new playground-booking tables — after upstream's schema state. Timestamp is already verified safe.
   3. Re-apply `_types.py` Pydantic model additions manually.
   4. Re-register the playground router in `proxy_server.py`.
 - **verification:** MUST-SURVIVE #22 (playground booking workflow).
@@ -120,6 +121,6 @@ No DROPs in batch 09.
 ## Replay notes
 
 - `model_prices_and_context_window.json` REWORK is mechanical — take both sets of keys; JSON conflict markers are easy to resolve since each model entry is a self-contained object.
-- `schema.prisma` changes must be sequence-safe — ensure our migration's timestamp lands AFTER all upstream migrations carried in v1.83.3.
+- `schema.prisma` changes are sequence-safe: our migration timestamp `20260409000000` is 9 days after the latest upstream migration `20260331000000`. Verified 2026-04-21.
 - Playground batch (#124, #132, #133) should be replayed together; don't split across sessions.
 - After replay, run `prisma generate && prisma migrate status` to catch any migration ordering issues.

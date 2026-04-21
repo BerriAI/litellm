@@ -8,8 +8,8 @@
 
 | Decision | Count | % |
 |---|---|---|
-| KEEP-AS-IS | 31 | 36% |
-| REWORK | 50 | 57% |
+| KEEP-AS-IS | 32 | 37% |
+| REWORK | 49 | 56% |
 | DROP (unconditional) | 3 | 3% |
 | Conditional DROP | 3 | 3% (no-ops after upstream refactors) |
 
@@ -61,12 +61,12 @@ If both are 0 on their respective file scopes, DROPs are safe. For `requirements
 | 09 build-ci-playground-misc | 12 | 4 | 8 | 0 | MED-HIGH | 2nd |
 | 02 gcs-gcp-logging | 14 | 12 | 2 | 0 | LOW-MED | 3rd |
 | 05 budgets | 5 | 0 | 3 | 0 + 2 conditional | **HIGHEST** | 4th |
-| 08 admin-user-mgmt | 4 | 0 | 4 | 0 | MED-HIGH | 5th |
+| 08 admin-user-mgmt | 4 | 1 | 3 | 0 | MED-HIGH | 5th |
 | 06 analytics-spend-failure | 13 | 1 | 9 | 2 + 1 conditional | HIGH | 6th |
 | 07 ui | 10 | 4 | 5 | 1 | MED-HIGH | 7th |
 | 04 rate-limit-concurrency | 6 | 1 | 5 | 0 | HIGH | 8th |
 | 03 routing-vision | 17 | 7 | 10 | 0 | HIGH (highest file churn) | 9th |
-| **Totals** | **87** | **31** | **50** | **3** + 3 conditional | | |
+| **Totals** | **87** | **32** | **49** | **3** + 3 conditional | | |
 
 ## Highest-risk files (by upstream churn)
 
@@ -90,7 +90,7 @@ If both are 0 on their respective file scopes, DROPs are safe. For `requirements
 - **Reasoning field → reasoning_content mapping** (`e48b7ae8f9`) — Delta type-level only. Our iterator-level fix complementary.
 - **Sticky-sessions** (PR #21763) — session-id header-driven affinity. Our load-driven sticky-least-busy is different mechanism, both can coexist.
 - **Agent-level budget + rate limiting** (`cf439c269c`, +141 lines in `parallel_request_limiter_v3.py`) — different scope from our MPR fixes. Our counter-leak/drift work still uniquely needed.
-- **`/user/bulk_update`** — adjacent to our `/user/bulk_cost_update` but different endpoint name; dropping breaks clients.
+- **`/user/bulk_update`** — adjacent to our `/user/update/batch`. Spec comparison (2026-04-21) shows upstream lacks team-targeting, spend-reset, and email-lookup → KEEP-AS-IS.
 - **Audit log S3 export** — additive to our audit-hook work, no replacement.
 
 ## Pre-Phase-3 checklist
@@ -132,9 +132,11 @@ Phase 4 verification (MUST-SURVIVE checklist)
 Phase 5 ship (squash-merge PR → main)
 ```
 
-## Open items to discuss before Phase 3
+## Resolved design decisions (2026-04-21 by @shriharsha)
 
-- **Batch 05 / #7c2f182ac1:** Should we re-plumb our user-budget enforcement onto upstream's `spend_counter_cache` pattern (longer REWORK, cleaner long-term) or carry parallel infrastructure (shorter REWORK, bigger diff to maintain)?
-- **Batch 03 / sticky-least-busy:** Should we adopt upstream's `deployment_affinity_check.py` pattern as a substrate, or keep our `router_strategy/sticky_least_busy*.py` as independent modules?
-- **Batch 08 / #75 bulk cost update:** Consider renaming our endpoint or migrating callers to upstream's `/user/bulk_update` to reduce long-term divergence.
-- **Batch 09 / playground #124:** 3 schema.prisma files changed — confirm migration timestamp doesn't clash with upstream's migrations in v1.83.3.
+| Item | Decision | Notes |
+|---|---|---|
+| Batch 05 / #7c2f182ac1 (user-budget multi-pod) | **RE-PLUMB onto upstream `spend_counter_cache`** | Longer REWORK, cleaner long-term. Lands user-scope as fourth scope alongside upstream's key/team/team-member. |
+| Batch 03 / sticky-least-busy | **Keep independent** from `deployment_affinity_check.py` | Working in prod. Substrate migration tracked as future standalone refactor. |
+| Batch 08 / #75 (`/user/update/batch`) | **KEEP-AS-IS** | Spec comparison shows upstream's `/user/bulk_update` lacks team-targeting, spend-reset, email-lookup. Spec does not match enough to migrate without losing functionality. Future refactor candidate: extend upstream's endpoint with our three missing modes. |
+| Batch 09 / #124 playground migration | **No clash** | Our timestamp `20260409000000` is 9 days after latest upstream migration `20260331000000`. Verified 2026-04-21. |
