@@ -131,13 +131,13 @@ Returns current quality estimates per model per request type. Useful for underst
           "request_type": "analytical_reasoning",
           "model": "fast",
           "quality_mean": 0.5,
-          "samples": 10.0
+          "samples": 0
         },
         {
           "request_type": "analytical_reasoning",
           "model": "smart",
           "quality_mean": 0.95,
-          "samples": 10.0
+          "samples": 0
         }
       ]
     }
@@ -145,7 +145,7 @@ Returns current quality estimates per model per request type. Useful for underst
 }
 ```
 
-`quality_mean` is the key number — it's the router's current estimate of how well that model handles that request type. `samples` counts how many real observations have moved the prior (starts at 10, the cold-start mass).
+`quality_mean` is the key number — it's the router's current estimate of how well that model handles that request type. `samples` counts how many real observations have moved the prior (starts at 0; the cold-start prior mass is excluded).
 
 ## Known limitations
 

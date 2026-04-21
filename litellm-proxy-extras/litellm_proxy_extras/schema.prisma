@@ -1232,7 +1232,7 @@ model LiteLLM_AdaptiveRouterState {
   alpha           Float
   beta            Float
   total_samples   Int      @default(0)
-  last_updated_at DateTime @default(now())
+  last_updated_at DateTime @default(now()) @updatedAt
 
   @@id([router_name, request_type, model_name])
 }
@@ -1261,7 +1261,7 @@ model LiteLLM_AdaptiveRouterSession {
   last_processed_turn    Int      @default(-1)
   clean_credit_awarded   Boolean  @default(false)
   terminal_status        Int?
-  last_activity_at       DateTime @default(now())
+  last_activity_at       DateTime @default(now()) @updatedAt
 
   @@id([session_id, router_name, model_name])
   @@index([last_activity_at])

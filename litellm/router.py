@@ -202,6 +202,7 @@ if TYPE_CHECKING:
     )
     from litellm.router_strategy.adaptive_router.adaptive_router import (
         AdaptiveRouter,
+    )
     from litellm.router_strategy.quality_router.quality_router import (
         QualityRouter,
     )
@@ -9901,6 +9902,14 @@ class Router:
         adaptive_router = self.adaptive_routers.get(model)
         if adaptive_router is not None:
             return await adaptive_router.async_pre_routing_hook(
+                model=model,
+                request_kwargs=request_kwargs,
+                messages=messages,
+                input=input,
+                specific_deployment=specific_deployment,
+            )
+
+        #########################################################
         # Check if any quality-router should be used
         #########################################################
         if model in self.quality_routers:
