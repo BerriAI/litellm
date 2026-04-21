@@ -92,14 +92,20 @@ RUN apk add --no-cache bash openssl tzdata nodejs npm python3 libsndfile supervi
     { apk del --no-cache npm 2>/dev/null || true; }
 
 WORKDIR /app
-ENV PRISMA_BINARY_CACHE_DIR=/app/.cache/prisma-python/binaries \
-    XDG_CACHE_HOME=/app/.cache \
-    PATH="/app/.venv/bin:${PATH}"
+ENV PATH="/app/.venv/bin:${PATH}"
 
 COPY --from=builder /app /app
 
 RUN find /app/.venv -type f -path "*/tornado/test/*" -delete && \
     find /app/.venv -type d -path "*/tornado/test" -delete
+
+# Regenerate the Prisma client in the runtime stage so the baked-in
+# BINARY_PATHS resolve to a location outside /app. Users with volume mounts
+# that shadow /app/.cache (e.g. readOnlyRootFilesystem + emptyDir) would
+# otherwise lose access to the pre-downloaded query engine at runtime.
+# Drop the builder's /app/.cache afterwards — it's stale and adds ~800 MB
+# the runtime doesn't use.
+RUN rm -rf /app/.cache && prisma generate --schema=./schema.prisma
 
 EXPOSE 4000/tcp
 
