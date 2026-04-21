@@ -1,34 +1,49 @@
 # Phase 2 Audit Summary — v1.83.3 Upgrade
 
 **Status:** All 9 batches audited.
-**Total custom commits:** 87 → 83 after DROP pairs.
+**Total custom commits:** 87 → 84 after DROPs (3 unconditional + 3 conditional).
 **Reclassifications:** 1 (`3be74052a5` moved from batch 01 to batch 02 — GCS-logger fix misclassified).
 
 ## Decision breakdown
 
 | Decision | Count | % |
 |---|---|---|
-| KEEP-AS-IS | 30 | 34% |
-| REWORK | 51 | 59% |
-| DROP (unconditional) | 4 | 5% (2 revert pairs) |
-| Conditional DROP | 2 | 2% (no-ops after upstream refactors) |
+| KEEP-AS-IS | 31 | 36% |
+| REWORK | 50 | 57% |
+| DROP (unconditional) | 3 | 3% |
+| Conditional DROP | 3 | 3% (no-ops after upstream refactors) |
 
 ## DROPs explained
 
 | SHA | Reason | Audit doc |
 |---|---|---|
-| 20caa0aebb (#111) | Reverted in place by #115 — net zero diff | batch-06 |
-| 596a3a3a5a (#115) | Reverts #111 — net zero diff | batch-06 |
-| f7f8141eab (#46) | Reverted in place by #48 — net zero diff | batch-07 |
-| 0930b8d771 (#48) | Reverts #46 — net zero diff | batch-07 |
+| 20caa0aebb (#111) | Reverted in place by #115 on files they exclusively own — net zero after isolation from intervening #112/#113 | batch-06 |
+| 596a3a3a5a (#115) | Reverts #111 — net zero on exclusive files | batch-06 |
+| f7f8141eab (#46) | Temp debug change (`litellm_raw_payload: kwargs`); fully removed by the first hunk of #48. **Note: #48 is NOT a pure revert — it also adds "headers in error log metadata" which we KEEP.** | batch-07 |
 
-**Verification command before Phase 3:**
+**#48 (0930b8d771)** is explicitly **NOT** a DROP — it contains a real feature (headers in error log metadata) in addition to the revert. Dropping it would lose the feature.
+
+**Verification command before Phase 3 (corrected):**
+
+Naively diffing the pair's ancestor vs the revert commit picks up changes from intervening commits (#112, #113) that happen to touch overlapping files (`requirements.txt`, `pyproject.toml`). The right check is per-file, restricted to files that **only** the revert pair modifies.
+
+For #111/#115 (schema migration), intervening commits #112 and #113 touch `requirements.txt`. Verify the pair on their exclusive files:
 ```bash
-git diff 20caa0aebb^ 596a3a3a5a | wc -l   # expect 0
-git diff f7f8141eab^ 0930b8d771 | wc -l   # expect 0
+git diff 20caa0aebb^ 596a3a3a5a -- \
+  litellm-proxy-extras/litellm_proxy_extras/migrations/20260318_add_aggregated_spend_logs/migration.sql \
+  litellm-proxy-extras/litellm_proxy_extras/schema.prisma \
+  schema.prisma \
+  Dockerfile
+# expect 0  — verified locally on 2026-04-21
 ```
 
-If both are 0, DROPs are safe. If not, re-audit.
+For #46/#48 (temp logging), no intervening commits touch `gcs_logger.py`:
+```bash
+git diff f7f8141eab^ 0930b8d771 -- litellm/integrations/gcs_bucket/gcs_logger.py
+# expect 0
+```
+
+If both are 0 on their respective file scopes, DROPs are safe. For `requirements.txt` in the #111/#115 case: the `litellm-proxy-extras` pin added by #111 is cleanly removed by #115, leaving the prisma-version bump from #113 intact — net semantics preserved.
 
 ## Conditional DROPs
 
@@ -48,10 +63,10 @@ If both are 0, DROPs are safe. If not, re-audit.
 | 05 budgets | 5 | 0 | 3 | 0 + 2 conditional | **HIGHEST** | 4th |
 | 08 admin-user-mgmt | 4 | 0 | 4 | 0 | MED-HIGH | 5th |
 | 06 analytics-spend-failure | 13 | 1 | 9 | 2 + 1 conditional | HIGH | 6th |
-| 07 ui | 10 | 3 | 5 | 2 | MED-HIGH | 7th |
+| 07 ui | 10 | 4 | 5 | 1 | MED-HIGH | 7th |
 | 04 rate-limit-concurrency | 6 | 1 | 5 | 0 | HIGH | 8th |
 | 03 routing-vision | 17 | 7 | 10 | 0 | HIGH (highest file churn) | 9th |
-| **Totals** | **87** | **30** | **50** | **4** + 3 conditional | | |
+| **Totals** | **87** | **31** | **50** | **3** + 3 conditional | | |
 
 ## Highest-risk files (by upstream churn)
 

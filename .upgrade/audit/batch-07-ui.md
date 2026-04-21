@@ -44,21 +44,27 @@ Searched for: message filter callback, model filter dropdown in logs, filter-sta
 ### f7f8141eab — "temp logging change" (#46)
 
 - **files:** `gcs_bucket/gcs_logger.py`
-- **decision:** **DROP (paired with #48)**
+- **decision:** **DROP**
+- **rationale:** Adds `"litellm_raw_payload": kwargs` as a temporary debug payload; #48 removes exactly this line. Purely a debug/temp change.
 
-### 0930b8d771 — Revert "temp logging change" (#48)
+### 0930b8d771 — Revert "temp logging change" + "Add headers to error log metadata" (#48)
 
 - **files:** `gcs_bucket/gcs_logger.py`
-- **decision:** **DROP (paired with #46)**
+- **decision:** **KEEP-AS-IS**
+- **rationale:** **NOT a pure revert.** The commit does two things:
+  1. Reverts #46's `litellm_raw_payload` addition (undone).
+  2. **Adds** `"headers": metadata.get("headers"),` to the error-log path (new feature).
+  
+  The second change is a real feature — headers in error log metadata — that we must keep. If we DROP both #46 and #48, we lose this feature.
 
-#### Drop-gate check for #46 + #48
+#### Drop-gate check for #46 (only)
 
-1. Behavior equivalence: revert cleanly undoes the temp change. ✓
-2. No semantic regression: net zero → no regression. ✓
-3. Verification test: no user-facing behavior. ✓
-4. Human sign-off: verify via `git diff f7f8141eab^ 0930b8d771` = empty.
+1. Behavior equivalence: `litellm_raw_payload: kwargs` was a temp debug payload, fully undone by the first hunk of #48.
+2. No semantic regression: dropping #46 means the temp payload never existed, which is the target state.
+3. Verification test: no user-facing behavior tied to the debug payload.
+4. Human sign-off: TBD.
 
-**Recommended action:** confirm with command above before Phase 3. If empty, DROP both.
+**Since we're keeping #48, #48 contributes both the revert-effect AND the headers-feature to the final tree. Cherry-picking #48 alone (and skipping #46) produces the correct end state.**
 
 ### 4d50cd5674 — chartOptions strict type checks (#55)
 
@@ -118,8 +124,8 @@ Searched for: message filter callback, model filter dropdown in logs, filter-sta
 |---|---|---|---|
 | 1 | 066d5d8026 | REWORK | MED |
 | 2 | 80e242236e | KEEP-AS-IS | LOW |
-| 3 | f7f8141eab | **DROP** (pair with 0930b8d771) | n/a |
-| 4 | 0930b8d771 | **DROP** (pair with f7f8141eab) | n/a |
+| 3 | f7f8141eab | **DROP** (temp debug, pure no-op) | n/a |
+| 4 | 0930b8d771 | **KEEP-AS-IS** (revert + real feature: headers in error log) | LOW |
 | 5 | 4d50cd5674 | KEEP-AS-IS | LOW |
 | 6 | f8709b0065 | KEEP-AS-IS | LOW |
 | 7 | c1fefb1090 | REWORK | HIGH |
@@ -127,10 +133,10 @@ Searched for: message filter callback, model filter dropdown in logs, filter-sta
 | 9 | 4a744f2144 | REWORK | LOW |
 | 10 | a6698e18db | REWORK | MED-HIGH |
 
-**Two DROPs** (revert pair #46/#48). 3 KEEP-AS-IS, 5 REWORK.
+**One DROP** (#46, pure temp debug change — removed by #48 which we keep). 4 KEEP-AS-IS, 5 REWORK.
 
 ## Replay notes
 
-- Revert-pair verification command: `git diff f7f8141eab^ 0930b8d771 | wc -l` — expect 0.
+- #46 is DROP (pure debug) but #48 must be KEEP. Verified 2026-04-21: #48 reverts #46 AND introduces "headers in error log metadata" as a new feature. Skipping #48 would lose the feature.
 - `c1fefb1090` is the most complex commit in this batch; allocate ~half a day to its resolution.
 - `package-lock.json` conflicts in #103 and elsewhere: regenerate via `npm install` in the `ui/litellm-dashboard` directory post-cherry-pick.
