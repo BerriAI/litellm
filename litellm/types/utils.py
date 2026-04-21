@@ -1652,6 +1652,8 @@ class Usage(SafeAttributeModel, CompletionUsage):
         )
 
         if server_tool_use is not None:
+            if isinstance(server_tool_use, dict):
+                server_tool_use = ServerToolUse(**server_tool_use)
             self.server_tool_use = server_tool_use
         else:  # maintain openai compatibility in usage object if possible
             del self.server_tool_use
