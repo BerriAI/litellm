@@ -1529,7 +1529,50 @@ jobs:
           command: |
             pwd
             ls
-            uv run --no-sync python -m pytest -vv tests/local_testing/test_basic_python_version.py
+            uv run --no-sync python -m pytest -vv tests/local_testing/test_basic_python_version.py -k "not v2_resolver"
+
+  installing_litellm_on_python_v2_migration_resolver:
+    docker:
+      - image: cimg/python:3.11
+        auth:
+          username: ${DOCKERHUB_USERNAME}
+          password: ${DOCKERHUB_PASSWORD}
+      - image: cimg/postgres:16.0
+        environment:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: litellm_test
+    working_directory: ~/project
+    environment:
+      DATABASE_URL: "postgresql://postgres:postgres@localhost:5432/litellm_test"
+
+    steps:
+      - checkout
+      - setup_google_dns
+      - run:
+          name: Install Dependencies
+          command: |
+            curl -LsSf -o /tmp/uv-install.sh https://astral.sh/uv/0.10.9/install.sh
+            echo "7fc46e39cb97290b57169c0c813a17970585ac519139f19006453c99b5f2f45f  /tmp/uv-install.sh" | sha256sum -c -
+            env UV_NO_MODIFY_PATH=1 sh /tmp/uv-install.sh
+            rm -f /tmp/uv-install.sh
+            echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$BASH_ENV"
+            export PATH="$HOME/.local/bin:$PATH"
+            if [ -f "$HOME/miniconda/etc/profile.d/conda.sh" ]; then
+              export PATH="$HOME/miniconda/bin:$PATH"
+              source "$HOME/miniconda/etc/profile.d/conda.sh"
+              conda activate myenv
+            fi
+            uv sync --frozen --all-groups --all-extras --python "$(which python)"
+      - setup_litellm_enterprise_pip
+      - wait_for_service:
+          url: tcp://localhost:5432
+          timeout: "60"
+      - run:
+          name: Run v2 migration resolver proxy smoke test
+          command: |
+            uv run --no-sync python -m pytest -vv \
+              tests/local_testing/test_basic_python_version.py::test_litellm_proxy_server_config_no_general_settings_v2_resolver
 
   installing_litellm_on_python_3_13:
     docker:
@@ -1563,7 +1606,7 @@ jobs:
           command: |
             pwd
             ls
-            uv run --no-sync python -m pytest -v tests/local_testing/test_basic_python_version.py
+            uv run --no-sync python -m pytest -v tests/local_testing/test_basic_python_version.py -k "not v2_resolver"
   helm_chart_testing:
     machine:
       image: ubuntu-2204:2023.10.1 # Use machine executor instead of docker
@@ -3539,6 +3582,12 @@ workflows:
                 - main
                 - /litellm_.*/
       - installing_litellm_on_python_3_13:
+          filters:
+            branches:
+              only:
+                - main
+                - /litellm_.*/
+      - installing_litellm_on_python_v2_migration_resolver:
           filters:
             branches:
               only:
