@@ -34,6 +34,7 @@ from litellm.llms.base_llm import BaseImageEditConfig, BaseImageGenerationConfig
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.llms.custom_llm import CustomLLM
+from litellm.llms.xai.image_credentials import resolve_for_openai_sdk_image_generation
 from litellm.utils import exception_type, get_litellm_params
 
 #################### Initialize provider clients ####################
@@ -491,15 +492,11 @@ def image_generation(  # noqa: PLR0915
                 optional_params["extra_headers"] = extra_headers
             # Forward OpenAI organization if present (set by proxy pre-call utils)
             organization: Optional[str] = kwargs.get("organization", None)
-            if custom_llm_provider == "xai":
-                (
-                    api_base,
-                    resolved_key,
-                ) = litellm.XAIChatConfig()._get_openai_compatible_provider_info(
-                    api_base, api_key or dynamic_api_key
+            api_base, api_key, dynamic_api_key = (
+                resolve_for_openai_sdk_image_generation(
+                    custom_llm_provider, api_base, api_key, dynamic_api_key
                 )
-                api_key = resolved_key
-                dynamic_api_key = None
+            )
             model_response = openai_chat_completions.image_generation(
                 model=model,
                 prompt=prompt,
