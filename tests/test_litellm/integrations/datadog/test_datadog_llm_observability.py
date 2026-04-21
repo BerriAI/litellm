@@ -172,9 +172,12 @@ class TestDataDogLLMObsLogger:
 
     def test_cost_and_trace_id_integration(self, mock_env_vars, mock_response_obj):
         """Test that total_cost is passed and trace_id from standard payload is used"""
-        with patch(
-            "litellm.integrations.datadog.datadog_llm_obs.get_async_httpx_client"
-        ), patch("asyncio.create_task"):
+        with (
+            patch(
+                "litellm.integrations.datadog.datadog_llm_obs.get_async_httpx_client"
+            ),
+            patch("asyncio.create_task"),
+        ):
             logger = DataDogLLMObsLogger()
 
             standard_payload = create_standard_logging_payload_with_cache()
@@ -208,9 +211,12 @@ class TestDataDogLLMObsLogger:
 
     def test_cache_metadata_fields(self, mock_env_vars, mock_response_obj):
         """Test that cache-related metadata fields are correctly tracked"""
-        with patch(
-            "litellm.integrations.datadog.datadog_llm_obs.get_async_httpx_client"
-        ), patch("asyncio.create_task"):
+        with (
+            patch(
+                "litellm.integrations.datadog.datadog_llm_obs.get_async_httpx_client"
+            ),
+            patch("asyncio.create_task"),
+        ):
             logger = DataDogLLMObsLogger()
 
             standard_payload = create_standard_logging_payload_with_cache()
@@ -229,9 +235,12 @@ class TestDataDogLLMObsLogger:
 
     def test_get_time_to_first_token_seconds(self, mock_env_vars):
         """Test the _get_time_to_first_token_seconds method for streaming calls"""
-        with patch(
-            "litellm.integrations.datadog.datadog_llm_obs.get_async_httpx_client"
-        ), patch("asyncio.create_task"):
+        with (
+            patch(
+                "litellm.integrations.datadog.datadog_llm_obs.get_async_httpx_client"
+            ),
+            patch("asyncio.create_task"),
+        ):
             logger = DataDogLLMObsLogger()
 
             # Test streaming case (completion_start_time available)
@@ -251,45 +260,77 @@ class TestDataDogLLMObsLogger:
         """Test that call_type values are correctly mapped to DataDog span kinds"""
         from litellm.types.utils import CallTypes
 
-        with patch(
-            "litellm.integrations.datadog.datadog_llm_obs.get_async_httpx_client"
-        ), patch("asyncio.create_task"):
+        with (
+            patch(
+                "litellm.integrations.datadog.datadog_llm_obs.get_async_httpx_client"
+            ),
+            patch("asyncio.create_task"),
+        ):
             logger = DataDogLLMObsLogger()
 
         # Test embedding operations
-        assert logger._get_datadog_span_kind(CallTypes.embedding.value, "123") == "embedding"
-        assert logger._get_datadog_span_kind(CallTypes.aembedding.value, "123") == "embedding"
+        assert (
+            logger._get_datadog_span_kind(CallTypes.embedding.value, "123")
+            == "embedding"
+        )
+        assert (
+            logger._get_datadog_span_kind(CallTypes.aembedding.value, "123")
+            == "embedding"
+        )
 
         # Test LLM completion operations
         assert logger._get_datadog_span_kind(CallTypes.completion.value, None) == "llm"
         assert logger._get_datadog_span_kind(CallTypes.acompletion.value, None) == "llm"
-        assert logger._get_datadog_span_kind(CallTypes.text_completion.value, None) == "llm"
-        assert logger._get_datadog_span_kind(CallTypes.generate_content.value, None) == "llm"
         assert (
-            logger._get_datadog_span_kind(CallTypes.anthropic_messages.value, None) == "llm"
+            logger._get_datadog_span_kind(CallTypes.text_completion.value, None)
+            == "llm"
+        )
+        assert (
+            logger._get_datadog_span_kind(CallTypes.generate_content.value, None)
+            == "llm"
+        )
+        assert (
+            logger._get_datadog_span_kind(CallTypes.anthropic_messages.value, None)
+            == "llm"
         )
         assert logger._get_datadog_span_kind(CallTypes.responses.value, None) == "llm"
         assert logger._get_datadog_span_kind(CallTypes.aresponses.value, None) == "llm"
 
         # Test tool operations
-        assert logger._get_datadog_span_kind(CallTypes.call_mcp_tool.value, "123") == "tool"
+        assert (
+            logger._get_datadog_span_kind(CallTypes.call_mcp_tool.value, "123")
+            == "tool"
+        )
 
         # Test retrieval operations
         assert (
-            logger._get_datadog_span_kind(CallTypes.get_assistants.value, "123") == "retrieval"
+            logger._get_datadog_span_kind(CallTypes.get_assistants.value, "123")
+            == "retrieval"
         )
         assert (
-            logger._get_datadog_span_kind(CallTypes.file_retrieve.value, "123") == "retrieval"
+            logger._get_datadog_span_kind(CallTypes.file_retrieve.value, "123")
+            == "retrieval"
         )
         assert (
-            logger._get_datadog_span_kind(CallTypes.retrieve_batch.value, "123") == "retrieval"
+            logger._get_datadog_span_kind(CallTypes.retrieve_batch.value, "123")
+            == "retrieval"
         )
 
         # Test task operations
-        assert logger._get_datadog_span_kind(CallTypes.create_batch.value, "123") == "task"
-        assert logger._get_datadog_span_kind(CallTypes.image_generation.value, "123") == "task"
-        assert logger._get_datadog_span_kind(CallTypes.moderation.value, "123") == "task"
-        assert logger._get_datadog_span_kind(CallTypes.transcription.value, "123") == "task"
+        assert (
+            logger._get_datadog_span_kind(CallTypes.create_batch.value, "123") == "task"
+        )
+        assert (
+            logger._get_datadog_span_kind(CallTypes.image_generation.value, "123")
+            == "task"
+        )
+        assert (
+            logger._get_datadog_span_kind(CallTypes.moderation.value, "123") == "task"
+        )
+        assert (
+            logger._get_datadog_span_kind(CallTypes.transcription.value, "123")
+            == "task"
+        )
 
         # Test default fallback
         assert logger._get_datadog_span_kind("unknown_call_type", None) == "llm"
@@ -299,22 +340,34 @@ class TestDataDogLLMObsLogger:
         """Test that non-llm kinds fallback to llm when no parent span is provided"""
         from litellm.types.utils import CallTypes
 
-        with patch(
-            "litellm.integrations.datadog.datadog_llm_obs.get_async_httpx_client"
-        ), patch("asyncio.create_task"):
+        with (
+            patch(
+                "litellm.integrations.datadog.datadog_llm_obs.get_async_httpx_client"
+            ),
+            patch("asyncio.create_task"),
+        ):
             logger = DataDogLLMObsLogger()
 
         # Tool/task/retrieval span kinds should fallback to llm when parent_id missing
-        assert logger._get_datadog_span_kind(CallTypes.call_mcp_tool.value, None) == "llm"
-        assert logger._get_datadog_span_kind(CallTypes.create_batch.value, None) == "llm"
-        assert logger._get_datadog_span_kind(CallTypes.get_assistants.value, None) == "llm"
+        assert (
+            logger._get_datadog_span_kind(CallTypes.call_mcp_tool.value, None) == "llm"
+        )
+        assert (
+            logger._get_datadog_span_kind(CallTypes.create_batch.value, None) == "llm"
+        )
+        assert (
+            logger._get_datadog_span_kind(CallTypes.get_assistants.value, None) == "llm"
+        )
 
     @pytest.mark.asyncio
     async def test_async_log_failure_event(self, mock_env_vars):
         """Test that async_log_failure_event correctly processes failure payloads according to DD LLM Obs API spec"""
-        with patch(
-            "litellm.integrations.datadog.datadog_llm_obs.get_async_httpx_client"
-        ), patch("asyncio.create_task"):
+        with (
+            patch(
+                "litellm.integrations.datadog.datadog_llm_obs.get_async_httpx_client"
+            ),
+            patch("asyncio.create_task"),
+        ):
             logger = DataDogLLMObsLogger()
 
             # Ensure log_queue starts empty
@@ -544,7 +597,7 @@ def create_standard_logging_payload_with_latency_metrics() -> StandardLoggingPay
         error_information=None,
         model_parameters={"stream": True},
         hidden_params=hidden_params,
-        guardrail_information=[ guardrail_info ],
+        guardrail_information=[guardrail_info],
         trace_id="test-trace-id-latency",
         custom_llm_provider="openai",
     )
@@ -552,9 +605,10 @@ def create_standard_logging_payload_with_latency_metrics() -> StandardLoggingPay
 
 def test_latency_metrics_in_metadata(mock_env_vars):
     """Test that time to first token, litellm overhead, and guardrail overhead are included in metadata"""
-    with patch(
-        "litellm.integrations.datadog.datadog_llm_obs.get_async_httpx_client"
-    ), patch("asyncio.create_task"):
+    with (
+        patch("litellm.integrations.datadog.datadog_llm_obs.get_async_httpx_client"),
+        patch("asyncio.create_task"),
+    ):
         logger = DataDogLLMObsLogger()
 
         standard_payload = create_standard_logging_payload_with_latency_metrics()
@@ -598,9 +652,10 @@ def test_latency_metrics_in_metadata(mock_env_vars):
 
 def test_latency_metrics_edge_cases(mock_env_vars):
     """Test latency metrics with edge cases (missing fields, zero values, etc.)"""
-    with patch(
-        "litellm.integrations.datadog.datadog_llm_obs.get_async_httpx_client"
-    ), patch("asyncio.create_task"):
+    with (
+        patch("litellm.integrations.datadog.datadog_llm_obs.get_async_httpx_client"),
+        patch("asyncio.create_task"),
+    ):
         logger = DataDogLLMObsLogger()
 
         # Test case 1: No latency metrics present
@@ -623,20 +678,23 @@ def test_latency_metrics_edge_cases(mock_env_vars):
 
         # Test case 3: Missing guardrail duration should not crash
         standard_payload = create_standard_logging_payload_with_cache()
-        standard_payload["guardrail_information"] = [StandardLoggingGuardrailInformation(
-            guardrail_name="test",
-            guardrail_status="success",
-            # duration is missing
-        )]
+        standard_payload["guardrail_information"] = [
+            StandardLoggingGuardrailInformation(
+                guardrail_name="test",
+                guardrail_status="success",
+                # duration is missing
+            )
+        ]
         metadata = logger._get_dd_llm_obs_payload_metadata(standard_payload)
         assert "guardrail_overhead_time_ms" not in metadata
 
 
 def test_guardrail_information_in_metadata(mock_env_vars):
     """Test that guardrail_information is included in metadata with input/output fields"""
-    with patch(
-        "litellm.integrations.datadog.datadog_llm_obs.get_async_httpx_client"
-    ), patch("asyncio.create_task"):
+    with (
+        patch("litellm.integrations.datadog.datadog_llm_obs.get_async_httpx_client"),
+        patch("asyncio.create_task"),
+    ):
         logger = DataDogLLMObsLogger()
 
         # Create a standard payload with guardrail information
@@ -694,10 +752,7 @@ def create_standard_logging_payload_with_tool_calls() -> StandardLoggingPayload:
         "endTime": 1234567891.0,
         "completionStartTime": 1234567890.5,
         "response_time": 1.0,
-        "model_map_information": {
-            "model_map_key": "gpt-4",
-            "model_map_value": None
-        },
+        "model_map_information": {"model_map_key": "gpt-4", "model_map_value": None},
         "model": "gpt-4",
         "model_id": "model-123",
         "model_group": "openai-gpt",
@@ -803,23 +858,30 @@ class TestDataDogLLMObsLoggerToolCalls:
 
     def test_tool_call_span_kind_mapping(self, mock_env_vars):
         """Test that tool call operations are correctly mapped to 'tool' span kind"""
-        with patch(
-            "litellm.integrations.datadog.datadog_llm_obs.get_async_httpx_client"
-        ), patch("asyncio.create_task"):
+        with (
+            patch(
+                "litellm.integrations.datadog.datadog_llm_obs.get_async_httpx_client"
+            ),
+            patch("asyncio.create_task"),
+        ):
             logger = DataDogLLMObsLogger()
 
             # Test MCP tool call mapping
             from litellm.types.utils import CallTypes
 
             assert (
-                logger._get_datadog_span_kind(CallTypes.call_mcp_tool.value, "123") == "tool"
+                logger._get_datadog_span_kind(CallTypes.call_mcp_tool.value, "123")
+                == "tool"
             )
 
     def test_tool_call_payload_creation(self, mock_env_vars):
         """Test that tool call payloads are created correctly"""
-        with patch(
-            "litellm.integrations.datadog.datadog_llm_obs.get_async_httpx_client"
-        ), patch("asyncio.create_task"):
+        with (
+            patch(
+                "litellm.integrations.datadog.datadog_llm_obs.get_async_httpx_client"
+            ),
+            patch("asyncio.create_task"),
+        ):
             logger = DataDogLLMObsLogger()
 
             standard_payload = create_standard_logging_payload_with_tool_calls()
@@ -849,9 +911,12 @@ class TestDataDogLLMObsLoggerToolCalls:
 
     def test_tool_call_messages_preserved(self, mock_env_vars):
         """Test that tool call messages are preserved in the payload"""
-        with patch(
-            "litellm.integrations.datadog.datadog_llm_obs.get_async_httpx_client"
-        ), patch("asyncio.create_task"):
+        with (
+            patch(
+                "litellm.integrations.datadog.datadog_llm_obs.get_async_httpx_client"
+            ),
+            patch("asyncio.create_task"),
+        ):
             logger = DataDogLLMObsLogger()
 
             standard_payload = create_standard_logging_payload_with_tool_calls()
@@ -889,9 +954,12 @@ class TestDataDogLLMObsLoggerToolCalls:
 
     def test_tool_call_response_handling(self, mock_env_vars):
         """Test that tool calls in response are handled correctly"""
-        with patch(
-            "litellm.integrations.datadog.datadog_llm_obs.get_async_httpx_client"
-        ), patch("asyncio.create_task"):
+        with (
+            patch(
+                "litellm.integrations.datadog.datadog_llm_obs.get_async_httpx_client"
+            ),
+            patch("asyncio.create_task"),
+        ):
             logger = DataDogLLMObsLogger()
 
             standard_payload = create_standard_logging_payload_with_tool_calls()
@@ -920,6 +988,7 @@ class TestDataDogLLMObsLoggerToolCalls:
             output_function_info = output_tool_calls[0].get("function", {})
             assert output_function_info.get("name") == "format_response"
 
+
 def create_standard_logging_payload_with_spend_metrics() -> StandardLoggingPayload:
     """Create a StandardLoggingPayload object with spend metrics for testing"""
     from datetime import datetime, timezone
@@ -943,10 +1012,7 @@ def create_standard_logging_payload_with_spend_metrics() -> StandardLoggingPaylo
         "endTime": 1234567891.0,
         "completionStartTime": 1234567890.5,
         "response_time": 1.0,
-        "model_map_information": {
-            "model_map_key": "gpt-4",
-            "model_map_value": None
-        },
+        "model_map_information": {"model_map_key": "gpt-4", "model_map_value": None},
         "model": "gpt-4",
         "model_id": "model-123",
         "model_group": "openai-gpt",
@@ -1014,6 +1080,7 @@ async def test_datadog_llm_obs_spend_metrics(mock_env_vars):
     budget_reset_iso = payload["metadata"]["user_api_key_budget_reset_at"]
     print(f"Budget reset time (ISO format): {budget_reset_iso}")
     from datetime import datetime, timezone
+
     print(f"Current time: {datetime.now(timezone.utc).isoformat()}")
 
     # Test the _get_spend_metrics method
@@ -1029,7 +1096,7 @@ async def test_datadog_llm_obs_spend_metrics(mock_env_vars):
     assert isinstance(budget_reset, str)
     print(f"Budget reset datetime: {budget_reset}")
     # Should be close to 10 days from now
-    budget_reset_dt = datetime.fromisoformat(budget_reset.replace('Z', '+00:00'))
+    budget_reset_dt = datetime.fromisoformat(budget_reset.replace("Z", "+00:00"))
     now = datetime.now(timezone.utc)
     time_diff = (budget_reset_dt - now).total_seconds() / 86400  # days
     assert 9.5 <= time_diff <= 10.5  # Should be close to 10 days
@@ -1067,6 +1134,7 @@ async def test_datadog_llm_obs_spend_metrics_no_budget(mock_env_vars):
 async def test_spend_metrics_in_datadog_payload(mock_env_vars):
     """Test that spend metrics are correctly included in DataDog LLM Observability payloads"""
     from datetime import datetime
+
     datadog_llm_obs_logger = DataDogLLMObsLogger()
 
     standard_payload = create_standard_logging_payload_with_spend_metrics()
@@ -1079,7 +1147,9 @@ async def test_spend_metrics_in_datadog_payload(mock_env_vars):
     start_time = datetime.now()
     end_time = datetime.now()
 
-    payload = datadog_llm_obs_logger.create_llm_obs_payload(kwargs, start_time, end_time)
+    payload = datadog_llm_obs_logger.create_llm_obs_payload(
+        kwargs, start_time, end_time
+    )
 
     # Verify basic payload structure
     assert payload.get("name") == "litellm_llm_call"
@@ -1109,14 +1179,17 @@ async def test_spend_metrics_in_datadog_payload(mock_env_vars):
     # Verify budget reset is a datetime string in ISO format
     budget_reset = spend_metrics["user_api_key_budget_reset_at"]
     assert isinstance(budget_reset, str)
-    print(f"Budget reset in payload: {budget_reset}")    # In StandardLoggingUserAPIKeyMetadata
+    print(
+        f"Budget reset in payload: {budget_reset}"
+    )  # In StandardLoggingUserAPIKeyMetadata
     user_api_key_budget_reset_at: Optional[str] = None
-    
-    # In DDLLMObsSpendMetrics  
+
+    # In DDLLMObsSpendMetrics
     user_api_key_budget_reset_at: str
     # Should be close to 10 days from now
     from datetime import datetime, timezone
-    budget_reset_dt = datetime.fromisoformat(budget_reset.replace('Z', '+00:00'))
+
+    budget_reset_dt = datetime.fromisoformat(budget_reset.replace("Z", "+00:00"))
     now = datetime.now(timezone.utc)
     time_diff = (budget_reset_dt - now).total_seconds() / 86400  # days
     assert 9.5 <= time_diff <= 10.5  # Should be close to 10 days

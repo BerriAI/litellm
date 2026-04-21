@@ -12,8 +12,9 @@ from fastapi import HTTPException
 
 sys.path.insert(0, os.path.abspath("../../../../../.."))
 
-from litellm.proxy.guardrails.guardrail_hooks.tool_policy.tool_policy_guardrail import \
-    ToolPolicyGuardrail
+from litellm.proxy.guardrails.guardrail_hooks.tool_policy.tool_policy_guardrail import (
+    ToolPolicyGuardrail,
+)
 from litellm.types.guardrails import GuardrailEventHooks
 
 
@@ -23,6 +24,7 @@ def guardrail():
 
 
 # --- helpers ---
+
 
 def _tool_request_inputs(tool_names: list) -> dict:
     return {
@@ -36,8 +38,7 @@ def _tool_request_inputs(tool_names: list) -> dict:
 def _tool_response_inputs(tool_names: list) -> dict:
     return {
         "tool_calls": [
-            {"type": "function", "function": {"name": name}}
-            for name in tool_names
+            {"type": "function", "function": {"name": name}} for name in tool_names
         ]
     }
 

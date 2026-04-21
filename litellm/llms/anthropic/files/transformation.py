@@ -79,9 +79,9 @@ class AnthropicFilesConfig(BaseFilesConfig):
         return AnthropicError(
             status_code=status_code,
             message=error_message,
-            headers=cast(httpx.Headers, headers)
-            if isinstance(headers, dict)
-            else headers,
+            headers=(
+                cast(httpx.Headers, headers) if isinstance(headers, dict) else headers
+            ),
         )
 
     def validate_environment(

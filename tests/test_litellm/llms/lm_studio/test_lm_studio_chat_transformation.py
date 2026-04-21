@@ -59,11 +59,11 @@ class TestLMStudioChatConfigResponseFormat:
 def test_lm_studio_get_openai_compatible_provider_info():
     """Test provider info retrieval"""
     config = LMStudioChatConfig()
-    
+
     # Test default behavior (no API key provided)
     _, api_key = config._get_openai_compatible_provider_info(None, None)
     assert api_key == "fake-api-key"
-    
+
     # Test explicit API key
     _, api_key = config._get_openai_compatible_provider_info(None, "test-key")
     assert api_key == "test-key"
@@ -72,7 +72,7 @@ def test_lm_studio_get_openai_compatible_provider_info():
 def test_lm_studio_get_openai_compatible_provider_info_with_env():
     """Test provider info retrieval with environment variables."""
     config = LMStudioChatConfig()
-    
+
     with patch.dict(
         "os.environ",
         {
