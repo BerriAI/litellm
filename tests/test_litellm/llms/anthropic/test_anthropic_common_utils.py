@@ -1153,6 +1153,20 @@ class TestAnthropicThinkingSignatureSelfHeal:
         )
         assert is_anthropic_invalid_thinking_signature_error(raw) is True
 
+    def test_is_anthropic_invalid_thinking_signature_error_vertex_ai(self):
+        """Vertex AI returns a different error format for invalid thinking signatures."""
+        from litellm.llms.anthropic.common_utils import (
+            is_anthropic_invalid_thinking_signature_error,
+        )
+
+        raw = (
+            '{"type":"error","error":{"type":"invalid_request_error",'
+            '"message":"messages.1.content.0.thinking.signature.str: '
+            'Input should be a valid string"},'
+            '"request_id":"req_vrtx_011CaB4qJPWdYMoM8yyQUQ5C"}'
+        )
+        assert is_anthropic_invalid_thinking_signature_error(raw) is True
+
     def test_is_anthropic_invalid_thinking_signature_error_negative(self):
         from litellm.llms.anthropic.common_utils import (
             is_anthropic_invalid_thinking_signature_error,
