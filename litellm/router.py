@@ -202,6 +202,8 @@ if TYPE_CHECKING:
     )
     from litellm.router_strategy.adaptive_router.adaptive_router import (
         AdaptiveRouter,
+    from litellm.router_strategy.quality_router.quality_router import (
+        QualityRouter,
     )
 
     Span = Union[_Span, Any]
@@ -210,6 +212,7 @@ else:
     AutoRouter = Any
     ComplexityRouter = Any
     AdaptiveRouter = Any
+    QualityRouter = Any
     PreRoutingHookResponse = Any
 
 
@@ -469,6 +472,7 @@ class Router:
         self.auto_routers: Dict[str, "AutoRouter"] = {}
         self.complexity_routers: Dict[str, "ComplexityRouter"] = {}
         self.adaptive_routers: Dict[str, "AdaptiveRouter"] = {}
+        self.quality_routers: Dict[str, "QualityRouter"] = {}
 
         # Initialize model_group_alias early since it's used in set_model_list
         self.model_group_alias: Dict[str, Union[str, RouterModelGroupAliasItem]] = (
@@ -5889,7 +5893,7 @@ class Router:
             response = await response
         ## PROCESS RESPONSE HEADERS
         response = await self.set_response_headers(
-            response=response, model_group=model_group
+            response=response, model_group=model_group, request_kwargs=kwargs
         )
 
         return response
@@ -6822,6 +6826,8 @@ class Router:
             return False  # This is handled by complexity_router
         if litellm_params.model.startswith("auto_router/adaptive_router"):
             return False  # This is handled by adaptive_router
+        if litellm_params.model.startswith("auto_router/quality_router"):
+            return False  # This is handled by quality_router
         if litellm_params.model.startswith("auto_router/"):
             return True
         return False
@@ -7045,6 +7051,57 @@ class Router:
             deployment.model_name,
             len(config.available_models),
         )
+    def _is_quality_router_deployment(self, litellm_params: LiteLLM_Params) -> bool:
+        """
+        Check if the deployment is a quality-router deployment.
+
+        Returns True if the litellm_params model starts with "auto_router/quality_router".
+        """
+        if litellm_params.model.startswith("auto_router/quality_router"):
+            return True
+        return False
+
+    def init_quality_router_deployment(self, deployment: Deployment):
+        """
+        Initialize the quality-router deployment.
+
+        Resolves the default model from either `quality_router_default_model` or
+        `quality_router_config["default_model"]`, then instantiates the
+        QualityRouter and stores it in `self.quality_routers`.
+        """
+        # Import here to mirror the AutoRouter / ComplexityRouter init pattern
+        # and avoid circular imports.
+        from litellm.router_strategy.quality_router.quality_router import (
+            QualityRouter,
+        )
+
+        quality_router_config: Optional[dict] = (
+            deployment.litellm_params.quality_router_config
+        )
+
+        default_model: Optional[str] = (
+            deployment.litellm_params.quality_router_default_model
+        )
+        if default_model is None and quality_router_config:
+            default_model = quality_router_config.get("default_model")
+
+        if default_model is None:
+            raise ValueError(
+                "quality_router_default_model is required for quality-router deployments, "
+                "or set default_model in quality_router_config. Please configure it in the litellm_params"
+            )
+
+        quality_router: QualityRouter = QualityRouter(
+            model_name=deployment.model_name,
+            default_model=default_model,
+            litellm_router_instance=self,
+            quality_router_config=quality_router_config,
+        )
+        if deployment.model_name in self.quality_routers:
+            raise ValueError(
+                f"Quality-router deployment {deployment.model_name} already exists. Please use a different model name."
+            )
+        self.quality_routers[deployment.model_name] = quality_router
 
     def deployment_is_active_for_environment(self, deployment: Deployment) -> bool:
         """
@@ -7092,6 +7149,11 @@ class Router:
         self.model_id_to_deployment_index_map = {}  # Reset the index
         self.model_name_to_deployment_indices = {}  # Reset the model_name index
         self.team_model_to_deployment_indices = {}  # Reset the team_model index
+        # Reset per-strategy router registries so hot-reload doesn't leave
+        # stale routers pointing at the old model_list.
+        self.quality_routers = {}
+        self.complexity_routers = {}
+        self.auto_routers = {}
         self._invalidate_model_group_info_cache()
         self._invalidate_access_groups_cache()
         # we add api_base/api_key each model so load balancing between azure/gpt on api_base1 and api_base2 works
@@ -7274,6 +7336,11 @@ class Router:
         # set_model_list() because their init needs visibility into the OTHER
         # deployments listed in `available_models` (which may not yet have
         # been processed when this one is created).
+        #########################################################
+        # Check if this is a quality-router deployment
+        #########################################################
+        if self._is_quality_router_deployment(litellm_params=deployment.litellm_params):
+            self.init_quality_router_deployment(deployment=deployment)
 
         return deployment
 
@@ -8278,7 +8345,10 @@ class Router:
         return returned_dict
 
     async def set_response_headers(
-        self, response: Any, model_group: Optional[str] = None
+        self,
+        response: Any,
+        model_group: Optional[str] = None,
+        request_kwargs: Optional[dict] = None,
     ) -> Any:
         """
         Add the most accurate rate limit headers for a given model response.
@@ -8298,6 +8368,45 @@ class Router:
             ] = model_group
 
             additional_headers = response._hidden_params["additional_headers"]  # type: ignore
+
+            # Lift QualityRouter routing decision into response headers for
+            # transparency. The decision is stashed in request_kwargs.metadata
+            # by QualityRouter.async_pre_routing_hook.
+            metadata = (
+                (request_kwargs.get("metadata") or {})
+                if isinstance(request_kwargs, dict)
+                else {}
+            )
+            decision = (
+                metadata.get("quality_router_decision")
+                if isinstance(metadata, dict)
+                else None
+            )
+            if isinstance(decision, dict):
+                # Only emit headers for fields that have a meaningful value.
+                # `complexity_tier` and `matched_keyword` are mutually exclusive
+                # (the keyword path short-circuits classification), so each
+                # request emits one or the other but not both.
+                if decision.get("routed_model") is not None:
+                    additional_headers["x-litellm-quality-router-model"] = str(
+                        decision["routed_model"]
+                    )
+                if decision.get("quality_tier") is not None:
+                    additional_headers["x-litellm-quality-router-tier"] = str(
+                        decision["quality_tier"]
+                    )
+                if decision.get("routed_via") is not None:
+                    additional_headers["x-litellm-quality-router-via"] = str(
+                        decision["routed_via"]
+                    )
+                if decision.get("matched_keyword") is not None:
+                    additional_headers["x-litellm-quality-router-keyword"] = str(
+                        decision["matched_keyword"]
+                    )
+                if decision.get("complexity_tier") is not None:
+                    additional_headers["x-litellm-quality-router-complexity"] = str(
+                        decision["complexity_tier"]
+                    )
 
             if (
                 "x-ratelimit-remaining-tokens" not in additional_headers
@@ -8843,8 +8952,6 @@ class Router:
                 and self.routing_strategy == "latency-based-routing"
             ):
                 _settings_to_return[var] = self.lowestlatency_logger.routing_args.json()
-            elif var == "routing_strategy_args":
-                _settings_to_return[var] = None
         return _settings_to_return
 
     def update_settings(self, **kwargs):
@@ -9755,7 +9862,7 @@ class Router:
         self,
         model: str,
         request_kwargs: Dict,
-        messages: Optional[List[Dict[str, str]]] = None,
+        messages: Optional[List[Dict[str, Any]]] = None,
         input: Optional[Union[str, List]] = None,
         specific_deployment: Optional[bool] = False,
     ) -> Optional[PreRoutingHookResponse]:
@@ -9794,6 +9901,10 @@ class Router:
         adaptive_router = self.adaptive_routers.get(model)
         if adaptive_router is not None:
             return await adaptive_router.async_pre_routing_hook(
+        # Check if any quality-router should be used
+        #########################################################
+        if model in self.quality_routers:
+            return await self.quality_routers[model].async_pre_routing_hook(
                 model=model,
                 request_kwargs=request_kwargs,
                 messages=messages,

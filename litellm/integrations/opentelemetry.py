@@ -1615,6 +1615,14 @@ class OpenTelemetry(CustomLogger):
                     value=response_id,
                 )
 
+            litellm_call_id = standard_logging_payload.get("litellm_call_id")
+            if litellm_call_id:
+                self.safe_set_attribute(
+                    span=span,
+                    key="litellm.call_id",
+                    value=litellm_call_id,
+                )
+
             # The model used to generate the response.
             if response_obj and response_obj.get("model"):
                 self.safe_set_attribute(
