@@ -965,8 +965,7 @@ def responses_api_bridge_check(
             web_search_options is not None
             and model_info.get("mode") != "responses"
             and model_info.get("supports_web_search") is True
-            and "/v1/responses"
-            in (model_info.get("supported_endpoints") or [])
+            and "/v1/responses" in (model_info.get("supported_endpoints") or [])
         ):
             model_info["mode"] = "responses"
 
