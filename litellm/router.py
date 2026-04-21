@@ -9241,6 +9241,12 @@ class Router:
         healthy_deployments = self._get_all_deployments(
             model_name=model, team_id=request_team_id
         )
+        healthy_deployments = self._filter_deployments_by_model_access_groups(
+            model=model,
+            healthy_deployments=healthy_deployments,
+            request_kwargs=request_kwargs,
+            request_team_id=request_team_id,
+        )
 
         if len(healthy_deployments) == 0:
             # check if the user sent in a deployment name instead
@@ -9263,6 +9269,14 @@ class Router:
                     model = fallback_model
                     healthy_deployments = self._get_all_deployments(
                         model_name=model, team_id=request_team_id
+                    )
+                    healthy_deployments = (
+                        self._filter_deployments_by_model_access_groups(
+                            model=model,
+                            healthy_deployments=healthy_deployments,
+                            request_kwargs=request_kwargs,
+                            request_team_id=request_team_id,
+                        )
                     )
 
             # If still no deployments after checking for fallbacks, raise an error
@@ -9288,6 +9302,68 @@ class Router:
             ]  # update the model to the actual value if an alias has been passed in
 
         return model, healthy_deployments
+
+    def _filter_deployments_by_model_access_groups(
+        self,
+        model: str,
+        healthy_deployments: List,
+        request_kwargs: Optional[Dict],
+        request_team_id: Optional[str],
+    ) -> List:
+        """
+        Restrict candidate deployments to caller-authorized model access groups.
+
+        This is only applied when:
+        - request metadata includes `user_api_key_auth`, and
+        - caller permissions for this model are access-group-only
+          (no explicit model, wildcard, or all-proxy grants).
+        """
+        if not healthy_deployments or request_kwargs is None:
+            return healthy_deployments
+
+        metadata = request_kwargs.get("metadata") or {}
+        litellm_metadata = request_kwargs.get("litellm_metadata") or {}
+        user_api_key_auth = metadata.get("user_api_key_auth") or litellm_metadata.get(
+            "user_api_key_auth"
+        )
+        if user_api_key_auth is None:
+            return healthy_deployments
+
+        object_models = set(getattr(user_api_key_auth, "models", []) or [])
+        object_team_models = set(getattr(user_api_key_auth, "team_models", []) or [])
+        allowed_models = object_models | object_team_models
+        if not allowed_models:
+            return healthy_deployments
+
+        # If caller has direct model/wildcard/all-proxy access, do not constrain
+        # deployment choice by access group.
+        if (
+            model in allowed_models
+            or "*" in allowed_models
+            or "all-proxy-models" in allowed_models
+        ):
+            return healthy_deployments
+
+        access_groups_for_model = self.get_model_access_groups(
+            model_name=model, team_id=request_team_id
+        )
+        if len(access_groups_for_model) == 0:
+            return healthy_deployments
+
+        allowed_access_groups = set(access_groups_for_model.keys()) & allowed_models
+        if not allowed_access_groups:
+            return healthy_deployments
+
+        filtered_deployments = []
+        for deployment in healthy_deployments:
+            deployment_model_info = deployment.get("model_info") or {}
+            deployment_access_groups = set(
+                deployment_model_info.get("access_groups", []) or []
+            )
+            if deployment_access_groups & allowed_access_groups:
+                filtered_deployments.append(deployment)
+
+        return filtered_deployments
 
     async def async_get_healthy_deployments(
         self,
@@ -9796,6 +9872,7 @@ class Router:
             messages=messages,
             input=input,
             specific_deployment=specific_deployment,
+            request_kwargs=request_kwargs,
         )
 
         if isinstance(healthy_deployments, dict):
