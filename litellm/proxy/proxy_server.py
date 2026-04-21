@@ -6579,21 +6579,26 @@ class ProxyStartupEvent:
             MAVVRIK_EXPORT_INTERVAL_MINUTES,
             MAVVRIK_EXPORT_USAGE_DATA_JOB_NAME,
         )
-        from litellm.integrations.mavvrik import Orchestrator, Settings, Uploader
+        from litellm.integrations.mavvrik import (
+            Orchestrator as MavvrikOrchestrator,
+            Settings as MavvrikSettings,
+            Uploader as MavvrikUploader,
+        )
 
-        if await Settings().is_setup():
-            _mavvrik_uploader = Uploader()
-            _mavvrik_orchestrator = Orchestrator(uploader=_mavvrik_uploader)
+        if await MavvrikSettings().is_setup():
+            uploader = MavvrikUploader()
+            orchestrator = MavvrikOrchestrator(uploader=uploader)
             scheduler.add_job(
-                _mavvrik_orchestrator.run,
+                orchestrator.run,
                 "interval",
                 minutes=MAVVRIK_EXPORT_INTERVAL_MINUTES,
                 id=MAVVRIK_EXPORT_USAGE_DATA_JOB_NAME,
                 replace_existing=True,
             )
-            verbose_proxy_logger.info(
-                "Mavvrik: background export job scheduled every %d min",
+            verbose_proxy_logger.warning(
+                "Mavvrik: background export job scheduled every %d min (connection_id=%s)",
                 MAVVRIK_EXPORT_INTERVAL_MINUTES,
+                getattr(uploader, "connection_id", "?"),
             )
 
         ########################################################

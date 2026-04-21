@@ -18,7 +18,7 @@ from litellm.integrations.azure_storage.azure_storage import AzureBlobStorageLog
 from litellm.integrations.bitbucket import BitBucketPromptManager
 from litellm.integrations.braintrust_logging import BraintrustLogger
 from litellm.integrations.cloudzero.cloudzero import CloudZeroLogger
-from litellm.integrations.mavvrik.logger import Logger as MavvrikLogger
+from litellm.integrations.mavvrik import Logger as MavvrikLogger
 from litellm.integrations.datadog.datadog import DataDogLogger
 from litellm.integrations.datadog.datadog_llm_obs import DataDogLLMObsLogger
 from litellm.integrations.datadog.datadog_metrics import DatadogMetricsLogger

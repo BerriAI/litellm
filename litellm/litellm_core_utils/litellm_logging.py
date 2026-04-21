@@ -3954,7 +3954,7 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
             _in_memory_loggers.append(galileo_logger)
             return galileo_logger  # type: ignore
         elif logging_integration == "mavvrik":
-            from litellm.integrations.mavvrik.logger import Logger as MavvrikLogger
+            from litellm.integrations.mavvrik import Logger as MavvrikLogger
 
             for callback in _in_memory_loggers:
                 if isinstance(callback, MavvrikLogger):
@@ -4350,7 +4350,7 @@ def get_custom_logger_compatible_class(  # noqa: PLR0915
                 if isinstance(callback, GalileoObserve):
                     return callback
         elif logging_integration == "mavvrik":
-            from litellm.integrations.mavvrik.logger import Logger as MavvrikLogger
+            from litellm.integrations.mavvrik import Logger as MavvrikLogger
 
             for callback in _in_memory_loggers:
                 if isinstance(callback, MavvrikLogger):
