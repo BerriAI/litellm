@@ -1047,33 +1047,35 @@ class TestOpenTelemetryEndpointNormalization(unittest.TestCase):
         result = otel._normalize_otel_endpoint("http://collector:4318/", "traces")
         self.assertEqual(result, "http://collector:4318/v1/traces")
 
-    def test_normalize_traces_splunk_observability_cloud_otlp_url_unchanged(self):
-        """Splunk Observability Cloud trace OTLP ingest must not get /v1/traces appended."""
-        otel = OpenTelemetry()
-        url = "https://ingest.eu1.observability.splunkcloud.com/v2/trace/otlp"
-        self.assertEqual(otel._normalize_otel_endpoint(url, "traces"), url)
-
-    def test_normalize_traces_splunk_observability_cloud_otlp_url_with_trailing_slash(
-        self,
-    ):
+    @parameterized.expand(
+        [
+            (
+                "https://ingest.eu1.observability.splunkcloud.com/v2/trace/otlp",
+                "https://ingest.eu1.observability.splunkcloud.com/v2/trace/otlp",
+            ),
+            (
+                "https://ingest.us0.observability.splunkcloud.com/v2/trace/otlp/",
+                "https://ingest.us0.observability.splunkcloud.com/v2/trace/otlp",
+            ),
+            (
+                "https://ingest.eu0.signalfx.com/v2/trace/otlp",
+                "https://ingest.eu0.signalfx.com/v2/trace/otlp",
+            ),
+            (
+                "https://example.com/prefix/v2/trace/otlp",
+                "https://example.com/prefix/v2/trace/otlp",
+            ),
+        ]
+    )
+    def test_normalize_traces_nonstandard_otlp_ingest_urls_unchanged(
+        self, input_url: str, expected: str
+    ) -> None:
+        """Splunk-style /v2/trace/otlp endpoints must not get /v1/traces appended."""
         otel = OpenTelemetry()
         self.assertEqual(
-            otel._normalize_otel_endpoint(
-                "https://ingest.us0.observability.splunkcloud.com/v2/trace/otlp/",
-                "traces",
-            ),
-            "https://ingest.us0.observability.splunkcloud.com/v2/trace/otlp",
+            otel._normalize_otel_endpoint(input_url, "traces"),
+            expected,
         )
-
-    def test_normalize_traces_legacy_signalfx_ingest_otlp_url_unchanged(self):
-        otel = OpenTelemetry()
-        url = "https://ingest.eu0.signalfx.com/v2/trace/otlp"
-        self.assertEqual(otel._normalize_otel_endpoint(url, "traces"), url)
-
-    def test_normalize_traces_custom_host_trace_otlp_suffix_unchanged(self):
-        otel = OpenTelemetry()
-        url = "https://example.com/prefix/v2/trace/otlp"
-        self.assertEqual(otel._normalize_otel_endpoint(url, "traces"), url)
 
     def test_normalize_endpoint_none(self):
         """Test that None endpoint returns None"""
