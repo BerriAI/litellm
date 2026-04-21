@@ -1,4 +1,4 @@
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -26,7 +26,12 @@ class MockImageEditConfig(BaseImageEditConfig):
         return "https://example.com/api"
 
     def validate_environment(
-        self, headers: dict, model: str, api_key: str = None
+        self,
+        headers: dict,
+        model: str,
+        api_key: str = None,
+        litellm_params: Optional[dict] = None,
+        api_base: Optional[str] = None,
     ) -> dict:
         return headers
 
