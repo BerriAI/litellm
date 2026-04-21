@@ -44,14 +44,6 @@ from litellm.integrations.opentelemetry import OpenTelemetry
 from litellm.integrations.opik.opik import OpikLogger
 from litellm.integrations.posthog import PostHogLogger
 from litellm.integrations.prometheus import PrometheusLogger
-from litellm.integrations.newrelic import NewRelicLogger
-
-try:
-    from litellm_enterprise.integrations.prometheus import PrometheusLogger
-except Exception:
-    PrometheusLogger = None
-from litellm.integrations.cloudzero.cloudzero import CloudZeroLogger
-from litellm.integrations.dotprompt import DotpromptManager
 from litellm.integrations.s3_v2 import S3Logger
 from litellm.integrations.sqs import SQSLogger
 from litellm.integrations.vector_store_integrations.vector_store_pre_call_hook import (
