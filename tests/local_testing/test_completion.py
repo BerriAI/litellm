@@ -1354,6 +1354,22 @@ def test_ollama_embedding_explicit_api_base_takes_precedence(monkeypatch):
         assert mock_embeddings.call_args.kwargs["api_base"] == "http://localhost:11434"
 
 
+@pytest.mark.asyncio
+async def test_ollama_aembedding_explicit_api_base_takes_precedence(monkeypatch):
+    monkeypatch.setattr(litellm, "api_base", "https://api.deepseek.com")
+
+    with patch("litellm.main.ollama.ollama_aembeddings") as mock_aembeddings:
+        mock_aembeddings.return_value = MagicMock()
+
+        await litellm.aembedding(
+            model="ollama/qwen3-embedding:0.6b",
+            input="hello",
+            api_base="http://localhost:11434",
+        )
+
+        assert mock_aembeddings.call_args.kwargs["api_base"] == "http://localhost:11434"
+
+
 # ################### Hugging Face Conversational models ########################
 # def hf_test_completion_conv():
 #     try:
