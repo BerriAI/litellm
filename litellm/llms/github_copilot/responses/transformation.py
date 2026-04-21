@@ -88,6 +88,44 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
         """
         return dict(response_api_optional_params)
 
+    def transform_responses_api_request(
+        self,
+        model: str,
+        input: Union[str, ResponseInputParam],
+        response_api_optional_request_params: Dict,
+        litellm_params: GenericLiteLLMParams,
+        headers: dict,
+    ) -> Dict:
+        """
+        Transform the Responses API request and set X-Initiator header.
+
+        GitHub Copilot requires X-Initiator header based on input analysis.
+        This is set here (not in validate_environment) because only this method
+        has access to the input parameter.
+        """
+        # Add X-Initiator header based on input analysis
+        initiator = self._get_initiator(input)
+        headers["X-Initiator"] = initiator
+        verbose_logger.debug(
+            f"GitHub Copilot Responses API: Set X-Initiator={initiator}"
+        )
+
+        # Add vision header if input contains images
+        if self._has_vision_input(input):
+            headers["copilot-vision-request"] = "true"
+            verbose_logger.debug(
+                "GitHub Copilot Responses API: Enabled vision request"
+            )
+
+        # Call parent to get request body (validates input, handles reasoning items)
+        return super().transform_responses_api_request(
+            model=model,
+            input=input,
+            response_api_optional_request_params=response_api_optional_request_params,
+            litellm_params=litellm_params,
+            headers=headers,
+        )
+
     def validate_environment(
         self,
         headers: dict,
@@ -139,23 +177,8 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
             # Merge with existing headers (user's extra_headers take priority)
             merged_headers = {**default_headers, **headers}
 
-            # Analyze input to determine additional headers
-            input_param = self._get_input_from_params(litellm_params)
-
-            # Add X-Initiator header based on input analysis
-            if input_param is not None:
-                initiator = self._get_initiator(input_param)
-                merged_headers["X-Initiator"] = initiator
-                verbose_logger.debug(
-                    f"GitHub Copilot Responses API: Set X-Initiator={initiator}"
-                )
-
-                # Add vision header if input contains images
-                if self._has_vision_input(input_param):
-                    merged_headers["copilot-vision-request"] = "true"
-                    verbose_logger.debug(
-                        "GitHub Copilot Responses API: Enabled vision request"
-                    )
+            # X-Initiator and vision headers are set in transform_responses_api_request
+            # where we have access to the input parameter
 
             verbose_logger.debug(
                 f"GitHub Copilot Responses API: Successfully configured headers for model {model}"
@@ -231,26 +254,6 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
         return item
 
     # ==================== Helper Methods ====================
-
-    def _get_input_from_params(
-        self, litellm_params: Optional[GenericLiteLLMParams]
-    ) -> Optional[Union[str, ResponseInputParam]]:
-        """
-        Extract input parameter from litellm_params.
-
-        The input parameter contains the conversation history and is needed
-        for vision detection and initiator determination.
-        """
-        if litellm_params is None:
-            return None
-
-        # Try to get input from litellm_params
-        # This might be in different locations depending on how LiteLLM structures it
-        if hasattr(litellm_params, "input"):
-            return litellm_params.input
-
-        # If not found, return None and let the API handle it
-        return None
 
     def _get_initiator(self, input_param: Union[str, ResponseInputParam]) -> str:
         """
