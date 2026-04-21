@@ -93,6 +93,49 @@ class BasePassthroughLoggingHandler(ABC):
             return get_end_user_id_from_request_body(request_body)
         return None
 
+    @staticmethod
+    def _apply_spend_logs_metadata(
+        kwargs: dict,
+        passthrough_logging_payload: Optional["PassthroughStandardLoggingPayload"],
+    ) -> None:
+        """
+        Propagate `spend_logs_metadata` from a pass-through logging payload into
+        `kwargs["litellm_params"]["metadata"]`.
+
+        OpenAI-compatible endpoints write the value at
+        `data["metadata"]["spend_logs_metadata"]` before the call; this helper
+        matches that key path at logging time so downstream
+        `get_standard_logging_object_payload` surfaces the same field for
+        pass-through traffic.
+        """
+        if not passthrough_logging_payload:
+            return
+        metadata = passthrough_logging_payload.get("spend_logs_metadata")
+        if not metadata:
+            return
+        kwargs.setdefault("litellm_params", {})
+        kwargs["litellm_params"].setdefault("metadata", {})
+        kwargs["litellm_params"]["metadata"]["spend_logs_metadata"] = metadata
+
+    @staticmethod
+    def _seed_streaming_kwargs_from_logging_obj(
+        litellm_logging_obj: LiteLLMLoggingObj,
+    ) -> dict:
+        """
+        Build the initial `kwargs` dict for streaming logging paths so the
+        pass-through payload (populated by `success_handler.pass_through_async_success_handler`
+        before any provider handler runs) survives into the response logging
+        builder. Without this seed, streaming paths would lose the
+        `spend_logs_metadata` that non-streaming traffic carries via kwargs.
+        """
+        initial: dict = {}
+        passthrough_payload = litellm_logging_obj.model_call_details.get(
+            "passthrough_logging_payload"
+        )
+        if passthrough_payload is not None:
+            initial["passthrough_logging_payload"] = passthrough_payload
+        return initial
+
     def _create_response_logging_payload(
         self,
         litellm_model_response: Union[ModelResponse, TextCompletionResponse],
@@ -118,6 +161,7 @@ class BasePassthroughLoggingHandler(ABC):
             kwargs["model"] = model
             passthrough_logging_payload: Optional[PassthroughStandardLoggingPayload] = (  # type: ignore
                 kwargs.get("passthrough_logging_payload")
+                or logging_obj.model_call_details.get("passthrough_logging_payload")
             )
             if passthrough_logging_payload:
                 user = self._get_user_from_metadata(
@@ -128,6 +172,8 @@ class BasePassthroughLoggingHandler(ABC):
                     kwargs["litellm_params"].update(
                         {"proxy_server_request": {"body": {"user": user}}}
                     )
+
+                self._apply_spend_logs_metadata(kwargs, passthrough_logging_payload)
 
             # Make standard logging object for Anthropic
             standard_logging_object = get_standard_logging_object_payload(
@@ -209,7 +255,7 @@ class BasePassthroughLoggingHandler(ABC):
         kwargs = self._create_response_logging_payload(
             litellm_model_response=complete_streaming_response,
             model=model,
-            kwargs={},
+            kwargs=self._seed_streaming_kwargs_from_logging_obj(litellm_logging_obj),
             start_time=start_time,
             end_time=end_time,
             logging_obj=litellm_logging_obj,

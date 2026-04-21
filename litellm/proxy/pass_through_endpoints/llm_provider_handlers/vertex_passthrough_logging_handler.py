@@ -341,7 +341,12 @@ class VertexPassthroughLoggingHandler:
         - Creates standard logging object
         - Logs in litellm callbacks
         """
-        kwargs: Dict[str, Any] = {}
+        from litellm.proxy.pass_through_endpoints.llm_provider_handlers.base_passthrough_logging_handler import BasePassthroughLoggingHandler  # noqa: PLC0415
+        kwargs: Dict[str, Any] = (
+            BasePassthroughLoggingHandler._seed_streaming_kwargs_from_logging_obj(
+                litellm_logging_obj
+            )
+        )
         model = model or VertexPassthroughLoggingHandler.extract_model_from_url(
             url_route
         )
@@ -546,6 +551,13 @@ class VertexPassthroughLoggingHandler:
 
         kwargs["response_cost"] = response_cost
         kwargs["model"] = model
+
+        from litellm.proxy.pass_through_endpoints.llm_provider_handlers.base_passthrough_logging_handler import BasePassthroughLoggingHandler  # noqa: PLC0415
+        BasePassthroughLoggingHandler._apply_spend_logs_metadata(
+            kwargs,
+            kwargs.get("passthrough_logging_payload")
+            or logging_obj.model_call_details.get("passthrough_logging_payload"),
+        )
 
         # pretty print standard logging object
         verbose_proxy_logger.debug("kwargs= %s", kwargs)
