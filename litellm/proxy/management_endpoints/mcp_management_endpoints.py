@@ -396,10 +396,8 @@ if MCP_AVAILABLE:
             redis_server = await _get_temporary_mcp_server_from_redis(server_id)
             if redis_server is None:
                 return None
-            _cache_temporary_mcp_server(
-                server=redis_server,
-                ttl_seconds=TEMPORARY_MCP_SERVER_TTL_SECONDS,
-            )
+            # Intentionally avoid repopulating local cache from Redis to prevent
+            # extending effective lifetime beyond the remaining Redis TTL.
             return redis_server
         return entry.server
 

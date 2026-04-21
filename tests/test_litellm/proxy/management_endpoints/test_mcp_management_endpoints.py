@@ -1348,7 +1348,7 @@ class TestTemporaryMCPSessionEndpoints:
             result = await _get_cached_temporary_mcp_server_or_404("cached")
 
         assert result is server
-        get_cached.assert_called_once_with("cached")
+        get_cached.assert_awaited_once_with("cached")
 
         with patch(
             "litellm.proxy.management_endpoints.mcp_management_endpoints.get_cached_temporary_mcp_server",
