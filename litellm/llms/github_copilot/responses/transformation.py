@@ -2,7 +2,8 @@
 GitHub Copilot Responses API Configuration.
 
 This module provides the configuration for GitHub Copilot's Responses API,
-which is required for models like gpt-5.1-codex that only support the /responses endpoint.
+which is required for models like gpt-5.1-codex that only support the
+/responses endpoint.
 
 Implementation based on analysis of the copilot-api project by caozhiyuan:
 https://github.com/caozhiyuan/copilot-api
@@ -27,6 +28,7 @@ from ..authenticator import Authenticator
 from ..common_utils import (
     DEFAULT_GITHUB_COPILOT_API_BASE,
     GetAPIKeyError,
+    determine_x_initiator,
     get_copilot_default_headers,
 )
 
@@ -113,11 +115,26 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
                 raise AuthenticationError(
                     model=model,
                     llm_provider="github_copilot",
-                    message="GitHub Copilot API key is required. Please authenticate via OAuth Device Flow.",
+                    message=(
+                        "GitHub Copilot API key is required. "
+                        "Please authenticate via OAuth Device Flow."
+                    ),
                 )
 
+            # Extract optional conversation key for session-scoped billing
+            conversation_key: Optional[str] = None
+            if litellm_params is not None:
+                lp_metadata = (
+                    litellm_params.get("metadata")
+                    if isinstance(litellm_params, dict)
+                    else getattr(litellm_params, "metadata", None)
+                ) or {}
+                conversation_key = lp_metadata.get("copilot_conversation_id")
+
             # Get default headers (from copilot-api configuration)
-            default_headers = get_copilot_default_headers(api_key)
+            default_headers = get_copilot_default_headers(
+                api_key, conversation_key=conversation_key
+            )
 
             # Merge with existing headers (user's extra_headers take priority)
             merged_headers = {**default_headers, **headers}
@@ -239,37 +256,10 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
         """
         Determine X-Initiator header value based on input analysis.
 
-        Based on copilot-api's hasAgentInitiator logic:
-        - Returns "agent" if input contains assistant role or items without role
-        - Returns "user" otherwise
-
-        Args:
-            input_param: The input parameter (string or list of input items)
-
-        Returns:
-            "agent" or "user"
+        Delegates to the shared determine_x_initiator() helper in common_utils.py.
+        See that function for full logic documentation (FIX-03).
         """
-        # If input is a string, it's user-initiated
-        if isinstance(input_param, str):
-            return "user"
-
-        # If input is a list, analyze items
-        if isinstance(input_param, list):
-            for item in input_param:
-                if not isinstance(item, dict):
-                    continue
-
-                # Check if item has no role (agent-initiated)
-                if "role" not in item or not item.get("role"):
-                    return "agent"
-
-                # Check if role is assistant (agent-initiated)
-                role = item.get("role")
-                if isinstance(role, str) and role.lower() == "assistant":
-                    return "agent"
-
-        # Default to user-initiated
-        return "user"
+        return determine_x_initiator(input_param)
 
     def _has_vision_input(self, input_param: Union[str, ResponseInputParam]) -> bool:
         """

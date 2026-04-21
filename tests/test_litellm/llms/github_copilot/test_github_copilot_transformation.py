@@ -24,6 +24,7 @@ from litellm.llms.github_copilot.authenticator import Authenticator
 from litellm.llms.github_copilot.chat.transformation import GithubCopilotConfig
 from litellm.llms.github_copilot.common_utils import (
     APIKeyExpiredError,
+    COPILOT_CONVERSATION_ID_HEADER,
     GetAccessTokenError,
     GetAPIKeyError,
     GetDeviceCodeError,
@@ -145,7 +146,7 @@ def test_completion_github_copilot_mock_response(mock_completion, mock_get_api_k
 
 
 def test_transform_messages_disable_copilot_system_to_assistant(monkeypatch):
-    """Test that system messages are converted to assistant unless disable_copilot_system_to_assistant is True."""
+    """Test system→assistant conversion unless disable flag is True."""
     import litellm
     from litellm.llms.github_copilot.chat.transformation import GithubCopilotConfig
 
@@ -213,7 +214,7 @@ def test_x_initiator_header_user_request():
 
 
 def test_x_initiator_header_agent_request_with_assistant():
-    """Test that messages with assistant role result in X-Initiator: agent header"""
+    """Test messages with assistant role return X-Initiator: agent"""
     config = GithubCopilotConfig()
 
     # Mock the authenticator
@@ -267,7 +268,7 @@ def test_x_initiator_header_agent_request_with_tool():
 
 
 def test_x_initiator_header_mixed_messages_with_agent_roles():
-    """Test that mixed messages with agent roles (assistant/tool) result in X-Initiator: agent header"""
+    """Test mixed messages with agent roles return X-Initiator: agent"""
     config = GithubCopilotConfig()
 
     # Mock the authenticator
@@ -373,7 +374,7 @@ def test_x_initiator_header_system_only_messages():
 
 
 def test_get_supported_openai_params_claude_model():
-    """Test that Claude models with extended thinking support have thinking and reasoning parameters."""
+    """Test Claude models with extended thinking support have thinking and reasoning params."""
     config = GithubCopilotConfig()
 
     # Test Claude 4 model supports thinking and reasoning_effort parameters
@@ -527,3 +528,151 @@ def test_copilot_vision_request_header_with_type_image_url():
 
     assert headers["Copilot-Vision-Request"] == "true"
     assert headers["X-Initiator"] == "user"
+
+
+def test_system_message_does_not_trigger_agent_initiator(monkeypatch):
+    """
+    FIX-05 regression guard: system→assistant conversion must NOT affect X-Initiator.
+
+    _determine_initiator() runs on original messages BEFORE _transform_messages().
+    A Turn 1 conversation with [system, user] messages must yield X-Initiator="user"
+    even when disable_copilot_system_to_assistant=False (system gets converted to
+    assistant during transformation).
+
+    If this test fails, it means _determine_initiator() is running AFTER
+    _transform_messages() — a correctness regression that causes Turn 1 to
+    consume a premium request as "agent".
+    """
+    # Enable system→assistant conversion (the default behavior)
+    monkeypatch.setattr(litellm, "disable_copilot_system_to_assistant", False)
+
+    config = GithubCopilotConfig()
+    config.authenticator = MagicMock()
+    config.authenticator.get_api_key.return_value = "gh-test-token"
+
+    messages = [
+        {"role": "system", "content": "You are a helpful assistant."},
+        {"role": "user", "content": "What is the capital of France?"},
+    ]
+
+    result_headers = config.validate_environment(
+        headers={},
+        model="gpt-4o",
+        messages=messages,
+        optional_params={},
+        litellm_params={},
+    )
+
+    assert result_headers.get("X-Initiator") == "user", (
+        "Turn 1 with [system, user] messages must set X-Initiator='user'. "
+        "If 'agent' is returned, _determine_initiator() is running AFTER "
+        "_transform_messages() which converts system→assistant — a FIX-05 regression."
+    )
+
+
+class TestConversationIdHeader:
+    """
+    FIX-01/FIX-02: Verify conversation_id header injection in Chat API.
+    When metadata["copilot_conversation_id"] is provided, a stable UUID
+    is included in headers across turns of the same conversation.
+
+    Uses COPILOT_CONVERSATION_ID_HEADER constant from common_utils so the
+    field name has one authoritative source — T2 defines it, tests use it.
+    """
+
+    def setup_method(self):
+        """Reset conversation store before each test."""
+        from litellm.llms.github_copilot import common_utils
+
+        with common_utils._conversation_store_lock:
+            common_utils._conversation_store.clear()
+
+    def _make_config(self):
+        config = GithubCopilotConfig()
+        config.authenticator = MagicMock()
+        config.authenticator.get_api_key.return_value = "gh-test-token"
+        return config
+
+    def test_no_conversation_key_no_conversation_id_header(self):
+        """Without metadata["copilot_conversation_id"], no conversation_id header is set."""
+        config = self._make_config()
+        headers = config.validate_environment(
+            headers={},
+            model="gpt-4o",
+            messages=[{"role": "user", "content": "Hi"}],
+            optional_params={},
+            litellm_params={},
+        )
+        # conversation_id header should NOT be present (backward compatible)
+        assert (
+            COPILOT_CONVERSATION_ID_HEADER not in headers
+        ), f"No {COPILOT_CONVERSATION_ID_HEADER} header should be set when metadata key is absent"
+
+    def test_conversation_key_produces_stable_id_across_turns(self):
+        """Same conversation_key produces same conversation_id UUID across turns."""
+        config = self._make_config()
+
+        turn1_headers = config.validate_environment(
+            headers={},
+            model="gpt-4o",
+            messages=[{"role": "user", "content": "Turn 1"}],
+            optional_params={},
+            litellm_params={"metadata": {"copilot_conversation_id": "user-1:conv-abc"}},
+        )
+
+        turn2_headers = config.validate_environment(
+            headers={},
+            model="gpt-4o",
+            messages=[
+                {"role": "user", "content": "Turn 1"},
+                {"role": "assistant", "content": "Response"},
+                {"role": "user", "content": "Turn 2"},
+            ],
+            optional_params={},
+            litellm_params={"metadata": {"copilot_conversation_id": "user-1:conv-abc"}},
+        )
+
+        assert (
+            COPILOT_CONVERSATION_ID_HEADER in turn1_headers
+        ), f"Turn 1 should have {COPILOT_CONVERSATION_ID_HEADER} header"
+        assert (
+            COPILOT_CONVERSATION_ID_HEADER in turn2_headers
+        ), f"Turn 2 should have {COPILOT_CONVERSATION_ID_HEADER} header"
+        assert (
+            turn1_headers[COPILOT_CONVERSATION_ID_HEADER]
+            == turn2_headers[COPILOT_CONVERSATION_ID_HEADER]
+        ), (
+            f"Same conversation_key must produce same conversation_id across turns. "
+            f"Turn 1: {turn1_headers[COPILOT_CONVERSATION_ID_HEADER]}, "
+            f"Turn 2: {turn2_headers[COPILOT_CONVERSATION_ID_HEADER]}"
+        )
+
+    def test_different_conversation_keys_produce_different_ids(self):
+        """Different conversation_keys produce different conversation_ids."""
+        config = self._make_config()
+
+        headers_a = config.validate_environment(
+            headers={},
+            model="gpt-4o",
+            messages=[{"role": "user", "content": "Hi"}],
+            optional_params={},
+            litellm_params={"metadata": {"copilot_conversation_id": "user-1:conv-A"}},
+        )
+        headers_b = config.validate_environment(
+            headers={},
+            model="gpt-4o",
+            messages=[{"role": "user", "content": "Hi"}],
+            optional_params={},
+            litellm_params={"metadata": {"copilot_conversation_id": "user-2:conv-B"}},
+        )
+
+        assert (
+            COPILOT_CONVERSATION_ID_HEADER in headers_a
+        ), f"Conversation A should have {COPILOT_CONVERSATION_ID_HEADER} header"
+        assert (
+            COPILOT_CONVERSATION_ID_HEADER in headers_b
+        ), f"Conversation B should have {COPILOT_CONVERSATION_ID_HEADER} header"
+        assert (
+            headers_a[COPILOT_CONVERSATION_ID_HEADER]
+            != headers_b[COPILOT_CONVERSATION_ID_HEADER]
+        ), "Different conversation_keys must produce different conversation_ids"
