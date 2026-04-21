@@ -182,7 +182,8 @@ class Authenticator:
                     )
             except httpx.HTTPStatusError as e:
                 verbose_logger.error(
-                    f"HTTP error refreshing API key (attempt {attempt+1}/{max_retries}): {str(e)}"
+                    f"HTTP error refreshing API key (attempt {attempt+1}/"
+                    f"{max_retries}): {str(e)}"
                 )
             except Exception as e:
                 verbose_logger.error(f"Unexpected error refreshing API key: {str(e)}")
@@ -370,7 +371,8 @@ class Authenticator:
         verification_uri = device_code_info["verification_uri"]
 
         print(  # noqa: T201
-            f"Please visit {verification_uri} and enter code {user_code} to authenticate.",
+            f"Please visit {verification_uri} and enter code {user_code} "
+            f"to authenticate.",
             # When this is running in docker, it may not be flushed immediately
             # so we force flush to ensure the user sees the message
             flush=True,
