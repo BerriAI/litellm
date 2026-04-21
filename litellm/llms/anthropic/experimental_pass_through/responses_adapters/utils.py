@@ -26,7 +26,7 @@ def build_web_tool_use(item: Any) -> Tuple[Dict[str, Any], Dict[str, str]]:
         input_dict = {"url": action.get("url", "")}
     else:
         name = "web_search"
-        queries = action.get("queries", {})
+        queries = action.get("queries") or []
         if queries:
             query = "\n".join(queries)
         else:
