@@ -93,6 +93,7 @@ from litellm.proxy._types import (
     TransformRequestBody,
     UserAPIKeyAuth,
 )
+from litellm.proxy.common_utils.cache_pydantic_utils import CacheCodec
 from litellm.proxy.common_utils.callback_utils import (
     normalize_callback_names,
     process_callback,
@@ -1943,14 +1944,22 @@ async def update_cache(  # noqa: PLR0915
         else:
             hashed_token = token
         verbose_proxy_logger.debug("_update_key_cache: hashed_token=%s", hashed_token)
-        existing_spend_obj: LiteLLM_VerificationTokenView = await user_api_key_cache.async_get_cache(key=hashed_token)  # type: ignore
+        cached_key = await user_api_key_cache.async_get_cache(key=hashed_token)
         verbose_proxy_logger.debug(
-            f"_update_key_cache: existing_spend_obj={existing_spend_obj}"
+            f"_update_key_cache: existing_spend_obj={cached_key}"
         )
-        if existing_spend_obj is None:
+        if cached_key is None:
             return
-        else:
-            existing_spend = existing_spend_obj.spend
+        existing_spend_obj = CacheCodec.deserialize(cached_key, UserAPIKeyAuth)
+        if existing_spend_obj is None:
+            verbose_proxy_logger.warning(
+                "_update_key_cache: unexpected cached key type %s for hashed_token=%s; skipping spend update",
+                type(cached_key).__name__,
+                hashed_token,
+            )
+            return
+
+        existing_spend = existing_spend_obj.spend or 0.0
         # Calculate the new cost by adding the existing cost and response_cost
         new_spend = existing_spend + response_cost
 
@@ -2008,9 +2017,14 @@ async def update_cache(  # noqa: PLR0915
                 existing_team_member_spend + response_cost
             )
 
-        # Update the cost column for the given token
+        # Update the cost column for the given token (dict for Redis pipeline json.dumps)
         existing_spend_obj.spend = new_spend
-        values_to_update_in_cache.append((hashed_token, existing_spend_obj))
+        values_to_update_in_cache.append(
+            (
+                hashed_token,
+                CacheCodec.serialize(existing_spend_obj, model_type=UserAPIKeyAuth),
+            )
+        )
 
     ### UPDATE USER SPEND ###
     async def _update_user_cache():
@@ -2851,9 +2865,22 @@ class ProxyConfig:
         ):
             ## INIT PROXY REDIS USAGE CLIENT ##
             redis_usage_cache = litellm.cache.cache
-            spend_counter_cache.redis_cache = redis_usage_cache
+            spend_counter_cache.attach_redis_cache(
+                redis_usage_cache,
+                default_redis_ttl=litellm.default_redis_ttl,
+            )
             # Note: PKCE verifier storage uses redis_usage_cache directly (not
             # user_api_key_cache) to avoid routing all API-key lookups through Redis.
+            # Share the same Redis client for virtual-key lookups (same DualCache as
+            # model_max_budget_limiter). attach_redis_cache is a no-op if Redis is
+            # already set (e.g. config reload).
+            user_api_key_cache.attach_redis_cache(
+                redis_usage_cache,
+                default_redis_ttl=litellm.default_redis_ttl,
+            )
+            verbose_proxy_logger.debug(
+                "Attached redis_usage_cache Redis client to user_api_key_cache"
+            )
 
     def switch_on_llm_response_caching(self):
         """
