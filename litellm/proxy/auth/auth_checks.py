@@ -3126,9 +3126,7 @@ async def _virtual_key_max_budget_alert_check(
         alert_email_config: Optional[Dict[str, List[str]]] = (
             _merge_budget_alert_email_configs(
                 global_cfg=litellm.default_key_max_budget_alert_emails,
-                per_key_cfg=(valid_token.metadata or {}).get(
-                    "max_budget_alert_emails"
-                ),
+                per_key_cfg=(valid_token.metadata or {}).get("max_budget_alert_emails"),
             )
         )
 
@@ -3138,7 +3136,9 @@ async def _virtual_key_max_budget_alert_check(
                 (int(k) for k in alert_email_config if k.isdigit()),
                 default=None,
             )
-            if min_pct is None or valid_token.spend < valid_token.max_budget * (min_pct / 100.0):
+            if min_pct is None or valid_token.spend < valid_token.max_budget * (
+                min_pct / 100.0
+            ):
                 return
 
             call_info = CallInfo(
@@ -3164,8 +3164,7 @@ async def _virtual_key_max_budget_alert_check(
         else:
             # Old path: existing single 80% threshold — completely unchanged
             alert_threshold = (
-                valid_token.max_budget
-                * EMAIL_BUDGET_ALERT_MAX_SPEND_ALERT_PERCENTAGE
+                valid_token.max_budget * EMAIL_BUDGET_ALERT_MAX_SPEND_ALERT_PERCENTAGE
             )
 
             if (
