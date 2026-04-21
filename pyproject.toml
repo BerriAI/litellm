@@ -1,6 +1,6 @@
 [project]
 name = "litellm"
-version = "1.83.13"
+version = "1.83.10"
 description = "Library to easily interface with LLM API providers"
 readme = "README.md"
 requires-python = ">=3.10, <3.14"
@@ -10,18 +10,18 @@ authors = [
     { name = "BerriAI" },
 ]
 dependencies = [
-    "fastuuid==0.14.0",
-    "httpx==0.28.1",
-    "openai==2.24.0",
-    "python-dotenv==1.0.1",
-    "tiktoken==0.12.0",
-    "importlib-metadata==8.5.0",
-    "tokenizers==0.22.2",
-    "click==8.1.8",
-    "jinja2==3.1.6",
-    "aiohttp==3.13.3",
-    "pydantic==2.12.5",
-    "jsonschema==4.23.0",
+    "fastuuid>=0.14.0",
+    "httpx>=0.28.0",
+    "openai>=2.0.0",
+    "python-dotenv>=1.0.0",
+    "tiktoken>=0.7.0",
+    "importlib-metadata>=6.0.0",
+    "tokenizers>=0.19.0",
+    "click>=8.0.0",
+    "jinja2>=3.1.0",
+    "aiohttp>=3.10",
+    "pydantic>=2.5.0,<3.0.0",
+    "jsonschema>=4.0.0",
 ]
 
 [project.urls]
@@ -29,8 +29,9 @@ Homepage = "https://litellm.ai"
 Repository = "https://github.com/BerriAI/litellm"
 Documentation = "https://docs.litellm.ai"
 
-# Dependencies pinned from the published `litellm[proxy]==1.83.0` resolution.
-# Docker and CI should prefer `uv.lock` rather than maintaining parallel installers.
+# Optional extras retain exact pins because they are consumed by Docker images
+# where exact reproducibility matters. The core SDK uses ranges so downstream
+# consumers can coexist with other packages without forced downgrades.
 [project.optional-dependencies]
 proxy = [
     "gunicorn==23.0.0",
@@ -52,7 +53,7 @@ proxy = [
     "azure-identity==1.25.2",
     "azure-storage-blob==12.28.0",
     "mcp==1.26.0",
-    "litellm-proxy-extras==0.4.68",
+    "litellm-proxy-extras==0.4.67",
     "litellm-enterprise==0.1.38",
     "RestrictedPython==8.1",
     "rich==13.9.4",
@@ -208,7 +209,7 @@ build-backend = "uv_build"
 
 [tool.uv]
 default-groups = ["dev"]
-required-version = ">=0.10.9"
+required-version = "==0.10.9"
 exclude-newer = "3 days"
 
 [tool.uv.sources]
@@ -236,7 +237,7 @@ source-exclude = [
 profile = "black"
 
 [tool.commitizen]
-version = "1.83.13"
+version = "1.83.10"
 version_files = [
     "pyproject.toml:^version",
 ]
@@ -264,3 +265,4 @@ filterwarnings = [
 [tool.coverage.run]
 source = ["litellm"]
 relative_files = true
+
