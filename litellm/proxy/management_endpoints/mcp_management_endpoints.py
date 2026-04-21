@@ -1451,8 +1451,13 @@ if MCP_AVAILABLE:
     @router.post(
         "/server/oauth/{server_id}/register",
         include_in_schema=False,
+        dependencies=[Depends(user_api_key_auth)],
     )
-    async def mcp_register(request: Request, server_id: str):
+    async def mcp_register(
+        request: Request,
+        server_id: str,
+        user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    ):
         mcp_server = _get_cached_temporary_mcp_server_or_404(server_id, request=request)
         request_data = await _read_request_body(request=request)
         data: dict = {**request_data}
