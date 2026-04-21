@@ -3204,3 +3204,118 @@ async def test_multiregion_team_failover_between_regions():
         "response from us-east-1",
         "response from us-west-2",
     ]
+
+
+def test_access_group_scoped_key_filters_deployments_with_same_public_model():
+    """
+    If a key can access a model only via access group membership,
+    router candidate deployments for that public model should be constrained
+    to deployments in the allowed access group.
+    """
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-5",
+                "litellm_params": {
+                    "model": "openai/gpt-5.1",
+                    "api_key": "key1",
+                    "mock_response": "response-via-AG1",
+                },
+                "model_info": {"access_groups": ["AG1"]},
+            },
+            {
+                "model_name": "gpt-5",
+                "litellm_params": {
+                    "model": "openai/gpt-4o",
+                    "api_key": "key2",
+                    "mock_response": "response-via-AG2",
+                },
+                "model_info": {"access_groups": ["AG2"]},
+            },
+        ]
+    )
+
+    scoped_key = UserAPIKeyAuth(
+        api_key="hashed-key",
+        team_id="team2",
+        models=["AG2"],
+        team_models=["AG2"],
+    )
+
+    _model, deployments = router._common_checks_available_deployment(
+        model="gpt-5",
+        request_kwargs={
+            "metadata": {
+                "user_api_key_team_id": "team2",
+                "user_api_key_auth": scoped_key,
+            }
+        },
+    )
+
+    assert len(deployments) == 1
+    assert deployments[0].get("model_info", {}).get("access_groups") == ["AG2"]
+
+    seen = set()
+    for _ in range(20):
+        response = router.completion(
+            model="gpt-5",
+            messages=[{"role": "user", "content": "hello"}],
+            metadata={"user_api_key_team_id": "team2", "user_api_key_auth": scoped_key},
+        )
+        seen.add(response.choices[0].message.content)
+
+    assert seen == {"response-via-AG2"}
+
+
+def test_explicit_model_access_does_not_force_access_group_filtering():
+    """
+    If a key has explicit model access in addition to access group entries,
+    do not force access-group-only filtering for deployment selection.
+    """
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-5",
+                "litellm_params": {
+                    "model": "openai/gpt-5.1",
+                    "api_key": "key1",
+                    "mock_response": "response-via-AG1",
+                },
+                "model_info": {"access_groups": ["AG1"]},
+            },
+            {
+                "model_name": "gpt-5",
+                "litellm_params": {
+                    "model": "openai/gpt-4o",
+                    "api_key": "key2",
+                    "mock_response": "response-via-AG2",
+                },
+                "model_info": {"access_groups": ["AG2"]},
+            },
+        ]
+    )
+
+    explicit_key = UserAPIKeyAuth(
+        api_key="hashed-key",
+        team_id="team2",
+        models=["AG2", "gpt-5"],
+        team_models=["AG2", "gpt-5"],
+    )
+
+    _model, deployments = router._common_checks_available_deployment(
+        model="gpt-5",
+        request_kwargs={
+            "metadata": {
+                "user_api_key_team_id": "team2",
+                "user_api_key_auth": explicit_key,
+            }
+        },
+    )
+
+    deployment_groups = [d.get("model_info", {}).get("access_groups") for d in deployments]
+    assert ["AG1"] in deployment_groups
+    assert ["AG2"] in deployment_groups
