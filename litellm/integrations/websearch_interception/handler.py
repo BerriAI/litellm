@@ -761,6 +761,16 @@ class WebSearchInterceptionLogger(CustomLogger):
 
             kwargs_for_followup = self._prepare_followup_kwargs(kwargs)
 
+            # Remove keys already present in optional_params to avoid
+            # duplicate keyword arguments in anthropic_messages.acreate().
+            # Claude Code sends params like context_management, output_config
+            # which end up in both dicts.
+            kwargs_for_followup = {
+                k: v
+                for k, v in kwargs_for_followup.items()
+                if k not in optional_params_without_max_tokens
+            }
+
             # Get model from logging_obj.model_call_details["agentic_loop_params"]
             # This preserves the full model name with provider prefix (e.g., "bedrock/invoke/...")
             if logging_obj is not None:
