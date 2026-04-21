@@ -45,6 +45,7 @@ IGNORE_FUNCTIONS = [
     "_convert_to_json_serializable_dict",  # max depth set (default 20) and circular reference protection to prevent infinite recursion.
     "dict",  # max depth set. _LiteLLMParamsDictView.dict() calls builtin dict(), not itself.
     "_read_image_bytes",  # max depth set.
+    "_walk",  # bounded by the depth of the input data structure; wrapped in try/except to prevent unbounded recursion.
 ]
 
 
