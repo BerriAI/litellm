@@ -289,7 +289,9 @@ class TestGetAudioFileContentHash:
         hash1 = get_audio_file_content_hash((filename1, content))
         hash2 = get_audio_file_content_hash((filename2, content))
 
-        assert hash1 == hash2, "Same content should produce same hash regardless of filename"
+        assert (
+            hash1 == hash2
+        ), "Same content should produce same hash regardless of filename"
 
     def test_bytes_input(self):
         """Test that raw bytes input works"""
@@ -302,6 +304,7 @@ class TestGetAudioFileContentHash:
 
     def test_fallback_to_filename(self):
         """Test that function falls back to filename when content extraction fails"""
+
         # Use a non-readable object that will trigger fallback
         class UnreadableFile:
             def __init__(self, name):

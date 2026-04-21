@@ -2,6 +2,7 @@
 Tests for Vertex AI rerank transformation functionality.
 Based on the test patterns from other rerank providers and the current Vertex AI implementation.
 """
+
 import json
 import os
 from unittest.mock import MagicMock, patch

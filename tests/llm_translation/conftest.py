@@ -72,6 +72,7 @@ def setup_and_teardown(event_loop):  # Add event_loop as a dependency
 
     # ---- Reset to true defaults before the test ----
     from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+
     asyncio.run(GLOBAL_LOGGING_WORKER.clear_queue())
     importlib.reload(litellm)
 
