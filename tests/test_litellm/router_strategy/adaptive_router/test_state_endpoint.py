@@ -89,7 +89,9 @@ async def test_get_state_snapshot_quality_mean_matches_alpha_over_total():
     )
     assert cell["alpha"] == expected.alpha
     assert cell["beta"] == expected.beta
-    assert cell["samples"] == expected.alpha + expected.beta
+    # `samples` reports net observations after subtracting the cold-start
+    # prior mass, so operators aren't misled by the initial value.
+    assert cell["samples"] == expected.total_samples
     assert cell["quality_mean"] == pytest.approx(expected_mean)
 
 

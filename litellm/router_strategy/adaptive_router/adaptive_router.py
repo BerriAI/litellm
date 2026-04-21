@@ -261,7 +261,11 @@ class AdaptiveRouter:
                     "model": model,
                     "alpha": cell.alpha,
                     "beta": cell.beta,
-                    "samples": total,
+                    # Net observations that have moved the posterior, excluding
+                    # the cold-start prior mass. `alpha + beta` would show the
+                    # initial COLD_START_MASS (e.g. 10) before any real traffic
+                    # arrives, which confuses operators reading the endpoint.
+                    "samples": cell.total_samples,
                     "quality_mean": cell.alpha / total if total > 0 else 0.0,
                 }
             )
