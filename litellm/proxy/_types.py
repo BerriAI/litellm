@@ -2007,6 +2007,7 @@ class LiteLLM_BudgetTable(LiteLLMPydanticObjectBase):
     rpm_limit: Optional[int] = None
     model_max_budget: Optional[dict] = None
     budget_duration: Optional[str] = None
+    budget_reset_at: Optional[datetime] = None
     allowed_models: Optional[List[str]] = (
         None  # per-member model scope; empty = inherit team models
     )
@@ -2017,7 +2018,6 @@ class LiteLLM_BudgetTable(LiteLLMPydanticObjectBase):
 class LiteLLM_BudgetTableFull(LiteLLM_BudgetTable):
     """Represents all params for a LiteLLM_BudgetTable record"""
 
-    budget_reset_at: Optional[datetime] = None
     created_at: datetime
 
 
@@ -3695,6 +3695,7 @@ class LiteLLM_TeamMembership(LiteLLMPydanticObjectBase):
     team_id: str
     budget_id: Optional[str] = None
     spend: Optional[float] = 0.0
+    total_spend: Optional[float] = 0.0
     litellm_budget_table: Optional[LiteLLM_BudgetTable]
 
     def safe_get_team_member_rpm_limit(self) -> Optional[int]:
