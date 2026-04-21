@@ -11,7 +11,7 @@ Run checks for:
 import asyncio
 import re
 import time
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Type, Union, cast
 
 from fastapi import HTTPException, Request, status
 from pydantic import BaseModel
@@ -64,6 +64,7 @@ from litellm.proxy.guardrails.tool_name_extraction import (
     TOOL_CAPABLE_CALL_TYPES,
     extract_request_tool_names,
 )
+from litellm.proxy.common_utils.cache_pydantic_utils import CacheCodec
 from litellm.proxy.route_llm_request import route_request
 from litellm.proxy.utils import PrismaClient, ProxyLogging, log_db_metrics
 from litellm.router import Router
@@ -1467,13 +1468,23 @@ async def get_user_object(
 
 async def _cache_management_object(
     key: str,
-    value: BaseModel,
+    value: Union[BaseModel, Dict[str, Any]],
     user_api_key_cache: DualCache,
     proxy_logging_obj: Optional[ProxyLogging],
+    *,
+    model_type: Type[BaseModel],
 ):
+    """
+    Persist management objects to DualCache (in-memory + optional Redis).
+
+    Values must be JSON-serializable for the Redis path (``json.dumps``). Payloads are
+    encoded with ``CacheCodec.serialize(..., model_type=...)`` so writes match reads
+    via ``CacheCodec.deserialize(..., model_type)``.
+    """
+    cache_payload = CacheCodec.serialize(value, model_type=model_type)
     await user_api_key_cache.async_set_cache(
         key=key,
-        value=value,
+        value=cache_payload,
         ttl=DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL,
     )
 
@@ -1494,6 +1505,7 @@ async def _cache_team_object(
         value=team_table,
         user_api_key_cache=user_api_key_cache,
         proxy_logging_obj=proxy_logging_obj,
+        model_type=LiteLLM_TeamTableCachedObj,
     )
 
 
@@ -1513,6 +1525,7 @@ async def _cache_key_object(
         value=user_api_key_obj,
         user_api_key_cache=user_api_key_cache,
         proxy_logging_obj=proxy_logging_obj,
+        model_type=UserAPIKeyAuth,
     )
 
 
@@ -2228,15 +2241,13 @@ async def get_key_object(
     # check if in cache
     key = hashed_token
 
-    cached_key_obj: Optional[UserAPIKeyAuth] = await user_api_key_cache.async_get_cache(
-        key=key
-    )
-
+    # Same flow as before: use cache only when we have a hit we can turn into UserAPIKeyAuth
+    # (dict from Redis / model_dump, or UserAPIKeyAuth from in-memory). Otherwise fall through to DB.
+    cached_key_obj = await user_api_key_cache.async_get_cache(key=key)
     if cached_key_obj is not None:
-        if isinstance(cached_key_obj, dict):
-            return UserAPIKeyAuth(**cached_key_obj)
-        elif isinstance(cached_key_obj, UserAPIKeyAuth):
-            return cached_key_obj
+        user_api_key_auth = CacheCodec.deserialize(cached_key_obj, UserAPIKeyAuth)
+        if user_api_key_auth is not None:
+            return user_api_key_auth
 
     if check_cache_only:
         raise Exception(
@@ -3375,6 +3386,7 @@ async def get_project_object(
         value=project_obj,
         user_api_key_cache=user_api_key_cache,
         proxy_logging_obj=proxy_logging_obj,
+        model_type=LiteLLM_ProjectTableCachedObj,
     )
 
     return project_obj
