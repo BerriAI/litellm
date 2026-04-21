@@ -1,7 +1,7 @@
 import asyncio
 import base64
 import os
-from typing import TYPE_CHECKING, Any, List, Literal, Optional, Type
+from typing import TYPE_CHECKING, Any, List, Literal, Optional, Tuple, Type, Union, overload
 
 from fastapi import HTTPException
 
@@ -14,6 +14,7 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
+from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
@@ -56,6 +57,24 @@ class PromptSecurityGuardrail(CustomGuardrail):
         else:
             self.check_tool_results = check_tool_results
 
+        # Optional compatibility control:
+        # - True (default): remap during_call -> pre_call + post_call for enforced modify behavior
+        # - False: preserve configured event_hook exactly
+        expand_during_call_hooks = kwargs.pop("expand_during_call_hooks", True)
+        if isinstance(expand_during_call_hooks, str):
+            expand_during_call_hooks = expand_during_call_hooks.lower() in (
+                "true",
+                "1",
+                "yes",
+            )
+
+        # Prompt Security supports request and response checks for "during_call" mode.
+        # In LiteLLM, during_call hooks execute in parallel and cannot safely apply modify actions.
+        # Translate during_call to pre_call + post_call so modifications are actually enforced.
+        event_hook = kwargs.get("event_hook")
+        if expand_during_call_hooks:
+            kwargs["event_hook"] = self._expand_event_hooks_for_prompt_security(event_hook)
+
         if not self.api_key or not self.api_base:
             msg = (
                 "Couldn't get Prompt Security api base or key, "
@@ -69,6 +88,58 @@ class PromptSecurityGuardrail(CustomGuardrail):
         self.poll_interval = 2  # Seconds between polling attempts
 
         super().__init__(**kwargs)
+
+    @staticmethod
+    def _expand_event_hooks_for_prompt_security(
+        event_hook: Optional[
+            Union[
+                GuardrailEventHooks,
+                List[GuardrailEventHooks],
+                str,
+                List[str],
+            ]
+        ],
+    ) -> Optional[Union[str, List[str], GuardrailEventHooks, List[GuardrailEventHooks]]]:
+        """Expand during_call to pre_call + post_call for Prompt Security."""
+        if event_hook is None:
+            return None
+
+        during_call = GuardrailEventHooks.during_call.value
+        pre_call = GuardrailEventHooks.pre_call.value
+        post_call = GuardrailEventHooks.post_call.value
+
+        if isinstance(event_hook, GuardrailEventHooks):
+            if event_hook == GuardrailEventHooks.during_call:
+                return [pre_call, post_call]
+            return event_hook
+
+        if isinstance(event_hook, str):
+            if event_hook == during_call:
+                return [pre_call, post_call]
+            return event_hook
+
+        normalized_hooks: List[str] = []
+        for hook in event_hook:
+            if isinstance(hook, GuardrailEventHooks):
+                normalized_hooks.append(hook.value)
+            else:
+                normalized_hooks.append(hook)
+
+        if during_call not in normalized_hooks:
+            return normalized_hooks
+
+        expanded_hooks = [hook for hook in normalized_hooks if hook != during_call]
+        if pre_call not in expanded_hooks:
+            expanded_hooks.append(pre_call)
+        if post_call not in expanded_hooks:
+            expanded_hooks.append(post_call)
+
+        verbose_proxy_logger.debug(
+            "Prompt Security Guardrail: Expanded event_hook=%s to %s",
+            event_hook,
+            expanded_hooks,
+        )
+        return expanded_hooks
 
     @log_guardrail_information
     async def apply_guardrail(
@@ -167,7 +238,9 @@ class PromptSecurityGuardrail(CustomGuardrail):
             await self._process_standalone_images(images, user_api_key_alias)
 
         # Filter messages by role for the API call
-        filtered_messages = self.filter_messages_by_role(messages)
+        filtered_messages, filtered_message_indexes = self.filter_messages_by_role(
+            messages, include_original_indices=True
+        )
 
         if not filtered_messages:
             verbose_proxy_logger.debug(
@@ -218,11 +291,42 @@ class PromptSecurityGuardrail(CustomGuardrail):
                 + ", ".join(violations),
             )
         elif action == "modify":
-            # Extract modified texts from modified_messages
             modified_messages = result.get("modified_messages", [])
-            modified_texts = self._extract_texts_from_messages(modified_messages)
-            if modified_texts:
-                inputs["texts"] = modified_texts
+            if modified_messages:
+                # If Prompt Security returned a message per scanned input message, map
+                # those back to the original message list so we preserve full context.
+                if len(modified_messages) == len(filtered_messages):
+                    for modified_idx, modified_message in enumerate(modified_messages):
+                        if not isinstance(modified_message, dict):
+                            continue
+                        original_idx = filtered_message_indexes[modified_idx]
+                        original_message = messages[original_idx]
+                        if not isinstance(original_message, dict):
+                            messages[original_idx] = modified_message
+                            continue
+
+                        # Preserve the original role for in-flight request messages.
+                        # Prompt Security may transform non-standard roles to "other"
+                        # for scanning, but "other" should never be sent to model providers.
+                        merged_message = {**original_message, **modified_message}
+                        merged_message["role"] = original_message.get(
+                            "role", merged_message.get("role")
+                        )
+                        messages[original_idx] = merged_message
+
+                    inputs["texts"] = self._extract_texts_from_messages(messages)
+                    if structured_messages:
+                        inputs["structured_messages"] = messages
+                else:
+                    verbose_proxy_logger.warning(
+                        "Prompt Security Guardrail: modified_messages length (%d) did not match scanned messages length (%d); "
+                        "falling back to modified text extraction only.",
+                        len(modified_messages),
+                        len(filtered_messages),
+                    )
+                    modified_texts = self._extract_texts_from_messages(modified_messages)
+                    if modified_texts:
+                        inputs["texts"] = modified_texts
 
         return inputs
 
@@ -623,7 +727,19 @@ class PromptSecurityGuardrail(CustomGuardrail):
 
         return processed_messages
 
-    def filter_messages_by_role(self, messages: list) -> list:
+    @overload
+    def filter_messages_by_role(
+        self, messages: list, include_original_indices: Literal[True]
+    ) -> Tuple[list, List[int]]: ...
+
+    @overload
+    def filter_messages_by_role(
+        self, messages: list, include_original_indices: Literal[False] = False
+    ) -> list: ...
+
+    def filter_messages_by_role(
+        self, messages: list, include_original_indices: bool = False
+    ) -> Union[list, Tuple[list, List[int]]]:
         """Filter messages to only include standard OpenAI/Anthropic roles.
 
         Behavior depends on check_tool_results flag:
@@ -634,13 +750,15 @@ class PromptSecurityGuardrail(CustomGuardrail):
         """
         supported_roles = ["system", "user", "assistant"]
         filtered_messages = []
+        filtered_message_indexes: List[int] = []
         transformed_count = 0
         filtered_count = 0
 
-        for message in messages:
+        for message_idx, message in enumerate(messages):
             role = message.get("role", "")
             if role in supported_roles:
                 filtered_messages.append(message)
+                filtered_message_indexes.append(message_idx)
             else:
                 if self.check_tool_results:
                     transformed_message = {
@@ -652,6 +770,7 @@ class PromptSecurityGuardrail(CustomGuardrail):
                         },
                     }
                     filtered_messages.append(transformed_message)
+                    filtered_message_indexes.append(message_idx)
                     transformed_count += 1
                     verbose_proxy_logger.debug(
                         "Prompt Security Guardrail: Transformed message from role '%s' to 'other'",
@@ -678,6 +797,8 @@ class PromptSecurityGuardrail(CustomGuardrail):
                 len(filtered_messages),
             )
 
+        if include_original_indices:
+            return filtered_messages, filtered_message_indexes
         return filtered_messages
 
     def _build_headers(self, user_api_key_alias: Optional[str] = None) -> dict:
