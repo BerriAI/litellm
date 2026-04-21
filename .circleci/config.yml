@@ -439,7 +439,14 @@ jobs:
         auth:
           username: ${DOCKERHUB_USERNAME}
           password: ${DOCKERHUB_PASSWORD}
+      - image: cimg/postgres:16.0
+        environment:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: litellm_test
     working_directory: ~/project
+    environment:
+      DATABASE_URL: "postgresql://postgres:postgres@localhost:5432/litellm_test"
 
     steps:
       - checkout
@@ -463,12 +470,14 @@ jobs:
           paths:
             - ./.venv
           key: v2-dependencies-{{ checksum "uv.lock" }}-{{ checksum ".circleci/config.yml" }}
+      - wait_for_service:
+          url: tcp://localhost:5432
+          timeout: "60"
       - run:
-          name: Run prisma ./docker/entrypoint.sh
+          name: Seed DB schema via prisma db push
           command: |
             set +e
-            chmod +x docker/entrypoint.sh
-            ./docker/entrypoint.sh
+            uv run --no-sync litellm --skip_server_startup --use_prisma_db_push
             set -e
       - run:
           name: Generate Prisma Client
@@ -3042,10 +3051,19 @@ jobs:
             - ui/litellm-dashboard/node_modules
       - run:
           name: Build UI from source
+          # Prior version used `cp -r out/ ../../litellm/proxy/_experimental/out/`.
+          # GNU cp (used on CircleCI's Ubuntu image) interprets that as "copy the
+          # source directory as a child of the destination" when the destination
+          # already exists — silently creating `_experimental/out/out/` instead of
+          # replacing the served bundle. The proxy continued serving whatever was
+          # checked into `_experimental/out/*`, so this job was effectively testing
+          # the pre-build bundle on every run. Replace-and-move guarantees the
+          # freshly built bundle is what the proxy actually serves.
           command: |
             cd ui/litellm-dashboard
             npm run build
-            cp -r out/ ../../litellm/proxy/_experimental/out/
+            rm -rf ../../litellm/proxy/_experimental/out
+            mv out ../../litellm/proxy/_experimental/out
             # Restructure HTML so extensionless routes work (login.html -> login/index.html)
             find ../../litellm/proxy/_experimental/out -name '*.html' ! -name 'index.html' | while read -r f; do
               d="${f%.html}"; mkdir -p "$d"; mv "$f" "$d/index.html"
