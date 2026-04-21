@@ -144,6 +144,78 @@ def test_v2_db_push_wraps_subprocess_error_as_runtime_error(monkeypatch, tmp_pat
             ProxyExtrasDBManager.setup_database(use_migrate=False, use_v2_resolver=True)
 
 
+def test_v2_warn_ahead_of_head_swallows_db_errors(monkeypatch, tmp_path):
+    """_warn_if_db_ahead_of_head must never raise — it's informational.
+
+    Non-connection DB errors (e.g. InsufficientPrivilege from a user
+    without SELECT on _prisma_migrations) must be caught, not propagated.
+    """
+    import psycopg
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@localhost:9/x")
+    monkeypatch.setattr(ProxyExtrasDBManager, "_get_prisma_dir", lambda: str(tmp_path))
+    (tmp_path / "schema.prisma").write_text("// stub")
+
+    class _FakeConn:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def execute(self, *a, **kw):
+            # Simulate an InsufficientPrivilege (subclass of DatabaseError).
+            raise psycopg.errors.InsufficientPrivilege("permission denied")
+
+    def _fake_connect(*a, **kw):
+        return _FakeConn()
+
+    monkeypatch.setattr("psycopg.connect", _fake_connect)
+
+    # Must not raise.
+    ProxyExtrasDBManager._warn_if_db_ahead_of_head(str(tmp_path))
+
+
+def test_v2_resolve_specific_migration_failure_raises_runtime_error(
+    monkeypatch, tmp_path
+):
+    """If marking a migration as applied fails inside P3009 idempotent
+    recovery, the subprocess error must be re-raised as RuntimeError so
+    proxy_cli.py catches it cleanly (instead of leaking CalledProcessError)."""
+    monkeypatch.setattr(
+        ProxyExtrasDBManager, "_warn_if_db_ahead_of_head", lambda _: None
+    )
+    monkeypatch.setattr(ProxyExtrasDBManager, "_get_prisma_dir", lambda: str(tmp_path))
+    (tmp_path / "schema.prisma").write_text("// stub")
+    monkeypatch.setattr(
+        ProxyExtrasDBManager, "_roll_back_migration", lambda *a, **kw: None
+    )
+
+    # First call: migrate deploy -> P3009 idempotent error.
+    # Recovery path tries _resolve_specific_migration; that also raises.
+    def _failing_resolve(*a, **kw):
+        raise subprocess.CalledProcessError(
+            returncode=1,
+            cmd="prisma migrate resolve --applied",
+            stderr="resolve failed",
+            output="",
+        )
+
+    monkeypatch.setattr(
+        ProxyExtrasDBManager, "_resolve_specific_migration", _failing_resolve
+    )
+
+    stderr = (
+        "Error: P3009\nMigration `20260101000000_some_migration` failed\n"
+        "relation already exists"
+    )
+    with patch("subprocess.run", side_effect=_fake_migrate_deploy_failure(1, stderr)):
+        with pytest.raises(
+            RuntimeError, match="Failed to mark migration .* as applied"
+        ):
+            ProxyExtrasDBManager.setup_database(use_migrate=True, use_v2_resolver=True)
+
+
 def test_v2_does_not_call_resolve_all_migrations(monkeypatch, tmp_path):
     """v2 must never call _resolve_all_migrations — that's the bug it fixes."""
     monkeypatch.setattr(
