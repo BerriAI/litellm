@@ -1501,6 +1501,9 @@ if TYPE_CHECKING:
     from .llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation import (
         AmazonAnthropicClaudeMessagesConfig as AmazonAnthropicClaudeMessagesConfig,
     )
+    from .llms.bedrock.messages.mantle_transformation import (
+        AmazonMantleMessagesConfig as AmazonMantleMessagesConfig,
+    )
     from .llms.together_ai.chat import TogetherAIConfig as TogetherAIConfig
     from .llms.nlp_cloud.chat.handler import NLPCloudConfig as NLPCloudConfig
     from .llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
