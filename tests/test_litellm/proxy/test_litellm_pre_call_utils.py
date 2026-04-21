@@ -1791,6 +1791,57 @@ def test_add_litellm_metadata_from_request_headers_both_headers_trace_id_precede
     assert data["litellm_trace_id"] == "trace-value"
 
 
+def test_add_litellm_metadata_from_request_headers_generic_session_id_header():
+    """A generic x-<vendor>-session-id header is used when no explicit litellm header is set."""
+    headers = {"x-claude-code-session-id": "e96634a3-fa28-4083-b354-55542e2dca01"}
+    data = {"metadata": {}}
+    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+        headers=headers, data=data, _metadata_variable_name="metadata"
+    )
+    assert data["metadata"]["session_id"] == "e96634a3-fa28-4083-b354-55542e2dca01"
+    assert data["litellm_session_id"] == "e96634a3-fa28-4083-b354-55542e2dca01"
+    assert data["litellm_trace_id"] == "e96634a3-fa28-4083-b354-55542e2dca01"
+
+
+def test_add_litellm_metadata_from_request_headers_explicit_header_beats_generic():
+    """Explicit x-litellm-trace-id wins over a generic x-*-session-id header."""
+    headers = {
+        "x-litellm-trace-id": "explicit-trace-id-value",
+        "x-claude-code-session-id": "e96634a3-fa28-4083-b354-55542e2dca01",
+    }
+    data = {"metadata": {}}
+    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+        headers=headers, data=data, _metadata_variable_name="metadata"
+    )
+    assert data["litellm_session_id"] == "explicit-trace-id-value"
+    assert data["litellm_trace_id"] == "explicit-trace-id-value"
+
+
+def test_get_chain_id_from_headers_generic_vendor_session_id():
+    """get_chain_id_from_headers picks up any x-<vendor>-session-id with a valid value."""
+    from litellm.proxy.litellm_pre_call_utils import get_chain_id_from_headers
+
+    assert (
+        get_chain_id_from_headers(
+            {"x-claude-code-session-id": "e96634a3-fa28-4083-b354-55542e2dca01"}
+        )
+        == "e96634a3-fa28-4083-b354-55542e2dca01"
+    )
+    # Short / non-alphanumeric values should be ignored
+    assert get_chain_id_from_headers({"x-foo-session-id": "short"}) is None
+    assert get_chain_id_from_headers({"x-foo-session-id": "has spaces!!"}) is None
+    # Explicit headers still take precedence
+    assert (
+        get_chain_id_from_headers(
+            {
+                "x-litellm-trace-id": "explicit-id-value",
+                "x-claude-code-session-id": "e96634a3-fa28-4083-b354-55542e2dca01",
+            }
+        )
+        == "explicit-id-value"
+    )
+
+
 def test_get_internal_user_header_from_mapping_returns_expected_header():
     mappings = [
         {"header_name": "X-OpenWebUI-User-Id", "litellm_user_role": "internal_user"},
