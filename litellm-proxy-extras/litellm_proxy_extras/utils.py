@@ -470,7 +470,11 @@ class ProxyExtrasDBManager:
                     ).fetchall()
                 except psycopg.errors.UndefinedTable:
                     return
-        except psycopg.OperationalError:
+        except (psycopg.OperationalError, psycopg.DatabaseError):
+            # Swallow connection failures AND any other DB-layer error
+            # (e.g. InsufficientPrivilege if the runtime user lacks SELECT
+            # on _prisma_migrations). This is an informational check —
+            # never block startup on it.
             return
 
         applied = {r[0] for r in rows}
@@ -589,8 +593,24 @@ class ProxyExtrasDBManager:
                                 subprocess.CalledProcessError,
                                 subprocess.TimeoutExpired,
                             ):
-                                pass
-                            ProxyExtrasDBManager._resolve_specific_migration(name)
+                                pass  # may already be rolled-back
+                            try:
+                                ProxyExtrasDBManager._resolve_specific_migration(name)
+                            except (
+                                subprocess.CalledProcessError,
+                                subprocess.TimeoutExpired,
+                            ) as resolve_err:
+                                # We're already inside the outer
+                                # `except CalledProcessError` handler —
+                                # re-raising CalledProcessError from here
+                                # would escape as itself, bypassing
+                                # proxy_cli.py's `except RuntimeError`.
+                                raise RuntimeError(
+                                    f"Failed to mark migration {name} as applied "
+                                    f"after idempotent recovery. Manual "
+                                    f"intervention may be required.\n\n"
+                                    f"Detail: {resolve_err}"
+                                ) from resolve_err
                             continue
                         raise RuntimeError(
                             "Database migration failed and cannot be auto-recovered. "
@@ -622,8 +642,19 @@ class ProxyExtrasDBManager:
                                 subprocess.CalledProcessError,
                                 subprocess.TimeoutExpired,
                             ):
-                                pass
-                            ProxyExtrasDBManager._resolve_specific_migration(name)
+                                pass  # may already be rolled-back
+                            try:
+                                ProxyExtrasDBManager._resolve_specific_migration(name)
+                            except (
+                                subprocess.CalledProcessError,
+                                subprocess.TimeoutExpired,
+                            ) as resolve_err:
+                                raise RuntimeError(
+                                    f"Failed to mark migration {name} as applied "
+                                    f"after idempotent recovery. Manual "
+                                    f"intervention may be required.\n\n"
+                                    f"Detail: {resolve_err}"
+                                ) from resolve_err
                             continue
 
                         raise RuntimeError(
