@@ -512,7 +512,7 @@ def test_stream_chunk_builder_anthropic_web_search():
     assert usage.prompt_tokens == 50
     assert usage.completion_tokens == 27
     assert usage.total_tokens == 77    
-    assert usage.server_tool_use['web_search_requests'] == 2
+    assert usage.server_tool_use.web_search_requests == 2
 
 
 def test_sort_chunks_handles_dict_hidden_params_created_at():
@@ -646,7 +646,11 @@ def test_stream_chunk_builder_coerces_server_tool_use_dict_to_object():
     ]
 
     processor = ChunkProcessor(chunks)
-    result = processor.get_combined_usage(chunks)
+    result = processor.calculate_usage(
+        chunks=chunks,
+        model="claude-sonnet-4-6",
+        completion_output="The otter",
+    )
 
     assert result is not None
     assert isinstance(result.server_tool_use, ServerToolUse), (
