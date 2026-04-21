@@ -67,6 +67,24 @@ async def test_pick_record_flush_full_cycle():
     chosen = await router.pick_model(RequestType.CODE_GENERATION)
     assert chosen in router.config.available_models
 
+    # Prime 2 prior turns (distinct content so no other signals fire) so the
+    # MIN_TURNS_FOR_CLEAN_CREDIT satisfaction gate is satisfied on turn 3.
+    priming = [
+        Turn(
+            user_content="alpha bravo charlie", assistant_content="delta echo foxtrot"
+        ),
+        Turn(
+            user_content="golf hotel india juliet",
+            assistant_content="kilo lima mike november",
+        ),
+    ]
+    for t in priming:
+        await router.record_turn(
+            session_id="s1",
+            model_name=chosen,
+            request_type=RequestType.CODE_GENERATION,
+            turn=t,
+        )
     await router.record_turn(
         session_id="s1",
         model_name=chosen,
@@ -226,6 +244,15 @@ async def test_load_state_from_db_handles_unknown_request_type():
 @pytest.mark.asyncio
 async def test_flush_isolates_writes_per_router_session_model():
     router = _make_router()
+    # Prime 2 prior turns per session to clear the MIN_TURNS_FOR_CLEAN_CREDIT gate.
+    for sid, model in (("s1", "gpt-4o"), ("s2", "gpt-4o-mini")):
+        for _ in range(2):
+            await router.record_turn(
+                sid,
+                model,
+                RequestType.GENERAL,
+                Turn(user_content="hi", assistant_content="hello"),
+            )
     await router.record_turn(
         "s1", "gpt-4o", RequestType.GENERAL, Turn(user_content="thanks!")
     )
@@ -248,6 +275,14 @@ async def test_repeated_flush_drains_queue_and_subsequent_flush_is_noop():
     """Verifies the queue is fully drained on flush -- a second flush writes nothing."""
     router = _make_router()
     chosen = await router.pick_model(RequestType.GENERAL)
+    # Prime 2 prior turns so satisfaction can fire on the third turn.
+    for _ in range(2):
+        await router.record_turn(
+            "drain-1",
+            chosen,
+            RequestType.GENERAL,
+            Turn(user_content="hi", assistant_content="hello"),
+        )
     await router.record_turn(
         "drain-1", chosen, RequestType.GENERAL, Turn(user_content="thanks!")
     )

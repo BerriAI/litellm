@@ -18,6 +18,7 @@ from typing import Any, Dict, List, Optional, Set
 
 from litellm.router_strategy.adaptive_router.config import (
     LOOP_REPEAT_THRESHOLD,
+    MIN_TURNS_FOR_CLEAN_CREDIT,
     MISALIGNMENT_JACCARD_THRESHOLD,
     STAGNATION_JACCARD_NEAR_DUP,
     TOOL_CALL_HISTORY_MAX,
@@ -80,6 +81,8 @@ class SessionState:
     pending_tool_calls: Dict[str, str] = field(default_factory=dict)
 
     turn_count: int = 0
+    last_processed_turn: int = -1
+    clean_credit_awarded: bool = False
     terminal_status: Optional[int] = None
 
 
@@ -161,12 +164,14 @@ def _detect_satisfaction(curr_user: Optional[str]) -> bool:
 
 
 def _detect_failure(tool_results: List[Dict[str, Any]]) -> bool:
-    """Any tool result that's an error or empty content."""
+    """Any tool result explicitly flagged as an error.
+
+    We do NOT treat empty content as failure — many tools legitimately return
+    empty output (zero-result searches, silent bash commands, void writes) and
+    penalizing the model for those would corrupt the bandit posterior.
+    """
     for r in tool_results:
         if r.get("is_error"):
-            return True
-        content = r.get("content")
-        if content is None or content == "" or content == [] or content == {}:
             return True
     return False
 
@@ -238,7 +243,16 @@ def apply_turn(state: SessionState, turn: Turn) -> SignalDelta:
     if _detect_disengagement(turn.user_content):
         delta.disengagement = 1
     if _detect_satisfaction(turn.user_content):
-        delta.satisfaction = 1
+        # Gate: only award satisfaction credit once per session, and only
+        # after MIN_TURNS_FOR_CLEAN_CREDIT turns of context. Early "thanks"
+        # on turn 1-2 is noise, not a validated quality signal.
+        current_turn_index = state.turn_count + 1
+        if (
+            not state.clean_credit_awarded
+            and current_turn_index >= MIN_TURNS_FOR_CLEAN_CREDIT
+        ):
+            delta.satisfaction = 1
+            state.clean_credit_awarded = True
     if _detect_failure(turn.tool_results):
         delta.failure = 1
     if _detect_loop(state.tool_call_history, turn.tool_calls):
@@ -268,5 +282,6 @@ def apply_turn(state: SessionState, turn: Turn) -> SignalDelta:
         state.terminal_status = turn.response_status
 
     state.turn_count += 1
+    state.last_processed_turn = state.turn_count
 
     return delta

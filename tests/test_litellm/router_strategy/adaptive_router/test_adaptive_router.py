@@ -124,6 +124,16 @@ def test_claim_or_check_owner_expired_owner_reclaims_for_new_model(monkeypatch):
 @pytest.mark.asyncio
 async def test_record_turn_pushes_to_queue():
     r = _make_router()
+    # Prime with 2 prior turns so satisfaction gate (MIN_TURNS_FOR_CLEAN_CREDIT=3)
+    # is satisfied when the "thanks" turn arrives.
+    for _ in range(2):
+        await r.record_turn(
+            session_id="s1",
+            model_name="fast",
+            request_type=RequestType.GENERAL,
+            turn=Turn(user_content="hi", assistant_content="hello"),
+        )
+
     r.queue.add_session_state = AsyncMock()
     r.queue.add_state_delta = AsyncMock()
 
@@ -143,6 +153,24 @@ async def test_record_turn_pushes_to_queue():
 @pytest.mark.asyncio
 async def test_record_turn_satisfaction_increments_alpha():
     r = _make_router()
+    # Prime with 2 prior turns to clear the MIN_TURNS_FOR_CLEAN_CREDIT gate.
+    # Use distinct content to avoid incidentally firing stagnation/misalignment.
+    priming_turns = [
+        Turn(
+            user_content="alpha bravo charlie", assistant_content="delta echo foxtrot"
+        ),
+        Turn(
+            user_content="golf hotel india juliet",
+            assistant_content="kilo lima mike november",
+        ),
+    ]
+    for t in priming_turns:
+        await r.record_turn(
+            session_id="sX",
+            model_name="fast",
+            request_type=RequestType.GENERAL,
+            turn=t,
+        )
     cell_before = r._cells[(RequestType.GENERAL, "fast")]
     turn = Turn(user_content="that worked, thanks!")
     await r.record_turn(
@@ -224,7 +252,6 @@ async def test_load_state_from_db_handles_unknown_request_type():
     assert r._cells[(RequestType.WRITING, "fast")] == cold or True
 
 
-
 # ---- Session state eviction ---------------------------------------------
 
 
@@ -267,4 +294,3 @@ def test_session_state_expiry_is_refreshed_on_access():
     second_exp = r._session_states_expiry[("sess-A", "fast")]
 
     assert second_exp > first_exp
-

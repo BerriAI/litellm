@@ -97,6 +97,74 @@ def test_mixed_failure_then_satisfaction():
     assert state.satisfaction_count >= 1
 
 
+def test_satisfaction_gated_by_min_turns_for_clean_credit():
+    """'thanks' on turn 1 is noise, not a validated quality signal."""
+    state = SessionState(
+        session_id="s", router_name="r", model_name="m", classified_type="general"
+    )
+    apply_turn(state, Turn(user_content="thanks!"))
+    assert state.satisfaction_count == 0
+    assert state.clean_credit_awarded is False
+    assert state.last_processed_turn == 1
+
+
+def test_satisfaction_credit_awarded_once_per_session():
+    """Even multiple satisfaction turns only award +1 alpha across the session."""
+    state = SessionState(
+        session_id="s", router_name="r", model_name="m", classified_type="general"
+    )
+    apply_turn(state, Turn(user_content="hi", assistant_content="hello"))
+    apply_turn(state, Turn(user_content="help me", assistant_content="sure"))
+    apply_turn(state, Turn(user_content="perfect, thanks"))
+    assert state.satisfaction_count == 1
+    assert state.clean_credit_awarded is True
+    apply_turn(state, Turn(user_content="great, thank you"))
+    assert state.satisfaction_count == 1
+
+
+def test_empty_tool_content_does_not_fire_failure():
+    """Zero-result searches / silent commands return empty but valid output."""
+    state = SessionState(
+        session_id="s", router_name="r", model_name="m", classified_type="general"
+    )
+    apply_turn(
+        state,
+        Turn(
+            tool_calls=[{"name": "grep", "arguments": {"q": "x"}}],
+            tool_results=[{"tool_call_id": "c1", "content": ""}],
+        ),
+    )
+    apply_turn(
+        state,
+        Turn(
+            tool_calls=[{"name": "list", "arguments": {}}],
+            tool_results=[{"tool_call_id": "c2", "content": []}],
+        ),
+    )
+    apply_turn(
+        state,
+        Turn(
+            tool_calls=[{"name": "noop", "arguments": {}}],
+            tool_results=[{"tool_call_id": "c3", "content": None}],
+        ),
+    )
+    assert state.failure_count == 0
+
+
+def test_is_error_still_fires_failure():
+    state = SessionState(
+        session_id="s", router_name="r", model_name="m", classified_type="general"
+    )
+    apply_turn(
+        state,
+        Turn(
+            tool_calls=[{"name": "read", "arguments": {"p": "x"}}],
+            tool_results=[{"tool_call_id": "c1", "content": "boom", "is_error": True}],
+        ),
+    )
+    assert state.failure_count == 1
+
+
 def test_apply_turn_is_o1_does_not_grow_history_unbounded():
     state = SessionState(
         session_id="s",
