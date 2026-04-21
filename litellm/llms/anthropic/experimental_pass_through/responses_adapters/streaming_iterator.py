@@ -332,8 +332,12 @@ class AnthropicResponsesStreamWrapper:
                 usage_delta["cache_read_input_tokens"] = cache_read_tokens
             if self._web_tool_uses:
                 usage_delta["server_tool_use"] = {
-                    "web_search_requests": sum(c["name"] == "web_search" for c in self._web_tool_uses),
-                    "web_fetch_requests": sum(c["name"] == "web_fetch" for c in self._web_tool_uses),
+                    "web_search_requests": sum(
+                        c["name"] == "web_search" for c in self._web_tool_uses
+                    ),
+                    "web_fetch_requests": sum(
+                        c["name"] == "web_fetch" for c in self._web_tool_uses
+                    ),
                 }
 
             self._chunk_queue.append(
@@ -369,9 +373,7 @@ class AnthropicResponsesStreamWrapper:
                 },
             }
         )
-        self._chunk_queue.append(
-            {"type": "content_block_stop", "index": block_idx}
-        )
+        self._chunk_queue.append({"type": "content_block_stop", "index": block_idx})
 
     def _emit_web_search_results(self, annotations: list) -> list:
         """Emit web_search_tool_result blocks and return citations for text emission."""
@@ -387,9 +389,7 @@ class AnthropicResponsesStreamWrapper:
                     "content_block": block,
                 }
             )
-            self._chunk_queue.append(
-            {"type": "content_block_stop", "index": block_idx}
-        )
+            self._chunk_queue.append({"type": "content_block_stop", "index": block_idx})
         return citations
 
     def _emit_cited_text_blocks(self, text: str, citations: list) -> None:
@@ -418,9 +418,7 @@ class AnthropicResponsesStreamWrapper:
                         "delta": {"type": "citations_delta", "citation": cit},
                     }
                 )
-            self._chunk_queue.append(
-            {"type": "content_block_stop", "index": block_idx}
-        )
+            self._chunk_queue.append({"type": "content_block_stop", "index": block_idx})
 
     def __aiter__(self) -> "AnthropicResponsesStreamWrapper":
         return self
