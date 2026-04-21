@@ -9352,6 +9352,8 @@ class Router:
 
         allowed_access_groups = set(access_groups_for_model.keys()) & allowed_models
         if not allowed_access_groups:
+            # No overlap means this request was not authorized via model access
+            # group membership for this model, so do not force group filtering.
             return healthy_deployments
 
         filtered_deployments = []
