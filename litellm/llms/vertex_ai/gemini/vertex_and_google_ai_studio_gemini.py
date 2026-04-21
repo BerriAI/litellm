@@ -3117,7 +3117,7 @@ class ModelResponseIterator:
 
         self.streaming_response = streaming_response
         self.chunk_type: Literal["valid_json", "accumulated_json"] = "valid_json"
-        self.accumulated_json = ""
+        self.accumulated_json_chunks: list = []
         self.sent_first_chunk = False
         self.logging_obj = logging_obj
         self.response_headers = response_headers or {}
@@ -3310,16 +3310,16 @@ class ModelResponseIterator:
         chunk = litellm.CustomStreamWrapper._strip_sse_data_from_chunk(chunk) or ""
         message = chunk.replace("\n\n", "")
 
-        # Accumulate JSON data
-        self.accumulated_json += message
-
-        # Try to parse the accumulated JSON
+        self.accumulated_json_chunks.append(message)
+        _stripped = message.rstrip()
+        if not _stripped or _stripped[-1] not in ('}', ']'):
+            return None
+        _full_json = "".join(self.accumulated_json_chunks)
         try:
-            _data = json.loads(self.accumulated_json)
-            self.accumulated_json = ""  # reset after successful parsing
+            _data = json.loads(_full_json)
+            self.accumulated_json_chunks = []
             return self.chunk_parser(chunk=_data)
         except json.JSONDecodeError:
-            # If it's not valid JSON yet, continue to the next event
             return None
 
     def _common_chunk_parsing_logic(
@@ -3346,7 +3346,7 @@ class ModelResponseIterator:
         try:
             chunk = self.response_iterator.__next__()
         except StopIteration:
-            if self.chunk_type == "accumulated_json" and self.accumulated_json:
+            if self.chunk_type == "accumulated_json" and self.accumulated_json_chunks:
                 return self.handle_accumulated_json_chunk(chunk="")
             raise StopIteration
         except ValueError as e:
@@ -3368,7 +3368,7 @@ class ModelResponseIterator:
         try:
             chunk = await self.async_response_iterator.__anext__()
         except StopAsyncIteration:
-            if self.chunk_type == "accumulated_json" and self.accumulated_json:
+            if self.chunk_type == "accumulated_json" and self.accumulated_json_chunks:
                 return self.handle_accumulated_json_chunk(chunk="")
             raise StopAsyncIteration
         except ValueError as e:
