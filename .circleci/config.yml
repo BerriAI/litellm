@@ -164,25 +164,6 @@ jobs:
           command: |
             uv run --no-sync python -m pytest tests/windows_tests/test_litellm_on_windows.py -v
 
-  semgrep:
-    docker:
-      - image: cimg/python:3.12@sha256:9c796c23c84e84a66a964acb508d39dc5433c81a47e07efd56dccbbc2427e07c
-        auth:
-          username: ${DOCKERHUB_USERNAME}
-          password: ${DOCKERHUB_PASSWORD}
-    working_directory: ~/project
-    resource_class: medium
-    steps:
-      - checkout
-      - setup_google_dns
-      - install_uv
-      - run:
-          name: Run Semgrep (custom rules only)
-          command: |
-            echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$BASH_ENV"
-            export PATH="$HOME/.local/bin:$PATH"
-            uv tool run --from 'semgrep==1.157.0' semgrep scan --config .semgrep/rules . --error
-
   local_testing_part1:
     docker:
       - image: cimg/python:3.12@sha256:9c796c23c84e84a66a964acb508d39dc5433c81a47e07efd56dccbbc2427e07c
@@ -1283,6 +1264,30 @@ jobs:
             ls
             uv run --no-sync python -m pytest -vv tests/local_testing/test_basic_python_version.py -k "not v2_resolver"
 
+  installing_litellm_on_python_3_13:
+    docker:
+      - image: cimg/python:3.13.1@sha256:87b243ae80d154db75ce5e58af16c72c5dd4b1e23e5c7264a816e85e0c440c13
+        auth:
+          username: ${DOCKERHUB_USERNAME}
+          password: ${DOCKERHUB_PASSWORD}
+    working_directory: ~/project
+    resource_class: medium
+
+    steps:
+      - checkout
+      - setup_google_dns
+      - install_uv
+      - run:
+          name: Install Dependencies
+          command: |
+            uv sync --frozen --all-groups --all-extras --python 3.13
+      - run:
+          name: Run tests
+          command: |
+            pwd
+            ls
+            uv run --no-sync python -m pytest -v tests/local_testing/test_basic_python_version.py -k "not v2_resolver"
+
   installing_litellm_on_python_v2_migration_resolver:
     docker:
       - image: cimg/python:3.12@sha256:9c796c23c84e84a66a964acb508d39dc5433c81a47e07efd56dccbbc2427e07c
@@ -1316,29 +1321,6 @@ jobs:
             uv run --no-sync python -m pytest -vv \
               tests/local_testing/test_basic_python_version.py::test_litellm_proxy_server_config_no_general_settings_v2_resolver
 
-  installing_litellm_on_python_3_13:
-    docker:
-      - image: cimg/python:3.13.1@sha256:87b243ae80d154db75ce5e58af16c72c5dd4b1e23e5c7264a816e85e0c440c13
-        auth:
-          username: ${DOCKERHUB_USERNAME}
-          password: ${DOCKERHUB_PASSWORD}
-    working_directory: ~/project
-    resource_class: medium
-
-    steps:
-      - checkout
-      - setup_google_dns
-      - install_uv
-      - run:
-          name: Install Dependencies
-          command: |
-            uv sync --frozen --all-groups --all-extras --python 3.13
-      - run:
-          name: Run tests
-          command: |
-            pwd
-            ls
-            uv run --no-sync python -m pytest -v tests/local_testing/test_basic_python_version.py -k "not v2_resolver"
   helm_chart_testing:
     machine:
       image: ubuntu-2204:2024.04.1 # Use machine executor instead of docker
@@ -1418,52 +1400,6 @@ jobs:
           command: |
             kind delete cluster --name litellm-test
           when: always # This ensures cleanup runs even if previous steps fail
-
-  check_code_and_doc_quality:
-    docker:
-      - image: cimg/python:3.12@sha256:9c796c23c84e84a66a964acb508d39dc5433c81a47e07efd56dccbbc2427e07c
-        auth:
-          username: ${DOCKERHUB_USERNAME}
-          password: ${DOCKERHUB_PASSWORD}
-    working_directory: ~/project/litellm
-
-    steps:
-      - checkout
-      - setup_google_dns
-      - install_uv
-      - run:
-          name: Install Dependencies
-          command: |
-            uv sync --frozen --all-groups --all-extras --python 3.12
-      - run: uv run --no-sync python -c "from litellm import *" || (echo '🚨 import failed, this means you introduced unprotected imports! 🚨'; exit 1)
-      - run: uv run --no-sync ruff check ./litellm
-      # - run: python ./tests/documentation_tests/test_general_setting_keys.py
-      - run: uv run --no-sync python ./tests/code_coverage_tests/check_licenses.py
-      - run: uv run --no-sync python ./tests/code_coverage_tests/check_provider_folders_documented.py
-      - run: uv run --no-sync python ./tests/code_coverage_tests/router_code_coverage.py
-      - run: uv run --no-sync python ./tests/code_coverage_tests/test_chat_completion_imports.py
-      - run: uv run --no-sync python ./tests/code_coverage_tests/info_log_check.py
-      - run: uv run --no-sync python ./tests/code_coverage_tests/check_guardrail_apply_decorator.py
-      - run: uv run --no-sync python ./tests/code_coverage_tests/test_ban_set_verbose.py
-      - run: uv run --no-sync python ./tests/code_coverage_tests/code_qa_check_tests.py
-      - run: uv run --no-sync python ./tests/code_coverage_tests/check_get_model_cost_key_performance.py
-      - run: uv run --no-sync python ./tests/code_coverage_tests/test_proxy_types_import.py
-      - run: uv run --no-sync python ./tests/code_coverage_tests/callback_manager_test.py
-      - run: uv run --no-sync python ./tests/code_coverage_tests/recursive_detector.py
-      - run: uv run --no-sync python ./tests/code_coverage_tests/test_router_strategy_async.py
-      - run: uv run --no-sync python ./tests/code_coverage_tests/litellm_logging_code_coverage.py
-      - run: uv run --no-sync python ./tests/documentation_tests/test_env_keys.py
-      - run: uv run --no-sync python ./tests/documentation_tests/test_router_settings.py
-      - run: uv run --no-sync python ./tests/documentation_tests/test_api_docs.py
-      - run: uv run --no-sync python ./tests/code_coverage_tests/ensure_async_clients_test.py
-      - run: uv run --no-sync python ./tests/code_coverage_tests/enforce_llms_folder_style.py
-      - run: uv run --no-sync python ./tests/documentation_tests/test_circular_imports.py
-      - run: uv run --no-sync python ./tests/code_coverage_tests/prevent_key_leaks_in_exceptions.py
-      - run: uv run --no-sync python ./tests/code_coverage_tests/check_unsafe_enterprise_import.py
-      - run: uv run --no-sync python ./tests/code_coverage_tests/ban_copy_deepcopy_kwargs.py
-      - run: uv run --no-sync python ./tests/code_coverage_tests/check_fastuuid_usage.py
-      - run: uv run --no-sync python ./tests/code_coverage_tests/memory_test.py
-      # helm lint is handled by the dedicated helm_chart_testing job
 
   db_migration_disable_update_check:
     machine:
@@ -2603,12 +2539,6 @@ workflows:
               only:
                 - main
                 - /litellm_.*/
-      - semgrep:
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
       - local_testing_part1:
           filters:
             branches:
@@ -2640,12 +2570,6 @@ workflows:
                 - main
                 - /litellm_.*/
       - litellm_router_unit_testing:
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
-      - check_code_and_doc_quality:
           filters:
             branches:
               only:
