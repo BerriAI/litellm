@@ -3,7 +3,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from litellm.proxy.db.db_transaction_queue.adaptive_router_update_queue import (
+from litellm.router_strategy.adaptive_router.update_queue import (
     AdaptiveRouterUpdateQueue,
 )
 

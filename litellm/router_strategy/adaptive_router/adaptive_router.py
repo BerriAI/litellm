@@ -27,9 +27,6 @@ from litellm._logging import verbose_router_logger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_last_user_message,
 )
-from litellm.proxy.db.db_transaction_queue.adaptive_router_update_queue import (
-    AdaptiveRouterUpdateQueue,
-)
 from litellm.router_strategy.adaptive_router.bandit import (
     BanditCell,
     apply_delta,
@@ -43,18 +40,21 @@ from litellm.router_strategy.adaptive_router.config import (
     MIN_QUALITY_TIER_METADATA_KEY,
     OWNER_CACHE_TTL_SECONDS,
 )
-
-# Sweep session-state cache when it exceeds this many live entries. Expired
-# entries are dropped in bulk; amortizes to O(1) per insert.
-_SESSION_STATE_SWEEP_THRESHOLD: int = 1024
-# Same pattern for the owner cache.
-_OWNER_CACHE_SWEEP_THRESHOLD: int = 1024
 from litellm.router_strategy.adaptive_router.signals import (
     SessionState,
     SignalDelta,
     Turn,
     apply_turn,
 )
+from litellm.router_strategy.adaptive_router.update_queue import (
+    AdaptiveRouterUpdateQueue,
+)
+
+# Sweep session-state cache when it exceeds this many live entries. Expired
+# entries are dropped in bulk; amortizes to O(1) per insert.
+_SESSION_STATE_SWEEP_THRESHOLD: int = 1024
+# Same pattern for the owner cache.
+_OWNER_CACHE_SWEEP_THRESHOLD: int = 1024
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import (
     AdaptiveRouterConfig,
