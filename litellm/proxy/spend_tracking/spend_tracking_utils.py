@@ -78,6 +78,7 @@ def _get_spend_logs_metadata(
         List[StandardLoggingVectorStoreRequest]
     ] = None,
     guardrail_information: Optional[List[StandardLoggingGuardrailInformation]] = None,
+    eval_information: Optional[List] = None,
     usage_object: Optional[dict] = None,
     model_map_information: Optional[StandardLoggingModelInformation] = None,
     cold_storage_object_key: Optional[str] = None,
@@ -131,6 +132,8 @@ def _get_spend_logs_metadata(
         _get_vector_store_request_for_spend_logs_payload(vector_store_request_metadata)
     )
     clean_metadata["guardrail_information"] = guardrail_information
+    if eval_information is not None:
+        clean_metadata["eval_information"] = eval_information
     clean_metadata["usage_object"] = usage_object
     clean_metadata["model_map_information"] = model_map_information
     clean_metadata["cold_storage_object_key"] = cold_storage_object_key
@@ -381,6 +384,9 @@ def get_logging_payload(  # noqa: PLR0915
                 if metadata is not None
                 else None
             )
+        ),
+        eval_information=(
+            metadata.get("eval_information", None) if metadata is not None else None
         ),
         cold_storage_object_key=(
             standard_logging_payload["metadata"].get("cold_storage_object_key", None)
