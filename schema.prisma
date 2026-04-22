@@ -1223,3 +1223,23 @@ model LiteLLM_ClaudeCodePluginTable {
 
   @@map("LiteLLM_ClaudeCodePluginTable")
 }
+
+// User/team-scoped memory store. Keyed by (key, user_id, team_id).
+// `value` is a string (typically markdown/text meant for LLM context);
+// `metadata` is an optional JSON envelope for structured tags without schema changes.
+model LiteLLM_MemoryTable {
+  memory_id   String   @id @default(uuid())
+  key         String
+  value       String
+  metadata    Json?
+  user_id     String?
+  team_id     String?
+  created_at  DateTime @default(now())
+  created_by  String?
+  updated_at  DateTime @default(now()) @updatedAt
+  updated_by  String?
+
+  @@unique([key, user_id, team_id])
+  @@index([user_id])
+  @@index([team_id])
+}
