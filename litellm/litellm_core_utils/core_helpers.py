@@ -1,5 +1,6 @@
 # What is this?
 ## Helper utilities
+import copy
 from typing import TYPE_CHECKING, Any, Iterable, List, Literal, Optional, Union
 
 import httpx
@@ -435,3 +436,38 @@ def filter_internal_params(
 
     # Filter out internal parameters
     return {k: v for k, v in data.items() if k not in internal_params}
+
+
+def redact_nested_match_and_regex_keys(
+    payload: Union[dict, List[Any], str, None],
+) -> Union[dict, List[Any], str, None]:
+    """
+    Deep-copy `payload` and replace every `match` / `regex` string field with
+    "[REDACTED]" anywhere in nested dict/list structures.
+
+    Used for guardrail spend/compliance logging so raw spans are not persisted.
+    """
+    if payload is None or isinstance(payload, str):
+        return payload
+    try:
+        redacted: Union[dict, List[Any], str, None] = copy.deepcopy(payload)
+    except Exception:
+        return payload
+
+    def _walk(node: Any) -> None:
+        if isinstance(node, dict):
+            if "match" in node:
+                node["match"] = "[REDACTED]"
+            if "regex" in node:
+                node["regex"] = "[REDACTED]"
+            for value in node.values():
+                _walk(value)
+        elif isinstance(node, list):
+            for item in node:
+                _walk(item)
+
+    try:
+        _walk(redacted)
+    except Exception:
+        return payload
+    return redacted
