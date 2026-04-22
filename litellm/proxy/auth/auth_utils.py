@@ -172,7 +172,17 @@ def is_request_body_safe(
         "aws_sts_endpoint",
         "aws_web_identity_token",
         "azure_ad_token",
+        "azure_ad_token",
         "azure_ad_token_provider",
+        "aws_bedrock_runtime_endpoint",
+        "aws_session_name",
+        "aws_external_id",
+        "tenant_id",
+        "client_id",
+        "client_secret",
+        "azure_username",
+        "azure_password",
+        "azure_scope",
     ]
 
     for param in banned_params:
