@@ -1692,6 +1692,7 @@ async def test_virtual_key_max_budget_alert_check_global_fallback():
     )
 
     import litellm
+
     original = litellm.default_key_max_budget_alert_emails
     try:
         litellm.default_key_max_budget_alert_emails = global_config
@@ -1731,6 +1732,7 @@ async def test_virtual_key_max_budget_alert_check_per_key_merges_with_global():
     )
 
     import litellm
+
     original = litellm.default_key_max_budget_alert_emails
     try:
         litellm.default_key_max_budget_alert_emails = global_config
@@ -1792,58 +1794,77 @@ async def test_get_fuzzy_user_object_case_insensitive_email():
 @pytest.mark.asyncio
 async def test_custom_auth_common_checks_opt_in():
     """
-    Test that _run_post_custom_auth_checks only runs common_checks when
+    Test that common_checks only runs for a custom-auth deployment when
     custom_auth_run_common_checks is explicitly set to True in general_settings.
 
-    By default (False), common_checks is skipped for backwards compatibility
-    with custom auth flows that existed before PR #22164.
+    After the centralization refactor, common_checks runs in the
+    ``user_api_key_auth`` wrapper via ``_run_centralized_common_checks``
+    (not inside ``_run_post_custom_auth_checks``). The opt-in flag now
+    gates the centralized gate for custom-auth deployments, preserving
+    the pre-existing RPS guarantee for custom-auth hot paths.
     """
-    from litellm.proxy.auth.user_api_key_auth import _run_post_custom_auth_checks
+    import litellm.proxy.proxy_server as _proxy_server_mod
+    from litellm.proxy.auth.user_api_key_auth import _run_centralized_common_checks
 
-    valid_token = UserAPIKeyAuth(token="test-token")
+    valid_token = UserAPIKeyAuth(token="test-token", user_id="u1")
     mock_request = MagicMock()
 
-    # Default (no flag) — common_checks should NOT be called
-    with (
-        patch(
-            "litellm.proxy.auth.user_api_key_auth.common_checks",
-            new_callable=AsyncMock,
-        ) as mock_common,
-        patch(
-            "litellm.proxy.proxy_server.general_settings",
-            {},
-        ),
-    ):
-        mock_common.return_value = True
-        result = await _run_post_custom_auth_checks(
-            valid_token=valid_token,
-            request=mock_request,
-            request_data={},
-            route="/ldap/ngs/ready",
-            parent_otel_span=None,
-        )
-        mock_common.assert_not_called()
+    def _attrs(flag, user_custom_auth):
+        return {
+            "prisma_client": None,
+            "user_api_key_cache": MagicMock(),
+            "proxy_logging_obj": MagicMock(),
+            "general_settings": (
+                {"custom_auth_run_common_checks": True} if flag else {}
+            ),
+            "llm_router": None,
+            "user_custom_auth": user_custom_auth,
+            "litellm_proxy_admin_name": "admin",
+            "master_key": "sk-test-master",
+        }
 
-    # With flag=True — common_checks SHOULD be called
-    with (
-        patch(
+    # Default (no flag) with custom auth configured — centralized gate
+    # SHOULD skip to preserve custom-auth RPS.
+    attrs = _attrs(flag=False, user_custom_auth=AsyncMock())
+    originals = {a: getattr(_proxy_server_mod, a, None) for a in attrs}
+    try:
+        for k, v in attrs.items():
+            setattr(_proxy_server_mod, k, v)
+        with patch(
             "litellm.proxy.auth.user_api_key_auth.common_checks",
             new_callable=AsyncMock,
-        ) as mock_common,
-        patch(
-            "litellm.proxy.proxy_server.general_settings",
-            {"custom_auth_run_common_checks": True},
-        ),
-    ):
-        mock_common.return_value = True
-        result = await _run_post_custom_auth_checks(
-            valid_token=valid_token,
-            request=mock_request,
-            request_data={},
-            route="/chat/completions",
-            parent_otel_span=None,
-        )
-        mock_common.assert_called_once()
+        ) as mock_common:
+            await _run_centralized_common_checks(
+                user_api_key_auth_obj=valid_token,
+                request=mock_request,
+                request_data={},
+                route="/chat/completions",
+            )
+            mock_common.assert_not_called()
+    finally:
+        for k, v in originals.items():
+            setattr(_proxy_server_mod, k, v)
+
+    # With flag=True and custom auth configured — common_checks SHOULD run.
+    attrs = _attrs(flag=True, user_custom_auth=AsyncMock())
+    originals = {a: getattr(_proxy_server_mod, a, None) for a in attrs}
+    try:
+        for k, v in attrs.items():
+            setattr(_proxy_server_mod, k, v)
+        with patch(
+            "litellm.proxy.auth.user_api_key_auth.common_checks",
+            new_callable=AsyncMock,
+        ) as mock_common:
+            await _run_centralized_common_checks(
+                user_api_key_auth_obj=valid_token,
+                request=mock_request,
+                request_data={},
+                route="/chat/completions",
+            )
+            mock_common.assert_called_once()
+    finally:
+        for k, v in originals.items():
+            setattr(_proxy_server_mod, k, v)
 
 
 # =====================================================================
