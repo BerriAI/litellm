@@ -508,6 +508,240 @@ and I learn to carry this small calm home."""
     print("✓ transform_response correctly handled reasoning items and output messages")
 
 
+def _make_empty_responses_api_response(model: str = "gpt-5.4"):
+    from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
+
+    return ResponsesAPIResponse(
+        id="resp_from_stream",
+        created_at=1760144904,
+        error=None,
+        incomplete_details=None,
+        instructions=None,
+        metadata={},
+        model=model,
+        object="response",
+        output=[],
+        parallel_tool_calls=True,
+        temperature=1.0,
+        tool_choice="auto",
+        tools=[],
+        top_p=1.0,
+        max_output_tokens=None,
+        previous_response_id=None,
+        reasoning={"effort": "low", "summary": "detailed"},
+        status="completed",
+        text={"format": {"type": "text"}, "verbosity": "medium"},
+        truncation="disabled",
+        usage=ResponseAPIUsage(
+            input_tokens=1,
+            input_tokens_details=None,
+            output_tokens=1,
+            output_tokens_details=None,
+            total_tokens=2,
+            cost=None,
+        ),
+        user=None,
+        store=True,
+        background=False,
+        billing={"payer": "developer"},
+        max_tool_calls=None,
+        prompt_cache_key=None,
+        safety_identifier=None,
+        service_tier="default",
+        top_logprobs=0,
+    )
+
+
+def _make_empty_model_response():
+    from litellm.types.utils import ModelResponse, Usage
+
+    return ModelResponse(
+        id="chatcmpl-test-recovered",
+        created=1760144904,
+        model=None,
+        object="chat.completion",
+        system_fingerprint=None,
+        choices=[],
+        usage=Usage(completion_tokens=0, prompt_tokens=0, total_tokens=0),
+    )
+
+
+def test_transform_response_recovers_empty_output_from_raw_sse():
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    handler = LiteLLMResponsesTransformationHandler()
+
+    raw_sse = "\n".join(
+        [
+            'data: {"type":"response.output_text.done","output_index":0,"content_index":0,"item_id":"msg_from_stream","text":"Recovered from SSE"}',
+            'data: {"type":"response.completed","response":{"id":"resp_from_stream","object":"response","created_at":1760144904,"status":"completed","model":"gpt-5.4","output":[]}}',
+            "data: [DONE]",
+            "",
+        ]
+    )
+
+    raw_response = _make_empty_responses_api_response()
+    model_response = _make_empty_model_response()
+    logging_obj = Mock()
+    logging_obj.model_call_details = {"original_response": raw_sse}
+
+    result = handler.transform_response(
+        model="gpt-5.4",
+        raw_response=raw_response,
+        model_response=model_response,
+        logging_obj=logging_obj,
+        request_data={"model": "gpt-5.4"},
+        messages=[{"role": "user", "content": "Reply with exactly: ok"}],
+        optional_params={},
+        litellm_params={},
+        encoding=Mock(),
+    )
+
+    assert len(result.choices) == 1
+    assert result.choices[0].message.content == "Recovered from SSE"
+
+
+def test_transform_response_recovers_output_item_done_from_raw_sse():
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    handler = LiteLLMResponsesTransformationHandler()
+
+    raw_sse = "\n".join(
+        [
+            'data: {"type":"response.output_item.done","output_index":0,"item":{"type":"message","id":"msg_from_item","role":"assistant","status":"completed","content":[{"type":"output_text","text":"Recovered from output item","annotations":[]}]}}',
+            'data: {"type":"response.completed","response":{"id":"resp_from_stream","object":"response","created_at":1760144904,"status":"completed","model":"gpt-5.4","output":[]}}',
+            "data: [DONE]",
+            "",
+        ]
+    )
+
+    raw_response = _make_empty_responses_api_response()
+    model_response = _make_empty_model_response()
+    logging_obj = Mock()
+    logging_obj.model_call_details = {"original_response": raw_sse}
+
+    result = handler.transform_response(
+        model="gpt-5.4",
+        raw_response=raw_response,
+        model_response=model_response,
+        logging_obj=logging_obj,
+        request_data={"model": "gpt-5.4"},
+        messages=[{"role": "user", "content": "Reply with exactly: ok"}],
+        optional_params={},
+        litellm_params={},
+        encoding=Mock(),
+    )
+
+    assert len(result.choices) == 1
+    assert result.choices[0].message.content == "Recovered from output item"
+
+
+def test_transform_response_recovers_output_item_done_from_whitespace_padded_raw_sse():
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    handler = LiteLLMResponsesTransformationHandler()
+
+    output_item_event = {
+        "type": "response.output_item.done",
+        "output_index": 0,
+        "item": {
+            "type": "message",
+            "id": "msg_from_item",
+            "role": "assistant",
+            "status": "completed",
+            "content": [
+                {
+                    "type": "output_text",
+                    "text": "Recovered from padded output item",
+                    "annotations": [],
+                }
+            ],
+        },
+    }
+    completed_event = {
+        "type": "response.completed",
+        "response": {
+            "id": "resp_from_stream",
+            "object": "response",
+            "created_at": 1760144904,
+            "status": "completed",
+            "model": "gpt-5.4",
+            "output": [],
+        },
+    }
+    raw_sse = "\n".join(
+        [
+            f"   data:  {json.dumps(output_item_event)}   ",
+            f"\tdata: {json.dumps(completed_event)}",
+            "data: [DONE]",
+            "",
+        ]
+    )
+
+    raw_response = _make_empty_responses_api_response()
+    model_response = _make_empty_model_response()
+    logging_obj = Mock()
+    logging_obj.model_call_details = {"original_response": raw_sse}
+
+    result = handler.transform_response(
+        model="gpt-5.4",
+        raw_response=raw_response,
+        model_response=model_response,
+        logging_obj=logging_obj,
+        request_data={"model": "gpt-5.4"},
+        messages=[{"role": "user", "content": "Reply with exactly: ok"}],
+        optional_params={},
+        litellm_params={},
+        encoding=Mock(),
+    )
+
+    assert len(result.choices) == 1
+    assert result.choices[0].message.content == "Recovered from padded output item"
+
+
+def test_transform_response_prefers_completed_output_from_raw_sse():
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    handler = LiteLLMResponsesTransformationHandler()
+
+    raw_sse = "\n".join(
+        [
+            'data: {"type":"response.output_item.done","output_index":0,"item":{"type":"message","id":"msg_from_item","role":"assistant","status":"completed","content":[{"type":"output_text","text":"Earlier stream text","annotations":[]}]}}',
+            'data: {"type":"response.completed","response":{"id":"resp_from_stream","object":"response","created_at":1760144904,"status":"completed","model":"gpt-5.4","output":[{"type":"message","id":"msg_from_completed","role":"assistant","status":"completed","content":[{"type":"output_text","text":"Authoritative completed text","annotations":[]}]}]}}',
+            "data: [DONE]",
+            "",
+        ]
+    )
+
+    raw_response = _make_empty_responses_api_response()
+    model_response = _make_empty_model_response()
+    logging_obj = Mock()
+    logging_obj.model_call_details = {"original_response": raw_sse}
+
+    result = handler.transform_response(
+        model="gpt-5.4",
+        raw_response=raw_response,
+        model_response=model_response,
+        logging_obj=logging_obj,
+        request_data={"model": "gpt-5.4"},
+        messages=[{"role": "user", "content": "Reply with exactly: ok"}],
+        optional_params={},
+        litellm_params={},
+        encoding=Mock(),
+    )
+
+    assert len(result.choices) == 1
+    assert result.choices[0].message.content == "Authoritative completed text"
+
+
 def test_convert_tools_to_responses_format():
     from litellm.completion_extras.litellm_responses_transformation.transformation import (
         LiteLLMResponsesTransformationHandler,
