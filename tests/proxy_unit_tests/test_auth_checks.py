@@ -1146,3 +1146,84 @@ async def test_can_key_call_model_via_access_group_ids():
             valid_token=user_api_key_object,
             llm_router=router,
         )
+
+
+# ---------------------------------------------------------------------------
+# _key_access_group_grants_model (key access group overriding team restriction)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_key_access_group_grants_model_when_group_covers_model():
+    """Key's access_group_ids expand to a set that includes the requested model."""
+    from unittest.mock import AsyncMock, patch
+
+    from litellm.proxy.auth.auth_checks import _key_access_group_grants_model
+
+    valid_token = UserAPIKeyAuth(
+        token="test-token",
+        models=[],
+        access_group_ids=["ryan-access-group"],
+    )
+
+    with patch(
+        "litellm.proxy.auth.auth_checks._get_models_from_access_groups",
+        new_callable=AsyncMock,
+        return_value=["claude-haiku-4-5"],
+    ):
+        assert (
+            await _key_access_group_grants_model(
+                model="claude-haiku-4-5",
+                valid_token=valid_token,
+                llm_router=None,
+            )
+            is True
+        )
+
+
+@pytest.mark.asyncio
+async def test_key_access_group_grants_model_when_key_has_no_groups():
+    """Key with no access_group_ids cannot override team denial."""
+    from litellm.proxy.auth.auth_checks import _key_access_group_grants_model
+
+    valid_token = UserAPIKeyAuth(
+        token="test-token",
+        models=[],
+        access_group_ids=[],
+    )
+    assert (
+        await _key_access_group_grants_model(
+            model="claude-haiku-4-5",
+            valid_token=valid_token,
+            llm_router=None,
+        )
+        is False
+    )
+
+
+@pytest.mark.asyncio
+async def test_key_access_group_grants_model_when_group_does_not_cover_model():
+    """Key's access_group_ids expand to models that do not include the request."""
+    from unittest.mock import AsyncMock, patch
+
+    from litellm.proxy.auth.auth_checks import _key_access_group_grants_model
+
+    valid_token = UserAPIKeyAuth(
+        token="test-token",
+        models=[],
+        access_group_ids=["other-group"],
+    )
+
+    with patch(
+        "litellm.proxy.auth.auth_checks._get_models_from_access_groups",
+        new_callable=AsyncMock,
+        return_value=["gpt-4o-mini"],
+    ):
+        assert (
+            await _key_access_group_grants_model(
+                model="claude-haiku-4-5",
+                valid_token=valid_token,
+                llm_router=None,
+            )
+            is False
+        )
