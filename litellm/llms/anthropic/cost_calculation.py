@@ -113,7 +113,7 @@ def get_cost_for_anthropic_web_search(
     if (
         usage is None
         or usage.server_tool_use is None
-        or usage.server_tool_use.web_search_requests is None
+        or getattr(usage.server_tool_use, "web_search_requests", None) is None
     ):
         return 0.0
 
@@ -128,5 +128,7 @@ def get_cost_for_anthropic_web_search(
         return 0.0
 
     ## Calculate the total cost
-    total_cost = cost_per_web_search_request * usage.server_tool_use.web_search_requests
+    total_cost = cost_per_web_search_request * getattr(
+        usage.server_tool_use, "web_search_requests", 0
+    )
     return total_cost
