@@ -3032,9 +3032,13 @@ class ProxyConfig:
 
                     verbose_proxy_logger.debug("passed cache type=%s", cache_type)
 
-                    if (
-                        cache_type == "redis" or cache_type == "redis-semantic"
-                    ) and len(cache_params.keys()) == 0:
+                    if (cache_type == "redis" or cache_type == "redis-semantic") and (
+                        "host" not in cache_params and "url" not in cache_params
+                    ):
+                        # Fall back to REDIS_* env vars whenever the user has not
+                        # supplied connection details in cache_params. Gating on
+                        # empty cache_params silently dropped to in-memory cache
+                        # when unrelated keys like `mode` were set.
                         cache_host = get_secret("REDIS_HOST", None)
                         cache_port = get_secret("REDIS_PORT", None)
                         cache_password = None
