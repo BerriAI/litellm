@@ -45,11 +45,10 @@ export default function TeamMemberTab({
     return "0";
   };
 
-  // Helper function to get spend for a user
-  const getUserSpend = (userId: string | null): number | null => {
+  const getUserTotalSpend = (userId: string | null): number => {
     if (!userId) return 0;
     const membership = teamData.team_memberships.find((tm) => tm.user_id === userId);
-    return membership?.spend || 0;
+    return membership?.total_spend ?? 0;
   };
 
   const getUserBudget = (userId: string | null): string | null => {
@@ -124,15 +123,15 @@ export default function TeamMemberTab({
     {
       title: (
         <Space direction="horizontal">
-          Team Member Spend (USD)
-          <Tooltip title="This is the amount spent by a user in the team.">
+          Total Spend (USD)
+          <Tooltip title="Total spend by this member within this team. Tracking began 2026-04-21; spend from before that date is not included.">
             <InfoCircleOutlined />
           </Tooltip>
         </Space>
       ),
-      key: "spend",
+      key: "total_spend",
       render: (_: unknown, record: Member) => (
-        <Typography.Text>${formatNumberWithCommas(getUserSpend(record.user_id), 4)}</Typography.Text>
+        <Typography.Text>${formatNumberWithCommas(getUserTotalSpend(record.user_id), 4)}</Typography.Text>
       ),
     },
     {

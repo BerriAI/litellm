@@ -60,6 +60,7 @@ export interface TeamMembership {
   team_id: string;
   budget_id: string;
   spend: number;
+  total_spend: number | null;
   litellm_budget_table: {
     budget_id: string;
     soft_budget: number | null;
