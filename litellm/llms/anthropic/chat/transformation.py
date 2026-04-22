@@ -1667,6 +1667,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 if thinking_content is not None:
                     reasoning_content += thinking_content
 
+        if "</think>" in text_content:
+            text_content = text_content.split("</think>", 1)[1].lstrip()
+
         return (
             text_content,
             citations,

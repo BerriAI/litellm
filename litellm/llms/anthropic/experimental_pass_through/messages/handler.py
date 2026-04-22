@@ -454,20 +454,22 @@ def anthropic_messages_handler(
                 "display": "summarized",
             }
 
-    return base_llm_http_handler.anthropic_messages_handler(
-        model=model,
-        messages=messages,
-        anthropic_messages_provider_config=anthropic_messages_provider_config,
-        anthropic_messages_optional_request_params=dict(
-            anthropic_messages_optional_request_params
-        ),
-        _is_async=is_async,
-        client=client,
-        custom_llm_provider=custom_llm_provider,
-        litellm_params=litellm_params,
-        logging_obj=litellm_logging_obj,
-        api_key=api_key,
-        api_base=api_base,
-        stream=stream,
-        kwargs=kwargs,
+    return _sanitize_think_tag_text_blocks(
+        base_llm_http_handler.anthropic_messages_handler(
+            model=model,
+            messages=messages,
+            anthropic_messages_provider_config=anthropic_messages_provider_config,
+            anthropic_messages_optional_request_params=dict(
+                anthropic_messages_optional_request_params
+            ),
+            _is_async=is_async,
+            client=client,
+            custom_llm_provider=custom_llm_provider,
+            litellm_params=litellm_params,
+            logging_obj=litellm_logging_obj,
+            api_key=api_key,
+            api_base=api_base,
+            stream=stream,
+            kwargs=kwargs,
+        )
     )
