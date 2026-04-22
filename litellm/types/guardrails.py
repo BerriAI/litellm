@@ -92,6 +92,7 @@ class SupportedGuardrailIntegrations(Enum):
     AKTO = "akto"
     MCP_JWT_SIGNER = "mcp_jwt_signer"
     LLM_AS_A_JUDGE = "llm_as_a_judge"
+    RUBRIK = "rubrik"
 
 
 class Role(Enum):
