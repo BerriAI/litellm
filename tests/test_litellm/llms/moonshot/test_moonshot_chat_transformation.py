@@ -666,8 +666,9 @@ class TestKimiK26ModelRegistry:
     def test_kimi_k26_pricing(self):
         """kimi-k2.6 pricing should match official Kimi API rates."""
         model_info = litellm.model_cost["moonshot/kimi-k2.6"]
-        assert model_info["input_cost_per_token"] == pytest.approx(6e-07)
-        assert model_info["output_cost_per_token"] == pytest.approx(2.8e-06)
+        assert model_info["input_cost_per_token"] == pytest.approx(9.5e-07)
+        assert model_info["output_cost_per_token"] == pytest.approx(4e-06)
+        assert model_info["cache_read_input_token_cost"] == pytest.approx(1.6e-07)
 
     def test_kimi_k26_context_window(self):
         """kimi-k2.6 should have a 256K (262144 token) context window."""
@@ -677,11 +678,13 @@ class TestKimiK26ModelRegistry:
         assert model_info["max_tokens"] == 262144
 
     def test_kimi_k26_capabilities(self):
-        """kimi-k2.6 should support function calling, vision, and video input."""
+        """kimi-k2.6 should support function calling, vision, video input, tool choice, and reasoning."""
         model_info = litellm.model_cost["moonshot/kimi-k2.6"]
         assert model_info.get("supports_function_calling") is True
+        assert model_info.get("supports_tool_choice") is True
         assert model_info.get("supports_vision") is True
         assert model_info.get("supports_video_input") is True
+        assert model_info.get("supports_reasoning") is True
 
     def test_kimi_k26_provider(self):
         """kimi-k2.6 should be assigned to the moonshot provider."""
