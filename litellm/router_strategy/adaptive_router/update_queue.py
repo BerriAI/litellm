@@ -21,7 +21,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any, Dict, Tuple
 
-from litellm._logging import verbose_proxy_logger
+from litellm._logging import verbose_router_logger
 
 StateKey = Tuple[str, str, str]  # (router_name, request_type, model_name)
 SessionKey = Tuple[str, str, str]  # (session_id, router_name, model_name)
@@ -139,7 +139,7 @@ class AdaptiveRouterUpdateQueue:
                     },
                 )
             except Exception as e:
-                verbose_proxy_logger.exception(
+                verbose_router_logger.exception(
                     "AdaptiveRouterUpdateQueue: failed to flush state for %s: %s",
                     key,
                     e,
@@ -193,7 +193,7 @@ class AdaptiveRouterUpdateQueue:
                     },
                 )
             except Exception as e:
-                verbose_proxy_logger.exception(
+                verbose_router_logger.exception(
                     "AdaptiveRouterUpdateQueue: failed to flush session for %s: %s",
                     key,
                     e,
