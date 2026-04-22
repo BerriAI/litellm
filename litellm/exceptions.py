@@ -9,7 +9,7 @@
 
 ## LiteLLM versions of the OpenAI Exception Types
 
-from typing import Optional
+from typing import Any, Optional
 
 import httpx
 import openai
@@ -500,6 +500,25 @@ class ContentPolicyViolationError(BadRequestError):  # type: ignore
         if self.max_retries:
             _message += f", LiteLLM Max Retries: {self.max_retries}"
         return _message
+
+
+class EvalFailedError(Exception):
+    """Raised when an LLM-judge eval fails to meet the acceptance threshold."""
+
+    status_code: int = 422
+
+    def __init__(
+        self,
+        message: str,
+        eval_result: Any,
+        model: str = "",
+        llm_provider: str = "",
+    ):
+        self.eval_result = eval_result
+        self.model = model
+        self.llm_provider = llm_provider
+        self.status_code = 422
+        super().__init__(message)
 
 
 class ServiceUnavailableError(openai.APIStatusError):  # type: ignore
