@@ -183,9 +183,7 @@ def _signature(call: Dict[str, Any]) -> str:
     if call_args is None:
         call_args = call.get("function", {}).get("arguments", "")
     if isinstance(call_args, dict):
-        call_args = ",".join(
-            f"{k}={call_args[k]}" for k in sorted(call_args.keys())
-        )
+        call_args = ",".join(f"{k}={call_args[k]}" for k in sorted(call_args.keys()))
     return f"{name}({call_args})"
 
 
