@@ -675,6 +675,9 @@ async def byok_authorize_get(
         raise HTTPException(status_code=400, detail="response_type must be 'code'")
     if not redirect_uri:
         raise HTTPException(status_code=400, detail="redirect_uri is required")
+    # Validate here too so the user sees the rejection before typing their
+    # API key into the HTML form (the POST handler also validates).
+    _validate_redirect_uri(redirect_uri)
     if not code_challenge:
         raise HTTPException(status_code=400, detail="code_challenge is required")
 
@@ -828,9 +831,6 @@ async def byok_token(
     if record.get("client_id") and client_id != record["client_id"]:
         return _oauth_token_error("invalid_grant")
 
-    # Consume the code (one-time use)
-    del _byok_auth_codes[code]
-
     server_id: str = record["server_id"]
     api_key_value: str = record["api_key"]
     # user_id is stamped by the authenticated /authorize POST. No client_id
@@ -841,6 +841,16 @@ async def byok_token(
     user_id: str = record.get("user_id") or ""
     if not user_id:
         return _oauth_token_error("invalid_grant")
+
+    # Verify preconditions that would fail token issuance BEFORE consuming
+    # the code or writing to the DB — otherwise a misconfigured proxy
+    # (missing master_key) silently persists the user's credential without
+    # ever returning an access token, and the user has no way to recover.
+    if master_key is None:
+        return _oauth_token_error("server_error", status=500)
+
+    # Consume the code (one-time use)
+    del _byok_auth_codes[code]
 
     # Persist the BYOK credential
     if prisma_client is not None:
@@ -870,9 +880,6 @@ async def byok_token(
         verbose_proxy_logger.warning(
             "byok_token: prisma_client is None — credential not persisted"
         )
-
-    if master_key is None:
-        return _oauth_token_error("server_error", status=500)
 
     now = int(time.time())
     payload = {
