@@ -5,9 +5,7 @@ from unittest.mock import patch
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../../../.."))  # Adds the parent directory to the system path
 
 from unittest.mock import MagicMock
 
@@ -24,9 +22,7 @@ def test_validate_environment_api_key_within_litellm_params():
     azure_openai_responses_apiconfig = AzureOpenAIResponsesAPIConfig()
     litellm_params = GenericLiteLLMParams(api_key="test-api-key")
 
-    result = azure_openai_responses_apiconfig.validate_environment(
-        headers={}, model="", litellm_params=litellm_params
-    )
+    result = azure_openai_responses_apiconfig.validate_environment(headers={}, model="", litellm_params=litellm_params)
 
     expected = {"api-key": "test-api-key"}
 
@@ -87,9 +83,7 @@ def test_get_complete_url():
     api_base = "https://litellm8397336933.openai.azure.com"
     litellm_params = {"api_version": "2024-05-01-preview"}
 
-    result = azure_openai_responses_apiconfig.get_complete_url(
-        api_base=api_base, litellm_params=litellm_params
-    )
+    result = azure_openai_responses_apiconfig.get_complete_url(api_base=api_base, litellm_params=litellm_params)
 
     expected = "https://litellm8397336933.openai.azure.com/openai/responses?api-version=2024-05-01-preview"
 
@@ -118,9 +112,7 @@ def test_azure_o_series_responses_api_drop_temperature_param():
     config = AzureOpenAIOSeriesResponsesAPIConfig()
 
     # Create request params with temperature
-    request_params = ResponsesAPIOptionalRequestParams(
-        temperature=0.7, max_output_tokens=1000, stream=False, top_p=0.9
-    )
+    request_params = ResponsesAPIOptionalRequestParams(temperature=0.7, max_output_tokens=1000, stream=False, top_p=0.9)
 
     # Test with drop_params=True
     mapped_params_with_drop = config.map_openai_params(
@@ -154,9 +146,7 @@ def test_azure_o_series_responses_api_drop_params_no_temperature():
     config = AzureOpenAIOSeriesResponsesAPIConfig()
 
     # Create request params without temperature
-    request_params = ResponsesAPIOptionalRequestParams(
-        max_output_tokens=1000, stream=False, top_p=0.9
-    )
+    request_params = ResponsesAPIOptionalRequestParams(max_output_tokens=1000, stream=False, top_p=0.9)
 
     # Should work fine even with drop_params=True
     mapped_params = config.map_openai_params(
@@ -242,30 +232,21 @@ class TestAzureResponsesAPIConfig:
             api_base=base_url,
             litellm_params={"api_version": "preview"},
         )
-        assert (
-            result_preview
-            == "https://litellm8397336933.openai.azure.com/openai/v1/responses?api-version=preview"
-        )
+        assert result_preview == "https://litellm8397336933.openai.azure.com/openai/v1/responses?api-version=preview"
 
         # Test with latest version - should use openai/v1/responses
         result_latest = self.config.get_complete_url(
             api_base=base_url,
             litellm_params={"api_version": "latest"},
         )
-        assert (
-            result_latest
-            == "https://litellm8397336933.openai.azure.com/openai/v1/responses?api-version=latest"
-        )
+        assert result_latest == "https://litellm8397336933.openai.azure.com/openai/v1/responses?api-version=latest"
 
         # Test with date-based version - should use openai/responses
         result_date = self.config.get_complete_url(
             api_base=base_url,
             litellm_params={"api_version": "2025-01-01"},
         )
-        assert (
-            result_date
-            == "https://litellm8397336933.openai.azure.com/openai/responses?api-version=2025-01-01"
-        )
+        assert result_date == "https://litellm8397336933.openai.azure.com/openai/responses?api-version=2025-01-01"
 
     def test_azure_get_complete_url_with_default_api_version(self):
         """Test Azure get_complete_url uses default API version when none is provided"""
@@ -311,7 +292,9 @@ class TestAzureResponsesAPIConfig:
             headers=headers,
         )
 
-        expected_url = "https://test.openai.azure.com/openai/responses/resp_test123/cancel?api-version=2024-05-01-preview"
+        expected_url = (
+            "https://test.openai.azure.com/openai/responses/resp_test123/cancel?api-version=2024-05-01-preview"
+        )
         assert url == expected_url
         assert data == {}
 
@@ -502,3 +485,98 @@ class TestAzureResponsesAPIConfig:
         """
         supported = self.config.get_supported_openai_params(self.model)
         assert "context_management" not in supported
+
+    # ------------------------------------------------------------------
+    # custom_tool_call id sanitization
+    # ------------------------------------------------------------------
+
+    def test_handle_custom_tool_call_item_strips_non_ctc_id(self):
+        """Azure rejects custom_tool_call ids that don't start with 'ctc'.
+
+        Cross-provider continuations (e.g. OpenAI -> Azure) replay items whose
+        id begins with 'fc_'. We strip the id so Azure can assign its own.
+        """
+        item = {
+            "type": "custom_tool_call",
+            "id": "fc_0faf4ac39d04a3c60069e79b9d30348197b37bae4e42072a2c",
+            "name": "get_weather",
+            "input": '{"city": "Seattle"}',
+            "call_id": "call_abc",
+        }
+        result = self.config._handle_custom_tool_call_item(item)
+        assert "id" not in result
+        # Other fields must be preserved verbatim.
+        assert result["type"] == "custom_tool_call"
+        assert result["name"] == "get_weather"
+        assert result["input"] == '{"city": "Seattle"}'
+        assert result["call_id"] == "call_abc"
+        # Original item must not be mutated in place.
+        assert item["id"] == "fc_0faf4ac39d04a3c60069e79b9d30348197b37bae4e42072a2c"
+
+    def test_handle_custom_tool_call_item_preserves_ctc_id(self):
+        """Ids that already start with 'ctc' are Azure-valid and untouched."""
+        item = {
+            "type": "custom_tool_call",
+            "id": "ctc_123abc",
+            "name": "get_weather",
+            "input": "{}",
+            "call_id": "call_xyz",
+        }
+        result = self.config._handle_custom_tool_call_item(item)
+        assert result == item
+        assert result["id"] == "ctc_123abc"
+
+    def test_handle_custom_tool_call_item_ignores_other_types(self):
+        """Non custom_tool_call items are returned unchanged, even with fc_ id."""
+        for other_type in ("function_call", "reasoning", "message"):
+            item = {"type": other_type, "id": "fc_should_not_be_stripped"}
+            assert self.config._handle_custom_tool_call_item(item) == item
+
+    def test_handle_custom_tool_call_item_no_id(self):
+        """Items without an id are returned unchanged."""
+        item = {"type": "custom_tool_call", "name": "get_weather", "input": "{}"}
+        assert self.config._handle_custom_tool_call_item(item) == item
+
+    def test_handle_custom_tool_call_item_non_string_id(self):
+        """Non-string ids (unexpected shape) are left alone rather than stripped."""
+        item = {"type": "custom_tool_call", "id": 123}
+        assert self.config._handle_custom_tool_call_item(item) == item
+
+    def test_validate_input_param_strips_non_ctc_custom_tool_call_id(self):
+        """End-to-end: _validate_input_param dispatches custom_tool_call items."""
+        input_items = [
+            {
+                "type": "message",
+                "role": "user",
+                "content": "what's the weather in Seattle?",
+                "status": "completed",
+            },
+            {
+                "type": "custom_tool_call",
+                "id": "fc_abc",
+                "name": "get_weather",
+                "input": '{"city": "Seattle"}',
+                "call_id": "call_1",
+            },
+            {
+                "type": "custom_tool_call",
+                "id": "ctc_keep_me",
+                "name": "get_weather",
+                "input": "{}",
+                "call_id": "call_2",
+            },
+        ]
+        result = self.config._validate_input_param(input_items)
+        assert isinstance(result, list)
+        # message: status removed
+        assert "status" not in result[0]
+        assert result[0]["role"] == "user"
+        # non-ctc custom_tool_call: id removed
+        assert "id" not in result[1]
+        assert result[1]["name"] == "get_weather"
+        # ctc-prefixed custom_tool_call: id preserved
+        assert result[2]["id"] == "ctc_keep_me"
+
+    def test_validate_input_param_string_input_untouched(self):
+        """String inputs should pass through without modification."""
+        assert self.config._validate_input_param("hello") == "hello"

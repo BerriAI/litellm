@@ -33,18 +33,10 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         Azure Responses API does not support context_management (compaction).
         """
         base_supported_params = super().get_supported_openai_params(model)
-        return [
-            param
-            for param in base_supported_params
-            if param not in self.AZURE_UNSUPPORTED_PARAMS
-        ]
+        return [param for param in base_supported_params if param not in self.AZURE_UNSUPPORTED_PARAMS]
 
-    def validate_environment(
-        self, headers: dict, model: str, litellm_params: Optional[GenericLiteLLMParams]
-    ) -> dict:
-        return BaseAzureLLM._base_validate_azure_environment(
-            headers=headers, litellm_params=litellm_params
-        )
+    def validate_environment(self, headers: dict, model: str, litellm_params: Optional[GenericLiteLLMParams]) -> dict:
+        return BaseAzureLLM._base_validate_azure_environment(headers=headers, litellm_params=litellm_params)
 
     def get_stripped_model_name(self, model: str) -> str:
         # if "responses/" is in the model name, remove it
@@ -81,32 +73,57 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
 
                 return dict_reasoning_item
             except Exception as e:
-                verbose_logger.debug(
-                    f"Failed to create ResponseReasoningItem, falling back to manual filtering: {e}"
-                )
+                verbose_logger.debug(f"Failed to create ResponseReasoningItem, falling back to manual filtering: {e}")
                 # Fallback: manually filter out known None fields
                 filtered_item = {
                     k: v
                     for k, v in item.items()
-                    if v is not None
-                    or k not in {"status", "content", "encrypted_content"}
+                    if v is not None or k not in {"status", "content", "encrypted_content"}
                 }
                 return filtered_item
         return item
 
-    def _validate_input_param(
-        self, input: Union[str, ResponseInputParam]
-    ) -> Union[str, ResponseInputParam]:
+    def _handle_custom_tool_call_item(self, item: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Override parent method to also filter out 'status' field from message items.
-        Azure OpenAI API does not accept 'status' field in input messages.
+        Handle custom_tool_call items to strip an 'id' that does not start with 'ctc'.
+
+        Azure OpenAI Responses API requires that the 'id' of a custom_tool_call
+        input item begins with 'ctc' (e.g. 'ctc_...'). When a conversation is
+        continued across providers (e.g. an OpenAI-generated response whose
+        custom_tool_call id starts with 'fc_' is replayed against Azure), Azure
+        rejects the request with:
+
+            Invalid 'input[N].id': '<id>'. Expected an ID that begins with 'ctc'.
+
+        Azure generates its own id when the field is omitted, so we strip the
+        offending id rather than attempt to rewrite it. ids that already begin
+        with 'ctc' are preserved untouched.
+        """
+        if item.get("type") != "custom_tool_call":
+            return item
+        item_id = item.get("id")
+        if isinstance(item_id, str) and not item_id.startswith("ctc"):
+            verbose_logger.debug(
+                "Stripping non-'ctc' id %r from custom_tool_call input item for Azure.",
+                item_id,
+            )
+            filtered_item = {k: v for k, v in item.items() if k != "id"}
+            return filtered_item
+        return item
+
+    def _validate_input_param(self, input: Union[str, ResponseInputParam]) -> Union[str, ResponseInputParam]:
+        """
+        Override parent method to also filter Azure-specific input constraints:
+        - 'status' field is removed from 'message' items.
+        - 'id' is removed from 'custom_tool_call' items whose id does not
+          start with 'ctc' (Azure-required prefix).
         """
         from typing import cast
 
         # First call parent's validation
         validated_input = super()._validate_input_param(input)
 
-        # Then filter out status from message items
+        # Apply Azure-specific per-item filters
         if isinstance(validated_input, list):
             filtered_input: List[Any] = []
             for item in validated_input:
@@ -114,6 +131,8 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
                     # Filter out status field from message items
                     filtered_item = {k: v for k, v in item.items() if k != "status"}
                     filtered_input.append(filtered_item)
+                elif isinstance(item, dict) and item.get("type") == "custom_tool_call":
+                    filtered_input.append(self._handle_custom_tool_call_item(cast(Dict[str, Any], item)))
                 else:
                     filtered_input.append(item)
             return cast(ResponseInputParam, filtered_input)
@@ -187,9 +206,7 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
     #########################################################
     ########## DELETE RESPONSE API TRANSFORMATION ##############
     #########################################################
-    def _construct_url_for_response_id_in_path(
-        self, api_base: str, response_id: str
-    ) -> str:
+    def _construct_url_for_response_id_in_path(self, api_base: str, response_id: str) -> str:
         """
         Constructs a URL for the API request with the response_id in the path.
         """
@@ -232,9 +249,7 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         This function handles URLs with query parameters by inserting the response_id
         at the correct location (before any query parameters).
         """
-        delete_url = self._construct_url_for_response_id_in_path(
-            api_base=api_base, response_id=response_id
-        )
+        delete_url = self._construct_url_for_response_id_in_path(api_base=api_base, response_id=response_id)
 
         data: Dict = {}
         verbose_logger.debug(f"delete response url={delete_url}")
@@ -256,9 +271,7 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         OpenAI API expects the following request
         - GET /v1/responses/{response_id}
         """
-        get_url = self._construct_url_for_response_id_in_path(
-            api_base=api_base, response_id=response_id
-        )
+        get_url = self._construct_url_for_response_id_in_path(api_base=api_base, response_id=response_id)
         data: Dict = {}
         verbose_logger.debug(f"get response url={get_url}")
         return get_url, data
@@ -275,12 +288,7 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         limit: int = 20,
         order: Literal["asc", "desc"] = "desc",
     ) -> Tuple[str, Dict]:
-        url = (
-            self._construct_url_for_response_id_in_path(
-                api_base=api_base, response_id=response_id
-            )
-            + "/input_items"
-        )
+        url = self._construct_url_for_response_id_in_path(api_base=api_base, response_id=response_id) + "/input_items"
         params: Dict[str, Any] = {}
         if after is not None:
             params["after"] = after
@@ -353,7 +361,5 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         except Exception:
             from litellm.llms.azure.chat.gpt_transformation import AzureOpenAIError
 
-            raise AzureOpenAIError(
-                message=raw_response.text, status_code=raw_response.status_code
-            )
+            raise AzureOpenAIError(message=raw_response.text, status_code=raw_response.status_code)
         return ResponsesAPIResponse(**raw_response_json)
