@@ -17,7 +17,7 @@ import os
 import sys
 from datetime import datetime
 from typing import Any, Dict, Optional
-from unittest.mock import Mock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
@@ -591,3 +591,82 @@ class TestBaseResponsesAPIStreamingIterator:
             # Failure handlers should NOT have been called
             mock_logging_obj.async_failure_handler.assert_not_called()
             mock_logging_obj.failure_handler.assert_not_called()
+
+
+class TestBaseResponsesAPIStreamingIteratorAclose:
+    """
+    Tests for BaseResponsesAPIStreamingIterator.aclose() — ensures the
+    underlying httpx.Response is released back to the connection pool when a
+    stream is abandoned mid-iteration. See issue #26250 and PR #21213 for the
+    equivalent fix on the chat-completions path.
+    """
+
+    def _build_iterator(self, mock_response):
+        mock_logging_obj = Mock(spec=LiteLLMLoggingObj)
+        mock_logging_obj.model_call_details = {"litellm_params": {}}
+        mock_config = Mock(spec=BaseResponsesAPIConfig)
+        return BaseResponsesAPIStreamingIterator(
+            response=mock_response,
+            model="gpt-4",
+            responses_api_provider_config=mock_config,
+            logging_obj=mock_logging_obj,
+        )
+
+    @pytest.mark.asyncio
+    async def test_aclose_calls_response_aclose(self):
+        """aclose() awaits response.aclose(), nulls self.response, and sets finished."""
+        mock_response = Mock()
+        mock_response.headers = {}
+        mock_response.aclose = AsyncMock()
+
+        iterator = self._build_iterator(mock_response)
+
+        await iterator.aclose()
+
+        mock_response.aclose.assert_awaited_once()
+        assert iterator.response is None
+        assert iterator.finished is True
+
+    @pytest.mark.asyncio
+    async def test_aclose_is_idempotent(self):
+        """Calling aclose() twice only closes the response once."""
+        mock_response = Mock()
+        mock_response.headers = {}
+        mock_response.aclose = AsyncMock()
+
+        iterator = self._build_iterator(mock_response)
+
+        await iterator.aclose()
+        await iterator.aclose()
+
+        mock_response.aclose.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_aclose_swallows_close_errors(self):
+        """Errors from the underlying close are logged, not raised."""
+        mock_response = Mock()
+        mock_response.headers = {}
+        mock_response.aclose = AsyncMock(side_effect=RuntimeError("boom"))
+
+        iterator = self._build_iterator(mock_response)
+
+        # Must not raise — cleanup errors are swallowed so they don't mask
+        # the user's original exception path.
+        await iterator.aclose()
+
+        mock_response.aclose.assert_awaited_once()
+        assert iterator.response is None
+
+    @pytest.mark.asyncio
+    async def test_aclose_falls_back_to_close_when_no_aclose(self):
+        """If the response exposes only close (not aclose), aclose() invokes close."""
+        mock_response = Mock(spec=["headers", "close"])
+        mock_response.headers = {}
+        mock_response.close = Mock(return_value=None)
+
+        iterator = self._build_iterator(mock_response)
+
+        await iterator.aclose()
+
+        mock_response.close.assert_called_once()
+        assert iterator.response is None
