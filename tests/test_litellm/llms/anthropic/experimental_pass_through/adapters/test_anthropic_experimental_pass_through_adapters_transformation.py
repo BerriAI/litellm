@@ -1007,6 +1007,34 @@ def test_translate_anthropic_messages_to_openai_tool_use_with_signature():
     )
 
 
+def test_translate_anthropic_messages_to_openai_tool_use_without_thinking_blocks():
+    anthropic_messages = [
+        AnthropicMessagesUserMessageParam(
+            role="user",
+            content=[{"type": "text", "text": "Use the weather tool."}],
+        ),
+        AnthopicMessagesAssistantMessageParam(
+            role="assistant",
+            content=[
+                {
+                    "type": "tool_use",
+                    "id": "toolu_01234",
+                    "name": "get_weather",
+                    "input": {"location": "Boston"},
+                }
+            ],
+        ),
+    ]
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    result = adapter.translate_anthropic_messages_to_openai(messages=anthropic_messages)
+
+    assert len(result) == 2
+    assert result[1]["role"] == "assistant"
+    assert len(result[1]["tool_calls"]) == 1
+    assert result[1].get("reasoning_content") is None
+
+
 def test_translate_anthropic_messages_to_openai_tool_result_with_multiple_content_items():
     """
     Test that tool_result with multiple content items creates a single tool message
