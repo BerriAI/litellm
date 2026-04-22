@@ -6,6 +6,7 @@ from litellm.litellm_core_utils.core_helpers import (
     _FINISH_REASON_MAP,
     map_finish_reason,
     reconstruct_model_name,
+    redact_nested_match_and_regex_keys,
 )
 
 
@@ -158,3 +159,37 @@ class TestFinishReasonMapOutputsAreValid:
                 f"Mapped value '{openai_reason}' (from '{provider_reason}') "
                 f"is not a valid OpenAI finish reason"
             )
+
+
+class TestRedactNestedMatchAndRegexKeys:
+    def test_redacts_match_and_regex_recursively(self):
+        payload = {
+            "assessments": [
+                {
+                    "sensitiveInformationPolicy": {
+                        "piiEntities": [
+                            {"type": "NAME", "match": "secret-name", "action": "BLOCKED"}
+                        ]
+                    },
+                    "wordPolicy": {
+                        "customWords": [{"match": "badword", "action": "BLOCKED"}]
+                    },
+                }
+            ],
+            "regex": "should-redact-key-named-regex",
+        }
+        out = redact_nested_match_and_regex_keys(payload)
+        assert out["assessments"][0]["sensitiveInformationPolicy"]["piiEntities"][0][
+            "match"
+        ] == "[REDACTED]"
+        assert out["assessments"][0]["wordPolicy"]["customWords"][0]["match"] == (
+            "[REDACTED]"
+        )
+        assert out["regex"] == "[REDACTED]"
+        assert payload["assessments"][0]["sensitiveInformationPolicy"]["piiEntities"][
+            0
+        ]["match"] == "secret-name"
+
+    def test_passes_through_none_and_str(self):
+        assert redact_nested_match_and_regex_keys(None) is None
+        assert redact_nested_match_and_regex_keys("plain") == "plain"
