@@ -65,6 +65,7 @@ def check_complete_credentials(request_body: dict) -> bool:
         or "bedrock" in given_model
         or "vertex_ai" in given_model
         or "vertex_ai_beta" in given_model
+        or "azure" in given_model
     ):
         # complex credentials - easier to make a malicious request
         return False
