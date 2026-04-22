@@ -169,6 +169,7 @@ def is_request_body_safe(
         "aws_region_name",
         "aws_profile_name",
         "aws_role_name",
+        "aws_sts_endpoint",
         "aws_web_identity_token",
         "azure_ad_token",
         "azure_ad_token_provider",
