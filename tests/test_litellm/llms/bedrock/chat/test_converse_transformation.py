@@ -4255,6 +4255,29 @@ def test_converse_does_not_add_output_config_for_non_anthropic_models():
     assert "output_config" not in additional_fields
 
 
+def test_converse_does_not_add_output_config_for_older_claude_models():
+    """output_config drives Claude 4.6+ adaptive thinking — older Claude
+    models reject the field. If a caller has it in their params (e.g. via
+    proxy config) and routes an older Claude through Converse, we shouldn't
+    forward it."""
+    config = AmazonConverseConfig()
+
+    optional_params = {
+        "output_config": {"effort": "medium"},
+        "maxTokens": 1024,
+    }
+
+    data = config._transform_request_helper(
+        model="anthropic.claude-3-sonnet-20240229-v1:0",
+        system_content_blocks=[],
+        optional_params=optional_params,
+        messages=None,
+    )
+
+    additional_fields = data.get("additionalModelRequestFields", {})
+    assert "output_config" not in additional_fields
+
+
 def test_converse_preserves_native_output_config_structured_outputs():
     """Bedrock's camelCase outputConfig (structured outputs) is a separate
     feature from Anthropic's output_config and should still pass through as a

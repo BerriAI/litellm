@@ -32,6 +32,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     _bedrock_tools_pt,
 )
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.types.llms.bedrock import *
 from litellm.types.llms.openai import (
@@ -1453,13 +1454,15 @@ class AmazonConverseConfig(BaseConfig):
             original_tools, model, headers, additional_request_params
         )
 
-        # Forward Anthropic's output_config via additionalModelRequestFields on
-        # Anthropic models — that's how Claude 4.6 gets its effort setting on
-        # Converse.
-        if anthropic_output_config is not None:
-            base_model = BedrockModelInfo.get_base_model(model)
-            if base_model.startswith("anthropic"):
-                additional_request_params["output_config"] = anthropic_output_config
+        # Forward Anthropic's output_config via additionalModelRequestFields —
+        # that's how Claude 4.6+ gets its effort setting on Converse. Older
+        # Claude models reject the field, so gate on the adaptive-thinking
+        # check (matches the Invoke paths).
+        if (
+            anthropic_output_config is not None
+            and AnthropicModelInfo._is_adaptive_thinking_model(model)
+        ):
+            additional_request_params["output_config"] = anthropic_output_config
 
         # Append cachePoint to tools if cache_control_injection_points has tool_config
         cache_injection_points = additional_request_params.pop(
