@@ -104,23 +104,11 @@ $ uv tool install 'litellm[proxy]'
 
 Docker Compose bundles LiteLLM with a Postgres database. Follow the steps below — the proxy will be fully running by the end.
 
-### Step 1 — Pull the LiteLLM database image
-
-LiteLLM provides a dedicated `litellm-database` image for proxy deployments that connect to Postgres.
-
-```bash
-docker pull ghcr.io/berriai/litellm-database:main-latest
-```
-
-See all available tags on the [GitHub Container Registry](https://github.com/BerriAI/litellm/pkgs/container/litellm-database).
-
----
-
-### Step 2 — Set up a database
+### Step 1 — Set up configuration files
 
 Complete all three config files **before** running `docker compose up`. The proxy server will not start correctly if any of these are missing.
 
-#### 2.1 — Get `docker-compose.yml` and create `.env`
+#### 1.1 — Get `docker-compose.yml` and create `.env`
 
 ```bash
 # Get the docker compose file
@@ -139,7 +127,7 @@ echo 'AZURE_API_BASE="https://openai-***********/"' >> .env
 echo 'AZURE_API_KEY="your-azure-api-key"' >> .env
 ```
 
-#### 2.2 — Create `config.yaml`
+#### 1.2 — Create `config.yaml`
 
 The default `docker-compose.yml` starts a Postgres container at `db:5432`. Your `config.yaml` must include `database_url` pointing to it:
 
@@ -161,7 +149,7 @@ general_settings:
 `database_url` enables virtual keys, spend tracking, and the UI. Replace it with your [Supabase](https://supabase.com/) or [Neon](https://neon.tech/) connection string if you prefer a managed database.
 :::
 
-#### 2.3 — Create `prometheus.yml`
+#### 1.3 — Create `prometheus.yml`
 
 This file **must exist as a file** before `docker compose up`. If it is missing, Docker auto-creates it as an empty directory and the Prometheus container fails to start.
 
@@ -176,7 +164,7 @@ scrape_configs:
       - targets: ["litellm:4000"]
 ```
 
-Also verify that the `config.yaml` volume mount and `--config` flag are **not commented out** in `docker-compose.yml`:
+Also verify that the `config.yaml` volume mount and `--config` flag are **not commented out** in `docker-compose.yml` (they are commented out by default — uncomment them to load your config):
 
 ```yaml
 services:
@@ -193,7 +181,7 @@ All three files (`.env`, `config.yaml`, `prometheus.yml`) must be present before
 
 ---
 
-### Step 3 — Start the proxy server and test it
+### Step 2 — Start the proxy server and test it
 
 After `config.yaml`, `prometheus.yml`, and `.env` are complete, start the proxy:
 
@@ -769,12 +757,12 @@ Error: cannot create subdirectories in ".../prometheus.yml": not a directory
 Docker created `prometheus.yml` as an **empty directory** instead of a file. This happens when the file is missing at `docker compose up` time.
 
 Fix it:
-Then create the file (see [Step 2.3 — Create `prometheus.yml`](#23--create-prometheusyml)) and run `docker compose up` again.
+
 ```bash
 rm -rf prometheus.yml
 ```
 
-Then create the file (see [Step 2.4](#step-24--create-prometheusyml)) and run `docker compose up` again.
+Then create the file (see [Step 1.3 — Create `prometheus.yml`](#13--create-prometheusyml)) and run `docker compose up` again.
 
 ### Non-root docker image?
 
