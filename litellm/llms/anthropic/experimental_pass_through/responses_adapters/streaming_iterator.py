@@ -248,9 +248,6 @@ class AnthropicResponsesStreamWrapper:
                 if item
                 else None
             )
-            if item_type == "reasoning":
-                # Reasoning items are closed by individual part.done events
-                return
             if item_type == "web_search_call":
                 self._emit_web_tool_use(item)
                 return
