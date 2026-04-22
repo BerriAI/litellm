@@ -95,11 +95,11 @@
 
 - **files:** `litellm/llms/anthropic/experimental_pass_through/adapters/transformation.py`
 - **intent:** When a response has `reasoning_content` but no `thinking_blocks`, synthesize an anthropic `thinking` content block from `reasoning_content` (covers OpenRouter-style providers). Handles both non-streaming and streaming paths.
-- **upstream overlap:** None applicable — upstream's `2c738cc939` content-block strip was REVERTED.
-- **decision:** **REWORK (likely)**
-- **rationale:** 23 upstream commits on this file; our additions (19 lines) land in two `elif` branches that may have shifted.
-- **replay plan:** Cherry-pick; if conflict, re-apply the reasoning→thinking-block synthesis against v1.83.3's updated adapter.
-- **verification:** smoke test — call an OpenRouter-backed model via the anthropic-compatible endpoint; verify thinking block appears in response.
+- **upstream overlap:** **FULL** — during replay (2026-04-22) found that v1.83.3 already contains BOTH hunks of this patch (non-streaming reasoning→thinking synthesis AND streaming variant). `git diff HEAD` after resolving conflicts was empty. Upstream must have landed this logic through a parallel commit during our divergence window.
+- **decision:** **DROP** (effective; skipped via `git cherry-pick --skip`)
+- **rationale:** Upstream fully covers — no new lines to add.
+- **replay plan:** Skipped during cherry-pick. No action required.
+- **verification:** smoke test — call an OpenRouter-backed model via the anthropic-compatible endpoint; verify thinking block appears in response. Expected to pass because upstream already has the logic.
 - **reviewer:** TBD
 
 ---
@@ -113,9 +113,9 @@
 | 3 | df60009c8e | REWORK | MED | Proxy pre-call layer has 51 upstream commits |
 | 4 | 01148e70ab | REWORK | MED | Stacked on #43 |
 | 5 | 1a635e20e4 | KEEP-AS-IS | LOW | Additive iterator-level fix; upstream's Delta-level fix is complementary |
-| 6 | 730dddc2dd | REWORK | MED | 23 upstream commits on adapter file |
+| 6 | 730dddc2dd | **DROP** | — | Upstream fully covers (discovered during replay) |
 
-**No DROPs.** Upstream's prompt-caching-scope fix is scoped narrowly to vertex-ai experimental path; our fixes cover three additional surfaces (direct-anthropic, non-experimental vertex-anthropic, proxy pre-call). Upstream's reasoning-field fix is at a different abstraction layer. Content-block strip was reverted upstream.
+**1 DROP.** Upstream's prompt-caching-scope fix is scoped narrowly to vertex-ai experimental path; our fixes cover three additional surfaces (direct-anthropic, non-experimental vertex-anthropic, proxy pre-call). Upstream's reasoning-field fix is at a different abstraction layer. Content-block fix (#134) is already present in upstream v1.83.3 verbatim.
 
 ## Replay notes
 
