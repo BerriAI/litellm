@@ -577,7 +577,11 @@ class AmazonAnthropicClaudeMessagesConfig(
         # 7. Final safety net: filter top-level fields to the Bedrock Invoke allowlist.
         # Catches Anthropic-only extensions (context_management, output_config, speed,
         # mcp_servers, ...) and any future additions Claude Code may start sending.
-        allowed = self.BEDROCK_INVOKE_ALLOWED_TOP_LEVEL_FIELDS
+        # Exception: Claude 4.6+ needs output_config to drive adaptive thinking —
+        # stripping it blows up token usage.
+        allowed = set(self.BEDROCK_INVOKE_ALLOWED_TOP_LEVEL_FIELDS)
+        if AnthropicModelInfo._is_adaptive_thinking_model(model):
+            allowed.add("output_config")
         stripped = sorted(k for k in anthropic_messages_request if k not in allowed)
         if stripped:
             verbose_logger.debug(

@@ -1003,9 +1003,12 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                     value if isinstance(value, int) else max(1, int(round(value)))
                 )
             elif param == "max_completion_tokens":
-                optional_params["max_tokens"] = (
-                    value if isinstance(value, int) else max(1, int(round(value)))
-                )
+                # Fallback alias — don't clobber an explicit max_tokens if the
+                # caller passed both.
+                if "max_tokens" not in optional_params:
+                    optional_params["max_tokens"] = (
+                        value if isinstance(value, int) else max(1, int(round(value)))
+                    )
             elif param == "tools":
                 # check if optional params already has tools
                 anthropic_tools, mcp_servers = self._map_tools(value)

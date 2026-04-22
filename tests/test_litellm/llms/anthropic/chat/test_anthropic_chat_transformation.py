@@ -3607,3 +3607,46 @@ def test_strip_advisor_blocks_no_op_when_no_advisor_blocks():
     original_content = [dict(b) for b in messages[1]["content"]]
     result = strip_advisor_blocks_from_messages(messages)
     assert result[1]["content"] == original_content
+
+
+def test_anthropic_max_completion_tokens_does_not_override_explicit_max_tokens():
+    """When both are passed, explicit max_tokens should win. The alias used to
+    clobber it unconditionally and silently capped generations."""
+    config = AnthropicConfig()
+
+    result = config.map_openai_params(
+        non_default_params={
+            "max_tokens": 64000,
+            "max_completion_tokens": 16384,
+        },
+        optional_params={},
+        model="claude-opus-4-6",
+        drop_params=False,
+    )
+    assert result["max_tokens"] == 64000
+
+    # Reverse iteration order — still explicit max_tokens wins
+    result = config.map_openai_params(
+        non_default_params={
+            "max_completion_tokens": 16384,
+            "max_tokens": 64000,
+        },
+        optional_params={},
+        model="claude-opus-4-6",
+        drop_params=False,
+    )
+    assert result["max_tokens"] == 64000
+
+
+def test_anthropic_max_completion_tokens_used_as_fallback_alias():
+    """With no max_tokens, max_completion_tokens should still pass through as
+    the max_tokens value."""
+    config = AnthropicConfig()
+
+    result = config.map_openai_params(
+        non_default_params={"max_completion_tokens": 16384},
+        optional_params={},
+        model="claude-opus-4-6",
+        drop_params=False,
+    )
+    assert result["max_tokens"] == 16384

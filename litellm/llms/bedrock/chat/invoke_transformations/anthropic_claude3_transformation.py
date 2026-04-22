@@ -11,6 +11,7 @@ from litellm.litellm_core_utils.prompt_templates.image_handling import (
     convert_url_to_base64,
 )
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation import (
     AmazonInvokeConfig,
 )
@@ -169,7 +170,10 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         anthropic_request.pop("model", None)
         anthropic_request.pop("stream", None)
         anthropic_request.pop("output_format", None)
-        anthropic_request.pop("output_config", None)
+        # Keep output_config for Claude 4.6+ (drives adaptive thinking). Older
+        # Anthropic Bedrock models reject it.
+        if not AnthropicModelInfo._is_adaptive_thinking_model(model):
+            anthropic_request.pop("output_config", None)
         if "anthropic_version" not in anthropic_request:
             anthropic_request["anthropic_version"] = self.anthropic_version
 

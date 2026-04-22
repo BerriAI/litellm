@@ -4146,3 +4146,138 @@ def test_transform_response_finish_reason_stop_when_json_mode_filters_all_tools(
 
     # finish_reason must be "stop", not "tool_calls"
     assert result.choices[0].finish_reason == "stop"
+
+
+def test_converse_preserves_anthropic_output_config_in_additional_model_request_fields():
+    """Claude 4.6 on Converse needs output_config to drive adaptive thinking.
+    It belongs in additionalModelRequestFields, not as the top-level
+    outputConfig (which is a different Bedrock feature)."""
+    config = AmazonConverseConfig()
+
+    # Run through map_openai_params first so the keys match production
+    # (max_tokens -> maxTokens, etc).
+    optional_params = config.map_openai_params(
+        non_default_params={
+            "max_tokens": 64000,
+            "max_completion_tokens": 16384,
+            "thinking": {"type": "adaptive"},
+        },
+        optional_params={},
+        model="global.anthropic.claude-opus-4-6-v1:0",
+        drop_params=False,
+    )
+    # output_config isn't mapped by map_openai_params — it passes through as-is.
+    optional_params["output_config"] = {"effort": "medium"}
+
+    data = config._transform_request_helper(
+        model="global.anthropic.claude-opus-4-6-v1:0",
+        system_content_blocks=[],
+        optional_params=optional_params,
+        messages=None,
+    )
+
+    assert "additionalModelRequestFields" in data
+    additional_fields = data["additionalModelRequestFields"]
+    assert additional_fields.get("output_config") == {"effort": "medium"}
+    assert additional_fields.get("thinking") == {"type": "adaptive"}
+
+    # Explicit max_tokens wins.
+    assert data["inferenceConfig"]["maxTokens"] == 64000
+
+    # Anthropic's snake_case output_config is separate from Bedrock's
+    # camelCase outputConfig — we shouldn't set the latter.
+    assert "outputConfig" not in data
+
+
+def test_converse_max_completion_tokens_does_not_override_explicit_max_tokens():
+    """Explicit max_tokens must win when both are passed. The Converse path
+    used to overwrite it with whichever came later."""
+    config = AmazonConverseConfig()
+
+    optional_params = {}
+    result = config.map_openai_params(
+        non_default_params={
+            "max_tokens": 64000,
+            "max_completion_tokens": 16384,
+        },
+        optional_params=optional_params,
+        model="anthropic.claude-opus-4-6-v1:0",
+        drop_params=False,
+    )
+    assert result["maxTokens"] == 64000
+
+    # Reversed dict order — still picks max_tokens.
+    optional_params = {}
+    result = config.map_openai_params(
+        non_default_params={
+            "max_completion_tokens": 16384,
+            "max_tokens": 64000,
+        },
+        optional_params=optional_params,
+        model="anthropic.claude-opus-4-6-v1:0",
+        drop_params=False,
+    )
+    assert result["maxTokens"] == 64000
+
+
+def test_converse_max_completion_tokens_used_when_max_tokens_absent():
+    """With no max_tokens, max_completion_tokens should pass through as
+    maxTokens."""
+    config = AmazonConverseConfig()
+
+    result = config.map_openai_params(
+        non_default_params={"max_completion_tokens": 16384},
+        optional_params={},
+        model="anthropic.claude-opus-4-6-v1:0",
+        drop_params=False,
+    )
+    assert result["maxTokens"] == 16384
+
+
+def test_converse_does_not_add_output_config_for_non_anthropic_models():
+    """output_config is Anthropic-only — don't leak it into requests for other
+    model families like Nova."""
+    config = AmazonConverseConfig()
+
+    optional_params = {
+        "output_config": {"effort": "medium"},
+        "maxTokens": 1024,
+    }
+
+    data = config._transform_request_helper(
+        model="amazon.nova-pro-v1:0",
+        system_content_blocks=[],
+        optional_params=optional_params,
+        messages=None,
+    )
+
+    additional_fields = data.get("additionalModelRequestFields", {})
+    assert "output_config" not in additional_fields
+
+
+def test_converse_preserves_native_output_config_structured_outputs():
+    """Bedrock's camelCase outputConfig (structured outputs) is a separate
+    feature from Anthropic's output_config and should still pass through as a
+    top-level field."""
+    config = AmazonConverseConfig()
+
+    native_output_config = {
+        "textFormat": {
+            "type": "json_schema",
+            "structure": {"jsonSchema": {"schema": "{}"}},
+        }
+    }
+
+    optional_params = {
+        "outputConfig": native_output_config,
+        "maxTokens": 1024,
+    }
+
+    data = config._transform_request_helper(
+        model="global.anthropic.claude-opus-4-6-v1:0",
+        system_content_blocks=[],
+        optional_params=optional_params,
+        messages=None,
+    )
+
+    assert data.get("outputConfig") == native_output_config

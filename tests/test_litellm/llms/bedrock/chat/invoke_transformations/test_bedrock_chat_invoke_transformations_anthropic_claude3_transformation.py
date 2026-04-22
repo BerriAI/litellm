@@ -475,3 +475,26 @@ def test_output_format_removed_from_bedrock_invoke_request():
     assert (
         "output_format" not in result
     ), f"output_format should be removed for Bedrock Invoke, got keys: {result.keys()}"
+
+
+def test_output_config_preserved_for_claude_4_6_bedrock_chat_invoke():
+    """Claude 4.6 on Bedrock invoke needs output_config to drive adaptive
+    thinking. Stripping it inflates token usage."""
+    config = AmazonAnthropicClaudeConfig()
+
+    messages = [{"role": "user", "content": "test"}]
+    optional_params = {
+        "max_tokens": 64000,
+        "output_config": {"effort": "medium"},
+    }
+
+    result = config.transform_request(
+        model="anthropic.claude-opus-4-6-v1:0",
+        messages=messages,
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+
+    assert result.get("output_config") == {"effort": "medium"}
+    assert result["max_tokens"] == 64000

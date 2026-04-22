@@ -871,7 +871,11 @@ class AmazonConverseConfig(BaseConfig):
                     non_default_params=non_default_params,
                     is_thinking_enabled=is_thinking_enabled,
                 )
-            if param == "max_tokens" or param == "max_completion_tokens":
+            # max_completion_tokens is a fallback alias — don't let it clobber
+            # an explicit max_tokens if the caller passed both.
+            if param == "max_tokens" or (
+                param == "max_completion_tokens" and "maxTokens" not in optional_params
+            ):
                 optional_params["maxTokens"] = value
             if param == "stream":
                 optional_params["stream"] = value
@@ -1175,7 +1179,7 @@ class AmazonConverseConfig(BaseConfig):
 
     def _prepare_request_params(
         self, optional_params: dict, model: str
-    ) -> Tuple[dict, dict, dict, Optional[OutputConfigBlock]]:
+    ) -> Tuple[dict, dict, dict, Optional[OutputConfigBlock], Optional[dict]]:
         """Prepare and separate request parameters."""
         # Filter out exception objects before deepcopy to prevent deepcopy failures
         # Exceptions should not be stored in optional_params (this is a defensive fix)
@@ -1192,21 +1196,26 @@ class AmazonConverseConfig(BaseConfig):
             + supported_config_params
         )
         inference_params.pop("json_mode", None)  # used for handling json_schema
-        # Anthropic-only key. Bedrock expects `outputConfig` (camelCase) and
-        # will reject `output_config` if it leaks through pass-through routes.
-        inference_params.pop("output_config", None)
 
         # Extract requestMetadata before processing other parameters
         request_metadata = inference_params.pop("requestMetadata", None)
         if request_metadata is not None:
             self._validate_request_metadata(request_metadata)
 
+        # Two different fields share a confusingly similar name:
+        #   - `outputConfig` (camelCase) — Bedrock's structured-output block, a
+        #     top-level Converse field.
+        #   - `output_config` (snake_case) — Anthropic's effort control for
+        #     Claude 4.6 adaptive thinking. Goes under
+        #     additionalModelRequestFields for Anthropic models; dropping it
+        #     tanks token efficiency. See _transform_request_helper for the
+        #     forwarding.
         output_config: Optional[OutputConfigBlock] = inference_params.pop(
             "outputConfig", None
         )
-        inference_params.pop(
+        anthropic_output_config: Optional[dict] = inference_params.pop(
             "output_config", None
-        )  # Bedrock Converse doesn't support it
+        )
 
         # keep supported params in 'inference_params', and set all model-specific params in 'additional_request_params'
         additional_request_params = {
@@ -1254,6 +1263,7 @@ class AmazonConverseConfig(BaseConfig):
             additional_request_params,
             request_metadata,
             output_config,
+            anthropic_output_config,
         )
 
     def _process_tools_and_beta(
@@ -1433,6 +1443,7 @@ class AmazonConverseConfig(BaseConfig):
             additional_request_params,
             request_metadata,
             output_config,
+            anthropic_output_config,
         ) = self._prepare_request_params(optional_params, model)
 
         original_tools = inference_params.pop("tools", [])
@@ -1441,6 +1452,14 @@ class AmazonConverseConfig(BaseConfig):
         bedrock_tools, anthropic_beta_list = self._process_tools_and_beta(
             original_tools, model, headers, additional_request_params
         )
+
+        # Forward Anthropic's output_config via additionalModelRequestFields on
+        # Anthropic models — that's how Claude 4.6 gets its effort setting on
+        # Converse.
+        if anthropic_output_config is not None:
+            base_model = BedrockModelInfo.get_base_model(model)
+            if base_model.startswith("anthropic"):
+                additional_request_params["output_config"] = anthropic_output_config
 
         # Append cachePoint to tools if cache_control_injection_points has tool_config
         cache_injection_points = additional_request_params.pop(
