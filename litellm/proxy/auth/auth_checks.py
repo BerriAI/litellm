@@ -494,23 +494,27 @@ async def common_checks(  # noqa: PLR0915
             f"Team={team_object.team_id} is blocked. Update via `/team/unblock` if you're an admin."
         )
 
-    # 2. If team can call model
+    # 2. If team can call model (or key's access_group_ids grant it)
     if _model and team_object:
         with tracer.trace("litellm.proxy.auth.common_checks.can_team_access_model"):
-            if not await can_team_access_model(
-                model=_model,
-                team_object=team_object,
-                llm_router=llm_router,
-                team_model_aliases=(
-                    valid_token.team_model_aliases if valid_token else None
-                ),
-            ):
-                raise ProxyException(
-                    message=f"Team not allowed to access model. Team={team_object.team_id}, Model={_model}. Allowed team models = {team_object.models}",
-                    type=ProxyErrorTypes.team_model_access_denied,
-                    param="model",
-                    code=status.HTTP_401_UNAUTHORIZED,
+            try:
+                await can_team_access_model(
+                    model=_model,
+                    team_object=team_object,
+                    llm_router=llm_router,
+                    team_model_aliases=(
+                        valid_token.team_model_aliases if valid_token else None
+                    ),
                 )
+            except ProxyException as team_denial:
+                if team_denial.type != ProxyErrorTypes.team_model_access_denied:
+                    raise
+                if not await _key_access_group_grants_model(
+                    model=_model,
+                    valid_token=valid_token,
+                    llm_router=llm_router,
+                ):
+                    raise
 
     # 2.2. If team member has per-member model scope, enforce it
     if _model and team_object and valid_token and valid_token.user_id:
@@ -2861,6 +2865,40 @@ async def can_team_access_model(
                     object_type="team",
                 )
         raise
+
+
+async def _key_access_group_grants_model(
+    model: Union[str, List[str]],
+    valid_token: Optional[UserAPIKeyAuth],
+    llm_router: Optional[Router],
+) -> bool:
+    """
+    Returns True if the key's `access_group_ids` expand to models that grant
+    access to `model`. Used to let a key's access group override a team's
+    model restriction in `common_checks`.
+    """
+    if valid_token is None:
+        return False
+    key_access_group_ids = valid_token.access_group_ids or []
+    if not key_access_group_ids:
+        return False
+    models_from_groups = await _get_models_from_access_groups(
+        access_group_ids=key_access_group_ids,
+    )
+    if not models_from_groups:
+        return False
+    try:
+        _can_object_call_model(
+            model=model,
+            llm_router=llm_router,
+            models=models_from_groups,
+            team_model_aliases=valid_token.team_model_aliases,
+            team_id=valid_token.team_id,
+            object_type="key",
+        )
+        return True
+    except ProxyException:
+        return False
 
 
 def can_project_access_model(
