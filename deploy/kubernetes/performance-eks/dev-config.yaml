@@ -1,0 +1,34 @@
+# Proxy config for performance-eks: Neon (DATABASE_URL from Secret) + in-memory cache (no Redis).
+# DB URL and master key must come from env — see README (litellm-dotenv Secret).
+
+model_list:
+  - model_name: fake-openai-endpoint
+    litellm_params:
+      model: openai/fake-model
+      api_key: fake-key
+      api_base: https://exampleopenaiendpoint-production.up.railway.app/
+      timeout: 40
+
+  - model_name: fake-openai-gpt4
+    litellm_params:
+      model: gpt-4
+      api_key: fake-key
+      api_base: http://mock-llm-provider/llm/
+
+general_settings:
+  master_key: os.environ/PROXY_MASTER_KEY
+  health_check_details: False
+  database_url: os.environ/DATABASE_URL
+
+litellm_settings:
+  network_mock: False
+  json_logs: True
+  drop_params: True
+  telemetry: False
+  callbacks: ["prometheus"]
+  public_routes: ["LiteLLMRoutes.public_routes", "/health/liveliness"]
+  num_retries: 0
+  cache: True
+  cache_params:
+    type: local
+    supported_call_types: []

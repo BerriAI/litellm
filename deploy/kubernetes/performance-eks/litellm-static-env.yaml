@@ -1,0 +1,9 @@
+# Non-secret env. DATABASE_URL + PROXY_MASTER_KEY: set via Secret litellm-dotenv (required).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: litellm-static-env
+data:
+  STORE_MODEL_IN_DB: "True"
+  ENV: "production"
+  LITELLM_ENVIRONMENT: "production"

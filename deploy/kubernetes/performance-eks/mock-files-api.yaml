@@ -1,0 +1,71 @@
+# Minimal OpenAI-shaped mock + /health (compose used repo mock_files_api.py on a volume).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mock-files-api-code
+data:
+  mock_files_api.py: |
+    """Minimal files/OpenAI mock for k8s parity; extend to match your local mock_files_api.py."""
+    from fastapi import FastAPI
+
+    app = FastAPI()
+
+    @app.get("/health")
+    def health():
+        return {"status": "ok"}
+
+    @app.get("/v1/models")
+    def models():
+        return {"object": "list", "data": []}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mock-files-api
+spec:
+  ports:
+    - port: 8001
+      targetPort: 8001
+  selector:
+    app: mock-files-api
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mock-files-api
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mock-files-api
+  template:
+    metadata:
+      labels:
+        app: mock-files-api
+    spec:
+      containers:
+        - name: api
+          image: python:3.11-slim
+          workingDir: /app
+          ports:
+            - containerPort: 8001
+          command:
+            - /bin/sh
+            - -c
+            - pip install --no-cache-dir fastapi uvicorn && uvicorn mock_files_api:app --host 0.0.0.0 --port 8001
+          volumeMounts:
+            - name: code
+              mountPath: /app/mock_files_api.py
+              subPath: mock_files_api.py
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8001
+            initialDelaySeconds: 30
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 12
+      volumes:
+        - name: code
+          configMap:
+            name: mock-files-api-code
