@@ -1121,14 +1121,14 @@ async def _db_health_readiness_check():
         return db_health_cache
     except Exception as e:
         db_health_cache = {"status": "disconnected", "last_updated": datetime.now()}
-        PrismaDBExceptionHandler.handle_db_exception(e)
         if PrismaDBExceptionHandler.is_database_transport_error(e):
             try:
                 verbose_proxy_logger.warning(
                     "_db_health_readiness_check: health_check failed, attempting reconnect"
                 )
-                await prisma_client.disconnect()
-                await prisma_client.connect()
+                await prisma_client.attempt_db_reconnect(
+                    reason="health_readiness_check"
+                )
                 await prisma_client.health_check()
                 verbose_proxy_logger.info(
                     "_db_health_readiness_check: reconnect succeeded"

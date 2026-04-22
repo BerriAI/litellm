@@ -34,6 +34,7 @@ from litellm.llms.bedrock.common_utils import (
     remove_custom_field_from_tools,
 )
 from litellm.types.llms.anthropic import ANTHROPIC_TOOL_SEARCH_BETA_HEADER
+from litellm.types.llms.bedrock import BedrockInvokeAnthropicMessagesRequest
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import GenericStreamingChunk
@@ -58,6 +59,10 @@ class AmazonAnthropicClaudeMessagesConfig(
     """
 
     DEFAULT_BEDROCK_ANTHROPIC_API_VERSION = "bedrock-2023-05-31"
+
+    BEDROCK_INVOKE_ALLOWED_TOP_LEVEL_FIELDS = frozenset(
+        BedrockInvokeAnthropicMessagesRequest.__annotations__.keys()
+    )
 
     def __init__(self, **kwargs):
         BaseAnthropicMessagesConfig.__init__(self, **kwargs)
@@ -500,10 +505,6 @@ class AmazonAnthropicClaudeMessagesConfig(
                 anthropic_messages_request=anthropic_messages_request,
             )
 
-        # 5b. Strip `output_config` — Bedrock Invoke doesn't support it
-        # Fixes: https://github.com/BerriAI/litellm/issues/22797
-        anthropic_messages_request.pop("output_config", None)
-
         # 5a. Remove `custom` field from tools (Bedrock doesn't support it)
         # Claude Code sends `custom: {defer_loading: true}` on tool definitions,
         # which causes Bedrock to reject the request with "Extra inputs are not permitted"
@@ -550,13 +551,42 @@ class AmazonAnthropicClaudeMessagesConfig(
         if "tool-search-tool-2025-10-19" in beta_set:
             beta_set.add("tool-examples-2025-10-29")
 
-        filtered_auto_betas = filter_and_transform_beta_headers(
-            beta_headers=list(beta_set - user_beta_set),
-            provider="bedrock",
+        filtered_betas = sorted(
+            filter_and_transform_beta_headers(
+                beta_headers=list(beta_set),
+                provider="bedrock",
+            )
         )
-        filtered_betas = sorted(user_beta_set.union(set(filtered_auto_betas)))
+
+        dropped_user_betas = sorted(
+            b
+            for b in user_beta_set
+            if not filter_and_transform_beta_headers([b], provider="bedrock")
+        )
+        if dropped_user_betas:
+            verbose_logger.warning(
+                "Bedrock Invoke: dropping unsupported anthropic-beta values "
+                "from client headers: %s. Bedrock has no mapping entry for "
+                "these; forwarding them would cause a 400.",
+                dropped_user_betas,
+            )
+
         if filtered_betas:
             anthropic_messages_request["anthropic_beta"] = filtered_betas
+
+        # 7. Final safety net: filter top-level fields to the Bedrock Invoke allowlist.
+        # Catches Anthropic-only extensions (context_management, output_config, speed,
+        # mcp_servers, ...) and any future additions Claude Code may start sending.
+        allowed = self.BEDROCK_INVOKE_ALLOWED_TOP_LEVEL_FIELDS
+        stripped = sorted(k for k in anthropic_messages_request if k not in allowed)
+        if stripped:
+            verbose_logger.debug(
+                "Bedrock Invoke: stripping unsupported top-level request fields: %s",
+                stripped,
+            )
+        anthropic_messages_request = {
+            k: v for k, v in anthropic_messages_request.items() if k in allowed
+        }
 
         return anthropic_messages_request
 
