@@ -37,6 +37,20 @@ def initialize_callbacks_on_proxy(  # noqa: PLR0915
     if isinstance(value, list):
         imported_list: List[Any] = []
         for callback in value:  # ["presidio", <my-custom-callback>]
+            if isinstance(callback, str) and callback == "compression_interception":
+                from litellm.integrations.compression_interception.handler import (
+                    CompressionInterceptionLogger,
+                )
+
+                compression_interception_obj = (
+                    CompressionInterceptionLogger.initialize_from_proxy_config(
+                        litellm_settings=litellm_settings,
+                        callback_specific_params=callback_specific_params,
+                    )
+                )
+                imported_list.append(compression_interception_obj)
+                continue
+
             # check if callback is a custom logger compatible callback
             if isinstance(callback, str):
                 callback = LoggingCallbackManager._add_custom_callback_generic_api_str(
@@ -419,7 +433,8 @@ def add_guardrail_to_applied_guardrails_header(
         return
     _metadata = request_data.get("metadata", None) or {}
     if "applied_guardrails" in _metadata:
-        _metadata["applied_guardrails"].append(guardrail_name)
+        if guardrail_name not in _metadata["applied_guardrails"]:
+            _metadata["applied_guardrails"].append(guardrail_name)
     else:
         _metadata["applied_guardrails"] = [guardrail_name]
     # Ensure metadata is set back to request_data (important when metadata didn't exist)

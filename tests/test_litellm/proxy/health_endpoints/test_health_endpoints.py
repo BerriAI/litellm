@@ -9,6 +9,7 @@ sys.path.insert(
     0, os.path.abspath("../../..")
 )  # Adds the parent directory to the system path
 
+import httpx
 import pytest
 from prisma.errors import ClientNotConnectedError, HTTPClientClosedError, PrismaError
 
@@ -110,220 +111,127 @@ async def test_db_health_prisma_client_none():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "prisma_error",
+    "transport_error",
     [
-        PrismaError(),
+        httpx.ConnectError("All connection attempts failed"),
         ClientNotConnectedError(),
         HTTPClientClosedError(),
+        PrismaError("Can't reach database server"),
     ],
 )
-async def test_db_health_error_flag_off_raises_no_reconnect(prisma_error):
+async def test_db_health_transport_error_never_raises(transport_error):
     """
-    When health_check raises and allow_requests_on_db_unavailable is False,
-    handle_db_exception re-raises immediately. The reconnect path is never
-    reached, so disconnect/connect are never called.
+    Regression test for the /health/readiness 503 loop bug.
+
+    handle_db_exception() used to re-raise inside _db_health_readiness_check,
+    turning any DB outage into a 503 "Service Unhealthy" response that never
+    recovered. Transport errors (ClientNotConnectedError, httpx.ConnectError,
+    etc.) must return {"status": "disconnected"} — never raise.
     """
     mock_prisma = MagicMock()
-    mock_prisma.health_check = AsyncMock(side_effect=prisma_error)
-    mock_prisma.disconnect = AsyncMock()
+    mock_prisma.health_check = AsyncMock(side_effect=transport_error)
+    mock_prisma.attempt_db_reconnect = AsyncMock(return_value=False)
 
     _health_endpoints_module.db_health_cache = {
         "status": "connected",
         "last_updated": datetime.now() - timedelta(seconds=20),
     }
 
-    with (
-        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
-        patch(
-            "litellm.proxy.proxy_server.general_settings",
-            {"allow_requests_on_db_unavailable": False},
-        ),
-    ):
-        with pytest.raises(Exception) as exc_info:
-            await _db_health_readiness_check()
+    with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma):
+        result = await _db_health_readiness_check()
 
-        assert exc_info.value is prisma_error
-        mock_prisma.disconnect.assert_not_called()
-        assert _health_endpoints_module.db_health_cache["status"] == "disconnected"
+    assert result["status"] == "disconnected"
+    mock_prisma.attempt_db_reconnect.assert_called_once_with(
+        reason="health_readiness_check"
+    )
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "prisma_error",
+    "transport_error",
     [
-        PrismaError("Can't reach database server"),
+        httpx.ConnectError("All connection attempts failed"),
         ClientNotConnectedError(),
         HTTPClientClosedError(),
     ],
 )
-async def test_db_health_error_flag_on_reconnect_succeeds(prisma_error):
+async def test_db_health_transport_error_reconnect_succeeds(transport_error):
     """
-    When health_check raises, allow_requests_on_db_unavailable is True,
-    and the reconnect cycle (disconnect -> connect -> health_check) succeeds,
-    return 'connected' and update the cache.
+    When health_check raises a transport error and attempt_db_reconnect
+    succeeds, the second health_check passes and we return 'connected'.
     """
     mock_prisma = MagicMock()
-    mock_prisma.health_check = AsyncMock(side_effect=[prisma_error, None])
-    mock_prisma.disconnect = AsyncMock()
-    mock_prisma.connect = AsyncMock()
+    mock_prisma.health_check = AsyncMock(side_effect=[transport_error, None])
+    mock_prisma.attempt_db_reconnect = AsyncMock(return_value=True)
 
     _health_endpoints_module.db_health_cache = {
         "status": "connected",
         "last_updated": datetime.now() - timedelta(seconds=20),
     }
 
-    with (
-        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
-        patch(
-            "litellm.proxy.proxy_server.general_settings",
-            {"allow_requests_on_db_unavailable": True},
-        ),
-    ):
+    with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma):
         result = await _db_health_readiness_check()
 
     assert result["status"] == "connected"
-    mock_prisma.disconnect.assert_called_once()
-    mock_prisma.connect.assert_called_once()
+    mock_prisma.attempt_db_reconnect.assert_called_once_with(
+        reason="health_readiness_check"
+    )
     assert mock_prisma.health_check.call_count == 2
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "prisma_error",
+    "transport_error",
     [
-        PrismaError("Can't reach database server"),
+        httpx.ConnectError("All connection attempts failed"),
         ClientNotConnectedError(),
         HTTPClientClosedError(),
     ],
 )
-async def test_db_health_error_flag_on_reconnect_fails(prisma_error):
+async def test_db_health_transport_error_reconnect_fails(transport_error):
     """
-    When health_check raises, allow_requests_on_db_unavailable is True,
-    but the reconnect also fails, return 'disconnected' instead of raising.
-    This respects the flag's intent: keep serving even without a DB.
+    When health_check raises a transport error and attempt_db_reconnect also
+    fails, return 'disconnected' without raising.
     """
-    mock_prisma = MagicMock()
-    mock_prisma.health_check = AsyncMock(side_effect=prisma_error)
-    mock_prisma.disconnect = AsyncMock()
-    mock_prisma.connect = AsyncMock()
-
-    _health_endpoints_module.db_health_cache = {
-        "status": "connected",
-        "last_updated": datetime.now() - timedelta(seconds=20),
-    }
-
-    with (
-        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
-        patch(
-            "litellm.proxy.proxy_server.general_settings",
-            {"allow_requests_on_db_unavailable": True},
-        ),
-    ):
-        result = await _db_health_readiness_check()
-
-    assert result["status"] == "disconnected"
-    mock_prisma.disconnect.assert_called_once()
-    mock_prisma.connect.assert_called_once()
-
-
-@pytest.mark.asyncio
-async def test_db_health_non_transport_error_flag_off_raises():
-    """
-    When health_check raises a non-transport error and
-    allow_requests_on_db_unavailable is False, handle_db_exception
-    re-raises before reaching the is_database_transport_error guard.
-    Cache is still invalidated before the re-raise.
-    """
-    non_transport_error = PrismaError("UniqueViolationError")
-    mock_prisma = MagicMock()
-    mock_prisma.health_check = AsyncMock(side_effect=non_transport_error)
-    mock_prisma.disconnect = AsyncMock()
-    mock_prisma.connect = AsyncMock()
-
-    _health_endpoints_module.db_health_cache = {
-        "status": "connected",
-        "last_updated": datetime.now() - timedelta(seconds=20),
-    }
-
-    with (
-        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
-        patch(
-            "litellm.proxy.proxy_server.general_settings",
-            {"allow_requests_on_db_unavailable": False},
-        ),
-    ):
-        with pytest.raises(PrismaError):
-            await _db_health_readiness_check()
-
-    assert _health_endpoints_module.db_health_cache["status"] == "disconnected"
-    mock_prisma.disconnect.assert_not_called()
-    mock_prisma.connect.assert_not_called()
-
-
-@pytest.mark.asyncio
-async def test_db_health_non_transport_error_flag_on_skips_reconnect():
-    """
-    When health_check raises a non-transport error (e.g. data-layer) and
-    allow_requests_on_db_unavailable is True, handle_db_exception swallows
-    the exception, then is_database_transport_error returns False so the
-    reconnect cycle is skipped. Returns 'disconnected' without calling
-    disconnect/connect.
-    """
-    non_transport_error = PrismaError("UniqueViolationError")
-    mock_prisma = MagicMock()
-    mock_prisma.health_check = AsyncMock(side_effect=non_transport_error)
-    mock_prisma.disconnect = AsyncMock()
-    mock_prisma.connect = AsyncMock()
-
-    _health_endpoints_module.db_health_cache = {
-        "status": "connected",
-        "last_updated": datetime.now() - timedelta(seconds=20),
-    }
-
-    with (
-        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
-        patch(
-            "litellm.proxy.proxy_server.general_settings",
-            {"allow_requests_on_db_unavailable": True},
-        ),
-    ):
-        result = await _db_health_readiness_check()
-
-    assert result["status"] == "disconnected"
-    mock_prisma.disconnect.assert_not_called()
-    mock_prisma.connect.assert_not_called()
-
-
-@pytest.mark.asyncio
-async def test_db_health_reconnect_disconnect_fails():
-    """
-    When disconnect() itself raises during the reconnect cycle,
-    the inner except catches it and returns 'disconnected'.
-    connect() and the second health_check() are never called.
-    """
-    transport_error = ClientNotConnectedError()
     mock_prisma = MagicMock()
     mock_prisma.health_check = AsyncMock(side_effect=transport_error)
-    mock_prisma.disconnect = AsyncMock(side_effect=RuntimeError("already closed"))
-    mock_prisma.connect = AsyncMock()
+    mock_prisma.attempt_db_reconnect = AsyncMock(
+        side_effect=RuntimeError("reconnect failed")
+    )
 
     _health_endpoints_module.db_health_cache = {
         "status": "connected",
         "last_updated": datetime.now() - timedelta(seconds=20),
     }
 
-    with (
-        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
-        patch(
-            "litellm.proxy.proxy_server.general_settings",
-            {"allow_requests_on_db_unavailable": True},
-        ),
-    ):
+    with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma):
         result = await _db_health_readiness_check()
 
     assert result["status"] == "disconnected"
-    mock_prisma.disconnect.assert_called_once()
-    mock_prisma.connect.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_db_health_non_transport_error_returns_disconnected():
+    """
+    When health_check raises a non-transport error (e.g. data-layer error),
+    is_database_transport_error returns False so reconnect is skipped.
+    Returns 'disconnected' without raising and without calling attempt_db_reconnect.
+    """
+    non_transport_error = PrismaError("UniqueViolationError")
+    mock_prisma = MagicMock()
+    mock_prisma.health_check = AsyncMock(side_effect=non_transport_error)
+    mock_prisma.attempt_db_reconnect = AsyncMock()
+
+    _health_endpoints_module.db_health_cache = {
+        "status": "connected",
+        "last_updated": datetime.now() - timedelta(seconds=20),
+    }
+
+    with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma):
+        result = await _db_health_readiness_check()
+
+    assert result["status"] == "disconnected"
+    mock_prisma.attempt_db_reconnect.assert_not_called()
 
 
 @pytest.mark.asyncio
