@@ -14073,6 +14073,9 @@ app.include_router(agent_endpoints_router)
 app.include_router(compliance_router)
 app.include_router(a2a_router)
 app.include_router(access_group_router)
+from litellm.proxy.eval_management.eval_endpoints import router as litellm_evals_router
+
+app.include_router(litellm_evals_router)
 
 
 async def _stream_mcp_asgi_response(
