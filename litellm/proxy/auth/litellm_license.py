@@ -175,7 +175,24 @@ class LicenseCheck:
                 license_key += "=" * (4 - padding_needed)
 
             decoded = base64.b64decode(license_key)
-            message, signature = decoded.split(b".", 1)
+
+            # Split message.signature using the RSA signature length from the end.
+            # The prior implementation used `decoded.split(b".", 1)` which misparses
+            # licenses whose JSON payload contains a literal "." (e.g. domain-like
+            # user_id "acme.co.jp-license-..."). RSA signatures are the same byte
+            # length as the verification key modulus, so derive the expected length
+            # from the provided public key instead of hardcoding specific sizes.
+            sig_len = getattr(public_key, "key_size", 0) // 8
+            if sig_len <= 0:
+                raise ValueError("Public key does not expose a valid RSA key_size")
+            if len(decoded) <= sig_len or decoded[-(sig_len + 1) : -sig_len] != b".":
+                raise ValueError(
+                    "License payload is not in <message>.<signature> format "
+                    "for RSA signature length {} bytes.".format(sig_len)
+                )
+
+            message = decoded[: -(sig_len + 1)]
+            signature = decoded[-sig_len:]
 
             # Verify the signature
             public_key.verify(
