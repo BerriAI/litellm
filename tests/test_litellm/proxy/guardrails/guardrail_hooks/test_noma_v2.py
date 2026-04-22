@@ -313,9 +313,7 @@ class TestNomaV2Configuration:
             if isinstance(obj, dict) and obj.get("_probe") == "fail-me":
                 state["count"] += 1
                 if state["count"] == 1:
-                    raise RuntimeError(
-                        "dictionary changed size during iteration"
-                    )
+                    raise RuntimeError("dictionary changed size during iteration")
             return original_deepcopy(obj)
 
         monkeypatch.setattr(copy, "deepcopy", flaky_deepcopy)

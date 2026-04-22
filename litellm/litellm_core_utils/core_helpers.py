@@ -335,9 +335,7 @@ def safe_deep_copy(data):
     if isinstance(snap_litellm_metadata, dict) and (
         "litellm_parent_otel_span" in snap_litellm_metadata
     ):
-        litellm_parent_otel_span = snap_litellm_metadata.pop(
-            "litellm_parent_otel_span"
-        )
+        litellm_parent_otel_span = snap_litellm_metadata.pop("litellm_parent_otel_span")
         snap_litellm_metadata["litellm_parent_otel_span"] = "placeholder"
 
     # Step 2: per-key deepcopy with fallback. Nested dicts beyond the two we
@@ -366,9 +364,7 @@ def safe_deep_copy(data):
         if isinstance(new_litellm_metadata, dict) and (
             "litellm_parent_otel_span" in new_litellm_metadata
         ):
-            new_litellm_metadata[
-                "litellm_parent_otel_span"
-            ] = litellm_parent_otel_span
+            new_litellm_metadata["litellm_parent_otel_span"] = litellm_parent_otel_span
     return new_data
 
 
