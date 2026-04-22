@@ -56,6 +56,11 @@ class SemanticToolFilterHook(CustomLogger):
         tool map, which is built from the MCP server registry at startup.
         Native (non-MCP) tools are not in this map and should pass through
         the filter unchanged.
+
+        Note: _extract_tool_info returns "" for standard OpenAI-format dicts
+        (where name is nested under "function"), which means native tools
+        will never match _tool_map entries. If _extract_tool_info is updated
+        to unwrap nested function.name, this method must be revisited.
         """
         tool_name, _ = self.filter._extract_tool_info(tool)
         return tool_name in self.filter._tool_map
