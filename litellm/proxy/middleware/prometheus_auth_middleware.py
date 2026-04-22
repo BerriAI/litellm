@@ -39,8 +39,22 @@ class PrometheusAuthMiddleware:
 
         # Only run auth if configured to do so
         if litellm.require_auth_for_metrics_endpoint is True:
-            # Construct Request only when auth is actually needed
-            request = Request(scope, receive)
+            # user_api_key_auth calls _read_request_body internally, which
+            # drains the ASGI receive channel via Starlette's Request.body().
+            # If we then handed the already-drained `receive` straight to the
+            # downstream app (e.g. the prometheus_client ASGI app mounted at
+            # /metrics), it would block forever awaiting an http.request
+            # message that has already been consumed. Buffer whatever auth
+            # reads so we can replay it below when the request continues
+            # through to the inner application.
+            consumed_messages: list = []
+
+            async def buffering_receive():
+                message = await receive()
+                consumed_messages.append(message)
+                return message
+
+            request = Request(scope, buffering_receive)
             api_key = request.headers.get(_AUTHORIZATION_HEADER) or ""
 
             try:
@@ -68,6 +82,21 @@ class PrometheusAuthMiddleware:
                     }
                 )
                 return
+
+            # Auth succeeded; replay any messages it consumed so the
+            # downstream app sees the original request on its own `receive`.
+            replay_index = 0
+
+            async def replay_receive():
+                nonlocal replay_index
+                if replay_index < len(consumed_messages):
+                    message = consumed_messages[replay_index]
+                    replay_index += 1
+                    return message
+                return await receive()
+
+            await self.app(scope, replay_receive, send)
+            return
 
         # Pass through to the inner application
         await self.app(scope, receive, send)

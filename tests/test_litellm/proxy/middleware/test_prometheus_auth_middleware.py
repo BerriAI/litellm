@@ -170,3 +170,99 @@ def test_non_metrics_requests_dont_trigger_auth(app_with_middleware, monkeypatch
     response = client.get("/embeddings")
     assert response.status_code == 200, response.text
     assert response.json() == {"msg": "embeddings OK"}
+
+
+@pytest.mark.asyncio
+async def test_downstream_asgi_app_receives_http_request_after_auth_reads_body(
+    monkeypatch,
+):
+    """
+    Regression test: the real user_api_key_auth calls _read_request_body()
+    (user_api_key_auth.py, line ~1591), which drains the ASGI `receive`
+    channel. The middleware must not pass the already-drained `receive`
+    straight through to the downstream app, or a mounted ASGI sub-app at
+    /metrics (created by prometheus_client.make_asgi_app) blocks on
+    `await receive()` and the request hangs indefinitely.
+
+    Reproduction: patch user_api_key_auth with a stub that reads the body
+    (mirroring what the real function does for admin-role callers). Install
+    a pure ASGI inner app that records any message it receives. Drive the
+    middleware once with a minimal HTTP scope. With the bug present, the
+    inner app times out waiting on receive() because the http.request
+    message was already pulled by auth. With a fix in place (e.g. a
+    receive-replay wrapper in the middleware), the inner app observes the
+    http.request message and completes normally.
+    """
+    import asyncio
+
+    litellm.require_auth_for_metrics_endpoint = True
+
+    # Stub that mirrors real auth: it reads the request body, consuming the
+    # ASGI receive channel. The existing fake_valid_auth skips this step
+    # which is why the bug is not caught by the other tests in this file.
+    async def fake_auth_that_reads_body(request, api_key):
+        _ = await request.body()
+        return
+
+    monkeypatch.setattr(
+        "litellm.proxy.middleware.prometheus_auth_middleware.user_api_key_auth",
+        fake_auth_that_reads_body,
+    )
+
+    received_by_inner: list = []
+
+    async def inner_app(scope, receive, send):
+        # Pure ASGI inner app. Emulates what a mounted app like
+        # prometheus_client.make_asgi_app() does: try to receive, then
+        # respond. If receive() blocks, we abort after 2s so the test can
+        # fail cleanly rather than hanging.
+        try:
+            msg = await asyncio.wait_for(receive(), timeout=2.0)
+            received_by_inner.append(msg)
+        except asyncio.TimeoutError:
+            received_by_inner.append({"type": "<timeout>"})
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": b"", "more_body": False})
+
+    middleware = PrometheusAuthMiddleware(inner_app)
+
+    scope = {
+        "type": "http",
+        "method": "GET",
+        "path": "/metrics",
+        "raw_path": b"/metrics",
+        "query_string": b"",
+        "headers": [(b"authorization", b"Bearer test-admin-key")],
+        "scheme": "http",
+        "client": ("127.0.0.1", 12345),
+        "server": ("testserver", 80),
+        "http_version": "1.1",
+    }
+
+    # Queue exactly one http.request message, as a real GET would deliver.
+    # After it is consumed, receive() would normally block.
+    queued = [{"type": "http.request", "body": b"", "more_body": False}]
+
+    async def receive():
+        if queued:
+            return queued.pop(0)
+        # Block indefinitely — same as real ASGI when no more messages.
+        await asyncio.Event().wait()
+
+    sent: list = []
+
+    async def send(message):
+        sent.append(message)
+
+    await asyncio.wait_for(middleware(scope, receive, send), timeout=5.0)
+
+    # Core assertion: the inner app must see the http.request message.
+    # With the current middleware, `received_by_inner` contains
+    # {"type": "<timeout>"} because `receive` was drained by the auth
+    # body-read.
+    assert received_by_inner, "inner app did not run"
+    assert received_by_inner[0].get("type") == "http.request", (
+        f"downstream app did not observe http.request; saw {received_by_inner[0]}. "
+        "Middleware must replay the consumed http.request message to downstream "
+        "when require_auth_for_metrics_endpoint is enabled."
+    )
