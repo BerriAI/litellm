@@ -44,6 +44,7 @@ from litellm.types.utils import (
     ModelResponse,
     ProviderField,
     StandardCallbackDynamicParams,
+    StandardLoggingEvalInformation,
     StandardLoggingGuardrailInformation,
     StandardLoggingMCPToolCall,
     StandardLoggingModelInformation,
@@ -3327,6 +3328,7 @@ class SpendLogsMetadata(TypedDict):
     mcp_tool_call_metadata: Optional[StandardLoggingMCPToolCall]
     vector_store_request_metadata: Optional[List[StandardLoggingVectorStoreRequest]]
     guardrail_information: Optional[List[StandardLoggingGuardrailInformation]]
+    eval_information: Optional[List[StandardLoggingEvalInformation]]
     status: StandardLoggingPayloadStatus
     proxy_server_request: Optional[str]
     batch_models: Optional[List[str]]
