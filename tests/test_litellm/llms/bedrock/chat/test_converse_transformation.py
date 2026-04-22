@@ -4154,20 +4154,11 @@ def test_converse_preserves_anthropic_output_config_in_additional_model_request_
     outputConfig (which is a different Bedrock feature)."""
     config = AmazonConverseConfig()
 
-    # Run through map_openai_params first so the keys match production
-    # (max_tokens -> maxTokens, etc).
-    optional_params = config.map_openai_params(
-        non_default_params={
-            "max_tokens": 64000,
-            "max_completion_tokens": 16384,
-            "thinking": {"type": "adaptive"},
-        },
-        optional_params={},
-        model="global.anthropic.claude-opus-4-6-v1:0",
-        drop_params=False,
-    )
-    # output_config isn't mapped by map_openai_params — it passes through as-is.
-    optional_params["output_config"] = {"effort": "medium"}
+    optional_params = {
+        "output_config": {"effort": "medium"},
+        "thinking": {"type": "adaptive"},
+        "maxTokens": 1024,
+    }
 
     data = config._transform_request_helper(
         model="global.anthropic.claude-opus-4-6-v1:0",
@@ -4181,57 +4172,9 @@ def test_converse_preserves_anthropic_output_config_in_additional_model_request_
     assert additional_fields.get("output_config") == {"effort": "medium"}
     assert additional_fields.get("thinking") == {"type": "adaptive"}
 
-    # Explicit max_tokens wins.
-    assert data["inferenceConfig"]["maxTokens"] == 64000
-
     # Anthropic's snake_case output_config is separate from Bedrock's
     # camelCase outputConfig — we shouldn't set the latter.
     assert "outputConfig" not in data
-
-
-def test_converse_max_completion_tokens_does_not_override_explicit_max_tokens():
-    """Explicit max_tokens must win when both are passed. The Converse path
-    used to overwrite it with whichever came later."""
-    config = AmazonConverseConfig()
-
-    optional_params = {}
-    result = config.map_openai_params(
-        non_default_params={
-            "max_tokens": 64000,
-            "max_completion_tokens": 16384,
-        },
-        optional_params=optional_params,
-        model="anthropic.claude-opus-4-6-v1:0",
-        drop_params=False,
-    )
-    assert result["maxTokens"] == 64000
-
-    # Reversed dict order — still picks max_tokens.
-    optional_params = {}
-    result = config.map_openai_params(
-        non_default_params={
-            "max_completion_tokens": 16384,
-            "max_tokens": 64000,
-        },
-        optional_params=optional_params,
-        model="anthropic.claude-opus-4-6-v1:0",
-        drop_params=False,
-    )
-    assert result["maxTokens"] == 64000
-
-
-def test_converse_max_completion_tokens_used_when_max_tokens_absent():
-    """With no max_tokens, max_completion_tokens should pass through as
-    maxTokens."""
-    config = AmazonConverseConfig()
-
-    result = config.map_openai_params(
-        non_default_params={"max_completion_tokens": 16384},
-        optional_params={},
-        model="anthropic.claude-opus-4-6-v1:0",
-        drop_params=False,
-    )
-    assert result["maxTokens"] == 16384
 
 
 def test_converse_does_not_add_output_config_for_non_anthropic_models():

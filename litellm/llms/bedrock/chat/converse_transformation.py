@@ -872,11 +872,7 @@ class AmazonConverseConfig(BaseConfig):
                     non_default_params=non_default_params,
                     is_thinking_enabled=is_thinking_enabled,
                 )
-            # max_completion_tokens is a fallback alias — don't let it clobber
-            # an explicit max_tokens if the caller passed both.
-            if param == "max_tokens" or (
-                param == "max_completion_tokens" and "maxTokens" not in optional_params
-            ):
+            if param == "max_tokens" or param == "max_completion_tokens":
                 optional_params["maxTokens"] = value
             if param == "stream":
                 optional_params["stream"] = value
