@@ -172,7 +172,6 @@ def is_request_body_safe(
         "aws_sts_endpoint",
         "aws_web_identity_token",
         "azure_ad_token",
-        "azure_ad_token",
         "azure_ad_token_provider",
         "aws_bedrock_runtime_endpoint",
         "aws_session_name",
