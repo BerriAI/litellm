@@ -326,15 +326,18 @@ def safe_deep_copy(data):
     # mutate the caller's state.
     litellm_parent_otel_span: Optional[Any] = None
     snap_metadata = snapshot.get("metadata")
-    if isinstance(snap_metadata, dict) and "litellm_parent_otel_span" in snap_metadata:
+    if isinstance(snap_metadata, dict) and (
+        "litellm_parent_otel_span" in snap_metadata
+    ):
         litellm_parent_otel_span = snap_metadata.pop("litellm_parent_otel_span")
         snap_metadata["litellm_parent_otel_span"] = "placeholder"
     snap_litellm_metadata = snapshot.get("litellm_metadata")
-    if (
-        isinstance(snap_litellm_metadata, dict)
-        and "litellm_parent_otel_span" in snap_litellm_metadata
+    if isinstance(snap_litellm_metadata, dict) and (
+        "litellm_parent_otel_span" in snap_litellm_metadata
     ):
-        litellm_parent_otel_span = snap_litellm_metadata.pop("litellm_parent_otel_span")
+        litellm_parent_otel_span = snap_litellm_metadata.pop(
+            "litellm_parent_otel_span"
+        )
         snap_litellm_metadata["litellm_parent_otel_span"] = "placeholder"
 
     # Step 2: per-key deepcopy with fallback. Nested dicts beyond the two we
@@ -355,12 +358,13 @@ def safe_deep_copy(data):
     # original `metadata`/`litellm_metadata` (we snapshotted, not mutated).
     if litellm_parent_otel_span is not None:
         new_metadata = new_data.get("metadata")
-        if isinstance(new_metadata, dict) and "litellm_parent_otel_span" in new_metadata:
+        if isinstance(new_metadata, dict) and (
+            "litellm_parent_otel_span" in new_metadata
+        ):
             new_metadata["litellm_parent_otel_span"] = litellm_parent_otel_span
         new_litellm_metadata = new_data.get("litellm_metadata")
-        if (
-            isinstance(new_litellm_metadata, dict)
-            and "litellm_parent_otel_span" in new_litellm_metadata
+        if isinstance(new_litellm_metadata, dict) and (
+            "litellm_parent_otel_span" in new_litellm_metadata
         ):
             new_litellm_metadata[
                 "litellm_parent_otel_span"
