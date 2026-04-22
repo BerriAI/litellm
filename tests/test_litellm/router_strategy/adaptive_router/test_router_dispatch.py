@@ -418,6 +418,59 @@ def test_finalize_adaptive_router_if_configured_initializes_and_is_idempotent():
     assert r.adaptive_routers["my-router"] is original
 
 
+def test_finalize_prunes_stale_adaptive_router_hooks_from_callbacks():
+    """Replacing the Router (hot-reload path) must not leave stale
+    AdaptiveRouterPostCallHook instances in `litellm.callbacks` — otherwise
+    every request double-fires signal recording."""
+    import litellm
+    from litellm.router_strategy.adaptive_router.hooks import (
+        AdaptiveRouterPostCallHook,
+    )
+
+    model_list = [
+        {
+            "model_name": "fast",
+            "litellm_params": {"model": "openai/gpt-4o-mini"},
+        },
+        {
+            "model_name": "my-router",
+            "litellm_params": {
+                "model": "auto_router/adaptive_router",
+                "adaptive_router_config": {"available_models": ["fast"]},
+            },
+        },
+    ]
+
+    # Snapshot any pre-existing AdaptiveRouterPostCallHook entries so we can
+    # restore them — other tests may have registered hooks we shouldn't drop.
+    pre_hooks = [
+        cb for cb in litellm.callbacks if isinstance(cb, AdaptiveRouterPostCallHook)
+    ]
+    for cb in pre_hooks:
+        litellm.callbacks.remove(cb)
+
+    try:
+        Router(model_list=model_list)
+        Router(model_list=model_list)  # simulate hot-reload
+
+        adaptive_hooks = [
+            cb
+            for cb in litellm.callbacks
+            if isinstance(cb, AdaptiveRouterPostCallHook)
+        ]
+        assert len(adaptive_hooks) == 1, (
+            f"expected exactly one AdaptiveRouterPostCallHook after hot-reload, "
+            f"got {len(adaptive_hooks)}"
+        )
+    finally:
+        # Best-effort cleanup: remove whatever this test added, then restore.
+        for cb in list(litellm.callbacks):
+            if isinstance(cb, AdaptiveRouterPostCallHook):
+                litellm.callbacks.remove(cb)
+        for cb in pre_hooks:
+            litellm.callbacks.append(cb)
+
+
 def test_finalize_adaptive_router_if_configured_noop_when_none_configured():
     """With no adaptive deployments in model_list, the finalizer leaves
     `adaptive_routers` empty."""

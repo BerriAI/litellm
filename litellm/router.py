@@ -6943,6 +6943,26 @@ class Router:
         """Locate every adaptive-router deployment in the finalized model_list and
         build an AdaptiveRouter for each. Safe no-op when none are configured.
         Idempotent: skips any deployment whose model_name is already initialized."""
+        # Drop any adaptive-router hooks left over from a previous Router
+        # instance (e.g. after `/config/reload` replaced `llm_router`). Without
+        # this, stale AdaptiveRouterPostCallHook callbacks from the old Router
+        # remain wired up in `litellm.callbacks` and double-fire signal
+        # recording for every request.
+        from litellm.router_strategy.adaptive_router.hooks import (
+            AdaptiveRouterPostCallHook,
+        )
+
+        for _cb_list in (
+            litellm.callbacks,
+            litellm.success_callback,
+            litellm.failure_callback,
+            litellm._async_success_callback,
+            litellm._async_failure_callback,
+        ):
+            litellm.logging_callback_manager.remove_callbacks_by_type(
+                _cb_list, AdaptiveRouterPostCallHook
+            )
+
         for entry in self.model_list or []:
             lp = (
                 entry.get("litellm_params")
@@ -7052,6 +7072,7 @@ class Router:
             deployment.model_name,
             len(config.available_models),
         )
+
     def _is_quality_router_deployment(self, litellm_params: LiteLLM_Params) -> bool:
         """
         Check if the deployment is a quality-router deployment.

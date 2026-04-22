@@ -92,6 +92,9 @@ class AdaptiveRouter:
         # Evicted opportunistically in `get_or_create_session_state`.
         self._session_states_expiry: Dict[Tuple[str, str], float] = {}
         self._skipped_updates_total: int = 0
+        # Set to True once the proxy flusher has loaded persisted priors from
+        # Postgres. Checked to support lazy-load on hot-reloaded routers.
+        self._state_loaded: bool = False
         self._lock = asyncio.Lock()
 
         self._init_cold_start_cells()

@@ -952,11 +952,16 @@ async def proxy_startup_event(app: FastAPI):  # noqa: PLR0915
             _run_background_health_check()
         )  # start the background health check coroutine.
 
-    # Start adaptive-router queue flusher and load persisted state if any AdaptiveRouter is configured.
+    # Start adaptive-router queue flusher unconditionally — adaptive routers
+    # may be added later via `/config/reload`, and the flusher is a no-op when
+    # `llm_router.adaptive_routers` is empty. Per-router DB state is loaded
+    # lazily by the flusher on first tick (see `_state_loaded` flag) so
+    # hot-reloaded routers also get their persisted priors.
     if llm_router is not None and getattr(llm_router, "adaptive_routers", None):
         for _ar in llm_router.adaptive_routers.values():
             await _ar.load_state_from_db(prisma_client)
-        asyncio.create_task(_adaptive_router_flusher_loop())
+            _ar._state_loaded = True
+    asyncio.create_task(_adaptive_router_flusher_loop())
 
     ## [Optional] Initialize dd tracer
     ProxyStartupEvent._init_dd_tracer()
@@ -2450,6 +2455,13 @@ async def _adaptive_router_flusher_loop():
             if not adaptive_routers or prisma_client is None:
                 continue
             for ar in adaptive_routers.values():
+                # Lazy state load: covers adaptive routers registered via
+                # `/config/reload` after proxy boot.
+                if not getattr(ar, "_state_loaded", False):
+                    try:
+                        await ar.load_state_from_db(prisma_client)
+                    finally:
+                        ar._state_loaded = True
                 await ar.queue.flush_state_to_db(prisma_client)
                 await ar.queue.flush_session_to_db(prisma_client)
         except asyncio.CancelledError:
