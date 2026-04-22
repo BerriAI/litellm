@@ -392,3 +392,240 @@ async def test_semantic_filter_hook_skips_no_tools():
     assert result is None, "Hook should skip requests without tools"
     print("✅ Hook correctly skips requests without tools")
 
+
+
+@pytest.mark.asyncio
+async def test_semantic_filter_hook_preserves_native_tools():
+    """
+    Test that native (non-MCP) tools pass through the semantic filter unchanged.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/26212
+
+    Given: A mix of MCP tools (registered in the filter's tool_map) and
+           native OpenAI-format tools (NOT in the MCP registry)
+    When: The semantic filter hook runs
+    Then: Native tools are preserved in the result, only MCP tools are filtered
+    """
+    from litellm.proxy._experimental.mcp_server.semantic_tool_filter import (
+        SemanticMCPToolFilter,
+    )
+    from litellm.proxy.hooks.mcp_semantic_filter import SemanticToolFilterHook
+    from litellm.types.utils import Embedding, EmbeddingResponse
+
+    # Create mock router for embeddings
+    mock_router = Mock()
+
+    def mock_embedding_sync(*args, **kwargs):
+        return EmbeddingResponse(
+            data=[Embedding(embedding=[0.1] * 1536, index=0, object="embedding")],
+            model="text-embedding-3-small",
+            object="list",
+            usage={"prompt_tokens": 10, "total_tokens": 10},
+        )
+
+    async def mock_embedding_async(*args, **kwargs):
+        return mock_embedding_sync()
+
+    mock_router.embedding = mock_embedding_sync
+    mock_router.aembedding = mock_embedding_async
+
+    # Create MCP tools (will be registered in the filter's tool_map)
+    mcp_tools = [
+        MCPTool(
+            name="jira_create_issue",
+            description="Create a Jira issue",
+            inputSchema={"type": "object"},
+        ),
+        MCPTool(
+            name="jira_list_issues",
+            description="List Jira issues",
+            inputSchema={"type": "object"},
+        ),
+        MCPTool(
+            name="slack_send_message",
+            description="Send a Slack message",
+            inputSchema={"type": "object"},
+        ),
+    ]
+
+    # Create filter and build router with MCP tools only
+    filter_instance = SemanticMCPToolFilter(
+        embedding_model="text-embedding-3-small",
+        litellm_router_instance=mock_router,
+        top_k=2,
+        similarity_threshold=0.3,
+        enabled=True,
+    )
+    filter_instance._build_router(mcp_tools)
+
+    # Create hook
+    hook = SemanticToolFilterHook(filter_instance)
+
+    # Native tools (NOT registered in MCP registry) - plain OpenAI format dicts
+    native_tool = {
+        "type": "function",
+        "function": {
+            "name": "weather_lookup",
+            "description": "Look up the current weather for a city",
+            "parameters": {
+                "type": "object",
+                "properties": {"city": {"type": "string"}},
+                "required": ["city"],
+            },
+        },
+    }
+
+    # Mix native + MCP tools in the request (like a real client would)
+    all_tools = [native_tool] + mcp_tools
+
+    data = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "Create a Jira ticket"}],
+        "tools": all_tools,
+        "metadata": {},
+    }
+
+    mock_user_api_key_dict = Mock()
+    mock_cache = Mock()
+
+    # Call hook
+    result = await hook.async_pre_call_hook(
+        user_api_key_dict=mock_user_api_key_dict,
+        cache=mock_cache,
+        data=data,
+        call_type="completion",
+    )
+
+    # Assertions
+    assert result is not None, "Hook should return modified data"
+    result_tools = result["tools"]
+
+    # The native tool MUST be present in the result
+    result_tool_names = []
+    for t in result_tools:
+        if isinstance(t, dict):
+            func = t.get("function", {})
+            result_tool_names.append(func.get("name", t.get("name", "")))
+        else:
+            result_tool_names.append(t.name)
+
+    assert (
+        "weather_lookup" in result_tool_names
+    ), f"Native tool 'weather_lookup' was dropped! Result tools: {result_tool_names}"
+
+    print(
+        f"✅ Native tool preserved: {len(all_tools)} input -> "
+        f"{len(result_tools)} output, weather_lookup present"
+    )
+
+
+@pytest.mark.asyncio
+async def test_semantic_filter_hook_all_native_tools():
+    """
+    Test that when ALL tools are native (none registered in MCP), all pass through.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/26212
+
+    Given: Only native OpenAI-format tools (no MCP tools registered)
+    When: The semantic filter hook runs
+    Then: All native tools are preserved (no MCP tools to filter)
+    """
+    from litellm.proxy._experimental.mcp_server.semantic_tool_filter import (
+        SemanticMCPToolFilter,
+    )
+    from litellm.proxy.hooks.mcp_semantic_filter import SemanticToolFilterHook
+    from litellm.types.utils import Embedding, EmbeddingResponse
+
+    mock_router = Mock()
+
+    def mock_embedding_sync(*args, **kwargs):
+        return EmbeddingResponse(
+            data=[Embedding(embedding=[0.1] * 1536, index=0, object="embedding")],
+            model="text-embedding-3-small",
+            object="list",
+            usage={"prompt_tokens": 10, "total_tokens": 10},
+        )
+
+    async def mock_embedding_async(*args, **kwargs):
+        return mock_embedding_sync()
+
+    mock_router.embedding = mock_embedding_sync
+    mock_router.aembedding = mock_embedding_async
+
+    # Build filter with some MCP tools (but NOT the native tools below)
+    mcp_tools = [
+        MCPTool(
+            name="some_mcp_tool",
+            description="An MCP tool",
+            inputSchema={"type": "object"},
+        ),
+    ]
+
+    filter_instance = SemanticMCPToolFilter(
+        embedding_model="text-embedding-3-small",
+        litellm_router_instance=mock_router,
+        top_k=5,
+        similarity_threshold=0.3,
+        enabled=True,
+    )
+    filter_instance._build_router(mcp_tools)
+
+    hook = SemanticToolFilterHook(filter_instance)
+
+    # ALL native tools - none match the MCP registry
+    native_tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "weather_lookup",
+                "description": "Look up weather",
+                "parameters": {"type": "object"},
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "calculator",
+                "description": "Perform calculations",
+                "parameters": {"type": "object"},
+            },
+        },
+    ]
+
+    data = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "what is the weather in tokyo?"}],
+        "tools": native_tools,
+        "metadata": {},
+    }
+
+    mock_user_api_key_dict = Mock()
+    mock_cache = Mock()
+
+    result = await hook.async_pre_call_hook(
+        user_api_key_dict=mock_user_api_key_dict,
+        cache=mock_cache,
+        data=data,
+        call_type="completion",
+    )
+
+    assert result is not None, "Hook should return modified data"
+    result_tools = result["tools"]
+
+    # ALL native tools must be preserved
+    assert len(result_tools) == len(
+        native_tools
+    ), f"Expected all {len(native_tools)} native tools, got {len(result_tools)}"
+
+    result_names = []
+    for t in result_tools:
+        func = t.get("function", {})
+        result_names.append(func.get("name", t.get("name", "")))
+
+    assert "weather_lookup" in result_names, "weather_lookup was dropped!"
+    assert "calculator" in result_names, "calculator was dropped!"
+
+    print(
+        f"✅ All {len(native_tools)} native tools preserved when no MCP tools in request"
+    )
+

@@ -48,6 +48,18 @@ class SemanticToolFilterHook(CustomLogger):
             f"enabled={semantic_filter.enabled}, top_k={semantic_filter.top_k}"
         )
 
+    def _is_mcp_tool(self, tool: Any) -> bool:
+        """
+        Check if a tool is registered in the MCP tool registry.
+
+        A tool is considered "MCP" if its name exists in the semantic filter's
+        tool map, which is built from the MCP server registry at startup.
+        Native (non-MCP) tools are not in this map and should pass through
+        the filter unchanged.
+        """
+        tool_name, _ = self.filter._extract_tool_info(tool)
+        return tool_name in self.filter._tool_map
+
     def _should_expand_mcp_tools(self, tools: List[Any]) -> bool:
         """
         Check if tools contain MCP references with server_url="litellm_proxy".
@@ -217,16 +229,36 @@ class SemanticToolFilterHook(CustomLogger):
                 )
                 return None
 
+            # Separate native (non-MCP) tools from MCP-registered tools.
+            # Native tools are not in the MCP registry and should always
+            # pass through the filter unchanged. Only MCP tools should be
+            # semantically filtered. This prevents native tools from being
+            # silently dropped (see https://github.com/BerriAI/litellm/issues/26212).
+            native_tools: List[Any] = []
+            mcp_tools: List[Any] = []
+            for tool in tools:
+                if self._is_mcp_tool(tool):
+                    mcp_tools.append(tool)
+                else:
+                    native_tools.append(tool)
+
             verbose_proxy_logger.debug(
-                f"Applying semantic filter to {len(tools)} tools "
-                f"with query: '{user_query[:50]}...'"
+                f"Applying semantic filter: {len(mcp_tools)} MCP tools to filter, "
+                f"{len(native_tools)} native tools to preserve, "
+                f"query: '{user_query[:50]}...'"
             )
 
-            # Filter tools semantically
-            filtered_tools = await self.filter.filter_tools(
-                query=user_query,
-                available_tools=tools,  # type: ignore
-            )
+            # Filter only MCP tools semantically; native tools pass through
+            if mcp_tools:
+                filtered_mcp_tools = await self.filter.filter_tools(
+                    query=user_query,
+                    available_tools=mcp_tools,  # type: ignore
+                )
+            else:
+                filtered_mcp_tools = []
+
+            # Merge: native tools are always preserved + filtered MCP tools
+            filtered_tools = native_tools + filtered_mcp_tools
 
             # Always update tools and emit header (even if count unchanged)
             data["tools"] = filtered_tools
@@ -243,7 +275,11 @@ class SemanticToolFilterHook(CustomLogger):
                 "litellm_semantic_filter_tools"
             ] = tool_names_csv
 
-            verbose_proxy_logger.info(f"Semantic tool filter: {filter_stats} tools")
+            verbose_proxy_logger.info(
+                f"Semantic tool filter: {filter_stats} tools "
+                f"({len(native_tools)} native preserved, "
+                f"{len(mcp_tools)}->{len(filtered_mcp_tools)} MCP filtered)"
+            )
 
             return data
 
