@@ -556,3 +556,44 @@ async def test_async_post_call_failure_hook_uses_actual_start_time():
         # Duration should be approximately 60 seconds, not 0
         duration = (call_args["end_time"] - call_args["start_time"]).total_seconds()
         assert duration >= 55, f"Duration should be ~60s, got {duration}s"
+
+
+def test_cost_tracking_uses_single_shared_proxy_db_logger_instance(monkeypatch):
+    """
+    cost_tracking() registers the DB logger on both litellm.callbacks and
+    litellm._async_success_callback. It must use a *single shared instance*:
+    two instances (one per list) are cosmetically noisy in /active/callbacks,
+    wastes memory proportional to proxy_server.cost_tracking() re-entry count,
+    and obscures debugging when the same hook appears at two different
+    object addresses.
+    """
+    import litellm
+    from litellm.proxy import proxy_server
+    from litellm.proxy.hooks.proxy_track_cost_callback import _ProxyDBLogger
+
+    # Snapshot + reset the callback lists so we test in isolation.
+    original_callbacks = list(litellm.callbacks)
+    original_async = list(litellm._async_success_callback)
+    litellm.callbacks = []
+    litellm._async_success_callback = []
+
+    try:
+        monkeypatch.setattr(proxy_server, "prisma_client", MagicMock())
+        proxy_server.cost_tracking()
+
+        callbacks_instances = [
+            cb for cb in litellm.callbacks if isinstance(cb, _ProxyDBLogger)
+        ]
+        async_instances = [
+            cb
+            for cb in litellm._async_success_callback
+            if isinstance(cb, _ProxyDBLogger)
+        ]
+
+        assert len(callbacks_instances) == 1
+        assert len(async_instances) == 1
+        # Same object — not two different instances at distinct addresses.
+        assert callbacks_instances[0] is async_instances[0]
+    finally:
+        litellm.callbacks = original_callbacks
+        litellm._async_success_callback = original_async
