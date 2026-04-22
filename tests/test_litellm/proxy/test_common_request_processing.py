@@ -2028,3 +2028,76 @@ class TestHandleLLMApiExceptionDictDetail:
         proxy_exc = await self._invoke(exc)
         assert proxy_exc.message == "Content blocked by guardrail"
         assert proxy_exc.provider_specific_fields is None
+
+
+class TestInjectCostAliasResolution:
+    """
+    Regression tests for the streaming cost-injection path introduced in
+    #15102.
+
+    When a client sends a request using a user-defined alias (declared in
+    the proxy YAML as `model_name: opus-4.7`), `request_data["model"]` is
+    the alias string. `async_streaming_data_generator` reads it and hands
+    it straight to `_inject_cost_into_usage_dict`, which then calls
+    `litellm.completion_cost(model=<alias>)`. `completion_cost` cannot
+    price an unknown alias that has no provider prefix, so it raises
+    `BadRequestError: LLM Provider NOT provided`. The raise is swallowed
+    by `except Exception: cost_val = None` and cost is silently dropped
+    from the SSE `message_delta` event.
+
+    Post-stream logging (Prometheus/Braintrust/response headers) is
+    unaffected because it reads the resolved `litellm_params.model` off
+    the logging obj — only the in-stream injected cost is broken.
+
+    Fix: resolve the alias to the underlying deployment's
+    provider-prefixed model (e.g. `bedrock/us.anthropic.claude-opus-4-7`)
+    before pricing.
+    """
+
+    @staticmethod
+    def _usage_event() -> dict:
+        return {
+            "type": "message_delta",
+            "usage": {"input_tokens": 100, "output_tokens": 50},
+        }
+
+    def test_cost_is_injected_when_model_is_provider_prefixed(self):
+        """
+        Control: a provider-prefixed model name that exists in the
+        bundled model registry prices successfully and cost is injected.
+        """
+        result = ProxyBaseLLMRequestProcessing._inject_cost_into_usage_dict(
+            self._usage_event(), "bedrock/us.anthropic.claude-opus-4-7"
+        )
+        assert result is not None, (
+            "control: provider-prefixed model should price successfully"
+        )
+        assert isinstance(result["usage"].get("cost"), float)
+        assert result["usage"]["cost"] > 0
+
+    @pytest.mark.xfail(
+        strict=True,
+        reason=(
+            "Known bug: _inject_cost_into_usage_dict passes the raw "
+            "client-facing alias to litellm.completion_cost, which cannot "
+            "price an unprefixed, unknown alias and raises. The raise is "
+            "swallowed and cost is silently dropped. Fix: resolve the "
+            "alias to the underlying deployment model before pricing."
+        ),
+    )
+    def test_cost_is_injected_when_model_is_client_facing_alias(self):
+        """
+        A user-defined alias (`opus-4.7`) is not in litellm's registry
+        and has no provider prefix, so `completion_cost` raises.
+        Expected post-fix: the alias resolves to its deployment and cost
+        is injected just like the control test above.
+        """
+        result = ProxyBaseLLMRequestProcessing._inject_cost_into_usage_dict(
+            self._usage_event(), "opus-4.7"
+        )
+        assert result is not None, (
+            "expected cost injection, but completion_cost() raised on "
+            "the alias and the exception was swallowed"
+        )
+        assert isinstance(result["usage"].get("cost"), float)
+        assert result["usage"]["cost"] > 0
