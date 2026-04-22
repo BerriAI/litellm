@@ -179,12 +179,14 @@ def _detect_failure(tool_results: List[Dict[str, Any]]) -> bool:
 def _signature(call: Dict[str, Any]) -> str:
     """Stable signature for loop detection: name + sorted JSON-ish args."""
     name = call.get("name") or call.get("function", {}).get("name", "")
-    args = call.get("arguments")
-    if args is None:
-        args = call.get("function", {}).get("arguments", "")
-    if isinstance(args, dict):
-        args = ",".join(f"{k}={args[k]}" for k in sorted(args.keys()))
-    return f"{name}({args})"
+    call_args = call.get("arguments")
+    if call_args is None:
+        call_args = call.get("function", {}).get("arguments", "")
+    if isinstance(call_args, dict):
+        call_args = ",".join(
+            f"{k}={call_args[k]}" for k in sorted(call_args.keys())
+        )
+    return f"{name}({call_args})"
 
 
 def _detect_loop(history: List[str], new_calls: List[Dict[str, Any]]) -> bool:
