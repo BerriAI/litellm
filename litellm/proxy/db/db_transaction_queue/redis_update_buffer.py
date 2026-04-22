@@ -22,6 +22,7 @@ from litellm.constants import (
 )
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import (
+    BaseDailySpendTransaction,
     DailyAgentSpendTransaction,
     DailyEndUserSpendTransaction,
     DailyOrganizationSpendTransaction,
@@ -303,18 +304,18 @@ class RedisUpdateBuffer:
     @staticmethod
     async def _restore_spend_updates_to_in_memory_queues(
         db_spend_update_transactions: Optional[DBSpendUpdateTransactions],
-        daily_spend_update_transactions: Optional[Dict[str, DailyUserSpendTransaction]],
+        daily_spend_update_transactions: Optional[Dict[str, BaseDailySpendTransaction]],
         daily_team_spend_update_transactions: Optional[
-            Dict[str, DailyTeamSpendTransaction]
+            Dict[str, BaseDailySpendTransaction]
         ],
         daily_org_spend_update_transactions: Optional[
-            Dict[str, DailyOrganizationSpendTransaction]
+            Dict[str, BaseDailySpendTransaction]
         ],
         daily_end_user_spend_update_transactions: Optional[
-            Dict[str, DailyEndUserSpendTransaction]
+            Dict[str, BaseDailySpendTransaction]
         ],
         daily_agent_spend_update_transactions: Optional[
-            Dict[str, DailyAgentSpendTransaction]
+            Dict[str, BaseDailySpendTransaction]
         ],
         spend_update_queue: SpendUpdateQueue,
         daily_spend_update_queue: DailySpendUpdateQueue,
@@ -330,19 +331,46 @@ class RedisUpdateBuffer:
         data aggregated during the current scheduler tick is permanently lost
         because the source queues were already drained before the rpush.
         """
-        entity_type_field_pairs = [
-            (Litellm_EntityType.USER, "user_list_transactions"),
-            (Litellm_EntityType.END_USER, "end_user_list_transactions"),
-            (Litellm_EntityType.KEY, "key_list_transactions"),
-            (Litellm_EntityType.TEAM, "team_list_transactions"),
-            (Litellm_EntityType.TEAM_MEMBER, "team_member_list_transactions"),
-            (Litellm_EntityType.ORGANIZATION, "org_list_transactions"),
-            (Litellm_EntityType.TAG, "tag_list_transactions"),
-            (Litellm_EntityType.AGENT, "agent_list_transactions"),
-        ]
         if db_spend_update_transactions is not None:
-            for entity_type, field in entity_type_field_pairs:
-                entities = db_spend_update_transactions.get(field) or {}  # type: ignore[call-overload]
+            entity_entries: List[
+                Tuple[Litellm_EntityType, Optional[Dict[str, float]]]
+            ] = [
+                (
+                    Litellm_EntityType.USER,
+                    db_spend_update_transactions.get("user_list_transactions"),
+                ),
+                (
+                    Litellm_EntityType.END_USER,
+                    db_spend_update_transactions.get("end_user_list_transactions"),
+                ),
+                (
+                    Litellm_EntityType.KEY,
+                    db_spend_update_transactions.get("key_list_transactions"),
+                ),
+                (
+                    Litellm_EntityType.TEAM,
+                    db_spend_update_transactions.get("team_list_transactions"),
+                ),
+                (
+                    Litellm_EntityType.TEAM_MEMBER,
+                    db_spend_update_transactions.get("team_member_list_transactions"),
+                ),
+                (
+                    Litellm_EntityType.ORGANIZATION,
+                    db_spend_update_transactions.get("org_list_transactions"),
+                ),
+                (
+                    Litellm_EntityType.TAG,
+                    db_spend_update_transactions.get("tag_list_transactions"),
+                ),
+                (
+                    Litellm_EntityType.AGENT,
+                    db_spend_update_transactions.get("agent_list_transactions"),
+                ),
+            ]
+            for entity_type, entities in entity_entries:
+                if not entities:
+                    continue
                 for entity_id, cost in entities.items():
                     await spend_update_queue.add_update(
                         SpendUpdateQueueItem(
@@ -352,7 +380,9 @@ class RedisUpdateBuffer:
                         )
                     )
 
-        daily_pairs = [
+        daily_pairs: List[
+            Tuple[Optional[Dict[str, BaseDailySpendTransaction]], DailySpendUpdateQueue]
+        ] = [
             (daily_spend_update_transactions, daily_spend_update_queue),
             (daily_team_spend_update_transactions, daily_team_spend_update_queue),
             (daily_org_spend_update_transactions, daily_org_spend_update_queue),
