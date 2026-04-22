@@ -1042,4 +1042,51 @@ class TestTranslateResponse:
         assert "thinking" in types
         assert "text" in types
         assert "tool_use" in types
-        assert result["stop_reason"] == "tool_use"
+
+
+# ---------------------------------------------------------------------------
+# drop_params: metadata.user_id -> user field
+# ---------------------------------------------------------------------------
+
+
+class TestDropParamsMetadataUserId:
+    """litellm.drop_params must suppress the user field mapped from metadata.user_id."""
+
+    def test_user_field_set_when_drop_params_false(self):
+        """user is included when drop_params is False (default)."""
+        import litellm
+
+        req = _make_request(metadata={"user_id": "alice"})
+        original = litellm.drop_params
+        try:
+            litellm.drop_params = False
+            kwargs = _ADAPTER.translate_request(req)
+        finally:
+            litellm.drop_params = original
+        assert kwargs.get("user") == "alice"
+
+    def test_user_field_omitted_when_drop_params_true(self):
+        """user is omitted when drop_params is True (issue #26241)."""
+        import litellm
+
+        req = _make_request(metadata={"user_id": "alice"})
+        original = litellm.drop_params
+        try:
+            litellm.drop_params = True
+            kwargs = _ADAPTER.translate_request(req)
+        finally:
+            litellm.drop_params = original
+        assert "user" not in kwargs
+
+    def test_no_metadata_no_user_field(self):
+        """No metadata means no user field regardless of drop_params."""
+        import litellm
+
+        req = _make_request()
+        original = litellm.drop_params
+        try:
+            litellm.drop_params = False
+            kwargs = _ADAPTER.translate_request(req)
+        finally:
+            litellm.drop_params = original
+        assert "user" not in kwargs

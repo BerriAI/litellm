@@ -8,6 +8,8 @@ path used for OpenAI and Azure models.
 import json
 from typing import Any, Dict, List, Optional, Union, cast
 
+import litellm
+
 from litellm.llms.anthropic.experimental_pass_through.utils import (
     is_reasoning_auto_summary_enabled,
 )
@@ -384,7 +386,8 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         # metadata user_id -> user
         metadata = anthropic_request.get("metadata")
         if isinstance(metadata, dict) and "user_id" in metadata:
-            responses_kwargs["user"] = str(metadata["user_id"])[:64]
+            if not litellm.drop_params:
+                responses_kwargs["user"] = str(metadata["user_id"])[:64]
 
         return responses_kwargs
 
