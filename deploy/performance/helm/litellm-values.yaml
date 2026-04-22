@@ -2,6 +2,13 @@
 # Argo CD: deploy/performance/argocd/application-litellm.yaml
 #
 # Override postgresql.auth and redis.auth passwords for non-dev clusters.
+#
+# Chart default image tag is main-<Chart.appVersion> (e.g. main-v1.80.12). That pattern is not always
+# published for ghcr.io/berriai/litellm-database; use main-latest or a tag from:
+# https://github.com/BerriAI/litellm/pkgs/container/litellm-database
+image:
+  repository: ghcr.io/berriai/litellm-database
+  tag: main-latest
 
 replicaCount: 2
 
