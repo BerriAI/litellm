@@ -749,16 +749,21 @@ def _transform_request_body(  # noqa: PLR0915
 
         data = RequestBody(contents=content)
         # Vertex rejects system_instruction/tools/toolConfig alongside cachedContent.
-        if system_instructions is not None and cached_content is None:
-            data["system_instruction"] = system_instructions
-        if tools is not None and cached_content is None:
-            data["tools"] = tools
-        if tool_choice is not None and cached_content is None:
-            data["toolConfig"] = tool_choice
-        if include_server_side_tool_invocations and cached_content is None:
-            if "toolConfig" not in data:
-                data["toolConfig"] = {}
-            data["toolConfig"]["includeServerSideToolInvocations"] = True
+        # Treat dropping these fields as a request mutation guarded by modify_params.
+        can_send_cache_incompatible_fields = (
+            cached_content is None or litellm.modify_params is False
+        )
+        if can_send_cache_incompatible_fields:
+            if system_instructions is not None:
+                data["system_instruction"] = system_instructions
+            if tools is not None:
+                data["tools"] = tools
+            if tool_choice is not None:
+                data["toolConfig"] = tool_choice
+            if include_server_side_tool_invocations:
+                if "toolConfig" not in data:
+                    data["toolConfig"] = {}
+                data["toolConfig"]["includeServerSideToolInvocations"] = True
         if safety_settings is not None:
             data["safetySettings"] = safety_settings
         if generation_config is not None and len(generation_config) > 0:
