@@ -1,6 +1,6 @@
 ---
 slug: advisor-tool-chat-completions
-title: "Advisor Tool (SDK + Proxy)"
+title: "[Beta] Advisor Tool (SDK + Proxy)"
 date: 2026-04-14T19:30:00
 authors:
   - sameer
@@ -14,7 +14,7 @@ hide_table_of_contents: false
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# Advisor Tool
+# Advisor Tool (Beta)
 
 LiteLLM now supports the Anthropic advisor tool across `chat/completions` and `messages` APIs (SDK + proxy).
 

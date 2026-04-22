@@ -74,16 +74,24 @@ def test_can_handle_edge_cases():
     )
 
     h = AdvisorOrchestrationHandler()
-
-    assert h.can_handle([ADVISOR_TOOL], "openai")
-    assert h.can_handle([ADVISOR_TOOL], "bedrock")
-    assert h.can_handle([ADVISOR_TOOL], "gemini")
-    assert not h.can_handle([ADVISOR_TOOL], "anthropic")
-    assert not h.can_handle([], "openai")
-    assert not h.can_handle(None, "openai")
-    assert not h.can_handle([{"type": "function", "name": "bash"}], "openai")
-    # provider=None: unknown → should intercept (treat as non-native)
-    assert h.can_handle([ADVISOR_TOOL], None)
+    # Ensure this edge-case test is deterministic regardless of any proxy-level
+    # model_group_alias configured by other tests.
+    with patch(
+        "litellm.llms.anthropic.experimental_pass_through.messages.interceptors.advisor.resolve_proxy_model_alias_to_litellm_model",
+        return_value="",
+    ), patch(
+        "litellm.llms.anthropic.experimental_pass_through.messages.interceptors.advisor.supports_native_advisor_tool",
+        return_value=True,
+    ):
+        assert h.can_handle([ADVISOR_TOOL], "openai")
+        assert h.can_handle([ADVISOR_TOOL], "bedrock")
+        assert h.can_handle([ADVISOR_TOOL], "gemini")
+        assert not h.can_handle([ADVISOR_TOOL], "anthropic")
+        assert not h.can_handle([], "openai")
+        assert not h.can_handle(None, "openai")
+        assert not h.can_handle([{"type": "function", "name": "bash"}], "openai")
+        # provider=None: unknown → should intercept (treat as non-native)
+        assert h.can_handle([ADVISOR_TOOL], None)
 
 
 # ---------------------------------------------------------------------------
@@ -102,9 +110,16 @@ async def test_anthropic_native_interceptor_skipped():
     )
 
     h = AdvisorOrchestrationHandler()
-    assert not h.can_handle(
-        [ADVISOR_TOOL], "anthropic"
-    ), "Interceptor must NOT trigger for anthropic provider"
+    with patch(
+        "litellm.llms.anthropic.experimental_pass_through.messages.interceptors.advisor.resolve_proxy_model_alias_to_litellm_model",
+        return_value="",
+    ), patch(
+        "litellm.llms.anthropic.experimental_pass_through.messages.interceptors.advisor.supports_native_advisor_tool",
+        return_value=True,
+    ):
+        assert not h.can_handle(
+            [ADVISOR_TOOL], "anthropic"
+        ), "Interceptor must NOT trigger for anthropic provider"
 
 
 # ---------------------------------------------------------------------------
@@ -298,6 +313,61 @@ async def test_loop_streaming_wraps_response():
     assert len(chunks) > 0
     first = chunks[0].decode() if isinstance(chunks[0], bytes) else str(chunks[0])
     assert "message_start" in first
+
+
+@pytest.mark.asyncio
+async def test_loop_streaming_advisor_block_start_contains_text():
+    """
+    Regression: when advisor orchestration is streamed via FakeAnthropicMessagesStreamIterator,
+    ``advisor_tool_result`` must carry the full advisor text in content_block_start.
+    Claude Code renders the advisor panel from that payload.
+    """
+    from litellm.llms.anthropic.experimental_pass_through.messages.interceptors.advisor import (
+        AdvisorOrchestrationHandler,
+    )
+
+    executor_first = _make_advisor_tool_use_response(
+        question="Please confirm integration status.", tool_id="toolu_advisor_123"
+    )
+    advisor_response = _make_text_response("Integration test: working correctly.")
+    executor_final = _make_text_response("All set.")
+
+    with patch(
+        "litellm.llms.anthropic.experimental_pass_through.messages.interceptors.advisor._call_messages_handler",
+        new_callable=AsyncMock,
+        side_effect=[executor_first, executor_final],
+    ), patch(
+        "litellm.llms.anthropic.experimental_pass_through.messages.interceptors.advisor._call_advisor_with_router",
+        new_callable=AsyncMock,
+        return_value=advisor_response,
+    ):
+        h = AdvisorOrchestrationHandler()
+        stream_iter = await h.handle(
+            model="openai/gpt-4o-mini",
+            messages=MESSAGES,
+            tools=[ADVISOR_TOOL],
+            stream=True,
+            max_tokens=512,
+            custom_llm_provider="openai",
+        )
+
+    chunks = []
+    async for chunk in stream_iter:
+        chunks.append(chunk.decode() if isinstance(chunk, bytes) else str(chunk))
+
+    advisor_start_events = [
+        c
+        for c in chunks
+        if '"type": "content_block_start"' in c
+        and '"type": "advisor_tool_result"' in c
+    ]
+    assert advisor_start_events, "Expected advisor_tool_result content_block_start event"
+    assert (
+        '"text": "Integration test: working correctly."' in advisor_start_events[0]
+    )
+
+    # advisor_tool_result should be complete in content_block_start (no extra delta needed)
+    assert not any('"type": "advisor_result_delta"' in c for c in chunks)
 
 
 # ---------------------------------------------------------------------------

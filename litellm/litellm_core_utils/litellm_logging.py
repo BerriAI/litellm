@@ -1478,6 +1478,21 @@ class Logging(LiteLLMLoggingBaseClass):
         if cache_hit is True:
             return 0.0
 
+        # If an orchestrator (e.g. advisor tool loop in /v1/messages) has
+        # already aggregated cost into self.cost_breakdown before this path
+        # runs again (typically on the streaming @client wrapper's
+        # update_response_metadata pass with a FakeAnthropicMessagesStream
+        # iterator), preserve the breakdown and return the aggregated total.
+        # Falling through to litellm.response_cost_calculator would recompute
+        # with zero usage (stream not yet consumed) and call
+        # _store_cost_breakdown_in_logging_obj, wiping additional_costs.
+        if (
+            self.cost_breakdown is not None
+            and self.cost_breakdown.get("total_cost") is not None
+            and self.cost_breakdown["total_cost"] > 0
+        ):
+            return self.cost_breakdown["total_cost"]
+
         if isinstance(result, BaseModel) and hasattr(result, "_hidden_params"):
             hidden_params = getattr(result, "_hidden_params", {})
             if (
