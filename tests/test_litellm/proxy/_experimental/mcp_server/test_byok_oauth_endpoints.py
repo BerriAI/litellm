@@ -160,8 +160,25 @@ def test_authorize_get_wrong_response_type(client):
     resp = client.get(
         "/v1/mcp/oauth/authorize",
         params={
-            "redirect_uri": "https://example.com/cb",
+            "redirect_uri": "http://127.0.0.1:3000/cb",
             "response_type": "token",
+            "code_challenge": "abc",
+        },
+        follow_redirects=False,
+    )
+    assert resp.status_code == 400
+
+
+def test_authorize_get_rejects_non_loopback_redirect_uri(client):
+    """GET /authorize validates redirect_uri up front so the user sees
+    the rejection before typing an API key into the HTML form — matches
+    the POST handler's rule and avoids the ``user fills form → POST 400
+    with no form state`` UX."""
+    resp = client.get(
+        "/v1/mcp/oauth/authorize",
+        params={
+            "redirect_uri": "https://attacker.example.com/cb",
+            "response_type": "code",
             "code_challenge": "abc",
         },
         follow_redirects=False,
@@ -932,3 +949,52 @@ def test_authorize_post_accepts_ipv6_loopback_full_form(client):
         follow_redirects=False,
     )
     assert resp.status_code == 302
+
+
+@pytest.mark.asyncio
+async def test_token_endpoint_missing_master_key_preserves_code_and_db():
+    """If master_key is unset, /token must reject BEFORE consuming the
+    code or writing the credential — otherwise a misconfigured deploy
+    burns the code and persists the key with no way for the user to
+    retrieve a session token without restarting the flow."""
+    from litellm.proxy._experimental.mcp_server.byok_oauth_endpoints import (
+        byok_token,
+    )
+
+    verifier = "verifier_for_missing_master_key_test_long_!"
+    challenge = _make_challenge(verifier)
+    code = str(uuid.uuid4())
+    _byok_auth_codes[code] = {
+        "api_key": "k",
+        "server_id": "sid",
+        "code_challenge": challenge,
+        "redirect_uri": "http://127.0.0.1:3000/cb",
+        "client_id": "",
+        "user_id": "u",
+        "expires_at": time.time() + 60,
+    }
+
+    mock_store = AsyncMock()
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.byok_oauth_endpoints.store_user_credential",
+            mock_store,
+        ),
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch("litellm.proxy.proxy_server.master_key", None),
+    ):
+        result = await byok_token(
+            request=MagicMock(),
+            grant_type="authorization_code",
+            code=code,
+            redirect_uri="http://127.0.0.1:3000/cb",
+            code_verifier=verifier,
+            client_id="",
+        )
+
+    assert result.status_code == 500
+    assert json.loads(result.body) == {"error": "server_error"}
+    # Code still present — user can retry once master_key is configured.
+    assert code in _byok_auth_codes
+    # Credential never written — no inconsistent DB state.
+    mock_store.assert_not_awaited()
