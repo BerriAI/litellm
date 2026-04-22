@@ -108,26 +108,40 @@ commands:
             # `uv sync --package litellm-enterprise` here — that overwrites the
             # shared .venv and strips out dev/test deps (pytest, prisma, etc.).
             uv run --no-sync python -c "import litellm_enterprise; print('litellm-enterprise OK:', litellm_enterprise.__file__)"
-  setup_litellm_test_deps:
+  install_python_env:
+    description: "Install uv, restore uv cache, run uv sync with all groups/extras, verify litellm-enterprise, and save uv cache. Assumes repo is already checked out."
+    parameters:
+      python_version:
+        type: string
+        default: "3.12"
     steps:
-      - checkout
-      - setup_google_dns
       - restore_cache:
           keys:
-            - v3-litellm-uv-deps-{{ checksum "uv.lock" }}
-            - v3-litellm-uv-deps-
+            - v3-litellm-uv-deps-py<< parameters.python_version >>-{{ checksum "uv.lock" }}
+            - v3-litellm-uv-deps-py<< parameters.python_version >>-
       - install_uv
       - run:
           name: Install Dependencies
           command: |
-            uv sync --frozen --all-groups --all-extras --python 3.12
+            uv sync --frozen --all-groups --all-extras --python << parameters.python_version >>
       - setup_litellm_enterprise_pip
       - save_cache:
           paths:
             - ~/.local/lib
             - ~/.local/bin
             - ~/.cache/uv
-          key: v3-litellm-uv-deps-{{ checksum "uv.lock" }}
+          key: v3-litellm-uv-deps-py<< parameters.python_version >>-{{ checksum "uv.lock" }}
+  setup_litellm_test_deps:
+    description: "Standard test setup: checkout, DNS, cached uv env. Wraps install_python_env with the boilerplate most jobs need."
+    parameters:
+      python_version:
+        type: string
+        default: "3.12"
+    steps:
+      - checkout
+      - setup_google_dns
+      - install_python_env:
+          python_version: << parameters.python_version >>
 
 jobs:
   # Add Windows testing job
@@ -392,17 +406,7 @@ jobs:
       DATABASE_URL: "postgresql://postgres:postgres@localhost:5432/litellm_test"
 
     steps:
-      - checkout
-      - setup_google_dns
-      - install_uv
-      - run:
-          name: Install Dependencies
-          command: |
-            uv sync --frozen --all-groups --all-extras --python 3.12
-      - save_cache:
-          paths:
-            - ./.venv
-          key: v2-dependencies-{{ checksum "uv.lock" }}
+      - setup_litellm_test_deps
       - wait_for_service:
           url: tcp://localhost:5432
           timeout: "60"
@@ -602,13 +606,7 @@ jobs:
     working_directory: ~/project
 
     steps:
-      - checkout
-      - setup_google_dns
-      - install_uv
-      - run:
-          name: Install Dependencies
-          command: |
-            uv sync --frozen --all-groups --all-extras --python 3.12
+      - setup_litellm_test_deps
       # Run pytest and generate JUnit XML report
       - run:
           name: Run realtime tests
@@ -642,13 +640,7 @@ jobs:
     working_directory: ~/project
 
     steps:
-      - checkout
-      - setup_google_dns
-      - install_uv
-      - run:
-          name: Install Dependencies
-          command: |
-            uv sync --frozen --all-groups --all-extras --python 3.12
+      - setup_litellm_test_deps
       # Run pytest and generate JUnit XML report
       - run:
           name: Run tests
@@ -680,13 +672,7 @@ jobs:
     working_directory: ~/project
 
     steps:
-      - checkout
-      - setup_google_dns
-      - install_uv
-      - run:
-          name: Install Dependencies
-          command: |
-            uv sync --frozen --all-groups --all-extras --python 3.12
+      - setup_litellm_test_deps
       # Run pytest and generate JUnit XML report
       - run:
           name: Run tests
@@ -718,13 +704,7 @@ jobs:
     working_directory: ~/project
 
     steps:
-      - checkout
-      - setup_google_dns
-      - install_uv
-      - run:
-          name: Install Dependencies
-          command: |
-            uv sync --frozen --all-groups --all-extras --python 3.12
+      - setup_litellm_test_deps
       # Run pytest and generate JUnit XML report
       - run:
           name: Run tests
@@ -757,13 +737,7 @@ jobs:
     working_directory: ~/project
 
     steps:
-      - checkout
-      - setup_google_dns
-      - install_uv
-      - run:
-          name: Install Dependencies
-          command: |
-            uv sync --frozen --all-groups --all-extras --python 3.12
+      - setup_litellm_test_deps
       # Run pytest and generate JUnit XML report
       - run:
           name: Run tests
@@ -834,13 +808,7 @@ jobs:
     working_directory: ~/project
 
     steps:
-      - checkout
-      - setup_google_dns
-      - install_uv
-      - run:
-          name: Install Dependencies
-          command: |
-            uv sync --frozen --all-groups --all-extras --python 3.12
+      - setup_litellm_test_deps
       # Run pytest and generate JUnit XML report
       - run:
           name: Run tests
@@ -872,13 +840,7 @@ jobs:
     working_directory: ~/project
 
     steps:
-      - checkout
-      - setup_google_dns
-      - install_uv
-      - run:
-          name: Install Dependencies
-          command: |
-            uv sync --frozen --all-groups --all-extras --python 3.12
+      - setup_litellm_test_deps
       # Run pytest and generate JUnit XML report
       - run:
           name: Run tests
@@ -950,14 +912,7 @@ jobs:
     resource_class: large
 
     steps:
-      - checkout
-      - setup_google_dns
-      - install_uv
-      - run:
-          name: Install Dependencies
-          command: |
-            uv sync --frozen --all-groups --all-extras --python 3.12
-      - setup_litellm_enterprise_pip
+      - setup_litellm_test_deps
       - run:
           name: Run enterprise tests
           command: |
@@ -978,13 +933,7 @@ jobs:
     working_directory: ~/project
 
     steps:
-      - checkout
-      - setup_google_dns
-      - install_uv
-      - run:
-          name: Install Dependencies
-          command: |
-            uv sync --frozen --all-groups --all-extras --python 3.12
+      - setup_litellm_test_deps
       # Run pytest and generate JUnit XML report
       - run:
           name: Run tests
@@ -1016,13 +965,7 @@ jobs:
     working_directory: ~/project
 
     steps:
-      - checkout
-      - setup_google_dns
-      - install_uv
-      - run:
-          name: Install Dependencies
-          command: |
-            uv sync --frozen --all-groups --all-extras --python 3.12
+      - setup_litellm_test_deps
       # Run pytest and generate JUnit XML report
       - run:
           name: Run tests
@@ -1055,13 +998,7 @@ jobs:
     working_directory: ~/project
 
     steps:
-      - checkout
-      - setup_google_dns
-      - install_uv
-      - run:
-          name: Install Dependencies
-          command: |
-            uv sync --frozen --all-groups --all-extras --python 3.12
+      - setup_litellm_test_deps
       # Run pytest and generate JUnit XML report
       - run:
           name: Run tests
@@ -1094,13 +1031,7 @@ jobs:
     resource_class: large
 
     steps:
-      - checkout
-      - setup_google_dns
-      - install_uv
-      - run:
-          name: Install Dependencies
-          command: |
-            uv sync --frozen --all-groups --all-extras --python 3.12
+      - setup_litellm_test_deps
       # Run pytest and generate JUnit XML report
       - run:
           name: Run tests
@@ -1121,13 +1052,7 @@ jobs:
     working_directory: ~/project
 
     steps:
-      - checkout
-      - setup_google_dns
-      - install_uv
-      - run:
-          name: Install Dependencies
-          command: |
-            uv sync --frozen --all-groups --all-extras --python 3.12
+      - setup_litellm_test_deps
       # Run pytest and generate JUnit XML report
       - setup_litellm_enterprise_pip
       - run:
@@ -1160,13 +1085,7 @@ jobs:
     working_directory: ~/project
 
     steps:
-      - checkout
-      - setup_google_dns
-      - install_uv
-      - run:
-          name: Install Dependencies
-          command: |
-            uv sync --frozen --all-groups --all-extras --python 3.12
+      - setup_litellm_test_deps
       # Run pytest and generate JUnit XML report
       - run:
           name: Run tests
@@ -1249,14 +1168,7 @@ jobs:
     working_directory: ~/project
 
     steps:
-      - checkout
-      - setup_google_dns
-      - install_uv
-      - run:
-          name: Install Dependencies
-          command: |
-            uv sync --frozen --all-groups --all-extras --python 3.12
-      - setup_litellm_enterprise_pip
+      - setup_litellm_test_deps
       - run:
           name: Run tests
           command: |
@@ -1274,13 +1186,8 @@ jobs:
     resource_class: medium
 
     steps:
-      - checkout
-      - setup_google_dns
-      - install_uv
-      - run:
-          name: Install Dependencies
-          command: |
-            uv sync --frozen --all-groups --all-extras --python 3.13
+      - setup_litellm_test_deps:
+          python_version: "3.13"
       - run:
           name: Run tests
           command: |
@@ -1304,14 +1211,7 @@ jobs:
       DATABASE_URL: "postgresql://postgres:postgres@localhost:5432/litellm_test"
 
     steps:
-      - checkout
-      - setup_google_dns
-      - install_uv
-      - run:
-          name: Install Dependencies
-          command: |
-            uv sync --frozen --all-groups --all-extras --python 3.12
-      - setup_litellm_enterprise_pip
+      - setup_litellm_test_deps
       - wait_for_service:
           url: tcp://localhost:5432
           timeout: "60"
@@ -1407,13 +1307,7 @@ jobs:
     resource_class: medium
     working_directory: ~/project
     steps:
-      - checkout
-      - setup_google_dns
-      - install_uv
-      - run:
-          name: Install Dependencies
-          command: |
-            uv sync --frozen --all-groups --all-extras --python 3.12
+      - setup_litellm_test_deps
       - start_postgres:
           db_name: litellm_test
       - attach_workspace:
@@ -1492,11 +1386,7 @@ jobs:
       - attach_workspace:
           at: ~/project
       - setup_google_dns
-      - install_uv
-      - run:
-          name: Install Dependencies
-          command: |
-            uv sync --frozen --all-groups --all-extras --python 3.12
+      - install_python_env
       - start_postgres
       - run:
           name: Load Docker Database Image
@@ -1570,11 +1460,7 @@ jobs:
           name: Verify Docker is available
           command: |
             docker version
-      - install_uv
-      - run:
-          name: Install Dependencies
-          command: |
-            uv sync --frozen --all-groups --all-extras --python 3.12
+      - install_python_env
       - start_postgres
       - attach_workspace:
           at: ~/project
@@ -1651,11 +1537,7 @@ jobs:
           name: Verify Docker is available
           command: |
             docker version
-      - install_uv
-      - run:
-          name: Install Dependencies
-          command: |
-            uv sync --frozen --all-groups --all-extras --python 3.12
+      - install_python_env
       - start_postgres
       - attach_workspace:
           at: ~/project
@@ -1769,11 +1651,7 @@ jobs:
           name: Verify Docker is available
           command: |
             docker version
-      - install_uv
-      - run:
-          name: Install Dependencies
-          command: |
-            uv sync --frozen --all-groups --all-extras --python 3.12
+      - install_python_env
       - start_postgres
       - attach_workspace:
           at: ~/project
@@ -1843,11 +1721,7 @@ jobs:
           name: Verify Docker is available
           command: |
             docker version
-      - install_uv
-      - run:
-          name: Install Dependencies
-          command: |
-            uv sync --frozen --all-groups --all-extras --python 3.12
+      - install_python_env
       - start_postgres
       - attach_workspace:
           at: ~/project
@@ -1935,11 +1809,7 @@ jobs:
           command: |
             docker version
             sudo systemctl restart docker
-      - install_uv
-      - run:
-          name: Install Dependencies
-          command: |
-            uv sync --frozen --all-groups --all-extras --python 3.12
+      - install_python_env
       - start_postgres
       - attach_workspace:
           at: ~/project
@@ -2001,11 +1871,8 @@ jobs:
       - checkout
       - setup_google_dns
       # Remove Docker CLI installation since it's already available in machine executor
-      - install_uv
-      - run:
-          name: Install Dependencies
-          command: |
-            uv sync --frozen --all-groups --all-extras --python 3.13
+      - install_python_env:
+          python_version: "3.13"
       - run:
           name: Build Docker image
           command: |
@@ -2068,13 +1935,7 @@ jobs:
     resource_class: large
     working_directory: ~/project
     steps:
-      - checkout
-      - setup_google_dns
-      - install_uv
-      - run:
-          name: Install Dependencies
-          command: |
-            uv sync --frozen --all-groups --all-extras --python 3.12
+      - setup_litellm_test_deps
       - start_postgres
       - attach_workspace:
           at: ~/project
@@ -2194,11 +2055,7 @@ jobs:
           name: Verify Docker is available
           command: |
             docker version
-      - install_uv
-      - run:
-          name: Install Dependencies
-          command: |
-            uv sync --frozen --all-groups --all-extras --python 3.12
+      - install_python_env
       - start_postgres
       - attach_workspace:
           at: ~/project
