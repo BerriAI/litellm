@@ -29,6 +29,8 @@ from litellm.proxy._types import (
     DailyTeamSpendTransaction,
     DailyUserSpendTransaction,
     DBSpendUpdateTransactions,
+    Litellm_EntityType,
+    SpendUpdateQueueItem,
 )
 from litellm.proxy.db.db_transaction_queue.base_update_queue import service_logger_obj
 from litellm.proxy.db.db_transaction_queue.daily_spend_update_queue import (
@@ -259,9 +261,36 @@ class RedisUpdateBuffer:
         if len(rpush_list) == 0:
             return
 
-        result_lengths = await self.redis_cache.async_rpush_pipeline(
-            rpush_list=rpush_list,
-        )
+        try:
+            result_lengths = await self.redis_cache.async_rpush_pipeline(
+                rpush_list=rpush_list,
+            )
+        except Exception as e:
+            # The in-memory queues were already drained above. If we let the
+            # exception propagate without restoring, the aggregated spend is
+            # permanently lost. Re-enqueue so the next scheduler tick retries.
+            verbose_proxy_logger.error(
+                "Spend tracking - failed to push aggregated spend updates to Redis. "
+                "Restoring %d transaction sets to in-memory queues for retry on next tick. "
+                "Error: %s",
+                len(rpush_list),
+                str(e),
+            )
+            await self._restore_spend_updates_to_in_memory_queues(
+                db_spend_update_transactions=db_spend_update_transactions,
+                daily_spend_update_transactions=daily_spend_update_transactions,
+                daily_team_spend_update_transactions=daily_team_spend_update_transactions,
+                daily_org_spend_update_transactions=daily_org_spend_update_transactions,
+                daily_end_user_spend_update_transactions=daily_end_user_spend_update_transactions,
+                daily_agent_spend_update_transactions=daily_agent_spend_update_transactions,
+                spend_update_queue=spend_update_queue,
+                daily_spend_update_queue=daily_spend_update_queue,
+                daily_team_spend_update_queue=daily_team_spend_update_queue,
+                daily_org_spend_update_queue=daily_org_spend_update_queue,
+                daily_end_user_spend_update_queue=daily_end_user_spend_update_queue,
+                daily_agent_spend_update_queue=daily_agent_spend_update_queue,
+            )
+            return
 
         # Emit gauge events for each queue
         for i, queue_size in enumerate(result_lengths):
@@ -270,6 +299,72 @@ class RedisUpdateBuffer:
                     queue_size=queue_size,
                     service=service_types[i],
                 )
+
+    @staticmethod
+    async def _restore_spend_updates_to_in_memory_queues(
+        db_spend_update_transactions: Optional[DBSpendUpdateTransactions],
+        daily_spend_update_transactions: Optional[Dict[str, DailyUserSpendTransaction]],
+        daily_team_spend_update_transactions: Optional[
+            Dict[str, DailyTeamSpendTransaction]
+        ],
+        daily_org_spend_update_transactions: Optional[
+            Dict[str, DailyOrganizationSpendTransaction]
+        ],
+        daily_end_user_spend_update_transactions: Optional[
+            Dict[str, DailyEndUserSpendTransaction]
+        ],
+        daily_agent_spend_update_transactions: Optional[
+            Dict[str, DailyAgentSpendTransaction]
+        ],
+        spend_update_queue: SpendUpdateQueue,
+        daily_spend_update_queue: DailySpendUpdateQueue,
+        daily_team_spend_update_queue: DailySpendUpdateQueue,
+        daily_org_spend_update_queue: DailySpendUpdateQueue,
+        daily_end_user_spend_update_queue: DailySpendUpdateQueue,
+        daily_agent_spend_update_queue: DailySpendUpdateQueue,
+    ) -> None:
+        """
+        Put drained-but-unpushed transactions back into in-memory queues.
+
+        Called when the Redis rpush pipeline raises. Without this, all spend
+        data aggregated during the current scheduler tick is permanently lost
+        because the source queues were already drained before the rpush.
+        """
+        entity_type_field_pairs = [
+            (Litellm_EntityType.USER, "user_list_transactions"),
+            (Litellm_EntityType.END_USER, "end_user_list_transactions"),
+            (Litellm_EntityType.KEY, "key_list_transactions"),
+            (Litellm_EntityType.TEAM, "team_list_transactions"),
+            (Litellm_EntityType.TEAM_MEMBER, "team_member_list_transactions"),
+            (Litellm_EntityType.ORGANIZATION, "org_list_transactions"),
+            (Litellm_EntityType.TAG, "tag_list_transactions"),
+            (Litellm_EntityType.AGENT, "agent_list_transactions"),
+        ]
+        if db_spend_update_transactions is not None:
+            for entity_type, field in entity_type_field_pairs:
+                entities = db_spend_update_transactions.get(field) or {}  # type: ignore[call-overload]
+                for entity_id, cost in entities.items():
+                    await spend_update_queue.add_update(
+                        SpendUpdateQueueItem(
+                            entity_type=entity_type,
+                            entity_id=entity_id,
+                            response_cost=cost,
+                        )
+                    )
+
+        daily_pairs = [
+            (daily_spend_update_transactions, daily_spend_update_queue),
+            (daily_team_spend_update_transactions, daily_team_spend_update_queue),
+            (daily_org_spend_update_transactions, daily_org_spend_update_queue),
+            (
+                daily_end_user_spend_update_transactions,
+                daily_end_user_spend_update_queue,
+            ),
+            (daily_agent_spend_update_transactions, daily_agent_spend_update_queue),
+        ]
+        for daily_txns, daily_queue in daily_pairs:
+            if daily_txns:
+                await daily_queue.update_queue.put(daily_txns)
 
     @staticmethod
     def _number_of_transactions_to_store_in_redis(
