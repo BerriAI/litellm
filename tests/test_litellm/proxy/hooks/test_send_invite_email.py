@@ -152,3 +152,117 @@ async def test_v1_key_generation_no_email_when_send_invite_email_false():
                     user_api_key_dict=user_api_key_dict,
                 )
                 mock_send_key_created_email.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_v1_user_creation_sends_email_when_send_invite_email_none_and_email_configured():
+    """
+    When send_invite_email is None (default) and email alerting is configured
+    and the user has an email address, an invitation email should be sent.
+    """
+    mock_slack_alerting = MagicMock()
+    mock_slack_alerting.send_key_created_or_user_invited_email = AsyncMock()
+    mock_proxy_logging_obj = MagicMock()
+    mock_proxy_logging_obj.slack_alerting_instance = mock_slack_alerting
+
+    with patch(
+        "litellm.logging_callback_manager.get_custom_loggers_for_type", return_value=[]
+    ):
+        mock_proxy_server = SimpleNamespace(
+            general_settings={"alerting": ["email"]},
+            proxy_logging_obj=mock_proxy_logging_obj,
+            litellm_proxy_admin_name="admin-user",
+        )
+        with patch.dict(sys.modules, {"litellm.proxy.proxy_server": mock_proxy_server}):
+            data = NewUserRequest(
+                user_email="test@example.com",
+            )
+            response = NewUserResponse(
+                user_id="test-user",
+                user_email="test@example.com",
+                key="sk-test-key",
+            )
+            user_api_key_dict = UserAPIKeyAuth(
+                user_id="admin-user", api_key="admin-key"
+            )
+            await UserManagementEventHooks.async_send_user_invitation_email(
+                data=data,
+                response=response,
+                user_api_key_dict=user_api_key_dict,
+            )
+            mock_slack_alerting.send_key_created_or_user_invited_email.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_v1_user_creation_no_email_when_send_invite_email_none_and_email_not_configured():
+    """
+    When send_invite_email is None (default) and email alerting is NOT configured,
+    no invitation email should be sent.
+    """
+    mock_slack_alerting = MagicMock()
+    mock_slack_alerting.send_key_created_or_user_invited_email = AsyncMock()
+    mock_proxy_logging_obj = MagicMock()
+    mock_proxy_logging_obj.slack_alerting_instance = mock_slack_alerting
+
+    with patch(
+        "litellm.logging_callback_manager.get_custom_loggers_for_type", return_value=[]
+    ):
+        mock_proxy_server = SimpleNamespace(
+            general_settings={},
+            proxy_logging_obj=mock_proxy_logging_obj,
+            litellm_proxy_admin_name="admin-user",
+        )
+        with patch.dict(sys.modules, {"litellm.proxy.proxy_server": mock_proxy_server}):
+            data = NewUserRequest(
+                user_email="test@example.com",
+            )
+            response = NewUserResponse(
+                user_id="test-user",
+                user_email="test@example.com",
+                key="sk-test-key",
+            )
+            user_api_key_dict = UserAPIKeyAuth(
+                user_id="admin-user", api_key="admin-key"
+            )
+            await UserManagementEventHooks.async_send_user_invitation_email(
+                data=data,
+                response=response,
+                user_api_key_dict=user_api_key_dict,
+            )
+            mock_slack_alerting.send_key_created_or_user_invited_email.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_v1_user_creation_no_email_when_send_invite_email_none_and_no_user_email():
+    """
+    When send_invite_email is None (default) and email alerting is configured
+    but the user has no email address, no invitation email should be sent.
+    """
+    mock_slack_alerting = MagicMock()
+    mock_slack_alerting.send_key_created_or_user_invited_email = AsyncMock()
+    mock_proxy_logging_obj = MagicMock()
+    mock_proxy_logging_obj.slack_alerting_instance = mock_slack_alerting
+
+    with patch(
+        "litellm.logging_callback_manager.get_custom_loggers_for_type", return_value=[]
+    ):
+        mock_proxy_server = SimpleNamespace(
+            general_settings={"alerting": ["email"]},
+            proxy_logging_obj=mock_proxy_logging_obj,
+            litellm_proxy_admin_name="admin-user",
+        )
+        with patch.dict(sys.modules, {"litellm.proxy.proxy_server": mock_proxy_server}):
+            data = NewUserRequest()
+            response = NewUserResponse(
+                user_id="test-user",
+                key="sk-test-key",
+            )
+            user_api_key_dict = UserAPIKeyAuth(
+                user_id="admin-user", api_key="admin-key"
+            )
+            await UserManagementEventHooks.async_send_user_invitation_email(
+                data=data,
+                response=response,
+                user_api_key_dict=user_api_key_dict,
+            )
+            mock_slack_alerting.send_key_created_or_user_invited_email.assert_not_called()

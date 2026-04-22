@@ -90,9 +90,28 @@ litellm_settings:
 
 ### 2. Create a new user
 
-On the LiteLLM Proxy UI, go to users > create a new user. 
+On the LiteLLM Proxy UI, go to users > create a new user with an email address.
 
-After creating a new user, they will receive an email invite a the email you specified when creating the user. 
+After creating a new user, they will automatically receive an invitation email if you have configured an email integration (step 1 above). No additional flag or toggle is needed — the proxy detects that email is configured and sends the invite automatically.
+
+When using the API directly, you can also explicitly control this behavior with the `send_invite_email` parameter:
+
+```shell
+curl -X POST '<your_proxy_base_url>/user/new' \
+  -H 'Authorization: Bearer <your_api_key>' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "user_email": "user@example.com",
+    "send_invite_email": true
+  }'
+```
+
+| `send_invite_email` value | Behavior |
+|--------------------------|----------|
+| `true` | Always send invitation email |
+| `false` | Never send invitation email |
+| omitted / `null` | Auto-detect: send if email integration is configured and user has an email |
+
 
 ### 3. Configure Budget Alerts (Optional)
 
