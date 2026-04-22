@@ -39,10 +39,12 @@ async def test_update_litellm_params_max_tokens_custom():
 
 
 @pytest.mark.asyncio
-async def test_update_litellm_params_max_tokens_wildcard():
+async def test_update_litellm_params_max_tokens_wildcard(monkeypatch):
     """
     Test that max_tokens is not set for wildcard models.
     """
+    monkeypatch.setattr(hc_module, "BACKGROUND_HEALTH_CHECK_MAX_TOKENS", None)
+    monkeypatch.setattr(hc_module, "BACKGROUND_HEALTH_CHECK_MAX_TOKENS_REASONING", None)
     model_info = {}
     litellm_params = {"model": "openai/*"}
 
