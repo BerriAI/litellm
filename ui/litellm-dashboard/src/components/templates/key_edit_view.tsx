@@ -4,7 +4,7 @@ import { useProjects } from "@/app/(dashboard)/hooks/projects/useProjects";
 import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
 import PolicySelector from "@/components/policies/PolicySelector";
 import { InfoCircleOutlined } from "@ant-design/icons";
-import { TextInput, Button as TremorButton } from "@tremor/react";
+import { TextInput, Button as TremorButton, Accordion, AccordionHeader, AccordionBody } from "@tremor/react";
 import { Form, Input, Select, Switch, Tooltip } from "antd";
 import { useEffect, useState } from "react";
 import { rolesWithWriteAccess } from "../../utils/roles";
@@ -15,6 +15,7 @@ import KeyLifecycleSettings from "../common_components/KeyLifecycleSettings";
 import PassThroughRoutesSelector from "../common_components/PassThroughRoutesSelector";
 import RateLimitTypeFormItem from "../common_components/RateLimitTypeFormItem";
 import OrganizationDropdown from "../common_components/OrganizationDropdown";
+import RouterSettingsAccordion, { RouterSettingsAccordionValue } from "../common_components/RouterSettingsAccordion";
 import { extractLoggingSettings, formatMetadataForDisplay, stripTagsFromMetadata } from "../key_info_utils";
 import { BudgetWindowEntry, BudgetWindowsEditor } from "../key_team_helpers/BudgetWindowsEditor";
 import { KeyResponse } from "../key_team_helpers/key_list";
@@ -107,6 +108,9 @@ export function KeyEditView({
   const [isKeySaving, setIsKeySaving] = useState(false);
   const [budgetLimits, setBudgetLimits] = useState<BudgetWindowEntry[]>(
     Array.isArray(keyData.budget_limits) ? keyData.budget_limits : []
+  );
+  const [routerSettings, setRouterSettings] = useState<RouterSettingsAccordionValue | null>(
+    keyData.router_settings ? { router_settings: keyData.router_settings } : null
   );
   const { data: organizations, isLoading: isOrganizationsLoading } = useOrganizations();
   const { data: projects } = useProjects();
@@ -283,6 +287,16 @@ export function KeyEditView({
       const validWindows = budgetLimits.filter((w) => w.budget_duration && w.max_budget !== null && w.max_budget !== undefined);
       values.budget_limits = validWindows.length > 0 ? validWindows : undefined;
 
+      // Add router_settings if any are defined
+      if (routerSettings?.router_settings) {
+        const hasValues = Object.values(routerSettings.router_settings).some(
+          (value) => value !== null && value !== undefined && value !== "",
+        );
+        if (hasValues) {
+          values.router_settings = routerSettings.router_settings;
+        }
+      }
+
       await onSubmit(values);
     } finally {
       setIsKeySaving(false);
@@ -447,6 +461,22 @@ export function KeyEditView({
           onChange={setBudgetLimits}
         />
       </Form.Item>
+
+      <Accordion className="mb-4">
+        <AccordionHeader>
+          <b>Router Settings</b>
+        </AccordionHeader>
+        <AccordionBody>
+          <div className="mt-4 w-full">
+            <RouterSettingsAccordion
+              accessToken={accessToken || ""}
+              value={routerSettings || undefined}
+              onChange={setRouterSettings}
+              modelData={undefined}
+            />
+          </div>
+        </AccordionBody>
+      </Accordion>
 
       <Form.Item label="TPM Limit" name="tpm_limit">
         <NumericalInput min={0} />
