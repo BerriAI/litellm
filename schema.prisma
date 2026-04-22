@@ -957,6 +957,39 @@ model LiteLLM_GuardrailsTable {
   @@index([status])
 }
 
+model LiteLLM_EvalsTable {
+  eval_id            String    @id @default(uuid())
+  eval_name          String    @unique
+  version            Int       @default(1)
+  criteria           Json
+  judge_model        String
+  description        String?
+  overall_threshold  Float?
+  max_iterations     Int       @default(1)
+  created_at         DateTime  @default(now())
+  updated_at         DateTime  @updatedAt
+  created_by         String
+  updated_by         String
+  agent_evals        LiteLLM_AgentEvalsTable[]
+
+  @@index([eval_name])
+}
+
+model LiteLLM_AgentEvalsTable {
+  agent_id                   String
+  eval_id                    String
+  eval_name                  String
+  on_failure                 String   @default("block")
+  overall_threshold_override Float?
+  created_at                 DateTime @default(now())
+  created_by                 String
+  eval                       LiteLLM_EvalsTable @relation(fields: [eval_id], references: [eval_id], onDelete: Cascade)
+
+  @@id([agent_id, eval_id])
+  @@index([agent_id])
+  @@index([eval_id])
+}
+
 // Daily guardrail metrics for usage dashboard (one row per guardrail per day)
 model LiteLLM_DailyGuardrailMetrics {
   guardrail_id        String   // logical id; may not FK if guardrail from config
