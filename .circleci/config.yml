@@ -78,6 +78,26 @@ commands:
             rm -f /tmp/uv-install.sh
             echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$BASH_ENV"
             export PATH="$HOME/.local/bin:$PATH"
+  start_postgres:
+    description: "Start a postgres-db container on port 5432 and wait until it accepts connections."
+    parameters:
+      db_name:
+        type: string
+        default: circle_test
+    steps:
+      - run:
+          name: Start PostgreSQL
+          command: |
+            docker run -d \
+              --name postgres-db \
+              -e POSTGRES_USER=postgres \
+              -e POSTGRES_PASSWORD=postgres \
+              -e POSTGRES_DB=<< parameters.db_name >> \
+              -p 5432:5432 \
+              postgres:14@sha256:6a70deda415ec296f977890e11aba04a0db9f632a362e3fce45e845e3db74f26
+      - wait_for_service:
+          url: tcp://localhost:5432
+          timeout: "60"
   setup_litellm_enterprise_pip:
     steps:
       - run:
@@ -1603,19 +1623,8 @@ jobs:
               conda activate myenv
             fi
             uv sync --frozen --all-groups --all-extras --python "$(which python)"
-      - run:
-          name: Start PostgreSQL Database
-          command: |
-            docker run -d \
-              --name postgres-db \
-              -e POSTGRES_USER=postgres \
-              -e POSTGRES_PASSWORD=postgres \
-              -e POSTGRES_DB=litellm_test \
-              -p 5432:5432 \
-              postgres:14@sha256:6a70deda415ec296f977890e11aba04a0db9f632a362e3fce45e845e3db74f26
-      - wait_for_service:
-          url: tcp://localhost:5432
-          timeout: "60"
+      - start_postgres:
+          db_name: litellm_test
       - attach_workspace:
           at: ~/project
       - run:
@@ -1713,19 +1722,7 @@ jobs:
               conda activate myenv
             fi
             uv sync --frozen --all-groups --all-extras --python "$(which python)"
-      - run:
-          name: Start PostgreSQL Database
-          command: |
-            docker run -d \
-              --name postgres-db \
-              -e POSTGRES_USER=postgres \
-              -e POSTGRES_PASSWORD=postgres \
-              -e POSTGRES_DB=circle_test \
-              -p 5432:5432 \
-              postgres:14@sha256:6a70deda415ec296f977890e11aba04a0db9f632a362e3fce45e845e3db74f26
-      - wait_for_service:
-          url: tcp://localhost:5432
-          timeout: "60"
+      - start_postgres
       - run:
           name: Load Docker Database Image
           command: |
@@ -1819,19 +1816,7 @@ jobs:
               conda activate myenv
             fi
             uv sync --frozen --all-groups --all-extras --python "$(which python)"
-      - run:
-          name: Start PostgreSQL Database
-          command: |
-            docker run -d \
-              --name postgres-db \
-              -e POSTGRES_USER=postgres \
-              -e POSTGRES_PASSWORD=postgres \
-              -e POSTGRES_DB=circle_test \
-              -p 5432:5432 \
-              postgres:14@sha256:6a70deda415ec296f977890e11aba04a0db9f632a362e3fce45e845e3db74f26
-      - wait_for_service:
-          url: tcp://localhost:5432
-          timeout: "60"
+      - start_postgres
       - attach_workspace:
           at: ~/project
       - run:
@@ -1928,19 +1913,7 @@ jobs:
               conda activate myenv
             fi
             uv sync --frozen --all-groups --all-extras --python "$(which python)"
-      - run:
-          name: Start PostgreSQL Database
-          command: |
-            docker run -d \
-              --name postgres-db \
-              -e POSTGRES_USER=postgres \
-              -e POSTGRES_PASSWORD=postgres \
-              -e POSTGRES_DB=circle_test \
-              -p 5432:5432 \
-              postgres:14@sha256:6a70deda415ec296f977890e11aba04a0db9f632a362e3fce45e845e3db74f26
-      - wait_for_service:
-          url: tcp://localhost:5432
-          timeout: "60"
+      - start_postgres
       - attach_workspace:
           at: ~/project
       - run:
@@ -2074,19 +2047,7 @@ jobs:
               conda activate myenv
             fi
             uv sync --frozen --all-groups --all-extras --python "$(which python)"
-      - run:
-          name: Start PostgreSQL Database
-          command: |
-            docker run -d \
-              --name postgres-db \
-              -e POSTGRES_USER=postgres \
-              -e POSTGRES_PASSWORD=postgres \
-              -e POSTGRES_DB=circle_test \
-              -p 5432:5432 \
-              postgres:14@sha256:6a70deda415ec296f977890e11aba04a0db9f632a362e3fce45e845e3db74f26
-      - wait_for_service:
-          url: tcp://localhost:5432
-          timeout: "60"
+      - start_postgres
       - attach_workspace:
           at: ~/project
       - run:
@@ -2175,19 +2136,7 @@ jobs:
               conda activate myenv
             fi
             uv sync --frozen --all-groups --all-extras --python "$(which python)"
-      - run:
-          name: Start PostgreSQL Database
-          command: |
-            docker run -d \
-              --name postgres-db \
-              -e POSTGRES_USER=postgres \
-              -e POSTGRES_PASSWORD=postgres \
-              -e POSTGRES_DB=circle_test \
-              -p 5432:5432 \
-              postgres:14@sha256:6a70deda415ec296f977890e11aba04a0db9f632a362e3fce45e845e3db74f26
-      - wait_for_service:
-          url: tcp://localhost:5432
-          timeout: "60"
+      - start_postgres
       - attach_workspace:
           at: ~/project
       - run:
@@ -2295,19 +2244,7 @@ jobs:
               conda activate myenv
             fi
             uv sync --frozen --all-groups --all-extras --python "$(which python)"
-      - run:
-          name: Start PostgreSQL Database
-          command: |
-            docker run -d \
-              --name postgres-db \
-              -e POSTGRES_USER=postgres \
-              -e POSTGRES_PASSWORD=postgres \
-              -e POSTGRES_DB=circle_test \
-              -p 5432:5432 \
-              postgres:14@sha256:6a70deda415ec296f977890e11aba04a0db9f632a362e3fce45e845e3db74f26
-      - wait_for_service:
-          url: tcp://localhost:5432
-          timeout: "60"
+      - start_postgres
       - attach_workspace:
           at: ~/project
       - run:
@@ -2393,20 +2330,7 @@ jobs:
           name: Build Docker image
           command: |
             docker build -t my-app:latest -f docker/build_from_pip/Dockerfile.build_from_pip .
-      - run:
-          name: Start PostgreSQL Database
-          command: |
-            docker run -d \
-              --name postgres-db \
-              -e POSTGRES_USER=postgres \
-              -e POSTGRES_PASSWORD=postgres \
-              -e POSTGRES_DB=circle_test \
-              -p 5432:5432 \
-              postgres:14@sha256:6a70deda415ec296f977890e11aba04a0db9f632a362e3fce45e845e3db74f26
-      - run:
-          name: Wait for PostgreSQL to be ready
-          command: |
-            timeout 60s bash -c 'until docker exec postgres-db pg_isready -U postgres -d circle_test; do sleep 2; done'
+      - start_postgres
       - run:
           name: Run Docker container
           # intentionally give bad redis credentials here
@@ -2487,19 +2411,7 @@ jobs:
               conda activate myenv
             fi
             uv sync --frozen --all-groups --all-extras --python "$(which python)"
-      - run:
-          name: Start PostgreSQL Database
-          command: |
-            docker run -d \
-              --name postgres-db \
-              -e POSTGRES_USER=postgres \
-              -e POSTGRES_PASSWORD=postgres \
-              -e POSTGRES_DB=circle_test \
-              -p 5432:5432 \
-              postgres:14@sha256:6a70deda415ec296f977890e11aba04a0db9f632a362e3fce45e845e3db74f26
-      - wait_for_service:
-          url: tcp://localhost:5432
-          timeout: "60"
+      - start_postgres
       - attach_workspace:
           at: ~/project
       - run:
@@ -2642,19 +2554,7 @@ jobs:
               conda activate myenv
             fi
             uv sync --frozen --all-groups --all-extras --python "$(which python)"
-      - run:
-          name: Start PostgreSQL Database
-          command: |
-            docker run -d \
-              --name postgres-db \
-              -e POSTGRES_USER=postgres \
-              -e POSTGRES_PASSWORD=postgres \
-              -e POSTGRES_DB=circle_test \
-              -p 5432:5432 \
-              postgres:14@sha256:6a70deda415ec296f977890e11aba04a0db9f632a362e3fce45e845e3db74f26
-      - wait_for_service:
-          url: tcp://localhost:5432
-          timeout: "60"
+      - start_postgres
       - attach_workspace:
           at: ~/project
       - run:
@@ -2957,19 +2857,7 @@ jobs:
       - attach_workspace:
           at: ~/project
       - setup_google_dns
-      - run:
-          name: Start PostgreSQL Database
-          command: |
-            docker run -d \
-              --name postgres-db \
-              -e POSTGRES_USER=postgres \
-              -e POSTGRES_PASSWORD=postgres \
-              -e POSTGRES_DB=circle_test \
-              -p 5432:5432 \
-              postgres:14@sha256:6a70deda415ec296f977890e11aba04a0db9f632a362e3fce45e845e3db74f26
-      - wait_for_service:
-          url: tcp://localhost:5432
-          timeout: "60"
+      - start_postgres
       - run:
           name: Load Docker Database Image
           command: |
