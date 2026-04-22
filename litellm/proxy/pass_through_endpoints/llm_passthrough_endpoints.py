@@ -1027,8 +1027,6 @@ async def bedrock_proxy_route(
     V2 is handled by the `/bedrock/v2` endpoint.
     [Docs](https://docs.litellm.ai/docs/pass_through/bedrock)
     """
-    create_request_copy(request)
-
     try:
         from botocore.auth import SigV4Auth
         from botocore.awsrequest import AWSRequest
