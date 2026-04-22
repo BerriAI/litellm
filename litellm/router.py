@@ -9428,12 +9428,17 @@ class Router:
 
         Allows all cache calls to be made async => 10x perf impact (8rps -> 100 rps).
         """
+        # Support per-request routing_strategy override from key/team config
+        routing_strategy_to_use = (
+            request_kwargs.pop("routing_strategy", None) or self.routing_strategy
+        )
+
         if (
-            self.routing_strategy != "usage-based-routing-v2"
-            and self.routing_strategy != "simple-shuffle"
-            and self.routing_strategy != "cost-based-routing"
-            and self.routing_strategy != "latency-based-routing"
-            and self.routing_strategy != "least-busy"
+            routing_strategy_to_use != "usage-based-routing-v2"
+            and routing_strategy_to_use != "simple-shuffle"
+            and routing_strategy_to_use != "cost-based-routing"
+            and routing_strategy_to_use != "latency-based-routing"
+            and routing_strategy_to_use != "least-busy"
         ):  # prevent regressions for other routing strategies, that don't have async get available deployments implemented.
             return self.get_available_deployment(
                 model=model,
@@ -9481,7 +9486,7 @@ class Router:
 
             start_time = time.time()
             if (
-                self.routing_strategy == "usage-based-routing-v2"
+                routing_strategy_to_use == "usage-based-routing-v2"
                 and self.lowesttpm_logger_v2 is not None
             ):
                 deployment = (
@@ -9493,7 +9498,7 @@ class Router:
                     )
                 )
             elif (
-                self.routing_strategy == "cost-based-routing"
+                routing_strategy_to_use == "cost-based-routing"
                 and self.lowestcost_logger is not None
             ):
                 deployment = (
@@ -9505,7 +9510,7 @@ class Router:
                     )
                 )
             elif (
-                self.routing_strategy == "latency-based-routing"
+                routing_strategy_to_use == "latency-based-routing"
                 and self.lowestlatency_logger is not None
             ):
                 deployment = (
@@ -9517,14 +9522,14 @@ class Router:
                         request_kwargs=request_kwargs,
                     )
                 )
-            elif self.routing_strategy == "simple-shuffle":
+            elif routing_strategy_to_use == "simple-shuffle":
                 return simple_shuffle(
                     llm_router_instance=self,
                     healthy_deployments=healthy_deployments,
                     model=model,
                 )
             elif (
-                self.routing_strategy == "least-busy"
+                routing_strategy_to_use == "least-busy"
                 and self.leastbusy_logger is not None
             ):
                 deployment = (
@@ -9642,8 +9647,14 @@ class Router:
 
             # 5. Apply load balancing strategy
             start_time = time.perf_counter()
+            # For now, pass-through endpoints don't support routing_strategy override
+            # TODO: Add routing_strategy override support for pass-through endpoints
+            routing_strategy_to_use = (
+                self.routing_strategy
+            )  # Pass-through uses global routing strategy
+
             if (
-                self.routing_strategy == "usage-based-routing-v2"
+                routing_strategy_to_use == "usage-based-routing-v2"
                 and self.lowesttpm_logger_v2 is not None
             ):
                 deployment = (
@@ -9655,7 +9666,7 @@ class Router:
                     )
                 )
             elif (
-                self.routing_strategy == "latency-based-routing"
+                routing_strategy_to_use == "latency-based-routing"
                 and self.lowestlatency_logger is not None
             ):
                 deployment = (
@@ -9667,14 +9678,14 @@ class Router:
                         request_kwargs=request_kwargs,
                     )
                 )
-            elif self.routing_strategy == "simple-shuffle":
+            elif routing_strategy_to_use == "simple-shuffle":
                 return simple_shuffle(
                     llm_router_instance=self,
                     healthy_deployments=pass_through_deployments,
                     model=model,
                 )
             elif (
-                self.routing_strategy == "least-busy"
+                routing_strategy_to_use == "least-busy"
                 and self.leastbusy_logger is not None
             ):
                 deployment = (
@@ -9683,8 +9694,6 @@ class Router:
                         healthy_deployments=pass_through_deployments,  # type: ignore
                     )
                 )
-            else:
-                deployment = None
 
             if deployment is None:
                 exception = await async_raise_no_deployment_exception(
@@ -9791,6 +9800,11 @@ class Router:
         # users need to explicitly call a specific deployment, by setting `specific_deployment = True` as completion()/embedding() kwarg
         # When this was no explicit we had several issues with fallbacks timing out
 
+        # Support per-request routing_strategy override from key/team config
+        routing_strategy_to_use = (request_kwargs or {}).pop(
+            "routing_strategy", None
+        ) or self.routing_strategy
+
         model, healthy_deployments = self._common_checks_available_deployment(
             model=model,
             messages=messages,
@@ -9859,11 +9873,14 @@ class Router:
                 cooldown_list=_cooldown_list,
             )
 
-        if self.routing_strategy == "least-busy" and self.leastbusy_logger is not None:
+        if (
+            routing_strategy_to_use == "least-busy"
+            and self.leastbusy_logger is not None
+        ):
             deployment = self.leastbusy_logger.get_available_deployments(
                 model_group=model, healthy_deployments=healthy_deployments  # type: ignore
             )
-        elif self.routing_strategy == "simple-shuffle":
+        elif routing_strategy_to_use == "simple-shuffle":
             # if users pass rpm or tpm, we do a random weighted pick - based on rpm/tpm
             ############## Check 'weight' param set for weighted pick #################
             return simple_shuffle(
@@ -9881,7 +9898,7 @@ class Router:
                 request_kwargs=request_kwargs,
             )
         elif (
-            self.routing_strategy == "usage-based-routing"
+            routing_strategy_to_use == "usage-based-routing"
             and self.lowesttpm_logger is not None
         ):
             deployment = self.lowesttpm_logger.get_available_deployments(
@@ -9891,10 +9908,20 @@ class Router:
                 input=input,
             )
         elif (
-            self.routing_strategy == "usage-based-routing-v2"
+            routing_strategy_to_use == "usage-based-routing-v2"
             and self.lowesttpm_logger_v2 is not None
         ):
             deployment = self.lowesttpm_logger_v2.get_available_deployments(
+                model_group=model,
+                healthy_deployments=healthy_deployments,  # type: ignore
+                messages=messages,
+                input=input,
+            )
+        elif (
+            routing_strategy_to_use == "cost-based-routing"
+            and self.lowestcost_logger is not None
+        ):
+            deployment = self.lowestcost_logger.get_available_deployments(
                 model_group=model,
                 healthy_deployments=healthy_deployments,  # type: ignore
                 messages=messages,

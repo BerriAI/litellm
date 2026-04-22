@@ -292,7 +292,6 @@ export function KeyEditView({
           value !== null &&
           value !== undefined &&
           value !== "" &&
-          value !== false &&
           !(Array.isArray(value) && value.length === 0);
 
         const hasNewValues = Object.values(currentRouterSettings.router_settings).some(isMeaningfulValue);
