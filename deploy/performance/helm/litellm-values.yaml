@@ -64,9 +64,20 @@ db:
   deployStandalone: true
   useExisting: false
 
+# Bitnami subcharts: set StorageClass so PVCs provision on EKS (e.g. gp2 in-tree or gp3 via CSI).
+# Without this, claims stay Pending with an empty STORAGECLASS. If you already have Pending PVCs,
+# delete them after syncing so StatefulSets recreate claims (wiping local DB/Redis data).
+postgresql:
+  primary:
+    persistence:
+      storageClass: gp2
+
 redis:
   enabled: true
   architecture: standalone
+  master:
+    persistence:
+      storageClass: gp2
 
 migrationJob:
   hooks:
