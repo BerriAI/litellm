@@ -2,7 +2,11 @@
 
 import React, { useState, useMemo, useCallback } from "react";
 import { Card, Title, BarList, Text } from "@tremor/react";
-import Chart from "react-apexcharts";
+import dynamic from "next/dynamic";
+
+// react-apexcharts touches `window` at module init, so dynamic-import with ssr: false
+// is required to avoid `ReferenceError: window is not defined` during SSG/SSR.
+const Chart = dynamic(() => import("react-apexcharts"), { ssr: false });
 
 /**
  * Represents a single error statistic data point from the backend.
