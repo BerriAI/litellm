@@ -559,6 +559,7 @@ class LiteLLMAnthropicMessagesAdapter:
             )  # For content blocks with cache_control
             has_cache_control_in_text = False
             tool_calls: List[ChatCompletionAssistantToolCall] = []
+            reasoning_content_parts: List[str] = []
             thinking_blocks: List[
                 Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]
             ] = []
@@ -616,12 +617,15 @@ class LiteLLMAnthropicMessagesAdapter:
                                 )
                                 tool_calls.append(tool_call)
                             elif content.get("type") == "thinking":
+                                thinking_text = content.get("thinking") or ""
                                 thinking_block = ChatCompletionThinkingBlock(
                                     type="thinking",
-                                    thinking=content.get("thinking") or "",
+                                    thinking=thinking_text,
                                     signature=content.get("signature") or "",
                                     cache_control=content.get("cache_control", {}),
                                 )
+                                if thinking_text:
+                                    reasoning_content_parts.append(thinking_text)
                                 thinking_blocks.append(thinking_block)
                             elif content.get("type") == "redacted_thinking":
                                 redacted_thinking_block = (
@@ -659,6 +663,9 @@ class LiteLLMAnthropicMessagesAdapter:
                 )
                 if len(tool_calls) > 0:
                     assistant_message["tool_calls"] = tool_calls  # type: ignore
+                    assistant_message["reasoning_content"] = (
+                        "".join(reasoning_content_parts) if len(reasoning_content_parts) > 0 else " "
+                    )  # type: ignore
                 if len(thinking_blocks) > 0:
                     assistant_message["thinking_blocks"] = thinking_blocks  # type: ignore
                 new_messages.append(assistant_message)
