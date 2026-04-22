@@ -1078,10 +1078,7 @@ async def organization_member_update(
             LitellmUserRoles.PROXY_ADMIN.value,
             LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
         ):
-            if (
-                user_api_key_dict.user_role
-                != LitellmUserRoles.PROXY_ADMIN.value
-            ):
+            if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value:
                 raise HTTPException(
                     status_code=403,
                     detail={
