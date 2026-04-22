@@ -625,6 +625,11 @@ async def test_semantic_filter_hook_all_native_tools():
     assert "weather_lookup" in result_names, "weather_lookup was dropped!"
     assert "calculator" in result_names, "calculator was dropped!"
 
+    # No semantic filtering occurred, so no filter stats should be emitted
+    assert "litellm_semantic_filter_stats" not in result.get(
+        "metadata", {}
+    ), "Spurious semantic filter header emitted for all-native request"
+
     print(
         f"✅ All {len(native_tools)} native tools preserved when no MCP tools in request"
     )

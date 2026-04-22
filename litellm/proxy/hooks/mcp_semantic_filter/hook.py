@@ -265,7 +265,17 @@ class SemanticToolFilterHook(CustomLogger):
             # Merge: native tools are always preserved + filtered MCP tools
             filtered_tools = native_tools + filtered_mcp_tools
 
-            # Always update tools and emit header (even if count unchanged)
+            # If no MCP tools were present, no semantic filtering occurred.
+            # Skip emitting the filter header to avoid a spurious "N->N" stat
+            # that would confuse downstream consumers.
+            if not mcp_tools:
+                data["tools"] = filtered_tools
+                verbose_proxy_logger.debug(
+                    "All tools are native, no semantic filtering applied"
+                )
+                return data
+
+            # Update tools and emit header for MCP-filtered requests
             data["tools"] = filtered_tools
 
             # Store filter stats and tool names for response header
