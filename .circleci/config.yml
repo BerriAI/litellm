@@ -66,6 +66,18 @@ commands:
             echo "513a7213d6d3332dd9ef27c24dab35e5ef10a04fa27274fe1c14d8a246493ded  /tmp/kind" | sha256sum -c -
             chmod +x /tmp/kind
             sudo mv /tmp/kind /usr/local/bin/kind
+  install_uv:
+    description: "Install pinned uv (0.10.9) with checksum verification. Adds ~/.local/bin to PATH."
+    steps:
+      - run:
+          name: Install uv (pinned 0.10.9)
+          command: |
+            curl -LsSf -o /tmp/uv-install.sh https://astral.sh/uv/0.10.9/install.sh
+            echo "7fc46e39cb97290b57169c0c813a17970585ac519139f19006453c99b5f2f45f  /tmp/uv-install.sh" | sha256sum -c -
+            env UV_NO_MODIFY_PATH=1 sh /tmp/uv-install.sh
+            rm -f /tmp/uv-install.sh
+            echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$BASH_ENV"
+            export PATH="$HOME/.local/bin:$PATH"
   setup_litellm_enterprise_pip:
     steps:
       - run:
@@ -83,15 +95,10 @@ commands:
       - restore_cache:
           keys:
             - v3-litellm-uv-deps-{{ checksum "uv.lock" }}-{{ checksum ".circleci/config.yml" }}
+      - install_uv
       - run:
           name: Install Dependencies
           command: |
-            curl -LsSf -o /tmp/uv-install.sh https://astral.sh/uv/0.10.9/install.sh
-            echo "7fc46e39cb97290b57169c0c813a17970585ac519139f19006453c99b5f2f45f  /tmp/uv-install.sh" | sha256sum -c -
-            env UV_NO_MODIFY_PATH=1 sh /tmp/uv-install.sh
-            rm -f /tmp/uv-install.sh
-            echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$BASH_ENV"
-            export PATH="$HOME/.local/bin:$PATH"
             uv sync --frozen --all-groups --all-extras --python "$(which python)"
       - setup_litellm_enterprise_pip
       - save_cache:
@@ -147,15 +154,10 @@ jobs:
     steps:
       - checkout
       - setup_google_dns
+      - install_uv
       - run:
           name: Install Semgrep
           command: |
-            curl -LsSf -o /tmp/uv-install.sh https://astral.sh/uv/0.10.9/install.sh
-            echo "7fc46e39cb97290b57169c0c813a17970585ac519139f19006453c99b5f2f45f  /tmp/uv-install.sh" | sha256sum -c -
-            env UV_NO_MODIFY_PATH=1 sh /tmp/uv-install.sh
-            rm -f /tmp/uv-install.sh
-            echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$BASH_ENV"
-            export PATH="$HOME/.local/bin:$PATH"
       - run:
           name: Run Semgrep (custom rules only)
           command: |
@@ -182,15 +184,10 @@ jobs:
       - restore_cache:
           keys:
             - v2-dependencies-{{ checksum "uv.lock" }}-{{ checksum ".circleci/config.yml" }}
+      - install_uv
       - run:
           name: Install Dependencies
           command: |
-            curl -LsSf -o /tmp/uv-install.sh https://astral.sh/uv/0.10.9/install.sh
-            echo "7fc46e39cb97290b57169c0c813a17970585ac519139f19006453c99b5f2f45f  /tmp/uv-install.sh" | sha256sum -c -
-            env UV_NO_MODIFY_PATH=1 sh /tmp/uv-install.sh
-            rm -f /tmp/uv-install.sh
-            echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$BASH_ENV"
-            export PATH="$HOME/.local/bin:$PATH"
             if [ -f "$HOME/miniconda/etc/profile.d/conda.sh" ]; then
               export PATH="$HOME/miniconda/bin:$PATH"
               source "$HOME/miniconda/etc/profile.d/conda.sh"
@@ -272,15 +269,10 @@ jobs:
       - restore_cache:
           keys:
             - v2-dependencies-{{ checksum "uv.lock" }}-{{ checksum ".circleci/config.yml" }}
+      - install_uv
       - run:
           name: Install Dependencies
           command: |
-            curl -LsSf -o /tmp/uv-install.sh https://astral.sh/uv/0.10.9/install.sh
-            echo "7fc46e39cb97290b57169c0c813a17970585ac519139f19006453c99b5f2f45f  /tmp/uv-install.sh" | sha256sum -c -
-            env UV_NO_MODIFY_PATH=1 sh /tmp/uv-install.sh
-            rm -f /tmp/uv-install.sh
-            echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$BASH_ENV"
-            export PATH="$HOME/.local/bin:$PATH"
             if [ -f "$HOME/miniconda/etc/profile.d/conda.sh" ]; then
               export PATH="$HOME/miniconda/bin:$PATH"
               source "$HOME/miniconda/etc/profile.d/conda.sh"
@@ -363,15 +355,10 @@ jobs:
       - restore_cache:
           keys:
             - v2-dependencies-{{ checksum "uv.lock" }}-{{ checksum ".circleci/config.yml" }}
+      - install_uv
       - run:
           name: Install Dependencies
           command: |
-            curl -LsSf -o /tmp/uv-install.sh https://astral.sh/uv/0.10.9/install.sh
-            echo "7fc46e39cb97290b57169c0c813a17970585ac519139f19006453c99b5f2f45f  /tmp/uv-install.sh" | sha256sum -c -
-            env UV_NO_MODIFY_PATH=1 sh /tmp/uv-install.sh
-            rm -f /tmp/uv-install.sh
-            echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$BASH_ENV"
-            export PATH="$HOME/.local/bin:$PATH"
             if [ -f "$HOME/miniconda/etc/profile.d/conda.sh" ]; then
               export PATH="$HOME/miniconda/bin:$PATH"
               source "$HOME/miniconda/etc/profile.d/conda.sh"
@@ -420,15 +407,10 @@ jobs:
     steps:
       - checkout
       - setup_google_dns
+      - install_uv
       - run:
           name: Install Dependencies
           command: |
-            curl -LsSf -o /tmp/uv-install.sh https://astral.sh/uv/0.10.9/install.sh
-            echo "7fc46e39cb97290b57169c0c813a17970585ac519139f19006453c99b5f2f45f  /tmp/uv-install.sh" | sha256sum -c -
-            env UV_NO_MODIFY_PATH=1 sh /tmp/uv-install.sh
-            rm -f /tmp/uv-install.sh
-            echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$BASH_ENV"
-            export PATH="$HOME/.local/bin:$PATH"
             if [ -f "$HOME/miniconda/etc/profile.d/conda.sh" ]; then
               export PATH="$HOME/miniconda/bin:$PATH"
               source "$HOME/miniconda/etc/profile.d/conda.sh"
@@ -479,15 +461,10 @@ jobs:
       - restore_cache:
           keys:
             - v1-router-testing-deps-{{ checksum "uv.lock" }}
+      - install_uv
       - run:
           name: Install Dependencies
           command: |
-            curl -LsSf -o /tmp/uv-install.sh https://astral.sh/uv/0.10.9/install.sh
-            echo "7fc46e39cb97290b57169c0c813a17970585ac519139f19006453c99b5f2f45f  /tmp/uv-install.sh" | sha256sum -c -
-            env UV_NO_MODIFY_PATH=1 sh /tmp/uv-install.sh
-            rm -f /tmp/uv-install.sh
-            echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$BASH_ENV"
-            export PATH="$HOME/.local/bin:$PATH"
             if [ -f "$HOME/miniconda/etc/profile.d/conda.sh" ]; then
               export PATH="$HOME/miniconda/bin:$PATH"
               source "$HOME/miniconda/etc/profile.d/conda.sh"
@@ -538,15 +515,10 @@ jobs:
       - restore_cache:
           keys:
             - v1-router-unit-deps-{{ checksum "uv.lock" }}
+      - install_uv
       - run:
           name: Install Dependencies
           command: |
-            curl -LsSf -o /tmp/uv-install.sh https://astral.sh/uv/0.10.9/install.sh
-            echo "7fc46e39cb97290b57169c0c813a17970585ac519139f19006453c99b5f2f45f  /tmp/uv-install.sh" | sha256sum -c -
-            env UV_NO_MODIFY_PATH=1 sh /tmp/uv-install.sh
-            rm -f /tmp/uv-install.sh
-            echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$BASH_ENV"
-            export PATH="$HOME/.local/bin:$PATH"
             if [ -f "$HOME/miniconda/etc/profile.d/conda.sh" ]; then
               export PATH="$HOME/miniconda/bin:$PATH"
               source "$HOME/miniconda/etc/profile.d/conda.sh"
@@ -582,15 +554,10 @@ jobs:
     steps:
       - checkout
       - setup_google_dns
+      - install_uv
       - run:
           name: Install Dependencies
           command: |
-            curl -LsSf -o /tmp/uv-install.sh https://astral.sh/uv/0.10.9/install.sh
-            echo "7fc46e39cb97290b57169c0c813a17970585ac519139f19006453c99b5f2f45f  /tmp/uv-install.sh" | sha256sum -c -
-            env UV_NO_MODIFY_PATH=1 sh /tmp/uv-install.sh
-            rm -f /tmp/uv-install.sh
-            echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$BASH_ENV"
-            export PATH="$HOME/.local/bin:$PATH"
             if [ -f "$HOME/miniconda/etc/profile.d/conda.sh" ]; then
               export PATH="$HOME/miniconda/bin:$PATH"
               source "$HOME/miniconda/etc/profile.d/conda.sh"
@@ -624,15 +591,10 @@ jobs:
       - restore_cache:
           keys:
             - v1-llm-translation-deps-{{ checksum "uv.lock" }}
+      - install_uv
       - run:
           name: Install Dependencies
           command: |
-            curl -LsSf -o /tmp/uv-install.sh https://astral.sh/uv/0.10.9/install.sh
-            echo "7fc46e39cb97290b57169c0c813a17970585ac519139f19006453c99b5f2f45f  /tmp/uv-install.sh" | sha256sum -c -
-            env UV_NO_MODIFY_PATH=1 sh /tmp/uv-install.sh
-            rm -f /tmp/uv-install.sh
-            echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$BASH_ENV"
-            export PATH="$HOME/.local/bin:$PATH"
             if [ -f "$HOME/miniconda/etc/profile.d/conda.sh" ]; then
               export PATH="$HOME/miniconda/bin:$PATH"
               source "$HOME/miniconda/etc/profile.d/conda.sh"
@@ -677,15 +639,10 @@ jobs:
     steps:
       - checkout
       - setup_google_dns
+      - install_uv
       - run:
           name: Install Dependencies
           command: |
-            curl -LsSf -o /tmp/uv-install.sh https://astral.sh/uv/0.10.9/install.sh
-            echo "7fc46e39cb97290b57169c0c813a17970585ac519139f19006453c99b5f2f45f  /tmp/uv-install.sh" | sha256sum -c -
-            env UV_NO_MODIFY_PATH=1 sh /tmp/uv-install.sh
-            rm -f /tmp/uv-install.sh
-            echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$BASH_ENV"
-            export PATH="$HOME/.local/bin:$PATH"
             if [ -f "$HOME/miniconda/etc/profile.d/conda.sh" ]; then
               export PATH="$HOME/miniconda/bin:$PATH"
               source "$HOME/miniconda/etc/profile.d/conda.sh"
@@ -727,15 +684,10 @@ jobs:
     steps:
       - checkout
       - setup_google_dns
+      - install_uv
       - run:
           name: Install Dependencies
           command: |
-            curl -LsSf -o /tmp/uv-install.sh https://astral.sh/uv/0.10.9/install.sh
-            echo "7fc46e39cb97290b57169c0c813a17970585ac519139f19006453c99b5f2f45f  /tmp/uv-install.sh" | sha256sum -c -
-            env UV_NO_MODIFY_PATH=1 sh /tmp/uv-install.sh
-            rm -f /tmp/uv-install.sh
-            echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$BASH_ENV"
-            export PATH="$HOME/.local/bin:$PATH"
             if [ -f "$HOME/miniconda/etc/profile.d/conda.sh" ]; then
               export PATH="$HOME/miniconda/bin:$PATH"
               source "$HOME/miniconda/etc/profile.d/conda.sh"
@@ -775,15 +727,10 @@ jobs:
     steps:
       - checkout
       - setup_google_dns
+      - install_uv
       - run:
           name: Install Dependencies
           command: |
-            curl -LsSf -o /tmp/uv-install.sh https://astral.sh/uv/0.10.9/install.sh
-            echo "7fc46e39cb97290b57169c0c813a17970585ac519139f19006453c99b5f2f45f  /tmp/uv-install.sh" | sha256sum -c -
-            env UV_NO_MODIFY_PATH=1 sh /tmp/uv-install.sh
-            rm -f /tmp/uv-install.sh
-            echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$BASH_ENV"
-            export PATH="$HOME/.local/bin:$PATH"
             if [ -f "$HOME/miniconda/etc/profile.d/conda.sh" ]; then
               export PATH="$HOME/miniconda/bin:$PATH"
               source "$HOME/miniconda/etc/profile.d/conda.sh"
@@ -823,15 +770,10 @@ jobs:
     steps:
       - checkout
       - setup_google_dns
+      - install_uv
       - run:
           name: Install Dependencies
           command: |
-            curl -LsSf -o /tmp/uv-install.sh https://astral.sh/uv/0.10.9/install.sh
-            echo "7fc46e39cb97290b57169c0c813a17970585ac519139f19006453c99b5f2f45f  /tmp/uv-install.sh" | sha256sum -c -
-            env UV_NO_MODIFY_PATH=1 sh /tmp/uv-install.sh
-            rm -f /tmp/uv-install.sh
-            echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$BASH_ENV"
-            export PATH="$HOME/.local/bin:$PATH"
             if [ -f "$HOME/miniconda/etc/profile.d/conda.sh" ]; then
               export PATH="$HOME/miniconda/bin:$PATH"
               source "$HOME/miniconda/etc/profile.d/conda.sh"
@@ -872,15 +814,10 @@ jobs:
     steps:
       - checkout
       - setup_google_dns
+      - install_uv
       - run:
           name: Install Dependencies
           command: |
-            curl -LsSf -o /tmp/uv-install.sh https://astral.sh/uv/0.10.9/install.sh
-            echo "7fc46e39cb97290b57169c0c813a17970585ac519139f19006453c99b5f2f45f  /tmp/uv-install.sh" | sha256sum -c -
-            env UV_NO_MODIFY_PATH=1 sh /tmp/uv-install.sh
-            rm -f /tmp/uv-install.sh
-            echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$BASH_ENV"
-            export PATH="$HOME/.local/bin:$PATH"
             if [ -f "$HOME/miniconda/etc/profile.d/conda.sh" ]; then
               export PATH="$HOME/miniconda/bin:$PATH"
               source "$HOME/miniconda/etc/profile.d/conda.sh"
@@ -925,15 +862,10 @@ jobs:
       - restore_cache:
           keys:
             - v1-llm-responses-deps-{{ checksum "uv.lock" }}
+      - install_uv
       - run:
           name: Install Dependencies
           command: |
-            curl -LsSf -o /tmp/uv-install.sh https://astral.sh/uv/0.10.9/install.sh
-            echo "7fc46e39cb97290b57169c0c813a17970585ac519139f19006453c99b5f2f45f  /tmp/uv-install.sh" | sha256sum -c -
-            env UV_NO_MODIFY_PATH=1 sh /tmp/uv-install.sh
-            rm -f /tmp/uv-install.sh
-            echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$BASH_ENV"
-            export PATH="$HOME/.local/bin:$PATH"
             if [ -f "$HOME/miniconda/etc/profile.d/conda.sh" ]; then
               export PATH="$HOME/miniconda/bin:$PATH"
               source "$HOME/miniconda/etc/profile.d/conda.sh"
@@ -968,15 +900,10 @@ jobs:
     steps:
       - checkout
       - setup_google_dns
+      - install_uv
       - run:
           name: Install Dependencies
           command: |
-            curl -LsSf -o /tmp/uv-install.sh https://astral.sh/uv/0.10.9/install.sh
-            echo "7fc46e39cb97290b57169c0c813a17970585ac519139f19006453c99b5f2f45f  /tmp/uv-install.sh" | sha256sum -c -
-            env UV_NO_MODIFY_PATH=1 sh /tmp/uv-install.sh
-            rm -f /tmp/uv-install.sh
-            echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$BASH_ENV"
-            export PATH="$HOME/.local/bin:$PATH"
             if [ -f "$HOME/miniconda/etc/profile.d/conda.sh" ]; then
               export PATH="$HOME/miniconda/bin:$PATH"
               source "$HOME/miniconda/etc/profile.d/conda.sh"
@@ -1016,15 +943,10 @@ jobs:
     steps:
       - checkout
       - setup_google_dns
+      - install_uv
       - run:
           name: Install Dependencies
           command: |
-            curl -LsSf -o /tmp/uv-install.sh https://astral.sh/uv/0.10.9/install.sh
-            echo "7fc46e39cb97290b57169c0c813a17970585ac519139f19006453c99b5f2f45f  /tmp/uv-install.sh" | sha256sum -c -
-            env UV_NO_MODIFY_PATH=1 sh /tmp/uv-install.sh
-            rm -f /tmp/uv-install.sh
-            echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$BASH_ENV"
-            export PATH="$HOME/.local/bin:$PATH"
             if [ -f "$HOME/miniconda/etc/profile.d/conda.sh" ]; then
               export PATH="$HOME/miniconda/bin:$PATH"
               source "$HOME/miniconda/etc/profile.d/conda.sh"
@@ -1104,15 +1026,10 @@ jobs:
     steps:
       - checkout
       - setup_google_dns
+      - install_uv
       - run:
           name: Install Dependencies
           command: |
-            curl -LsSf -o /tmp/uv-install.sh https://astral.sh/uv/0.10.9/install.sh
-            echo "7fc46e39cb97290b57169c0c813a17970585ac519139f19006453c99b5f2f45f  /tmp/uv-install.sh" | sha256sum -c -
-            env UV_NO_MODIFY_PATH=1 sh /tmp/uv-install.sh
-            rm -f /tmp/uv-install.sh
-            echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$BASH_ENV"
-            export PATH="$HOME/.local/bin:$PATH"
             if [ -f "$HOME/miniconda/etc/profile.d/conda.sh" ]; then
               export PATH="$HOME/miniconda/bin:$PATH"
               source "$HOME/miniconda/etc/profile.d/conda.sh"
@@ -1142,15 +1059,10 @@ jobs:
     steps:
       - checkout
       - setup_google_dns
+      - install_uv
       - run:
           name: Install Dependencies
           command: |
-            curl -LsSf -o /tmp/uv-install.sh https://astral.sh/uv/0.10.9/install.sh
-            echo "7fc46e39cb97290b57169c0c813a17970585ac519139f19006453c99b5f2f45f  /tmp/uv-install.sh" | sha256sum -c -
-            env UV_NO_MODIFY_PATH=1 sh /tmp/uv-install.sh
-            rm -f /tmp/uv-install.sh
-            echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$BASH_ENV"
-            export PATH="$HOME/.local/bin:$PATH"
             if [ -f "$HOME/miniconda/etc/profile.d/conda.sh" ]; then
               export PATH="$HOME/miniconda/bin:$PATH"
               source "$HOME/miniconda/etc/profile.d/conda.sh"
@@ -1190,15 +1102,10 @@ jobs:
     steps:
       - checkout
       - setup_google_dns
+      - install_uv
       - run:
           name: Install Dependencies
           command: |
-            curl -LsSf -o /tmp/uv-install.sh https://astral.sh/uv/0.10.9/install.sh
-            echo "7fc46e39cb97290b57169c0c813a17970585ac519139f19006453c99b5f2f45f  /tmp/uv-install.sh" | sha256sum -c -
-            env UV_NO_MODIFY_PATH=1 sh /tmp/uv-install.sh
-            rm -f /tmp/uv-install.sh
-            echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$BASH_ENV"
-            export PATH="$HOME/.local/bin:$PATH"
             if [ -f "$HOME/miniconda/etc/profile.d/conda.sh" ]; then
               export PATH="$HOME/miniconda/bin:$PATH"
               source "$HOME/miniconda/etc/profile.d/conda.sh"
@@ -1239,15 +1146,10 @@ jobs:
     steps:
       - checkout
       - setup_google_dns
+      - install_uv
       - run:
           name: Install Dependencies
           command: |
-            curl -LsSf -o /tmp/uv-install.sh https://astral.sh/uv/0.10.9/install.sh
-            echo "7fc46e39cb97290b57169c0c813a17970585ac519139f19006453c99b5f2f45f  /tmp/uv-install.sh" | sha256sum -c -
-            env UV_NO_MODIFY_PATH=1 sh /tmp/uv-install.sh
-            rm -f /tmp/uv-install.sh
-            echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$BASH_ENV"
-            export PATH="$HOME/.local/bin:$PATH"
             if [ -f "$HOME/miniconda/etc/profile.d/conda.sh" ]; then
               export PATH="$HOME/miniconda/bin:$PATH"
               source "$HOME/miniconda/etc/profile.d/conda.sh"
@@ -1288,15 +1190,10 @@ jobs:
     steps:
       - checkout
       - setup_google_dns
+      - install_uv
       - run:
           name: Install Dependencies
           command: |
-            curl -LsSf -o /tmp/uv-install.sh https://astral.sh/uv/0.10.9/install.sh
-            echo "7fc46e39cb97290b57169c0c813a17970585ac519139f19006453c99b5f2f45f  /tmp/uv-install.sh" | sha256sum -c -
-            env UV_NO_MODIFY_PATH=1 sh /tmp/uv-install.sh
-            rm -f /tmp/uv-install.sh
-            echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$BASH_ENV"
-            export PATH="$HOME/.local/bin:$PATH"
             if [ -f "$HOME/miniconda/etc/profile.d/conda.sh" ]; then
               export PATH="$HOME/miniconda/bin:$PATH"
               source "$HOME/miniconda/etc/profile.d/conda.sh"
@@ -1325,15 +1222,10 @@ jobs:
     steps:
       - checkout
       - setup_google_dns
+      - install_uv
       - run:
           name: Install Dependencies
           command: |
-            curl -LsSf -o /tmp/uv-install.sh https://astral.sh/uv/0.10.9/install.sh
-            echo "7fc46e39cb97290b57169c0c813a17970585ac519139f19006453c99b5f2f45f  /tmp/uv-install.sh" | sha256sum -c -
-            env UV_NO_MODIFY_PATH=1 sh /tmp/uv-install.sh
-            rm -f /tmp/uv-install.sh
-            echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$BASH_ENV"
-            export PATH="$HOME/.local/bin:$PATH"
             if [ -f "$HOME/miniconda/etc/profile.d/conda.sh" ]; then
               export PATH="$HOME/miniconda/bin:$PATH"
               source "$HOME/miniconda/etc/profile.d/conda.sh"
@@ -1374,15 +1266,10 @@ jobs:
     steps:
       - checkout
       - setup_google_dns
+      - install_uv
       - run:
           name: Install Dependencies
           command: |
-            curl -LsSf -o /tmp/uv-install.sh https://astral.sh/uv/0.10.9/install.sh
-            echo "7fc46e39cb97290b57169c0c813a17970585ac519139f19006453c99b5f2f45f  /tmp/uv-install.sh" | sha256sum -c -
-            env UV_NO_MODIFY_PATH=1 sh /tmp/uv-install.sh
-            rm -f /tmp/uv-install.sh
-            echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$BASH_ENV"
-            export PATH="$HOME/.local/bin:$PATH"
             if [ -f "$HOME/miniconda/etc/profile.d/conda.sh" ]; then
               export PATH="$HOME/miniconda/bin:$PATH"
               source "$HOME/miniconda/etc/profile.d/conda.sh"
@@ -1425,15 +1312,10 @@ jobs:
       - restore_cache:
           keys:
             - v2-dependencies-{{ checksum "uv.lock" }}-{{ checksum ".circleci/config.yml" }}
+      - install_uv
       - run:
           name: Install Dependencies
           command: |
-            curl -LsSf -o /tmp/uv-install.sh https://astral.sh/uv/0.10.9/install.sh
-            echo "7fc46e39cb97290b57169c0c813a17970585ac519139f19006453c99b5f2f45f  /tmp/uv-install.sh" | sha256sum -c -
-            env UV_NO_MODIFY_PATH=1 sh /tmp/uv-install.sh
-            rm -f /tmp/uv-install.sh
-            echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$BASH_ENV"
-            export PATH="$HOME/.local/bin:$PATH"
             uv sync --frozen --all-groups --all-extras --python "$(which python)"
       - save_cache:
           paths:
@@ -1477,15 +1359,10 @@ jobs:
     steps:
       - checkout
       - setup_google_dns
+      - install_uv
       - run:
           name: Install Dependencies
           command: |
-            curl -LsSf -o /tmp/uv-install.sh https://astral.sh/uv/0.10.9/install.sh
-            echo "7fc46e39cb97290b57169c0c813a17970585ac519139f19006453c99b5f2f45f  /tmp/uv-install.sh" | sha256sum -c -
-            env UV_NO_MODIFY_PATH=1 sh /tmp/uv-install.sh
-            rm -f /tmp/uv-install.sh
-            echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$BASH_ENV"
-            export PATH="$HOME/.local/bin:$PATH"
             if [ -f "$HOME/miniconda/etc/profile.d/conda.sh" ]; then
               export PATH="$HOME/miniconda/bin:$PATH"
               source "$HOME/miniconda/etc/profile.d/conda.sh"
@@ -1518,15 +1395,10 @@ jobs:
     steps:
       - checkout
       - setup_google_dns
+      - install_uv
       - run:
           name: Install Dependencies
           command: |
-            curl -LsSf -o /tmp/uv-install.sh https://astral.sh/uv/0.10.9/install.sh
-            echo "7fc46e39cb97290b57169c0c813a17970585ac519139f19006453c99b5f2f45f  /tmp/uv-install.sh" | sha256sum -c -
-            env UV_NO_MODIFY_PATH=1 sh /tmp/uv-install.sh
-            rm -f /tmp/uv-install.sh
-            echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$BASH_ENV"
-            export PATH="$HOME/.local/bin:$PATH"
             if [ -f "$HOME/miniconda/etc/profile.d/conda.sh" ]; then
               export PATH="$HOME/miniconda/bin:$PATH"
               source "$HOME/miniconda/etc/profile.d/conda.sh"
@@ -1555,15 +1427,10 @@ jobs:
     steps:
       - checkout
       - setup_google_dns
+      - install_uv
       - run:
           name: Install Dependencies
           command: |
-            curl -LsSf -o /tmp/uv-install.sh https://astral.sh/uv/0.10.9/install.sh
-            echo "7fc46e39cb97290b57169c0c813a17970585ac519139f19006453c99b5f2f45f  /tmp/uv-install.sh" | sha256sum -c -
-            env UV_NO_MODIFY_PATH=1 sh /tmp/uv-install.sh
-            rm -f /tmp/uv-install.sh
-            echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$BASH_ENV"
-            export PATH="$HOME/.local/bin:$PATH"
             if [ -f "$HOME/miniconda/etc/profile.d/conda.sh" ]; then
               export PATH="$HOME/miniconda/bin:$PATH"
               source "$HOME/miniconda/etc/profile.d/conda.sh"
@@ -1667,15 +1534,10 @@ jobs:
     steps:
       - checkout
       - setup_google_dns
+      - install_uv
       - run:
           name: Install Dependencies
           command: |
-            curl -LsSf -o /tmp/uv-install.sh https://astral.sh/uv/0.10.9/install.sh
-            echo "7fc46e39cb97290b57169c0c813a17970585ac519139f19006453c99b5f2f45f  /tmp/uv-install.sh" | sha256sum -c -
-            env UV_NO_MODIFY_PATH=1 sh /tmp/uv-install.sh
-            rm -f /tmp/uv-install.sh
-            echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$BASH_ENV"
-            export PATH="$HOME/.local/bin:$PATH"
             if [ -f "$HOME/miniconda/etc/profile.d/conda.sh" ]; then
               export PATH="$HOME/miniconda/bin:$PATH"
               source "$HOME/miniconda/etc/profile.d/conda.sh"
@@ -1731,15 +1593,10 @@ jobs:
             conda create -n myenv python=3.10 -y
             conda activate myenv
             python --version
+      - install_uv
       - run:
           name: Install Dependencies
           command: |
-            curl -LsSf -o /tmp/uv-install.sh https://astral.sh/uv/0.10.9/install.sh
-            echo "7fc46e39cb97290b57169c0c813a17970585ac519139f19006453c99b5f2f45f  /tmp/uv-install.sh" | sha256sum -c -
-            env UV_NO_MODIFY_PATH=1 sh /tmp/uv-install.sh
-            rm -f /tmp/uv-install.sh
-            echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$BASH_ENV"
-            export PATH="$HOME/.local/bin:$PATH"
             if [ -f "$HOME/miniconda/etc/profile.d/conda.sh" ]; then
               export PATH="$HOME/miniconda/bin:$PATH"
               source "$HOME/miniconda/etc/profile.d/conda.sh"
@@ -1846,15 +1703,10 @@ jobs:
             conda create -n myenv python=3.10 -y
             conda activate myenv
             python --version
+      - install_uv
       - run:
           name: Install Dependencies
           command: |
-            curl -LsSf -o /tmp/uv-install.sh https://astral.sh/uv/0.10.9/install.sh
-            echo "7fc46e39cb97290b57169c0c813a17970585ac519139f19006453c99b5f2f45f  /tmp/uv-install.sh" | sha256sum -c -
-            env UV_NO_MODIFY_PATH=1 sh /tmp/uv-install.sh
-            rm -f /tmp/uv-install.sh
-            echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$BASH_ENV"
-            export PATH="$HOME/.local/bin:$PATH"
             if [ -f "$HOME/miniconda/etc/profile.d/conda.sh" ]; then
               export PATH="$HOME/miniconda/bin:$PATH"
               source "$HOME/miniconda/etc/profile.d/conda.sh"
@@ -1957,15 +1809,10 @@ jobs:
             conda create -n myenv python=3.10 -y
             conda activate myenv
             python --version
+      - install_uv
       - run:
           name: Install Dependencies
           command: |
-            curl -LsSf -o /tmp/uv-install.sh https://astral.sh/uv/0.10.9/install.sh
-            echo "7fc46e39cb97290b57169c0c813a17970585ac519139f19006453c99b5f2f45f  /tmp/uv-install.sh" | sha256sum -c -
-            env UV_NO_MODIFY_PATH=1 sh /tmp/uv-install.sh
-            rm -f /tmp/uv-install.sh
-            echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$BASH_ENV"
-            export PATH="$HOME/.local/bin:$PATH"
             if [ -f "$HOME/miniconda/etc/profile.d/conda.sh" ]; then
               export PATH="$HOME/miniconda/bin:$PATH"
               source "$HOME/miniconda/etc/profile.d/conda.sh"
@@ -2071,15 +1918,10 @@ jobs:
             conda create -n myenv python=3.10 -y
             conda activate myenv
             python --version
+      - install_uv
       - run:
           name: Install Dependencies
           command: |
-            curl -LsSf -o /tmp/uv-install.sh https://astral.sh/uv/0.10.9/install.sh
-            echo "7fc46e39cb97290b57169c0c813a17970585ac519139f19006453c99b5f2f45f  /tmp/uv-install.sh" | sha256sum -c -
-            env UV_NO_MODIFY_PATH=1 sh /tmp/uv-install.sh
-            rm -f /tmp/uv-install.sh
-            echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$BASH_ENV"
-            export PATH="$HOME/.local/bin:$PATH"
             if [ -f "$HOME/miniconda/etc/profile.d/conda.sh" ]; then
               export PATH="$HOME/miniconda/bin:$PATH"
               source "$HOME/miniconda/etc/profile.d/conda.sh"
@@ -2222,15 +2064,10 @@ jobs:
             conda create -n myenv python=3.10 -y
             conda activate myenv
             python --version
+      - install_uv
       - run:
           name: Install Dependencies
           command: |
-            curl -LsSf -o /tmp/uv-install.sh https://astral.sh/uv/0.10.9/install.sh
-            echo "7fc46e39cb97290b57169c0c813a17970585ac519139f19006453c99b5f2f45f  /tmp/uv-install.sh" | sha256sum -c -
-            env UV_NO_MODIFY_PATH=1 sh /tmp/uv-install.sh
-            rm -f /tmp/uv-install.sh
-            echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$BASH_ENV"
-            export PATH="$HOME/.local/bin:$PATH"
             if [ -f "$HOME/miniconda/etc/profile.d/conda.sh" ]; then
               export PATH="$HOME/miniconda/bin:$PATH"
               source "$HOME/miniconda/etc/profile.d/conda.sh"
@@ -2328,15 +2165,10 @@ jobs:
             conda create -n myenv python=3.10 -y
             conda activate myenv
             python --version
+      - install_uv
       - run:
           name: Install Dependencies
           command: |
-            curl -LsSf -o /tmp/uv-install.sh https://astral.sh/uv/0.10.9/install.sh
-            echo "7fc46e39cb97290b57169c0c813a17970585ac519139f19006453c99b5f2f45f  /tmp/uv-install.sh" | sha256sum -c -
-            env UV_NO_MODIFY_PATH=1 sh /tmp/uv-install.sh
-            rm -f /tmp/uv-install.sh
-            echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$BASH_ENV"
-            export PATH="$HOME/.local/bin:$PATH"
             if [ -f "$HOME/miniconda/etc/profile.d/conda.sh" ]; then
               export PATH="$HOME/miniconda/bin:$PATH"
               source "$HOME/miniconda/etc/profile.d/conda.sh"
@@ -2453,15 +2285,10 @@ jobs:
             conda create -n myenv python=3.10 -y
             conda activate myenv
             python --version
+      - install_uv
       - run:
           name: Install Dependencies
           command: |
-            curl -LsSf -o /tmp/uv-install.sh https://astral.sh/uv/0.10.9/install.sh
-            echo "7fc46e39cb97290b57169c0c813a17970585ac519139f19006453c99b5f2f45f  /tmp/uv-install.sh" | sha256sum -c -
-            env UV_NO_MODIFY_PATH=1 sh /tmp/uv-install.sh
-            rm -f /tmp/uv-install.sh
-            echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$BASH_ENV"
-            export PATH="$HOME/.local/bin:$PATH"
             if [ -f "$HOME/miniconda/etc/profile.d/conda.sh" ]; then
               export PATH="$HOME/miniconda/bin:$PATH"
               source "$HOME/miniconda/etc/profile.d/conda.sh"
@@ -2552,15 +2379,10 @@ jobs:
             conda create -n myenv python=3.13 -y
             conda activate myenv
             python --version
+      - install_uv
       - run:
           name: Install Dependencies
           command: |
-            curl -LsSf -o /tmp/uv-install.sh https://astral.sh/uv/0.10.9/install.sh
-            echo "7fc46e39cb97290b57169c0c813a17970585ac519139f19006453c99b5f2f45f  /tmp/uv-install.sh" | sha256sum -c -
-            env UV_NO_MODIFY_PATH=1 sh /tmp/uv-install.sh
-            rm -f /tmp/uv-install.sh
-            echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$BASH_ENV"
-            export PATH="$HOME/.local/bin:$PATH"
             if [ -f "$HOME/miniconda/etc/profile.d/conda.sh" ]; then
               export PATH="$HOME/miniconda/bin:$PATH"
               source "$HOME/miniconda/etc/profile.d/conda.sh"
@@ -2655,15 +2477,10 @@ jobs:
             conda create -n myenv python=3.10 -y
             conda activate myenv
             python --version
+      - install_uv
       - run:
           name: Install Dependencies
           command: |
-            curl -LsSf -o /tmp/uv-install.sh https://astral.sh/uv/0.10.9/install.sh
-            echo "7fc46e39cb97290b57169c0c813a17970585ac519139f19006453c99b5f2f45f  /tmp/uv-install.sh" | sha256sum -c -
-            env UV_NO_MODIFY_PATH=1 sh /tmp/uv-install.sh
-            rm -f /tmp/uv-install.sh
-            echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$BASH_ENV"
-            export PATH="$HOME/.local/bin:$PATH"
             if [ -f "$HOME/miniconda/etc/profile.d/conda.sh" ]; then
               export PATH="$HOME/miniconda/bin:$PATH"
               source "$HOME/miniconda/etc/profile.d/conda.sh"
@@ -2815,15 +2632,10 @@ jobs:
             conda create -n myenv python=3.10 -y
             conda activate myenv
             python --version
+      - install_uv
       - run:
           name: Install Dependencies
           command: |
-            curl -LsSf -o /tmp/uv-install.sh https://astral.sh/uv/0.10.9/install.sh
-            echo "7fc46e39cb97290b57169c0c813a17970585ac519139f19006453c99b5f2f45f  /tmp/uv-install.sh" | sha256sum -c -
-            env UV_NO_MODIFY_PATH=1 sh /tmp/uv-install.sh
-            rm -f /tmp/uv-install.sh
-            echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$BASH_ENV"
-            export PATH="$HOME/.local/bin:$PATH"
             if [ -f "$HOME/miniconda/etc/profile.d/conda.sh" ]; then
               export PATH="$HOME/miniconda/bin:$PATH"
               source "$HOME/miniconda/etc/profile.d/conda.sh"
@@ -2908,15 +2720,10 @@ jobs:
             ls -la
             echo "\nContents of tests/llm_translation:"
             ls -la tests/llm_translation
+      - install_uv
       - run:
           name: Combine Coverage
           command: |
-            curl -LsSf -o /tmp/uv-install.sh https://astral.sh/uv/0.10.9/install.sh
-            echo "7fc46e39cb97290b57169c0c813a17970585ac519139f19006453c99b5f2f45f  /tmp/uv-install.sh" | sha256sum -c -
-            env UV_NO_MODIFY_PATH=1 sh /tmp/uv-install.sh
-            rm -f /tmp/uv-install.sh
-            echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$BASH_ENV"
-            export PATH="$HOME/.local/bin:$PATH"
             uv tool run --from 'coverage[toml]==7.10.6' coverage combine realtime_translation_coverage ocr_coverage search_coverage mcp_coverage logging_coverage audio_coverage local_testing_part1_coverage local_testing_part2_coverage pass_through_unit_tests_coverage batches_coverage guardrails_coverage redis_caching_coverage
             uv tool run --from 'coverage[toml]==7.10.6' coverage xml
       - codecov/upload:
@@ -3018,15 +2825,10 @@ jobs:
       - restore_cache:
           keys:
             - ui-e2e-py-deps-v2-{{ checksum "uv.lock" }}-{{ checksum ".circleci/config.yml" }}
+      - install_uv
       - run:
           name: Install Python dependencies
           command: |
-            curl -LsSf -o /tmp/uv-install.sh https://astral.sh/uv/0.10.9/install.sh
-            echo "7fc46e39cb97290b57169c0c813a17970585ac519139f19006453c99b5f2f45f  /tmp/uv-install.sh" | sha256sum -c -
-            env UV_NO_MODIFY_PATH=1 sh /tmp/uv-install.sh
-            rm -f /tmp/uv-install.sh
-            echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$BASH_ENV"
-            export PATH="$HOME/.local/bin:$PATH"
             uv sync --frozen --all-groups --all-extras --python "$(which python)"
             uv run --no-sync python -m prisma generate --schema litellm/proxy/schema.prisma
       - save_cache:
