@@ -23,6 +23,7 @@ from litellm.constants import (
     DEFAULT_IMAGE_HEIGHT,
     DEFAULT_IMAGE_TOKEN_COUNT,
     DEFAULT_IMAGE_WIDTH,
+    MAX_IMAGE_URL_DOWNLOAD_SIZE_MB,
     MAX_LONG_SIDE_FOR_IMAGE_HIGH_RES,
     MAX_SHORT_SIDE_FOR_IMAGE_HIGH_RES,
     MAX_TILE_HEIGHT,
@@ -215,7 +216,13 @@ def get_image_dimensions(
         try:
             client = _get_httpx_client()
             response = safe_get(client, data)
+            max_bytes = int(MAX_IMAGE_URL_DOWNLOAD_SIZE_MB * 1024 * 1024)
+            content_length = response.headers.get("Content-Length")
+            if content_length is not None and int(content_length) > max_bytes:
+                raise ValueError("Image response exceeds size limit")
             img_data = response.read()
+            if len(img_data) > max_bytes:
+                raise ValueError("Image response exceeds size limit")
         except Exception:
             pass
     if img_data is None:
