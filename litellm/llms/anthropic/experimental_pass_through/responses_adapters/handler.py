@@ -15,6 +15,7 @@ from litellm.types.llms.openai import ResponsesAPIResponse
 
 from .streaming_iterator import AnthropicResponsesStreamWrapper
 from .transformation import LiteLLMAnthropicToResponsesAPIAdapter
+from ..utils import is_reasoning_auto_summary_enabled
 
 _ADAPTER = LiteLLMAnthropicToResponsesAPIAdapter()
 
@@ -76,7 +77,8 @@ def _build_responses_kwargs(
         responses_kwargs["stream"] = True
 
     # Forward litellm-specific kwargs (api_key, api_base, logging obj, etc.)
-    excluded = {"anthropic_messages"}
+    excluded = {"anthropic_messages", "force_reasoning_effort"}
+    force_reasoning_effort = (extra_kwargs or {}).get("force_reasoning_effort")
     for key, value in (extra_kwargs or {}).items():
         if key == "litellm_logging_obj" and value is not None:
             from litellm.litellm_core_utils.litellm_logging import (
@@ -92,6 +94,24 @@ def _build_responses_kwargs(
             responses_kwargs[key] = value
         elif key not in excluded and key not in responses_kwargs and value is not None:
             responses_kwargs[key] = value
+
+    # Override reasoning effort if force_reasoning_effort is configured
+    if force_reasoning_effort:
+        reasoning = responses_kwargs.get("reasoning")
+        if isinstance(reasoning, dict):
+            responses_kwargs["reasoning"] = {
+                **reasoning,
+                "effort": force_reasoning_effort,
+            }
+        else:
+            responses_kwargs["reasoning"] = {
+                **(
+                    {"summary": "detailed"}
+                    if is_reasoning_auto_summary_enabled()
+                    else {}
+                ),
+                "effort": force_reasoning_effort,
+            }
 
     return responses_kwargs
 

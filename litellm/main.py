@@ -1577,6 +1577,7 @@ def completion(  # type: ignore # noqa: PLR0915
             merge_reasoning_content_in_choices=kwargs.get(
                 "merge_reasoning_content_in_choices", None
             ),
+            force_reasoning_effort=kwargs.get("force_reasoning_effort"),
             use_litellm_proxy=kwargs.get("use_litellm_proxy", False),
             api_version=api_version,
             azure_ad_token=kwargs.get("azure_ad_token"),
@@ -1592,6 +1593,11 @@ def completion(  # type: ignore # noqa: PLR0915
             tpm=kwargs.get("tpm"),
             rpm=kwargs.get("rpm"),
         )
+        # Override reasoning_effort if force_reasoning_effort is configured
+        force_reasoning_effort = litellm_params.get("force_reasoning_effort")
+        if force_reasoning_effort:
+            optional_params["reasoning_effort"] = force_reasoning_effort
+
         cast(LiteLLMLoggingObj, logging).update_environment_variables(
             model=model,
             user=user,
