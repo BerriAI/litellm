@@ -68,6 +68,12 @@ db:
 # Without this, claims stay Pending with an empty STORAGECLASS. If you already have Pending PVCs,
 # delete them after syncing so StatefulSets recreate claims (wiping local DB/Redis data).
 postgresql:
+  # docker.io/bitnami/postgresql tags from the subchart (e.g. 16.2.0-debian-12-r6) are often removed;
+  # use Bitnami Legacy Catalog: https://hub.docker.com/r/bitnamilegacy/postgresql/tags
+  image:
+    registry: docker.io
+    repository: bitnamilegacy/postgresql
+    tag: 16.6.0-debian-12-r2
   primary:
     persistence:
       storageClass: gp2
@@ -75,6 +81,12 @@ postgresql:
 redis:
   enabled: true
   architecture: standalone
+  # Same as Postgres: chart default docker.io/bitnami/redis tags may 404; legacy catalog:
+  # https://hub.docker.com/r/bitnamilegacy/redis/tags
+  image:
+    registry: docker.io
+    repository: bitnamilegacy/redis
+    tag: 7.2.5-debian-12-r6
   master:
     persistence:
       storageClass: gp2
