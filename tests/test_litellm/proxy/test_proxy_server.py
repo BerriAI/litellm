@@ -5085,3 +5085,110 @@ async def test_reseed_spend_from_db_skips_window_variant_keys():
         fake_prisma.db.litellm_teamtable.find_unique.assert_not_awaited()
     finally:
         ps.prisma_client = orig_prisma
+
+
+@pytest.mark.asyncio
+async def test_redis_env_vars_loaded_when_cache_params_has_non_connection_keys(
+    monkeypatch,
+):
+    """
+    Regression test for https://github.com/BerriAI/litellm/issues/26233.
+
+    When `litellm_settings.cache: true` is combined with a `cache_params`
+    dict that contains only non-connection keys (e.g. `mode: default_off`),
+    the proxy must still fall back to the REDIS_HOST / REDIS_PORT /
+    REDIS_PASSWORD env vars. Previously the env-var fallback was gated on
+    `cache_params` being completely empty, so any unrelated key silently
+    dropped the cache to in-memory — which breaks multi-pod spend tracking.
+    """
+    import tempfile
+
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    monkeypatch.setenv("REDIS_HOST", "test-redis.internal")
+    monkeypatch.setenv("REDIS_PORT", "6379")
+    monkeypatch.setenv("REDIS_PASSWORD", "fake-test-password")
+
+    test_config = {
+        "model_list": [],
+        "router_settings": {},
+        "litellm_settings": {
+            "cache": True,
+            "cache_params": {
+                "mode": "default_off",
+            },
+        },
+    }
+
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+        yaml.dump(test_config, f)
+        config_file_path = f.name
+
+    try:
+        proxy_config = ProxyConfig()
+        with patch.object(ProxyConfig, "_init_cache") as mock_init:
+            await proxy_config.load_config(
+                router=MagicMock(), config_file_path=config_file_path
+            )
+
+            mock_init.assert_called_once()
+            actual_cache_params = mock_init.call_args.kwargs["cache_params"]
+
+            assert actual_cache_params.get("type") == "redis"
+            assert actual_cache_params.get("host") == "test-redis.internal"
+            assert actual_cache_params.get("port") == "6379"
+            assert actual_cache_params.get("password") == "fake-test-password"
+            # Preserved user-supplied non-connection keys
+            assert actual_cache_params.get("mode") == "default_off"
+    finally:
+        os.unlink(config_file_path)
+
+
+@pytest.mark.asyncio
+async def test_explicit_cache_params_host_not_overwritten_by_env_vars(monkeypatch):
+    """
+    Companion to test_redis_env_vars_loaded_when_cache_params_has_non_connection_keys.
+
+    When `cache_params` explicitly specifies a `host`, the REDIS_* env vars
+    must NOT overwrite it. The env-var fallback only applies when the user
+    has supplied no connection details.
+    """
+    import tempfile
+
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    monkeypatch.setenv("REDIS_HOST", "env-redis.internal")
+    monkeypatch.setenv("REDIS_PORT", "6379")
+
+    test_config = {
+        "model_list": [],
+        "router_settings": {},
+        "litellm_settings": {
+            "cache": True,
+            "cache_params": {
+                "host": "explicit-redis.internal",
+                "port": 1234,
+                "mode": "default_off",
+            },
+        },
+    }
+
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+        yaml.dump(test_config, f)
+        config_file_path = f.name
+
+    try:
+        proxy_config = ProxyConfig()
+        with patch.object(ProxyConfig, "_init_cache") as mock_init:
+            await proxy_config.load_config(
+                router=MagicMock(), config_file_path=config_file_path
+            )
+
+            mock_init.assert_called_once()
+            actual_cache_params = mock_init.call_args.kwargs["cache_params"]
+
+            assert actual_cache_params.get("host") == "explicit-redis.internal"
+            assert actual_cache_params.get("port") == 1234
+            assert actual_cache_params.get("mode") == "default_off"
+    finally:
+        os.unlink(config_file_path)
