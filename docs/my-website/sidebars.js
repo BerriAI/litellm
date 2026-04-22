@@ -536,6 +536,7 @@ const sidebars = {
           description: "Modify requests, responses, and more",
           items: [
             "proxy/call_hooks",
+            "proxy/agentic_loop_hook",
             "proxy/rules",
           ]
         },
