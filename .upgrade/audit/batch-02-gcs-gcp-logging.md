@@ -108,12 +108,13 @@ Searched upstream commit messages for: GCS directory, GCS disable header, BigQue
 ### 451349a62c — GCP logs client init issue (#127)
 
 - **files:** `docker-compose.yml`, `gcp_logs_query.py` (our new file, 0 upstream)
-- **decision:** **KEEP-AS-IS**
+- **decision:** **KEEP-AS-IS** (DEFERRED to batch-06 replay)
+- **2026-04-22 replay note:** This commit modifies `gcp_logs_query.py`, but that file is CREATED by `a6698e18db` in batch-06 (2026-04-14, which is chronologically *before* this commit on 2026-04-15). Batch-02's chronological order picks this commit before the file exists, so cherry-pick fails with "deleted by us". Deferred to batch-06 where it will land naturally after `a6698e18db`.
 
 ### 805f26bc72 — log line for GCP client init (#135)
 
 - **files:** `gcp_logs_query.py` (our new file)
-- **decision:** **KEEP-AS-IS**
+- **decision:** **KEEP-AS-IS** (DEFERRED to batch-06 replay, stacked on `451349a62c`)
 
 ---
 
