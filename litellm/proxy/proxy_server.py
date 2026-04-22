@@ -1762,10 +1762,15 @@ def load_from_azure_key_vault(use_azure_key_vault: bool = False):
 def cost_tracking():
     global prisma_client
     if prisma_client is not None:
-        litellm.logging_callback_manager.add_litellm_callback(_ProxyDBLogger())
-        litellm.logging_callback_manager.add_litellm_async_success_callback(
-            _ProxyDBLogger()
-        )
+        # Register one shared logger on both lists. Two separate instances worked
+        # functionally (each list iterates independently) but showed up at two
+        # different object addresses in /active/callbacks, which made triaging
+        # spend-tracking issues harder to reason about — a reader couldn't tell
+        # whether the two entries represented a double-write or just cosmetic
+        # fan-out. Using one instance makes the registration unambiguous.
+        logger = _ProxyDBLogger()
+        litellm.logging_callback_manager.add_litellm_callback(logger)
+        litellm.logging_callback_manager.add_litellm_async_success_callback(logger)
 
 
 async def get_current_spend(counter_key: str, fallback_spend: float) -> float:
