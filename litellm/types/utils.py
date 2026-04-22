@@ -2758,6 +2758,57 @@ class StandardLoggingGuardrailInformation(TypedDict, total=False):
     """Risk score 0-10 indicating how risky the request was (higher = riskier). Computed by the guardrail provider."""
 
 
+class EvalCriterion(TypedDict, total=False):
+    name: str
+    weight: int  # 0-100, weights should sum to 100
+    description: str
+    threshold: Optional[float]  # optional per-criterion minimum score
+
+
+class EvalVerdict(TypedDict, total=False):
+    criterion_name: str
+    score: float  # 0-100
+    reasoning: str
+    passed: bool
+
+
+class StandardLoggingEvalInformation(TypedDict, total=False):
+    eval_id: Optional[str]
+    eval_name: str
+    overall_score: float
+    passed: bool
+    judge_model: str
+    iteration: int
+    eval_error: Optional[str]
+    start_time: str
+    end_time: str
+    duration: float
+
+
+class EvalResult(BaseModel):
+    eval_id: Optional[str] = None
+    eval_name: Optional[str] = None
+    overall_score: float = 0.0
+    verdicts: List[EvalVerdict] = []
+    passed: bool = False
+    judge_model: str = ""
+    iteration: int = 0
+    eval_error: Optional[str] = None
+    raw_judge_response: Optional[dict] = None
+
+    def check_thresholds(self, overall_min: float = 0.0) -> bool:
+        from litellm.exceptions import EvalFailedError
+
+        if self.overall_score < overall_min:
+            raise EvalFailedError(
+                message=f"Eval failed: score {self.overall_score:.1f} < minimum {overall_min}",
+                eval_result=self,
+                model=self.judge_model,
+                llm_provider="",
+            )
+        return True
+
+
 class GuardrailTracingDetail(TypedDict, total=False):
     """
     Typed fields for guardrail tracing metadata.
@@ -2888,6 +2939,7 @@ class StandardLoggingPayload(TypedDict):
     model_parameters: dict
     hidden_params: StandardLoggingHiddenParams
     guardrail_information: Optional[List[StandardLoggingGuardrailInformation]]
+    eval_information: Optional[List[StandardLoggingEvalInformation]]
     standard_built_in_tools_params: Optional[StandardBuiltInToolsParams]
 
 
