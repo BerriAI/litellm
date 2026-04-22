@@ -112,11 +112,10 @@ commands:
     steps:
       - checkout
       - setup_google_dns
+      - install_uv
       - restore_cache:
           keys:
-            - v3-litellm-uv-deps-{{ checksum "uv.lock" }}
-            - v3-litellm-uv-deps-
-      - install_uv
+            - v1-uv-cache-{{ checksum "uv.lock" }}
       - run:
           name: Install Dependencies
           command: |
@@ -124,10 +123,8 @@ commands:
       - setup_litellm_enterprise_pip
       - save_cache:
           paths:
-            - ~/.local/lib
-            - ~/.local/bin
             - ~/.cache/uv
-          key: v3-litellm-uv-deps-{{ checksum "uv.lock" }}
+          key: v1-uv-cache-{{ checksum "uv.lock" }}
 
 jobs:
   # Add Windows testing job
@@ -182,8 +179,7 @@ jobs:
 
       - restore_cache:
           keys:
-            - v2-dependencies-{{ checksum "uv.lock" }}
-            - v2-dependencies-
+            - v1-uv-cache-{{ checksum "uv.lock" }}
       - install_uv
       - run:
           name: Install Dependencies
@@ -192,8 +188,8 @@ jobs:
       - setup_litellm_enterprise_pip
       - save_cache:
           paths:
-            - ./.venv
-          key: v2-dependencies-{{ checksum "uv.lock" }}
+            - ~/.cache/uv
+          key: v1-uv-cache-{{ checksum "uv.lock" }}
       - run:
           name: Run prisma ./docker/entrypoint.sh
           command: |
@@ -263,8 +259,7 @@ jobs:
 
       - restore_cache:
           keys:
-            - v2-dependencies-{{ checksum "uv.lock" }}
-            - v2-dependencies-
+            - v1-uv-cache-{{ checksum "uv.lock" }}
       - install_uv
       - run:
           name: Install Dependencies
@@ -273,8 +268,8 @@ jobs:
       - setup_litellm_enterprise_pip
       - save_cache:
           paths:
-            - ./.venv
-          key: v2-dependencies-{{ checksum "uv.lock" }}
+            - ~/.cache/uv
+          key: v1-uv-cache-{{ checksum "uv.lock" }}
       - run:
           name: Run prisma ./docker/entrypoint.sh
           command: |
@@ -345,8 +340,7 @@ jobs:
 
       - restore_cache:
           keys:
-            - v2-dependencies-{{ checksum "uv.lock" }}
-            - v2-dependencies-
+            - v1-uv-cache-{{ checksum "uv.lock" }}
       - install_uv
       - run:
           name: Install Dependencies
@@ -355,8 +349,8 @@ jobs:
       - setup_litellm_enterprise_pip
       - save_cache:
           paths:
-            - ./.venv
-          key: v2-dependencies-{{ checksum "uv.lock" }}
+            - ~/.cache/uv
+          key: v1-uv-cache-{{ checksum "uv.lock" }}
       - run:
           name: Run prisma ./docker/entrypoint.sh
           command: |
@@ -401,8 +395,8 @@ jobs:
             uv sync --frozen --all-groups --all-extras --python 3.12
       - save_cache:
           paths:
-            - ./.venv
-          key: v2-dependencies-{{ checksum "uv.lock" }}
+            - ~/.cache/uv
+          key: v1-uv-cache-{{ checksum "uv.lock" }}
       - wait_for_service:
           url: tcp://localhost:5432
           timeout: "60"
@@ -440,20 +434,18 @@ jobs:
     steps:
       - checkout
       - setup_google_dns
+      - install_uv
       - restore_cache:
           keys:
-            - v1-router-testing-deps-{{ checksum "uv.lock" }}
-            - v1-router-testing-deps-
-      - install_uv
+            - v1-uv-cache-{{ checksum "uv.lock" }}
       - run:
           name: Install Dependencies
           command: |
             uv sync --frozen --all-groups --all-extras --python 3.12
       - save_cache:
           paths:
-            - /home/circleci/.pyenv
-            - /home/circleci/.local
-          key: v1-router-testing-deps-{{ checksum "uv.lock" }}
+            - ~/.cache/uv
+          key: v1-uv-cache-{{ checksum "uv.lock" }}
       # Run pytest and generate JUnit XML report
       - setup_litellm_enterprise_pip
       - run:
@@ -490,20 +482,18 @@ jobs:
     steps:
       - checkout
       - setup_google_dns
+      - install_uv
       - restore_cache:
           keys:
-            - v1-router-unit-deps-{{ checksum "uv.lock" }}
-            - v1-router-unit-deps-
-      - install_uv
+            - v1-uv-cache-{{ checksum "uv.lock" }}
       - run:
           name: Install Dependencies
           command: |
             uv sync --frozen --all-groups --all-extras --python 3.12
       - save_cache:
           paths:
-            - /home/circleci/.pyenv
-            - /home/circleci/.local
-          key: v1-router-unit-deps-{{ checksum "uv.lock" }}
+            - ~/.cache/uv
+          key: v1-uv-cache-{{ checksum "uv.lock" }}
       # Run pytest and generate JUnit XML report
       - setup_litellm_enterprise_pip
       - run:
@@ -557,20 +547,18 @@ jobs:
     steps:
       - checkout
       - setup_google_dns
+      - install_uv
       - restore_cache:
           keys:
-            - v1-llm-translation-deps-{{ checksum "uv.lock" }}
-            - v1-llm-translation-deps-
-      - install_uv
+            - v1-uv-cache-{{ checksum "uv.lock" }}
       - run:
           name: Install Dependencies
           command: |
             uv sync --frozen --all-groups --all-extras --python 3.12
       - save_cache:
           paths:
-            - /home/circleci/.pyenv
-            - /home/circleci/.local
-          key: v1-llm-translation-deps-{{ checksum "uv.lock" }}
+            - ~/.cache/uv
+          key: v1-uv-cache-{{ checksum "uv.lock" }}
       # Run pytest and generate JUnit XML report
       - run:
           name: Run tests
@@ -799,20 +787,18 @@ jobs:
     steps:
       - checkout
       - setup_google_dns
+      - install_uv
       - restore_cache:
           keys:
-            - v1-llm-responses-deps-{{ checksum "uv.lock" }}
-            - v1-llm-responses-deps-
-      - install_uv
+            - v1-uv-cache-{{ checksum "uv.lock" }}
       - run:
           name: Install Dependencies
           command: |
             uv sync --frozen --all-groups --all-extras --python 3.12
       - save_cache:
           paths:
-            - /home/circleci/.pyenv
-            - /home/circleci/.local
-          key: v1-llm-responses-deps-{{ checksum "uv.lock" }}
+            - ~/.cache/uv
+          key: v1-uv-cache-{{ checksum "uv.lock" }}
       # Run pytest and generate JUnit XML report
       - run:
           name: Run tests
@@ -1202,8 +1188,7 @@ jobs:
       - setup_google_dns
       - restore_cache:
           keys:
-            - v2-dependencies-{{ checksum "uv.lock" }}
-            - v2-dependencies-
+            - v1-uv-cache-{{ checksum "uv.lock" }}
       - install_uv
       - run:
           name: Install Dependencies
@@ -1211,8 +1196,8 @@ jobs:
             uv sync --frozen --all-groups --all-extras --python 3.12
       - save_cache:
           paths:
-            - ./.venv
-          key: v2-dependencies-{{ checksum "uv.lock" }}
+            - ~/.cache/uv
+          key: v1-uv-cache-{{ checksum "uv.lock" }}
       # Run pytest and generate JUnit XML report
       - run:
           name: Run tests
@@ -2364,20 +2349,19 @@ jobs:
     steps:
       - checkout
       - setup_google_dns
+      - install_uv
       - restore_cache:
           keys:
-            - ui-e2e-py-deps-v2-{{ checksum "uv.lock" }}
-            - ui-e2e-py-deps-v2-
-      - install_uv
+            - v1-uv-cache-{{ checksum "uv.lock" }}
       - run:
           name: Install Python dependencies
           command: |
             uv sync --frozen --all-groups --all-extras --python 3.12
             uv run --no-sync python -m prisma generate --schema litellm/proxy/schema.prisma
       - save_cache:
-          key: ui-e2e-py-deps-v2-{{ checksum "uv.lock" }}
+          key: v1-uv-cache-{{ checksum "uv.lock" }}
           paths:
-            - ./.venv
+            - ~/.cache/uv
       - restore_cache:
           keys:
             - ui-e2e-node-deps-v1-{{ checksum "ui/litellm-dashboard/package-lock.json" }}
