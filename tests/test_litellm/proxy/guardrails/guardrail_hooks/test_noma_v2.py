@@ -198,6 +198,147 @@ class TestNomaV2Configuration:
         assert "logging_obj" not in payload
         assert request_data["litellm_logging_obj"] == "<Logging object>"
 
+    def test_build_scan_payload_snapshots_request_data_and_metadata(
+        self, noma_v2_guardrail
+    ):
+        """Payload build must not mutate the caller's request_data or nested metadata.
+
+        safe_deep_copy used to pop/re-insert litellm_parent_otel_span on the
+        caller's original metadata dict. With a top-level-only snapshot that
+        pop still hit the caller because the nested metadata was shared by
+        reference. The fix snapshots the two known-mutable nested dicts
+        (``metadata``, ``litellm_metadata``) as well.
+        """
+        sentinel = object()
+        metadata = {
+            "user_api_key_alias": "rory",
+            "litellm_parent_otel_span": sentinel,
+        }
+        litellm_metadata = {"request_tags": ["tag-a"]}
+        request_data = {
+            "messages": [{"role": "user", "content": "hello"}],
+            "model": "gpt-4o",
+            "metadata": metadata,
+            "litellm_metadata": litellm_metadata,
+        }
+
+        payload = noma_v2_guardrail._build_scan_payload(
+            inputs={"texts": ["hello"]},
+            request_data=request_data,
+            input_type="request",
+            logging_obj=None,
+            application_id="app-id",
+        )
+
+        # Caller's nested dicts are intact — no pop/placeholder bled through.
+        assert metadata["litellm_parent_otel_span"] is sentinel
+        assert metadata is request_data["metadata"]
+        assert litellm_metadata is request_data["litellm_metadata"]
+        # Payload carries the expected structure.
+        assert payload["request_data"]["model"] == "gpt-4o"
+        assert payload["request_data"]["metadata"]["user_api_key_alias"] == "rory"
+
+    def test_build_scan_payload_concurrent_mutation_does_not_raise(
+        self, noma_v2_guardrail
+    ):
+        """Thread-based repro of the concurrent-mutation race.
+
+        A background thread mutates request_data["metadata"] in a tight loop
+        while the main thread calls _build_scan_payload repeatedly. Before
+        the fix (safe_deep_copy iterating the caller's metadata dict), this
+        raised ``RuntimeError: dictionary changed size during iteration``
+        within a few hundred iterations. With the fix (snapshot first) no
+        iteration observes mid-mutation state.
+
+        The test is flaky by construction — it times out rather than failing
+        — but on the pre-fix code the race reproduces reliably under pytest.
+        """
+        import threading
+        import time
+
+        request_data = {
+            "messages": [{"role": "user", "content": "hello"}],
+            "model": "gpt-4o",
+            "metadata": {"seed": 0},
+        }
+        stop = threading.Event()
+        errors: list = []
+
+        def mutator() -> None:
+            i = 0
+            while not stop.is_set():
+                request_data["metadata"][f"k{i}"] = i
+                if i > 0:
+                    request_data["metadata"].pop(f"k{i - 1}", None)
+                i += 1
+
+        t = threading.Thread(target=mutator, daemon=True)
+        t.start()
+        try:
+            deadline = time.time() + 0.5
+            iterations = 0
+            while time.time() < deadline:
+                try:
+                    noma_v2_guardrail._build_scan_payload(
+                        inputs={"texts": ["hello"]},
+                        request_data=request_data,
+                        input_type="request",
+                        logging_obj=None,
+                        application_id="app-id",
+                    )
+                except RuntimeError as e:
+                    errors.append(str(e))
+                    break
+                iterations += 1
+            assert iterations > 0, "test ran no iterations"
+            assert not errors, f"concurrent mutation tripped the build: {errors[0]}"
+        finally:
+            stop.set()
+            t.join(timeout=1.0)
+
+    def test_build_scan_payload_falls_back_on_deepcopy_failure(
+        self, noma_v2_guardrail, monkeypatch
+    ):
+        """If deepcopy raises mid-iteration (simulated concurrent mutation),
+        the per-key fallback in safe_deep_copy keeps the original reference
+        for that key and continues. No unhandled exception propagates."""
+        import copy
+
+        original_deepcopy = copy.deepcopy
+        state = {"count": 0}
+
+        def flaky_deepcopy(obj):
+            # Fail once on the `metadata` value specifically, then succeed.
+            if isinstance(obj, dict) and obj.get("_probe") == "fail-me":
+                state["count"] += 1
+                if state["count"] == 1:
+                    raise RuntimeError(
+                        "dictionary changed size during iteration"
+                    )
+            return original_deepcopy(obj)
+
+        monkeypatch.setattr(copy, "deepcopy", flaky_deepcopy)
+
+        request_data = {
+            "messages": [{"role": "user", "content": "hello"}],
+            "model": "gpt-4o",
+            "metadata": {"_probe": "fail-me"},
+        }
+
+        payload = noma_v2_guardrail._build_scan_payload(
+            inputs={"texts": ["hello"]},
+            request_data=request_data,
+            input_type="request",
+            logging_obj=None,
+            application_id="app-id",
+        )
+
+        assert state["count"] >= 1, "flaky_deepcopy did not fire"
+        # metadata falls back to the caller's snapshotted reference, but the
+        # top-level dict is a distinct object from request_data.
+        assert payload["request_data"] is not request_data
+        assert payload["request_data"]["model"] == "gpt-4o"
+
     @pytest.mark.asyncio
     async def test_call_noma_scan_sanitizes_response_model_dump_object(
         self, noma_v2_guardrail
