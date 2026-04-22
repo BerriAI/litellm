@@ -1858,6 +1858,11 @@ class Logging(LiteLLMLoggingBaseClass):
 
             logging_result = self.normalize_logging_result(result=result)
 
+            if isinstance(result, Response) and isinstance(
+                logging_result, ModelResponse
+            ):
+                result = logging_result
+
             if (
                 standard_logging_object is None
                 and result is not None
@@ -5587,7 +5592,13 @@ def get_standard_logging_object_payload(
 
 def emit_standard_logging_payload(payload: StandardLoggingPayload):
     if os.getenv("LITELLM_PRINT_STANDARD_LOGGING_PAYLOAD"):
-        print(json.dumps(payload, indent=4))  # noqa
+        try:
+            print(json.dumps(payload, indent=4, default=str))  # noqa
+        except Exception as e:
+            print(
+                "Error serializing standard logging payload for debug output:",
+                str(e),
+            )
 
 
 def get_standard_logging_metadata(

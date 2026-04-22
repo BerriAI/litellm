@@ -6,11 +6,12 @@ import json
 import uuid
 from typing import Any, Optional
 
+from litellm.llms.gigachat.utils import convert_usage
 from litellm.types.llms.openai import (
     ChatCompletionToolCallChunk,
     ChatCompletionToolCallFunctionChunk,
 )
-from litellm.types.utils import GenericStreamingChunk
+from litellm.types.utils import ChatCompletionUsageBlock, GenericStreamingChunk
 
 
 class GigaChatModelResponseIterator:
@@ -70,6 +71,13 @@ class GigaChatModelResponseIterator:
             )
             finish_reason = "tool_calls"
 
+        usage_block = None
+        if finish_reason == "stop":
+            usage_data = chunk.get("usage", {})
+            if usage_data:
+                usage = convert_usage(usage_data)
+                usage_block = ChatCompletionUsageBlock(**usage.dict())
+
         if finish_reason is not None:
             is_finished = True
 
@@ -78,7 +86,7 @@ class GigaChatModelResponseIterator:
             tool_use=tool_use,
             is_finished=is_finished,
             finish_reason=finish_reason or "",
-            usage=None,
+            usage=usage_block,
             index=choice.get("index", 0),
         )
 

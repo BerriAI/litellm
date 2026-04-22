@@ -22,6 +22,7 @@ from litellm.constants import (
     ALLOWED_VERTEX_AI_PASSTHROUGH_HEADERS,
     BEDROCK_AGENT_RUNTIME_PASS_THROUGH_ROUTES,
 )
+from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.proxy._types import *
@@ -2369,3 +2370,255 @@ def create_generic_websocket_passthrough_endpoint(
         _forward_headers=forward_headers,
         cost_per_request=cost_per_request,
     )
+
+
+@router.api_route(
+    "/gigachat/{endpoint:path}",
+    methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
+    tags=["Gigachat Pass-through", "pass-through"],
+)
+async def gigachat_proxy_route(
+    endpoint: str,
+    request: Request,
+    fastapi_response: Response,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    [Docs](https://docs.litellm.ai/docs/pass_through/gigachat)
+    """
+    from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+    from litellm.proxy.proxy_server import (
+        general_settings,
+        llm_router,
+        proxy_config,
+        proxy_logging_obj,
+        select_data_generator,
+        user_api_base,
+        user_max_tokens,
+        user_model,
+        user_request_timeout,
+        user_temperature,
+        version,
+    )
+
+    ## check for streaming
+    request_body = await get_request_body(request)
+    is_router_model = False
+
+    model = request_body.get("model")
+    if model:    
+        is_router_model = is_passthrough_request_using_router_model(
+            request_body, llm_router
+        )
+    elif any(word in endpoint for word in ("completions", "embeddings")):
+        raise HTTPException(
+            status_code=400, detail={"error": "Model is required in request body"}
+        )
+
+
+    # If router model, use dedicated router passthrough handler
+    # This uses the same common processing path as non-router models
+    if model and is_router_model and llm_router:
+        return await handle_gigachat_passthrough_router_model(
+            model=model,
+            endpoint=endpoint,
+            request=request,
+            request_body=request_body,
+            fastapi_response=fastapi_response,
+            llm_router=llm_router,
+            user_api_key_dict=user_api_key_dict,
+            proxy_logging_obj=proxy_logging_obj,
+            general_settings=general_settings,
+            proxy_config=proxy_config,
+            select_data_generator=select_data_generator,
+            user_model=user_model,
+            user_temperature=user_temperature,
+            user_request_timeout=user_request_timeout,
+            user_max_tokens=user_max_tokens,
+            user_api_base=user_api_base,
+            version=version,
+        )
+
+    # Fall back to existing implementation for direct GigaChat models
+    verbose_proxy_logger.debug(
+        f"Gigachat passthrough: Using direct Gigachat model '{model}' for endpoint '{endpoint}'"
+    )
+
+    data: Dict[str, Any] = {}
+
+    data["method"] = request.method
+    data["endpoint"] = endpoint
+    data["json"] = request_body
+    data["custom_llm_provider"] = "gigachat"
+
+    client = get_async_httpx_client(  # type: ignore
+        llm_provider=LlmProviders.GIGACHAT,
+        params={
+            "timeout": httpx.Timeout(timeout=600.0, connect=5.0),
+            "ssl_verify": False,
+        },
+    )
+    data["http_client"] = client
+
+    base_llm_response_processor = ProxyBaseLLMRequestProcessing(data=data)
+
+    try:
+        result = await base_llm_response_processor.base_passthrough_process_llm_request(
+            request=request,
+            fastapi_response=fastapi_response,
+            user_api_key_dict=user_api_key_dict,
+            proxy_logging_obj=proxy_logging_obj,
+            llm_router=llm_router,
+            general_settings=general_settings,
+            proxy_config=proxy_config,
+            select_data_generator=select_data_generator,
+            model=model,
+            user_model=user_model,
+            user_temperature=user_temperature,
+            user_request_timeout=user_request_timeout,
+            user_max_tokens=user_max_tokens,
+            user_api_base=user_api_base,
+            version=version,
+        )
+
+        return result
+    except Exception as e:
+        raise await base_llm_response_processor._handle_llm_api_exception(
+            e=e,
+            user_api_key_dict=user_api_key_dict,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+
+async def handle_gigachat_passthrough_router_model(
+    model: str,
+    endpoint: str,
+    request: Request,
+    request_body: dict,
+    fastapi_response: Response,
+    llm_router: litellm.Router,
+    user_api_key_dict: UserAPIKeyAuth,
+    proxy_logging_obj,
+    general_settings: dict,
+    proxy_config,
+    select_data_generator,
+    user_model: Optional[str],
+    user_temperature: Optional[float],
+    user_request_timeout: Optional[float],
+    user_max_tokens: Optional[int],
+    user_api_base: Optional[str],
+    version: Optional[str],
+) -> Union[Response, StreamingResponse]:
+    """
+    Handle Gigachat passthrough for router models (models defined in config.yaml).
+
+    Uses the same common processing path as non-router models to ensure
+    metadata and hooks are properly initialized.
+
+    Args:
+        model: The router model name (e.g., "gigachat/gigachat-2")
+        endpoint: The Gigachat endpoint path (e.g., "/chat/completions")
+        request: The FastAPI request object
+        request_body: The parsed request body
+        llm_router: The LiteLLM router instance
+        user_api_key_dict: The user API key authentication dictionary
+        (additional args for common processing)
+
+    Returns:
+        Response or StreamingResponse depending on endpoint type
+    """
+    from fastapi import Response as FastAPIResponse
+
+    from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+
+    # Detect streaming based on request body
+    is_streaming = request_body.get("stream", False)
+
+    data: Dict[str, Any] = await _read_request_body(request=request)
+    if user_api_key_dict is not None:
+        if data.get("metadata") is None:
+            data["metadata"] = {}
+        if (
+            hasattr(user_api_key_dict, "user_id")
+            and user_api_key_dict.user_id is not None
+        ):
+            data["metadata"]["user_api_key_user_id"] = user_api_key_dict.user_id
+        if (
+            hasattr(user_api_key_dict, "team_id")
+            and user_api_key_dict.team_id is not None
+        ):
+            data["metadata"]["user_api_key_team_id"] = user_api_key_dict.team_id
+        if (
+            hasattr(user_api_key_dict, "org_id")
+            and user_api_key_dict.org_id is not None
+        ):
+            data["metadata"]["user_api_key_org_id"] = user_api_key_dict.org_id
+        if (
+            hasattr(user_api_key_dict, "agent_id")
+            and user_api_key_dict.agent_id is not None
+        ):
+            data["metadata"]["agent_id"] = user_api_key_dict.agent_id
+
+    verbose_proxy_logger.debug(
+        f"Gigachat router passthrough: model='{model}', endpoint='{endpoint}', streaming={is_streaming}"
+    )
+
+    # Use the common processing path (same as non-router models)
+    # This ensures all metadata, hooks, and logging are properly initialized
+
+    data["model"] = model
+    data["method"] = request.method
+    data["endpoint"] = endpoint
+    data["json"] = request_body
+    data["custom_llm_provider"] = "gigachat"
+
+    # Remove sensitive keys from data
+    keys = ["gigachat_auth_url", "gigachat_access_token", "gigachat_scope", "api_base", "api_key"]
+    for key in keys:
+        data.pop(key, None)
+
+    client = get_async_httpx_client(  # type: ignore
+        llm_provider=LlmProviders.GIGACHAT,
+        params={
+            "timeout": httpx.Timeout(timeout=600.0, connect=5.0),
+            "ssl_verify": False,
+        },
+    )
+
+    data["http_client"] = client
+    base_llm_response_processor = ProxyBaseLLMRequestProcessing(data=data)
+
+    # Use the common passthrough processing to handle metadata and hooks
+    # This also handles all response formatting (streaming/non-streaming) and exceptions
+    try:
+        result = await base_llm_response_processor.base_passthrough_process_llm_request(
+            request=request,
+            fastapi_response=fastapi_response,
+            user_api_key_dict=user_api_key_dict,
+            proxy_logging_obj=proxy_logging_obj,
+            llm_router=llm_router,
+            general_settings=general_settings,
+            proxy_config=proxy_config,
+            select_data_generator=select_data_generator,
+            model=model,
+            user_model=user_model,
+            user_temperature=user_temperature,
+            user_request_timeout=user_request_timeout,
+            user_max_tokens=user_max_tokens,
+            user_api_base=user_api_base,
+            version=version,
+        )
+
+        if isinstance(result, StreamingResponse):
+            if result.headers.get("Content-Type") is None:
+                result.headers["Content-Type"] = "text/event-stream; charset=utf-8"
+            return result
+
+        return result
+    except Exception as e:
+        # Use common exception handling
+        raise await base_llm_response_processor._handle_llm_api_exception(
+            e=e,
+            user_api_key_dict=user_api_key_dict,
+            proxy_logging_obj=proxy_logging_obj,
+        )

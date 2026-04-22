@@ -1183,6 +1183,68 @@
     "default_model_placeholder": "gpt-3.5-turbo"
   },
   {
+    "provider": "GIGACHAT",
+    "provider_display_name": "GigaChat",
+    "litellm_provider": "gigachat",
+    "credential_fields": [
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": null,
+        "tooltip": null,
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": null,
+        "tooltip": null,
+        "required": false,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "gigachat_scope",
+        "label": "Scope",
+        "placeholder": null,
+        "tooltip": null,
+        "required": false,
+        "field_type": "select",
+        "options": [
+          "GIGACHAT_API_PERS",
+          "GIGACHAT_API_B2B",
+          "GIGACHAT_API_CORP"
+        ],
+        "default_value": "GIGACHAT_API_PERS"
+      },
+      {
+        "key": "gigachat_auth_url",
+        "label": "Auth URL",
+        "placeholder": null,
+        "tooltip": null,
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "gigachat_access_token",
+        "label": "Access token",
+        "placeholder": null,
+        "tooltip": "Disable OAuth, provide value to authorization.",
+        "required": false,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "GigaChat-2"
+  },
+  {
     "provider": "GITHUB",
     "provider_display_name": "Github",
     "litellm_provider": "github",

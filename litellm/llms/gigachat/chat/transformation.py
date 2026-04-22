@@ -13,9 +13,10 @@ import httpx
 
 from litellm._logging import verbose_logger
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
+from litellm.llms.gigachat.utils import convert_usage, get_api_base
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
-from litellm.types.utils import Choices, Message, ModelResponse, Usage
+from litellm.types.utils import Choices, Message, ModelResponse
 
 from ..authenticator import get_access_token
 from ..file_handler import upload_file_sync
@@ -26,9 +27,6 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
-
-# GigaChat API endpoint
-GIGACHAT_BASE_URL = "https://gigachat.devices.sberbank.ru/api/v1"
 
 
 def is_valid_json(value: str) -> bool:
@@ -94,7 +92,7 @@ class GigaChatConfig(BaseConfig):
         stream: Optional[bool] = None,
     ) -> str:
         """Get complete API URL for chat completions."""
-        base = api_base or get_secret_str("GIGACHAT_API_BASE") or GIGACHAT_BASE_URL
+        base = get_api_base(api_base)
         return f"{base}/chat/completions"
 
     def validate_environment(
@@ -116,7 +114,9 @@ class GigaChatConfig(BaseConfig):
             or get_secret_str("GIGACHAT_CREDENTIALS")
             or get_secret_str("GIGACHAT_API_KEY")
         )
-        access_token = get_access_token(credentials=credentials)
+        access_token = get_access_token(
+            credentials=credentials, litellm_params=litellm_params
+        )
 
         # Store credentials for image uploads
         self._current_credentials = credentials
@@ -467,11 +467,7 @@ class GigaChatConfig(BaseConfig):
 
         # Build usage
         usage_data = response_json.get("usage", {})
-        usage = Usage(
-            prompt_tokens=usage_data.get("prompt_tokens", 0),
-            completion_tokens=usage_data.get("completion_tokens", 0),
-            total_tokens=usage_data.get("total_tokens", 0),
-        )
+        usage = convert_usage(usage_data)
 
         model_response.id = response_json.get("id", f"chatcmpl-{uuid.uuid4().hex[:12]}")
         model_response.created = response_json.get("created", int(time.time()))

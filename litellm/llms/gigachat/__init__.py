@@ -15,9 +15,11 @@ API Documentation: https://developers.sber.ru/docs/ru/gigachat/api/overview
 
 from .chat.transformation import GigaChatConfig, GigaChatError
 from .embedding.transformation import GigaChatEmbeddingConfig
+from .passthrough.transformation import GigaChatPassthroughConfig
 
 __all__ = [
     "GigaChatConfig",
     "GigaChatEmbeddingConfig",
     "GigaChatError",
+    "GigaChatPassthroughConfig",
 ]

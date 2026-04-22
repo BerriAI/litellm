@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, Mock, patch
 import httpx
 import pytest
 from fastapi import Request, Response
+from fastapi.responses import StreamingResponse
 from fastapi.testclient import TestClient
 
 sys.path.insert(
@@ -15,12 +16,14 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 import litellm
+from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     BaseOpenAIPassThroughHandler,
     RouteChecks,
     bedrock_llm_proxy_route,
     create_pass_through_route,
     cursor_proxy_route,
+    gigachat_proxy_route,
     llm_passthrough_factory_proxy_route,
     milvus_proxy_route,
     openai_proxy_route,
@@ -1521,6 +1524,176 @@ class TestVLLMProxyRoute:
 
         assert result == "factory_success"
         mock_factory_route.assert_awaited_once()
+
+
+class TestGigachatProxyRoute:
+    @pytest.mark.asyncio
+    @patch(
+        "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.get_request_body",
+        return_value={"model": "router-model", "stream": False},
+    )
+    @patch(
+        "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.is_passthrough_request_using_router_model",
+        return_value=True,
+    )
+    @patch("litellm.proxy.proxy_server.llm_router")
+    async def test_gigachat_proxy_route_with_router_model(
+        self, mock_llm_router, mock_is_router, mock_get_body
+    ):
+        mock_request = MagicMock(spec=Request)
+        mock_request.method = "POST"
+        mock_request.headers = {"content-type": "application/json"}
+        mock_request.query_params = {}
+        mock_fastapi_response = MagicMock(spec=Response)
+        mock_user_api_key_dict = MagicMock()
+        mock_llm_router.allm_passthrough_route = AsyncMock(
+            return_value=httpx.Response(200, json={"response": "success"})
+        )
+
+        result = await gigachat_proxy_route(
+            endpoint="/chat/completions",
+            request=mock_request,
+            fastapi_response=mock_fastapi_response,
+            user_api_key_dict=mock_user_api_key_dict,
+        )
+
+        mock_is_router.assert_called_once()
+        mock_llm_router.allm_passthrough_route.assert_awaited_once()
+        assert isinstance(result, Response)
+
+    @pytest.mark.asyncio
+    @patch(
+        "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.get_request_body",
+        return_value={"model": "other-model"},
+    )
+    @patch(
+        "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.is_passthrough_request_using_router_model",
+        return_value=False,
+    )
+    @patch(
+        "litellm.proxy.common_request_processing.ProxyBaseLLMRequestProcessing.base_passthrough_process_llm_request",
+        new_callable=AsyncMock,
+    )
+    async def test_gigachat_proxy_route_fallback_to_http_pass_through(
+        self,
+        mock_base_passthrough,
+        mock_is_router,
+        mock_get_body,
+    ):
+        mock_request = MagicMock(spec=Request)
+        mock_fastapi_response = MagicMock(spec=Response)
+        mock_user_api_key_dict = MagicMock()
+
+        expected_response = Response(
+            content=b'{"response": "success"}',
+            status_code=200,
+            media_type="application/json",
+        )
+        mock_base_passthrough.return_value = expected_response
+
+        result = await gigachat_proxy_route(
+            endpoint="/chat/completions",
+            request=mock_request,
+            fastapi_response=mock_fastapi_response,
+            user_api_key_dict=mock_user_api_key_dict,
+        )
+
+        assert isinstance(result, Response)
+        assert result.status_code == 200
+        assert result.body == b'{"response": "success"}'
+        mock_base_passthrough.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_allm_passthrough_streaming_preserves_upstream_headers(self):
+        async def _stream() -> bytes:
+            yield b'data: {"id":"1"}\n\n'
+
+        class MockPassthroughStreamingResponse:
+            def __init__(self):
+                self.status_code = 201
+                self.headers = {
+                    "content-type": "text/event-stream; charset=utf-8",
+                    "x-request-id": "req-123",
+                    "x-ratelimit-remaining-requests": "77",
+                    "transfer-encoding": "chunked",
+                    "content-encoding": "gzip",
+                }
+                self._iterator = _stream()
+
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                return await self._iterator.__anext__()
+
+        processor = ProxyBaseLLMRequestProcessing(
+            data={
+                "model": "some-provider/model",
+                "stream": True,
+                "litellm_call_id": "call-123",
+                "litellm_logging_obj": MagicMock(litellm_call_id="call-123"),
+            }
+        )
+
+        mock_request = MagicMock(spec=Request)
+        mock_request.headers = {"content-type": "application/json"}
+        mock_fastapi_response = MagicMock(spec=Response)
+        mock_user_api_key_dict = MagicMock()
+        mock_user_api_key_dict.allowed_model_region = ""
+        mock_user_api_key_dict.spend = 0.0
+        mock_proxy_logging_obj = MagicMock()
+        mock_proxy_logging_obj.during_call_hook = AsyncMock(return_value=None)
+        mock_proxy_logging_obj.update_request_status = AsyncMock(return_value=None)
+        mock_proxy_logging_obj.post_call_response_headers_hook = AsyncMock(
+            return_value={"x-test-callback-header": "callback-value"}
+        )
+
+        streaming_response = MockPassthroughStreamingResponse()
+
+        async def _fake_route_request(*args, **kwargs):
+            async def _inner():
+                return streaming_response
+
+            return _inner()
+
+        with patch.object(
+            processor,
+            "common_processing_pre_call_logic",
+            new=AsyncMock(
+                return_value=(
+                    processor.data,
+                    processor.data["litellm_logging_obj"],
+                )
+            ),
+        ), patch(
+            "litellm.proxy.common_request_processing.route_request",
+            new=_fake_route_request,
+        ), patch(
+            "litellm.proxy.common_request_processing.ProxyBaseLLMRequestProcessing.get_custom_headers",
+            return_value={"x-litellm-call-id": "call-123"},
+        ):
+            result = await processor.base_passthrough_process_llm_request(
+                request=mock_request,
+                fastapi_response=mock_fastapi_response,
+                user_api_key_dict=mock_user_api_key_dict,
+                proxy_logging_obj=mock_proxy_logging_obj,
+                general_settings={},
+                proxy_config=MagicMock(),
+                select_data_generator=MagicMock(),
+                llm_router=None,
+                model="some-provider/model",
+                version="test-version",
+            )
+
+        assert isinstance(result, StreamingResponse)
+        assert result.status_code == 201
+        assert result.headers["content-type"] == "text/event-stream; charset=utf-8"
+        assert result.headers["x-request-id"] == "req-123"
+        assert result.headers["x-ratelimit-remaining-requests"] == "77"
+        assert result.headers["x-litellm-call-id"] == "call-123"
+        assert result.headers["x-test-callback-header"] == "callback-value"
+        assert "transfer-encoding" not in result.headers
+        assert "content-encoding" not in result.headers
 
 
 class TestForwardHeaders:

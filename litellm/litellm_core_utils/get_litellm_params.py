@@ -30,6 +30,9 @@ _OPTIONAL_KWARGS_KEYS = frozenset(
         "aws_sts_endpoint",
         "aws_external_id",
         "aws_bedrock_runtime_endpoint",
+        "gigachat_scope",
+        "gigachat_auth_url",
+        "gigachat_access_token",
         "tpm",
         "rpm",
     }

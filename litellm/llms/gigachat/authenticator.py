@@ -65,6 +65,7 @@ def get_access_token(
     credentials: Optional[str] = None,
     scope: Optional[str] = None,
     auth_url: Optional[str] = None,
+    litellm_params: Optional[dict] = None,
 ) -> str:
     """
     Get valid access token, using cache if available.
@@ -80,6 +81,15 @@ def get_access_token(
     Raises:
         GigaChatAuthError: If authentication fails
     """
+    if not litellm_params:
+        litellm_params = {}
+
+    access_token = litellm_params.get("gigachat_access_token") or get_secret_str(
+        "GIGACHAT_ACCESS_TOKEN"
+    )
+    if access_token:
+        return access_token
+
     credentials = credentials or _get_credentials()
     if not credentials:
         raise GigaChatAuthError(
@@ -87,8 +97,8 @@ def get_access_token(
             message="GigaChat credentials not provided. Set GIGACHAT_CREDENTIALS or GIGACHAT_API_KEY environment variable.",
         )
 
-    scope = scope or _get_scope()
-    auth_url = auth_url or _get_auth_url()
+    scope = scope or litellm_params.get("gigachat_scope") or _get_scope()
+    auth_url = auth_url or litellm_params.get("gigachat_auth_url") or _get_auth_url()
 
     # Check cache
     cache_key = f"gigachat_token:{credentials[:16]}"
@@ -117,8 +127,18 @@ async def get_access_token_async(
     credentials: Optional[str] = None,
     scope: Optional[str] = None,
     auth_url: Optional[str] = None,
+    litellm_params: Optional[dict] = None,
 ) -> str:
     """Async version of get_access_token."""
+    if not litellm_params:
+        litellm_params = {}
+
+    access_token = litellm_params.get("gigachat_access_token") or get_secret_str(
+        "GIGACHAT_ACCESS_TOKEN"
+    )
+    if access_token:
+        return access_token
+
     credentials = credentials or _get_credentials()
     if not credentials:
         raise GigaChatAuthError(
@@ -126,8 +146,10 @@ async def get_access_token_async(
             message="GigaChat credentials not provided. Set GIGACHAT_CREDENTIALS or GIGACHAT_API_KEY environment variable.",
         )
 
-    scope = scope or _get_scope()
-    auth_url = auth_url or _get_auth_url()
+    scope = scope or litellm_params.get("gigachat_scope") or _get_scope()
+    auth_url = (
+        auth_url or litellm_params.get("gigachat_auth_url") or _get_auth_url()
+    )
 
     # Check cache
     cache_key = f"gigachat_token:{credentials[:16]}"
@@ -141,12 +163,13 @@ async def get_access_token_async(
     # Request new token
     token, expires_at = await _request_token_async(credentials, scope, auth_url)
 
-    # Cache token
-    ttl_seconds = max(
-        0, (expires_at - TOKEN_EXPIRY_BUFFER_MS - time.time() * 1000) / 1000
-    )
-    if ttl_seconds > 0:
-        _token_cache.set_cache(cache_key, (token, expires_at), ttl=ttl_seconds)
+    if expires_at:
+        # Cache token
+        ttl_seconds = max(
+            0, (expires_at - TOKEN_EXPIRY_BUFFER_MS - time.time() * 1000) / 1000
+        )
+        if ttl_seconds > 0:
+            _token_cache.set_cache(cache_key, (token, expires_at), ttl=ttl_seconds)
 
     return token
 

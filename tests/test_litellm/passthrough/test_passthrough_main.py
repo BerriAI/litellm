@@ -40,7 +40,7 @@ def test_llm_passthrough_route():
                 "model": "my-custom-model",
                 "messages": [{"role": "user", "content": "Hello, world!"}],
             },
-            client=client,
+            http_client=client,
         )
 
         mock_post.call_args.kwargs[
@@ -94,7 +94,7 @@ def test_bedrock_application_inference_profile_url_encoding():
             endpoint="model/arn:aws:bedrock:us-east-1:123456789123:application-inference-profile/r742sbn2zckd/converse",
             method="POST",
             custom_llm_provider="bedrock",
-            client=client,
+            http_client=client,
             litellm_logging_obj=mock_logging_obj,
         )
 
@@ -152,7 +152,7 @@ def test_bedrock_non_application_inference_profile_no_encoding():
             endpoint="model/anthropic.claude-3-sonnet-20240229-v1:0/converse",
             method="POST",
             custom_llm_provider="bedrock",
-            client=client,
+            http_client=client,
             litellm_logging_obj=mock_logging_obj,
         )
 
@@ -511,7 +511,7 @@ def test_azure_with_custom_api_base_and_key():
                 "model": "gpt-4.1",
                 "messages": [{"role": "user", "content": "Hello!"}],
             },
-            client=client,
+            http_client=client,
             litellm_logging_obj=mock_logging_obj,
         )
 
@@ -592,7 +592,7 @@ def test_content_param_forwarded_to_build_request():
             content=raw_content,
             data=None,
             json=None,
-            client=client,
+            http_client=client,
             litellm_logging_obj=mock_logging_obj,
         )
 
@@ -650,13 +650,14 @@ async def test_allm_passthrough_route_429_streaming_raises():
     Regression test: Azure 429 during streaming must raise HTTPStatusError,
     not be silently forwarded as raw bytes under HTTP 200.
 
-    Before the fix, _async_streaming() would yield the 429 error JSON as
-    chunks and allm_passthrough_route returned an async generator.  The
-    caller (azure_proxy_route) wrapped it in StreamingResponse(status_code=200),
+    Before the fix, the async passthrough streaming path would yield the 429
+    error JSON as chunks and allm_passthrough_route returned a streaming
+    iterator. The caller (azure_proxy_route) wrapped it in
+    StreamingResponse(status_code=200),
     so the client saw HTTP 200 + unparseable SSE body → silent task_complete(null).
 
-    After the fix, raise_for_status() fires inside _async_streaming() before
-    any chunks are yielded, so the exception propagates all the way up.
+    After the fix, raise_for_status() fires before the streaming wrapper is
+    returned, so the exception propagates all the way up.
     """
     mock_provider_config = MagicMock()
     mock_provider_config.get_complete_url.return_value = (
@@ -684,6 +685,7 @@ async def test_allm_passthrough_route_429_streaming_raises():
     mock_logging_obj = MagicMock()
     mock_logging_obj.update_environment_variables = MagicMock()
     mock_logging_obj.async_flush_passthrough_collected_chunks = AsyncMock()
+    mock_logging_obj.async_failure_handler = AsyncMock()
 
     with (
         patch(
@@ -706,23 +708,17 @@ async def test_allm_passthrough_route_429_streaming_raises():
         patch.object(async_client.client, "send", mock_send),
         patch.object(async_client.client, "build_request", mock_build_request),
     ):
-        result = await allm_passthrough_route(
-            model="azure/gpt-4",
-            endpoint="openai/deployments/gpt-4/responses",
-            method="POST",
-            custom_llm_provider="azure",
-            api_base="https://my-azure.openai.azure.com",
-            api_key="fake-azure-key",
-            json={"model": "gpt-4", "input": "hello", "stream": True},
-            client=async_client,
-            litellm_logging_obj=mock_logging_obj,
-        )
-
-        # result is an async generator — consuming it must raise, not silently yield error bytes
-        chunks = []
         with pytest.raises(httpx.HTTPStatusError) as exc_info:
-            async for chunk in result:  # type: ignore[union-attr]
-                chunks.append(chunk)
+            await allm_passthrough_route(
+                model="azure/gpt-4",
+                endpoint="openai/deployments/gpt-4/responses",
+                method="POST",
+                custom_llm_provider="azure",
+                api_base="https://my-azure.openai.azure.com",
+                api_key="fake-azure-key",
+                json={"model": "gpt-4", "input": "hello", "stream": True},
+                http_client=async_client,
+                litellm_logging_obj=mock_logging_obj,
+            )
 
     assert exc_info.value.response.status_code == 429
-    assert len(chunks) == 0, "No chunks should be yielded before the 429 raises"

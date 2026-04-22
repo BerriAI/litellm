@@ -16985,7 +16985,7 @@
         "supports_response_schema": true,
         "supports_vision": true
     },
-    "gigachat/GigaChat-2-Lite": {
+    "gigachat/GigaChat-2": {
         "input_cost_per_token": 0.0,
         "litellm_provider": "gigachat",
         "max_input_tokens": 128000,
@@ -17046,6 +17046,15 @@
         "mode": "embedding",
         "output_cost_per_token": 0.0,
         "output_vector_size": 2560
+    },
+    "gigachat/GigaEmbeddings-3B-2025-09": {
+        "input_cost_per_token": 0.0,
+        "litellm_provider": "gigachat",
+        "max_input_tokens": 4096,
+        "max_tokens": 4096,
+        "mode": "embedding",
+        "output_cost_per_token": 0.0,
+        "output_vector_size": 2048
     },
     "gmi/anthropic/claude-opus-4.5": {
         "input_cost_per_token": 5e-06,
