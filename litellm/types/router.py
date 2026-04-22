@@ -221,6 +221,10 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     complexity_router_config: Optional[Dict] = None
     complexity_router_default_model: Optional[str] = None
 
+    # quality-router params
+    quality_router_config: Optional[Dict] = None
+    quality_router_default_model: Optional[str] = None
+
     # Batch/File API Params
     s3_bucket_name: Optional[str] = None
     s3_encryption_key_id: Optional[str] = None

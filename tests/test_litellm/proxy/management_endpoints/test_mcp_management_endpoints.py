@@ -1486,7 +1486,7 @@ class TestTemporaryMCPSessionEndpoints:
             )
 
         assert result is authorize_response
-        get_server.assert_called_once_with("server-1")
+        get_server.assert_called_once_with("server-1", request=request)
         authorize_mock.assert_awaited_once_with(
             request=request,
             mcp_server=server,
@@ -1533,7 +1533,7 @@ class TestTemporaryMCPSessionEndpoints:
             )
 
         assert result is exchange_response
-        get_server.assert_called_once_with("server-1")
+        get_server.assert_called_once_with("server-1", request=request)
         exchange_mock.assert_awaited_once_with(
             request=request,
             mcp_server=server,
@@ -1581,7 +1581,7 @@ class TestTemporaryMCPSessionEndpoints:
             )
 
         assert result is exchange_response
-        get_server.assert_called_once_with("server-1")
+        get_server.assert_called_once_with("server-1", request=request)
         exchange_mock.assert_awaited_once_with(
             request=request,
             mcp_server=server,
@@ -1628,7 +1628,7 @@ class TestTemporaryMCPSessionEndpoints:
             result = await mcp_register(request=request, server_id="server-1")
 
         assert result is register_response
-        get_server.assert_called_once_with("server-1")
+        get_server.assert_called_once_with("server-1", request=request)
         read_body.assert_awaited_once_with(request=request)
         register_mock.assert_awaited_once_with(
             request=request,

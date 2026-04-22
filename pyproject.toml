@@ -208,7 +208,7 @@ build-backend = "uv_build"
 
 [tool.uv]
 default-groups = ["dev"]
-required-version = "==0.10.9"
+required-version = ">=0.10.9"
 exclude-newer = "3 days"
 
 [tool.uv.sources]

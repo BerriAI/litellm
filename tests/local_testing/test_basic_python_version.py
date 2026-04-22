@@ -100,8 +100,12 @@ import pytest
 import requests
 
 
-def test_litellm_proxy_server_config_no_general_settings():
-    # Sync the local litellm packages into the project environment
+def _run_proxy_server_smoke_test(extra_proxy_args=None):
+    """Sync deps, generate Prisma client, start proxy with optional extra args,
+    send a health check + chat/completions request, and tear down."""
+    if extra_proxy_args is None:
+        extra_proxy_args = []
+
     server_process = None
     try:
         _run_uv(
@@ -144,6 +148,7 @@ def test_litellm_proxy_server_config_no_general_settings():
                 "litellm.proxy.proxy_cli",
                 "--config",
                 config_fp,
+                *extra_proxy_args,
             ],
             cwd=PROJECT_ROOT,
         )
@@ -182,3 +187,17 @@ def test_litellm_proxy_server_config_no_general_settings():
 
     # Additional assertions can be added here
     assert True
+
+
+def test_litellm_proxy_server_config_no_general_settings():
+    """Exercises the default (v1) migration resolver."""
+    _run_proxy_server_smoke_test()
+
+
+def test_litellm_proxy_server_config_no_general_settings_v2_resolver():
+    """Exercises the opt-in v2 migration resolver.
+
+    Runs in a separate CI job against a local Postgres to avoid collisions
+    with the v1 variant when they share a database.
+    """
+    _run_proxy_server_smoke_test(extra_proxy_args=["--use_v2_migration_resolver"])
