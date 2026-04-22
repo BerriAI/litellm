@@ -130,3 +130,30 @@
   - `tests/test_litellm/router_strategy/test_sticky_least_busy*.py`
   - a 2-instance Redis soak test with sticky enabled (MUST-SURVIVE #4)
 - If `router.py` conflicts exceed 300 lines during the first cherry-pick attempt, consider splitting batch 03 further (per-theme) and checkpointing between themes.
+
+---
+
+## Replay result — 2026-04-22
+
+**Status:** ✅ Complete. Tag: `upgrade-batch-03-routing-vision`.
+
+**16 of 17 commits cherry-picked. 1 skipped (superseded).**
+
+### Skipped
+
+- **#117 `2973257d2d` Fix/oomkills** — SKIPPED (empty cherry-pick).
+  - Intent: replace `find_many(distinct=["tag"])` with raw SQL `SELECT DISTINCT` to avoid 10 GB RSS / OOM kills caused by Prisma client-side deduplication.
+  - HEAD already contained a strictly-superior fix (`prisma.litellm_dailytagspend.group_by(by=["tag"], min={"created_at"}, max={"updated_at"})`) that:
+    1. Solves the same OOM issue (dedup pushed to DB).
+    2. Follows the project convention from CLAUDE.md: "Do not write raw SQL for proxy DB operations. Use Prisma model methods." + "prefer `group_by` over `find_many(distinct=...)` which does client-side processing."
+    3. Additionally returns `min(created_at)` / `max(updated_at)` timestamps (commit #117 lost these by hard-coding to `None`).
+  - Dropping #117 preserves the better convention-aligned implementation and is not a regression.
+
+### Conflict hot-spots resolved
+
+- `litellm/caching/dual_cache.py` (commit `b418c68ed1` #23) — merged HEAD's `_reserve_redis_batch_keys` reservation pattern with upstream's `redis_only` flag. When `redis_only=True`, query all keys from Redis and skip in-memory cache updates; otherwise use reservation/rollback.
+- `litellm/router_strategy/simple_shuffle.py` (commit `22b9f44138` #74) — took upstream body (pure random selection with edge cases + deployment info logging); removed old weighted-pick code path with `verbose_router_logger`. Import `verbose_router_logger` was already absent in HEAD so no cleanup needed.
+- `litellm/proxy/management_endpoints/tag_management_endpoints.py` (#117) — kept HEAD's `group_by` (see Skipped above).
+- `litellm/router_strategy/least_busy.py` (commit `338dcd82f2` #123) — took upstream's defensive `litellm_params = kwargs.get("litellm_params")` pattern across all four log handlers; debug `print(...)` statements were already absent from HEAD.
+- `litellm/proxy/auth/auth_checks.py` (#123) — kept HEAD's refactored structure (AI_RESOURCE_ROUTES list, `_tag_max_budget_check` call, nested FREE_MODELS conditional) while applying the commit's intent: removed the three `[METADATA_ENDPOINT]`, `[BUDGET_EXCEEDED]`, `[BUDGET_CHECK_PASSED]` debug prints.
+- `tests/test_litellm/litellm_core_utils/test_exception_mapping_utils.py` (#28) — merged HEAD's Gemini 2.0/2.5/3 context-window patterns with upstream's VLLM pattern.
