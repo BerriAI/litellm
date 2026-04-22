@@ -23,6 +23,7 @@ from litellm.proxy._types import (
 from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.auth.user_api_key_auth import (
+    _run_centralized_common_checks,
     _run_post_custom_auth_checks,
     get_api_key,
     user_api_key_auth,
@@ -1731,4 +1732,268 @@ async def test_user_api_key_auth_builder_no_blocking_calls():
 
     finally:
         for k, v in _originals.items():
+            setattr(_proxy_server_mod, k, v)
+
+
+# ---------------------------------------------------------------------------
+# _run_centralized_common_checks — centralized authz gate
+# ---------------------------------------------------------------------------
+
+
+def _proxy_attrs_for_centralized_checks(
+    user_custom_auth=None, flag=False, master_key="sk-test-master"
+):
+    """Build the minimal proxy_server module attributes that
+    _run_centralized_common_checks reads.
+
+    ``master_key`` defaults to a non-None value because setting it to
+    None short-circuits the gate (no-auth dev mode); tests that want to
+    exercise that branch must pass ``master_key=None`` explicitly.
+    """
+    return {
+        "prisma_client": None,
+        "user_api_key_cache": MagicMock(),
+        "proxy_logging_obj": MagicMock(),
+        "general_settings": ({"custom_auth_run_common_checks": True} if flag else {}),
+        "llm_router": None,
+        "user_custom_auth": user_custom_auth,
+        "litellm_proxy_admin_name": "admin",
+        "master_key": master_key,
+    }
+
+
+@pytest.mark.asyncio
+async def test_centralized_common_checks_runs_for_standard_auth():
+    """Regardless of which _user_api_key_auth_builder path returned, the
+    wrapper must run common_checks. This is the structural fix: no
+    early-return path can skip authorization."""
+    import litellm.proxy.proxy_server as _proxy_server_mod
+    from fastapi import Request
+    from starlette.datastructures import URL
+
+    token = UserAPIKeyAuth(api_key="sk-test", user_id="u1")
+    request = Request(scope={"type": "http"})
+    request._url = URL(url="/chat/completions")
+
+    attrs = _proxy_attrs_for_centralized_checks(user_custom_auth=None)
+    originals = {a: getattr(_proxy_server_mod, a, None) for a in attrs}
+    try:
+        for k, v in attrs.items():
+            setattr(_proxy_server_mod, k, v)
+        with patch(
+            "litellm.proxy.auth.user_api_key_auth.common_checks",
+            new_callable=AsyncMock,
+        ) as mock_checks:
+            await _run_centralized_common_checks(
+                user_api_key_auth_obj=token,
+                request=request,
+                request_data={"model": "gpt-4o"},
+                route="/chat/completions",
+            )
+            mock_checks.assert_awaited_once()
+    finally:
+        for k, v in originals.items():
+            setattr(_proxy_server_mod, k, v)
+
+
+@pytest.mark.asyncio
+async def test_centralized_common_checks_skipped_for_custom_auth_without_flag():
+    """Existing RPS guarantee: custom-auth deployments without
+    custom_auth_run_common_checks must not pay the centralized gate.
+    Custom-auth paths don't use OAuth2/DB-fallback so this skip does
+    not widen any bypass."""
+    import litellm.proxy.proxy_server as _proxy_server_mod
+    from fastapi import Request
+    from starlette.datastructures import URL
+
+    token = UserAPIKeyAuth(api_key="sk-test", user_id="u1")
+    request = Request(scope={"type": "http"})
+    request._url = URL(url="/chat/completions")
+
+    attrs = _proxy_attrs_for_centralized_checks(
+        user_custom_auth=AsyncMock(), flag=False
+    )
+    originals = {a: getattr(_proxy_server_mod, a, None) for a in attrs}
+    try:
+        for k, v in attrs.items():
+            setattr(_proxy_server_mod, k, v)
+        with patch(
+            "litellm.proxy.auth.user_api_key_auth.common_checks",
+            new_callable=AsyncMock,
+        ) as mock_checks:
+            await _run_centralized_common_checks(
+                user_api_key_auth_obj=token,
+                request=request,
+                request_data={"model": "gpt-4o"},
+                route="/chat/completions",
+            )
+            mock_checks.assert_not_awaited()
+    finally:
+        for k, v in originals.items():
+            setattr(_proxy_server_mod, k, v)
+
+
+@pytest.mark.asyncio
+async def test_centralized_common_checks_runs_for_custom_auth_with_flag():
+    """Custom-auth deployments that opt in via custom_auth_run_common_checks
+    get the centralized gate."""
+    import litellm.proxy.proxy_server as _proxy_server_mod
+    from fastapi import Request
+    from starlette.datastructures import URL
+
+    token = UserAPIKeyAuth(api_key="sk-test", user_id="u1")
+    request = Request(scope={"type": "http"})
+    request._url = URL(url="/chat/completions")
+
+    attrs = _proxy_attrs_for_centralized_checks(user_custom_auth=AsyncMock(), flag=True)
+    originals = {a: getattr(_proxy_server_mod, a, None) for a in attrs}
+    try:
+        for k, v in attrs.items():
+            setattr(_proxy_server_mod, k, v)
+        with patch(
+            "litellm.proxy.auth.user_api_key_auth.common_checks",
+            new_callable=AsyncMock,
+        ) as mock_checks:
+            await _run_centralized_common_checks(
+                user_api_key_auth_obj=token,
+                request=request,
+                request_data={"model": "gpt-4o"},
+                route="/chat/completions",
+            )
+            mock_checks.assert_awaited_once()
+    finally:
+        for k, v in originals.items():
+            setattr(_proxy_server_mod, k, v)
+
+
+@pytest.mark.asyncio
+async def test_centralized_common_checks_runs_for_oauth2_fallback_token():
+    """VERIA-18 regression: an OAuth2 token that would previously early-
+    return without common_checks is now subject to it. If common_checks
+    raises, the gate propagates the failure."""
+    import litellm.proxy.proxy_server as _proxy_server_mod
+    from fastapi import Request
+    from starlette.datastructures import URL
+
+    token = UserAPIKeyAuth(api_key="oauth2-token", user_id="oauth-user")
+    request = Request(scope={"type": "http"})
+    request._url = URL(url="/chat/completions")
+
+    attrs = _proxy_attrs_for_centralized_checks(user_custom_auth=None)
+    originals = {a: getattr(_proxy_server_mod, a, None) for a in attrs}
+    try:
+        for k, v in attrs.items():
+            setattr(_proxy_server_mod, k, v)
+        with patch(
+            "litellm.proxy.auth.user_api_key_auth.common_checks",
+            new_callable=AsyncMock,
+            side_effect=ProxyException(
+                message="Key not allowed to access model",
+                type=ProxyErrorTypes.key_model_access_denied,
+                param="model",
+                code=401,
+            ),
+        ):
+            with pytest.raises(ProxyException) as exc:
+                await _run_centralized_common_checks(
+                    user_api_key_auth_obj=token,
+                    request=request,
+                    request_data={"model": "gpt-4"},
+                    route="/chat/completions",
+                )
+            assert exc.value.type == ProxyErrorTypes.key_model_access_denied
+    finally:
+        for k, v in originals.items():
+            setattr(_proxy_server_mod, k, v)
+
+
+@pytest.mark.asyncio
+async def test_centralized_common_checks_tolerates_db_errors_when_fetching_context():
+    """DB-outage scenario: the fallback UserAPIKeyAuth is issued when the
+    DB is down, then the gate tries to fetch team/user/etc. Those fetches
+    fail — the gate must swallow and still call common_checks with None
+    objects so enforcement runs against whatever the token recorded."""
+    import litellm.proxy.proxy_server as _proxy_server_mod
+    from fastapi import Request
+    from starlette.datastructures import URL
+
+    from litellm.proxy.auth.auth_exception_handler import (
+        DB_UNAVAILABLE_FALLBACK_USER_ID,
+    )
+
+    token = UserAPIKeyAuth(
+        api_key="fallback",
+        user_id=DB_UNAVAILABLE_FALLBACK_USER_ID,
+        team_id="team-x",
+    )
+    request = Request(scope={"type": "http"})
+    request._url = URL(url="/chat/completions")
+
+    attrs = _proxy_attrs_for_centralized_checks(user_custom_auth=None)
+    originals = {a: getattr(_proxy_server_mod, a, None) for a in attrs}
+    try:
+        for k, v in attrs.items():
+            setattr(_proxy_server_mod, k, v)
+        with (
+            patch(
+                "litellm.proxy.auth.user_api_key_auth.get_team_object",
+                new_callable=AsyncMock,
+                side_effect=Exception("DB down"),
+            ),
+            patch(
+                "litellm.proxy.auth.user_api_key_auth.common_checks",
+                new_callable=AsyncMock,
+            ) as mock_checks,
+        ):
+            await _run_centralized_common_checks(
+                user_api_key_auth_obj=token,
+                request=request,
+                request_data={"model": "gpt-4o"},
+                route="/chat/completions",
+            )
+            mock_checks.assert_awaited_once()
+            # team_object kwarg should have ended up as None after the
+            # DB fetch was swallowed.
+            assert mock_checks.call_args.kwargs["team_object"] is None
+    finally:
+        for k, v in originals.items():
+            setattr(_proxy_server_mod, k, v)
+
+
+@pytest.mark.asyncio
+async def test_centralized_common_checks_short_circuits_when_master_key_unset():
+    """master_key=None is no-auth dev mode — admin-only routes and
+    common_checks must not run. Deployments in this mode have no proxy-
+    level authentication, so applying authz would block every admin
+    route for a test/dev setup that was previously wide-open."""
+    import litellm.proxy.proxy_server as _proxy_server_mod
+    from fastapi import Request
+    from starlette.datastructures import URL
+
+    from litellm.proxy._types import LitellmUserRoles
+
+    token = UserAPIKeyAuth(
+        api_key="sk-test", user_id="u", user_role=LitellmUserRoles.INTERNAL_USER
+    )
+    request = Request(scope={"type": "http"})
+    request._url = URL(url="/get/config/callbacks")
+
+    attrs = _proxy_attrs_for_centralized_checks(user_custom_auth=None, master_key=None)
+    originals = {a: getattr(_proxy_server_mod, a, None) for a in attrs}
+    try:
+        for k, v in attrs.items():
+            setattr(_proxy_server_mod, k, v)
+        with patch(
+            "litellm.proxy.auth.user_api_key_auth.common_checks",
+            new_callable=AsyncMock,
+        ) as mock_checks:
+            await _run_centralized_common_checks(
+                user_api_key_auth_obj=token,
+                request=request,
+                request_data={},
+                route="/get/config/callbacks",
+            )
+            mock_checks.assert_not_awaited()
+    finally:
+        for k, v in originals.items():
             setattr(_proxy_server_mod, k, v)

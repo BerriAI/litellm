@@ -3816,10 +3816,15 @@ async def test_user_api_key_auth_db_unavailable():
         api_key="Bearer sk-123456789",
     )
 
-    # Verify results
+    from litellm.proxy.auth.auth_exception_handler import (
+        DB_UNAVAILABLE_FALLBACK_USER_ID,
+    )
+
+    # Verify results. user_id is the non-admin fallback sentinel so a DB
+    # outage cannot escalate an anonymous caller to proxy-admin.
     assert isinstance(result, UserAPIKeyAuth)
     assert result.key_name == "failed-to-connect-to-db"
-    assert result.user_id == litellm.proxy.proxy_server.litellm_proxy_admin_name
+    assert result.user_id == DB_UNAVAILABLE_FALLBACK_USER_ID
 
 
 @pytest.mark.asyncio
