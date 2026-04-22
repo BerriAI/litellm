@@ -5,9 +5,11 @@ import traceback
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
+import anyio
 import httpx
 
 import litellm
+from litellm._logging import verbose_logger
 from litellm.constants import (
     LITELLM_MAX_STREAMING_DURATION_SECONDS,
     STREAM_SSE_DONE_STRING,
@@ -88,6 +90,37 @@ class BaseResponsesAPIStreamingIterator:
         self._hidden_params["additional_headers"] = process_response_headers(
             self.response.headers or {}
         )  # GUARANTEE OPENAI HEADERS IN RESPONSE
+
+    async def aclose(self) -> None:
+        """
+        Release the underlying httpx.Response back to the connection pool.
+
+        Safe to call multiple times; only the first call performs cleanup.
+        Shielded from anyio cancellation so cleanup awaits complete even when
+        the surrounding task is being cancelled (e.g. client disconnect).
+
+        Mirrors CustomStreamWrapper.aclose (see PR #21213) for the Responses
+        API path. Fixes #26250 — without this, client disconnects leak the
+        upstream connection until the pool is exhausted.
+        """
+        response = self.response
+        if response is None:
+            return
+        self.response = None  # type: ignore[assignment]
+        self.finished = True
+        with anyio.CancelScope(shield=True):
+            try:
+                if hasattr(response, "aclose"):
+                    await response.aclose()
+                elif hasattr(response, "close"):
+                    result = response.close()
+                    if result is not None:
+                        await result
+            except BaseException as e:
+                verbose_logger.debug(
+                    "BaseResponsesAPIStreamingIterator.aclose: error closing response: %s",
+                    e,
+                )
 
     def _check_max_streaming_duration(self) -> None:
         """Raise litellm.Timeout if the stream has exceeded LITELLM_MAX_STREAMING_DURATION_SECONDS."""
@@ -771,7 +804,6 @@ class MockResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
 # WebSocket mode streaming (bidirectional forwarding)
 # ---------------------------------------------------------------------------
 
-from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.thread_pool_executor import executor as _ws_executor
 
 RESPONSES_WS_LOGGED_EVENT_TYPES = [
