@@ -17,6 +17,7 @@ from litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails import (
     BedrockGuardrail,
     _redact_pii_matches,
 )
+from litellm.types.utils import ModelResponse
 
 
 @pytest.mark.asyncio
@@ -1111,6 +1112,72 @@ async def test_bedrock_apply_guardrail_with_only_tool_calls_response():
         # Verify that the Bedrock API was NOT called since there's no text to process
         mock_api_request.assert_not_called()
         print("✅ apply_guardrail with tool_calls test passed - no API call made")
+
+
+@pytest.mark.asyncio
+async def test_bedrock_apply_guardrail_response_uses_OUTPUT_source():
+    """input_type='response' must call Bedrock with source=OUTPUT and assistant content.
+
+    Regression: apply_guardrail used to always use source=INPUT. Output-only Bedrock
+    policies (e.g. PII on model output) then returned action=NONE for non-streaming
+    completions that go through unified_guardrail -> process_output_response.
+    """
+    guardrail = BedrockGuardrail(
+        guardrailIdentifier="test-guardrail", guardrailVersion="DRAFT"
+    )
+    bedrock_none = {"action": "NONE", "output": [], "outputs": []}
+
+    with patch.object(
+        guardrail, "make_bedrock_api_request", new_callable=AsyncMock
+    ) as mock_api:
+        mock_api.return_value = bedrock_none
+
+        await guardrail.apply_guardrail(
+            inputs={"texts": ["first line", "second line"]},
+            request_data={"model": "gpt-4o"},
+            input_type="response",
+        )
+
+        mock_api.assert_called_once()
+        kwargs = mock_api.call_args.kwargs
+        assert kwargs["source"] == "OUTPUT"
+        assert kwargs["request_data"] == {"model": "gpt-4o"}
+        synthetic = kwargs["response"]
+        assert isinstance(synthetic, ModelResponse)
+        assert len(synthetic.choices) == 2
+        assert synthetic.choices[0].message.content == "first line"
+        assert synthetic.choices[0].message.role == "assistant"
+        assert synthetic.choices[1].message.content == "second line"
+        assert synthetic.choices[1].message.role == "assistant"
+
+
+@pytest.mark.asyncio
+async def test_bedrock_apply_guardrail_request_uses_INPUT_source():
+    """input_type='request' must call Bedrock with source=INPUT and user messages."""
+    guardrail = BedrockGuardrail(
+        guardrailIdentifier="test-guardrail", guardrailVersion="DRAFT"
+    )
+    bedrock_none = {"action": "NONE", "output": [], "outputs": []}
+
+    with patch.object(
+        guardrail, "make_bedrock_api_request", new_callable=AsyncMock
+    ) as mock_api:
+        mock_api.return_value = bedrock_none
+
+        await guardrail.apply_guardrail(
+            inputs={"texts": ["user prompt"]},
+            request_data={},
+            input_type="request",
+        )
+
+        mock_api.assert_called_once()
+        kwargs = mock_api.call_args.kwargs
+        assert kwargs["source"] == "INPUT"
+        assert kwargs["messages"] is not None
+        assert len(kwargs["messages"]) == 1
+        assert kwargs["messages"][0]["role"] == "user"
+        assert kwargs["messages"][0]["content"] == "user prompt"
+        assert kwargs.get("response") is None
 
 
 @pytest.mark.asyncio
