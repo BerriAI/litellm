@@ -1,6 +1,7 @@
 #### CRUD ENDPOINTS for UI Settings #####
 import json
 from typing import Any, Dict, List, Optional, Union
+from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 
@@ -96,7 +97,24 @@ class UISettings(BaseModel):
 
     forward_client_headers_to_llm_api: bool = Field(
         default=False,
-        description="If enabled, forwards client headers (e.g. Authorization) to the LLM API. Required for Claude Code with Max subscription.",
+        description=(
+            "Forwards client headers (Authorization, anthropic-beta, and x-* "
+            "custom headers) to the upstream LLM. Enable for Claude Code with a "
+            "Max subscription (forwards the OAuth token) or to pass custom/tracing "
+            "headers through to the provider. Independent of the BYOK toggle — "
+            "enable only the one(s) you need."
+        ),
+    )
+
+    forward_llm_provider_auth_headers: bool = Field(
+        default=False,
+        description=(
+            "Forwards provider auth headers (x-api-key, x-goog-api-key, api-key, "
+            "ocp-apim-subscription-key) to the upstream LLM, overriding any "
+            "deployment-configured key for that request. Enable for Claude Code "
+            "BYOK (clients bring their own API key). Independent of the "
+            "client-headers toggle — enable only the one(s) you need."
+        ),
     )
 
     enable_projects_ui: bool = Field(
@@ -148,6 +166,7 @@ ALLOWED_UI_SETTINGS_FIELDS = {
     "enabled_ui_pages_internal_users",
     "require_auth_for_public_ai_hub",
     "forward_client_headers_to_llm_api",
+    "forward_llm_provider_auth_headers",
     "enable_projects_ui",
     "disable_agents_for_internal_users",
     "allow_agents_for_team_admins",
@@ -161,6 +180,7 @@ ALLOWED_UI_SETTINGS_FIELDS = {
 # general_settings at runtime (on both read and write).
 _RUNTIME_GENERAL_SETTINGS_FLAGS = [
     "forward_client_headers_to_llm_api",
+    "forward_llm_provider_auth_headers",
     "disable_agents_for_internal_users",
     "allow_agents_for_team_admins",
     "disable_vector_stores_for_internal_users",
@@ -817,6 +837,29 @@ async def get_ui_theme_settings():
     )
 
 
+def _validate_public_image_url(value: Optional[str], field_name: str) -> None:
+    """
+    Reject anything that isn't a plain http(s) URL with a host. This value is
+    later served via the unauthenticated /get_image endpoint, so local paths
+    like "/etc/passwd" or "file://..." must not be accepted.
+    """
+    if value is None:
+        return
+    if not isinstance(value, str) or not value.strip():
+        return
+    parsed = urlparse(value.strip())
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": (
+                    f"Invalid {field_name}: must be an http(s) URL with a host. "
+                    "Local filesystem paths and non-http schemes are not allowed."
+                )
+            },
+        )
+
+
 @router.patch(
     "/update/ui_theme_settings",
     tags=["UI Theme Settings"],
@@ -830,6 +873,9 @@ async def update_ui_theme_settings(theme_config: UIThemeConfig):
     import os
 
     from litellm.proxy.proxy_server import proxy_config, store_model_in_db
+
+    _validate_public_image_url(theme_config.logo_url, "logo_url")
+    _validate_public_image_url(theme_config.favicon_url, "favicon_url")
 
     if store_model_in_db is not True:
         raise HTTPException(

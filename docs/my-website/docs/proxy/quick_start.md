@@ -13,7 +13,7 @@ LiteLLM Server (LLM Gateway) manages:
 * **Load Balancing**: between [Multiple Models](#multiple-models---quick-start) + [Deployments of the same model](#multiple-instances-of-1-model) - LiteLLM proxy can handle 1.5k+ requests/second during load tests.
 
 ```shell
-$ pip install 'litellm[proxy]'
+$ uv tool install 'litellm[proxy]'
 ```
 
 ## Quick Start - LiteLLM Proxy CLI

@@ -19,8 +19,12 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union, cast
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
+from litellm.llms.base_llm.guardrail_translation.utils import (
+    effective_skip_system_message_for_guardrail,
+    openai_messages_without_system,
+)
 from litellm.main import stream_chunk_builder
-from litellm.types.llms.openai import ChatCompletionToolParam
+from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
 from litellm.types.utils import (
     Choices,
     GenericGuardrailAPIInputs,
@@ -57,6 +61,8 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         if messages is None:
             return data
 
+        skip_system = effective_skip_system_message_for_guardrail(guardrail_to_apply)
+
         texts_to_check: List[str] = []
         images_to_check: List[str] = []
         tool_calls_to_check: List[ChatCompletionToolParam] = []
@@ -76,6 +82,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                 tool_calls_to_check=tool_calls_to_check,
                 text_task_mappings=text_task_mappings,
                 tool_call_task_mappings=tool_call_task_mappings,
+                skip_system_message=skip_system,
             )
 
         # Step 2: Apply guardrail to all texts and tool calls in batch
@@ -86,9 +93,12 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             if tool_calls_to_check:
                 inputs["tool_calls"] = tool_calls_to_check  # type: ignore
             if messages:
-                inputs[
-                    "structured_messages"
-                ] = messages  # pass the openai /chat/completions messages to the guardrail, as-is
+                msg_list = cast(List[AllMessageValues], messages)
+                inputs["structured_messages"] = (
+                    openai_messages_without_system(msg_list)
+                    if skip_system
+                    else msg_list
+                )
             # Pass tools (function definitions) to the guardrail
             tools = data.get("tools")
             if tools:
@@ -157,12 +167,16 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         tool_calls_to_check: List[ChatCompletionToolParam],
         text_task_mappings: List[Tuple[int, Optional[int]]],
         tool_call_task_mappings: List[Tuple[int, int]],
+        skip_system_message: bool = False,
     ) -> None:
         """
         Extract text content, images, and tool calls from a message.
 
         Override this method to customize text/image/tool call extraction logic.
         """
+        if skip_system_message and str(message.get("role") or "").lower() == "system":
+            return
+
         content = message.get("content", None)
         if content is not None:
             if isinstance(content, str):

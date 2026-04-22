@@ -70,15 +70,15 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 }'
 ```
 
-:::tip Already have pip installed?
-You can skip the curl install and run `litellm --setup` directly after `pip install 'litellm[proxy]'`.
+:::tip Already have uv installed?
+You can skip the curl install and run `litellm --setup` directly after `uv tool install 'litellm[proxy]'`.
 :::
 
 ---
 
 ## Pre-Requisites 
 
-Choose your install method. **Docker Compose** users complete their full setup inside the tab and are done. **Docker** and **pip** users continue with the steps below the tabs.
+Choose your install method. **Docker Compose** users complete their full setup inside the tab and are done. **Docker** and **LiteLLM CLI** users continue with the steps below the tabs.
 
 <Tabs>
 
@@ -92,10 +92,10 @@ docker pull docker.litellm.ai/berriai/litellm:main-latest
 
 </TabItem>
 
-<TabItem value="pip" label="LiteLLM CLI (pip package)">
+<TabItem value="cli" label="LiteLLM CLI">
 
 ```shell
-$ pip install 'litellm[proxy]'
+$ uv tool install 'litellm[proxy]'
 ```
 
 </TabItem>
@@ -269,7 +269,7 @@ Virtual keys let you track spend, set rate limits, and control model access per 
 </Tabs>
 
 :::note Docker Compose users
-Your setup is complete — the steps below are for **Docker** and **pip** users only.
+Your setup is complete — the steps below are for **Docker** and **LiteLLM CLI** users only.
 :::
 
 ---
@@ -336,7 +336,7 @@ docker run \
 
 </TabItem>
 
-<TabItem value="pip" label="LiteLLM CLI (pip package)">
+<TabItem value="cli" label="LiteLLM CLI">
 
 ```shell
 $ litellm --config /app/config.yaml --detailed_debug
@@ -463,7 +463,7 @@ Track spend and control model access via virtual keys for the proxy.
 Your Postgres container is already running — skip ahead to [Create Key w/ RPM Limit](#create-key-w-rpm-limit) below.
 :::
 
-**Docker / pip users** — you need a Postgres database (e.g. [Supabase](https://supabase.com/), [Neon](https://neon.tech/), or self-hosted). Add `general_settings` to your `config.yaml`:
+**Docker / LiteLLM CLI users** — you need a Postgres database (e.g. [Supabase](https://supabase.com/), [Neon](https://neon.tech/), or self-hosted). Add `general_settings` to your `config.yaml`:
 
 ```yaml
 model_list:

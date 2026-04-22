@@ -8,6 +8,7 @@ No external API calls - all scoring is local and <1ms.
 
 Inspired by ClawRouter: https://github.com/BlockRunAI/ClawRouter
 """
+
 import re
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 

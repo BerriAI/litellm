@@ -42,7 +42,7 @@ npm install @google/genai
 <TabItem value="python" label="Python">
 
 ```bash
-pip install google-genai
+uv add google-genai
 ```
 
 </TabItem>
