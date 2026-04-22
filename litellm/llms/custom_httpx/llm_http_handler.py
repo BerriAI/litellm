@@ -2213,6 +2213,7 @@ class BaseLLMHTTPHandler:
             litellm_params=litellm_params,
             headers=headers,
         )
+        data = BaseResponsesAPIConfig.normalize_responses_api_request_dict(data)
 
         if extra_body:
             data.update(extra_body)
@@ -2358,6 +2359,7 @@ class BaseLLMHTTPHandler:
             litellm_params=litellm_params,
             headers=headers,
         )
+        data = BaseResponsesAPIConfig.normalize_responses_api_request_dict(data)
 
         if extra_body:
             data.update(extra_body)
@@ -3897,6 +3899,7 @@ class BaseLLMHTTPHandler:
             litellm_params=litellm_params,
             headers=headers,
         )
+        data = BaseResponsesAPIConfig.normalize_responses_api_request_dict(data)
 
         ## LOGGING
         logging_obj.pre_call(
@@ -3979,6 +3982,7 @@ class BaseLLMHTTPHandler:
             litellm_params=litellm_params,
             headers=headers,
         )
+        data = BaseResponsesAPIConfig.normalize_responses_api_request_dict(data)
 
         ## LOGGING
         logging_obj.pre_call(
