@@ -422,6 +422,45 @@ def test_translate_openai_response_to_anthropic_text_and_tool_calls():
     assert anthropic_response.get("stop_reason") == "tool_use"
 
 
+def test_translate_openai_response_to_anthropic_strips_leaked_think_tags():
+    openai_response = ModelResponse(
+        id="resp_text_tool_sanitized",
+        model="gpt-4o-mini",
+        choices=[
+            Choices(
+                finish_reason="tool_calls",
+                message=Message(
+                    role="assistant",
+                    content="I need to call the tool first.\n</think>\n\ntool-loop-ok",
+                    tool_calls=[
+                        ChatCompletionAssistantToolCall(
+                            id="call_tool_combo",
+                            type="function",
+                            function=Function(
+                                name="echo_status", arguments='{"status": "ok"}'
+                            ),
+                        )
+                    ],
+                ),
+            )
+        ],
+        usage=Usage(prompt_tokens=5, completion_tokens=2),
+    )
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    anthropic_response = adapter.translate_openai_response_to_anthropic(
+        response=openai_response
+    )
+
+    anthropic_content = anthropic_response.get("content")
+    assert anthropic_content is not None
+    assert len(anthropic_content) == 2
+    assert anthropic_content[0]["type"] == "text"
+    assert anthropic_content[0]["text"] == "tool-loop-ok"
+    assert anthropic_content[1]["type"] == "tool_use"
+    assert anthropic_content[1]["name"] == "echo_status"
+
+
 def test_translate_streaming_openai_chunk_to_anthropic_with_partial_json():
     """Test that partial tool arguments are correctly handled as input_json_delta."""
     choices = [
