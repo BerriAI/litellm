@@ -1249,10 +1249,14 @@ class LiteLLMAnthropicMessagesAdapter:
                 )
 
             # Handle text content
-            if choice.message.content is not None:
+            text_content = choice.message.content
+            if isinstance(text_content, str) and "</think>" in text_content:
+                text_content = text_content.split("</think>", 1)[1].lstrip()
+
+            if text_content:
                 new_content.append(
                     AnthropicResponseContentBlockText(
-                        type="text", text=choice.message.content
+                        type="text", text=text_content
                     ).model_dump()
                 )
             # Handle tool calls (in parallel to text content)
