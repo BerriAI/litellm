@@ -178,6 +178,7 @@ class UserManagementEventHooks:
             )
             use_enterprise_email_hooks = False
 
+        enterprise_email_sent = False
         if use_enterprise_email_hooks and should_send_email:
             initialized_email_loggers = litellm.logging_callback_manager.get_custom_loggers_for_type(
                 callback_type=BaseEmailLogger  # type: ignore
@@ -188,11 +189,12 @@ class UserManagementEventHooks:
                         await email_logger.send_user_invitation_email(  # type: ignore
                             event=event,
                         )
+                        enterprise_email_sent = True
 
         #########################################################
         ########## LEGACY V1 USER INVITATION EMAIL ################
         #########################################################
-        if should_send_email:
+        if should_send_email and not enterprise_email_sent:
             await UserManagementEventHooks.send_legacy_v1_user_invitation_email(
                 data=data,
                 response=response,
