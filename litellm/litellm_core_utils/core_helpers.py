@@ -284,7 +284,16 @@ def safe_deep_copy(data):
     (e.g., tracing spans, locks, clients).
 
     This helper deep-copies each top-level key independently; on failure keeps
-    original ref
+    original ref.
+
+    Concurrency: `data` and its nested ``metadata``/``litellm_metadata`` dicts
+    can be mutated by other hooks/callbacks during the request lifecycle.
+    Iterating them directly races with those mutations and raises
+    ``RuntimeError: dictionary changed size during iteration``. We take an
+    atomic shallow snapshot (``dict(x)`` is atomic under the GIL) of the
+    top-level dict AND of the two known-mutable nested dicts before iterating,
+    so both the iteration and the parent-span pop/re-add operate on our own
+    copies and never trip on concurrent writers.
     """
     import copy
 
@@ -293,46 +302,67 @@ def safe_deep_copy(data):
     if litellm.safe_memory_mode is True:
         return data
 
-    litellm_parent_otel_span: Optional[Any] = None
-    # Step 1: Remove the litellm_parent_otel_span
-    litellm_parent_otel_span = None
-    if isinstance(data, dict):
-        # remove litellm_parent_otel_span since this is not picklable
-        if "metadata" in data and "litellm_parent_otel_span" in data["metadata"]:
-            litellm_parent_otel_span = data["metadata"].pop("litellm_parent_otel_span")
-            data["metadata"]["litellm_parent_otel_span"] = "placeholder"
-        if (
-            "litellm_metadata" in data
-            and "litellm_parent_otel_span" in data["litellm_metadata"]
-        ):
-            litellm_parent_otel_span = data["litellm_metadata"].pop(
-                "litellm_parent_otel_span"
-            )
-            data["litellm_metadata"]["litellm_parent_otel_span"] = "placeholder"
-
-    # Step 2: Per-key deepcopy with fallback
-    if isinstance(data, dict):
-        new_data = {}
-        for k, v in data.items():
-            try:
-                new_data[k] = copy.deepcopy(v)
-            except Exception:
-                new_data[k] = v
-    else:
+    if not isinstance(data, dict):
         try:
-            new_data = copy.deepcopy(data)
+            return copy.deepcopy(data)
         except Exception:
-            new_data = data
+            return data
 
-    # Step 3: re-add the litellm_parent_otel_span after doing a deep copy
-    if isinstance(data, dict) and litellm_parent_otel_span is not None:
-        if "metadata" in data and "litellm_parent_otel_span" in data["metadata"]:
-            data["metadata"]["litellm_parent_otel_span"] = litellm_parent_otel_span
+    # Step 0: shallow-snapshot top-level + the two nested dicts we touch.
+    # Everything below this line operates on `snapshot` (and its
+    # metadata/litellm_metadata copies), not on the caller's original.
+    snapshot = dict(data)
+    metadata = snapshot.get("metadata")
+    if isinstance(metadata, dict):
+        snapshot["metadata"] = dict(metadata)
+    litellm_metadata = snapshot.get("litellm_metadata")
+    if isinstance(litellm_metadata, dict):
+        snapshot["litellm_metadata"] = dict(litellm_metadata)
+
+    # Step 1: Remove litellm_parent_otel_span from our snapshot's nested dicts.
+    # The otel span is not picklable, so deepcopy would raise; we swap it for
+    # a placeholder during the copy and restore afterward. Because `snapshot`
+    # points to our own metadata/litellm_metadata copies, these pops do not
+    # mutate the caller's state.
+    litellm_parent_otel_span: Optional[Any] = None
+    snap_metadata = snapshot.get("metadata")
+    if isinstance(snap_metadata, dict) and "litellm_parent_otel_span" in snap_metadata:
+        litellm_parent_otel_span = snap_metadata.pop("litellm_parent_otel_span")
+        snap_metadata["litellm_parent_otel_span"] = "placeholder"
+    snap_litellm_metadata = snapshot.get("litellm_metadata")
+    if (
+        isinstance(snap_litellm_metadata, dict)
+        and "litellm_parent_otel_span" in snap_litellm_metadata
+    ):
+        litellm_parent_otel_span = snap_litellm_metadata.pop("litellm_parent_otel_span")
+        snap_litellm_metadata["litellm_parent_otel_span"] = "placeholder"
+
+    # Step 2: per-key deepcopy with fallback. Nested dicts beyond the two we
+    # snapshotted are still copied via copy.deepcopy, which iterates them; if
+    # those are also concurrently mutated this can still raise. Known callers
+    # only mutate metadata/litellm_metadata concurrently, so we cover the
+    # realistic surface without paying for a full recursive snapshot.
+    new_data: dict = {}
+    for k, v in snapshot.items():
+        try:
+            new_data[k] = copy.deepcopy(v)
+        except Exception:
+            new_data[k] = v
+
+    # Step 3: re-insert the real parent_otel_span into the returned copy.
+    # We intentionally do NOT re-insert into the caller's original dict; the
+    # caller still has its own reference to the untouched span via its
+    # original `metadata`/`litellm_metadata` (we snapshotted, not mutated).
+    if litellm_parent_otel_span is not None:
+        new_metadata = new_data.get("metadata")
+        if isinstance(new_metadata, dict) and "litellm_parent_otel_span" in new_metadata:
+            new_metadata["litellm_parent_otel_span"] = litellm_parent_otel_span
+        new_litellm_metadata = new_data.get("litellm_metadata")
         if (
-            "litellm_metadata" in data
-            and "litellm_parent_otel_span" in data["litellm_metadata"]
+            isinstance(new_litellm_metadata, dict)
+            and "litellm_parent_otel_span" in new_litellm_metadata
         ):
-            data["litellm_metadata"][
+            new_litellm_metadata[
                 "litellm_parent_otel_span"
             ] = litellm_parent_otel_span
     return new_data

@@ -18,6 +18,7 @@ from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
 )
+from litellm.litellm_core_utils.core_helpers import safe_deep_copy
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.llms.custom_httpx.http_handler import (
@@ -140,20 +141,20 @@ class NomaV2Guardrail(CustomGuardrail):
         logging_obj: Optional["LiteLLMLoggingObj"],
         application_id: Optional[str],
     ) -> dict:
-        # safe_deep_copy instead of deepcopy: request_data can contain non-serializable
-        # C-extension objects (e.g. uvloop.Loop) during post_call/during_call hooks,
-        # causing deepcopy to crash with "no default __reduce__ due to non-trivial __cinit__".
-        # safe_deep_copy copies each top-level key independently, falling back to the
-        # original reference on per-key failure, so it never crashes.
-        # _sanitize_payload_for_transport() handles serialization of any remaining
-        # non-serializable values before the payload is sent over the wire.
+        # safe_deep_copy internally snapshots top-level + metadata/litellm_metadata
+        # so it's safe against concurrent mutation of the caller's request_data
+        # and also falls back to a reference copy for non-picklable values
+        # (e.g. uvloop.Loop, tracing spans).
         payload_request_data = safe_deep_copy(request_data)
         if logging_obj is not None:
-            # Use dict spread to avoid mutating the original request_data when
-            # safe_deep_copy returns the same reference (safe_memory_mode=True).
+            # model_call_details is also concurrently mutated. Take a shallow
+            # snapshot so the json.dumps downstream doesn't iterate a mutating dict.
+            model_call_details = getattr(logging_obj, "model_call_details", None)
+            if isinstance(model_call_details, dict):
+                model_call_details = dict(model_call_details)
             payload_request_data = {
                 **payload_request_data,
-                "litellm_logging_obj": getattr(logging_obj, "model_call_details", None),
+                "litellm_logging_obj": model_call_details,
             }
 
         payload: dict[str, Any] = {
@@ -336,7 +337,11 @@ class NomaV2Guardrail(CustomGuardrail):
         except Exception as e:
             guardrail_status = "guardrail_failed_to_respond"
             guardrail_json_response = str(e)
-            verbose_proxy_logger.error("Noma v2 guardrail failed: %s", str(e))
+            # exception() captures the traceback; the previous .error("... %s", str(e))
+            # swallowed stack context, making it impossible to distinguish a Noma API
+            # failure from a local exception (e.g. concurrent-mutation races on
+            # request_data or model_call_details during payload build).
+            verbose_proxy_logger.exception("Noma v2 guardrail failed: %s", str(e))
             if self.block_failures:
                 raise
             return inputs
