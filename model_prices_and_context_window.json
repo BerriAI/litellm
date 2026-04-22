@@ -9177,6 +9177,7 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_xhigh_reasoning_effort": true,
+        "supports_max_reasoning_effort": true,
         "tool_use_system_prompt_tokens": 346,
         "provider_specific_entry": {
             "us": 1.1,
@@ -9209,6 +9210,7 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_xhigh_reasoning_effort": true,
+        "supports_max_reasoning_effort": true,
         "tool_use_system_prompt_tokens": 346,
         "provider_specific_entry": {
             "us": 1.1,
