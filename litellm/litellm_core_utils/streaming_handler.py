@@ -1872,7 +1872,9 @@ class CustomStreamWrapper:
                     if response.choices:
                         choice = response.choices[0]
                         if isinstance(choice, StreamingChoices):
-                            self.response_uptil_now += choice.delta.get("content", "") or ""
+                            self.response_uptil_now += (
+                                choice.delta.get("content", "") or ""
+                            )
                         else:
                             self.response_uptil_now += ""
                     self.rules.post_call_rules(
@@ -2053,7 +2055,9 @@ class CustomStreamWrapper:
                     if processed_chunk.choices:
                         choice = processed_chunk.choices[0]
                         if isinstance(choice, StreamingChoices):
-                            self.response_uptil_now += choice.delta.get("content", "") or ""
+                            self.response_uptil_now += (
+                                choice.delta.get("content", "") or ""
+                            )
                         else:
                             self.response_uptil_now += ""
                     self.rules.post_call_rules(
