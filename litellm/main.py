@@ -7619,7 +7619,15 @@ def stream_chunk_builder(  # noqa: PLR0915
 
         completion_output = get_content_from_model_response(response)
 
-        reasoning_tokens = processor.count_reasoning_tokens(response)
+        # Skip the local tiktoken recount when the provider already reports
+        # reasoning_tokens in a streaming usage chunk. calculate_usage would
+        # discard the recomputed value anyway, and tiktoken.encode() holds
+        # the GIL for tens of seconds on large reasoning responses — long
+        # enough to fail liveness probes and get pods killed.
+        if processor.chunks_have_reasoning_tokens(chunks):
+            reasoning_tokens = None
+        else:
+            reasoning_tokens = processor.count_reasoning_tokens(response)
 
         usage = processor.calculate_usage(
             chunks=chunks,

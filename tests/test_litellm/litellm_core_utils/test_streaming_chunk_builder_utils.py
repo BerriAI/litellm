@@ -13,6 +13,7 @@ from litellm.litellm_core_utils.streaming_chunk_builder_utils import ChunkProces
 from litellm.types.utils import (
     ChatCompletionDeltaToolCall,
     ChatCompletionMessageToolCall,
+    CompletionTokensDetailsWrapper,
     Delta,
     Function,
     ModelResponseStream,
@@ -613,3 +614,109 @@ def test_stream_chunk_builder_dict_snapshot_preserves_hidden_provider_fields():
     assert (
         response._hidden_params["provider_specific_fields"]["traffic_type"] == "default"
     )
+
+
+def _make_reasoning_chunk(
+    reasoning_tokens,
+    completion_tokens=10,
+    prompt_tokens=5,
+    reasoning_content="some reasoning content",
+):
+    """Build a minimal ModelResponseStream with optional reasoning_tokens usage."""
+    completion_details = (
+        CompletionTokensDetailsWrapper(reasoning_tokens=reasoning_tokens)
+        if reasoning_tokens is not None
+        else None
+    )
+    chunk = ModelResponseStream(
+        id="chatcmpl-reasoning-1",
+        created=1,
+        model="o1-mini",
+        object="chat.completion.chunk",
+        choices=[
+            StreamingChoices(
+                finish_reason="stop",
+                index=0,
+                delta=Delta(content="final answer", role="assistant"),
+            )
+        ],
+        stream_options={"include_usage": True},
+        usage=Usage(
+            completion_tokens=completion_tokens,
+            prompt_tokens=prompt_tokens,
+            total_tokens=completion_tokens + prompt_tokens,
+            completion_tokens_details=completion_details,
+            prompt_tokens_details=None,
+        ),
+    )
+    # Attach reasoning_content at the message level (how stream_chunk_builder
+    # sees the assembled response).
+    chunk.choices[0].delta.provider_specific_fields = {
+        "reasoning_content": reasoning_content
+    }
+    return chunk
+
+
+def test_chunks_have_reasoning_tokens_true_when_provider_supplies():
+    """Regression test for https://github.com/BerriAI/litellm/issues/26193.
+
+    When any streaming usage chunk already reports reasoning_tokens,
+    chunks_have_reasoning_tokens must return True so callers can skip the
+    expensive local tiktoken recount (which would be discarded downstream
+    by calculate_usage and which holds the GIL long enough to fail K8s
+    liveness probes on large reasoning responses).
+    """
+    chunks = [_make_reasoning_chunk(reasoning_tokens=12345)]
+    processor = ChunkProcessor(chunks=chunks)
+    assert processor.chunks_have_reasoning_tokens(chunks) is True
+
+
+def test_chunks_have_reasoning_tokens_false_when_provider_omits():
+    """When no streaming usage chunk reports reasoning_tokens, the caller
+    must still fall back to count_reasoning_tokens (the existing slow path)
+    so providers that don't supply usage are unaffected by the short-circuit.
+    """
+    chunks = [_make_reasoning_chunk(reasoning_tokens=None)]
+    processor = ChunkProcessor(chunks=chunks)
+    assert processor.chunks_have_reasoning_tokens(chunks) is False
+
+
+def test_chunks_have_reasoning_tokens_handles_dict_chunks():
+    """stream_chunk_builder accepts plain-dict chunks (e.g. from proxies).
+    The presence check must handle both ModelResponseStream objects and
+    dicts without raising."""
+    chunks = [
+        {
+            "id": "chatcmpl-reasoning-dict",
+            "choices": [{"finish_reason": "stop", "index": 0, "delta": {}}],
+            "usage": {
+                "prompt_tokens": 5,
+                "completion_tokens": 10,
+                "total_tokens": 15,
+                "completion_tokens_details": {"reasoning_tokens": 999},
+            },
+        }
+    ]
+    processor = ChunkProcessor(chunks=chunks)
+    assert processor.chunks_have_reasoning_tokens(chunks) is True
+
+
+def test_stream_chunk_builder_skips_count_reasoning_tokens_when_usage_present():
+    """End-to-end: stream_chunk_builder must not invoke the expensive
+    count_reasoning_tokens path when the provider already supplied
+    reasoning_tokens in a streaming usage chunk."""
+    from unittest.mock import patch
+
+    chunks = [_make_reasoning_chunk(reasoning_tokens=42)]
+
+    with patch.object(
+        ChunkProcessor,
+        "count_reasoning_tokens",
+        autospec=True,
+    ) as mock_count:
+        response = stream_chunk_builder(chunks=chunks)
+
+    assert response is not None
+    mock_count.assert_not_called()
+    # Provider-supplied reasoning_tokens is preserved on the final response.
+    assert response.usage.completion_tokens_details.reasoning_tokens == 42
