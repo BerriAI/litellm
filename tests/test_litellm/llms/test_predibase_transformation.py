@@ -332,6 +332,49 @@ def test_predibase_transform_response_best_of_from_request_data(monkeypatch):
     assert result.choices[1].message.content == "secondary-output"
 
 
+def test_predibase_transform_response_best_of_invalid_value_falls_back(monkeypatch):
+    config = PredibaseConfig()
+    logging_obj = Mock()
+    encoding = Mock()
+    encoding.encode.return_value = [1]
+    monkeypatch.setattr("litellm.token_counter", lambda messages: 1)
+
+    raw_response = httpx.Response(
+        status_code=200,
+        json={
+            "generated_text": "primary-output",
+            "details": {
+                "finish_reason": "stop",
+                "tokens": [],
+                "best_of_sequences": [
+                    {
+                        "generated_text": "secondary-output",
+                        "finish_reason": "length",
+                        "tokens": [],
+                    }
+                ],
+            },
+        },
+    )
+
+    result = config.transform_response(
+        model="predibase-model",
+        raw_response=raw_response,
+        model_response=_build_model_response(),
+        logging_obj=logging_obj,
+        request_data={"inputs": "hello", "parameters": {}},
+        messages=[{"role": "user", "content": "hello"}],
+        optional_params={"best_of": "invalid-int"},
+        litellm_params={},
+        encoding=encoding,
+        api_key="test-key",
+    )
+
+    # Invalid best_of should safely fall back to 0 and not append extra choices.
+    assert len(result.choices) == 1
+    assert result.choices[0].message.content == "primary-output"
+
+
 def test_predibase_transform_response_empty_output_sets_completion_tokens_zero(monkeypatch):
     config = PredibaseConfig()
     logging_obj = Mock()
