@@ -6,7 +6,7 @@ import PolicySelector from "@/components/policies/PolicySelector";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { TextInput, Button as TremorButton, Accordion, AccordionHeader, AccordionBody } from "@tremor/react";
 import { Form, Input, Select, Switch, Tooltip } from "antd";
-import { useEffect, useState } from "react";
+import React, { useEffect, useState } from "react";
 import { rolesWithWriteAccess } from "../../utils/roles";
 import AgentSelector from "../agent_management/AgentSelector";
 import AccessGroupSelector from "../common_components/AccessGroupSelector";
@@ -15,7 +15,7 @@ import KeyLifecycleSettings from "../common_components/KeyLifecycleSettings";
 import PassThroughRoutesSelector from "../common_components/PassThroughRoutesSelector";
 import RateLimitTypeFormItem from "../common_components/RateLimitTypeFormItem";
 import OrganizationDropdown from "../common_components/OrganizationDropdown";
-import RouterSettingsAccordion, { RouterSettingsAccordionValue } from "../common_components/RouterSettingsAccordion";
+import RouterSettingsAccordion, { RouterSettingsAccordionRef } from "../common_components/RouterSettingsAccordion";
 import { extractLoggingSettings, formatMetadataForDisplay, stripTagsFromMetadata } from "../key_info_utils";
 import { BudgetWindowEntry, BudgetWindowsEditor } from "../key_team_helpers/BudgetWindowsEditor";
 import { KeyResponse } from "../key_team_helpers/key_list";
@@ -109,9 +109,7 @@ export function KeyEditView({
   const [budgetLimits, setBudgetLimits] = useState<BudgetWindowEntry[]>(
     Array.isArray(keyData.budget_limits) ? keyData.budget_limits : []
   );
-  const [routerSettings, setRouterSettings] = useState<RouterSettingsAccordionValue | null>(
-    keyData.router_settings ? { router_settings: keyData.router_settings } : null
-  );
+  const routerSettingsRef = React.useRef<RouterSettingsAccordionRef>(null);
   const { data: organizations, isLoading: isOrganizationsLoading } = useOrganizations();
   const { data: projects } = useProjects();
   const { data: uiSettingsData } = useUISettings();
@@ -287,13 +285,23 @@ export function KeyEditView({
       const validWindows = budgetLimits.filter((w) => w.budget_duration && w.max_budget !== null && w.max_budget !== undefined);
       values.budget_limits = validWindows.length > 0 ? validWindows : undefined;
 
-      // Add router_settings if any are defined
-      if (routerSettings?.router_settings) {
-        const hasValues = Object.values(routerSettings.router_settings).some(
-          (value) => value !== null && value !== undefined && value !== "",
-        );
-        if (hasValues) {
-          values.router_settings = routerSettings.router_settings;
+      // Handle router_settings - read fresh values from DOM at save time.
+      const currentRouterSettings = routerSettingsRef.current?.getValue();
+      if (currentRouterSettings?.router_settings) {
+        const isMeaningfulValue = (value: unknown) =>
+          value !== null &&
+          value !== undefined &&
+          value !== "" &&
+          value !== false &&
+          !(Array.isArray(value) && value.length === 0);
+
+        const hasNewValues = Object.values(currentRouterSettings.router_settings).some(isMeaningfulValue);
+        const hadExistingSettings = keyData.router_settings &&
+          Object.values(keyData.router_settings).some(isMeaningfulValue);
+
+        // Send if there are new values OR if the user is clearing existing ones
+        if (hasNewValues || hadExistingSettings) {
+          values.router_settings = currentRouterSettings.router_settings;
         }
       }
 
@@ -469,9 +477,9 @@ export function KeyEditView({
         <AccordionBody>
           <div className="mt-4 w-full">
             <RouterSettingsAccordion
+              ref={routerSettingsRef}
               accessToken={accessToken || ""}
-              value={routerSettings || undefined}
-              onChange={setRouterSettings}
+              value={keyData.router_settings ? { router_settings: keyData.router_settings } : undefined}
               modelData={undefined}
             />
           </div>
