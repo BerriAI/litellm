@@ -1541,12 +1541,11 @@ class ProxyLogging:
                 else:
                     user_api_key_auth_dict = user_api_key_dict
                 # Add task to list for parallel execution
-                use_unified_during = (
+                if (
                     "apply_guardrail" in type(callback).__dict__
                     and user_api_key_dict is not None
                     and not getattr(callback, "use_native_during_call_hook", False)
-                )
-                if use_unified_during:
+                ):
                     data["guardrail_to_apply"] = callback
                     guardrail_task = self._run_guardrail_task_with_enrichment(
                         callback,
