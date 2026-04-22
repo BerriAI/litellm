@@ -103,34 +103,26 @@ class Exporter:
     # Transform
     # ------------------------------------------------------------------
 
-    def to_csv(self, df: pl.DataFrame, connection_id: Optional[str] = None) -> str:
-        """Return the DataFrame as a CSV string with connection_id added.
+    def filter(self, df: pl.DataFrame) -> pl.DataFrame:
+        """Drop rows with zero successful_requests — they have no billable output."""
+        if "successful_requests" not in df.columns:
+            return df
+        return df.filter(pl.col("successful_requests") > 0)
 
-        Rows where successful_requests == 0 are excluded — they represent
-        API calls that produced no billable output and add no value to the export.
+    def to_csv(self, df: pl.DataFrame, connection_id: Optional[str] = None) -> str:
+        """Serialise a DataFrame to CSV, adding a connection_id column if provided.
 
         Args:
-            df: Polars DataFrame with all columns from the DB query.
-            connection_id: Optional connection identifier to add as a column.
+            df: Polars DataFrame. Caller should run filter() first.
+            connection_id: Optional identifier added as a column.
 
         Returns:
-            CSV string (header + data rows). Empty string if DataFrame is empty
-            or all rows are filtered out.
+            CSV string (header + data rows). Empty string if DataFrame is empty.
         """
         if df.is_empty():
             verbose_proxy_logger.debug("Exporter: empty DataFrame, nothing to export")
             return ""
 
-        # Filter out rows with no successful requests when the column is present
-        if "successful_requests" in df.columns:
-            df = df.filter(pl.col("successful_requests") > 0)
-            if df.is_empty():
-                verbose_proxy_logger.debug(
-                    "Exporter: all rows have zero successful_requests, skipping"
-                )
-                return ""
-
-        # Add connection_id column if provided
         if connection_id:
             df = df.with_columns(pl.lit(connection_id).alias("connection_id"))
 

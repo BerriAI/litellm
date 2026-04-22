@@ -1,208 +1,188 @@
-"""Uploader — export from Postgres, then upload to Mavvrik.
+"""Uploader — GCS resumable upload protocol.
 
-Upload flow (called by Orchestrator or manual endpoints):
+Responsibility: receive a CSV string and upload it to GCS. Nothing else.
 
-  1. Export: query DB + transform to CSV via Exporter.
-  2. Upload: send gzipped CSV to Mavvrik via Client.
+Upload flow:
+  1. Compress   — gzip the CSV string → bytes
+  2. Signed URL — GET from Mavvrik API via Client.get_signed_url()
+  3. Initiate   — POST to signed URL → GCS session URI (Location header)
+  4. Finalize   — PUT gzip bytes to session URI → upload complete
 
-Environment variables (fallback when DB settings are absent):
-    MAVVRIK_API_KEY              x-api-key sent to Mavvrik API
-    MAVVRIK_API_ENDPOINT         Mavvrik API base URL (includes tenant)
-    MAVVRIK_CONNECTION_ID        Connection/instance ID
+Steps 3 and 4 talk directly to GCS (no Mavvrik auth header).
+Step 2 is delegated to Client which owns all Mavvrik API calls.
+
+GCS resumable upload protocol reference:
+  https://cloud.google.com/storage/docs/resumable-uploads
 """
 
-import os
-from datetime import timedelta, timezone
-from datetime import datetime as _dt
-from typing import Optional
+import asyncio
+import gzip
+import io
+from typing import TYPE_CHECKING, Any
 
-import polars as pl
+import httpx
 
-from litellm._logging import verbose_logger
-from litellm.constants import MAVVRIK_MAX_FETCHED_DATA_RECORDS
-from litellm.integrations.mavvrik.client import Client
-from litellm.integrations.mavvrik.exporter import Exporter
+from litellm._logging import verbose_proxy_logger
+
+if TYPE_CHECKING:
+    from litellm.integrations.mavvrik.client import Client
+else:
+    Client = Any
+
+_MAX_RETRIES = 3
+_RETRY_BACKOFF_BASE = 1.0  # seconds; doubles each retry
 
 
 class Uploader:
-    """Fetch LiteLLM spend data, transform to CSV, and upload to Mavvrik."""
+    """Upload gzip-compressed CSV data to GCS via the resumable upload protocol."""
 
-    def __init__(
-        self,
-        api_key: Optional[str] = None,
-        api_endpoint: Optional[str] = None,
-        connection_id: Optional[str] = None,
-    ):
-        self._api_key = api_key or os.getenv("MAVVRIK_API_KEY")
-        self._api_endpoint = api_endpoint or os.getenv("MAVVRIK_API_ENDPOINT", "")
-        self._connection_id = connection_id or os.getenv("MAVVRIK_CONNECTION_ID", "")
-        self._mavvrik_client = Client(
-            api_key=self._api_key or "",
-            api_endpoint=self._api_endpoint or "",
-            connection_id=self._connection_id or "",
-        )
-
-        verbose_logger.debug(
-            "Uploader initialised: endpoint=%s connection_id=%s",
-            self._api_endpoint,
-            self._connection_id,
-        )
-
-    # ------------------------------------------------------------------
-    # Read-only properties
-    # ------------------------------------------------------------------
+    def __init__(self, client: "Client") -> None:
+        self._client = client
 
     @property
-    def api_key(self) -> Optional[str]:
-        return self._api_key
-
-    @property
-    def api_endpoint(self) -> str:
-        return self._api_endpoint
-
-    @property
-    def connection_id(self) -> str:
-        return self._connection_id
-
-    @property
-    def is_valid(self) -> bool:
-        """True when all required config fields are present."""
-        return bool(self._api_key and self._api_endpoint and self._connection_id)
+    def client(self) -> "Client":
+        return self._client
 
     # ------------------------------------------------------------------
-    # Core upload
+    # Public interface
     # ------------------------------------------------------------------
 
-    async def upload_usage_data(
-        self,
-        date_str: str,
-        limit: Optional[int] = None,
-    ) -> int:
-        """Query → transform → upload for a single calendar date (YYYY-MM-DD).
+    async def upload(self, csv_payload: str, date_str: str) -> None:
+        """Compress and upload a CSV string to GCS for the given date.
 
-        Re-uploading the same date overwrites the previous upload — idempotent.
-        Called by the orchestrator and the manual /mavvrik/export endpoint.
+        Re-uploading the same date overwrites the previous object — idempotent.
 
-        Returns:
-            Number of records uploaded (0 if no data).
+        Args:
+            csv_payload: CSV string (header + rows).
+            date_str:    Date in YYYY-MM-DD format.
+
+        Raises:
+            RuntimeError: if any upload step fails after retries.
         """
-        self._validate_config()
+        if not csv_payload.strip():
+            verbose_proxy_logger.debug("uploader: empty payload, skipping upload")
+            return
 
-        verbose_logger.debug("Uploader: uploading date %s", date_str)
+        gzip_bytes = self._compress(csv_payload)
+        signed_url = await self._client.get_signed_url(date_str)
+        session_uri = await self._initiate_resumable_upload(signed_url)
+        await self._finalize_upload(session_uri, gzip_bytes)
 
-        exporter = Exporter()
-        df = await exporter.get_usage_data(date_str=date_str, limit=limit)
-
-        if df.is_empty():
-            verbose_logger.debug(
-                "Uploader: no spend data for %s, nothing to upload", date_str
-            )
-            return 0
-
-        verbose_logger.debug("Uploader: %d rows fetched, transforming…", len(df))
-
-        # Apply the same filter as to_csv (successful_requests > 0) before
-        # serialising so the record count reflects what is actually uploaded.
-        if "successful_requests" in df.columns:
-            df = df.filter(pl.col("successful_requests") > 0)
-
-        if df.is_empty():
-            verbose_logger.debug(
-                "Uploader: 0 rows after filter for %s, skipping upload",
-                date_str,
-            )
-            return 0
-
-        records_uploaded = len(df)
-        csv_payload = exporter.to_csv(df, connection_id=self._connection_id)
-
-        await self._mavvrik_client.upload(csv_payload, date_str=date_str)
-
-        verbose_logger.info(
-            "Uploader: uploaded %d records (%d CSV bytes) for date %s",
-            records_uploaded,
-            len(csv_payload),
-            date_str,
+        verbose_proxy_logger.info(
+            "uploader: uploaded %d bytes for date %s", len(gzip_bytes), date_str
         )
-        return records_uploaded
 
     # ------------------------------------------------------------------
-    # Dry run (preview without uploading)
+    # GCS protocol steps
     # ------------------------------------------------------------------
 
-    async def dry_run(
-        self,
-        date_str: Optional[str] = None,
-        limit: Optional[int] = None,
-    ) -> dict:
-        """Return transformed records as dicts without uploading — for /mavvrik/dry-run."""
-        if not date_str:
-            date_str = (_dt.now(timezone.utc).date() - timedelta(days=1)).isoformat()
+    async def _initiate_resumable_upload(self, signed_url: str) -> str:
+        """POST to the GCS signed URL to open a resumable upload session.
 
-        exporter = Exporter()
-        df = await exporter.get_usage_data(
-            date_str=date_str,
-            limit=limit or MAVVRIK_MAX_FETCHED_DATA_RECORDS,
-        )
-
-        if df.is_empty():
-            return {
-                "usage_data": [],
-                "csv_preview": "",
-                "summary": {
-                    "total_records": 0,
-                    "total_cost": 0.0,
-                    "total_tokens": 0,
-                    "unique_models": 0,
-                    "unique_teams": 0,
-                },
-            }
-
-        csv_payload = exporter.to_csv(df, connection_id=self._connection_id)
-
-        # Apply same filter as to_csv (successful_requests > 0) so preview and
-        # summary stats match what would actually be uploaded.
-        if "successful_requests" in df.columns:
-            df = df.filter(pl.col("successful_requests") > 0)
-
-        usage_sample = df.head(50).to_dicts()
-        total_cost = float(df["spend"].sum()) if "spend" in df.columns else 0.0
-        total_tokens = (
-            int((df["prompt_tokens"].sum() or 0) + (df["completion_tokens"].sum() or 0))
-            if "prompt_tokens" in df.columns
-            else 0
-        )
-        unique_models = df["model"].n_unique() if "model" in df.columns else 0
-        unique_teams = df["team_id"].n_unique() if "team_id" in df.columns else 0
-
-        return {
-            "usage_data": usage_sample,
-            "csv_preview": csv_payload[:5000] if csv_payload else "",
-            "summary": {
-                "total_records": len(df),
-                "total_cost": total_cost,
-                "total_tokens": total_tokens,
-                "unique_models": unique_models,
-                "unique_teams": unique_teams,
-            },
+        Returns the session URI from the Location response header.
+        Retries on 5xx; raises immediately on 4xx.
+        """
+        headers = {
+            "Content-Type": "application/gzip",
+            "x-goog-resumable": "start",
         }
+        metadata = b'{"contentEncoding":"gzip","contentDisposition":"attachment"}'
+        last_exc: Exception = RuntimeError("unknown error")
+
+        async with httpx.AsyncClient() as http:
+            for attempt in range(_MAX_RETRIES):
+                try:
+                    resp = await http.post(
+                        signed_url, headers=headers, content=metadata, timeout=30.0
+                    )
+                    if resp.status_code == 201:
+                        session_uri = resp.headers.get("Location")
+                        if not session_uri:
+                            raise RuntimeError(
+                                "GCS initiate upload response missing Location header"
+                            )
+                        return session_uri
+
+                    last_exc = RuntimeError(
+                        f"GCS initiate upload failed: {resp.status_code} {resp.text[:200]}"
+                    )
+                    if resp.status_code < 500:
+                        raise last_exc
+
+                except httpx.RequestError as exc:
+                    last_exc = exc
+
+                if attempt < _MAX_RETRIES - 1:
+                    wait = _RETRY_BACKOFF_BASE * (2**attempt)
+                    verbose_proxy_logger.warning(
+                        "uploader: initiate attempt %d/%d failed, retrying in %.1fs: %s",
+                        attempt + 1,
+                        _MAX_RETRIES,
+                        wait,
+                        last_exc,
+                    )
+                    await asyncio.sleep(wait)
+
+        raise RuntimeError(
+            f"GCS initiate upload failed after {_MAX_RETRIES} attempts: {last_exc}"
+        )
+
+    async def _finalize_upload(self, session_uri: str, gzip_bytes: bytes) -> None:
+        """PUT gzip bytes to the GCS session URI to complete the upload.
+
+        Retries on 5xx; raises immediately on 4xx.
+        """
+        headers = {
+            "Content-Type": "application/gzip",
+            "Content-Encoding": "gzip",
+            "x-goog-resumable": "stop",
+        }
+        last_exc: Exception = RuntimeError("unknown error")
+
+        async with httpx.AsyncClient() as http:
+            for attempt in range(_MAX_RETRIES):
+                try:
+                    resp = await http.put(
+                        session_uri, headers=headers, content=gzip_bytes, timeout=120.0
+                    )
+                    if resp.status_code in (200, 201):
+                        verbose_proxy_logger.debug(
+                            "uploader: finalize OK (%d)", resp.status_code
+                        )
+                        return
+
+                    last_exc = RuntimeError(
+                        f"GCS finalize upload failed: {resp.status_code} {resp.text[:200]}"
+                    )
+                    if resp.status_code < 500:
+                        raise last_exc
+
+                except httpx.RequestError as exc:
+                    last_exc = exc
+
+                if attempt < _MAX_RETRIES - 1:
+                    wait = _RETRY_BACKOFF_BASE * (2**attempt)
+                    verbose_proxy_logger.warning(
+                        "uploader: finalize attempt %d/%d failed, retrying in %.1fs: %s",
+                        attempt + 1,
+                        _MAX_RETRIES,
+                        wait,
+                        last_exc,
+                    )
+                    await asyncio.sleep(wait)
+
+        raise RuntimeError(
+            f"GCS finalize upload failed after {_MAX_RETRIES} attempts: {last_exc}"
+        )
 
     # ------------------------------------------------------------------
-    # Config validation
+    # Helpers
     # ------------------------------------------------------------------
 
-    def _validate_config(self) -> None:
-        missing = [
-            name
-            for name, val in [
-                ("api_key", self._api_key),
-                ("api_endpoint", self._api_endpoint),
-                ("connection_id", self._connection_id),
-            ]
-            if not val
-        ]
-        if missing:
-            raise ValueError(
-                f"Uploader: missing required config fields: {missing}. "
-                "Set via /mavvrik/init or MAVVRIK_* environment variables."
-            )
+    @staticmethod
+    def _compress(text: str) -> bytes:
+        """GZIP-compress a UTF-8 string and return the raw bytes."""
+        buf = io.BytesIO()
+        with gzip.GzipFile(fileobj=buf, mode="wb") as gz:
+            gz.write(text.encode("utf-8"))
+        return buf.getvalue()

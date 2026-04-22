@@ -36,51 +36,45 @@ def _make_df(**kwargs) -> pl.DataFrame:
     return pl.DataFrame(defaults)
 
 
+class TestExporterFilter:
+    def test_drops_zero_successful_requests(self):
+        exporter = Exporter()
+        df = _make_df(successful_requests=[0])
+        assert exporter.filter(df).is_empty()
+
+    def test_keeps_nonzero_successful_requests(self):
+        exporter = Exporter()
+        df = _make_df(successful_requests=[3])
+        assert len(exporter.filter(df)) == 1
+
+    def test_all_zero_returns_empty(self):
+        exporter = Exporter()
+        df = pl.DataFrame({"successful_requests": [0, 0], "spend": [1.0, 2.0]})
+        assert exporter.filter(df).is_empty()
+
+    def test_mixed_keeps_nonzero_rows_only(self):
+        exporter = Exporter()
+        df = pl.DataFrame({"successful_requests": [5, 0, 3], "spend": [1.0, 2.0, 3.0]})
+        result = exporter.filter(df)
+        assert len(result) == 2
+
+    def test_no_column_returns_df_unchanged(self):
+        exporter = Exporter()
+        df = pl.DataFrame({"spend": [1.0, 2.0]})
+        assert len(exporter.filter(df)) == 2
+
+
 class TestExporterToCsv:
     def test_empty_dataframe_returns_empty_string(self):
         transformer = Exporter()
         result = transformer.to_csv(pl.DataFrame())
         assert result == ""
 
-    def test_filters_zero_successful_requests(self):
-        transformer = Exporter()
-        df = _make_df(successful_requests=[0])
-        result = transformer.to_csv(df)
-        assert result == ""
-
-    def test_keeps_nonzero_successful_requests(self):
+    def test_nonzero_successful_requests_in_output(self):
         transformer = Exporter()
         df = _make_df(successful_requests=[3])
         result = transformer.to_csv(df)
         assert result != ""
-
-    def test_all_zero_requests_returns_empty(self):
-        transformer = Exporter()
-        df = pl.DataFrame(
-            {
-                "date": ["2025-01-19", "2025-01-20"],
-                "successful_requests": [0, 0],
-                "spend": [1.0, 2.0],
-                "model": ["gpt-4", "gpt-4"],
-            }
-        )
-        result = transformer.to_csv(df)
-        assert result == ""
-
-    def test_mixed_requests_filters_correctly(self):
-        transformer = Exporter()
-        df = pl.DataFrame(
-            {
-                "date": ["2025-01-19", "2025-01-20", "2025-01-21"],
-                "successful_requests": [5, 0, 3],
-                "spend": [1.0, 2.0, 3.0],
-                "model": ["gpt-4", "gpt-4", "gpt-4"],
-            }
-        )
-        result = transformer.to_csv(df)
-        lines = [l for l in result.strip().split("\n") if l]
-        # 1 header + 2 data rows
-        assert len(lines) == 3
 
     def test_output_has_header_row(self):
         transformer = Exporter()

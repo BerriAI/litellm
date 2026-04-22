@@ -1,41 +1,23 @@
-"""Mavvrik upload layer — 3-step signed URL upload pattern.
+"""Mavvrik API client — all HTTP calls to the Mavvrik REST API.
 
-  Step 1 — GET signed URL from Mavvrik API
-      GET {api_endpoint}/metrics/agent/ai/{connection_id}/upload-url
-          ?name={date_str}&type=metrics
-      Header: x-api-key: {api_key}
-      Response: { "url": "https://..." }
+Responsibility: talk to the Mavvrik API and nothing else.
 
-  Step 2 — Initiate resumable upload (POST to signed URL)
-      POST {signed_url}
-      Headers: Content-Type: application/gzip, x-goog-resumable: start
-      Response 201: Location header = session URI
+Public methods (one per API endpoint):
+  register()         POST  /metrics/agent/ai/{id}         → Optional[str] ISO marker
+  advance_marker()   PATCH /metrics/agent/ai/{id}         → None
+  report_error()     PATCH /metrics/agent/ai/{id}         → None (best-effort)
+  get_signed_url()   GET   /metrics/agent/ai/{id}/upload-url → str
 
-  Step 3 — Upload CSV payload (PUT to session URI)
-      PUT {session_uri}
-      Headers: Content-Type: application/gzip
-      Body: gzip-compressed CSV bytes
-      Response 200/201: upload complete
-
-Additionally implements registration and marker advance:
-
-  Register — POST {api_endpoint}/metrics/agent/ai/{connection_id}
-      Body: { "name": instance_id, "version": <litellm version>, "arch": <system arch> }
-      Response: { "id": "...", "metricsMarker": <epoch_seconds> }
-      Returns ISO-8601 marker string, or None when epoch is 0 (first run).
-
-  Advance marker — PATCH {api_endpoint}/metrics/agent/ai/{connection_id}
-      Body: { "metricsMarker": <epoch_seconds> }
-      Response: 204 No Content
+Transport layer (shared by all four methods):
+  _request()    — single httpx call with retry + exponential backoff
+  _assert_ok()  — raises RuntimeError on unexpected status; fast-fails on 4xx
 """
 
 import asyncio
-import gzip
-import io
 import platform
 from datetime import datetime as _dt
 from datetime import timezone as _tz
-from typing import Dict, Optional
+from typing import Any, Dict, List, Optional, Union
 
 import httpx
 import litellm as _litellm
@@ -47,7 +29,7 @@ _RETRY_BACKOFF_BASE = 1.0  # seconds; doubles each retry
 
 
 class Client:
-    """Upload gzip-compressed CSV spend data to Mavvrik via a signed URL upload."""
+    """HTTP client for the Mavvrik REST API."""
 
     def __init__(self, api_key: str, api_endpoint: str, connection_id: str) -> None:
         self._api_key = api_key
@@ -55,7 +37,7 @@ class Client:
         self._connection_id = connection_id
 
     # ------------------------------------------------------------------
-    # Read-only public accessors (for backward compatibility)
+    # Read-only properties
     # ------------------------------------------------------------------
 
     @property
@@ -70,10 +52,6 @@ class Client:
     def connection_id(self) -> str:
         return self._connection_id
 
-    # ------------------------------------------------------------------
-    # URL properties
-    # ------------------------------------------------------------------
-
     @property
     def agent_url(self) -> str:
         return f"{self._api_endpoint}/metrics/agent/ai/{self._connection_id}"
@@ -87,348 +65,168 @@ class Client:
         return {"Content-Type": "application/json", "x-api-key": self._api_key}
 
     # ------------------------------------------------------------------
-    # Public interface
-    # ------------------------------------------------------------------
-
-    async def upload(self, csv_payload: str, date_str: str) -> None:
-        """Upload a CSV string to Mavvrik for the given date.
-
-        Args:
-            csv_payload: CSV string (header + rows) from MavvrikExporter.to_csv().
-            date_str:    Date string "YYYY-MM-DD". Re-uploading the same date
-                         overwrites the previous upload — idempotent.
-
-        Raises:
-            RuntimeError: if any upload step fails after retries.
-        """
-        if not csv_payload.strip():
-            verbose_proxy_logger.debug("uploader: empty payload, skipping upload")
-            return
-
-        upload_data = self._compress(csv_payload)
-
-        # Share one client across all three steps to reuse the TCP connection pool.
-        # Use a generous overall timeout; each step applies its own timeout via the
-        # per-request `timeout` arg so slow steps don't block unrelated ones.
-        async with httpx.AsyncClient() as client:
-            signed_url = await self._get_signed_url(date_str, client=client)
-            session_uri = await self._initiate_resumable_upload(
-                signed_url, client=client
-            )
-            await self._finalize_upload(session_uri, upload_data, client=client)
-
-        verbose_proxy_logger.info(
-            "uploader: successfully uploaded %d bytes for date %s",
-            len(upload_data),
-            date_str,
-        )
-
-    # ------------------------------------------------------------------
-    # Registration — called once during POST /mavvrik/init
+    # Public API methods
     # ------------------------------------------------------------------
 
     async def register(self) -> Optional[str]:
-        """POST to Mavvrik agent endpoint and return the current marker as ISO-8601.
+        """POST agent endpoint → return current metricsMarker as ISO-8601 string.
 
-          POST {api_endpoint}/metrics/agent/ai/{connection_id}
-          Body: { "name": instance_id, "version": <litellm version>, "arch": <system arch> }
-          Response: { "id": "...", "metricsMarker": <epoch_seconds> }
-
-        Returns:
-            ISO-8601 UTC string when a marker exists, or None when the remote
-            marker is absent or zero (brand-new connection).  The caller
-            (MavvrikOrchestrator) decides how to handle the first-run case.
-
-        Raises:
-            RuntimeError: if the registration call fails.
+        Returns None when the remote marker is absent or zero (first run).
+        Raises RuntimeError if the call fails.
         """
-        headers = self._auth_headers
         body: dict = {
             "name": self._connection_id,
             "version": getattr(_litellm, "__version__", "0.0.0"),
             "arch": platform.machine(),
         }
+        resp = await self._request(
+            "POST", self.agent_url, headers=self._auth_headers, json=body
+        )
+        self._assert_ok(resp, expected={200})
 
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            resp = await client.post(self.agent_url, headers=headers, json=body)
-
-        if resp.status_code != 200:
-            raise RuntimeError(
-                f"Mavvrik registration failed: {resp.status_code} {resp.text[:200]}"
-            )
-
-        response_body = resp.json()
-        epoch = response_body.get("metricsMarker", 0)
-
+        epoch = resp.json().get("metricsMarker", 0)
         if not epoch:
             verbose_proxy_logger.info(
-                "register: remote epoch=%s → no marker (first run)",
-                epoch,
+                "register: no marker (first run), epoch=%s", epoch
             )
             return None
 
         marker_iso = _dt.fromtimestamp(float(epoch), tz=_tz.utc).isoformat()
-        verbose_proxy_logger.info(
-            "register: remote epoch=%s → marker %s",
-            epoch,
-            marker_iso,
-        )
+        verbose_proxy_logger.info("register: epoch=%s → marker %s", epoch, marker_iso)
         return marker_iso
 
-    # ------------------------------------------------------------------
-    # Marker advance — called after each successful upload
-    # ------------------------------------------------------------------
-
     async def advance_marker(self, epoch: int) -> None:
-        """PATCH the Mavvrik agent endpoint to advance the export marker.
+        """PATCH agent endpoint to advance the export cursor to the given epoch.
 
-          PATCH {api_endpoint}/metrics/agent/ai/{connection_id}
-          Body: { "metricsMarker": <epoch_seconds> }
-          Response: 204 No Content
-
-        Raises:
-            RuntimeError: if the PATCH fails.
+        Raises RuntimeError if the call fails.
         """
-        headers = self._auth_headers
-        body = {"metricsMarker": epoch}
-
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            resp = await client.patch(self.agent_url, headers=headers, json=body)
-
-        if resp.status_code not in (200, 204):
-            raise RuntimeError(
-                f"advance_marker failed: {resp.status_code} {resp.text[:200]}"
-            )
-
-        verbose_proxy_logger.info("uploader: marker advanced to epoch %d", epoch)
+        resp = await self._request(
+            "PATCH",
+            self.agent_url,
+            headers=self._auth_headers,
+            json={"metricsMarker": epoch},
+        )
+        self._assert_ok(resp, expected={200, 204})
+        verbose_proxy_logger.info("client: marker advanced to epoch %d", epoch)
 
     async def report_error(self, error_message: str) -> None:
-        """PATCH the Mavvrik agent endpoint to report an export error.
+        """PATCH agent endpoint to report an export failure to Mavvrik.
 
-        Uses the same endpoint as advance_marker but sends error
-        instead of metricsMarker so Mavvrik can track failures on their side.
-
-          PATCH {api_endpoint}/metrics/agent/ai/{connection_id}
-          Body: { "error": <str> }
-          Response: 204 No Content
-
-        This is best-effort — failures are logged but not raised.
+        Best-effort: exceptions are logged and swallowed so a reporting failure
+        never masks the original error.
         """
-        headers = self._auth_headers
-        body = {
-            "error": error_message[:500]
-        }  # truncate to avoid oversized payloads
-
         try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                resp = await client.patch(self.agent_url, headers=headers, json=body)
-
+            resp = await self._request(
+                "PATCH",
+                self.agent_url,
+                headers=self._auth_headers,
+                json={"error": error_message[:500]},
+            )
             if resp.status_code in (200, 204):
                 verbose_proxy_logger.debug(
-                    "report_error: error reported for connection %s",
-                    self.connection_id,
+                    "report_error: reported for connection %s", self._connection_id
                 )
             else:
                 verbose_proxy_logger.warning(
-                    "report_error PATCH returned %d: %s",
-                    resp.status_code,
-                    resp.text[:200],
+                    "report_error: unexpected status %d", resp.status_code
                 )
         except Exception as exc:
             verbose_proxy_logger.warning("report_error failed (non-fatal): %s", exc)
 
-    # ------------------------------------------------------------------
-    # Step 1: Get signed URL from Mavvrik API
-    # ------------------------------------------------------------------
+    async def get_signed_url(self, date_str: str) -> str:
+        """GET upload-url endpoint → return the GCS signed URL for the given date.
 
-    async def _get_signed_url(
-        self, date_str: str, client: Optional[httpx.AsyncClient] = None
-    ) -> str:
+        Raises RuntimeError if the call fails or the response is missing the URL.
+        """
         params = {"name": date_str, "type": "metrics"}
-        headers = {"Content-Type": "application/json", "x-api-key": self._api_key}
-
-        last_exc: Exception = RuntimeError("unknown error")
-
-        for attempt in range(_MAX_RETRIES):
-            try:
-                if client is not None:
-                    resp = await client.get(
-                        self.upload_url, headers=headers, params=params, timeout=30.0
-                    )
-                else:
-                    async with httpx.AsyncClient(timeout=30.0) as _client:
-                        resp = await _client.get(
-                            self.upload_url, headers=headers, params=params
-                        )
-
-                if resp.status_code == 200:
-                    body = resp.json()
-                    signed_url = body.get("url")
-                    if not signed_url:
-                        raise RuntimeError(
-                            f"Mavvrik API response missing 'url' field: {body}"
-                        )
-                    verbose_proxy_logger.debug(
-                        "uploader: got signed URL for date %s", date_str
-                    )
-                    return signed_url
-
-                last_exc = RuntimeError(
-                    f"Mavvrik signed URL request failed: {resp.status_code} {resp.text[:200]}"
-                )
-                if resp.status_code < 500:
-                    raise last_exc
-
-            except httpx.RequestError as exc:
-                last_exc = exc
-
-            wait = _RETRY_BACKOFF_BASE * (2**attempt)
-            verbose_proxy_logger.warning(
-                "uploader: signed URL attempt %d/%d failed for date %s, "
-                "retrying in %.1fs: %s",
-                attempt + 1,
-                _MAX_RETRIES,
-                date_str,
-                wait,
-                last_exc,
-            )
-            await asyncio.sleep(wait)
-
-        raise RuntimeError(
-            f"Mavvrik signed URL failed after {_MAX_RETRIES} attempts: {last_exc}"
+        resp = await self._request(
+            "GET", self.upload_url, headers=self._auth_headers, params=params
         )
+        self._assert_ok(resp, expected={200})
 
-    # ------------------------------------------------------------------
-    # Step 2: Initiate resumable upload
-    # ------------------------------------------------------------------
-
-    async def _initiate_resumable_upload(
-        self, signed_url: str, client: Optional[httpx.AsyncClient] = None
-    ) -> str:
-        headers = {
-            "Content-Type": "application/gzip",
-            "x-goog-resumable": "start",
-        }
-        metadata = b'{"contentEncoding":"gzip","contentDisposition":"attachment"}'
-
-        last_exc: Exception = RuntimeError("unknown error")
-        for attempt in range(_MAX_RETRIES):
-            try:
-                if client is not None:
-                    resp = await client.post(
-                        signed_url, headers=headers, content=metadata, timeout=30.0
-                    )
-                else:
-                    async with httpx.AsyncClient(timeout=30.0) as _client:
-                        resp = await _client.post(
-                            signed_url, headers=headers, content=metadata
-                        )
-
-                if resp.status_code == 201:
-                    session_uri = resp.headers.get("Location")
-                    if not session_uri:
-                        raise RuntimeError(
-                            "Mavvrik initiate upload response missing Location header"
-                        )
-                    verbose_proxy_logger.debug(
-                        "uploader: resumable upload session created"
-                    )
-                    return session_uri
-
-                last_exc = RuntimeError(
-                    f"Mavvrik initiate upload failed: {resp.status_code} {resp.text[:200]}"
-                )
-                if resp.status_code < 500:
-                    raise last_exc
-
-            except httpx.RequestError as exc:
-                last_exc = exc
-
-            wait = _RETRY_BACKOFF_BASE * (2**attempt)
-            verbose_proxy_logger.warning(
-                "uploader: initiate attempt %d/%d failed, retrying in %.1fs: %s",
-                attempt + 1,
-                _MAX_RETRIES,
-                wait,
-                last_exc,
+        signed_url = resp.json().get("url")
+        if not signed_url:
+            raise RuntimeError(
+                f"Mavvrik API response missing 'url' field: {resp.json()}"
             )
-            await asyncio.sleep(wait)
 
-        raise RuntimeError(
-            f"Mavvrik initiate upload failed after {_MAX_RETRIES} attempts: {last_exc}"
-        )
+        verbose_proxy_logger.debug("client: got signed URL for date %s", date_str)
+        return signed_url
 
     # ------------------------------------------------------------------
-    # Step 3: Finalize upload — PUT gzip bytes to session URI
+    # Transport layer
     # ------------------------------------------------------------------
 
-    async def _finalize_upload(
+    async def _request(
         self,
-        session_uri: str,
-        csv_data: bytes,
-        client: Optional[httpx.AsyncClient] = None,
-    ) -> None:
-        headers = {
-            "Content-Type": "application/gzip",
-            "Content-Encoding": "gzip",
-            "x-goog-resumable": "stop",
-        }
+        method: str,
+        url: str,
+        *,
+        headers: Optional[Dict[str, str]] = None,
+        json: Optional[Any] = None,
+        params: Optional[Dict[str, str]] = None,
+        content: Optional[bytes] = None,
+        timeout: float = 30.0,
+    ) -> httpx.Response:
+        """Execute an HTTP request with retry and exponential backoff.
 
+        Retries up to _MAX_RETRIES times on 5xx responses and network errors.
+        4xx responses are not retried — they indicate a client-side problem.
+
+        Returns the httpx.Response. Callers use _assert_ok() to check the status.
+        """
         last_exc: Exception = RuntimeError("unknown error")
-        for attempt in range(_MAX_RETRIES):
-            try:
-                if client is not None:
-                    resp = await client.put(
-                        session_uri, headers=headers, content=csv_data, timeout=120.0
+
+        async with httpx.AsyncClient() as http:
+            for attempt in range(_MAX_RETRIES):
+                try:
+                    resp = await http.request(
+                        method,
+                        url,
+                        headers=headers,
+                        json=json,
+                        params=params,
+                        content=content,
+                        timeout=timeout,
                     )
-                else:
-                    async with httpx.AsyncClient(timeout=120.0) as _client:
-                        resp = await _client.put(
-                            session_uri, headers=headers, content=csv_data
-                        )
 
-                if resp.status_code in (200, 201):
-                    verbose_proxy_logger.debug(
-                        "uploader: finalize upload OK (%d)", resp.status_code
+                    if resp.status_code < 500:
+                        return resp
+
+                    last_exc = RuntimeError(
+                        f"{method} {url} → {resp.status_code} {resp.text[:200]}"
                     )
-                    return
 
-                last_exc = RuntimeError(
-                    f"Mavvrik finalize upload failed: {resp.status_code} {resp.text[:200]}"
-                )
-                if resp.status_code < 500:
-                    raise last_exc
+                except httpx.RequestError as exc:
+                    last_exc = exc
 
-            except httpx.RequestError as exc:
-                last_exc = exc
-
-            wait = _RETRY_BACKOFF_BASE * (2**attempt)
-            verbose_proxy_logger.warning(
-                "uploader: finalize attempt %d/%d failed, retrying in %.1fs: %s",
-                attempt + 1,
-                _MAX_RETRIES,
-                wait,
-                last_exc,
-            )
-            await asyncio.sleep(wait)
+                if attempt < _MAX_RETRIES - 1:
+                    wait = _RETRY_BACKOFF_BASE * (2**attempt)
+                    verbose_proxy_logger.warning(
+                        "client: %s %s attempt %d/%d failed, retrying in %.1fs: %s",
+                        method,
+                        url,
+                        attempt + 1,
+                        _MAX_RETRIES,
+                        wait,
+                        last_exc,
+                    )
+                    await asyncio.sleep(wait)
 
         raise RuntimeError(
-            f"Mavvrik finalize upload failed after {_MAX_RETRIES} attempts: {last_exc}"
+            f"client: {method} {url} failed after {_MAX_RETRIES} attempts: {last_exc}"
         )
 
-    # ------------------------------------------------------------------
-    # Helpers
-    # ------------------------------------------------------------------
-
     @staticmethod
-    def _utc_now() -> _dt:
-        """Return current UTC datetime. Extracted for easy test patching."""
-        return _dt.now(_tz.utc)
+    def _assert_ok(
+        resp: httpx.Response,
+        expected: Union[set, List[int]],
+    ) -> None:
+        """Raise RuntimeError when the response status is not in expected.
 
-    @staticmethod
-    def _compress(text: str) -> bytes:
-        """GZIP-compress a UTF-8 string and return the raw bytes."""
-        buf = io.BytesIO()
-        with gzip.GzipFile(fileobj=buf, mode="wb") as gz:
-            gz.write(text.encode("utf-8"))
-        return buf.getvalue()
+        Called immediately after _request() by each public method.
+        """
+        if resp.status_code not in expected:
+            raise RuntimeError(
+                f"unexpected status {resp.status_code}: {resp.text[:200]}"
+            )

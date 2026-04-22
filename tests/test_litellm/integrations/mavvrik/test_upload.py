@@ -1,9 +1,7 @@
-"""Unit tests for the Mavvrik API streaming layer (signed URL upload)."""
+"""Unit tests for Mavvrik Client — Mavvrik API HTTP calls."""
 
-import gzip
-import os
 import sys
-from datetime import datetime, timezone
+import os
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -14,7 +12,7 @@ sys.path.insert(0, os.path.abspath("../../../.."))
 from litellm.integrations.mavvrik.client import Client
 
 
-def _make_streamer(**kwargs) -> Client:
+def _make_client(**kwargs) -> Client:
     defaults = dict(
         api_key="test-key",
         api_endpoint="https://api.mavvrik.dev/acme",
@@ -24,452 +22,416 @@ def _make_streamer(**kwargs) -> Client:
     return Client(**defaults)
 
 
-def _mock_async_client(method: str, mock_resp: MagicMock):
-    """Return a context-manager mock for httpx.AsyncClient with one stubbed method."""
-    client_mock = MagicMock()
-    async_method = AsyncMock(return_value=mock_resp)
-    setattr(client_mock, method, async_method)
-    cm = MagicMock()
-    cm.__aenter__ = AsyncMock(return_value=client_mock)
-    cm.__aexit__ = AsyncMock(return_value=False)
-    return cm, client_mock, async_method
+def _mock_response(
+    status_code: int, json_body=None, text="", headers=None
+) -> MagicMock:
+    resp = MagicMock(spec=httpx.Response)
+    resp.status_code = status_code
+    resp.text = text
+    resp.json.return_value = json_body or {}
+    resp.headers = headers or {}
+    return resp
+
+
+# ---------------------------------------------------------------------------
+# Init
+# ---------------------------------------------------------------------------
 
 
 class TestClientInit:
-    def test_init_strips_trailing_slash(self):
-        streamer = Client(
-            api_key="key",
-            api_endpoint="https://api.mavvrik.dev/acme/",
-            connection_id="litellm-001",
+    def test_strips_trailing_slash(self):
+        c = Client(
+            api_key="k", api_endpoint="https://api.mavvrik.dev/acme/", connection_id="x"
         )
-        assert not streamer.api_endpoint.endswith("/")
-        assert streamer.api_endpoint == "https://api.mavvrik.dev/acme"
+        assert c.api_endpoint == "https://api.mavvrik.dev/acme"
 
-    def test_init_stores_attributes(self):
-        streamer = Client(
+    def test_stores_attributes(self):
+        c = Client(
             api_key="mvk-key",
-            api_endpoint="https://api.mavvrik.dev/my-tenant",
-            connection_id="inst-123",
+            api_endpoint="https://api.mavvrik.dev/t",
+            connection_id="inst-1",
         )
-        assert streamer.api_key == "mvk-key"
-        assert streamer.connection_id == "inst-123"
+        assert c.api_key == "mvk-key"
+        assert c.connection_id == "inst-1"
+
+    def test_agent_url_includes_connection_id(self):
+        c = _make_client(connection_id="prod-001")
+        assert "prod-001" in c.agent_url
+
+    def test_upload_url_includes_connection_id(self):
+        c = _make_client(connection_id="prod-001")
+        assert "prod-001" in c.upload_url
+        assert "upload-url" in c.upload_url
 
 
-class TestClientGetSignedUrl:
+# ---------------------------------------------------------------------------
+# _request — transport layer
+# ---------------------------------------------------------------------------
+
+
+class TestClientRequest:
     @pytest.mark.asyncio
-    async def test_returns_signed_url_on_200(self):
-        streamer = _make_streamer()
-        mock_resp = MagicMock()
-        mock_resp.status_code = 200
-        mock_resp.json.return_value = {
-            "url": "https://storage.example.com/signed?token=abc"
-        }
+    async def test_returns_response_on_success(self):
+        c = _make_client()
+        mock_resp = _mock_response(200)
 
-        cm, _, _ = _mock_async_client("get", mock_resp)
-        with patch("httpx.AsyncClient", return_value=cm):
-            url = await streamer._get_signed_url("2025-01-15")
+        with patch("httpx.AsyncClient") as mock_cls:
+            http = AsyncMock()
+            http.request = AsyncMock(return_value=mock_resp)
+            mock_cls.return_value.__aenter__ = AsyncMock(return_value=http)
+            mock_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+            resp = await c._request("GET", "https://example.com")
 
-        assert url == "https://storage.example.com/signed?token=abc"
-
-    @pytest.mark.asyncio
-    async def test_raises_on_missing_url_field(self):
-        streamer = _make_streamer()
-        mock_resp = MagicMock()
-        mock_resp.status_code = 200
-        mock_resp.json.return_value = {}  # no 'url' key
-
-        cm, _, _ = _mock_async_client("get", mock_resp)
-        with patch("httpx.AsyncClient", return_value=cm):
-            with pytest.raises(Exception, match="missing 'url' field"):
-                await streamer._get_signed_url("2025-01-15")
+        assert resp.status_code == 200
 
     @pytest.mark.asyncio
-    async def test_raises_immediately_on_4xx(self):
-        streamer = _make_streamer()
-        mock_resp = MagicMock()
-        mock_resp.status_code = 401
-        mock_resp.text = "Unauthorized"
+    async def test_returns_4xx_without_retry(self):
+        c = _make_client()
+        mock_resp = _mock_response(401, text="Unauthorized")
 
-        cm, _, _ = _mock_async_client("get", mock_resp)
-        with patch("httpx.AsyncClient", return_value=cm), patch(
+        with patch("httpx.AsyncClient") as mock_cls, patch(
             "asyncio.sleep", new_callable=AsyncMock
         ) as mock_sleep:
-            with pytest.raises(Exception, match="401"):
-                await streamer._get_signed_url("2025-01-15")
+            http = AsyncMock()
+            http.request = AsyncMock(return_value=mock_resp)
+            mock_cls.return_value.__aenter__ = AsyncMock(return_value=http)
+            mock_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+            resp = await c._request("GET", "https://example.com")
+
+        assert resp.status_code == 401
         mock_sleep.assert_not_called()
+        assert http.request.call_count == 1
 
     @pytest.mark.asyncio
     async def test_retries_on_5xx_then_raises(self):
-        streamer = _make_streamer()
-        mock_resp = MagicMock()
-        mock_resp.status_code = 503
-        mock_resp.text = "Service Unavailable"
+        c = _make_client()
+        mock_resp = _mock_response(503, text="Service Unavailable")
 
-        cm, _, _ = _mock_async_client("get", mock_resp)
-        with patch("httpx.AsyncClient", return_value=cm), patch(
+        with patch("httpx.AsyncClient") as mock_cls, patch(
             "asyncio.sleep", new_callable=AsyncMock
         ):
-            with pytest.raises(Exception, match="503|failed after"):
-                await streamer._get_signed_url("2025-01-15")
+            http = AsyncMock()
+            http.request = AsyncMock(return_value=mock_resp)
+            mock_cls.return_value.__aenter__ = AsyncMock(return_value=http)
+            mock_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+            with pytest.raises(RuntimeError, match="failed after"):
+                await c._request("GET", "https://example.com")
+
+        assert http.request.call_count == 3
 
     @pytest.mark.asyncio
-    async def test_builds_correct_url_with_connection_id(self):
-        streamer = Client(
-            api_key="key",
-            api_endpoint="https://api.example.com/my-org",
-            connection_id="prod-001",
-        )
-        mock_resp = MagicMock()
-        mock_resp.status_code = 200
-        mock_resp.json.return_value = {"url": "https://example.com/signed"}
+    async def test_retries_on_network_error_then_raises(self):
+        c = _make_client()
 
-        captured_url = []
+        with patch("httpx.AsyncClient") as mock_cls, patch(
+            "asyncio.sleep", new_callable=AsyncMock
+        ):
+            http = AsyncMock()
+            http.request = AsyncMock(side_effect=httpx.ConnectError("timeout"))
+            mock_cls.return_value.__aenter__ = AsyncMock(return_value=http)
+            mock_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+            with pytest.raises(RuntimeError, match="failed after"):
+                await c._request("GET", "https://example.com")
 
-        async def fake_get(url, **kwargs):
-            captured_url.append(url)
-            return mock_resp
-
-        client_mock = MagicMock()
-        client_mock.get = fake_get
-        cm = MagicMock()
-        cm.__aenter__ = AsyncMock(return_value=client_mock)
-        cm.__aexit__ = AsyncMock(return_value=False)
-
-        with patch("httpx.AsyncClient", return_value=cm):
-            await streamer._get_signed_url("2025-01-15")
-
-        assert "prod-001" in captured_url[0]
+        assert http.request.call_count == 3
 
     @pytest.mark.asyncio
-    async def test_sends_x_api_key_header(self):
-        streamer = _make_streamer()
-        mock_resp = MagicMock()
-        mock_resp.status_code = 200
-        mock_resp.json.return_value = {"url": "https://example.com/signed"}
+    async def test_succeeds_on_second_attempt(self):
+        c = _make_client()
+        fail = _mock_response(503, text="err")
+        ok = _mock_response(200)
 
-        captured_headers = []
+        with patch("httpx.AsyncClient") as mock_cls, patch(
+            "asyncio.sleep", new_callable=AsyncMock
+        ):
+            http = AsyncMock()
+            http.request = AsyncMock(side_effect=[fail, ok])
+            mock_cls.return_value.__aenter__ = AsyncMock(return_value=http)
+            mock_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+            resp = await c._request("GET", "https://example.com")
 
-        async def fake_get(url, headers=None, **kwargs):
-            captured_headers.append(headers)
-            return mock_resp
-
-        client_mock = MagicMock()
-        client_mock.get = fake_get
-        cm = MagicMock()
-        cm.__aenter__ = AsyncMock(return_value=client_mock)
-        cm.__aexit__ = AsyncMock(return_value=False)
-
-        with patch("httpx.AsyncClient", return_value=cm):
-            await streamer._get_signed_url("2025-01-15")
-
-        assert captured_headers[0].get("x-api-key") == "test-key"
+        assert resp.status_code == 200
+        assert http.request.call_count == 2
 
 
-class TestClientInitiateResumable:
+# ---------------------------------------------------------------------------
+# _assert_ok — status checker
+# ---------------------------------------------------------------------------
+
+
+class TestAssertOk:
+    def test_passes_on_expected_status(self):
+        resp = _mock_response(200)
+        Client._assert_ok(resp, expected={200, 201})  # no raise
+
+    def test_raises_on_unexpected_status(self):
+        resp = _mock_response(403, text="Forbidden")
+        with pytest.raises(RuntimeError, match="403"):
+            Client._assert_ok(resp, expected={200})
+
+    def test_accepts_any_code_in_set(self):
+        for code in (200, 201, 204):
+            Client._assert_ok(_mock_response(code), expected={200, 201, 204})
+
+
+# ---------------------------------------------------------------------------
+# register()
+# ---------------------------------------------------------------------------
+
+
+class TestClientRegister:
     @pytest.mark.asyncio
-    async def test_returns_location_header_on_201(self):
-        streamer = _make_streamer()
-        mock_resp = MagicMock()
-        mock_resp.status_code = 201
-        mock_resp.headers = {"Location": "https://example.com/session-uri"}
-
-        cm, _, _ = _mock_async_client("post", mock_resp)
-        with patch("httpx.AsyncClient", return_value=cm):
-            session_uri = await streamer._initiate_resumable_upload(
-                "https://signed-url"
-            )
-
-        assert session_uri == "https://example.com/session-uri"
-
-    @pytest.mark.asyncio
-    async def test_raises_on_non_201(self):
-        streamer = _make_streamer()
-        mock_resp = MagicMock()
-        mock_resp.status_code = 403
-        mock_resp.text = "Forbidden"
-
-        cm, _, _ = _mock_async_client("post", mock_resp)
-        with patch("httpx.AsyncClient", return_value=cm):
-            with pytest.raises(Exception, match="initiate upload failed"):
-                await streamer._initiate_resumable_upload("https://signed-url")
-
-    @pytest.mark.asyncio
-    async def test_raises_on_missing_location_header(self):
-        streamer = _make_streamer()
-        mock_resp = MagicMock()
-        mock_resp.status_code = 201
-        mock_resp.headers = {}  # no Location
-
-        cm, _, _ = _mock_async_client("post", mock_resp)
-        with patch("httpx.AsyncClient", return_value=cm):
-            with pytest.raises(Exception, match="missing Location header"):
-                await streamer._initiate_resumable_upload("https://signed-url")
-
-
-class TestClientFinalizeUpload:
-    @pytest.mark.asyncio
-    async def test_accepts_200(self):
-        streamer = _make_streamer()
-        mock_resp = MagicMock()
-        mock_resp.status_code = 200
-
-        cm, _, _ = _mock_async_client("put", mock_resp)
-        with patch("httpx.AsyncClient", return_value=cm):
-            await streamer._finalize_upload("https://session-uri", b"gzip-bytes")
-
-    @pytest.mark.asyncio
-    async def test_accepts_201(self):
-        streamer = _make_streamer()
-        mock_resp = MagicMock()
-        mock_resp.status_code = 201
-
-        cm, _, _ = _mock_async_client("put", mock_resp)
-        with patch("httpx.AsyncClient", return_value=cm):
-            await streamer._finalize_upload("https://session-uri", b"gzip-bytes")
-
-    @pytest.mark.asyncio
-    async def test_raises_on_error_status(self):
-        streamer = _make_streamer()
-        mock_resp = MagicMock()
-        mock_resp.status_code = 500
-        mock_resp.text = "Internal Server Error"
-
-        cm, _, _ = _mock_async_client("put", mock_resp)
-        with patch("httpx.AsyncClient", return_value=cm):
-            with pytest.raises(Exception, match="finalize upload failed"):
-                await streamer._finalize_upload("https://session-uri", b"gzip-bytes")
-
-
-class TestClientUpload:
-    @pytest.mark.asyncio
-    async def test_upload_empty_payload_skips_all_steps(self):
-        streamer = _make_streamer()
+    async def test_returns_iso_string_from_epoch(self):
+        c = _make_client()
         with patch.object(
-            streamer, "_get_signed_url", new_callable=AsyncMock
-        ) as mock_url, patch.object(
-            streamer, "_initiate_resumable_upload", new_callable=AsyncMock
-        ) as mock_init, patch.object(
-            streamer, "_finalize_upload", new_callable=AsyncMock
-        ) as mock_fin:
-            await streamer.upload("   ", date_str="2025-01-15")
-        mock_url.assert_not_called()
-        mock_init.assert_not_called()
-        mock_fin.assert_not_called()
+            c,
+            "_request",
+            return_value=_mock_response(200, {"metricsMarker": 1737000000}),
+        ):
+            marker = await c.register()
+        assert "2025-01-16" in marker
+        assert "+00:00" in marker or "Z" in marker
 
     @pytest.mark.asyncio
-    async def test_upload_calls_all_three_steps(self):
-        streamer = _make_streamer()
-        csv_payload = "date,model,spend\n2025-01-15,gpt-4o,1.5"
+    async def test_returns_none_when_marker_zero(self):
+        c = _make_client()
         with patch.object(
-            streamer,
-            "_get_signed_url",
-            new_callable=AsyncMock,
-            return_value="https://signed",
-        ) as mock_url, patch.object(
-            streamer,
-            "_initiate_resumable_upload",
-            new_callable=AsyncMock,
-            return_value="https://session",
-        ) as mock_init, patch.object(
-            streamer, "_finalize_upload", new_callable=AsyncMock
-        ) as mock_fin:
-            await streamer.upload(csv_payload, date_str="2025-01-15")
+            c, "_request", return_value=_mock_response(200, {"metricsMarker": 0})
+        ):
+            assert await c.register() is None
 
-        # Methods now receive client= kwarg — check positional args only
-        mock_url.assert_called_once()
-        assert mock_url.call_args.args[0] == "2025-01-15"
-        mock_init.assert_called_once()
-        assert mock_init.call_args.args[0] == "https://signed"
-        mock_fin.assert_called_once()
-        upload_bytes = mock_fin.call_args.args[1]
-        assert isinstance(upload_bytes, bytes)
-        assert gzip.decompress(upload_bytes) == csv_payload.encode("utf-8")
+    @pytest.mark.asyncio
+    async def test_returns_none_when_marker_absent(self):
+        c = _make_client()
+        with patch.object(c, "_request", return_value=_mock_response(200, {"id": "x"})):
+            assert await c.register() is None
+
+    @pytest.mark.asyncio
+    async def test_raises_on_non_200(self):
+        c = _make_client()
+        with patch.object(
+            c, "_request", return_value=_mock_response(401, text="Unauthorized")
+        ):
+            with pytest.raises(RuntimeError, match="401"):
+                await c.register()
+
+    @pytest.mark.asyncio
+    async def test_posts_to_agent_url(self):
+        c = _make_client(connection_id="prod-001")
+        calls = []
+
+        async def fake_request(method, url, **kwargs):
+            calls.append((method, url))
+            return _mock_response(200, {"metricsMarker": 1700000000})
+
+        with patch.object(c, "_request", side_effect=fake_request):
+            await c.register()
+
+        assert calls[0] == ("POST", c.agent_url)
+        assert "prod-001" in calls[0][1]
+
+    @pytest.mark.asyncio
+    async def test_sends_auth_header(self):
+        c = _make_client()
+        captured = []
+
+        async def fake_request(method, url, *, headers=None, **kwargs):
+            captured.append(headers)
+            return _mock_response(200, {"metricsMarker": 1700000000})
+
+        with patch.object(c, "_request", side_effect=fake_request):
+            await c.register()
+
+        assert captured[0].get("x-api-key") == "test-key"
+
+
+# ---------------------------------------------------------------------------
+# advance_marker()
+# ---------------------------------------------------------------------------
 
 
 class TestClientAdvanceMarker:
     @pytest.mark.asyncio
     async def test_accepts_204(self):
-        streamer = _make_streamer()
-        mock_resp = MagicMock()
-        mock_resp.status_code = 204
-
-        cm, _, _ = _mock_async_client("patch", mock_resp)
-        with patch("httpx.AsyncClient", return_value=cm):
-            await streamer.advance_marker(1737000000)
+        c = _make_client()
+        with patch.object(c, "_request", return_value=_mock_response(204)):
+            await c.advance_marker(1737000000)
 
     @pytest.mark.asyncio
     async def test_accepts_200(self):
-        streamer = _make_streamer()
-        mock_resp = MagicMock()
-        mock_resp.status_code = 200
-
-        cm, _, _ = _mock_async_client("patch", mock_resp)
-        with patch("httpx.AsyncClient", return_value=cm):
-            await streamer.advance_marker(1737000000)
+        c = _make_client()
+        with patch.object(c, "_request", return_value=_mock_response(200)):
+            await c.advance_marker(1737000000)
 
     @pytest.mark.asyncio
     async def test_raises_on_error_status(self):
-        streamer = _make_streamer()
-        mock_resp = MagicMock()
-        mock_resp.status_code = 403
-        mock_resp.text = "Forbidden"
-
-        cm, _, _ = _mock_async_client("patch", mock_resp)
-        with patch("httpx.AsyncClient", return_value=cm):
-            with pytest.raises(Exception, match="advance_marker failed"):
-                await streamer.advance_marker(1737000000)
+        c = _make_client()
+        with patch.object(
+            c, "_request", return_value=_mock_response(403, text="Forbidden")
+        ):
+            with pytest.raises(RuntimeError, match="403"):
+                await c.advance_marker(1737000000)
 
     @pytest.mark.asyncio
     async def test_sends_correct_body(self):
-        streamer = _make_streamer()
-        mock_resp = MagicMock()
-        mock_resp.status_code = 204
-
+        c = _make_client()
         captured = []
 
-        async def fake_patch(url, headers=None, json=None, **kwargs):
-            captured.append({"url": url, "json": json})
-            return mock_resp
+        async def fake_request(method, url, *, json=None, **kwargs):
+            captured.append(json)
+            return _mock_response(204)
 
-        client_mock = MagicMock()
-        client_mock.patch = fake_patch
-        cm = MagicMock()
-        cm.__aenter__ = AsyncMock(return_value=client_mock)
-        cm.__aexit__ = AsyncMock(return_value=False)
+        with patch.object(c, "_request", side_effect=fake_request):
+            await c.advance_marker(1737000000)
 
-        with patch("httpx.AsyncClient", return_value=cm):
-            await streamer.advance_marker(1737000000)
-
-        assert captured[0]["json"] == {"metricsMarker": 1737000000}
+        assert captured[0] == {"metricsMarker": 1737000000}
 
     @pytest.mark.asyncio
-    async def test_patches_agent_base_path_with_connection_id(self):
-        streamer = Client(
-            api_key="key",
-            api_endpoint="https://api.example.com/my-org",
-            connection_id="prod-001",
-        )
-        mock_resp = MagicMock()
-        mock_resp.status_code = 204
+    async def test_patches_agent_url(self):
+        c = _make_client(connection_id="prod-001")
+        calls = []
 
-        captured_url = []
+        async def fake_request(method, url, **kwargs):
+            calls.append((method, url))
+            return _mock_response(204)
 
-        async def fake_patch(url, **kwargs):
-            captured_url.append(url)
-            return mock_resp
+        with patch.object(c, "_request", side_effect=fake_request):
+            await c.advance_marker(1737000000)
 
-        client_mock = MagicMock()
-        client_mock.patch = fake_patch
-        cm = MagicMock()
-        cm.__aenter__ = AsyncMock(return_value=client_mock)
-        cm.__aexit__ = AsyncMock(return_value=False)
-
-        with patch("httpx.AsyncClient", return_value=cm):
-            await streamer.advance_marker(1737000000)
-
-        assert "prod-001" in captured_url[0]
+        assert calls[0][0] == "PATCH"
+        assert "prod-001" in calls[0][1]
 
     @pytest.mark.asyncio
-    async def test_sends_x_api_key_header(self):
-        streamer = _make_streamer()
-        mock_resp = MagicMock()
-        mock_resp.status_code = 204
+    async def test_sends_auth_header(self):
+        c = _make_client()
+        captured = []
 
-        captured_headers = []
+        async def fake_request(method, url, *, headers=None, **kwargs):
+            captured.append(headers)
+            return _mock_response(204)
 
-        async def fake_patch(url, headers=None, **kwargs):
-            captured_headers.append(headers)
-            return mock_resp
+        with patch.object(c, "_request", side_effect=fake_request):
+            await c.advance_marker(1737000000)
 
-        client_mock = MagicMock()
-        client_mock.patch = fake_patch
-        cm = MagicMock()
-        cm.__aenter__ = AsyncMock(return_value=client_mock)
-        cm.__aexit__ = AsyncMock(return_value=False)
-
-        with patch("httpx.AsyncClient", return_value=cm):
-            await streamer.advance_marker(1737000000)
-
-        assert captured_headers[0].get("x-api-key") == "test-key"
+        assert captured[0].get("x-api-key") == "test-key"
 
 
-class TestClientRegister:
+# ---------------------------------------------------------------------------
+# report_error()
+# ---------------------------------------------------------------------------
+
+
+class TestClientReportError:
     @pytest.mark.asyncio
-    async def test_register_returns_iso_string_from_epoch(self):
-        streamer = _make_streamer()
-        mock_resp = MagicMock()
-        mock_resp.status_code = 200
-        mock_resp.json.return_value = {"id": "litellm-001", "metricsMarker": 1737000000}
-
-        cm, _, _ = _mock_async_client("post", mock_resp)
-        with patch("httpx.AsyncClient", return_value=cm):
-            marker = await streamer.register()
-
-        assert "2025-01-16" in marker
-        assert "+00:00" in marker or "UTC" in marker or "Z" in marker or "+00" in marker
+    async def test_swallows_exception(self):
+        c = _make_client()
+        with patch.object(c, "_request", side_effect=RuntimeError("network down")):
+            await c.report_error("something went wrong")  # must not raise
 
     @pytest.mark.asyncio
-    async def test_register_returns_none_when_marker_zero(self):
-        streamer = _make_streamer()
-        mock_resp = MagicMock()
-        mock_resp.status_code = 200
-        mock_resp.json.return_value = {"id": "litellm-001", "metricsMarker": 0}
+    async def test_truncates_message_to_500_chars(self):
+        c = _make_client()
+        captured = []
 
-        cm, _, _ = _mock_async_client("post", mock_resp)
-        with patch("httpx.AsyncClient", return_value=cm):
-            marker = await streamer.register()
+        async def fake_request(method, url, *, json=None, **kwargs):
+            captured.append(json)
+            return _mock_response(204)
 
-        assert marker is None
+        with patch.object(c, "_request", side_effect=fake_request):
+            await c.report_error("x" * 600)
 
-    @pytest.mark.asyncio
-    async def test_register_returns_none_when_marker_absent(self):
-        streamer = _make_streamer()
-        mock_resp = MagicMock()
-        mock_resp.status_code = 200
-        mock_resp.json.return_value = {"id": "litellm-001"}  # no metricsMarker
-
-        cm, _, _ = _mock_async_client("post", mock_resp)
-        with patch("httpx.AsyncClient", return_value=cm):
-            marker = await streamer.register()
-
-        assert marker is None
+        assert len(captured[0]["error"]) == 500
 
     @pytest.mark.asyncio
-    async def test_register_raises_on_non_200(self):
-        streamer = _make_streamer()
-        mock_resp = MagicMock()
-        mock_resp.status_code = 401
-        mock_resp.text = "Unauthorized"
+    async def test_sends_error_field_in_body(self):
+        c = _make_client()
+        captured = []
 
-        cm, _, _ = _mock_async_client("post", mock_resp)
-        with patch("httpx.AsyncClient", return_value=cm):
-            with pytest.raises(Exception, match="registration failed"):
-                await streamer.register()
+        async def fake_request(method, url, *, json=None, **kwargs):
+            captured.append(json)
+            return _mock_response(204)
+
+        with patch.object(c, "_request", side_effect=fake_request):
+            await c.report_error("export failed")
+
+        assert captured[0] == {"error": "export failed"}
+
+
+# ---------------------------------------------------------------------------
+# get_signed_url()
+# ---------------------------------------------------------------------------
+
+
+class TestClientGetSignedUrl:
+    @pytest.mark.asyncio
+    async def test_returns_signed_url_on_200(self):
+        c = _make_client()
+        with patch.object(
+            c,
+            "_request",
+            return_value=_mock_response(
+                200, {"url": "https://storage.example.com/signed"}
+            ),
+        ):
+            url = await c.get_signed_url("2025-01-15")
+        assert url == "https://storage.example.com/signed"
 
     @pytest.mark.asyncio
-    async def test_register_posts_to_agent_base_path(self):
-        streamer = Client(
-            api_key="key",
-            api_endpoint="https://api.example.com/my-org",
-            connection_id="prod-001",
-        )
-        mock_resp = MagicMock()
-        mock_resp.status_code = 200
-        mock_resp.json.return_value = {"id": "prod-001", "metricsMarker": 1700000000}
+    async def test_raises_on_missing_url_field(self):
+        c = _make_client()
+        with patch.object(c, "_request", return_value=_mock_response(200, {})):
+            with pytest.raises(RuntimeError, match="missing 'url' field"):
+                await c.get_signed_url("2025-01-15")
 
-        captured_url = []
+    @pytest.mark.asyncio
+    async def test_raises_on_non_200(self):
+        c = _make_client()
+        with patch.object(
+            c, "_request", return_value=_mock_response(403, text="Forbidden")
+        ):
+            with pytest.raises(RuntimeError, match="403"):
+                await c.get_signed_url("2025-01-15")
 
-        async def fake_post(url, **kwargs):
-            captured_url.append(url)
-            return mock_resp
+    @pytest.mark.asyncio
+    async def test_sends_date_as_name_param(self):
+        c = _make_client()
+        captured = []
 
-        client_mock = MagicMock()
-        client_mock.post = fake_post
-        cm = MagicMock()
-        cm.__aenter__ = AsyncMock(return_value=client_mock)
-        cm.__aexit__ = AsyncMock(return_value=False)
+        async def fake_request(method, url, *, params=None, **kwargs):
+            captured.append(params)
+            return _mock_response(200, {"url": "https://example.com/signed"})
 
-        with patch("httpx.AsyncClient", return_value=cm):
-            await streamer.register()
+        with patch.object(c, "_request", side_effect=fake_request):
+            await c.get_signed_url("2025-01-15")
 
-        assert "prod-001" in captured_url[0]
+        assert captured[0]["name"] == "2025-01-15"
+        assert captured[0]["type"] == "metrics"
+
+    @pytest.mark.asyncio
+    async def test_sends_auth_header(self):
+        c = _make_client()
+        captured = []
+
+        async def fake_request(method, url, *, headers=None, **kwargs):
+            captured.append(headers)
+            return _mock_response(200, {"url": "https://example.com/signed"})
+
+        with patch.object(c, "_request", side_effect=fake_request):
+            await c.get_signed_url("2025-01-15")
+
+        assert captured[0].get("x-api-key") == "test-key"
+
+    @pytest.mark.asyncio
+    async def test_gets_upload_url_with_connection_id(self):
+        c = _make_client(connection_id="prod-001")
+        calls = []
+
+        async def fake_request(method, url, **kwargs):
+            calls.append(url)
+            return _mock_response(200, {"url": "https://example.com/signed"})
+
+        with patch.object(c, "_request", side_effect=fake_request):
+            await c.get_signed_url("2025-01-15")
+
+        assert "prod-001" in calls[0]
+        assert "upload-url" in calls[0]

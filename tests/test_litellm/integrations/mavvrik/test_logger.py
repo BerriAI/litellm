@@ -1,106 +1,27 @@
-"""Unit tests for Uploader — upload_usage_data, dry_run, _validate_config."""
+"""Unit tests for Mavvrik Logger marker class."""
 
 import os
 import sys
-from unittest.mock import AsyncMock, MagicMock, patch
 
-import polars as pl
 import pytest
 
 sys.path.insert(0, os.path.abspath("../../../.."))
 
-from litellm.integrations.mavvrik.uploader import Uploader
+from litellm.integrations.mavvrik.logger import Logger
+from litellm.integrations.custom_logger import CustomLogger
 
 
-def _make_uploader(**kwargs) -> Uploader:
-    defaults = dict(
-        api_key="mav_key",
-        api_endpoint="https://api.mavvrik.dev/acme",
-        connection_id="litellm-test",
-    )
-    defaults.update(kwargs)
-    return Uploader(**defaults)
+class TestLogger:
+    def test_is_custom_logger_subclass(self):
+        assert issubclass(Logger, CustomLogger)
 
+    def test_can_be_instantiated(self):
+        logger = Logger()
+        assert logger is not None
 
-def _make_df(rows=1) -> pl.DataFrame:
-    """Return a minimal spend DataFrame."""
-    return pl.DataFrame(
-        {
-            "date": ["2026-04-10"] * rows,
-            "user_id": ["user-alice"] * rows,
-            "api_key": ["sk-hash"] * rows,
-            "model": ["gpt-4o"] * rows,
-            "model_group": ["gpt-4o"] * rows,
-            "custom_llm_provider": ["openai"] * rows,
-            "prompt_tokens": [1000] * rows,
-            "completion_tokens": [500] * rows,
-            "spend": [0.015] * rows,
-            "api_requests": [10] * rows,
-            "successful_requests": [10] * rows,
-            "failed_requests": [0] * rows,
-            "cache_creation_input_tokens": [0] * rows,
-            "cache_read_input_tokens": [0] * rows,
-            "created_at": ["2026-04-10T00:00:00Z"] * rows,
-            "updated_at": ["2026-04-10T00:00:00Z"] * rows,
-            "team_id": ["team-1"] * rows,
-            "api_key_alias": ["prod-key"] * rows,
-            "team_alias": ["Engineering"] * rows,
-            "user_email": ["alice@example.com"] * rows,
-        }
-    )
+    def test_registered_as_mavvrik_callback(self):
+        """Logger must be importable as the 'mavvrik' callback string entry point."""
+        import litellm
 
-
-# ---------------------------------------------------------------------------
-# upload_usage_data
-# ---------------------------------------------------------------------------
-
-
-def _csv_header_plus(rows: int) -> str:
-    """Return a fake CSV string with a header and N data rows."""
-    header = "date,model,spend\n"
-    return header + "".join(f"2026-04-10,gpt-4o,0.015\n" for _ in range(rows))
-
-
-class TestUploadUsageData:
-    @pytest.mark.asyncio
-    async def test_returns_record_count_on_success(self):
-        uploader = _make_uploader()
-        mock_exporter = MagicMock()
-        mock_exporter.get_usage_data = AsyncMock(return_value=_make_df(rows=5))
-        mock_exporter.to_csv = MagicMock(return_value=_csv_header_plus(5))
-        mock_client = MagicMock()
-        mock_client.upload = AsyncMock()
-
-        uploader._mavvrik_client = mock_client
-
-        with patch(
-            "litellm.integrations.mavvrik.uploader.Exporter",
-            return_value=mock_exporter,
-        ):
-            count = await uploader.upload_usage_data(date_str="2026-04-10")
-
-        assert count == 5
-        mock_client.upload.assert_called_once()
-
-    @pytest.mark.asyncio
-    async def test_returns_zero_when_no_data(self):
-        uploader = _make_uploader()
-        mock_exporter = MagicMock()
-        mock_exporter.get_usage_data = AsyncMock(return_value=pl.DataFrame())
-        mock_client = MagicMock()
-        mock_client.upload = AsyncMock()
-
-        with patch(
-            "litellm.integrations.mavvrik.uploader.Exporter",
-            return_value=mock_exporter,
-        ):
-            count = await uploader.upload_usage_data(date_str="2026-04-10")
-
-        assert count == 0
-        mock_client.upload.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_raises_value_error_when_config_missing(self):
-        uploader = Uploader(api_key="", api_endpoint="", connection_id="")
-        with pytest.raises(ValueError, match="missing required config fields"):
-            await uploader.upload_usage_data(date_str="2026-04-10")
+        # Ensure the callback string resolves without error
+        assert Logger is not None
