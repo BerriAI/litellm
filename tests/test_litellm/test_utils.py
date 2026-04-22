@@ -3893,7 +3893,15 @@ def test_no_pydantic_serialization_warning_with_tool_calls():
     msg = _make_tool_call_message()
 
     with warnings.catch_warnings():
-        warnings.filterwarnings("error", message="Pydantic serializer warnings")
+        # Pydantic v2 raises PydanticSerializationUnexpectedValue (a UserWarning
+        # subclass) with messages like "Expected `str` but got `int` - serialized
+        # value may not be as expected".  The old pattern "Pydantic serializer
+        # warnings" never matched, making this guard a no-op.
+        warnings.filterwarnings(
+            "error",
+            message=".*serialized value may not be as expected.*",
+            category=UserWarning,
+        )
         # Should not raise
         result = validate_and_fix_openai_messages(
             [
