@@ -29,7 +29,7 @@ import {
   UserOutlined,
 } from "@ant-design/icons";
 import type { MenuProps } from "antd";
-import { ConfigProvider, Layout, Menu } from "antd";
+import { ConfigProvider, Layout, Menu, Tag } from "antd";
 import { useMemo } from "react";
 import { all_admin_roles, internalUserRoles, isAdminRole, isUserTeamAdminForAnyTeam, rolesWithWriteAccess } from "../utils/roles";
 import NewBadge from "./common_components/NewBadge";
@@ -144,6 +144,16 @@ const menuGroups: MenuGroup[] = [
         page: "guardrails",
         label: "Guardrails",
         icon: <SafetyOutlined />,
+      },
+      {
+        key: "evals",
+        page: "evals",
+        label: (
+          <span className="flex items-center gap-2">
+            Evals <Tag color="blue" style={{ fontSize: 10, padding: "0 4px", lineHeight: "16px" }}>Beta</Tag>
+          </span>
+        ),
+        icon: <ExperimentOutlined />,
       },
       {
         key: "policies",
