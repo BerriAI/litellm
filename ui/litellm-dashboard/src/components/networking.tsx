@@ -9986,3 +9986,104 @@ export const listMCPUserCredentials = async (
   if (!response.ok) return [];
   return response.json();
 };
+
+// ==================== Evals [Beta] ====================
+
+export const createLiteLLMEval = async (
+  accessToken: string,
+  evalConfig: {
+    eval_name: string;
+    criteria: Array<{ name: string; weight: number; description: string; threshold?: number }>;
+    judge_model: string;
+    description?: string;
+    overall_threshold?: number;
+    max_iterations?: number;
+  }
+): Promise<any> => {
+  const url = proxyBaseUrl ? `${proxyBaseUrl}/v1/evals/config` : `/v1/evals/config`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(evalConfig),
+  });
+  if (!response.ok) {
+    const err = await response.text();
+    throw new Error(err);
+  }
+  return response.json();
+};
+
+export const listLiteLLMEvals = async (accessToken: string): Promise<any[]> => {
+  const url = proxyBaseUrl ? `${proxyBaseUrl}/v1/evals/config` : `/v1/evals/config`;
+  const response = await fetch(url, {
+    headers: { [globalLitellmHeaderName]: `Bearer ${accessToken}` },
+  });
+  if (!response.ok) throw new Error(await response.text());
+  return response.json();
+};
+
+export const deleteLiteLLMEval = async (
+  accessToken: string,
+  evalId: string
+): Promise<any> => {
+  const url = proxyBaseUrl ? `${proxyBaseUrl}/v1/evals/config/${evalId}` : `/v1/evals/config/${evalId}`;
+  const response = await fetch(url, {
+    method: "DELETE",
+    headers: { [globalLitellmHeaderName]: `Bearer ${accessToken}` },
+  });
+  if (!response.ok) throw new Error(await response.text());
+  return response.json();
+};
+
+export const attachEvalToAgent = async (
+  accessToken: string,
+  agentId: string,
+  payload: { eval_id: string; on_failure: "block" | "log"; overall_threshold_override?: number }
+): Promise<any> => {
+  const url = proxyBaseUrl
+    ? `${proxyBaseUrl}/v1/agents/${agentId}/evals`
+    : `/v1/agents/${agentId}/evals`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) throw new Error(await response.text());
+  return response.json();
+};
+
+export const detachEvalFromAgent = async (
+  accessToken: string,
+  agentId: string,
+  evalId: string
+): Promise<any> => {
+  const url = proxyBaseUrl
+    ? `${proxyBaseUrl}/v1/agents/${agentId}/evals/${evalId}`
+    : `/v1/agents/${agentId}/evals/${evalId}`;
+  const response = await fetch(url, {
+    method: "DELETE",
+    headers: { [globalLitellmHeaderName]: `Bearer ${accessToken}` },
+  });
+  if (!response.ok) throw new Error(await response.text());
+  return response.json();
+};
+
+export const getAgentEvals = async (
+  accessToken: string,
+  agentId: string
+): Promise<any[]> => {
+  const url = proxyBaseUrl
+    ? `${proxyBaseUrl}/v1/agents/${agentId}/evals`
+    : `/v1/agents/${agentId}/evals`;
+  const response = await fetch(url, {
+    headers: { [globalLitellmHeaderName]: `Bearer ${accessToken}` },
+  });
+  if (!response.ok) throw new Error(await response.text());
+  return response.json();
+};
