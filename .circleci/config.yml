@@ -136,40 +136,9 @@ jobs:
           command: |
             uv run --no-sync python -m pytest tests/windows_tests/test_litellm_on_windows.py -v
 
-  mypy_linting:
-    docker:
-      - image: cimg/python:3.12
-        auth:
-          username: ${DOCKERHUB_USERNAME}
-          password: ${DOCKERHUB_PASSWORD}
-    working_directory: ~/project
-    resource_class: medium
-
-    steps:
-      - checkout
-      - setup_google_dns
-      - run:
-          name: Install Dependencies
-          command: |
-            curl -LsSf -o /tmp/uv-install.sh https://astral.sh/uv/0.10.9/install.sh
-            echo "7fc46e39cb97290b57169c0c813a17970585ac519139f19006453c99b5f2f45f  /tmp/uv-install.sh" | sha256sum -c -
-            env UV_NO_MODIFY_PATH=1 sh /tmp/uv-install.sh
-            rm -f /tmp/uv-install.sh
-            echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$BASH_ENV"
-            export PATH="$HOME/.local/bin:$PATH"
-            uv sync --frozen --group dev --python "$(which python)" --no-install-package fastuuid
-      - run:
-          name: MyPy Type Checking
-          command: |
-            cd litellm
-            # Use the same approach as GitHub Actions, explicitly exclude fastuuid to avoid segfaults
-            uv run --no-sync python -m mypy .
-            cd ..
-          no_output_timeout: 10m
-
   semgrep:
     docker:
-      - image: cimg/python:3.12
+      - image: cimg/python:3.12@sha256:9c796c23c84e84a66a964acb508d39dc5433c81a47e07efd56dccbbc2427e07c
         auth:
           username: ${DOCKERHUB_USERNAME}
           password: ${DOCKERHUB_PASSWORD}
@@ -196,7 +165,7 @@ jobs:
 
   local_testing_part1:
     docker:
-      - image: cimg/python:3.12
+      - image: cimg/python:3.12@sha256:9c796c23c84e84a66a964acb508d39dc5433c81a47e07efd56dccbbc2427e07c
         auth:
           username: ${DOCKERHUB_USERNAME}
           password: ${DOCKERHUB_PASSWORD}
@@ -286,7 +255,7 @@ jobs:
             - local_testing_part1_coverage
   local_testing_part2:
     docker:
-      - image: cimg/python:3.12
+      - image: cimg/python:3.12@sha256:9c796c23c84e84a66a964acb508d39dc5433c81a47e07efd56dccbbc2427e07c
         auth:
           username: ${DOCKERHUB_USERNAME}
           password: ${DOCKERHUB_PASSWORD}
@@ -376,7 +345,7 @@ jobs:
             - local_testing_part2_coverage
   langfuse_logging_unit_tests:
     docker:
-      - image: cimg/python:3.11
+      - image: cimg/python:3.11@sha256:89910694a298ea0c861750804ddd100ac0ae8c6386055a8a68f7713dcdeb373d
         auth:
           username: ${DOCKERHUB_USERNAME}
           password: ${DOCKERHUB_PASSWORD}
@@ -435,11 +404,11 @@ jobs:
           path: test-results
   auth_ui_unit_tests:
     docker:
-      - image: cimg/python:3.11
+      - image: cimg/python:3.11@sha256:89910694a298ea0c861750804ddd100ac0ae8c6386055a8a68f7713dcdeb373d
         auth:
           username: ${DOCKERHUB_USERNAME}
           password: ${DOCKERHUB_PASSWORD}
-      - image: cimg/postgres:16.0
+      - image: cimg/postgres:16.0@sha256:b125148bc76e8e8eee5eb3ad6020a3a14110a14e8192f1c645128afebe2e2f84
         environment:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
@@ -497,7 +466,7 @@ jobs:
 
   litellm_router_testing: # Runs all tests with the "router" keyword
     docker:
-      - image: cimg/python:3.11
+      - image: cimg/python:3.11@sha256:89910694a298ea0c861750804ddd100ac0ae8c6386055a8a68f7713dcdeb373d
         auth:
           username: ${DOCKERHUB_USERNAME}
           password: ${DOCKERHUB_PASSWORD}
@@ -556,7 +525,7 @@ jobs:
 
   litellm_router_unit_testing: # Runs all tests with the "router" keyword
     docker:
-      - image: cimg/python:3.11
+      - image: cimg/python:3.11@sha256:89910694a298ea0c861750804ddd100ac0ae8c6386055a8a68f7713dcdeb373d
         auth:
           username: ${DOCKERHUB_USERNAME}
           password: ${DOCKERHUB_PASSWORD}
@@ -603,7 +572,7 @@ jobs:
           path: test-results
   litellm_assistants_api_testing: # Runs all tests with the "assistants" keyword
     docker:
-      - image: cimg/python:3.13.1
+      - image: cimg/python:3.13.1@sha256:87b243ae80d154db75ce5e58af16c72c5dd4b1e23e5c7264a816e85e0c440c13
         auth:
           username: ${DOCKERHUB_USERNAME}
           password: ${DOCKERHUB_PASSWORD}
@@ -642,7 +611,7 @@ jobs:
           path: test-results
   llm_translation_testing:
     docker:
-      - image: cimg/python:3.11
+      - image: cimg/python:3.11@sha256:89910694a298ea0c861750804ddd100ac0ae8c6386055a8a68f7713dcdeb373d
         auth:
           username: ${DOCKERHUB_USERNAME}
           password: ${DOCKERHUB_PASSWORD}
@@ -699,7 +668,7 @@ jobs:
           path: test-results
   realtime_translation_testing:
     docker:
-      - image: cimg/python:3.11
+      - image: cimg/python:3.11@sha256:89910694a298ea0c861750804ddd100ac0ae8c6386055a8a68f7713dcdeb373d
         auth:
           username: ${DOCKERHUB_USERNAME}
           password: ${DOCKERHUB_PASSWORD}
@@ -749,7 +718,7 @@ jobs:
             - realtime_translation_coverage
   mcp_testing:
     docker:
-      - image: cimg/python:3.11
+      - image: cimg/python:3.11@sha256:89910694a298ea0c861750804ddd100ac0ae8c6386055a8a68f7713dcdeb373d
         auth:
           username: ${DOCKERHUB_USERNAME}
           password: ${DOCKERHUB_PASSWORD}
@@ -797,7 +766,7 @@ jobs:
             - mcp_coverage
   agent_testing:
     docker:
-      - image: cimg/python:3.11
+      - image: cimg/python:3.11@sha256:89910694a298ea0c861750804ddd100ac0ae8c6386055a8a68f7713dcdeb373d
         auth:
           username: ${DOCKERHUB_USERNAME}
           password: ${DOCKERHUB_PASSWORD}
@@ -845,7 +814,7 @@ jobs:
             - agent_coverage
   guardrails_testing:
     docker:
-      - image: cimg/python:3.11
+      - image: cimg/python:3.11@sha256:89910694a298ea0c861750804ddd100ac0ae8c6386055a8a68f7713dcdeb373d
         auth:
           username: ${DOCKERHUB_USERNAME}
           password: ${DOCKERHUB_PASSWORD}
@@ -894,7 +863,7 @@ jobs:
 
   google_generate_content_endpoint_testing:
     docker:
-      - image: cimg/python:3.11
+      - image: cimg/python:3.11@sha256:89910694a298ea0c861750804ddd100ac0ae8c6386055a8a68f7713dcdeb373d
         auth:
           username: ${DOCKERHUB_USERNAME}
           password: ${DOCKERHUB_PASSWORD}
@@ -943,7 +912,7 @@ jobs:
 
   llm_responses_api_testing:
     docker:
-      - image: cimg/python:3.11
+      - image: cimg/python:3.11@sha256:89910694a298ea0c861750804ddd100ac0ae8c6386055a8a68f7713dcdeb373d
         auth:
           username: ${DOCKERHUB_USERNAME}
           password: ${DOCKERHUB_PASSWORD}
@@ -990,7 +959,7 @@ jobs:
           path: test-results
   ocr_testing:
     docker:
-      - image: cimg/python:3.11
+      - image: cimg/python:3.11@sha256:89910694a298ea0c861750804ddd100ac0ae8c6386055a8a68f7713dcdeb373d
         auth:
           username: ${DOCKERHUB_USERNAME}
           password: ${DOCKERHUB_PASSWORD}
@@ -1038,7 +1007,7 @@ jobs:
             - ocr_coverage
   search_testing:
     docker:
-      - image: cimg/python:3.11
+      - image: cimg/python:3.11@sha256:89910694a298ea0c861750804ddd100ac0ae8c6386055a8a68f7713dcdeb373d
         auth:
           username: ${DOCKERHUB_USERNAME}
           password: ${DOCKERHUB_PASSWORD}
@@ -1087,7 +1056,7 @@ jobs:
   # Split litellm_mapped_tests into parallel jobs
   litellm_mapped_tests_proxy_part1:
     docker:
-      - image: cimg/python:3.11
+      - image: cimg/python:3.11@sha256:89910694a298ea0c861750804ddd100ac0ae8c6386055a8a68f7713dcdeb373d
         auth:
           username: ${DOCKERHUB_USERNAME}
           password: ${DOCKERHUB_PASSWORD}
@@ -1106,7 +1075,7 @@ jobs:
           path: test-results
   litellm_mapped_tests_proxy_part2:
     docker:
-      - image: cimg/python:3.11
+      - image: cimg/python:3.11@sha256:89910694a298ea0c861750804ddd100ac0ae8c6386055a8a68f7713dcdeb373d
         auth:
           username: ${DOCKERHUB_USERNAME}
           password: ${DOCKERHUB_PASSWORD}
@@ -1125,7 +1094,7 @@ jobs:
           path: test-results
   litellm_mapped_enterprise_tests:
     docker:
-      - image: cimg/python:3.11
+      - image: cimg/python:3.11@sha256:89910694a298ea0c861750804ddd100ac0ae8c6386055a8a68f7713dcdeb373d
         auth:
           username: ${DOCKERHUB_USERNAME}
           password: ${DOCKERHUB_PASSWORD}
@@ -1164,7 +1133,7 @@ jobs:
           path: test-results
   batches_testing:
     docker:
-      - image: cimg/python:3.11
+      - image: cimg/python:3.11@sha256:89910694a298ea0c861750804ddd100ac0ae8c6386055a8a68f7713dcdeb373d
         auth:
           username: ${DOCKERHUB_USERNAME}
           password: ${DOCKERHUB_PASSWORD}
@@ -1212,7 +1181,7 @@ jobs:
             - batches_coverage
   litellm_utils_testing:
     docker:
-      - image: cimg/python:3.11
+      - image: cimg/python:3.11@sha256:89910694a298ea0c861750804ddd100ac0ae8c6386055a8a68f7713dcdeb373d
         auth:
           username: ${DOCKERHUB_USERNAME}
           password: ${DOCKERHUB_PASSWORD}
@@ -1261,7 +1230,7 @@ jobs:
 
   pass_through_unit_testing:
     docker:
-      - image: cimg/python:3.11
+      - image: cimg/python:3.11@sha256:89910694a298ea0c861750804ddd100ac0ae8c6386055a8a68f7713dcdeb373d
         auth:
           username: ${DOCKERHUB_USERNAME}
           password: ${DOCKERHUB_PASSWORD}
@@ -1309,7 +1278,7 @@ jobs:
             - pass_through_unit_tests_coverage
   image_gen_testing:
     docker:
-      - image: cimg/python:3.11
+      - image: cimg/python:3.11@sha256:89910694a298ea0c861750804ddd100ac0ae8c6386055a8a68f7713dcdeb373d
         auth:
           username: ${DOCKERHUB_USERNAME}
           password: ${DOCKERHUB_PASSWORD}
@@ -1347,7 +1316,7 @@ jobs:
           path: test-results
   logging_testing:
     docker:
-      - image: cimg/python:3.11
+      - image: cimg/python:3.11@sha256:89910694a298ea0c861750804ddd100ac0ae8c6386055a8a68f7713dcdeb373d
         auth:
           username: ${DOCKERHUB_USERNAME}
           password: ${DOCKERHUB_PASSWORD}
@@ -1396,7 +1365,7 @@ jobs:
             - logging_coverage
   audio_testing:
     docker:
-      - image: cimg/python:3.11
+      - image: cimg/python:3.11@sha256:89910694a298ea0c861750804ddd100ac0ae8c6386055a8a68f7713dcdeb373d
         auth:
           username: ${DOCKERHUB_USERNAME}
           password: ${DOCKERHUB_PASSWORD}
@@ -1444,7 +1413,7 @@ jobs:
             - audio_coverage
   redis_caching_unit_tests:
     docker:
-      - image: cimg/python:3.11
+      - image: cimg/python:3.11@sha256:89910694a298ea0c861750804ddd100ac0ae8c6386055a8a68f7713dcdeb373d
         auth:
           username: ${DOCKERHUB_USERNAME}
           password: ${DOCKERHUB_PASSWORD}
@@ -1499,7 +1468,7 @@ jobs:
             - redis_caching_coverage
   installing_litellm_on_python:
     docker:
-      - image: cimg/python:3.11
+      - image: cimg/python:3.11@sha256:89910694a298ea0c861750804ddd100ac0ae8c6386055a8a68f7713dcdeb373d
         auth:
           username: ${DOCKERHUB_USERNAME}
           password: ${DOCKERHUB_PASSWORD}
@@ -1533,11 +1502,11 @@ jobs:
 
   installing_litellm_on_python_v2_migration_resolver:
     docker:
-      - image: cimg/python:3.11
+      - image: cimg/python:3.11@sha256:89910694a298ea0c861750804ddd100ac0ae8c6386055a8a68f7713dcdeb373d
         auth:
           username: ${DOCKERHUB_USERNAME}
           password: ${DOCKERHUB_PASSWORD}
-      - image: cimg/postgres:16.0
+      - image: cimg/postgres:16.0@sha256:b125148bc76e8e8eee5eb3ad6020a3a14110a14e8192f1c645128afebe2e2f84
         environment:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
@@ -1576,7 +1545,7 @@ jobs:
 
   installing_litellm_on_python_3_13:
     docker:
-      - image: cimg/python:3.13.1
+      - image: cimg/python:3.13.1@sha256:87b243ae80d154db75ce5e58af16c72c5dd4b1e23e5c7264a816e85e0c440c13
         auth:
           username: ${DOCKERHUB_USERNAME}
           password: ${DOCKERHUB_PASSWORD}
@@ -1689,7 +1658,7 @@ jobs:
 
   check_code_and_doc_quality:
     docker:
-      - image: cimg/python:3.11
+      - image: cimg/python:3.11@sha256:89910694a298ea0c861750804ddd100ac0ae8c6386055a8a68f7713dcdeb373d
         auth:
           username: ${DOCKERHUB_USERNAME}
           password: ${DOCKERHUB_PASSWORD}
@@ -1786,7 +1755,7 @@ jobs:
               -e POSTGRES_PASSWORD=postgres \
               -e POSTGRES_DB=litellm_test \
               -p 5432:5432 \
-              postgres:14
+              postgres:14@sha256:6a70deda415ec296f977890e11aba04a0db9f632a362e3fce45e845e3db74f26
       - wait_for_service:
           url: tcp://localhost:5432
           timeout: "60"
@@ -1901,7 +1870,7 @@ jobs:
               -e POSTGRES_PASSWORD=postgres \
               -e POSTGRES_DB=circle_test \
               -p 5432:5432 \
-              postgres:14
+              postgres:14@sha256:6a70deda415ec296f977890e11aba04a0db9f632a362e3fce45e845e3db74f26
       - wait_for_service:
           url: tcp://localhost:5432
           timeout: "60"
@@ -1947,11 +1916,6 @@ jobs:
               --config /app/config.yaml \
               --port 4000 \
               --detailed_debug \
-      - run:
-          name: Install curl
-          command: |
-            sudo apt-get update
-            sudo apt-get install -y curl
       - run:
           name: Start outputting logs
           command: docker logs -f my-app
@@ -2017,7 +1981,7 @@ jobs:
               -e POSTGRES_PASSWORD=postgres \
               -e POSTGRES_DB=circle_test \
               -p 5432:5432 \
-              postgres:14
+              postgres:14@sha256:6a70deda415ec296f977890e11aba04a0db9f632a362e3fce45e845e3db74f26
       - wait_for_service:
           url: tcp://localhost:5432
           timeout: "60"
@@ -2066,11 +2030,6 @@ jobs:
               --config /app/config.yaml \
               --port 4000 \
               --detailed_debug \
-      - run:
-          name: Install curl
-          command: |
-            sudo apt-get update
-            sudo apt-get install -y curl
       - run:
           name: Start outputting logs
           command: docker logs -f my-app
@@ -2136,7 +2095,7 @@ jobs:
               -e POSTGRES_PASSWORD=postgres \
               -e POSTGRES_DB=circle_test \
               -p 5432:5432 \
-              postgres:14
+              postgres:14@sha256:6a70deda415ec296f977890e11aba04a0db9f632a362e3fce45e845e3db74f26
       - wait_for_service:
           url: tcp://localhost:5432
           timeout: "60"
@@ -2287,7 +2246,7 @@ jobs:
               -e POSTGRES_PASSWORD=postgres \
               -e POSTGRES_DB=circle_test \
               -p 5432:5432 \
-              postgres:14
+              postgres:14@sha256:6a70deda415ec296f977890e11aba04a0db9f632a362e3fce45e845e3db74f26
       - wait_for_service:
           url: tcp://localhost:5432
           timeout: "60"
@@ -2325,11 +2284,6 @@ jobs:
               --config /app/config.yaml \
               --port 4000 \
               --detailed_debug \
-      - run:
-          name: Install curl
-          command: |
-            sudo apt-get update
-            sudo apt-get install -y curl
       - run:
           name: Start outputting logs
           command: docker logs -f my-app
@@ -2398,7 +2352,7 @@ jobs:
               -e POSTGRES_PASSWORD=postgres \
               -e POSTGRES_DB=circle_test \
               -p 5432:5432 \
-              postgres:14
+              postgres:14@sha256:6a70deda415ec296f977890e11aba04a0db9f632a362e3fce45e845e3db74f26
       - wait_for_service:
           url: tcp://localhost:5432
           timeout: "60"
@@ -2523,7 +2477,7 @@ jobs:
               -e POSTGRES_PASSWORD=postgres \
               -e POSTGRES_DB=circle_test \
               -p 5432:5432 \
-              postgres:14
+              postgres:14@sha256:6a70deda415ec296f977890e11aba04a0db9f632a362e3fce45e845e3db74f26
       - wait_for_service:
           url: tcp://localhost:5432
           timeout: "60"
@@ -2626,7 +2580,7 @@ jobs:
               -e POSTGRES_PASSWORD=postgres \
               -e POSTGRES_DB=circle_test \
               -p 5432:5432 \
-              postgres:14
+              postgres:14@sha256:6a70deda415ec296f977890e11aba04a0db9f632a362e3fce45e845e3db74f26
       - run:
           name: Wait for PostgreSQL to be ready
           command: |
@@ -2725,7 +2679,7 @@ jobs:
               -e POSTGRES_PASSWORD=postgres \
               -e POSTGRES_DB=circle_test \
               -p 5432:5432 \
-              postgres:14
+              postgres:14@sha256:6a70deda415ec296f977890e11aba04a0db9f632a362e3fce45e845e3db74f26
       - wait_for_service:
           url: tcp://localhost:5432
           timeout: "60"
@@ -2885,7 +2839,7 @@ jobs:
               -e POSTGRES_PASSWORD=postgres \
               -e POSTGRES_DB=circle_test \
               -p 5432:5432 \
-              postgres:14
+              postgres:14@sha256:6a70deda415ec296f977890e11aba04a0db9f632a362e3fce45e845e3db74f26
       - wait_for_service:
           url: tcp://localhost:5432
           timeout: "60"
@@ -2941,7 +2895,7 @@ jobs:
 
   upload-coverage:
     docker:
-      - image: cimg/python:3.9
+      - image: cimg/python:3.9@sha256:32e85ea8c78a81b316a1ef956c11a591d0c47d2cc864ace824e4dc7cf87b34e0
     steps:
       - checkout
       - attach_workspace:
@@ -2970,7 +2924,7 @@ jobs:
 
   ui_build:
     docker:
-      - image: cimg/node:20.19
+      - image: cimg/node:20.19@sha256:35e64883e8d21bc345b0a7b04c35ee46442c127607ed1d8d7d37d8a1ed76db81
         auth:
           username: ${DOCKERHUB_USERNAME}
           password: ${DOCKERHUB_PASSWORD}
@@ -3012,7 +2966,7 @@ jobs:
 
   ui_unit_tests:
     docker:
-      - image: cimg/node:20.19
+      - image: cimg/node:20.19@sha256:35e64883e8d21bc345b0a7b04c35ee46442c127607ed1d8d7d37d8a1ed76db81
         auth:
           username: ${DOCKERHUB_USERNAME}
           password: ${DOCKERHUB_PASSWORD}
@@ -3044,11 +2998,11 @@ jobs:
 
   e2e_ui_testing:
     docker:
-      - image: cimg/python:3.12-browsers
+      - image: cimg/python:3.12-browsers@sha256:b432899af01c9a311bf74f4f22e9ada2e5306d4b1b4383f8d29e1228a5844ef2
         auth:
           username: ${DOCKERHUB_USERNAME}
           password: ${DOCKERHUB_PASSWORD}
-      - image: cimg/postgres:16.0
+      - image: cimg/postgres:16.0@sha256:b125148bc76e8e8eee5eb3ad6020a3a14110a14e8192f1c645128afebe2e2f84
         environment:
           POSTGRES_USER: e2euser
           POSTGRES_PASSWORD: e2epassword
@@ -3210,7 +3164,7 @@ jobs:
               -e POSTGRES_PASSWORD=postgres \
               -e POSTGRES_DB=circle_test \
               -p 5432:5432 \
-              postgres:14
+              postgres:14@sha256:6a70deda415ec296f977890e11aba04a0db9f632a362e3fce45e845e3db74f26
       - wait_for_service:
           url: tcp://localhost:5432
           timeout: "60"
@@ -3254,12 +3208,6 @@ workflows:
               only:
                 - main
                 - /litellm_.*/
-      - mypy_linting:
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
       - semgrep:
           filters:
             branches:
@@ -3282,16 +3230,6 @@ workflows:
           filters:
             branches:
               only:
-                - main
-                - /litellm_.*/
-                - main
-                - /litellm_.*/
-                - main
-                - /litellm_.*/
-                - main
-                - /litellm_.*/
-                - main
-                - /litellm_.*/
                 - main
                 - /litellm_.*/
       - litellm_assistants_api_testing:
