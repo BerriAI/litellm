@@ -8,6 +8,7 @@ Use litellm with Anthropic SDK, Vertex AI SDK, Cohere SDK, etc.
 
 import json
 import os
+import re
 from typing import Any, Optional, Tuple, Union, cast
 
 import httpx
@@ -1500,6 +1501,10 @@ def get_vertex_base_url(vertex_location: Optional[str]) -> str:
     """
     if vertex_location == "global":
         return "https://aiplatform.googleapis.com/"
+    if vertex_location is not None and not re.match(
+        r"^[a-z][a-z0-9-]*$", vertex_location
+    ):
+        raise ValueError("Invalid vertex_location format")
     return f"https://{vertex_location}-aiplatform.googleapis.com/"
 
 
