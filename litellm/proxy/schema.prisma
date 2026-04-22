@@ -1264,5 +1264,5 @@ model LiteLLM_AdaptiveRouterSession {
   last_activity_at       DateTime @default(now()) @updatedAt
 
   @@id([session_id, router_name, model_name])
-  @@index([last_activity_at])
+  @@index([last_activity_at], map: "idx_adaptive_router_session_activity")
 }
