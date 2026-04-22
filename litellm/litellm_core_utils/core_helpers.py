@@ -454,20 +454,24 @@ def redact_nested_match_and_regex_keys(
     except Exception:
         return payload
 
-    def _walk(node: Any) -> None:
-        if isinstance(node, dict):
-            if "match" in node:
-                node["match"] = "[REDACTED]"
-            if "regex" in node:
-                node["regex"] = "[REDACTED]"
-            for value in node.values():
-                _walk(value)
-        elif isinstance(node, list):
-            for item in node:
-                _walk(item)
-
+    # Iterative traversal; `seen` guards against cyclic refs preserved by deepcopy.
     try:
-        _walk(redacted)
+        seen: set = set()
+        stack: List[Any] = [redacted]
+        while stack:
+            node = stack.pop()
+            node_id = id(node)
+            if node_id in seen:
+                continue
+            seen.add(node_id)
+            if isinstance(node, dict):
+                if "match" in node:
+                    node["match"] = "[REDACTED]"
+                if "regex" in node:
+                    node["regex"] = "[REDACTED]"
+                stack.extend(node.values())
+            elif isinstance(node, list):
+                stack.extend(node)
     except Exception:
         return payload
     return redacted
