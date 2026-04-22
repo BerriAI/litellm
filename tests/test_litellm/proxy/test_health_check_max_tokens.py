@@ -7,14 +7,14 @@ from unittest.mock import AsyncMock, patch, MagicMock
 @pytest.mark.asyncio
 async def test_update_litellm_params_max_tokens_default():
     """
-    Test that max_tokens defaults to 1 for non-wildcard models.
+    Test that max_tokens defaults to 16 for non-wildcard models.
     """
     model_info = {}
     litellm_params = {"model": "gpt-4"}
 
     updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
 
-    assert updated_params["max_tokens"] == 1
+    assert updated_params["max_tokens"] == 16
 
 
 @pytest.mark.asyncio
@@ -33,15 +33,15 @@ async def test_update_litellm_params_max_tokens_custom():
 @pytest.mark.asyncio
 async def test_update_litellm_params_max_tokens_wildcard():
     """
-    Test that max_tokens does NOT default to 1 for wildcard models.
+    Test that max_tokens is not set for wildcard models.
     """
     model_info = {}
     litellm_params = {"model": "openai/*"}
 
     updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
 
-    # Should not be set to 1
-    assert "max_tokens" not in updated_params or updated_params["max_tokens"] != 1
+    # Should not be set at all for wildcard models
+    assert "max_tokens" not in updated_params
 
 
 @pytest.mark.asyncio
