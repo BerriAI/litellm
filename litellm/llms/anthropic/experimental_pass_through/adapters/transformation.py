@@ -660,7 +660,9 @@ class LiteLLMAnthropicMessagesAdapter:
                 if len(tool_calls) > 0:
                     assistant_message["tool_calls"] = tool_calls  # type: ignore
                     assistant_message["reasoning_content"] = (
-                        "".join(reasoning_content_parts) if len(reasoning_content_parts) > 0 else " "
+                            "".join(reasoning_content_parts)
+                            if len(reasoning_content_parts) > 0
+                            else None
                     )  # type: ignore
                 if len(thinking_blocks) > 0:
                     assistant_message["thinking_blocks"] = thinking_blocks  # type: ignore
