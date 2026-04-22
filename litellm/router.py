@@ -825,60 +825,76 @@ class Router:
                     f"or the 'routing_strategy' parameter if using the Router SDK directly."
                 )
 
+        # Initialize the logger for the global routing strategy
+        self._ensure_routing_strategy_logger(routing_strategy, routing_strategy_args)
+
+    def _ensure_routing_strategy_logger(
+        self, routing_strategy: Union[RoutingStrategy, str], routing_strategy_args: Optional[dict] = None
+    ):
+        """
+        Lazy initialization of routing strategy loggers.
+        Creates logger if it doesn't exist yet. Supports per-request routing strategy overrides.
+        """
+        routing_strategy_args = routing_strategy_args or {}
+        
         if (
             routing_strategy == RoutingStrategy.LEAST_BUSY.value
             or routing_strategy == RoutingStrategy.LEAST_BUSY
         ):
-            self.leastbusy_logger = LeastBusyLoggingHandler(router_cache=self.cache)
-            ## add callback
-            if isinstance(litellm.input_callback, list):
-                litellm.input_callback.append(self.leastbusy_logger)  # type: ignore
-            else:
-                litellm.input_callback = [self.leastbusy_logger]  # type: ignore
-            if isinstance(litellm.callbacks, list):
-                litellm.logging_callback_manager.add_litellm_callback(self.leastbusy_logger)  # type: ignore
+            if not hasattr(self, 'leastbusy_logger') or self.leastbusy_logger is None:
+                self.leastbusy_logger = LeastBusyLoggingHandler(router_cache=self.cache)
+                ## add callback
+                if isinstance(litellm.input_callback, list):
+                    litellm.input_callback.append(self.leastbusy_logger)  # type: ignore
+                else:
+                    litellm.input_callback = [self.leastbusy_logger]  # type: ignore
+                if isinstance(litellm.callbacks, list):
+                    litellm.logging_callback_manager.add_litellm_callback(self.leastbusy_logger)  # type: ignore
         elif (
             routing_strategy == RoutingStrategy.USAGE_BASED_ROUTING.value
             or routing_strategy == RoutingStrategy.USAGE_BASED_ROUTING
         ):
-            self.lowesttpm_logger = LowestTPMLoggingHandler(
-                router_cache=self.cache,
-                routing_args=routing_strategy_args,
-            )
-            if isinstance(litellm.callbacks, list):
-                litellm.logging_callback_manager.add_litellm_callback(self.lowesttpm_logger)  # type: ignore
+            if not hasattr(self, 'lowesttpm_logger') or self.lowesttpm_logger is None:
+                self.lowesttpm_logger = LowestTPMLoggingHandler(
+                    router_cache=self.cache,
+                    routing_args=routing_strategy_args,
+                )
+                if isinstance(litellm.callbacks, list):
+                    litellm.logging_callback_manager.add_litellm_callback(self.lowesttpm_logger)  # type: ignore
         elif (
             routing_strategy == RoutingStrategy.USAGE_BASED_ROUTING_V2.value
             or routing_strategy == RoutingStrategy.USAGE_BASED_ROUTING_V2
         ):
-            self.lowesttpm_logger_v2 = LowestTPMLoggingHandler_v2(
-                router_cache=self.cache,
-                routing_args=routing_strategy_args,
-            )
-            if isinstance(litellm.callbacks, list):
-                litellm.logging_callback_manager.add_litellm_callback(self.lowesttpm_logger_v2)  # type: ignore
+            if not hasattr(self, 'lowesttpm_logger_v2') or self.lowesttpm_logger_v2 is None:
+                self.lowesttpm_logger_v2 = LowestTPMLoggingHandler_v2(
+                    router_cache=self.cache,
+                    routing_args=routing_strategy_args,
+                )
+                if isinstance(litellm.callbacks, list):
+                    litellm.logging_callback_manager.add_litellm_callback(self.lowesttpm_logger_v2)  # type: ignore
         elif (
             routing_strategy == RoutingStrategy.LATENCY_BASED.value
             or routing_strategy == RoutingStrategy.LATENCY_BASED
         ):
-            self.lowestlatency_logger = LowestLatencyLoggingHandler(
-                router_cache=self.cache,
-                routing_args=routing_strategy_args,
-            )
-            if isinstance(litellm.callbacks, list):
-                litellm.logging_callback_manager.add_litellm_callback(self.lowestlatency_logger)  # type: ignore
+            if not hasattr(self, 'lowestlatency_logger') or self.lowestlatency_logger is None:
+                self.lowestlatency_logger = LowestLatencyLoggingHandler(
+                    router_cache=self.cache,
+                    routing_args=routing_strategy_args,
+                )
+                if isinstance(litellm.callbacks, list):
+                    litellm.logging_callback_manager.add_litellm_callback(self.lowestlatency_logger)  # type: ignore
         elif (
             routing_strategy == RoutingStrategy.COST_BASED.value
             or routing_strategy == RoutingStrategy.COST_BASED
         ):
-            self.lowestcost_logger = LowestCostLoggingHandler(
-                router_cache=self.cache,
-                routing_args={},
-            )
-            if isinstance(litellm.callbacks, list):
-                litellm.logging_callback_manager.add_litellm_callback(self.lowestcost_logger)  # type: ignore
-        else:
-            pass
+            if not hasattr(self, 'lowestcost_logger') or self.lowestcost_logger is None:
+                self.lowestcost_logger = LowestCostLoggingHandler(
+                    router_cache=self.cache,
+                    routing_args={},
+                )
+                if isinstance(litellm.callbacks, list):
+                    litellm.logging_callback_manager.add_litellm_callback(self.lowestcost_logger)  # type: ignore
+        # simple-shuffle doesn't need a logger
 
     def initialize_assistants_endpoint(self):
         ## INITIALIZE PASS THROUGH ASSISTANTS ENDPOINT ##
@@ -9440,6 +9456,10 @@ class Router:
             and routing_strategy_to_use != "latency-based-routing"
             and routing_strategy_to_use != "least-busy"
         ):  # prevent regressions for other routing strategies, that don't have async get available deployments implemented.
+            # Preserve routing_strategy in request_kwargs for sync fallthrough
+            if request_kwargs is None:
+                request_kwargs = {}
+            request_kwargs["routing_strategy"] = routing_strategy_to_use
             return self.get_available_deployment(
                 model=model,
                 messages=messages,
@@ -9485,6 +9505,9 @@ class Router:
                 return healthy_deployments[0]
 
             start_time = time.time()
+            # Ensure logger is initialized for the routing strategy (lazy init)
+            self._ensure_routing_strategy_logger(routing_strategy_to_use, self.routing_strategy_args)
+            
             if (
                 routing_strategy_to_use == "usage-based-routing-v2"
                 and self.lowesttpm_logger_v2 is not None
@@ -9653,6 +9676,9 @@ class Router:
                 self.routing_strategy
             )  # Pass-through uses global routing strategy
 
+            # Ensure logger is initialized (lazy init)
+            self._ensure_routing_strategy_logger(routing_strategy_to_use, self.routing_strategy_args)
+
             if (
                 routing_strategy_to_use == "usage-based-routing-v2"
                 and self.lowesttpm_logger_v2 is not None
@@ -9694,6 +9720,8 @@ class Router:
                         healthy_deployments=pass_through_deployments,  # type: ignore
                     )
                 )
+            else:
+                deployment = None
 
             if deployment is None:
                 exception = await async_raise_no_deployment_exception(
@@ -9801,9 +9829,10 @@ class Router:
         # When this was no explicit we had several issues with fallbacks timing out
 
         # Support per-request routing_strategy override from key/team config
-        routing_strategy_to_use = (request_kwargs or {}).pop(
-            "routing_strategy", None
-        ) or self.routing_strategy
+        if request_kwargs is not None:
+            routing_strategy_to_use = request_kwargs.pop("routing_strategy", None) or self.routing_strategy
+        else:
+            routing_strategy_to_use = self.routing_strategy
 
         model, healthy_deployments = self._common_checks_available_deployment(
             model=model,
@@ -9873,6 +9902,9 @@ class Router:
                 cooldown_list=_cooldown_list,
             )
 
+        # Ensure logger is initialized for the routing strategy (lazy init)
+        self._ensure_routing_strategy_logger(routing_strategy_to_use, self.routing_strategy_args)
+        
         if (
             routing_strategy_to_use == "least-busy"
             and self.leastbusy_logger is not None
@@ -9889,7 +9921,7 @@ class Router:
                 model=model,
             )
         elif (
-            self.routing_strategy == "latency-based-routing"
+            routing_strategy_to_use == "latency-based-routing"
             and self.lowestlatency_logger is not None
         ):
             deployment = self.lowestlatency_logger.get_available_deployments(
