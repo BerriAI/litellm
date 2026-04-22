@@ -2112,6 +2112,82 @@ def test_sonnet_4_6_reasoning_effort_to_transform_request_payload():
     assert "budget_tokens" not in result["thinking"]
 
 
+def _force_local_model_cost_map():
+    """Force litellm to use the bundled model_prices JSON so the new
+    supports_temperature / supports_top_p flags on claude-opus-4-7 are
+    visible. Follows the pattern used in
+    tests/litellm_utils_tests/test_utils.py::test_supports_reasoning.
+    """
+    import os
+
+    import litellm
+
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+
+def test_opus_4_7_excludes_temperature_and_top_p_from_supported_params():
+    """Claude Opus 4.7 deprecated `temperature` and `top_p` — the Anthropic API
+    returns 400 "temperature is deprecated for this model" when either is sent.
+    They must not appear in get_supported_openai_params. Gated via
+    supports_temperature / supports_top_p flags in
+    model_prices_and_context_window.json.
+    """
+    _force_local_model_cost_map()
+    config = AnthropicConfig()
+
+    for model in ("claude-opus-4-7", "claude-opus-4-7-20260416"):
+        params = config.get_supported_openai_params(model=model)
+        assert "temperature" not in params, f"temperature should be dropped for {model}"
+        assert "top_p" not in params, f"top_p should be dropped for {model}"
+
+
+def test_opus_4_6_still_supports_temperature_and_top_p():
+    """Claude Opus 4.6 still accepts temperature/top_p — the deprecation is
+    narrowly scoped to 4.7. This test guards against over-stripping.
+    """
+    _force_local_model_cost_map()
+    config = AnthropicConfig()
+
+    params = config.get_supported_openai_params(model="claude-opus-4-6")
+    assert "temperature" in params
+    assert "top_p" in params
+
+
+def test_opus_4_7_map_openai_params_drops_temperature_and_top_p():
+    """Even if a caller forces temperature/top_p into map_openai_params, the
+    transformation layer must not forward them to the Anthropic request for 4.7.
+    """
+    _force_local_model_cost_map()
+    config = AnthropicConfig()
+
+    mapped = config.map_openai_params(
+        non_default_params={"temperature": 0.3, "top_p": 0.9},
+        optional_params={},
+        model="claude-opus-4-7",
+        drop_params=False,
+    )
+
+    assert "temperature" not in mapped
+    assert "top_p" not in mapped
+
+
+def test_opus_4_6_map_openai_params_preserves_temperature_and_top_p():
+    """4.6 keeps the existing forward-as-is behavior."""
+    _force_local_model_cost_map()
+    config = AnthropicConfig()
+
+    mapped = config.map_openai_params(
+        non_default_params={"temperature": 0.3, "top_p": 0.9},
+        optional_params={},
+        model="claude-opus-4-6",
+        drop_params=False,
+    )
+
+    assert mapped.get("temperature") == 0.3
+    assert mapped.get("top_p") == 0.9
+
+
 def test_reasoning_effort_maps_to_budget_thinking_for_non_opus_4_6():
     """
     Test that reasoning_effort maps to budget-based thinking config for non-Opus 4.6 models.

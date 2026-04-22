@@ -220,7 +220,30 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             params.append("thinking")
             params.append("reasoning_effort")
 
+        # Drop params whose supports_* flag is explicitly False in
+        # model_prices_and_context_window.json (e.g. claude-opus-4-7 sets
+        # supports_temperature=false and supports_top_p=false because the
+        # Anthropic API returns 400 for either on that model).
+        params = [p for p in params if not self._param_explicitly_unsupported(model, p)]
+
         return params
+
+    def _param_explicitly_unsupported(self, model: str, param: str) -> bool:
+        """True iff model_info has `supports_<param>` explicitly set to False.
+
+        Imports get_model_info lazily to avoid the module-level cyclic
+        import litellm.utils ↔ litellm.llms.anthropic.chat.transformation
+        (get_model_info is defined late in utils.py, after the cycle).
+        """
+        from litellm.utils import get_model_info
+
+        try:
+            model_info = get_model_info(
+                model=model, custom_llm_provider=self.custom_llm_provider
+            )
+        except Exception:
+            return False
+        return bool(model_info) and model_info.get(f"supports_{param}") is False
 
     @staticmethod
     def filter_anthropic_output_schema(schema: Dict[str, Any]) -> Dict[str, Any]:
@@ -1005,9 +1028,13 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 if _value is not None:
                     optional_params["stop_sequences"] = _value
             elif param == "temperature":
-                optional_params["temperature"] = value
+                # Gated by supports_temperature in model_prices_and_context_window.json.
+                if not self._param_explicitly_unsupported(model, "temperature"):
+                    optional_params["temperature"] = value
             elif param == "top_p":
-                optional_params["top_p"] = value
+                # Gated by supports_top_p in model_prices_and_context_window.json.
+                if not self._param_explicitly_unsupported(model, "top_p"):
+                    optional_params["top_p"] = value
             elif param == "response_format" and isinstance(value, dict):
                 if any(
                     substring in model

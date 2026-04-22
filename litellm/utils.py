@@ -5880,6 +5880,8 @@ def _get_model_info_helper(  # noqa: PLR0915
                 supports_reasoning=_model_info.get("supports_reasoning", None),
                 supports_none_reasoning_effort=_model_info.get("supports_none_reasoning_effort", None),
                 supports_xhigh_reasoning_effort=_model_info.get("supports_xhigh_reasoning_effort", None),
+                supports_temperature=_model_info.get("supports_temperature", None),
+                supports_top_p=_model_info.get("supports_top_p", None),
                 supports_computer_use=_model_info.get("supports_computer_use", None),
                 search_context_cost_per_query=_model_info.get(
                     "search_context_cost_per_query", None
@@ -5966,6 +5968,8 @@ def get_model_info(
             supports_web_search: Optional[bool]
             supports_url_context: Optional[bool]
             supports_reasoning: Optional[bool]
+            supports_temperature: Optional[bool]
+            supports_top_p: Optional[bool]
     Raises:
         Exception: If the model is not mapped yet.
 
