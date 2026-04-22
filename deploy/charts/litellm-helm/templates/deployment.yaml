@@ -75,6 +75,8 @@ spec:
               value: {{ .Release.Name }}-postgresql
             - name: DATABASE_NAME
               value: litellm
+            - name: DATABASE_URL
+              value: postgresql://{{ .Values.postgresql.auth.username }}:{{ .Values.postgresql.auth.password }}@{{ .Release.Name }}-postgresql/{{ .Values.postgresql.auth.database }}
             {{- else if .Values.db.useExisting }}
             - name: DATABASE_USERNAME
               valueFrom:

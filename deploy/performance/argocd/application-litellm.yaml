@@ -1,0 +1,34 @@
+# Argo CD Application: LiteLLM Helm chart → namespace performance.
+#
+# Chart: deploy/charts/litellm-helm
+# Values: deploy/performance/helm/litellm-values.yaml
+#
+# Install Argo CD (once): see deploy/performance/README.md.
+#
+# Apply:
+#   kubectl apply -n argocd -f deploy/performance/argocd/application-litellm.yaml
+#
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: litellm-helm
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/BerriAI/litellm.git
+    targetRevision: litellm_eks_perf_bench_suite #temporary
+    path: deploy/charts/litellm-helm
+    helm:
+      releaseName: litellm
+      valueFiles:
+        - ../../performance/helm/litellm-values.yaml
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: performance
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

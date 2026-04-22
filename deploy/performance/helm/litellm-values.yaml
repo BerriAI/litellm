@@ -1,0 +1,90 @@
+# Helm values for EKS performance stack: LiteLLM + Bitnami Postgres + Bitnami Redis (chart subcharts).
+# Argo CD: deploy/performance/argocd/application-litellm.yaml
+#
+# Override postgresql.auth and redis.auth passwords for non-dev clusters.
+
+replicaCount: 2
+
+args:
+  - --config
+  - /etc/litellm/config.yaml
+  - --num_workers
+  - "2"
+  - --max_requests_before_restart
+  - "20000"
+
+service:
+  type: LoadBalancer
+  port: 4000
+
+nodeSelector:
+  workload: litellm
+
+securityContext:
+  capabilities:
+    add:
+      - SYS_PTRACE
+
+resources:
+  requests:
+    cpu: "500m"
+    memory: "1Gi"
+  limits:
+    cpu: "4"
+    memory: "4Gi"
+
+readinessProbe:
+  initialDelaySeconds: 10
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 6
+
+livenessProbe:
+  initialDelaySeconds: 45
+  periodSeconds: 30
+  timeoutSeconds: 10
+  failureThreshold: 3
+
+startupProbe:
+  failureThreshold: 30
+
+envVars:
+  STORE_MODEL_IN_DB: "True"
+  ENV: "production"
+  LITELLM_ENVIRONMENT: "production"
+
+db:
+  deployStandalone: true
+  useExisting: false
+
+redis:
+  enabled: true
+  architecture: standalone
+
+migrationJob:
+  hooks:
+    argocd:
+      enabled: true
+
+proxy_config:
+  model_list:
+    - model_name: fake-openai-endpoint
+      litellm_params:
+        model: openai/fake-model
+        api_key: fake-key
+        api_base: https://exampleopenaiendpoint-production.up.railway.app/
+        timeout: 40
+  general_settings:
+    master_key: os.environ/PROXY_MASTER_KEY
+    health_check_details: false
+    database_url: os.environ/DATABASE_URL
+  litellm_settings:
+    drop_params: true
+    telemetry: false
+    callbacks: []
+    cache: true
+    cache_params:
+      type: redis
+      supported_call_types: []
+
+extraResources: []

@@ -1,0 +1,11 @@
+# Non-secret env. DATABASE_URL, DATABASE_PASSWORD, PROXY_MASTER_KEY: Secret litellm-dotenv (required).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: litellm-static-env
+data:
+  STORE_MODEL_IN_DB: "True"
+  ENV: "production"
+  LITELLM_ENVIRONMENT: "production"
+  REDIS_HOST: "redis"
+  REDIS_PORT: "6379"

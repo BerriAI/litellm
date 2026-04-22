@@ -4,10 +4,65 @@ model_list:
       model: openai/fake-model
       api_key: fake-key
       api_base: https://exampleopenaiendpoint-production.up.railway.app/
+      timeout: 40
+
+  - model_name: fake-openai-gpt4
+    litellm_params:
+      model: gpt-4
+      api_key: fake-key
+      # Docker Compose service `mock-llm-provider` (host:8090). Requires network_mock: False for real HTTP.
+      api_base: http://mock-llm-provider/llm/
+
+  - model_name: fake-openai-gpt4
+    litellm_params:
+      model: gpt-4
+      api_key: fake-key
+      # Docker Compose service `mock-llm-provider` (host:8090). Requires network_mock: False for real HTTP.
+      api_base: http://mock-llm-provider/llm/
 
 general_settings:
   master_key: sk-1234
+  health_check_details: False
+  database_url: "postgresql://llmproxy:dbpassword9090@127.0.0.1:5432/litellm" # 👈 KEY CHANGE
+  # disable_spend_updates: True
+  # use_redis_transaction_buffer: True
 
 litellm_settings:
+  network_mock: False # must be false to call mock-llm-provider over the Docker network
+  json_logs: True
   drop_params: True
   telemetry: False
+  callbacks: ["prometheus"]
+  public_routes: ["LiteLLMRoutes.public_routes", "/health/liveliness"]
+  num_retries: 0
+
+  # Redis-backed cache (Compose service `redis`; env RATELIMIT_* in docker-compose.yml)
+  cache: True
+  cache_params:
+    # type: "local"
+    type: "redis"
+    host: os.environ/RATELIMIT_REDIS_ENDPOINT
+    port: os.environ/RATELIMIT_REDIS_PORT
+    # # Uncomment when Redis requires AUTH (set `REDIS_DEFAULT_PASSWORD` in `.env`):
+    # # password: os.environ/REDIS_DEFAULT_PASSWORD
+    # mode: "default_off"
+    # ttl: 60
+    # max_connections: 500
+    supported_call_types: [] # cache opt-in; Redis still used for router / rate limits when configured
+
+# Router Redis (same Compose Redis). Omit redis_password in `.env` if Redis has no auth.
+router_settings:
+  redis_host: os.environ/RATELIMIT_REDIS_ENDPOINT
+  redis_port: os.environ/RATELIMIT_REDIS_PORT
+  # redis_password: os.environ/REDIS_DEFAULT_PASSWORD
+
+# Uncomment when `opinionated_api` is installed (iFood production shape):
+# guardrails:
+#   - guardrail_name: "llm-firewall"
+#     litellm_params:
+#       guardrail: opinionated_api.custom_guardrails.llm_firewall.LLMFirewall
+#       mode: "during_call"
+#   - guardrail_name: "llm-firewall-post"
+#     litellm_params:
+#       guardrail: opinionated_api.custom_guardrails.llm_firewall.LLMFirewall
+#       mode: "post_call"

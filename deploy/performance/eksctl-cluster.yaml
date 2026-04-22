@@ -1,0 +1,30 @@
+# EKS cluster — single managed node group for LiteLLM + in-cluster Bitnami Postgres/Redis.
+# Cluster name (metadata.name) is litellm-performance so you can create it while the old cluster
+# (e.g. litellm-perf) is still deleting. Point kubectl at this cluster after create:
+#   aws eks update-kubeconfig --region us-east-1 --name litellm-performance
+#
+# Node label matches Helm nodeSelector in deploy/performance/helm/litellm-values.yaml (`workload: litellm`).
+#
+# Prometheus / Grafana: deploy via Argo (`argocd/application-kube-prometheus-stack.yaml`), not via eksctl.
+# Bitnami charts only package Postgres/Redis; they do not define AWS node pools.
+#
+# Create:  eksctl create cluster -f deploy/performance/eksctl-cluster.yaml
+# Delete:  eksctl delete cluster -f deploy/performance/eksctl-cluster.yaml
+#
+# To resize or add node groups later: `eksctl create nodegroup` / console, then drain old groups if needed.
+
+apiVersion: eksctl.io/v1alpha5
+kind: ClusterConfig
+
+metadata:
+  name: litellm-performance
+  region: us-east-1
+
+managedNodeGroups:
+  - name: litellm
+    instanceType: t3.xlarge
+    desiredCapacity: 1
+    minSize: 1
+    maxSize: 1
+    labels:
+      workload: litellm

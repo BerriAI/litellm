@@ -1,0 +1,29 @@
+# Legacy: in-cluster Postgres + Redis + Prometheus (no Helm). Prefer Helm + Argo (../..).
+#
+# Apply from repo root:
+#   kubectl kustomize deploy/performance/legacy/kustomize --load-restrictor=LoadRestrictionsNone | kubectl apply -f -
+#
+# Requires Secret litellm-dotenv: DATABASE_URL, DATABASE_PASSWORD, PROXY_MASTER_KEY — see parent README.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: performance
+
+resources:
+  - namespace.yaml
+  - postgres.yaml
+  - redis.yaml
+  - litellm-static-env.yaml
+  - prometheus.yaml
+  - litellm.yaml
+
+configMapGenerator:
+  - name: dev-config
+    files:
+      - config.yaml=../dev-config.yaml
+  - name: prometheus-config
+    files:
+      - prometheus.yml=../../../../prometheus.yml
+
+generatorOptions:
+  disableNameSuffixHash: true

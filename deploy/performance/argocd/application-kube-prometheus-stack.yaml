@@ -1,0 +1,29 @@
+# Argo CD Application: kube-prometheus-stack → namespace monitoring.
+#
+# Chart: https://github.com/prometheus-community/helm-charts/tree/main/charts/kube-prometheus-stack
+#
+# Apply:
+#   kubectl apply -n argocd -f deploy/performance/argocd/application-kube-prometheus-stack.yaml
+#
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: kube-prometheus-stack
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/prometheus-community/helm-charts.git
+    targetRevision: main
+    path: charts/kube-prometheus-stack
+    helm:
+      releaseName: kube-prometheus-stack
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: monitoring
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

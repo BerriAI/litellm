@@ -15,7 +15,7 @@ kind: Deployment
 metadata:
   name: litellm
 spec:
-  replicas: 1
+  replicas: 2
   selector:
     matchLabels:
       app: litellm
@@ -24,6 +24,8 @@ spec:
       labels:
         app: litellm
     spec:
+      nodeSelector:
+        workload: litellm
       containers:
         - name: litellm
           image: ghcr.io/berriai/litellm:v1.83.3-stable

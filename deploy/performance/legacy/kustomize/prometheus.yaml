@@ -23,6 +23,8 @@ spec:
       labels:
         app: prometheus
     spec:
+      nodeSelector:
+        workload: prometheus
       containers:
         - name: prometheus
           image: prom/prometheus

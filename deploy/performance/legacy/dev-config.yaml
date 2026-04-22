@@ -1,5 +1,8 @@
-# Proxy config for performance-eks: Neon (DATABASE_URL from Secret) + in-memory cache (no Redis).
-# DB URL and master key must come from env — see README (litellm-dotenv Secret).
+# Proxy config for legacy Kustomize only (in-cluster Postgres + Redis). See kustomize/kustomization.yaml.
+# Helm + Argo: use deploy/performance/helm/litellm-values.yaml → proxy_config.
+#
+# Legacy Secret litellm-dotenv: DATABASE_URL, DATABASE_PASSWORD (same value as in URL), PROXY_MASTER_KEY.
+# Redis: litellm-static-env ConfigMap sets REDIS_HOST / REDIS_PORT for this overlay.
 
 model_list:
   - model_name: fake-openai-endpoint
@@ -8,12 +11,6 @@ model_list:
       api_key: fake-key
       api_base: https://exampleopenaiendpoint-production.up.railway.app/
       timeout: 40
-
-  - model_name: fake-openai-gpt4
-    litellm_params:
-      model: gpt-4
-      api_key: fake-key
-      api_base: http://mock-llm-provider/llm/
 
 general_settings:
   master_key: os.environ/PROXY_MASTER_KEY
@@ -25,10 +22,10 @@ litellm_settings:
   json_logs: True
   drop_params: True
   telemetry: False
-  callbacks: ["prometheus"]
+  callbacks: []
   public_routes: ["LiteLLMRoutes.public_routes", "/health/liveliness"]
   num_retries: 0
   cache: True
   cache_params:
-    type: local
+    type: redis
     supported_call_types: []
