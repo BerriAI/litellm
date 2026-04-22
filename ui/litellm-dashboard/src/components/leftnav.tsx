@@ -133,11 +133,17 @@ const menuGroups: MenuGroup[] = [
         icon: <ToolOutlined />,
       },
       {
+        key: "skills",
+        page: "skills",
+        label: "Skills",
+        icon: <ApiOutlined />,
+        roles: all_admin_roles,
+      },
+      {
         key: "guardrails",
         page: "guardrails",
         label: "Guardrails",
         icon: <SafetyOutlined />,
-        roles: all_admin_roles,
       },
       {
         key: "policies",
@@ -268,6 +274,7 @@ const menuGroups: MenuGroup[] = [
         label: "AI Hub",
         icon: <AppstoreOutlined />,
       },
+
       {
         key: "learning-resources",
         page: "learning-resources",
@@ -307,13 +314,6 @@ const menuGroups: MenuGroup[] = [
             page: "tag-management",
             label: "Tag Management",
             icon: <TagsOutlined />,
-            roles: all_admin_roles,
-          },
-          {
-            key: "claude-code-plugins",
-            page: "claude-code-plugins",
-            label: "Claude Code Plugins",
-            icon: <ToolOutlined />,
             roles: all_admin_roles,
           },
           {

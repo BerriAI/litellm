@@ -22,6 +22,7 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.management_endpoints.model_management_endpoints import (
     ModelManagementAuthChecks,
+    _get_team_deployments,
     clear_cache,
 )
 from litellm.proxy.utils import PrismaClient
@@ -53,44 +54,24 @@ class MockPrismaClient:
             )
         return None
 
-    async def find_many(self, where):
-        # Filter sibling deployments by team_id if where clause specifies it
+    async def find_many(self, where=None):
+        # Filter sibling deployments based on where clause
         if not self.sibling_deployments:
             return []
 
-        # Extract team_id from where clause if present
-        team_id_filter = None
-        if where and "model_info" in where:
-            model_info_filter = where["model_info"]
-            if isinstance(model_info_filter, dict) and "path" in model_info_filter:
-                if (
-                    model_info_filter["path"] == ["team_id"]
-                    and "equals" in model_info_filter
-                ):
-                    team_id_filter = model_info_filter["equals"]
+        results = self.sibling_deployments
 
-        # Filter deployments by team_id if specified
-        if team_id_filter:
+        # Support model_name startswith filter (used by _get_team_deployments)
+        if where and "model_name" in where:
+            model_name_filter = where["model_name"]
+            if (
+                isinstance(model_name_filter, dict)
+                and "startswith" in model_name_filter
+            ):
+                prefix = model_name_filter["startswith"]
+                results = [d for d in results if d.model_name.startswith(prefix)]
 
-            def _get_team_id(model_info):
-                if isinstance(model_info, dict):
-                    return model_info.get("team_id")
-                if isinstance(model_info, str):
-                    try:
-                        parsed = json.loads(model_info)
-                    except (TypeError, ValueError):
-                        return None
-                    if isinstance(parsed, dict):
-                        return parsed.get("team_id")
-                return None
-
-            return [
-                d
-                for d in self.sibling_deployments
-                if _get_team_id(d.model_info) == team_id_filter
-            ]
-
-        return self.sibling_deployments
+        return results
 
     @property
     def litellm_teamtable(self):
@@ -432,12 +413,12 @@ class TestClearCache:
         mock_prisma = MagicMock()
         mock_logging = MagicMock()
 
-        with patch("litellm.proxy.proxy_server.llm_router", mock_router), patch(
-            "litellm.proxy.proxy_server.proxy_config", mock_config
-        ), patch("litellm.proxy.proxy_server.prisma_client", mock_prisma), patch(
-            "litellm.proxy.proxy_server.proxy_logging_obj", mock_logging
-        ), patch(
-            "litellm.proxy.proxy_server.verbose_proxy_logger"
+        with (
+            patch("litellm.proxy.proxy_server.llm_router", mock_router),
+            patch("litellm.proxy.proxy_server.proxy_config", mock_config),
+            patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
+            patch("litellm.proxy.proxy_server.proxy_logging_obj", mock_logging),
+            patch("litellm.proxy.proxy_server.verbose_proxy_logger"),
         ):
             await clear_cache()
 
@@ -483,12 +464,12 @@ class TestClearCache:
         mock_prisma = MagicMock()
         mock_logging = MagicMock()
 
-        with patch("litellm.proxy.proxy_server.llm_router", mock_router), patch(
-            "litellm.proxy.proxy_server.proxy_config", mock_config
-        ), patch("litellm.proxy.proxy_server.prisma_client", mock_prisma), patch(
-            "litellm.proxy.proxy_server.proxy_logging_obj", mock_logging
-        ), patch(
-            "litellm.proxy.proxy_server.verbose_proxy_logger"
+        with (
+            patch("litellm.proxy.proxy_server.llm_router", mock_router),
+            patch("litellm.proxy.proxy_server.proxy_config", mock_config),
+            patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
+            patch("litellm.proxy.proxy_server.proxy_logging_obj", mock_logging),
+            patch("litellm.proxy.proxy_server.verbose_proxy_logger"),
         ):
             await clear_cache()
 
@@ -544,12 +525,15 @@ class TestUpdatePublicModelGroups:
 
         original_value = getattr(litellm, "public_model_groups", None)
         try:
-            with patch(
-                "litellm.proxy.proxy_server.proxy_config",
-                mock_proxy_config,
-            ), patch(
-                "litellm.proxy.proxy_server.store_model_in_db",
-                True,
+            with (
+                patch(
+                    "litellm.proxy.proxy_server.proxy_config",
+                    mock_proxy_config,
+                ),
+                patch(
+                    "litellm.proxy.proxy_server.store_model_in_db",
+                    True,
+                ),
             ):
                 result = await update_public_model_groups(
                     request=request,
@@ -654,12 +638,15 @@ class TestTeamModelSiblingRouting:
                 ),
                 model_info=ModelInfo(team_id=team_id),
             )
-            with patch(
-                "litellm.proxy.management_endpoints.model_management_endpoints._add_model_to_db",
-                side_effect=mock_add_model_to_db,
-            ), patch(
-                "litellm.proxy.management_endpoints.model_management_endpoints.team_model_add",
-                mock_team_model_add,
+            with (
+                patch(
+                    "litellm.proxy.management_endpoints.model_management_endpoints._add_model_to_db",
+                    side_effect=mock_add_model_to_db,
+                ),
+                patch(
+                    "litellm.proxy.management_endpoints.model_management_endpoints.team_model_add",
+                    mock_team_model_add,
+                ),
             ):
                 await _add_team_model_to_db(
                     model_params=dep,
@@ -798,14 +785,18 @@ class TestTeamModelUpdate:
         )
         prisma_client = MockPrismaClient(team_exists=True)
 
-        with patch(
-            "litellm.proxy.proxy_server.premium_user",
-            True,
-        ), patch(
-            "litellm.proxy.management_endpoints.model_management_endpoints.team_model_add"
-        ) as mock_team_model_add, patch(
-            "litellm.proxy.management_endpoints.model_management_endpoints.update_team"
-        ) as mock_update_team:
+        with (
+            patch(
+                "litellm.proxy.proxy_server.premium_user",
+                True,
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.model_management_endpoints.team_model_add"
+            ) as mock_team_model_add,
+            patch(
+                "litellm.proxy.management_endpoints.model_management_endpoints.update_team"
+            ) as mock_update_team,
+        ):
             result = await _update_team_model_in_db(
                 db_model=db_model,
                 patch_data=patch_data,
@@ -861,11 +852,14 @@ class TestTeamModelUpdate:
             user_role=LitellmUserRoles.PROXY_ADMIN,
         )
 
-        with patch(
-            "litellm.proxy.management_endpoints.model_management_endpoints.team_model_delete"
-        ) as mock_delete, patch(
-            "litellm.proxy.management_endpoints.model_management_endpoints.team_model_add"
-        ) as mock_add:
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.model_management_endpoints.team_model_delete"
+            ) as mock_delete,
+            patch(
+                "litellm.proxy.management_endpoints.model_management_endpoints.team_model_add"
+            ) as mock_add,
+        ):
             await _update_existing_team_model_assignment(
                 team_id="team_123",
                 public_model_name="new-public-name",
@@ -904,11 +898,14 @@ class TestTeamModelUpdate:
             user_role=LitellmUserRoles.PROXY_ADMIN,
         )
 
-        with patch(
-            "litellm.proxy.management_endpoints.model_management_endpoints.team_model_delete"
-        ) as mock_delete, patch(
-            "litellm.proxy.management_endpoints.model_management_endpoints.team_model_add"
-        ) as mock_add:
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.model_management_endpoints.team_model_delete"
+            ) as mock_delete,
+            patch(
+                "litellm.proxy.management_endpoints.model_management_endpoints.team_model_add"
+            ) as mock_add,
+        ):
             await _update_existing_team_model_assignment(
                 team_id="team_123",
                 public_model_name="new-public-name",
@@ -994,11 +991,14 @@ class TestTeamModelUpdate:
             user_role=LitellmUserRoles.PROXY_ADMIN,
         )
 
-        with patch(
-            "litellm.proxy.management_endpoints.model_management_endpoints.team_model_delete"
-        ) as mock_delete, patch(
-            "litellm.proxy.management_endpoints.model_management_endpoints.team_model_add"
-        ) as mock_add:
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.model_management_endpoints.team_model_delete"
+            ) as mock_delete,
+            patch(
+                "litellm.proxy.management_endpoints.model_management_endpoints.team_model_add"
+            ) as mock_add,
+        ):
             await _update_existing_team_model_assignment(
                 team_id="team_123",
                 public_model_name="new-public-name",
@@ -1064,15 +1064,15 @@ class TestModelInfoEndpoint:
             team_models=["gpt-3.5-turbo"],
         )
 
-        with patch("litellm.proxy.proxy_server.llm_router") as mock_router, patch(
-            "litellm.proxy.proxy_server.get_key_models"
-        ) as mock_get_key_models, patch(
-            "litellm.proxy.proxy_server.get_team_models"
-        ) as mock_get_team_models, patch(
-            "litellm.proxy.proxy_server.get_complete_model_list"
-        ) as mock_get_complete_models, patch(
-            "litellm.get_llm_provider"
-        ) as mock_get_provider:
+        with (
+            patch("litellm.proxy.proxy_server.llm_router") as mock_router,
+            patch("litellm.proxy.proxy_server.get_key_models") as mock_get_key_models,
+            patch("litellm.proxy.proxy_server.get_team_models") as mock_get_team_models,
+            patch(
+                "litellm.proxy.proxy_server.get_complete_model_list"
+            ) as mock_get_complete_models,
+            patch("litellm.get_llm_provider") as mock_get_provider,
+        ):
             # Setup mocks
             mock_router.get_model_names.return_value = [
                 "gpt-4",
@@ -1114,13 +1114,14 @@ class TestModelInfoEndpoint:
             team_models=[],
         )
 
-        with patch("litellm.proxy.proxy_server.llm_router") as mock_router, patch(
-            "litellm.proxy.proxy_server.get_key_models"
-        ) as mock_get_key_models, patch(
-            "litellm.proxy.proxy_server.get_team_models"
-        ) as mock_get_team_models, patch(
-            "litellm.proxy.proxy_server.get_complete_model_list"
-        ) as mock_get_complete_models:
+        with (
+            patch("litellm.proxy.proxy_server.llm_router") as mock_router,
+            patch("litellm.proxy.proxy_server.get_key_models") as mock_get_key_models,
+            patch("litellm.proxy.proxy_server.get_team_models") as mock_get_team_models,
+            patch(
+                "litellm.proxy.proxy_server.get_complete_model_list"
+            ) as mock_get_complete_models,
+        ):
             # Setup mocks - user only has access to gpt-4
             mock_router.get_model_names.return_value = ["gpt-4", "claude-3"]
             mock_router.get_model_access_groups.return_value = {}
@@ -1152,15 +1153,15 @@ class TestModelInfoEndpoint:
             team_models=["team-model-1"],
         )
 
-        with patch("litellm.proxy.proxy_server.llm_router") as mock_router, patch(
-            "litellm.proxy.proxy_server.get_key_models"
-        ) as mock_get_key_models, patch(
-            "litellm.proxy.proxy_server.get_team_models"
-        ) as mock_get_team_models, patch(
-            "litellm.proxy.proxy_server.get_complete_model_list"
-        ) as mock_get_complete_models, patch(
-            "litellm.get_llm_provider"
-        ) as mock_get_provider:
+        with (
+            patch("litellm.proxy.proxy_server.llm_router") as mock_router,
+            patch("litellm.proxy.proxy_server.get_key_models") as mock_get_key_models,
+            patch("litellm.proxy.proxy_server.get_team_models") as mock_get_team_models,
+            patch(
+                "litellm.proxy.proxy_server.get_complete_model_list"
+            ) as mock_get_complete_models,
+            patch("litellm.get_llm_provider") as mock_get_provider,
+        ):
             # Setup mocks
             mock_router.get_model_names.return_value = ["team-model-1"]
             mock_router.get_model_access_groups.return_value = {}
@@ -1235,14 +1236,16 @@ class TestAddAndDeleteModelLifecycle:
 
         _PS = "litellm.proxy.proxy_server"
         _ENCRYPT = "litellm.proxy.management_endpoints.model_management_endpoints.encrypt_value_helper"
-        with patch(f"{_PS}.prisma_client", mock_prisma), \
-             patch(f"{_PS}.store_model_in_db", True), \
-             patch(f"{_PS}.proxy_config", mock_proxy_config), \
-             patch(f"{_PS}.proxy_logging_obj", MagicMock()), \
-             patch(f"{_PS}.general_settings", {}), \
-             patch(f"{_PS}.premium_user", True), \
-             patch(f"{_PS}.llm_router", mock_router), \
-             patch(_ENCRYPT, side_effect=lambda value, **kwargs: value):
+        with (
+            patch(f"{_PS}.prisma_client", mock_prisma),
+            patch(f"{_PS}.store_model_in_db", True),
+            patch(f"{_PS}.proxy_config", mock_proxy_config),
+            patch(f"{_PS}.proxy_logging_obj", MagicMock()),
+            patch(f"{_PS}.general_settings", {}),
+            patch(f"{_PS}.premium_user", True),
+            patch(f"{_PS}.llm_router", mock_router),
+            patch(_ENCRYPT, side_effect=lambda value, **kwargs: value),
+        ):
 
             # --- ADD ---
             add_result = await add_new_model(
@@ -1276,3 +1279,88 @@ class TestAddAndDeleteModelLifecycle:
                     user_api_key_dict=admin_user,
                 )
             assert str(exc_info.value.code) == "400"
+
+
+class TestGetTeamDeployments:
+    """Tests for _get_team_deployments which filters by model_name prefix + Python-side team_id check."""
+
+    @pytest.mark.asyncio
+    async def test_returns_matching_team_deployments(self):
+        """Deployments with matching model_name prefix and team_id are returned."""
+        team_id = "team_abc"
+        dep = MagicMock()
+        dep.model_name = f"model_name_{team_id}_uuid1"
+        dep.model_info = {"team_id": team_id, "team_public_model_name": "gpt-4"}
+
+        prisma_client = MockPrismaClient(sibling_deployments=[dep])
+        result = await _get_team_deployments(team_id, prisma_client)
+        assert len(result) == 1
+        assert result[0] is dep
+
+    @pytest.mark.asyncio
+    async def test_filters_out_wrong_team_id_in_model_info(self):
+        """A deployment whose model_name matches but model_info.team_id differs is excluded."""
+        team_id = "team_abc"
+        dep = MagicMock()
+        dep.model_name = f"model_name_{team_id}_uuid1"
+        dep.model_info = {"team_id": "other_team"}
+
+        prisma_client = MockPrismaClient(sibling_deployments=[dep])
+        result = await _get_team_deployments(team_id, prisma_client)
+        assert len(result) == 0
+
+    @pytest.mark.asyncio
+    async def test_handles_string_encoded_model_info(self):
+        """Legacy rows with JSON-string model_info are parsed and filtered correctly."""
+        team_id = "team_abc"
+        dep = MagicMock()
+        dep.model_name = f"model_name_{team_id}_uuid1"
+        dep.model_info = json.dumps({"team_id": team_id})
+
+        prisma_client = MockPrismaClient(sibling_deployments=[dep])
+        result = await _get_team_deployments(team_id, prisma_client)
+        assert len(result) == 1
+
+    @pytest.mark.asyncio
+    async def test_returns_empty_when_no_deployments(self):
+        """Returns empty list when no deployments exist."""
+        prisma_client = MockPrismaClient(sibling_deployments=[])
+        result = await _get_team_deployments("team_abc", prisma_client)
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_skips_rows_with_invalid_model_info(self):
+        """Rows with non-dict, non-parseable model_info are skipped."""
+        team_id = "team_abc"
+        dep = MagicMock()
+        dep.model_name = f"model_name_{team_id}_uuid1"
+        dep.model_info = "not-valid-json"
+
+        prisma_client = MockPrismaClient(sibling_deployments=[dep])
+        result = await _get_team_deployments(team_id, prisma_client)
+        assert len(result) == 0
+
+    @pytest.mark.asyncio
+    async def test_multiple_deployments_mixed_filtering(self):
+        """Only deployments with correct prefix AND team_id are returned."""
+        team_id = "team_abc"
+
+        # Matches both prefix and team_id
+        dep1 = MagicMock()
+        dep1.model_name = f"model_name_{team_id}_uuid1"
+        dep1.model_info = {"team_id": team_id}
+
+        # Matches prefix but wrong team_id
+        dep2 = MagicMock()
+        dep2.model_name = f"model_name_{team_id}_uuid2"
+        dep2.model_info = {"team_id": "wrong_team"}
+
+        # Different prefix entirely (won't be returned by mock's startswith filter)
+        dep3 = MagicMock()
+        dep3.model_name = "model_name_other_team_uuid3"
+        dep3.model_info = {"team_id": "other_team"}
+
+        prisma_client = MockPrismaClient(sibling_deployments=[dep1, dep2, dep3])
+        result = await _get_team_deployments(team_id, prisma_client)
+        assert len(result) == 1
+        assert result[0] is dep1

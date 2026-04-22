@@ -51,6 +51,7 @@ import litellm.litellm_core_utils
 
 # audio_utils.utils is lazy-loaded - only imported when needed for transcription calls
 import litellm.litellm_core_utils.json_validation_rule
+from litellm._internal_context import is_internal_call
 from litellm._lazy_imports import (
     _get_default_encoding,
     _get_modified_max_tokens,
@@ -213,9 +214,11 @@ _CALL_TYPE_ENUM_MAP: dict = {ct.value: ct for ct in CallTypes}
 
 try:
     # Python 3.9+
-    with resources.files("litellm.litellm_core_utils.tokenizers").joinpath(
-        "anthropic_tokenizer.json"
-    ).open("r", encoding="utf-8") as f:
+    with (
+        resources.files("litellm.litellm_core_utils.tokenizers")
+        .joinpath("anthropic_tokenizer.json")
+        .open("r", encoding="utf-8") as f
+    ):
         json_data = json.load(f)
 except (ImportError, AttributeError, TypeError):
     with resources.open_text(
@@ -242,8 +245,6 @@ from typing import (
     cast,
     get_args,
 )
-
-from openai import OpenAIError as OriginalError
 
 # These are lazy loaded via __getattr__
 from litellm.llms.base_llm.base_utils import (
@@ -783,9 +784,9 @@ def function_setup(  # noqa: PLR0915
         coroutine_checker = get_coroutine_checker_fn()
 
         ## DYNAMIC CALLBACKS ##
-        dynamic_callbacks: Optional[
-            List[Union[str, Callable, "CustomLogger"]]
-        ] = kwargs.pop("callbacks", None)
+        dynamic_callbacks: Optional[List[Union[str, Callable, "CustomLogger"]]] = (
+            kwargs.pop("callbacks", None)
+        )
         all_callbacks = get_dynamic_callbacks(dynamic_callbacks=dynamic_callbacks)
 
         if len(all_callbacks) > 0:
@@ -1691,9 +1692,9 @@ def client(original_function):  # noqa: PLR0915
                         exception=e,
                         retry_policy=kwargs.get("retry_policy"),
                     )
-                    kwargs[
-                        "retry_policy"
-                    ] = reset_retry_policy()  # prevent infinite loops
+                    kwargs["retry_policy"] = (
+                        reset_retry_policy()
+                    )  # prevent infinite loops
                 litellm.num_retries = (
                     None  # set retries to None to prevent infinite loops
                 )
@@ -1740,9 +1741,9 @@ def client(original_function):  # noqa: PLR0915
                         exception=e,
                         retry_policy=kwargs.get("retry_policy"),
                     )
-                    kwargs[
-                        "retry_policy"
-                    ] = reset_retry_policy()  # prevent infinite loops
+                    kwargs["retry_policy"] = (
+                        reset_retry_policy()
+                    )  # prevent infinite loops
                 litellm.num_retries = (
                     None  # set retries to None to prevent infinite loops
                 )
@@ -1794,7 +1795,8 @@ def client(original_function):  # noqa: PLR0915
 
         model: Optional[str] = args[0] if len(args) > 0 else kwargs.get("model", None)
         is_completion_with_fallbacks = kwargs.get("fallbacks") is not None
-        _is_litellm_internal_call = kwargs.pop("_is_litellm_internal_call", False)
+        kwargs.pop("_is_litellm_internal_call", None)  # discard if injected
+        _is_litellm_internal_call = is_internal_call.get()
 
         try:
             if logging_obj is None:
@@ -1810,6 +1812,11 @@ def client(original_function):  # noqa: PLR0915
             modified_kwargs = await async_pre_call_deployment_hook(kwargs, call_type)
             if modified_kwargs is not None:
                 kwargs = modified_kwargs
+
+            # Sync logging_obj.stream after deployment hooks (they may convert it).
+            _hook_stream = kwargs.get("stream")
+            if _hook_stream is not None and logging_obj.stream != _hook_stream:
+                logging_obj.stream = _hook_stream
 
             kwargs["litellm_logging_obj"] = logging_obj
             ## LOAD CREDENTIALS
@@ -3771,10 +3778,10 @@ def pre_process_non_default_params(
 
     if "response_format" in non_default_params:
         if provider_config is not None:
-            non_default_params[
-                "response_format"
-            ] = provider_config.get_json_schema_from_pydantic_object(
-                response_format=non_default_params["response_format"]
+            non_default_params["response_format"] = (
+                provider_config.get_json_schema_from_pydantic_object(
+                    response_format=non_default_params["response_format"]
+                )
             )
         else:
             non_default_params["response_format"] = type_to_response_format_param(
@@ -3903,16 +3910,16 @@ def pre_process_optional_params(
                     True  # so that main.py adds the function call to the prompt
                 )
                 if "tools" in non_default_params:
-                    optional_params[
-                        "functions_unsupported_model"
-                    ] = non_default_params.pop("tools")
+                    optional_params["functions_unsupported_model"] = (
+                        non_default_params.pop("tools")
+                    )
                     non_default_params.pop(
                         "tool_choice", None
                     )  # causes ollama requests to hang
                 elif "functions" in non_default_params:
-                    optional_params[
-                        "functions_unsupported_model"
-                    ] = non_default_params.pop("functions")
+                    optional_params["functions_unsupported_model"] = (
+                        non_default_params.pop("functions")
+                    )
             elif (
                 litellm.add_function_to_prompt
             ):  # if user opts to add it to prompt instead
@@ -4808,11 +4815,21 @@ def _apply_openai_param_overrides(
     If user passes in allowed_openai_params, apply them to optional_params
 
     These params will get passed as is to the LLM API since the user opted in to passing them in the request
+
+    Only params the caller actually sent are forwarded. Previously this
+    function unconditionally wrote `None` for any allowed param missing from
+    the request, which then reached the provider SDK as a top-level kwarg it
+    did not recognize (e.g. openai SDK raising
+    `AsyncCompletions.create() got an unexpected keyword argument 'enable_thinking'`).
+    See https://github.com/BerriAI/litellm/issues/25697
     """
     if allowed_openai_params:
         for param in allowed_openai_params:
-            if param not in optional_params:
-                optional_params[param] = non_default_params.pop(param, None)
+            if param in optional_params:
+                continue
+            if param not in non_default_params:
+                continue
+            optional_params[param] = non_default_params.pop(param)
     return optional_params
 
 
@@ -4875,14 +4892,25 @@ def calculate_max_parallel_requests(
     return None
 
 
+def _get_deployment_order(deployment: Union[Dict, Any]) -> Optional[int]:
+    """
+    Returns the routing order for a deployment.
+
+    Checks litellm_params first (static config), then model_info (dynamic/team
+    models added via API where order lives in model_info, not litellm_params).
+    """
+    order = deployment.get("litellm_params", {}).get("order")
+    if order is None:
+        order = deployment.get("model_info", {}).get("order")
+    return order
+
+
 def _get_order_filtered_deployments(
     healthy_deployments: List[Dict], target_order: Optional[int] = None
 ) -> List:
     if target_order is not None:
         filtered = [
-            d
-            for d in healthy_deployments
-            if d["litellm_params"].get("order") == target_order
+            d for d in healthy_deployments if _get_deployment_order(d) == target_order
         ]
         if filtered:
             return filtered
@@ -4890,20 +4918,19 @@ def _get_order_filtered_deployments(
         return healthy_deployments
 
     # Default: pick min order group
-    min_order = min(
-        (
-            deployment["litellm_params"]["order"]
-            for deployment in healthy_deployments
-            if "order" in deployment["litellm_params"]
-        ),
-        default=None,
-    )
+    _valid_orders: List[int] = [
+        o
+        for deployment in healthy_deployments
+        for o in [_get_deployment_order(deployment)]
+        if o is not None
+    ]
+    min_order: Optional[int] = min(_valid_orders) if _valid_orders else None
 
     if min_order is not None:
         filtered_deployments = [
             deployment
             for deployment in healthy_deployments
-            if deployment["litellm_params"].get("order") == min_order
+            if _get_deployment_order(deployment) == min_order
         ]
 
         return filtered_deployments
@@ -5812,6 +5839,9 @@ def _get_model_info_helper(  # noqa: PLR0915
                     "output_cost_per_token_above_272k_tokens", None
                 ),
                 output_cost_per_second=_model_info.get("output_cost_per_second", None),
+                output_cost_per_second_1080p=_model_info.get(
+                    "output_cost_per_second_1080p", None
+                ),
                 output_cost_per_video_per_second=_model_info.get(
                     "output_cost_per_video_per_second", None
                 ),
@@ -5860,6 +5890,12 @@ def _get_model_info_helper(  # noqa: PLR0915
                 supports_web_search=_model_info.get("supports_web_search", None),
                 supports_url_context=_model_info.get("supports_url_context", None),
                 supports_reasoning=_model_info.get("supports_reasoning", None),
+                supports_none_reasoning_effort=_model_info.get(
+                    "supports_none_reasoning_effort", None
+                ),
+                supports_xhigh_reasoning_effort=_model_info.get(
+                    "supports_xhigh_reasoning_effort", None
+                ),
                 supports_computer_use=_model_info.get("supports_computer_use", None),
                 search_context_cost_per_query=_model_info.get(
                     "search_context_cost_per_query", None
@@ -7537,9 +7573,9 @@ class ModelResponseIterator:
         if convert_to_delta is True:
             _stream_response = ModelResponseStream()
             _stream_response.choices[0].delta.content = model_response.choices[0].message.content  # type: ignore
-            self.model_response: Union[
-                ModelResponse, ModelResponseStream
-            ] = _stream_response
+            self.model_response: Union[ModelResponse, ModelResponseStream] = (
+                _stream_response
+            )
         else:
             self.model_response = model_response
         self.is_done = False
@@ -8314,6 +8350,10 @@ class ProviderConfigManager:
             return SagemakerEmbeddingConfig.get_model_config(model)
         elif litellm.LlmProviders.PERPLEXITY == provider:
             return litellm.PerplexityEmbeddingConfig()
+        elif litellm.LlmProviders.OCI == provider:
+            from litellm.llms.oci.embed.transformation import OCIEmbeddingConfig
+
+            return OCIEmbeddingConfig()
         return None
 
     @staticmethod
@@ -8432,6 +8472,12 @@ class ProviderConfigManager:
             )
 
             return OVHCloudAudioTranscriptionConfig()
+        elif litellm.LlmProviders.SCALEWAY == provider:
+            from litellm.llms.scaleway.audio_transcription.transformation import (
+                ScalewayAudioTranscriptionConfig,
+            )
+
+            return ScalewayAudioTranscriptionConfig()
         elif litellm.LlmProviders.MISTRAL == provider:
             from litellm.llms.mistral.audio_transcription.transformation import (
                 MistralAudioTranscriptionConfig,
@@ -8939,6 +8985,12 @@ class ProviderConfigManager:
             )
 
             return OpenAIContainerConfig()
+        if provider in (LlmProviders.AZURE, LlmProviders.AZURE_TEXT):
+            from litellm.llms.azure.containers.transformation import (
+                AzureContainerConfig,
+            )
+
+            return AzureContainerConfig()
         return None
 
     @staticmethod
@@ -9030,11 +9082,11 @@ class ProviderConfigManager:
 
             return get_stability_image_edit_config(model)
         elif LlmProviders.BEDROCK == provider:
-            from litellm.llms.bedrock.image_edit.stability_transformation import (
-                BedrockStabilityImageEditConfig,
+            from litellm.llms.bedrock.image_edit.amazon_nova_canvas_image_edit_transformation import (
+                get_bedrock_image_edit_config_for_model,
             )
 
-            return BedrockStabilityImageEditConfig()
+            return get_bedrock_image_edit_config_for_model(model)
         elif LlmProviders.OPENROUTER == provider:
             from litellm.llms.openrouter.image_edit import (
                 get_openrouter_image_edit_config,

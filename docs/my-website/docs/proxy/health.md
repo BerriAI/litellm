@@ -316,86 +316,9 @@ general_settings:
 
 ## Health Check Driven Routing
 
-By default, background health checks are observability-only — they populate the `/health` endpoint but don't affect routing. Unhealthy deployments still receive traffic until request failures trigger cooldown.
+Route traffic away from unhealthy deployments proactively — before user requests hit them. Supports per-error-type failure thresholds, transient error suppression, and automatic safety nets.
 
-With `enable_health_check_routing: true`, the router **excludes deployments that failed their last background health check** before selecting a candidate. This gives you proactive failover instead of reactive cooldown.
-
-### How it works
-
-1. Background health checks run on their configured interval
-2. After each cycle, every deployment is marked healthy or unhealthy
-3. On each incoming request, the router filters out unhealthy deployments **before** cooldown filtering and load balancing
-4. If all deployments are unhealthy, the filter is bypassed (safety net — never causes a total outage)
-5. If health state is stale (older than `health_check_staleness_threshold`), it is ignored
-
-### Quick start
-
-```yaml
-model_list:
-  - model_name: gpt-4
-    litellm_params:
-      model: openai/gpt-4
-      api_key: os.environ/OPENAI_API_KEY
-  - model_name: gpt-4
-    litellm_params:
-      model: openai/gpt-4
-      api_key: os.environ/OPENAI_API_KEY_SECONDARY
-
-general_settings:
-  background_health_checks: true
-  health_check_interval: 60
-  enable_health_check_routing: true
-```
-
-### Configuration
-
-| Setting | Where | Default | Description |
-|---------|-------|---------|-------------|
-| `enable_health_check_routing` | `general_settings` | `false` | Enable/disable health-check-driven routing |
-| `health_check_staleness_threshold` | `general_settings` | `health_check_interval * 2` | Seconds before health state is considered stale and ignored |
-| `background_health_checks` | `general_settings` | `false` | Must be `true` for health check routing to work |
-| `health_check_interval` | `general_settings` | `300` | Seconds between health check cycles |
-
-### Interaction with cooldown
-
-Health check filtering and cooldown are **additive**. A deployment can be excluded by either mechanism:
-
-- **Health check filter** — proactive, runs on the configured interval, excludes deployments that failed the last check
-- **Cooldown** — reactive, triggered by request failures, excludes deployments for a short TTL
-
-This means request failures still provide fast detection between health check intervals.
-
-### Staleness
-
-If a health check result is older than `health_check_staleness_threshold`, it is ignored and the deployment is treated as eligible. This prevents stale data from permanently excluding a deployment if the health check loop stops or slows down.
-
-The default staleness threshold is `health_check_interval * 2`. For a 60s interval, health state expires after 120s.
-
-### Example: custom staleness
-
-```yaml
-general_settings:
-  background_health_checks: true
-  health_check_interval: 30
-  enable_health_check_routing: true
-  health_check_staleness_threshold: 90  # ignore health state older than 90s
-```
-
-### Debugging
-
-Run the proxy with `--detailed_debug` and look for:
-
-```
-health_check_routing_state_updated healthy=3 unhealthy=1
-```
-
-This is logged after each health check cycle when routing state is written.
-
-If the safety net triggers (all deployments unhealthy), you'll see:
-
-```
-All deployments marked unhealthy by health checks, bypassing health filter
-```
+See the full guide: [Health Check Driven Routing](./health_check_routing.md)
 
 ## Health Check Timeout
 
@@ -415,7 +338,7 @@ model_list:
 
 ## Health Check Max Tokens
 
-By default, health checks use `max_tokens=1` to minimize cost and latency. For wildcard models, the default is `max_tokens=10`.
+By default, health checks use `max_tokens=5` to balance reliability with low cost and latency. For wildcard models, the default is `max_tokens=10`.
 
 You can override this per-model by setting `health_check_max_tokens` in the `model_info` section of your config.yaml.
 
@@ -428,6 +351,30 @@ model_list:
     model_info:
       health_check_max_tokens: 5 # 👈 OVERRIDE HEALTH CHECK MAX TOKENS
 ```
+
+### Reasoning vs non-reasoning defaults
+
+Reasoning models (per `supports_reasoning` in the model map) often need a higher health-check `max_tokens` because providers count reasoning tokens toward the completion budget. You can set **separate** limits without listing every model:
+
+**Per deployment (`model_info`)** — used when `health_check_max_tokens` is not set. Ignored for wildcard routes (`*` in `litellm_params.model`, i.e. the deployment model string; not `health_check_model`).
+
+```yaml
+model_list:
+  - model_name: openai-stack
+    litellm_params:
+      model: openai/gpt-5-nano
+      api_key: os.environ/OPENAI_API_KEY
+    model_info:
+      health_check_max_tokens_reasoning: 128
+      health_check_max_tokens_non_reasoning: 1
+```
+
+**Global (environment)**:
+
+- `BACKGROUND_HEALTH_CHECK_MAX_TOKENS_REASONING` — for non-wildcard reasoning models, this value takes precedence when set
+- `BACKGROUND_HEALTH_CHECK_MAX_TOKENS` — global fallback for all models (including wildcard routes)
+
+If neither is set, non-wildcard models default to `5` and wildcard routes omit `max_tokens`.
 
 ## `/health/readiness`
 

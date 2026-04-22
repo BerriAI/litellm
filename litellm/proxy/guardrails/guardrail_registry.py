@@ -472,6 +472,13 @@ class InMemoryGuardrailHandler:
         else:
             raise ValueError(f"Unsupported guardrail: {guardrail_type}")
 
+        if custom_guardrail_callback is not None:
+            setattr(
+                custom_guardrail_callback,
+                "skip_system_message_in_guardrail",
+                getattr(litellm_params, "skip_system_message_in_guardrail", None),
+            )
+
         parsed_guardrail = Guardrail(
             guardrail_id=guardrail.get("guardrail_id"),
             guardrail_name=guardrail["guardrail_name"],

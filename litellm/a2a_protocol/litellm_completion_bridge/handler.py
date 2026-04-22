@@ -48,20 +48,19 @@ class A2ACompletionBridgeHandler:
         # Get provider config for custom_llm_provider
         custom_llm_provider = litellm_params.get("custom_llm_provider")
         a2a_provider_config = A2AProviderConfigManager.get_provider_config(
-            custom_llm_provider=custom_llm_provider
+            custom_llm_provider=custom_llm_provider,
+            model=litellm_params.get("model"),
         )
 
         # If provider config exists, use it
         if a2a_provider_config is not None:
-            if api_base is None:
-                raise ValueError(f"api_base is required for {custom_llm_provider}")
-
             verbose_logger.info(f"A2A: Using provider config for {custom_llm_provider}")
 
             response_data = await a2a_provider_config.handle_non_streaming(
                 request_id=request_id,
                 params=params,
                 api_base=api_base,
+                litellm_params=litellm_params,
             )
 
             return response_data
@@ -147,14 +146,12 @@ class A2ACompletionBridgeHandler:
         # Get provider config for custom_llm_provider
         custom_llm_provider = litellm_params.get("custom_llm_provider")
         a2a_provider_config = A2AProviderConfigManager.get_provider_config(
-            custom_llm_provider=custom_llm_provider
+            custom_llm_provider=custom_llm_provider,
+            model=litellm_params.get("model"),
         )
 
         # If provider config exists, use it
         if a2a_provider_config is not None:
-            if api_base is None:
-                raise ValueError(f"api_base is required for {custom_llm_provider}")
-
             verbose_logger.info(
                 f"A2A: Using provider config for {custom_llm_provider} (streaming)"
             )
@@ -163,6 +160,7 @@ class A2ACompletionBridgeHandler:
                 request_id=request_id,
                 params=params,
                 api_base=api_base,
+                litellm_params=litellm_params,
             ):
                 yield chunk
 

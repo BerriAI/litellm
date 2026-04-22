@@ -26,7 +26,7 @@ curl -L -X POST 'http://0.0.0.0:4000/model/new' \
     "model": "openai/gpt-4o",
     "custom_llm_provider": "openai",
     "api_key": "******ccb07",
-    "api_base": "https://my-endpoint-sweden-berri992.openai.azure.com",
+    "api_base": "https://my-azure-endpoint.openai.azure.com",
     "api_version": "2023-12-01-preview"
   },
   "model_info": {

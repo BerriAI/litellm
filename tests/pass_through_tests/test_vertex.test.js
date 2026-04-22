@@ -56,59 +56,74 @@ beforeAll(() => {
     loadVertexAiCredentials();
 });
 
-
+// Non-streaming Vertex generateContent can exceed 5s in CI / under load
+const VERTEX_TEST_TIMEOUT_MS = 30000;
 
 describe('Vertex AI Tests', () => {
-    test('should successfully generate content from Vertex AI', async () => {
-        const vertexAI = new VertexAI({
-            project: 'litellm-ci-cd',
-            location: 'us-central1',
-            apiEndpoint: "localhost:4000/vertex-ai"
-        });
+    test(
+        'should successfully generate content from Vertex AI',
+        async () => {
+            const vertexAI = new VertexAI({
+                project: 'litellm-ci-cd',
+                location: 'us-central1',
+                apiEndpoint: "localhost:4000/vertex-ai"
+            });
 
-        const customHeaders = new Headers({
-            "x-litellm-api-key": "sk-1234"
-        });
+            const customHeaders = new Headers({
+                "x-litellm-api-key": "sk-1234"
+            });
 
-        const requestOptions = {
-            customHeaders: customHeaders
-        };
+            const requestOptions = {
+                customHeaders: customHeaders
+            };
 
-        const generativeModel = vertexAI.getGenerativeModel(
-            { model: 'gemini-2.5-flash-lite' },
-            requestOptions
-        );
+            const generativeModel = vertexAI.getGenerativeModel(
+                { model: 'gemini-2.5-flash-lite' },
+                requestOptions
+            );
 
-        const request = {
-            contents: [{role: 'user', parts: [{text: 'How are you doing today tell me your name?'}]}],
-        };
+            const request = {
+                contents: [{role: 'user', parts: [{text: 'How are you doing today tell me your name?'}]}],
+            };
 
-        const streamingResult = await generativeModel.generateContentStream(request);
-        
-        // Add some assertions
-        expect(streamingResult).toBeDefined();
-        
-        for await (const item of streamingResult.stream) {
-            console.log('stream chunk:', JSON.stringify(item));
-            expect(item).toBeDefined();
-        }
+            const streamingResult = await generativeModel.generateContentStream(request);
 
-        const aggregatedResponse = await streamingResult.response;
-        console.log('aggregated response:', JSON.stringify(aggregatedResponse));
-        expect(aggregatedResponse).toBeDefined();
-    });
+            // Add some assertions
+            expect(streamingResult).toBeDefined();
 
+            for await (const item of streamingResult.stream) {
+                console.log('stream chunk:', JSON.stringify(item));
+                expect(item).toBeDefined();
+            }
 
-    test('should successfully generate non-streaming content from Vertex AI', async () => {
-        const vertexAI = new VertexAI({project: 'litellm-ci-cd', location: 'us-central1', apiEndpoint: "localhost:4000/vertex-ai"});
-        const customHeaders = new Headers({"x-litellm-api-key": "sk-1234"});
-        const requestOptions = {customHeaders: customHeaders};
-        const generativeModel = vertexAI.getGenerativeModel({model: 'gemini-2.5-flash-lite'}, requestOptions);
-        const request = {contents: [{role: 'user', parts: [{text: 'What is 2+2?'}]}]};
+            const aggregatedResponse = await streamingResult.response;
+            console.log('aggregated response:', JSON.stringify(aggregatedResponse));
+            expect(aggregatedResponse).toBeDefined();
+        },
+        VERTEX_TEST_TIMEOUT_MS
+    );
 
-        const result = await generativeModel.generateContent(request);
-        expect(result).toBeDefined();
-        expect(result.response).toBeDefined();
-        console.log('non-streaming response:', JSON.stringify(result.response));
-    });
+    test(
+        'should successfully generate non-streaming content from Vertex AI',
+        async () => {
+            const vertexAI = new VertexAI({
+                project: 'litellm-ci-cd',
+                location: 'us-central1',
+                apiEndpoint: "localhost:4000/vertex-ai"
+            });
+            const customHeaders = new Headers({"x-litellm-api-key": "sk-1234"});
+            const requestOptions = {customHeaders: customHeaders};
+            const generativeModel = vertexAI.getGenerativeModel(
+                {model: 'gemini-2.5-flash-lite'},
+                requestOptions
+            );
+            const request = {contents: [{role: 'user', parts: [{text: 'What is 2+2?'}]}]};
+
+            const result = await generativeModel.generateContent(request);
+            expect(result).toBeDefined();
+            expect(result.response).toBeDefined();
+            console.log('non-streaming response:', JSON.stringify(result.response));
+        },
+        VERTEX_TEST_TIMEOUT_MS
+    );
 });

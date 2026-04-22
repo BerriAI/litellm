@@ -1519,7 +1519,7 @@ class LiteLLMCompletionResponsesConfig:
         """
         Map chat completion finish_reason to responses API status.
 
-        Chat completion finish_reason values include: "stop", "length", "tool_calls", "content_filter", "function_call"
+        Chat completion finish_reason values include: "stop", "length", "tool_calls", "content_filter", "function_call", "refusal"
         Responses API status values are: "completed", "failed", "in_progress", "cancelled", "queued", "incomplete"
 
         Args:
@@ -1534,7 +1534,7 @@ class LiteLLMCompletionResponsesConfig:
         # Map finish reasons to status
         if finish_reason in ["stop", "tool_calls", "function_call"]:
             return "completed"
-        elif finish_reason in ["length", "content_filter"]:
+        elif finish_reason in ["length", "content_filter", "refusal"]:
             return "incomplete"
         else:
             # Default to completed for unknown finish reasons

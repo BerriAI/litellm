@@ -72,7 +72,7 @@ docker run -p 4317:4317 -p 4318:4318 \
 ### 3. Install OpenTelemetry Dependencies
 
 ```bash
-pip install opentelemetry-api opentelemetry-sdk opentelemetry-exporter-otlp
+uv add opentelemetry-api opentelemetry-sdk opentelemetry-exporter-otlp
 ```
 
 ### 4. Configure LiteLLM

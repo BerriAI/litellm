@@ -83,6 +83,7 @@ const sidebars = {
           "proxy/guardrails/openai_moderation",
           "proxy/guardrails/pangea",
           "proxy/guardrails/pillar_security",
+          "proxy/guardrails/promptguard",
           "proxy/guardrails/pii_masking_v2",
           "proxy/guardrails/panw_prisma_airs",
           "proxy/guardrails/secret_detection",
@@ -255,6 +256,11 @@ const sidebars = {
             },
             {
               type: "doc",
+              id: "completion/prompt_compression",
+              label: "compress()",
+            },
+            {
+              type: "doc",
               id: "audio_transcription",
               label: "transcription()",
             },
@@ -325,11 +331,19 @@ const sidebars = {
                 "mcp_control",
                 "mcp_cost",
                 "mcp_guardrail",
+                "mcp_toolsets",
                 {
                   type: "link",
                   label: "MCP Troubleshooting Guide",
                   href: "/docs/mcp_troubleshoot"
                 },
+              ],
+            },
+            {
+              type: "category",
+              label: "Skills Gateway",
+              items: [
+                "skills_gateway",
               ],
             },
           ],
@@ -348,6 +362,7 @@ const sidebars = {
             "proxy/debugging",
             "proxy/error_diagnosis",
             "proxy/deploy",
+            "proxy/docker_image_security",
             "proxy/health",
             "proxy/master_key_rotations",
             "proxy/model_management",
@@ -521,6 +536,7 @@ const sidebars = {
           description: "Modify requests, responses, and more",
           items: [
             "proxy/call_hooks",
+            "proxy/agentic_loop_hook",
             "proxy/rules",
           ]
         },
@@ -562,7 +578,8 @@ const sidebars = {
             "proxy/model_access",
             "proxy/model_access_groups",
             "proxy/access_groups",
-            "proxy/team_model_add"
+            "proxy/team_model_add",
+            "proxy/credential_routing"
           ]
         },
         {
@@ -858,6 +875,7 @@ const sidebars = {
           ]
         },
         "providers/anthropic",
+        "providers/anthropic_tool_search",
         "providers/aws_sagemaker",
         {
           type: "category",
@@ -1051,19 +1069,11 @@ const sidebars = {
         "proxy/fallback_management",
         "proxy/tag_routing",
         "proxy/timeout",
-        "wildcard_routing"
+        "wildcard_routing",
+        "proxy/health_check_routing"
       ],
     },
-    {
-      type: "category",
-      label: "Load Testing",
-      items: [
-        "benchmarks",
-        "load_test_advanced",
-        "load_test_sdk",
-        "load_test_rpm",
-      ]
-    },
+    "benchmarks",
     {
       type: "category",
       label: "Contributing",
@@ -1092,6 +1102,9 @@ const sidebars = {
         "data_retention",
         "proxy/security_encryption_faq",
         "migration_policy",
+        "load_test_advanced",
+        "load_test_sdk",
+        "load_test_rpm",
         {
           type: "category",
           label: "❤️ 🚅 Projects built on LiteLLM",
@@ -1144,6 +1157,7 @@ const sidebars = {
       label: "Troubleshooting",
       items: [
         "troubleshoot/ui_issues",
+        "troubleshoot/cost_discrepancy",
         "mcp_troubleshoot",
         {
           type: "category",
@@ -1228,6 +1242,7 @@ const learnSidebar = {
             "completion/web_fetch",
             "completion/computer_use",
             "guides/code_interpreter",
+            "completion/anthropic_advisor_tool",
             "completion/message_sanitization",
           ],
         },
@@ -1279,6 +1294,7 @@ const learnSidebar = {
           items: [
             "completion/prefix",
             "completion/predict_outputs",
+            "completion/prompt_compression",
             "completion/message_trimming",
             "completion/prompt_caching",
             "completion/prompt_formatting",
