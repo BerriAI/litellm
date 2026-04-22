@@ -1264,7 +1264,7 @@ class Delta(SafeAttributeModel, OpenAIObject):
     reasoning_items: Optional[List[ChatCompletionReasoningItem]] = None
     provider_specific_fields: Optional[Dict[str, Any]] = Field(default=None)
 
-    def __init__(
+    def __init__(  # noqa: PLR0915
         self,
         content=None,
         role=None,

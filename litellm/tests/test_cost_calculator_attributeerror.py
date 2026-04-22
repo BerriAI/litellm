@@ -1,7 +1,5 @@
 import sys
 import os
-from unittest.mock import MagicMock
-import pytest
 
 # Add the project root to the path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
@@ -40,9 +38,7 @@ def test_completion_cost_with_dict_usage():
     # This should not raise AttributeError
     cost = completion_cost(completion_response=response, model="gpt-3.5-turbo")
     assert cost is not None
-    print(f"Cost calculated: {cost}")
 
 if __name__ == "__main__":
     test_usage_coercion_from_dict()
     test_completion_cost_with_dict_usage()
-    print("Tests passed!")
