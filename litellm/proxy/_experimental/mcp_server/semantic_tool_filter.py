@@ -6,6 +6,7 @@ Filters MCP tools semantically for /chat/completions and /responses endpoints.
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from litellm._logging import verbose_logger
+from litellm.proxy._experimental.mcp_server.utils import MCP_TOOL_PREFIX_SEPARATOR
 
 if TYPE_CHECKING:
     from semantic_router.routers import SemanticRouter
@@ -229,9 +230,20 @@ class SemanticMCPToolFilter:
         The match is anchored: ``canonical`` must form the complete suffix
         of ``client_name`` and be preceded by a separator character, so
         ``rain_gear`` does not match canonical ``ear``.
+
+        Suffix matching is additionally gated on ``canonical`` itself
+        containing ``MCP_TOOL_PREFIX_SEPARATOR``. Server-registered MCP
+        tools are always emitted as
+        ``<server_name><MCP_TOOL_PREFIX_SEPARATOR><tool_name>`` (see
+        ``add_server_prefix_to_name``), so a canonical without the
+        separator is not a namespaced MCP tool and falling back to
+        suffix matching would spuriously collide with unrelated local
+        user functions whose names end in the same characters.
         """
         if client_name == canonical:
             return True
+        if MCP_TOOL_PREFIX_SEPARATOR not in canonical:
+            return False
         if len(client_name) <= len(canonical):
             return False
         if not client_name.endswith(canonical):
