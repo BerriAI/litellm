@@ -2089,6 +2089,38 @@ class ProxyLogging:
                 )
                 if callback_response is not None:
                     response = callback_response
+
+            ############ Eval Gate [Beta] ##############################
+            ############################################################
+            try:
+                _agent_id = (data.get("metadata") or {}).get("agent_id") or data.get(
+                    "agent_id"
+                )
+                if _agent_id:
+                    from litellm.proxy.eval_management.eval_engine import (
+                        run_evals_for_agent,
+                    )
+                    from litellm.proxy.proxy_server import (
+                        prisma_client as _prisma_client,
+                    )
+
+                    if _prisma_client is not None:
+                        response = await run_evals_for_agent(
+                            agent_id=_agent_id,
+                            response=response,
+                            data=data,
+                            user_api_key_dict=user_api_key_dict,
+                            prisma_client=_prisma_client,
+                        )
+            except Exception as e:
+                from fastapi import HTTPException
+
+                if isinstance(e, HTTPException):
+                    raise
+                verbose_proxy_logger.warning(
+                    f"[Evals] Unexpected error in eval gate: {e}"
+                )
+            ############################################################
         except Exception as e:
             raise e
         return response
