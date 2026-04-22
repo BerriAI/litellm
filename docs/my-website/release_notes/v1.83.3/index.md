@@ -54,7 +54,7 @@ pip install litellm==1.83.3
 ## Key Highlights
 
 - **MCP Toolsets** — [Create curated tool subsets from one or more MCP servers with scoped permissions, and manage them from the UI or API](../../docs/mcp)
-- **Skills Marketplace** — [Browse, install, and publish Claude Code skills from a self-hosted marketplace — works across Anthropic, Vertex AI, Azure, and Bedrock](../../docs/proxy/skills)
+- **Skills Marketplace** — [Browse, install, and publish Claude Code skills from a self-hosted marketplace — works across Anthropic, Vertex AI, Azure, and Bedrock](../../docs/skills_gateway)
 - **Guardrail Fallbacks** — [Configure `on_error` behavior so guardrail failures degrade gracefully instead of blocking the request](../../docs/proxy/guardrails)
 - **Team Bring Your Own Guardrails** — [Teams can now attach and manage their own guardrails directly from team settings in the UI](../../docs/proxy/guardrails)
 
@@ -67,7 +67,7 @@ The Skills Marketplace gives teams a self-hosted catalog for discovering, instal
 
 ![Skills Marketplace](../../img/release_notes/skills_marketplace.png)
 
-[Get Started](../../docs/proxy/skills)
+[Get Started](../../docs/skills_gateway)
 
 ### Guardrail Fallbacks
 
