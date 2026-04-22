@@ -1764,7 +1764,11 @@ class ProxyBaseLLMRequestProcessing:
                 elif isinstance(chunk, dict):
                     str_so_far += str(chunk.get("content", ""))
 
-                model_name = request_data.get("model", "")
+                model_name = (
+                    ProxyBaseLLMRequestProcessing._resolve_cost_injection_model_name(
+                        request_data
+                    )
+                )
                 chunk = (
                     ProxyBaseLLMRequestProcessing._process_chunk_with_cost_injection(
                         chunk, model_name
@@ -1915,6 +1919,26 @@ class ProxyBaseLLMRequestProcessing:
             return None
         except Exception:
             return None
+
+    @staticmethod
+    def _resolve_cost_injection_model_name(request_data: dict) -> str:
+        """
+        Pick the model name to use for streaming cost injection.
+
+        `request_data["model"]` is the public alias a client sends
+        (mirroring `model_name:` in the proxy YAML). For YAML aliases
+        this is not priceable by `litellm.completion_cost`. The router
+        has already resolved the alias to the deployment's
+        provider-prefixed model (e.g. `bedrock/us.anthropic.claude-opus-4-7`)
+        and stamped it on the `LiteLLMLoggingObj` via
+        `update_environment_variables(model=<deployment_model>)` inside
+        `litellm.completion()` — same instance that's on
+        `request_data["litellm_logging_obj"]`. Prefer that resolved name
+        and fall back to the raw request value only when it is missing.
+        """
+        logging_obj = request_data.get("litellm_logging_obj")
+        resolved = getattr(logging_obj, "model", None) if logging_obj else None
+        return resolved or request_data.get("model", "") or ""
 
     @staticmethod
     def _inject_cost_into_usage_dict(obj: dict, model_name: str) -> Optional[dict]:

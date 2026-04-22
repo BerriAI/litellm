@@ -2035,23 +2035,20 @@ class TestInjectCostAliasResolution:
     Regression tests for the streaming cost-injection path introduced in
     #15102.
 
-    When a client sends a request using a user-defined alias (declared in
-    the proxy YAML as `model_name: opus-4.7`), `request_data["model"]` is
-    the alias string. `async_streaming_data_generator` reads it and hands
-    it straight to `_inject_cost_into_usage_dict`, which then calls
-    `litellm.completion_cost(model=<alias>)`. `completion_cost` cannot
-    price an unknown alias that has no provider prefix, so it raises
-    `BadRequestError: LLM Provider NOT provided`. The raise is swallowed
-    by `except Exception: cost_val = None` and cost is silently dropped
-    from the SSE `message_delta` event.
+    When a client sends a request using a proxy-level alias (declared in
+    the YAML as `model_name: opus-4.7`), `request_data["model"]` is the
+    alias string. Before this fix, `async_streaming_data_generator` handed
+    that alias straight to `litellm.completion_cost`, which cannot price
+    an unknown, unprefixed name and raised `LLM Provider NOT provided`.
+    The raise was swallowed by `except Exception: cost_val = None`,
+    silently dropping cost from the SSE `message_delta` event. Post-stream
+    logging was unaffected because it reads the resolved
+    `litellm_params.model` off the logging obj.
 
-    Post-stream logging (Prometheus/Braintrust/response headers) is
-    unaffected because it reads the resolved `litellm_params.model` off
-    the logging obj — only the in-stream injected cost is broken.
-
-    Fix: resolve the alias to the underlying deployment's
-    provider-prefixed model (e.g. `bedrock/us.anthropic.claude-opus-4-7`)
-    before pricing.
+    Fix: read the resolved deployment model the router already stamped on
+    `request_data["litellm_logging_obj"].model` (set inside
+    `litellm.completion()` via `update_environment_variables`) and use
+    that for pricing. No router lookup needed — the info is already there.
     """
 
     @staticmethod
@@ -2063,41 +2060,86 @@ class TestInjectCostAliasResolution:
 
     def test_cost_is_injected_when_model_is_provider_prefixed(self):
         """
-        Control: a provider-prefixed model name that exists in the
-        bundled model registry prices successfully and cost is injected.
+        Control: the leaf helper prices a provider-prefixed model directly.
+        Documents the contract callers must satisfy.
         """
         result = ProxyBaseLLMRequestProcessing._inject_cost_into_usage_dict(
             self._usage_event(), "bedrock/us.anthropic.claude-opus-4-7"
         )
-        assert result is not None, (
-            "control: provider-prefixed model should price successfully"
-        )
+        assert result is not None
         assert isinstance(result["usage"].get("cost"), float)
         assert result["usage"]["cost"] > 0
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "Known bug: _inject_cost_into_usage_dict passes the raw "
-            "client-facing alias to litellm.completion_cost, which cannot "
-            "price an unprefixed, unknown alias and raises. The raise is "
-            "swallowed and cost is silently dropped. Fix: resolve the "
-            "alias to the underlying deployment model before pricing."
-        ),
-    )
-    def test_cost_is_injected_when_model_is_client_facing_alias(self):
+    def test_inject_cost_with_unresolved_alias_returns_none(self):
         """
-        A user-defined alias (`opus-4.7`) is not in litellm's registry
-        and has no provider prefix, so `completion_cost` raises.
-        Expected post-fix: the alias resolves to its deployment and cost
-        is injected just like the control test above.
+        Constraint documentation: `_inject_cost_into_usage_dict` does not
+        itself resolve aliases. Handed an unprefixed alias, pricing fails,
+        the exception is swallowed, and no cost is injected. Callers are
+        responsible for resolving first — that is what
+        `_resolve_cost_injection_model_name` is for.
         """
         result = ProxyBaseLLMRequestProcessing._inject_cost_into_usage_dict(
             self._usage_event(), "opus-4.7"
         )
-        assert result is not None, (
-            "expected cost injection, but completion_cost() raised on "
-            "the alias and the exception was swallowed"
+        assert result is None
+
+    def test_resolve_prefers_logging_obj_over_request_data(self):
+        """
+        Fix: when the router has stamped the deployment model on the
+        logging obj, use it instead of the client-facing alias.
+        """
+        logging_obj = MagicMock()
+        logging_obj.model = "bedrock/us.anthropic.claude-opus-4-7"
+        request_data = {"model": "opus-4.7", "litellm_logging_obj": logging_obj}
+
+        resolved = ProxyBaseLLMRequestProcessing._resolve_cost_injection_model_name(
+            request_data
         )
+        assert resolved == "bedrock/us.anthropic.claude-opus-4-7"
+
+    def test_resolve_falls_back_when_logging_obj_has_no_model(self):
+        """
+        If the logging obj is present but `.model` is unset, the raw
+        request value is used. Keeps non-router / early-lifecycle paths
+        working.
+        """
+        logging_obj = MagicMock(spec=[])  # no .model attribute
+        request_data = {"model": "opus-4.7", "litellm_logging_obj": logging_obj}
+
+        resolved = ProxyBaseLLMRequestProcessing._resolve_cost_injection_model_name(
+            request_data
+        )
+        assert resolved == "opus-4.7"
+
+    def test_resolve_falls_back_when_no_logging_obj(self):
+        """No logging obj on `request_data` → return the raw request model."""
+        resolved = ProxyBaseLLMRequestProcessing._resolve_cost_injection_model_name(
+            {"model": "gpt-4o"}
+        )
+        assert resolved == "gpt-4o"
+
+    def test_resolve_returns_empty_string_when_nothing_available(self):
+        """Empty dict → empty string (matches pre-fix default)."""
+        resolved = ProxyBaseLLMRequestProcessing._resolve_cost_injection_model_name({})
+        assert resolved == ""
+
+    def test_resolve_plus_inject_end_to_end(self):
+        """
+        End-to-end of the two pieces that compose the fix: resolver reads
+        the deployment model from the logging obj, and the leaf helper
+        prices that name successfully.
+        """
+        logging_obj = MagicMock()
+        logging_obj.model = "bedrock/us.anthropic.claude-opus-4-7"
+        request_data = {"model": "opus-4.7", "litellm_logging_obj": logging_obj}
+
+        model_name = ProxyBaseLLMRequestProcessing._resolve_cost_injection_model_name(
+            request_data
+        )
+        result = ProxyBaseLLMRequestProcessing._inject_cost_into_usage_dict(
+            self._usage_event(), model_name
+        )
+
+        assert result is not None
         assert isinstance(result["usage"].get("cost"), float)
         assert result["usage"]["cost"] > 0
