@@ -16,6 +16,7 @@ import {
   Typography,
 } from "antd";
 import { LoadingOutlined } from "@ant-design/icons";
+// eslint-disable-next-line litellm-ui/no-banned-ui-imports
 import { BarChart } from "@tremor/react";
 import { ArrowLeftIcon, DollarSignIcon, EditIcon, KeyIcon, UsersIcon } from "lucide-react";
 import { useMemo, useState } from "react";
