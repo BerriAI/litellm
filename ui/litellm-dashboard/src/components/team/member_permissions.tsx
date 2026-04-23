@@ -1,7 +1,20 @@
-import { getTeamPermissionsCall, teamPermissionsUpdateCall } from "@/components/networking";
-import { ReloadOutlined, SaveOutlined } from "@ant-design/icons";
-import { Card, Table, TableBody, TableCell, TableHead, TableHeaderCell, TableRow, Text, Title } from "@tremor/react";
-import { Button, Checkbox, Empty } from "antd";
+import {
+  getTeamPermissionsCall,
+  teamPermissionsUpdateCall,
+} from "@/components/networking";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import { cn } from "@/lib/utils";
+import { RefreshCcw, Save } from "lucide-react";
 import React, { useEffect, useState } from "react";
 import NotificationsManager from "../molecules/notifications_manager";
 import { getPermissionInfo } from "./permission_definitions";
@@ -12,7 +25,11 @@ interface MemberPermissionsProps {
   canEditTeam: boolean;
 }
 
-const MemberPermissions: React.FC<MemberPermissionsProps> = ({ teamId, accessToken, canEditTeam }) => {
+const MemberPermissions: React.FC<MemberPermissionsProps> = ({
+  teamId,
+  accessToken,
+  canEditTeam,
+}) => {
   const [permissions, setPermissions] = useState<string[]>([]);
   const [selectedPermissions, setSelectedPermissions] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
@@ -39,6 +56,7 @@ const MemberPermissions: React.FC<MemberPermissionsProps> = ({ teamId, accessTok
 
   useEffect(() => {
     fetchPermissions();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [teamId, accessToken]);
 
   const handlePermissionChange = (permission: string, checked: boolean) => {
@@ -75,58 +93,76 @@ const MemberPermissions: React.FC<MemberPermissionsProps> = ({ teamId, accessTok
   const hasPermissions = permissions.length > 0;
 
   return (
-    <Card className="bg-white shadow-md rounded-md p-6">
-      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center border-b pb-4 mb-6">
-        <Title className="mb-2 sm:mb-0">Member Permissions</Title>
+    <Card className="bg-background shadow-md rounded-md p-6">
+      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center border-b border-border pb-4 mb-6">
+        <h3 className="text-lg font-semibold mb-2 sm:mb-0">
+          Member Permissions
+        </h3>
         {canEditTeam && hasChanges && (
           <div className="flex gap-3">
-            <Button icon={<ReloadOutlined />} onClick={handleReset}>
+            <Button variant="outline" onClick={handleReset}>
+              <RefreshCcw className="h-4 w-4" />
               Reset
             </Button>
-            <Button onClick={handleSave} loading={saving} type="primary" icon={<SaveOutlined />}>
-              Save Changes
+            <Button onClick={handleSave} disabled={saving}>
+              <Save className="h-4 w-4" />
+              {saving ? "Saving…" : "Save Changes"}
             </Button>
           </div>
         )}
       </div>
 
-      <Text className="mb-6 text-gray-600">Control what team members can do when they are not team admins.</Text>
+      <p className="mb-6 text-muted-foreground">
+        Control what team members can do when they are not team admins.
+      </p>
 
       {hasPermissions ? (
-        <div className="overflow-x-auto">
-          <Table className=" min-w-full">
-            <TableHead>
+        <div className="overflow-x-auto border border-border rounded-md">
+          <Table className="min-w-full">
+            <TableHeader>
               <TableRow>
-                <TableHeaderCell>Method</TableHeaderCell>
-                <TableHeaderCell>Endpoint</TableHeaderCell>
-                <TableHeaderCell>Description</TableHeaderCell>
-                <TableHeaderCell className="sticky right-0 bg-white shadow-[-4px_0_4px_-4px_rgba(0,0,0,0.1)] text-center">
+                <TableHead>Method</TableHead>
+                <TableHead>Endpoint</TableHead>
+                <TableHead>Description</TableHead>
+                <TableHead className="sticky right-0 bg-background shadow-[-4px_0_4px_-4px_rgba(0,0,0,0.1)] text-center">
                   Allow Access
-                </TableHeaderCell>
+                </TableHead>
               </TableRow>
-            </TableHead>
+            </TableHeader>
             <TableBody>
               {permissions.map((permission) => {
                 const permInfo = getPermissionInfo(permission);
                 return (
-                  <TableRow key={permission} className="hover:bg-gray-50 transition-colors">
+                  <TableRow
+                    key={permission}
+                    className="hover:bg-muted transition-colors"
+                  >
                     <TableCell>
                       <span
-                        className={`px-2 py-1 rounded text-xs font-medium ${
-                          permInfo.method === "GET" ? "bg-blue-100 text-blue-800" : "bg-green-100 text-green-800"
-                        }`}
+                        className={cn(
+                          "px-2 py-1 rounded text-xs font-medium",
+                          permInfo.method === "GET"
+                            ? "bg-blue-100 text-blue-800 dark:bg-blue-950 dark:text-blue-300"
+                            : "bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300",
+                        )}
                       >
                         {permInfo.method}
                       </span>
                     </TableCell>
                     <TableCell>
-                      <span className="font-mono text-sm text-gray-800">{permInfo.endpoint}</span>
+                      <span className="font-mono text-sm text-foreground">
+                        {permInfo.endpoint}
+                      </span>
                     </TableCell>
-                    <TableCell className="text-gray-700">{permInfo.description}</TableCell>
-                    <TableCell className="sticky right-0 bg-white shadow-[-4px_0_4px_-4px_rgba(0,0,0,0.1)] text-center">
+                    <TableCell className="text-foreground">
+                      {permInfo.description}
+                    </TableCell>
+                    <TableCell className="sticky right-0 bg-background shadow-[-4px_0_4px_-4px_rgba(0,0,0,0.1)] text-center">
                       <Checkbox
                         checked={selectedPermissions.includes(permission)}
-                        onChange={(e) => handlePermissionChange(permission, e.target.checked)}
+                        onCheckedChange={(checked) =>
+                          handlePermissionChange(permission, checked === true)
+                        }
                         disabled={!canEditTeam}
                       />
                     </TableCell>
@@ -137,8 +173,8 @@ const MemberPermissions: React.FC<MemberPermissionsProps> = ({ teamId, accessTok
           </Table>
         </div>
       ) : (
-        <div className="py-12">
-          <Empty description="No permissions available" />
+        <div className="py-12 text-center text-muted-foreground">
+          No permissions available
         </div>
       )}
     </Card>
