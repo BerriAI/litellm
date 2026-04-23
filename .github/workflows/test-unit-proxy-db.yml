@@ -74,6 +74,10 @@ jobs:
 
   proxy-db:
     needs: assert-shard-coverage
+    # Display only the semantic shard name in the checks UI instead of GHA's
+    # default "proxy-db (key-generation, tests/proxy_unit_tests/…, 0, loadscope, "", 20)"
+    # which includes every matrix field and gets truncated past the test-path.
+    name: ${{ matrix.test-group }}
     permissions:
       contents: read
       id-token: write
