@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import os
 import time
 import traceback
 from datetime import datetime
@@ -55,6 +56,12 @@ from litellm.types.utils import ServerToolUse
 StreamChunkSerializer = Callable[[Any], str]
 # Type alias for streaming error serializer (ProxyException -> wire format)
 StreamErrorSerializer = Callable[[ProxyException], str]
+
+# Cached at module load time to avoid repeated env var lookups on every request.
+# NOTE: changing this env var at runtime has no effect; a server restart is required.
+_ENFORCE_STREAMED_USAGE = (
+    os.environ.get("LITELLM_ENFORCE_STREAMED_USAGE", "false").lower() == "true"
+)
 
 if TYPE_CHECKING:
     from litellm.proxy.proxy_server import ProxyConfig as _ProxyConfig
@@ -797,8 +804,8 @@ class ProxyBaseLLMRequestProcessing:
         # automatically add stream_options={'include_usage': True} if not already set
         if (
             general_settings.get("always_include_stream_usage", False) is True
-            and self.data.get("stream", False) is True
-        ):
+            or _ENFORCE_STREAMED_USAGE
+        ) and self.data.get("stream", False) is True:
             # Only set if stream_options is not already provided by the client
             if "stream_options" not in self.data:
                 self.data["stream_options"] = {"include_usage": True}
