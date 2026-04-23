@@ -13,11 +13,12 @@ import { Providers, getPlaceholder, getProviderModels } from "@/components/provi
 import { getDisplayModelName } from "@/components/view_model/model_name_display";
 import { transformModelData } from "./utils/modelDataTransformer";
 import { all_admin_roles, internalUserRoles, isProxyAdminRole, isUserTeamAdminForAnyTeam } from "@/utils/roles";
-import { RefreshIcon } from "@heroicons/react/outline";
+import { RefreshCcw } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
-import { Col, Grid, Icon, Tab, TabGroup, TabList, TabPanel, TabPanels } from "@tremor/react";
+// eslint-disable-next-line litellm-ui/no-banned-ui-imports
+import { Tab, TabGroup, TabList, TabPanel, TabPanels } from "@tremor/react";
 import type { UploadProps } from "antd";
-import { Form, Typography } from "antd";
+import { Form } from "antd";
 import { PlusCircleOutlined } from "@ant-design/icons";
 import React, { useEffect, useMemo, useState } from "react";
 import AddModelTab from "../../../components/add_model/add_model_tab";
@@ -230,11 +231,12 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({ premiumUser, te
   const isLoading = isLoadingModels || isLoadingModelCostMap || isLoadingCredentials || isLoadingUISettings;
 
   if (userRole && userRole == "Admin Viewer") {
-    const { Title, Paragraph } = Typography;
     return (
       <div>
-        <Title level={1}>Access Denied</Title>
-        <Paragraph>Ask your proxy admin for access to view all models</Paragraph>
+        <h1 className="text-3xl font-semibold">Access Denied</h1>
+        <p className="text-muted-foreground">
+          Ask your proxy admin for access to view all models
+        </p>
       </div>
     );
   }
@@ -276,8 +278,8 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({ premiumUser, te
 
   return (
     <div className="w-full mx-4 h-[75vh]">
-      <Grid numItems={1} className="gap-2 p-8 w-full mt-2">
-        <Col numColSpan={1} className="flex flex-col gap-2">
+      <div className="grid grid-cols-1 gap-2 p-8 w-full mt-2">
+        <div className="col-span-1 flex flex-col gap-2">
           {/* Model Management Header */}
           <div className="flex justify-between items-center mb-4">
             <div>
@@ -387,14 +389,19 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({ premiumUser, te
                 </div>
 
                 <div className="flex items-center space-x-2 self-center">
-                  {lastRefreshed && <span className="text-xs text-gray-500">Last Refreshed: {lastRefreshed}</span>}
-                  <Icon
-                    icon={RefreshIcon}
-                    variant="shadow"
-                    size="xs"
-                    className="cursor-pointer"
+                  {lastRefreshed && (
+                    <span className="text-xs text-muted-foreground">
+                      Last Refreshed: {lastRefreshed}
+                    </span>
+                  )}
+                  <button
+                    type="button"
                     onClick={handleRefreshClick}
-                  />
+                    className="p-1.5 rounded-md border border-border shadow-sm hover:bg-muted transition-colors"
+                    aria-label="Refresh"
+                  >
+                    <RefreshCcw className="h-3.5 w-3.5" />
+                  </button>
                 </div>
               </TabList>
               <TabPanels>
@@ -470,8 +477,8 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({ premiumUser, te
               </TabPanels>
             </TabGroup>
           )}
-        </Col>
-      </Grid>
+        </div>
+      </div>
     </div>
   );
 };
