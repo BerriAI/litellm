@@ -1,21 +1,22 @@
-import { Typography } from "antd";
 import { JsonView, defaultStyles } from "react-json-view-lite";
 import "react-json-view-lite/dist/index.css";
-import { JSON_MAX_HEIGHT, COLOR_BG_LIGHT, SPACING_LARGE } from "./constants";
-
-const { Text } = Typography;
+import {
+  JSON_MAX_HEIGHT,
+  COLOR_BG_LIGHT,
+  SPACING_LARGE,
+} from "./constants";
 
 interface JsonViewerProps {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   data: any;
   mode: "formatted";
 }
 
 /**
  * Displays JSON data in formatted tree view.
- * Uses an interactive tree component for easy navigation.
  */
 export function JsonViewer({ data }: JsonViewerProps) {
-  if (!data) return <Text type="secondary">No data</Text>;
+  if (!data) return <span className="text-muted-foreground">No data</span>;
 
   return (
     <div
