@@ -708,7 +708,11 @@ def test_authorize_post_accepts_ui_session_cookie(unauthenticated_client):
 
     with patch("litellm.proxy.proxy_server.master_key", "test-master-key"):
         cookie_jwt = _jwt.encode(
-            {"user_id": "browser-user-42", "login_method": "sso"},
+            {
+                "user_id": "browser-user-42",
+                "login_method": "sso",
+                "exp": int(time.time()) + 3600,
+            },
             "test-master-key",
             algorithm="HS256",
         )
@@ -998,3 +1002,107 @@ async def test_token_endpoint_missing_master_key_preserves_code_and_db():
     assert code in _byok_auth_codes
     # Credential never written — no inconsistent DB state.
     mock_store.assert_not_awaited()
+
+
+def test_authorize_post_rejects_cookie_without_exp(unauthenticated_client):
+    """Defense-in-depth: UI session cookies must carry an ``exp`` claim
+    so a leaked cookie has a bounded lifetime. A master-key-signed JWT
+    without ``exp`` is rejected at decode time (PyJWT
+    ``options={"require": ["exp"]}``)."""
+    import jwt as _jwt
+
+    with patch("litellm.proxy.proxy_server.master_key", "real-master-key"):
+        no_exp = _jwt.encode(
+            {"user_id": "u", "login_method": "sso"},
+            "real-master-key",
+            algorithm="HS256",
+        )
+        resp = _authorize_post_with_cookie(unauthenticated_client, no_exp, api_key="k")
+    assert resp.status_code == 401
+
+
+def test_authorize_post_rejects_expired_cookie(unauthenticated_client):
+    """An expired UI session cookie is rejected, not accepted as valid."""
+    import jwt as _jwt
+
+    with patch("litellm.proxy.proxy_server.master_key", "real-master-key"):
+        expired = _jwt.encode(
+            {
+                "user_id": "u",
+                "login_method": "sso",
+                "exp": int(time.time()) - 60,  # 1 minute ago
+            },
+            "real-master-key",
+            algorithm="HS256",
+        )
+        resp = _authorize_post_with_cookie(unauthenticated_client, expired, api_key="k")
+    assert resp.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_token_endpoint_accepts_oauth21_client_omitting_redirect_uri():
+    """OAuth 2.1 draft-15 §4.1.3 dropped the redirect_uri requirement at
+    the token endpoint. A strict OAuth 2.1 client will omit the value —
+    LiteLLM must accept that and rely on PKCE + client_id binding for
+    the security role redirect_uri played under RFC 6749.
+
+    Enforcement still fires when the client DOES submit a value that
+    disagrees with the record (see test_token_endpoint_rejects_redirect_uri_mismatch).
+    """
+    from litellm.proxy._experimental.mcp_server.byok_oauth_endpoints import (
+        byok_token,
+    )
+
+    verifier = "verifier_for_oauth21_no_redirect_uri_omit_ok!"
+    challenge = _make_challenge(verifier)
+    code = str(uuid.uuid4())
+    _byok_auth_codes[code] = {
+        "api_key": "k",
+        "server_id": "sid",
+        "code_challenge": challenge,
+        "redirect_uri": "http://127.0.0.1:3000/cb",
+        "client_id": "claude-desktop",
+        "user_id": "u",
+        "expires_at": time.time() + 60,
+    }
+
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.byok_oauth_endpoints.store_user_credential",
+            new=AsyncMock(),
+        ),
+        patch("litellm.proxy.proxy_server.master_key", "test-master"),
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+    ):
+        result = await byok_token(
+            request=MagicMock(),
+            grant_type="authorization_code",
+            code=code,
+            redirect_uri="",  # OAuth 2.1 client omits it
+            code_verifier=verifier,
+            client_id="claude-desktop",
+        )
+    assert result.status_code == 200
+
+
+def test_validate_loopback_redirect_uri_rejects_fragment():
+    from litellm.proxy._experimental.mcp_server.oauth_utils import (
+        validate_loopback_redirect_uri,
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        validate_loopback_redirect_uri("http://127.0.0.1:3000/cb#code=1")
+    assert exc.value.status_code == 400
+
+
+def test_validate_loopback_redirect_uri_rejects_malformed_cleanly():
+    """Malformed / unparseable URIs should surface as 400 invalid_request,
+    not a 500 from an unhandled exception inside ip_address()."""
+    from litellm.proxy._experimental.mcp_server.oauth_utils import (
+        validate_loopback_redirect_uri,
+    )
+
+    # Netloc that parses but whose host is neither "localhost" nor a valid IP.
+    with pytest.raises(HTTPException) as exc:
+        validate_loopback_redirect_uri("http://[not-an-ip]/cb")
+    assert exc.value.status_code == 400
