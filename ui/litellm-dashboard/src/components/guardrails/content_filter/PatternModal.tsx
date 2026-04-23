@@ -79,7 +79,7 @@ const PatternModal: React.FC<PatternModalProps> = ({
                       <SelectLabel>{category}</SelectLabel>
                       {categoryPatterns.map((pattern) => (
                         <SelectItem key={pattern.name} value={pattern.name}>
-                          {pattern.display_name}
+                          {pattern.display_name || pattern.name}
                         </SelectItem>
                       ))}
                     </SelectGroup>
