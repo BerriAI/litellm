@@ -18,9 +18,8 @@ import hashlib
 import html as _html_module
 import time
 import uuid
-from ipaddress import ip_address
 from typing import Dict, Optional, cast
-from urllib.parse import urlencode, urlparse
+from urllib.parse import urlencode
 
 import jwt
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
@@ -30,6 +29,9 @@ from litellm._logging import verbose_proxy_logger
 from litellm.proxy._experimental.mcp_server.db import store_user_credential
 from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
     get_request_base_url,
+)
+from litellm.proxy._experimental.mcp_server.oauth_utils import (
+    validate_loopback_redirect_uri,
 )
 from litellm.proxy._types import UserAPIKeyAuth
 
@@ -84,32 +86,6 @@ def _oauth_token_error(code: str, status: int = 400) -> JSONResponse:
     return JSONResponse(
         status_code=status, content={"error": code}, headers=_TOKEN_NO_CACHE_HEADERS
     )
-
-
-def _validate_redirect_uri(redirect_uri: str) -> None:
-    """Require a loopback redirect_uri (OAuth 2.1 §4.1.2.1 + RFC 8252
-    native-app pattern). MCP clients are native apps that listen on a
-    localhost port; rejecting non-loopback URIs prevents a malicious MCP
-    client from pointing the callback at its own server to capture the
-    code after a legitimate user enters their upstream API key.
-
-    Accepts the literal ``localhost`` plus any IP in the loopback ranges
-    (IPv4 ``127.0.0.0/8`` and IPv6 ``::1``) per RFC 8252 §7.3 — a string
-    match on ``"127.0.0.1"`` would miss ``127.0.0.2`` and full-form IPv6
-    (``0:0:0:0:0:0:0:1``).
-    """
-    parsed = urlparse(redirect_uri)
-    if parsed.scheme not in ("http", "https"):
-        raise HTTPException(status_code=400, detail="invalid_request")
-    host = (parsed.hostname or "").lower()
-    if host == "localhost":
-        return
-    try:
-        if ip_address(host).is_loopback:
-            return
-    except ValueError:
-        pass
-    raise HTTPException(status_code=400, detail="invalid_request")
 
 
 def _user_id_from_session_cookie(request: Request) -> Optional[str]:
@@ -677,7 +653,7 @@ async def byok_authorize_get(
         raise HTTPException(status_code=400, detail="redirect_uri is required")
     # Validate here too so the user sees the rejection before typing their
     # API key into the HTML form (the POST handler also validates).
-    _validate_redirect_uri(redirect_uri)
+    validate_loopback_redirect_uri(redirect_uri)
     if not code_challenge:
         raise HTTPException(status_code=400, detail="code_challenge is required")
 
@@ -737,7 +713,7 @@ async def byok_authorize_post(
     """
     _purge_expired_codes()
 
-    _validate_redirect_uri(redirect_uri)
+    validate_loopback_redirect_uri(redirect_uri)
 
     # Reject new codes if the store is at capacity (prevents memory exhaustion
     # from a burst of abandoned OAuth flows).
