@@ -9,6 +9,7 @@ interface EvalVerdict {
   score: number;
   reasoning: string;
   passed: boolean;
+  weight?: number;
 }
 
 interface EvalInformation {
@@ -37,11 +38,8 @@ export default function EvalViewer({ data }: EvalViewerProps) {
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
         <ExperimentOutlined style={{ fontSize: 16, color: "#6366f1" }} />
         <Text strong style={{ fontSize: 15 }}>
-          Evals
+          LLM Judge Results
         </Text>
-        <Tag color="blue" style={{ fontSize: 11 }}>
-          Beta
-        </Tag>
       </div>
 
       {entries.map((entry, idx) => (
@@ -55,18 +53,34 @@ function EvalEntryCard({ entry }: { entry: EvalInformation }) {
   const passed = entry.passed;
   const scoreColor = passed ? "#52c41a" : "#ff4d4f";
 
+  // Filter out synthetic "Overall" row the judge sometimes appends — it's already in the header
+  const verdicts = (entry.verdicts || []).filter(
+    (v) => (v.criterion_name || "").toLowerCase() !== "overall"
+  );
+
   const columns = [
     {
       title: "Criterion",
       dataIndex: "criterion_name",
       key: "criterion_name",
-      render: (v: string) => <Text strong>{v}</Text>,
+      width: 160,
+      render: (v: string) => <Text strong style={{ whiteSpace: "nowrap" }}>{v}</Text>,
+    },
+    {
+      title: "Weight",
+      dataIndex: "weight",
+      key: "weight",
+      width: 65,
+      render: (v: number) =>
+        v != null ? (
+          <Text type="secondary" style={{ fontSize: 12 }}>{v}%</Text>
+        ) : null,
     },
     {
       title: "Score",
       dataIndex: "score",
       key: "score",
-      width: 80,
+      width: 65,
       render: (v: number) => (
         <Text style={{ color: v >= 70 ? "#52c41a" : v >= 50 ? "#faad14" : "#ff4d4f", fontWeight: 600 }}>
           {v}
@@ -74,14 +88,31 @@ function EvalEntryCard({ entry }: { entry: EvalInformation }) {
       ),
     },
     {
+      title: (
+        <Tooltip title="Score × Weight — how much each criterion contributes to the final score">
+          <span style={{ borderBottom: "1px dashed #aaa", cursor: "help" }}>Weighted</span>
+        </Tooltip>
+      ),
+      key: "weighted",
+      width: 75,
+      render: (_: unknown, row: EvalVerdict) => {
+        if (row.weight == null) return null;
+        const contrib = (row.score * row.weight) / 100;
+        return (
+          <Text type="secondary" style={{ fontSize: 12 }}>
+            {contrib % 1 === 0 ? contrib : contrib.toFixed(1)}
+          </Text>
+        );
+      },
+    },
+    {
       title: "Comment",
       dataIndex: "reasoning",
       key: "reasoning",
+      ellipsis: { showTitle: false },
       render: (v: string) => (
         <Tooltip title={v}>
-          <Text style={{ fontSize: 12 }} ellipsis>
-            {v}
-          </Text>
+          <span style={{ fontSize: 12 }}>{v}</span>
         </Tooltip>
       ),
     },
@@ -101,10 +132,12 @@ function EvalEntryCard({ entry }: { entry: EvalInformation }) {
           )}
           <Text strong>{entry.eval_name}</Text>
           <Tag color={passed ? "success" : "error"}>{passed ? "PASSED" : "FAILED"}</Tag>
-          <Text type="secondary" style={{ fontSize: 12 }}>
-            {entry.overall_score?.toFixed(0)} / 100
-            {entry.threshold != null && ` (threshold: ${entry.threshold})`}
-          </Text>
+          <Tooltip title={`Weighted average of all criterion scores. Each criterion has a weight (%) set when the eval was created — higher-weight criteria count more toward the final score.`}>
+            <Text type="secondary" style={{ fontSize: 12, cursor: "help", borderBottom: "1px dashed #aaa" }}>
+              {entry.overall_score?.toFixed(0)} / 100
+              {entry.threshold != null && ` (threshold: ${entry.threshold})`}
+            </Text>
+          </Tooltip>
         </Space>
       }
       extra={
@@ -128,13 +161,37 @@ function EvalEntryCard({ entry }: { entry: EvalInformation }) {
         </Text>
       )}
 
-      {entry.verdicts && entry.verdicts.length > 0 ? (
+      {verdicts.length > 0 ? (
         <Table
-          dataSource={entry.verdicts}
+          dataSource={verdicts}
           columns={columns}
           pagination={false}
           size="small"
           rowKey="criterion_name"
+          scroll={{ x: true }}
+          summary={() => {
+            const hasWeights = verdicts.some((v) => v.weight != null);
+            if (!hasWeights) return null;
+            const total = verdicts.reduce(
+              (sum, v) => sum + (v.weight != null ? (v.score * v.weight) / 100 : 0),
+              0
+            );
+            return (
+              <Table.Summary.Row>
+                <Table.Summary.Cell index={0}>
+                  <Text strong style={{ fontSize: 12 }}>Total</Text>
+                </Table.Summary.Cell>
+                <Table.Summary.Cell index={1} />
+                <Table.Summary.Cell index={2} />
+                <Table.Summary.Cell index={3}>
+                  <Text strong style={{ fontSize: 12, color: scoreColor }}>
+                    {total % 1 === 0 ? total : total.toFixed(1)}
+                  </Text>
+                </Table.Summary.Cell>
+                <Table.Summary.Cell index={4} />
+              </Table.Summary.Row>
+            );
+          }}
         />
       ) : (
         <Text type="secondary" style={{ fontSize: 12 }}>
