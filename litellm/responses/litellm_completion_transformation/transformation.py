@@ -1652,7 +1652,7 @@ class LiteLLMCompletionResponsesConfig:
             id=chat_completion_response.id,
             created_at=chat_completion_response.created,
             model=chat_completion_response.model,
-            object=chat_completion_response.object,
+            object="response",
             error=getattr(chat_completion_response, "error", None),
             incomplete_details=getattr(
                 chat_completion_response, "incomplete_details", None
