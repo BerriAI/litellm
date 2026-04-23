@@ -3,20 +3,21 @@ import {
   credentialDeleteCall,
   CredentialItem,
   credentialUpdateCall,
-} from "@/components/networking"; // Assume this is your networking function
-import { PencilAltIcon, TrashIcon } from "@heroicons/react/outline";
+} from "@/components/networking";
+import { Pencil, Trash2 } from "lucide-react";
+// eslint-disable-next-line litellm-ui/no-banned-ui-imports
 import {
-  Badge,
-  Button,
-  Card,
   Table,
   TableBody,
   TableCell,
   TableHead,
   TableHeaderCell,
   TableRow,
-  Text,
 } from "@tremor/react";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { cn } from "@/lib/utils";
 import { Form } from "antd";
 import { UploadProps } from "antd/es/upload";
 import { useState } from "react";
@@ -26,24 +27,40 @@ import AddCredentialsTab from "./AddCredentialModal";
 import EditCredentialsModal from "./EditCredentialModal";
 import { useCredentials } from "@/app/(dashboard)/hooks/credentials/useCredentials";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
+
 interface CredentialsPanelProps {
   uploadProps: UploadProps;
 }
 
+const PROVIDER_BADGE_CLASSES: Record<string, string> = {
+  openai:
+    "bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300",
+  azure:
+    "bg-indigo-100 text-indigo-700 dark:bg-indigo-950 dark:text-indigo-300",
+  anthropic:
+    "bg-purple-100 text-purple-700 dark:bg-purple-950 dark:text-purple-300",
+  default: "bg-muted text-muted-foreground",
+};
+
 const CredentialsPanel: React.FC<CredentialsPanelProps> = ({ uploadProps }) => {
   const { accessToken } = useAuthorized();
-  const { data: credentialsResponse, refetch: refetchCredentials } = useCredentials();
+  const { data: credentialsResponse, refetch: refetchCredentials } =
+    useCredentials();
   const credentialList = credentialsResponse?.credentials || [];
 
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [isUpdateModalOpen, setIsUpdateModalOpen] = useState(false);
-  const [selectedCredential, setSelectedCredential] = useState<CredentialItem | null>(null);
-  const [credentialToDelete, setCredentialToDelete] = useState<CredentialItem | null>(null);
+  const [selectedCredential, setSelectedCredential] =
+    useState<CredentialItem | null>(null);
+  const [credentialToDelete, setCredentialToDelete] =
+    useState<CredentialItem | null>(null);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [isCredentialDeleting, setIsCredentialDeleting] = useState(false);
-  const [form] = Form.useForm();
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const [_form] = Form.useForm();
 
   const restrictedFields = ["credential_name", "custom_llm_provider"];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const handleUpdateCredential = async (values: any) => {
     if (!accessToken) {
       return;
@@ -52,7 +69,6 @@ const CredentialsPanel: React.FC<CredentialsPanelProps> = ({ uploadProps }) => {
     const filter_credential_values = Object.entries(values)
       .filter(([key]) => !restrictedFields.includes(key))
       .reduce((acc, [key, value]) => ({ ...acc, [key]: value }), {});
-    // Transform form values into credential structure
     const newCredential = {
       credential_name: values.credential_name,
       credential_values: filter_credential_values,
@@ -61,12 +77,17 @@ const CredentialsPanel: React.FC<CredentialsPanelProps> = ({ uploadProps }) => {
       },
     };
 
-    await credentialUpdateCall(accessToken, values.credential_name, newCredential);
+    await credentialUpdateCall(
+      accessToken,
+      values.credential_name,
+      newCredential,
+    );
     NotificationsManager.success("Credential updated successfully");
     setIsUpdateModalOpen(false);
     await refetchCredentials();
   };
 
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const handleAddCredential = async (values: any) => {
     if (!accessToken) {
       return;
@@ -75,7 +96,6 @@ const CredentialsPanel: React.FC<CredentialsPanelProps> = ({ uploadProps }) => {
     const filter_credential_values = Object.entries(values)
       .filter(([key]) => !restrictedFields.includes(key))
       .reduce((acc, [key, value]) => ({ ...acc, [key]: value }), {});
-    // Transform form values into credential structure
     const newCredential = {
       credential_name: values.credential_name,
       credential_values: filter_credential_values,
@@ -84,7 +104,6 @@ const CredentialsPanel: React.FC<CredentialsPanelProps> = ({ uploadProps }) => {
       },
     };
 
-    // Add to list and close modal
     await credentialCreateCall(accessToken, newCredential);
     NotificationsManager.success("Credential added successfully");
     setIsAddModalOpen(false);
@@ -92,19 +111,10 @@ const CredentialsPanel: React.FC<CredentialsPanelProps> = ({ uploadProps }) => {
   };
 
   const renderProviderBadge = (provider: string) => {
-    const providerColors: Record<string, string> = {
-      openai: "blue",
-      azure: "indigo",
-      anthropic: "purple",
-      default: "gray",
-    };
-
-    const color = providerColors[provider.toLowerCase()] || providerColors["default"];
-    return (
-      <Badge color={color as any} size="xs">
-        {provider}
-      </Badge>
-    );
+    const classes =
+      PROVIDER_BADGE_CLASSES[provider.toLowerCase()] ||
+      PROVIDER_BADGE_CLASSES.default;
+    return <Badge className={cn("text-xs", classes)}>{provider}</Badge>;
   };
 
   const handleDeleteCredential = async () => {
@@ -113,10 +123,14 @@ const CredentialsPanel: React.FC<CredentialsPanelProps> = ({ uploadProps }) => {
     }
     setIsCredentialDeleting(true);
     try {
-      await credentialDeleteCall(accessToken, credentialToDelete.credential_name);
+      await credentialDeleteCall(
+        accessToken,
+        credentialToDelete.credential_name,
+      );
       NotificationsManager.success("Credential deleted successfully");
       await refetchCredentials();
-    } catch (error) {
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    } catch (_error) {
       NotificationsManager.error("Failed to delete credential");
     } finally {
       setCredentialToDelete(null);
@@ -139,7 +153,10 @@ const CredentialsPanel: React.FC<CredentialsPanelProps> = ({ uploadProps }) => {
     <div className="w-full mx-auto flex-auto overflow-y-auto p-2">
       <Button onClick={() => setIsAddModalOpen(true)}>Add Credential</Button>
       <div className="flex justify-between items-center mt-4 mb-4">
-        <Text>Configured credentials for different AI providers. Add and manage your API credentials.</Text>
+        <p className="text-muted-foreground">
+          Configured credentials for different AI providers. Add and manage
+          your API credentials.
+        </p>
       </div>
 
       <Card>
@@ -154,37 +171,50 @@ const CredentialsPanel: React.FC<CredentialsPanelProps> = ({ uploadProps }) => {
           <TableBody>
             {!credentialList || credentialList.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={4} className="text-center py-4 text-gray-500">
+                <TableCell
+                  colSpan={4}
+                  className="text-center py-4 text-muted-foreground"
+                >
                   No credentials configured
                 </TableCell>
               </TableRow>
             ) : (
-              credentialList.map((credential: CredentialItem, index: number) => (
-                <TableRow key={index}>
-                  <TableCell>{credential.credential_name}</TableCell>
-                  <TableCell>
-                    {renderProviderBadge((credential.credential_info?.custom_llm_provider as string) || "-")}
-                  </TableCell>
-                  <TableCell>
-                    <Button
-                      icon={PencilAltIcon}
-                      variant="light"
-                      size="sm"
-                      onClick={() => {
-                        setSelectedCredential(credential);
-                        setIsUpdateModalOpen(true);
-                      }}
-                    />
-                    <Button
-                      icon={TrashIcon}
-                      variant="light"
-                      size="sm"
-                      onClick={() => openDeleteModal(credential)}
-                      className="ml-2"
-                    />
-                  </TableCell>
-                </TableRow>
-              ))
+              credentialList.map(
+                (credential: CredentialItem, index: number) => (
+                  <TableRow key={index}>
+                    <TableCell>{credential.credential_name}</TableCell>
+                    <TableCell>
+                      {renderProviderBadge(
+                        (credential.credential_info
+                          ?.custom_llm_provider as string) || "-",
+                      )}
+                    </TableCell>
+                    <TableCell>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-7 w-7"
+                        onClick={() => {
+                          setSelectedCredential(credential);
+                          setIsUpdateModalOpen(true);
+                        }}
+                        aria-label="Edit credential"
+                      >
+                        <Pencil className="h-4 w-4" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-7 w-7 ml-2 text-destructive hover:text-destructive"
+                        onClick={() => openDeleteModal(credential)}
+                        aria-label="Delete credential"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    </TableCell>
+                  </TableRow>
+                ),
+              )
             )}
           </TableBody>
         </Table>
@@ -216,8 +246,15 @@ const CredentialsPanel: React.FC<CredentialsPanelProps> = ({ uploadProps }) => {
         message="Are you sure you want to delete this credential? This action cannot be undone and may break existing integrations."
         resourceInformationTitle="Credential Information"
         resourceInformation={[
-          { label: "Credential Name", value: credentialToDelete?.credential_name },
-          { label: "Provider", value: credentialToDelete?.credential_info?.custom_llm_provider || "-" },
+          {
+            label: "Credential Name",
+            value: credentialToDelete?.credential_name,
+          },
+          {
+            label: "Provider",
+            value:
+              credentialToDelete?.credential_info?.custom_llm_provider || "-",
+          },
         ]}
         confirmLoading={isCredentialDeleting}
         requiredConfirmation={credentialToDelete?.credential_name}
