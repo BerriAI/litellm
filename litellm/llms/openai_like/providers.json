@@ -101,5 +101,9 @@
     "param_mappings": {
       "max_completion_tokens": "max_tokens"
     }
+  },
+  "telnyx": {
+    "base_url": "https://api.telnyx.com/v2/ai",
+    "api_key_env": "TELNYX_API_KEY"
   }
 }
