@@ -605,6 +605,39 @@ class TestLiteLLMCompletionResponsesConfig:
         assert hasattr(responses_api_response, "_hidden_params")
         assert responses_api_response._hidden_params == {}
 
+    def test_transform_chat_completion_response_sets_object_to_response(self):
+        """The bridged Responses API payload must emit ``object="response"``, not
+        forward the upstream Chat Completion's ``"chat.completion"`` literal.
+
+        Regression for https://github.com/BerriAI/litellm/issues/26267.
+        Also aligns the non-streaming bridge with the streaming sibling in
+        ``streaming_iterator.py``, which already hardcodes ``"object": "response"``.
+        """
+        chat_completion_response = ModelResponse(
+            id="chatcmpl-abc123",
+            created=1234567890,
+            model="anthropic.claude-sonnet-4-6",
+            object="chat.completion",
+            choices=[
+                Choices(
+                    finish_reason="stop",
+                    index=0,
+                    message=Message(
+                        content="Test response",
+                        role="assistant",
+                    ),
+                )
+            ],
+        )
+
+        responses_api_response = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+            request_input="Test",
+            responses_api_request={},
+            chat_completion_response=chat_completion_response,
+        )
+
+        assert responses_api_response.object == "response"
+
 
 class TestFunctionCallTransformation:
     """Test cases for function_call input transformation"""
