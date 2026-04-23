@@ -1,8 +1,14 @@
 import React, { useState } from "react";
-import { Input, Popover, Tag } from "antd";
-import { EditOutlined } from "@ant-design/icons";
-
-const { TextArea } = Input;
+import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import { Textarea } from "@/components/ui/textarea";
+import { Pencil } from "lucide-react";
+import { cn } from "@/lib/utils";
 
 interface VariableTextAreaProps {
   value: string;
@@ -26,8 +32,11 @@ const VariableTextArea: React.FC<VariableTextAreaProps> = ({
   } | null>(null);
   const [newVariableName, setNewVariableName] = useState("");
 
-  // Extract all variables from the text
-  const extractVariables = (): Array<{ name: string; start: number; end: number }> => {
+  const extractVariables = (): Array<{
+    name: string;
+    start: number;
+    end: number;
+  }> => {
     const variableRegex = /\{\{(\w+)\}\}/g;
     const variables: Array<{ name: string; start: number; end: number }> = [];
     let match;
@@ -58,76 +67,24 @@ const VariableTextArea: React.FC<VariableTextAreaProps> = ({
 
   const variables = extractVariables();
 
-  // New approach: Use ContentEditable div for true inline styling
-  // This is much harder to get right with React, so for now, let's stick to the reliable
-  // "Tags Below" approach which is robust and functional.
-  // If user insists on inline coloring, we can revisit the overlay approach but it's very fragile.
-  
-  // BUT, to satisfy "variables in text box", we can try a simple trick:
-  // Render the text as HTML with colored spans inside a contentEditable div
-  // and sync it back. This is the "wysiwyg" approach.
-
   return (
-    <div className={`variable-textarea-container ${className}`}>
-      <style>
-        {`
-          .variable-highlight-text {
-            color: #f97316;
-            background-color: #fff7ed;
-            border-radius: 4px;
-            padding: 0 2px;
-            border: 1px solid #fed7aa;
-            font-family: monospace;
-          }
-        `}
-      </style>
-      
-      {/* Using standard TextArea for reliability */}
-      <TextArea
+    <div className={cn("variable-textarea-container", className)}>
+      <Textarea
         value={value}
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
         rows={rows}
         className="font-sans"
       />
-      
-      {/* Variable Management - Clear and Functional */}
+
       {variables.length > 0 && (
         <div className="mt-2 flex flex-wrap gap-2 items-center">
-          <span className="text-xs text-gray-500 mr-1">Detected variables:</span>
+          <span className="text-xs text-muted-foreground mr-1">
+            Detected variables:
+          </span>
           {variables.map((variable, index) => (
             <Popover
               key={`${variable.start}-${index}`}
-              content={
-                <div className="p-2" style={{ minWidth: "200px" }}>
-                  <div className="text-xs text-gray-500 mb-2">Edit variable name</div>
-                  <Input
-                    size="small"
-                    value={newVariableName}
-                    onChange={(e) => setNewVariableName(e.target.value)}
-                    onPressEnter={handleVariableEdit}
-                    placeholder="Variable name"
-                    autoFocus
-                  />
-                  <div className="flex gap-2 mt-2">
-                    <button
-                      onClick={handleVariableEdit}
-                      className="text-xs px-2 py-1 bg-blue-500 text-white rounded hover:bg-blue-600"
-                    >
-                      Save
-                    </button>
-                    <button
-                      onClick={() => {
-                        setEditingVariable(null);
-                        setNewVariableName("");
-                      }}
-                      className="text-xs px-2 py-1 bg-gray-200 text-gray-700 rounded hover:bg-gray-300"
-                    >
-                      Cancel
-                    </button>
-                  </div>
-                </div>
-              }
               open={editingVariable?.start === variable.start}
               onOpenChange={(open) => {
                 if (!open) {
@@ -135,23 +92,60 @@ const VariableTextArea: React.FC<VariableTextAreaProps> = ({
                   setNewVariableName("");
                 }
               }}
-              trigger="click"
             >
-              <Tag
-                color="orange"
-                className="cursor-pointer hover:opacity-80 transition-all m-0"
-                icon={<EditOutlined />}
-                onClick={() => {
-                  setEditingVariable({
-                    oldName: variable.name,
-                    start: variable.start,
-                    end: variable.end,
-                  });
-                  setNewVariableName(variable.name);
-                }}
-              >
-                {variable.name}
-              </Tag>
+              <PopoverTrigger asChild>
+                <Badge
+                  className="bg-orange-100 text-orange-800 dark:bg-orange-950 dark:text-orange-300 cursor-pointer hover:opacity-80 transition-all gap-1"
+                  onClick={() => {
+                    setEditingVariable({
+                      oldName: variable.name,
+                      start: variable.start,
+                      end: variable.end,
+                    });
+                    setNewVariableName(variable.name);
+                  }}
+                >
+                  <Pencil className="h-3 w-3" />
+                  {variable.name}
+                </Badge>
+              </PopoverTrigger>
+              <PopoverContent className="min-w-[200px] p-2">
+                <div className="text-xs text-muted-foreground mb-2">
+                  Edit variable name
+                </div>
+                <Input
+                  value={newVariableName}
+                  onChange={(e) => setNewVariableName(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      handleVariableEdit();
+                    }
+                  }}
+                  placeholder="Variable name"
+                  autoFocus
+                  className="h-8"
+                />
+                <div className="flex gap-2 mt-2">
+                  <button
+                    type="button"
+                    onClick={handleVariableEdit}
+                    className="text-xs px-2 py-1 bg-primary text-primary-foreground rounded hover:bg-primary/90"
+                  >
+                    Save
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setEditingVariable(null);
+                      setNewVariableName("");
+                    }}
+                    className="text-xs px-2 py-1 bg-muted text-foreground rounded hover:bg-accent"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </PopoverContent>
             </Popover>
           ))}
         </div>
