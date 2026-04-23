@@ -146,16 +146,6 @@ const menuGroups: MenuGroup[] = [
         icon: <SafetyOutlined />,
       },
       {
-        key: "evals",
-        page: "evals",
-        label: (
-          <span className="flex items-center gap-2">
-            Evals <Tag color="blue" style={{ fontSize: 10, padding: "0 4px", lineHeight: "16px" }}>Beta</Tag>
-          </span>
-        ),
-        icon: <ExperimentOutlined />,
-      },
-      {
         key: "policies",
         page: "policies",
         label: (
