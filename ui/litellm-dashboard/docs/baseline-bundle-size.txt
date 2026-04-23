@@ -1,0 +1,32 @@
+# Phase 1 migration — baseline bundle size
+
+Captured pre-migration (after shadcn init + deps installed, before any section migrations).
+
+## `out/` total
+21M	out/
+
+## By _next chunks (top 20 by size)
+625410	out/_next/static/chunks/7e417dd24c8becd0.js
+550208	out/_next/static/chunks/cf06797ce4e438f9.js
+550208	out/_next/static/chunks/c13f822e4447c193.js
+550208	out/_next/static/chunks/b727940bc64dbb7e.js
+550208	out/_next/static/chunks/75aa748805945c8c.js
+550208	out/_next/static/chunks/342c7d7210247a5e.js
+397105	out/_next/static/chunks/496b84010c33cf69.js
+311450	out/_next/static/chunks/99cf9cf99df5ccfc.js
+273723	out/_next/static/chunks/37821c5764fddf43.js
+229764	out/_next/static/chunks/d3ac82723ec9e30d.js
+224513	out/_next/static/chunks/726579f2940c2a2f.js
+206622	out/_next/static/chunks/3daef8922b68e600.js
+201689	out/_next/static/chunks/a5ab01e86df55e55.js
+192705	out/_next/static/chunks/399a183eff6b9833.js
+189972	out/_next/static/chunks/d6308809b80e3792.js
+189972	out/_next/static/chunks/80619ce7df47600b.js
+185214	out/_next/static/chunks/7e5fe5584502da06.js
+174972	out/_next/static/chunks/eaa9f9b9bb3e054b.js
+174972	out/_next/static/chunks/a230559fcabaea23.js
+160159	out/_next/static/chunks/5d1b90e5b929acc3.js
+
+## Total JS bytes
+15425508
+15425508 bytes total js
