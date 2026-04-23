@@ -37,7 +37,8 @@
         "src/components/cache_dashboard.tsx",
         "src/components/Settings/AdminSettings/MCPSemanticFilterSettings/MCPSemanticFilterTestPanel.tsx",
         "src/components/mcp_hub_table_columns.tsx",
-        "src/components/model_hub_table_columns.tsx"
+        "src/components/model_hub_table_columns.tsx",
+        "src/components/mcp_server_management/MCPServerSelector.tsx"
       ],
       "rules": {
         "litellm-ui/no-banned-ui-imports": "off",

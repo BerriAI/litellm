@@ -1,8 +1,12 @@
 import React, { useEffect, useRef, useState, useMemo } from "react";
 import { listMCPTools } from "../networking";
 import { MCPTool, MCPServer } from "../mcp_tools/types";
-import { Text } from "@tremor/react";
-import { Spin, Radio } from "antd";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Skeleton } from "@/components/ui/skeleton";
+import {
+  ToggleGroup,
+  ToggleGroupItem,
+} from "@/components/ui/toggle-group";
 import { useMCPServers } from "../../app/(dashboard)/hooks/mcpServers/useMCPServers";
 import McpCrudPermissionPanel from "../mcp_tools/McpCrudPermissionPanel";
 import { classifyToolOp } from "../../utils/mcpToolCrudClassification";
@@ -117,34 +121,42 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
         const viewMode = viewModes[server.server_id] ?? "crud";
 
         return (
-          <div key={server.server_id} className="border rounded-lg bg-gray-50">
-            {/* Header */}
-            <div className="flex items-center justify-between p-4 border-b bg-white rounded-t-lg">
+          <div
+            key={server.server_id}
+            className="border border-border rounded-lg bg-muted"
+          >
+            <div className="flex items-center justify-between p-4 border-b border-border bg-background rounded-t-lg">
               <div>
-                <Text className="font-semibold text-gray-900">{serverName}</Text>
-                {server.description && <Text className="text-sm text-gray-500">{server.description}</Text>}
+                <p className="font-semibold text-foreground">{serverName}</p>
+                {server.description && (
+                  <p className="text-sm text-muted-foreground">
+                    {server.description}
+                  </p>
+                )}
               </div>
               <div className="flex items-center gap-3">
                 {!disabled && tools.length > 0 && (
-                  <Radio.Group
+                  <ToggleGroup
+                    type="single"
+                    size="sm"
                     value={viewMode}
-                    onChange={(e) =>
-                      setViewModes((prev) => ({ ...prev, [server.server_id]: e.target.value }))
-                    }
-                    size="small"
-                    optionType="button"
-                    buttonStyle="solid"
-                    options={[
-                      { label: "Risk Groups", value: "crud" },
-                      { label: "Flat List", value: "flat" },
-                    ]}
-                  />
+                    onValueChange={(v) => {
+                      if (!v) return;
+                      setViewModes((prev) => ({
+                        ...prev,
+                        [server.server_id]: v as "crud" | "flat",
+                      }));
+                    }}
+                  >
+                    <ToggleGroupItem value="crud">Risk Groups</ToggleGroupItem>
+                    <ToggleGroupItem value="flat">Flat List</ToggleGroupItem>
+                  </ToggleGroup>
                 )}
                 {!disabled && (
                   <>
                     <button
                       type="button"
-                      className="text-sm text-blue-600 hover:text-blue-700 font-medium"
+                      className="text-sm text-primary hover:underline font-medium"
                       onClick={() => handleSelectAll(server.server_id)}
                       disabled={isLoading}
                     >
@@ -152,7 +164,7 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
                     </button>
                     <button
                       type="button"
-                      className="text-sm text-blue-600 hover:text-blue-700 font-medium"
+                      className="text-sm text-primary hover:underline font-medium"
                       onClick={() => handleDeselectAll(server.server_id)}
                       disabled={isLoading}
                     >
@@ -163,60 +175,62 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
               </div>
             </div>
 
-            {/* Tools */}
             <div className="p-4">
-              {/* Loading */}
               {isLoading && (
-                <div className="flex items-center justify-center py-8">
-                  <Spin size="large" />
-                  <Text className="ml-3 text-gray-500">Loading tools...</Text>
+                <div className="flex items-center justify-center py-8 gap-3">
+                  <Skeleton className="h-8 w-8 rounded-full" />
+                  <p className="text-muted-foreground">Loading tools...</p>
                 </div>
               )}
 
-              {/* Error */}
               {error && !isLoading && (
-                <div className="p-4 bg-red-50 border border-red-200 rounded-lg text-center">
-                  <Text className="text-red-600 font-medium">Unable to load tools</Text>
-                  <Text className="text-sm text-red-500 mt-1">{error}</Text>
+                <div className="p-4 bg-destructive/10 border border-destructive/30 rounded-lg text-center">
+                  <p className="text-destructive font-medium">
+                    Unable to load tools
+                  </p>
+                  <p className="text-sm text-destructive mt-1">{error}</p>
                 </div>
               )}
 
-              {/* CRUD grouped view */}
               {!isLoading && !error && tools.length > 0 && viewMode === "crud" && (
                 <McpCrudPermissionPanel
                   tools={tools}
-                  value={!toolPermissions[server.server_id] ? undefined : selectedTools}
-                  onChange={(allowed) => handleCrudPanelChange(server.server_id, allowed)}
+                  value={
+                    !toolPermissions[server.server_id] ? undefined : selectedTools
+                  }
+                  onChange={(allowed) =>
+                    handleCrudPanelChange(server.server_id, allowed)
+                  }
                   readOnly={disabled}
                 />
               )}
 
-              {/* Flat list view */}
               {!isLoading && !error && tools.length > 0 && viewMode === "flat" && (
                 <div className="space-y-2">
                   {tools.map((tool) => {
                     const isSelected = selectedTools.includes(tool.name);
                     return (
                       <div key={tool.name} className="flex items-start gap-2">
-                        <input
-                          type="checkbox"
+                        <Checkbox
                           checked={isSelected}
-                          onChange={() => {
-                            if (disabled) return;
-                            const next = isSelected
-                              ? selectedTools.filter((n) => n !== tool.name)
-                              : [...selectedTools, tool.name];
-                            handleCrudPanelChange(server.server_id, next);
-                          }}
                           disabled={disabled}
                           className="mt-0.5"
+                          onCheckedChange={(next) => {
+                            if (disabled) return;
+                            const nextList = next
+                              ? [...selectedTools, tool.name]
+                              : selectedTools.filter((n) => n !== tool.name);
+                            handleCrudPanelChange(server.server_id, nextList);
+                          }}
                         />
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-2">
-                            <Text className="font-medium text-gray-900">{tool.name}</Text>
-                            <Text className="text-sm text-gray-500">
+                            <span className="font-medium text-foreground">
+                              {tool.name}
+                            </span>
+                            <span className="text-sm text-muted-foreground">
                               - {tool.description || "No description"}
-                            </Text>
+                            </span>
                           </div>
                         </div>
                       </div>
@@ -225,10 +239,9 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
                 </div>
               )}
 
-              {/* Empty State */}
               {!isLoading && !error && tools.length === 0 && (
                 <div className="text-center py-6">
-                  <Text className="text-gray-500">No tools available</Text>
+                  <p className="text-muted-foreground">No tools available</p>
                 </div>
               )}
             </div>
