@@ -1,11 +1,27 @@
-import { DeleteOutlined, InfoCircleOutlined, PlusOutlined } from "@ant-design/icons";
-import { Select as AntdSelect, Button, Card, Collapse, Divider, Empty, Flex, Input, InputNumber, Space, Tooltip, Typography } from "antd";
+import { Info, Plus, Trash2 } from "lucide-react";
+import { Select as AntdSelect, Collapse, Empty, InputNumber } from "antd";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { Textarea } from "@/components/ui/textarea";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import React, { useEffect, useState } from "react";
 import { ModelGroup } from "../playground/llm_calls/fetch_models";
 
-const { Text } = Typography;
-
-const { TextArea } = Input;
+const InfoTip: React.FC<{ children: React.ReactNode }> = ({ children }) => (
+  <TooltipProvider>
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Info className="h-4 w-4 text-muted-foreground" />
+      </TooltipTrigger>
+      <TooltipContent className="max-w-xs">{children}</TooltipContent>
+    </Tooltip>
+  </TooltipProvider>
+);
 
 interface Route {
   id: string;
@@ -140,55 +156,68 @@ const RouterConfigBuilder: React.FC<RouterConfigBuilderProps> = ({ modelInfo, va
 
   return (
     <div className="w-full max-w-none">
-      <Flex justify="space-between" align="center" gap="middle" style={{ width: "100%", marginBottom: 24 }}>
-        <Space align="center">
-          <Typography.Title level={4} style={{ margin: 0 }}>Routes Configuration</Typography.Title>
-          <Tooltip title="Configure routing logic to automatically select the best model based on user input patterns">
-            <InfoCircleOutlined className="text-gray-400" />
-          </Tooltip>
-        </Space>
-        <Button type="primary" icon={<PlusOutlined />} onClick={addRoute} className="bg-blue-600 hover:bg-blue-700">
+      <div className="flex justify-between items-center w-full mb-6">
+        <div className="flex items-center gap-2">
+          <h4 className="text-base font-semibold m-0">Routes Configuration</h4>
+          <InfoTip>
+            Configure routing logic to automatically select the best model
+            based on user input patterns
+          </InfoTip>
+        </div>
+        <Button type="button" onClick={addRoute}>
+          <Plus className="h-4 w-4" />
           Add Route
         </Button>
-      </Flex>
+      </div>
 
       {/* Routes */}
       {routes.length === 0 ? (
-        <Card>
-          <Empty description="No routes configured. Click &quot;Add Route&quot; to get started." />
+        <Card className="p-6">
+          <Empty description='No routes configured. Click "Add Route" to get started.' />
         </Card>
       ) : (
         <Collapse
           activeKey={expandedRoutes}
-          onChange={(keys) => setExpandedRoutes(Array.isArray(keys) ? keys : [keys].filter(Boolean))}
+          onChange={(keys) =>
+            setExpandedRoutes(
+              Array.isArray(keys) ? keys : [keys].filter(Boolean),
+            )
+          }
           style={{ width: "100%" }}
           items={routes.map((route, index) => ({
             key: route.id,
             label: (
-              <Text style={{ fontSize: 16 }}>
+              <span className="text-base">
                 Route {index + 1}: {route.model || "Unnamed"}
-              </Text>
+              </span>
             ),
             extra: (
               <Button
-                type="text"
-                danger
-                size="small"
-                icon={<DeleteOutlined />}
+                type="button"
+                size="icon"
+                variant="ghost"
+                className="h-7 w-7 text-destructive"
                 onClick={(e) => {
                   e.stopPropagation();
                   removeRoute(route.id);
                 }}
-              />
+                aria-label="Remove route"
+              >
+                <Trash2 className="h-4 w-4" />
+              </Button>
             ),
             children: (
-              <Card key={route.id}>
+              <Card key={route.id} className="p-4">
                 {/* Model Selection */}
                 <div className="mb-4 w-full">
-                  <Text className="text-sm font-medium mb-2 block">Model</Text>
+                  <span className="text-sm font-medium mb-2 block">
+                    Model
+                  </span>
                   <AntdSelect
                     value={route.model}
-                    onChange={(value) => updateRoute(route.id, "model", value)}
+                    onChange={(value) =>
+                      updateRoute(route.id, "model", value)
+                    }
                     placeholder="Select model"
                     showSearch
                     style={{ width: "100%" }}
@@ -198,27 +227,39 @@ const RouterConfigBuilder: React.FC<RouterConfigBuilderProps> = ({ modelInfo, va
 
                 {/* Description */}
                 <div className="mb-4 w-full">
-                  <Text className="text-sm font-medium mb-2 block">Description</Text>
-                  <TextArea
+                  <span className="text-sm font-medium mb-2 block">
+                    Description
+                  </span>
+                  <Textarea
                     value={route.description}
-                    onChange={(e) => updateRoute(route.id, "description", e.target.value)}
+                    onChange={(e) =>
+                      updateRoute(
+                        route.id,
+                        "description",
+                        e.target.value,
+                      )
+                    }
                     placeholder="Describe when this route should be used..."
                     rows={2}
-                    style={{ width: "100%" }}
+                    className="w-full"
                   />
                 </div>
 
                 {/* Score Threshold */}
                 <div className="mb-4 w-full">
                   <div className="flex items-center gap-2 mb-2">
-                    <Text className="text-sm font-medium">Score Threshold</Text>
-                    <Tooltip title="Minimum similarity score to route to this model (0-1)">
-                      <InfoCircleOutlined className="text-gray-400" />
-                    </Tooltip>
+                    <span className="text-sm font-medium">
+                      Score Threshold
+                    </span>
+                    <InfoTip>
+                      Minimum similarity score to route to this model (0-1)
+                    </InfoTip>
                   </div>
                   <InputNumber
                     value={route.score_threshold}
-                    onChange={(value) => updateRoute(route.id, "score_threshold", value || 0)}
+                    onChange={(value) =>
+                      updateRoute(route.id, "score_threshold", value || 0)
+                    }
                     min={0}
                     max={1}
                     step={0.1}
@@ -230,18 +271,24 @@ const RouterConfigBuilder: React.FC<RouterConfigBuilderProps> = ({ modelInfo, va
                 {/* Example Utterances */}
                 <div className="w-full">
                   <div className="flex items-center gap-2 mb-2">
-                    <Text className="text-sm font-medium">Example Utterances</Text>
-                    <Tooltip title="Training examples for this route. Type an utterance and press Enter to add it.">
-                      <InfoCircleOutlined className="text-gray-400" />
-                    </Tooltip>
+                    <span className="text-sm font-medium">
+                      Example Utterances
+                    </span>
+                    <InfoTip>
+                      Training examples for this route. Type an utterance
+                      and press Enter to add it.
+                    </InfoTip>
                   </div>
-                  <Text className="text-xs text-gray-500 mb-2">
-                    Type an utterance and press Enter to add it. You can also paste multiple lines.
-                  </Text>
+                  <p className="text-xs text-muted-foreground mb-2">
+                    Type an utterance and press Enter to add it. You can
+                    also paste multiple lines.
+                  </p>
                   <AntdSelect
                     mode="tags"
                     value={route.utterances}
-                    onChange={(utterances) => updateRoute(route.id, "utterances", utterances)}
+                    onChange={(utterances) =>
+                      updateRoute(route.id, "utterances", utterances)
+                    }
                     placeholder="Type an utterance and press Enter..."
                     style={{ width: "100%" }}
                     tokenSeparators={["\n"]}
@@ -256,20 +303,26 @@ const RouterConfigBuilder: React.FC<RouterConfigBuilderProps> = ({ modelInfo, va
       )}
 
       {/* JSON Preview */}
-      <Divider />
+      <hr className="border-border my-6" />
       <div className="flex justify-between items-center mb-4 w-full">
-        <Text className="text-lg font-semibold">JSON Preview</Text>
-        <Button type="link" onClick={() => setShowJsonPreview(!showJsonPreview)} className="text-blue-600 p-0">
+        <span className="text-lg font-semibold">JSON Preview</span>
+        <Button
+          type="button"
+          variant="link"
+          onClick={() => setShowJsonPreview(!showJsonPreview)}
+          className="p-0 h-auto"
+        >
           {showJsonPreview ? "Hide" : "Show"}
         </Button>
       </div>
 
       {showJsonPreview && (
-        <Card className="bg-gray-50 w-full">
-          <pre className="text-sm overflow-auto max-h-64 w-full">{JSON.stringify(generateConfig(), null, 2)}</pre>
+        <Card className="bg-muted w-full p-4">
+          <pre className="text-sm overflow-auto max-h-64 w-full">
+            {JSON.stringify(generateConfig(), null, 2)}
+          </pre>
         </Card>
       )}
-
     </div>
   );
 };
