@@ -217,16 +217,18 @@ class PrismaWrapper:
     async def recreate_prisma_client(
         self, new_db_url: str, http_client: Optional[Any] = None
     ):
-        """Disconnect and reconnect the Prisma client with a new database URL."""
+        """Disconnect and reconnect the Prisma client with a new database URL.
+
+        Kills the old engine subprocess directly rather than calling
+        disconnect(). prisma-client-py's disconnect ultimately invokes a
+        synchronous `process.wait()` on the query engine that can block
+        the asyncio event loop for 30-120s when the DB is unreachable,
+        freezing liveness probes. See #26191.
+        """
         from prisma import Prisma  # type: ignore
 
         old_engine_pid = self._get_engine_pid()
-
-        try:
-            await self._original_prisma.disconnect()
-        except Exception as e:
-            verbose_proxy_logger.warning(f"Failed to disconnect Prisma client: {e}")
-            await self._kill_engine_process(old_engine_pid)
+        await self._kill_engine_process(old_engine_pid)
 
         if http_client is not None:
             self._original_prisma = Prisma(http=http_client)
