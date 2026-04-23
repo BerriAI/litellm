@@ -1,15 +1,37 @@
-import { ColumnDef, flexRender, getCoreRowModel, SortingState, useReactTable } from "@tanstack/react-table";
+import {
+  ColumnDef,
+  flexRender,
+  getCoreRowModel,
+  SortingState,
+  useReactTable,
+} from "@tanstack/react-table";
 import React from "react";
-import { Table, TableHead, TableHeaderCell, TableBody, TableRow, TableCell, Select, SelectItem } from "@tremor/react";
-import { SwitchVerticalIcon, ChevronUpIcon, ChevronDownIcon } from "@heroicons/react/outline";
-import { Skeleton } from "antd";
+// eslint-disable-next-line litellm-ui/no-banned-ui-imports
+import {
+  Table,
+  TableHead,
+  TableHeaderCell,
+  TableBody,
+  TableRow,
+  TableCell,
+  Select,
+  SelectItem,
+} from "@tremor/react";
+import {
+  ArrowUpDown,
+  ChevronDown,
+  ChevronUp,
+  CircleUserRound,
+  Search,
+  User,
+} from "lucide-react";
 import { UserInfo } from "./types";
 import UserInfoView from "./user_info_view";
 import { columns as createColumns } from "./columns";
 import { FilterInput } from "@/components/common_components/Filters/FilterInput";
 import { FiltersButton } from "@/components/common_components/Filters/FiltersButton";
 import { ResetFiltersButton } from "@/components/common_components/Filters/ResetFiltersButton";
-import { Search, User, CircleUserRound } from "lucide-react";
+import { cn } from "@/lib/utils";
 
 interface FilterState {
   email: string;
@@ -26,6 +48,7 @@ interface FilterState {
 
 interface UserDataTableProps {
   data: UserInfo[];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   columns: ColumnDef<UserInfo, any>[];
   isLoading?: boolean;
   onSortChange?: (sortBy: string, sortOrder: "asc" | "desc") => void;
@@ -42,12 +65,12 @@ interface UserDataTableProps {
   selectedUsers?: UserInfo[];
   onSelectionChange?: (selectedUsers: UserInfo[]) => void;
   enableSelection?: boolean;
-  // Filter-related props
   filters: FilterState;
   updateFilters: (update: Partial<FilterState>) => void;
   initialFilters: FilterState;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   teams: any[] | null;
-  // Pagination props
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   userListResponse: any;
   currentPage: number;
   handlePageChange: (newPage: number) => void;
@@ -165,6 +188,7 @@ export function UserDataTable({
     state: {
       sorting,
     },
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     onSortingChange: (updaterOrValue: any) => {
       const newSorting = typeof updaterOrValue === "function" ? updaterOrValue(sorting) : updaterOrValue;
       setSorting(newSorting);
@@ -212,9 +236,9 @@ export function UserDataTable({
   }
 
   return (
-    <div className="bg-white rounded-lg shadow">
+    <div className="bg-background rounded-lg shadow">
       {/* Filter Section */}
-      <div className="border-b px-6 py-4">
+      <div className="border-b border-border px-6 py-4">
         <div className="flex flex-col space-y-4">
           {/* Search and Filter Controls */}
           <div className="flex flex-wrap items-center gap-3">
@@ -295,16 +319,21 @@ export function UserDataTable({
           {/* Results Count and Pagination */}
           <div className="flex justify-between items-center">
             {isLoading ? (
-              <Skeleton.Input active style={{ width: 192, height: 20 }} />
+              <div className="h-5 w-48 rounded bg-muted animate-pulse" />
             ) : (
-              <span className="text-sm text-gray-700">
+              <span className="text-sm text-foreground/80">
                 Showing{" "}
-                {userListResponse && userListResponse.users && userListResponse.users.length > 0
+                {userListResponse &&
+                userListResponse.users &&
+                userListResponse.users.length > 0
                   ? (userListResponse.page - 1) * userListResponse.page_size + 1
                   : 0}{" "}
                 -{" "}
                 {userListResponse && userListResponse.users
-                  ? Math.min(userListResponse.page * userListResponse.page_size, userListResponse.total)
+                  ? Math.min(
+                      userListResponse.page * userListResponse.page_size,
+                      userListResponse.total,
+                    )
                   : 0}{" "}
                 of {userListResponse ? userListResponse.total : 0} results
               </span>
@@ -314,28 +343,38 @@ export function UserDataTable({
             <div className="flex space-x-2">
               {isLoading ? (
                 <>
-                  <Skeleton.Button active size="small" style={{ width: 80, height: 30 }} />
-                  <Skeleton.Button active size="small" style={{ width: 60, height: 30 }} />
+                  <div className="h-[30px] w-20 rounded bg-muted animate-pulse" />
+                  <div className="h-[30px] w-16 rounded bg-muted animate-pulse" />
                 </>
               ) : (
                 <>
                   <button
+                    type="button"
                     onClick={() => handlePageChange(currentPage - 1)}
                     disabled={currentPage === 1}
-                    className={`px-3 py-1 text-sm border rounded-md ${
-                      currentPage === 1 ? "bg-gray-100 text-gray-400 cursor-not-allowed" : "hover:bg-gray-50"
-                    }`}
+                    className={cn(
+                      "px-3 py-1 text-sm border border-border rounded-md",
+                      currentPage === 1
+                        ? "bg-muted text-muted-foreground cursor-not-allowed"
+                        : "hover:bg-muted",
+                    )}
                   >
                     Previous
                   </button>
                   <button
+                    type="button"
                     onClick={() => handlePageChange(currentPage + 1)}
-                    disabled={!userListResponse || currentPage >= userListResponse.total_pages}
-                    className={`px-3 py-1 text-sm border rounded-md ${
-                      !userListResponse || currentPage >= userListResponse.total_pages
-                        ? "bg-gray-100 text-gray-400 cursor-not-allowed"
-                        : "hover:bg-gray-50"
-                    }`}
+                    disabled={
+                      !userListResponse ||
+                      currentPage >= userListResponse.total_pages
+                    }
+                    className={cn(
+                      "px-3 py-1 text-sm border border-border rounded-md",
+                      !userListResponse ||
+                        currentPage >= userListResponse.total_pages
+                        ? "bg-muted text-muted-foreground cursor-not-allowed"
+                        : "hover:bg-muted",
+                    )}
                   >
                     Next
                   </button>
@@ -357,11 +396,13 @@ export function UserDataTable({
                     {headerGroup.headers.map((header) => (
                       <TableHeaderCell
                         key={header.id}
-                        className={`py-1 h-8 ${
-                          header.id === "actions"
-                            ? "sticky right-0 bg-white shadow-[-4px_0_8px_-6px_rgba(0,0,0,0.1)]"
-                            : ""
-                        } ${header.column.getCanSort() ? "cursor-pointer hover:bg-gray-50" : ""}`}
+                        className={cn(
+                          "py-1 h-8",
+                          header.id === "actions" &&
+                            "sticky right-0 bg-background shadow-[-4px_0_8px_-6px_rgba(0,0,0,0.1)]",
+                          header.column.getCanSort() &&
+                            "cursor-pointer hover:bg-muted",
+                        )}
                         onClick={header.column.getToggleSortingHandler()}
                       >
                         <div className="flex items-center justify-between gap-2">
@@ -370,18 +411,23 @@ export function UserDataTable({
                               ? null
                               : flexRender(header.column.columnDef.header, header.getContext())}
                           </div>
-                          {header.id !== "actions" && header.column.getCanSort() && (
-                            <div className="w-4">
-                              {header.column.getIsSorted() ? (
-                                {
-                                  asc: <ChevronUpIcon className="h-4 w-4 text-blue-500" />,
-                                  desc: <ChevronDownIcon className="h-4 w-4 text-blue-500" />,
-                                }[header.column.getIsSorted() as string]
-                              ) : (
-                                <SwitchVerticalIcon className="h-4 w-4 text-gray-400" />
-                              )}
-                            </div>
-                          )}
+                          {header.id !== "actions" &&
+                            header.column.getCanSort() && (
+                              <div className="w-4">
+                                {header.column.getIsSorted() ? (
+                                  {
+                                    asc: (
+                                      <ChevronUp className="h-4 w-4 text-primary" />
+                                    ),
+                                    desc: (
+                                      <ChevronDown className="h-4 w-4 text-primary" />
+                                    ),
+                                  }[header.column.getIsSorted() as string]
+                                ) : (
+                                  <ArrowUpDown className="h-4 w-4 text-muted-foreground" />
+                                )}
+                              </div>
+                            )}
                         </div>
                       </TableHeaderCell>
                     ))}
@@ -391,8 +437,11 @@ export function UserDataTable({
               <TableBody>
                 {isLoading ? (
                   <TableRow>
-                    <TableCell colSpan={columns.length} className="h-8 text-center">
-                      <div className="text-center text-gray-500">
+                    <TableCell
+                      colSpan={columns.length}
+                      className="h-8 text-center"
+                    >
+                      <div className="text-center text-muted-foreground">
                         <p>🚅 Loading users...</p>
                       </div>
                     </TableCell>
@@ -403,30 +452,34 @@ export function UserDataTable({
                       {row.getVisibleCells().map((cell) => (
                         <TableCell
                           key={cell.id}
-                          className={`py-0.5 max-h-8 overflow-hidden text-ellipsis whitespace-nowrap ${
-                            cell.column.id === "actions"
-                              ? "sticky right-0 bg-white shadow-[-4px_0_8px_-6px_rgba(0,0,0,0.1)]"
-                              : ""
-                          }`}
+                          className={cn(
+                            "py-0.5 max-h-8 overflow-hidden text-ellipsis whitespace-nowrap",
+                            cell.column.id === "actions" &&
+                              "sticky right-0 bg-background shadow-[-4px_0_8px_-6px_rgba(0,0,0,0.1)]",
+                            cell.column.id === "user_id" &&
+                              "cursor-pointer text-primary",
+                          )}
                           onClick={() => {
                             if (cell.column.id === "user_id") {
                               handleUserClick(cell.getValue() as string, false);
                             }
                           }}
-                          style={{
-                            cursor: cell.column.id === "user_id" ? "pointer" : "default",
-                            color: cell.column.id === "user_id" ? "#3b82f6" : "inherit",
-                          }}
                         >
-                          {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                          {flexRender(
+                            cell.column.columnDef.cell,
+                            cell.getContext(),
+                          )}
                         </TableCell>
                       ))}
                     </TableRow>
                   ))
                 ) : (
                   <TableRow>
-                    <TableCell colSpan={columns.length} className="h-8 text-center">
-                      <div className="text-center text-gray-500">
+                    <TableCell
+                      colSpan={columns.length}
+                      className="h-8 text-center"
+                    >
+                      <div className="text-center text-muted-foreground">
                         <p>No users found</p>
                       </div>
                     </TableCell>
