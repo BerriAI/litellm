@@ -1961,6 +1961,59 @@ async def test_centralized_common_checks_tolerates_db_errors_when_fetching_conte
 
 
 @pytest.mark.asyncio
+async def test_centralized_common_checks_propagates_end_user_budget_error():
+    """Regression: ``get_end_user_object`` raises ``litellm.BudgetExceededError``
+    internally when an end user is over budget. ``_safe_fetch`` must
+    re-raise it so the wrapper surfaces the budget violation, rather
+    than swallowing it and letting ``common_checks`` see
+    ``end_user_object=None`` and skip enforcement."""
+    import litellm
+    import litellm.proxy.proxy_server as _proxy_server_mod
+    from fastapi import Request
+    from starlette.datastructures import URL
+
+    token = UserAPIKeyAuth(api_key="sk-test", user_id="u", end_user_id="alice")
+    request = Request(scope={"type": "http"})
+    request._url = URL(url="/chat/completions")
+    request._body = json.dumps({"user": "alice", "model": "gpt-4o"}).encode()
+
+    attrs = _proxy_attrs_for_centralized_checks(user_custom_auth=None)
+    originals = {a: getattr(_proxy_server_mod, a, None) for a in attrs}
+    try:
+        for k, v in attrs.items():
+            setattr(_proxy_server_mod, k, v)
+        with (
+            patch(
+                "litellm.proxy.auth.user_api_key_auth.get_end_user_object",
+                new_callable=AsyncMock,
+                side_effect=litellm.BudgetExceededError(
+                    message="End-user budget exceeded",
+                    current_cost=20.0,
+                    max_budget=10.0,
+                ),
+            ),
+            patch(
+                "litellm.proxy.auth.user_api_key_auth.common_checks",
+                new_callable=AsyncMock,
+            ) as mock_checks,
+        ):
+            with pytest.raises(litellm.BudgetExceededError):
+                await _run_centralized_common_checks(
+                    user_api_key_auth_obj=token,
+                    request=request,
+                    request_data={"user": "alice", "model": "gpt-4o"},
+                    route="/chat/completions",
+                )
+            # common_checks must not be invoked if the budget violation
+            # propagates from the context gathering — the wrapper should
+            # fail before reaching it.
+            mock_checks.assert_not_awaited()
+    finally:
+        for k, v in originals.items():
+            setattr(_proxy_server_mod, k, v)
+
+
+@pytest.mark.asyncio
 async def test_centralized_common_checks_short_circuits_when_master_key_unset():
     """master_key=None is no-auth dev mode — admin-only routes and
     common_checks must not run. Deployments in this mode have no proxy-

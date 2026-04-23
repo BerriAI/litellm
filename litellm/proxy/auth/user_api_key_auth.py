@@ -1525,16 +1525,18 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
 
 
 async def _safe_fetch(label: str, awaitable):
-    """Run an awaitable and return its result, logging and swallowing
-    HTTPException / ProxyException / PrismaError. Used in the centralized
-    authz gate so a DB outage fetching a team/user/project yields a
-    ``None`` object (and ``common_checks`` no-ops the corresponding
-    branch) rather than failing the request before authorization can
-    run against whatever limits are recorded on the token itself.
+    """Run an awaitable and return its result. Re-raises authentication /
+    authorization failures (HTTPException, ProxyException,
+    BudgetExceededError — which ``get_end_user_object`` raises for
+    end-user budget violations) so they propagate to the caller.
+    Other exceptions (e.g. transient DB errors fetching context) are
+    swallowed with a debug log and ``None`` is returned so
+    ``common_checks`` can still run against whatever limits are recorded
+    directly on the token.
     """
     try:
         return await awaitable
-    except (HTTPException, ProxyException) as e:
+    except (HTTPException, ProxyException, litellm.BudgetExceededError) as e:
         verbose_proxy_logger.debug(
             "centralized auth: %s fetch failed (%s: %s)",
             label,
