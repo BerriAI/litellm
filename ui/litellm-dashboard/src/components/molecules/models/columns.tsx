@@ -1,5 +1,5 @@
 import { EditOutlined, InfoCircleOutlined, SyncOutlined } from "@ant-design/icons";
-import { TrashIcon } from "@heroicons/react/outline";
+import { Trash2 } from "lucide-react";
 import { ColumnDef } from "@tanstack/react-table";
 // eslint-disable-next-line litellm-ui/no-banned-ui-imports
 import { Badge, Button, Icon } from "@tremor/react";
@@ -410,21 +410,29 @@ export const columns = (
           <div className="flex items-center justify-end gap-2 pr-4">
             {isConfigModel ? (
               <Tooltip title="Config model cannot be deleted on the dashboard. Please delete it from the config file.">
-                <Icon icon={TrashIcon} size="sm" className="opacity-50 cursor-not-allowed" />
+                <span className="inline-flex items-center opacity-50 cursor-not-allowed">
+                  <Trash2 className="h-4 w-4" />
+                </span>
               </Tooltip>
             ) : (
               <Tooltip title="Delete model">
-                <Icon
-                  icon={TrashIcon}
-                  size="sm"
+                <button
+                  type="button"
                   onClick={(e) => {
                     e.stopPropagation();
                     if (canEditModel && onDeleteClick) {
                       onDeleteClick(model.model_info.id);
                     }
                   }}
-                  className={!canEditModel ? "opacity-50 cursor-not-allowed" : "cursor-pointer hover:text-red-600"}
-                />
+                  className={
+                    !canEditModel
+                      ? "opacity-50 cursor-not-allowed"
+                      : "cursor-pointer hover:text-destructive"
+                  }
+                  aria-label="Delete model"
+                >
+                  <Trash2 className="h-4 w-4" />
+                </button>
               </Tooltip>
             )}
           </div>
