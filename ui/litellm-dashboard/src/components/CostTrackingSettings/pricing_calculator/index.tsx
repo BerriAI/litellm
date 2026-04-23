@@ -1,6 +1,8 @@
 import React, { useState, useCallback } from "react";
-import { Table, Select, InputNumber, Button, Radio } from "antd";
-import { DeleteOutlined, PlusOutlined } from "@ant-design/icons";
+import { Table, Select, InputNumber } from "antd";
+import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
+import { Plus, Trash2 } from "lucide-react";
 import { PricingCalculatorProps, ModelEntry } from "./types";
 import MultiCostResults from "./multi_cost_results";
 import { useMultiCostEstimate } from "./use_multi_cost_estimate";
@@ -155,13 +157,15 @@ const PricingCalculator: React.FC<PricingCalculatorProps> = ({
       width: 50,
       render: (_: unknown, record: ModelEntry) => (
         <Button
-          type="text"
-          icon={<DeleteOutlined />}
+          variant="ghost"
+          size="icon"
+          className="h-7 w-7 text-destructive hover:text-destructive"
           onClick={() => handleRemoveEntry(record.id)}
           disabled={entries.length === 1}
-          danger
-          size="small"
-        />
+          aria-label="Remove"
+        >
+          <Trash2 className="h-3.5 w-3.5" />
+        </Button>
       ),
     },
   ];
@@ -169,16 +173,32 @@ const PricingCalculator: React.FC<PricingCalculatorProps> = ({
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-end mb-2">
-        <Radio.Group
-          value={timePeriod}
-          onChange={(e) => handleTimePeriodChange(e.target.value)}
-          size="small"
-          optionType="button"
-          buttonStyle="solid"
-        >
-          <Radio.Button value="day">Per Day</Radio.Button>
-          <Radio.Button value="month">Per Month</Radio.Button>
-        </Radio.Group>
+        <div className="inline-flex rounded-md border border-border overflow-hidden text-xs">
+          <button
+            type="button"
+            onClick={() => handleTimePeriodChange("day")}
+            className={cn(
+              "px-3 py-1",
+              timePeriod === "day"
+                ? "bg-primary text-primary-foreground"
+                : "bg-background text-foreground hover:bg-muted",
+            )}
+          >
+            Per Day
+          </button>
+          <button
+            type="button"
+            onClick={() => handleTimePeriodChange("month")}
+            className={cn(
+              "px-3 py-1 border-l border-border",
+              timePeriod === "month"
+                ? "bg-primary text-primary-foreground"
+                : "bg-background text-foreground hover:bg-muted",
+            )}
+          >
+            Per Month
+          </button>
+        </div>
       </div>
 
       <Table
@@ -189,11 +209,11 @@ const PricingCalculator: React.FC<PricingCalculatorProps> = ({
         size="small"
         footer={() => (
           <Button
-            type="dashed"
+            variant="outline"
             onClick={handleAddEntry}
-            icon={<PlusOutlined />}
-            className="w-full"
+            className="w-full border-dashed"
           >
+            <Plus className="h-4 w-4" />
             Add Another Model
           </Button>
         )}
