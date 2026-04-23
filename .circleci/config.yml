@@ -163,7 +163,8 @@ jobs:
 
   local_testing_part1:
     docker:
-      - image: cimg/python:3.12@sha256:9c796c23c84e84a66a964acb508d39dc5433c81a47e07efd56dccbbc2427e07c
+      - &python312_image
+        image: cimg/python:3.12@sha256:9c796c23c84e84a66a964acb508d39dc5433c81a47e07efd56dccbbc2427e07c
         auth:
           username: ${DOCKERHUB_USERNAME}
           password: ${DOCKERHUB_PASSWORD}
@@ -231,10 +232,7 @@ jobs:
             - local_testing_part1_coverage
   local_testing_part2:
     docker:
-      - image: cimg/python:3.12@sha256:9c796c23c84e84a66a964acb508d39dc5433c81a47e07efd56dccbbc2427e07c
-        auth:
-          username: ${DOCKERHUB_USERNAME}
-          password: ${DOCKERHUB_PASSWORD}
+      - *python312_image
     working_directory: ~/project
     parallelism: 4
     steps:
@@ -299,10 +297,7 @@ jobs:
             - local_testing_part2_coverage
   langfuse_logging_unit_tests:
     docker:
-      - image: cimg/python:3.12@sha256:9c796c23c84e84a66a964acb508d39dc5433c81a47e07efd56dccbbc2427e07c
-        auth:
-          username: ${DOCKERHUB_USERNAME}
-          password: ${DOCKERHUB_PASSWORD}
+      - *python312_image
     working_directory: ~/project
     resource_class: medium
 
@@ -341,10 +336,7 @@ jobs:
           path: test-results
   auth_ui_unit_tests:
     docker:
-      - image: cimg/python:3.12@sha256:9c796c23c84e84a66a964acb508d39dc5433c81a47e07efd56dccbbc2427e07c
-        auth:
-          username: ${DOCKERHUB_USERNAME}
-          password: ${DOCKERHUB_PASSWORD}
+      - *python312_image
       - image: cimg/postgres:16.0@sha256:b125148bc76e8e8eee5eb3ad6020a3a14110a14e8192f1c645128afebe2e2f84
         environment:
           POSTGRES_USER: postgres
@@ -391,10 +383,7 @@ jobs:
 
   litellm_router_testing: # Runs all tests with the "router" keyword
     docker:
-      - image: cimg/python:3.12@sha256:9c796c23c84e84a66a964acb508d39dc5433c81a47e07efd56dccbbc2427e07c
-        auth:
-          username: ${DOCKERHUB_USERNAME}
-          password: ${DOCKERHUB_PASSWORD}
+      - *python312_image
     working_directory: ~/project
     resource_class: large
     parallelism: 4
@@ -437,10 +426,7 @@ jobs:
 
   litellm_router_unit_testing: # Runs all tests with the "router" keyword
     docker:
-      - image: cimg/python:3.12@sha256:9c796c23c84e84a66a964acb508d39dc5433c81a47e07efd56dccbbc2427e07c
-        auth:
-          username: ${DOCKERHUB_USERNAME}
-          password: ${DOCKERHUB_PASSWORD}
+      - *python312_image
     working_directory: ~/project
     resource_class: large
 
@@ -471,10 +457,7 @@ jobs:
           path: test-results
   litellm_assistants_api_testing: # Runs all tests with the "assistants" keyword
     docker:
-      - image: cimg/python:3.12@sha256:9c796c23c84e84a66a964acb508d39dc5433c81a47e07efd56dccbbc2427e07c
-        auth:
-          username: ${DOCKERHUB_USERNAME}
-          password: ${DOCKERHUB_PASSWORD}
+      - *python312_image
     working_directory: ~/project
     resource_class: medium
 
@@ -498,10 +481,7 @@ jobs:
           path: test-results
   llm_translation_testing:
     docker:
-      - image: cimg/python:3.12@sha256:9c796c23c84e84a66a964acb508d39dc5433c81a47e07efd56dccbbc2427e07c
-        auth:
-          username: ${DOCKERHUB_USERNAME}
-          password: ${DOCKERHUB_PASSWORD}
+      - *python312_image
     working_directory: ~/project
     resource_class: xlarge
 
@@ -542,10 +522,7 @@ jobs:
           path: test-results
   realtime_translation_testing:
     docker:
-      - image: cimg/python:3.12@sha256:9c796c23c84e84a66a964acb508d39dc5433c81a47e07efd56dccbbc2427e07c
-        auth:
-          username: ${DOCKERHUB_USERNAME}
-          password: ${DOCKERHUB_PASSWORD}
+      - *python312_image
     working_directory: ~/project
 
     steps:
@@ -580,10 +557,7 @@ jobs:
             - realtime_translation_coverage
   mcp_testing:
     docker:
-      - image: cimg/python:3.12@sha256:9c796c23c84e84a66a964acb508d39dc5433c81a47e07efd56dccbbc2427e07c
-        auth:
-          username: ${DOCKERHUB_USERNAME}
-          password: ${DOCKERHUB_PASSWORD}
+      - *python312_image
     working_directory: ~/project
 
     steps:
@@ -616,10 +590,7 @@ jobs:
             - mcp_coverage
   agent_testing:
     docker:
-      - image: cimg/python:3.12@sha256:9c796c23c84e84a66a964acb508d39dc5433c81a47e07efd56dccbbc2427e07c
-        auth:
-          username: ${DOCKERHUB_USERNAME}
-          password: ${DOCKERHUB_PASSWORD}
+      - *python312_image
     working_directory: ~/project
 
     steps:
@@ -652,10 +623,7 @@ jobs:
             - agent_coverage
   guardrails_testing:
     docker:
-      - image: cimg/python:3.12@sha256:9c796c23c84e84a66a964acb508d39dc5433c81a47e07efd56dccbbc2427e07c
-        auth:
-          username: ${DOCKERHUB_USERNAME}
-          password: ${DOCKERHUB_PASSWORD}
+      - *python312_image
     working_directory: ~/project
 
     steps:
@@ -689,10 +657,7 @@ jobs:
 
   google_generate_content_endpoint_testing:
     docker:
-      - image: cimg/python:3.12@sha256:9c796c23c84e84a66a964acb508d39dc5433c81a47e07efd56dccbbc2427e07c
-        auth:
-          username: ${DOCKERHUB_USERNAME}
-          password: ${DOCKERHUB_PASSWORD}
+      - *python312_image
     working_directory: ~/project
 
     steps:
@@ -726,10 +691,7 @@ jobs:
 
   llm_responses_api_testing:
     docker:
-      - image: cimg/python:3.12@sha256:9c796c23c84e84a66a964acb508d39dc5433c81a47e07efd56dccbbc2427e07c
-        auth:
-          username: ${DOCKERHUB_USERNAME}
-          password: ${DOCKERHUB_PASSWORD}
+      - *python312_image
     working_directory: ~/project
     resource_class: large
 
@@ -760,10 +722,7 @@ jobs:
           path: test-results
   ocr_testing:
     docker:
-      - image: cimg/python:3.12@sha256:9c796c23c84e84a66a964acb508d39dc5433c81a47e07efd56dccbbc2427e07c
-        auth:
-          username: ${DOCKERHUB_USERNAME}
-          password: ${DOCKERHUB_PASSWORD}
+      - *python312_image
     working_directory: ~/project
 
     steps:
@@ -796,10 +755,7 @@ jobs:
             - ocr_coverage
   search_testing:
     docker:
-      - image: cimg/python:3.12@sha256:9c796c23c84e84a66a964acb508d39dc5433c81a47e07efd56dccbbc2427e07c
-        auth:
-          username: ${DOCKERHUB_USERNAME}
-          password: ${DOCKERHUB_PASSWORD}
+      - *python312_image
     working_directory: ~/project
 
     steps:
@@ -833,10 +789,7 @@ jobs:
   # Split litellm_mapped_tests into parallel jobs
   litellm_mapped_tests_proxy_part1:
     docker:
-      - image: cimg/python:3.12@sha256:9c796c23c84e84a66a964acb508d39dc5433c81a47e07efd56dccbbc2427e07c
-        auth:
-          username: ${DOCKERHUB_USERNAME}
-          password: ${DOCKERHUB_PASSWORD}
+      - *python312_image
     working_directory: ~/project
     resource_class: large
     steps:
@@ -852,10 +805,7 @@ jobs:
           path: test-results
   litellm_mapped_tests_proxy_part2:
     docker:
-      - image: cimg/python:3.12@sha256:9c796c23c84e84a66a964acb508d39dc5433c81a47e07efd56dccbbc2427e07c
-        auth:
-          username: ${DOCKERHUB_USERNAME}
-          password: ${DOCKERHUB_PASSWORD}
+      - *python312_image
     working_directory: ~/project
     resource_class: large
     steps:
@@ -871,10 +821,7 @@ jobs:
           path: test-results
   litellm_mapped_enterprise_tests:
     docker:
-      - image: cimg/python:3.12@sha256:9c796c23c84e84a66a964acb508d39dc5433c81a47e07efd56dccbbc2427e07c
-        auth:
-          username: ${DOCKERHUB_USERNAME}
-          password: ${DOCKERHUB_PASSWORD}
+      - *python312_image
     working_directory: ~/project
     resource_class: large
 
@@ -898,10 +845,7 @@ jobs:
           path: test-results
   batches_testing:
     docker:
-      - image: cimg/python:3.12@sha256:9c796c23c84e84a66a964acb508d39dc5433c81a47e07efd56dccbbc2427e07c
-        auth:
-          username: ${DOCKERHUB_USERNAME}
-          password: ${DOCKERHUB_PASSWORD}
+      - *python312_image
     working_directory: ~/project
 
     steps:
@@ -934,10 +878,7 @@ jobs:
             - batches_coverage
   litellm_utils_testing:
     docker:
-      - image: cimg/python:3.12@sha256:9c796c23c84e84a66a964acb508d39dc5433c81a47e07efd56dccbbc2427e07c
-        auth:
-          username: ${DOCKERHUB_USERNAME}
-          password: ${DOCKERHUB_PASSWORD}
+      - *python312_image
     working_directory: ~/project
 
     steps:
@@ -971,10 +912,7 @@ jobs:
 
   pass_through_unit_testing:
     docker:
-      - image: cimg/python:3.12@sha256:9c796c23c84e84a66a964acb508d39dc5433c81a47e07efd56dccbbc2427e07c
-        auth:
-          username: ${DOCKERHUB_USERNAME}
-          password: ${DOCKERHUB_PASSWORD}
+      - *python312_image
     working_directory: ~/project
 
     steps:
@@ -1007,10 +945,7 @@ jobs:
             - pass_through_unit_tests_coverage
   image_gen_testing:
     docker:
-      - image: cimg/python:3.12@sha256:9c796c23c84e84a66a964acb508d39dc5433c81a47e07efd56dccbbc2427e07c
-        auth:
-          username: ${DOCKERHUB_USERNAME}
-          password: ${DOCKERHUB_PASSWORD}
+      - *python312_image
     working_directory: ~/project
     resource_class: large
 
@@ -1033,10 +968,7 @@ jobs:
           path: test-results
   logging_testing:
     docker:
-      - image: cimg/python:3.12@sha256:9c796c23c84e84a66a964acb508d39dc5433c81a47e07efd56dccbbc2427e07c
-        auth:
-          username: ${DOCKERHUB_USERNAME}
-          password: ${DOCKERHUB_PASSWORD}
+      - *python312_image
     working_directory: ~/project
 
     steps:
@@ -1070,10 +1002,7 @@ jobs:
             - logging_coverage
   audio_testing:
     docker:
-      - image: cimg/python:3.12@sha256:9c796c23c84e84a66a964acb508d39dc5433c81a47e07efd56dccbbc2427e07c
-        auth:
-          username: ${DOCKERHUB_USERNAME}
-          password: ${DOCKERHUB_PASSWORD}
+      - *python312_image
     working_directory: ~/project
 
     steps:
@@ -1106,10 +1035,7 @@ jobs:
             - audio_coverage
   redis_caching_unit_tests:
     docker:
-      - image: cimg/python:3.12@sha256:9c796c23c84e84a66a964acb508d39dc5433c81a47e07efd56dccbbc2427e07c
-        auth:
-          username: ${DOCKERHUB_USERNAME}
-          password: ${DOCKERHUB_PASSWORD}
+      - *python312_image
     working_directory: ~/project
 
     steps:
@@ -1156,10 +1082,7 @@ jobs:
             - redis_caching_coverage
   installing_litellm_on_python:
     docker:
-      - image: cimg/python:3.12@sha256:9c796c23c84e84a66a964acb508d39dc5433c81a47e07efd56dccbbc2427e07c
-        auth:
-          username: ${DOCKERHUB_USERNAME}
-          password: ${DOCKERHUB_PASSWORD}
+      - *python312_image
     working_directory: ~/project
 
     steps:
@@ -1200,10 +1123,7 @@ jobs:
 
   installing_litellm_on_python_v2_migration_resolver:
     docker:
-      - image: cimg/python:3.12@sha256:9c796c23c84e84a66a964acb508d39dc5433c81a47e07efd56dccbbc2427e07c
-        auth:
-          username: ${DOCKERHUB_USERNAME}
-          password: ${DOCKERHUB_PASSWORD}
+      - *python312_image
       - image: cimg/postgres:16.0@sha256:b125148bc76e8e8eee5eb3ad6020a3a14110a14e8192f1c645128afebe2e2f84
         environment:
           POSTGRES_USER: postgres
@@ -2117,7 +2037,7 @@ jobs:
 
   upload-coverage:
     docker:
-      - image: cimg/python:3.12@sha256:9c796c23c84e84a66a964acb508d39dc5433c81a47e07efd56dccbbc2427e07c
+      - *python312_image
     steps:
       - checkout
       - attach_workspace:
@@ -2402,263 +2322,107 @@ workflows:
   build_and_test:
     jobs:
       - using_litellm_on_windows:
-          filters:
+          filters: &main_branches
             branches:
               only:
                 - main
                 - /litellm_.*/
       - local_testing_part1:
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
+          filters: *main_branches
       - local_testing_part2:
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
+          filters: *main_branches
       - langfuse_logging_unit_tests:
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
+          filters: *main_branches
       - litellm_assistants_api_testing:
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
+          filters: *main_branches
       - litellm_router_testing:
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
+          filters: *main_branches
       - litellm_router_unit_testing:
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
+          filters: *main_branches
       - ui_build:
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
+          filters: *main_branches
       - ui_unit_tests:
           requires:
             - ui_build
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
+          filters: *main_branches
       - auth_ui_unit_tests:
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
+          filters: *main_branches
       - build_docker_database_image:
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
+          filters: *main_branches
       - e2e_ui_testing:
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
+          filters: *main_branches
       - build_and_test:
           requires:
             - build_docker_database_image
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
+          filters: *main_branches
       - e2e_openai_endpoints:
           requires:
             - build_docker_database_image
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
+          filters: *main_branches
       - proxy_logging_guardrails_model_info_tests:
           requires:
             - build_docker_database_image
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
+          filters: *main_branches
       - proxy_spend_accuracy_tests:
           requires:
             - build_docker_database_image
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
+          filters: *main_branches
       - proxy_multi_instance_tests:
           requires:
             - build_docker_database_image
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
+          filters: *main_branches
       - proxy_store_model_in_db_tests:
           requires:
             - build_docker_database_image
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
+          filters: *main_branches
       - proxy_build_from_pip_tests:
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
+          filters: *main_branches
       - proxy_pass_through_endpoint_tests:
           requires:
             - build_docker_database_image
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
+          filters: *main_branches
       - proxy_e2e_anthropic_messages_tests:
           requires:
             - build_docker_database_image
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
+          filters: *main_branches
       - llm_translation_testing:
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
+          filters: *main_branches
       - realtime_translation_testing:
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
+          filters: *main_branches
       - mcp_testing:
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
+          filters: *main_branches
       - agent_testing:
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
+          filters: *main_branches
       - guardrails_testing:
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
+          filters: *main_branches
       - google_generate_content_endpoint_testing:
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
+          filters: *main_branches
       - llm_responses_api_testing:
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
+          filters: *main_branches
       - ocr_testing:
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
+          filters: *main_branches
       - search_testing:
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
+          filters: *main_branches
       - litellm_mapped_enterprise_tests:
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
+          filters: *main_branches
       - litellm_mapped_tests_proxy_part1:
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
+          filters: *main_branches
       - litellm_mapped_tests_proxy_part2:
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
+          filters: *main_branches
       - batches_testing:
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
+          filters: *main_branches
       - litellm_utils_testing:
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
+          filters: *main_branches
       - pass_through_unit_testing:
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
+          filters: *main_branches
       - image_gen_testing:
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
+          filters: *main_branches
       - logging_testing:
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
+          filters: *main_branches
       - audio_testing:
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
+          filters: *main_branches
       - redis_caching_unit_tests:
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
+          filters: *main_branches
       - upload-coverage:
           requires:
             - realtime_translation_testing
@@ -2685,42 +2449,18 @@ workflows:
       - db_migration_disable_update_check:
           requires:
             - build_docker_database_image
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
+          filters: *main_branches
       - installing_litellm_on_python:
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
+          filters: *main_branches
       - installing_litellm_on_python_3_13:
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
+          filters: *main_branches
       - installing_litellm_on_python_v2_migration_resolver:
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
+          filters: *main_branches
       - helm_chart_testing:
           requires:
             - build_docker_database_image
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
+          filters: *main_branches
       - test_bad_database_url:
           requires:
             - build_docker_database_image
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
+          filters: *main_branches
