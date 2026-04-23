@@ -5085,3 +5085,175 @@ async def test_reseed_spend_from_db_skips_window_variant_keys():
         fake_prisma.db.litellm_teamtable.find_unique.assert_not_awaited()
     finally:
         ps.prisma_client = orig_prisma
+
+
+# ---------------------------------------------------------------------------
+# Optional-feature gate (LITELLM_ENABLED_FEATURES) — import-time memory gate.
+#
+# Three testable units in proxy_server.py:
+#   * _parse_enabled_features_env — reads the env var, returns None (unset /
+#     empty / whitespace) or a set of allowed feature keys; warns on unknowns.
+#   * _should_import_feature — checks a name against the parsed allowlist and
+#     records skips to _disabled_optional_features.
+#   * _register_optional_feature_routers — uses the above to mount routers;
+#     the module-load-time call already ran against `app`, so we sample
+#     `app.routes` to verify the default-unset path registers everything.
+# ---------------------------------------------------------------------------
+
+
+import logging
+
+
+class TestParseEnabledFeaturesEnv:
+    """Unit tests for _parse_enabled_features_env."""
+
+    def test_unset_returns_none(self, monkeypatch):
+        from litellm.proxy.proxy_server import _parse_enabled_features_env
+
+        monkeypatch.delenv("LITELLM_ENABLED_FEATURES", raising=False)
+        assert _parse_enabled_features_env() is None
+
+    def test_empty_string_returns_none(self, monkeypatch):
+        from litellm.proxy.proxy_server import _parse_enabled_features_env
+
+        monkeypatch.setenv("LITELLM_ENABLED_FEATURES", "")
+        assert _parse_enabled_features_env() is None
+
+    def test_whitespace_only_returns_none(self, monkeypatch):
+        from litellm.proxy.proxy_server import _parse_enabled_features_env
+
+        monkeypatch.setenv("LITELLM_ENABLED_FEATURES", "   \t  ")
+        assert _parse_enabled_features_env() is None
+
+    def test_single_valid_key(self, monkeypatch):
+        from litellm.proxy.proxy_server import _parse_enabled_features_env
+
+        monkeypatch.setenv("LITELLM_ENABLED_FEATURES", "mcp")
+        assert _parse_enabled_features_env() == {"mcp"}
+
+    def test_multiple_valid_keys(self, monkeypatch):
+        from litellm.proxy.proxy_server import _parse_enabled_features_env
+
+        monkeypatch.setenv("LITELLM_ENABLED_FEATURES", "mcp,guardrails,prompts")
+        assert _parse_enabled_features_env() == {"mcp", "guardrails", "prompts"}
+
+    def test_whitespace_around_entries_trimmed(self, monkeypatch):
+        from litellm.proxy.proxy_server import _parse_enabled_features_env
+
+        monkeypatch.setenv("LITELLM_ENABLED_FEATURES", "  mcp , guardrails  ")
+        assert _parse_enabled_features_env() == {"mcp", "guardrails"}
+
+    def test_empty_entries_dropped(self, monkeypatch):
+        from litellm.proxy.proxy_server import _parse_enabled_features_env
+
+        monkeypatch.setenv("LITELLM_ENABLED_FEATURES", "mcp,,guardrails,")
+        assert _parse_enabled_features_env() == {"mcp", "guardrails"}
+
+    def test_unknown_keys_emit_warning(self, monkeypatch, caplog):
+        from litellm.proxy.proxy_server import (
+            _parse_enabled_features_env,
+            verbose_proxy_logger,
+        )
+
+        monkeypatch.setenv("LITELLM_ENABLED_FEATURES", "mcp,guadrails,prmopts")
+        with caplog.at_level(logging.WARNING, logger=verbose_proxy_logger.name):
+            result = _parse_enabled_features_env()
+        # Unknown keys are still returned (their gate check will simply never
+        # match a real feature name), but a warning must surface them.
+        assert result == {"mcp", "guadrails", "prmopts"}
+        joined = " ".join(r.getMessage() for r in caplog.records)
+        assert "unknown" in joined.lower()
+        assert "guadrails" in joined
+        assert "prmopts" in joined
+
+
+class TestShouldImportFeature:
+    """Unit tests for _should_import_feature."""
+
+    def test_none_allowlist_loads_everything(self):
+        import litellm.proxy.proxy_server as ps
+
+        with patch.object(ps, "_ENABLED_FEATURES", None):
+            assert ps._should_import_feature("mcp") is True
+            assert ps._should_import_feature("guardrails") is True
+            # Even unknown names return True when allowlist is None — that's
+            # the backward-compat default.
+            assert ps._should_import_feature("not_a_real_feature") is True
+
+    def test_set_allowlist_gates_unlisted_features(self):
+        import litellm.proxy.proxy_server as ps
+
+        with patch.object(ps, "_ENABLED_FEATURES", {"mcp"}):
+            assert ps._should_import_feature("mcp") is True
+            assert ps._should_import_feature("guardrails") is False
+            assert ps._should_import_feature("policies") is False
+
+    def test_disabled_features_recorded_once(self):
+        """Skipped feature names accumulate in the set for the summary log."""
+        import litellm.proxy.proxy_server as ps
+
+        with patch.object(ps, "_ENABLED_FEATURES", {"mcp"}):
+            ps._disabled_optional_features.clear()
+            ps._should_import_feature("mcp")  # enabled → not tracked
+            ps._should_import_feature("guardrails")
+            ps._should_import_feature("agents")
+            ps._should_import_feature("guardrails")  # repeated → still one entry
+
+            tracked = ps._disabled_optional_features
+            assert "mcp" not in tracked
+            assert tracked >= {"guardrails", "agents"}
+            assert isinstance(tracked, set)
+
+
+@pytest.mark.skipif(
+    os.environ.get("LITELLM_ENABLED_FEATURES") is not None,
+    reason=(
+        "LITELLM_ENABLED_FEATURES is set in the test runner — "
+        "_register_optional_feature_routers mounted only the listed "
+        "features at import time, so assertions about the backward-compat "
+        "default path cannot be verified. Unset the env var to run these."
+    ),
+)
+class TestDefaultUnsetRegistersAllGatedRouters:
+    """
+    Backward-compat contract: when LITELLM_ENABLED_FEATURES is unset at
+    module load (the default for existing deployments), every optional
+    feature router must register so no endpoint silently disappears.
+
+    `_register_optional_feature_routers(app)` ran at import time — we
+    inspect `app.routes` rather than re-invoke the helper (re-invoking
+    would double-register routes).
+    """
+
+    @pytest.fixture(scope="class")
+    def app_paths(self):
+        from litellm.proxy.proxy_server import app
+
+        return {
+            (method, getattr(route, "path", None))
+            for route in app.routes
+            for method in (getattr(route, "methods", None) or set())
+        }
+
+    @pytest.mark.parametrize(
+        "method,path,gate_name",
+        [
+            # One representative endpoint per gate family. If any of these
+            # is missing in the default-unset case, the gate accidentally
+            # swallowed the feature on the backward-compat path.
+            ("GET", "/guardrails/list", "guardrails"),
+            ("GET", "/v1/agents", "agents"),
+            ("POST", "/vector_store/new", "vector_stores"),
+            ("GET", "/vector_store/list", "vector_stores"),
+            ("POST", "/scim/v2/Users", "scim"),
+            ("GET", "/access_group/list", "access_groups"),
+        ],
+    )
+    def test_gated_endpoint_registered_by_default(
+        self, app_paths, method, path, gate_name
+    ):
+        assert (method, path) in app_paths, (
+            f"{method} {path} (gate={gate_name!r}) missing from app.routes. "
+            "The default env-unset path must register every gated router "
+            "to stay backward compatible."
+        )
