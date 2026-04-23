@@ -46,6 +46,7 @@ GPT5_MODELS = [
     "gpt-5.2",
     "gpt-5.3",
     "gpt-5.4",
+    "gpt-5.5",
     "gpt-5.1-chat",  # versioned chat — THE KEY REGRESSION CASE
     "gpt-5.2-chat",  # versioned chat — also a regression case
     "gpt-5.3-chat",  # versioned chat — THE KEY REGRESSION CASE
