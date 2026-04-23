@@ -121,18 +121,22 @@ async def create_memory(
         user_id = user_api_key_dict.user_id
         team_id = user_api_key_dict.team_id
 
+    # Prisma's Python client rejects `metadata=None` on a `Json?` field —
+    # the field must be omitted entirely to store SQL NULL. Build the data
+    # dict conditionally so we only include metadata when the caller sent it.
+    create_data: dict = {
+        "key": body.key,
+        "value": body.value,
+        "user_id": user_id,
+        "team_id": team_id,
+        "created_by": user_api_key_dict.user_id,
+        "updated_by": user_api_key_dict.user_id,
+    }
+    if body.metadata is not None:
+        create_data["metadata"] = body.metadata
+
     try:
-        row = await prisma_client.db.litellm_memorytable.create(
-            data={
-                "key": body.key,
-                "value": body.value,
-                "metadata": body.metadata,
-                "user_id": user_id,
-                "team_id": team_id,
-                "created_by": user_api_key_dict.user_id,
-                "updated_by": user_api_key_dict.user_id,
-            }
-        )
+        row = await prisma_client.db.litellm_memorytable.create(data=create_data)
     except Exception as e:
         # Unique constraint (key, user_id, team_id) → 409.
         msg = str(e)
@@ -270,17 +274,18 @@ async def upsert_memory(
                     status_code=400,
                     detail="Cannot create a new memory via PUT without a 'value'.",
                 )
-            row = await prisma_client.db.litellm_memorytable.create(
-                data={
-                    "key": key,
-                    "value": body.value,
-                    "metadata": body.metadata,
-                    "user_id": user_api_key_dict.user_id,
-                    "team_id": user_api_key_dict.team_id,
-                    "created_by": user_api_key_dict.user_id,
-                    "updated_by": user_api_key_dict.user_id,
-                }
-            )
+            # Omit `metadata` when None — Prisma rejects None on Json? fields.
+            create_data: dict = {
+                "key": key,
+                "value": body.value,
+                "user_id": user_api_key_dict.user_id,
+                "team_id": user_api_key_dict.team_id,
+                "created_by": user_api_key_dict.user_id,
+                "updated_by": user_api_key_dict.user_id,
+            }
+            if body.metadata is not None:
+                create_data["metadata"] = body.metadata
+            row = await prisma_client.db.litellm_memorytable.create(data=create_data)
     except HTTPException:
         raise
     except Exception as e:
