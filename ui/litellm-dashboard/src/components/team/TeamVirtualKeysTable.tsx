@@ -12,6 +12,7 @@ import {
   SortingState,
   useReactTable,
 } from "@tanstack/react-table";
+// eslint-disable-next-line litellm-ui/no-banned-ui-imports
 import {
   Badge,
   Button,

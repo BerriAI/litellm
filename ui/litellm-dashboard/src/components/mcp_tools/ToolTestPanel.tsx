@@ -1,4 +1,5 @@
 import React from "react";
+// eslint-disable-next-line litellm-ui/no-banned-ui-imports
 import { Button, TextInput } from "@tremor/react";
 import { MCPTool, InputSchema, InputSchemaProperty } from "./types";
 import { Form, Select, Tooltip } from "antd";

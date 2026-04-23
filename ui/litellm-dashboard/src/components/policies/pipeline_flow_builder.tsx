@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { Select, Typography, Spin } from "antd";
 import MessageManager from "@/components/molecules/message_manager";
+// eslint-disable-next-line litellm-ui/no-banned-ui-imports
 import { Button, TextInput } from "@tremor/react";
 import { ArrowLeftIcon, PlusIcon } from "@heroicons/react/outline";
 import { DotsVerticalIcon } from "@heroicons/react/solid";

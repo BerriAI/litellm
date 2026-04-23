@@ -21,6 +21,7 @@ import {
   ToolOutlined,
   UserOutlined,
 } from "@ant-design/icons";
+// eslint-disable-next-line litellm-ui/no-banned-ui-imports
 import { Card, Text, TextInput, Title, Button as TremorButton } from "@tremor/react";
 import { Button, Input, Modal, Popover, Select, Spin, Tooltip, Typography, Upload } from "antd";
 import React, { useEffect, useRef, useState } from "react";

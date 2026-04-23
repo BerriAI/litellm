@@ -1,4 +1,5 @@
 import React, { useState } from "react";
+// eslint-disable-next-line litellm-ui/no-banned-ui-imports
 import { Card, Title, Text } from "@tremor/react";
 import { Upload, Button, Select, Form, Alert, Tooltip, Input } from "antd";
 import MessageManager from "@/components/molecules/message_manager";

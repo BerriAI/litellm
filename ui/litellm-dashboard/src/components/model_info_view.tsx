@@ -3,6 +3,7 @@ import { useModelHub, useModelsInfo } from "@/app/(dashboard)/hooks/models/useMo
 import { transformModelData } from "@/app/(dashboard)/models-and-endpoints/utils/modelDataTransformer";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { ArrowLeftIcon, KeyIcon, RefreshIcon, TrashIcon } from "@heroicons/react/outline";
+// eslint-disable-next-line litellm-ui/no-banned-ui-imports
 import {
   Card,
   Grid,

@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from "react";
 import { Modal, Select, Switch, Collapse, Input, Divider } from "antd";
+// eslint-disable-next-line litellm-ui/no-banned-ui-imports
 import { Button, TextInput } from "@tremor/react";
 import {
   CodeOutlined,

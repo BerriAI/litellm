@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { Form, Typography, Select, Input, Switch, Modal } from "antd";
+// eslint-disable-next-line litellm-ui/no-banned-ui-imports
 import { Button, TextInput } from "@tremor/react";
 import {
   guardrail_provider_map,

@@ -6,6 +6,7 @@ import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { truncateString } from "@/utils/textUtils";
 import { SettingOutlined, SyncOutlined } from "@ant-design/icons";
 import { Row } from "@tanstack/react-table";
+// eslint-disable-next-line litellm-ui/no-banned-ui-imports
 import { Switch, Tab, TabGroup, TabList, TabPanel, TabPanels } from "@tremor/react";
 import { Button, Tag, Tooltip } from "antd";
 import { internalUserRoles } from "../../utils/roles";

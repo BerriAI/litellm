@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { Modal, Spin, Radio, Select } from "antd";
+// eslint-disable-next-line litellm-ui/no-banned-ui-imports
 import { Button, TextInput } from "@tremor/react";
 import { modelHubCall, enrichPolicyTemplateStream } from "../networking";
 

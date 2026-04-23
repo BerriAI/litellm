@@ -7,6 +7,7 @@ import {
 import { copyToClipboard as utilCopyToClipboard } from "@/utils/dataUtils";
 import { CodeOutlined, EyeInvisibleOutlined, InfoCircleOutlined, StopOutlined } from "@ant-design/icons";
 import { ArrowLeftIcon } from "@heroicons/react/outline";
+// eslint-disable-next-line litellm-ui/no-banned-ui-imports
 import {
   Badge,
   Card,

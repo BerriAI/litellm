@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from "react";
+// eslint-disable-next-line litellm-ui/no-banned-ui-imports
 import { Button, TabGroup, TabList, Tab, TabPanels, TabPanel } from "@tremor/react";
 import { Alert } from "antd";
 

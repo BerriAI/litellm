@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from "react";
+// eslint-disable-next-line litellm-ui/no-banned-ui-imports
 import { Title, Text, Button, Badge } from "@tremor/react";
 import { Modal } from "antd";
 import { Button as AntdButton } from "antd";

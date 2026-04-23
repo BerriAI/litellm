@@ -1,4 +1,5 @@
 import React, { useState, useCallback } from "react";
+// eslint-disable-next-line litellm-ui/no-banned-ui-imports
 import { Button, Text, Title } from "@tremor/react";
 import { Modal, Form, Input, message, Spin, Card, Typography, Space } from "antd";
 import { PlusIcon, PencilIcon, TrashIcon } from "@heroicons/react/outline";

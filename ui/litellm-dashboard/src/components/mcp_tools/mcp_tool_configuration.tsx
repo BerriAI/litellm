@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
+// eslint-disable-next-line litellm-ui/no-banned-ui-imports
 import { Card, Title, Text } from "@tremor/react";
 import { ToolOutlined, CheckCircleOutlined, SearchOutlined, EditOutlined } from "@ant-design/icons";
 import { Badge, Spin, Checkbox, Input, Radio } from "antd";
