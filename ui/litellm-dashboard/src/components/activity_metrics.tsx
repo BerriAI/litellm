@@ -1,7 +1,13 @@
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { resolveTeamAliasFromTeamID } from "@/utils/teamUtils";
+// eslint-disable-next-line litellm-ui/no-banned-ui-imports
 import { AreaChart, BarChart, Card, Grid, Text, Title } from "@tremor/react";
-import { Collapse } from "antd";
+import {
+  Accordion,
+  AccordionContent,
+  AccordionItem,
+  AccordionTrigger,
+} from "@/components/ui/accordion";
 import React from "react";
 import { CustomLegend, CustomTooltip } from "./common_components/chartUtils";
 import { Team } from "./key_team_helpers/key_list";
@@ -322,28 +328,39 @@ export const ActivityMetrics: React.FC<ActivityMetricsProps> = ({ modelMetrics, 
       </div>
 
       {/* Individual Model Sections */}
-      <Collapse defaultActiveKey={modelNames[0]}>
+      <Accordion type="multiple" defaultValue={modelNames.slice(0, 1)}>
         {modelNames.map((modelName) => (
-          <Collapse.Panel
-            key={modelName}
-            header={
-              <div className="flex justify-between items-center w-full">
-                <Title>{modelMetrics[modelName].label || "Unknown Item"}</Title>
-                <div className="flex space-x-4 text-sm text-gray-500">
-                  <span>${formatNumberWithCommas(modelMetrics[modelName].total_spend, 2)}</span>
-                  <span>{modelMetrics[modelName].total_requests.toLocaleString()} requests</span>
+          <AccordionItem key={modelName} value={modelName}>
+            <AccordionTrigger>
+              <div className="flex justify-between items-center w-full pr-2">
+                <Title>
+                  {modelMetrics[modelName].label || "Unknown Item"}
+                </Title>
+                <div className="flex space-x-4 text-sm text-muted-foreground">
+                  <span>
+                    $
+                    {formatNumberWithCommas(
+                      modelMetrics[modelName].total_spend,
+                      2,
+                    )}
+                  </span>
+                  <span>
+                    {modelMetrics[modelName].total_requests.toLocaleString()}{" "}
+                    requests
+                  </span>
                 </div>
               </div>
-            }
-          >
-            <ModelSection
-              modelName={modelName || "Unknown Model"}
-              metrics={modelMetrics[modelName]}
-              hidePromptCachingMetrics={hidePromptCachingMetrics}
-            />
-          </Collapse.Panel>
+            </AccordionTrigger>
+            <AccordionContent>
+              <ModelSection
+                modelName={modelName || "Unknown Model"}
+                metrics={modelMetrics[modelName]}
+                hidePromptCachingMetrics={hidePromptCachingMetrics}
+              />
+            </AccordionContent>
+          </AccordionItem>
         ))}
-      </Collapse>
+      </Accordion>
     </div>
   );
 };
