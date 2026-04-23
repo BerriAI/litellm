@@ -31,6 +31,36 @@ from abc import ABC, abstractmethod
 from openai import OpenAI
 
 
+# Substrings that indicate the failure is caused by the CI provider account
+# (billing, quota, missing scope) rather than a LiteLLM regression. When a
+# provider raises `BadRequestError`/`AuthenticationError`/`RateLimitError` with
+# one of these messages, the test should `pytest.skip` rather than fail: the
+# underlying LiteLLM code path is not broken, the CI credential is just
+# temporarily unhealthy. Keep this list narrow and allow-listed.
+_ENV_PROVIDER_ERROR_SUBSTRINGS = (
+    "missing scopes",
+    "insufficient permissions",
+    "insufficient_quota",
+    "credit balance is too low",
+    "exceeded your current quota",
+    "billing",
+)
+
+
+def _is_env_provider_error(exc: Exception) -> bool:
+    """Return True when `exc` was raised by a provider for an env/account reason.
+
+    Case-insensitive substring match against the allow-list above. Used to
+    distinguish "CI credentials are temporarily unhealthy" from a real LiteLLM
+    regression.
+    """
+    message = str(exc) if exc else ""
+    if not message:
+        return False
+    lowered = message.lower()
+    return any(needle in lowered for needle in _ENV_PROVIDER_ERROR_SUBSTRINGS)
+
+
 def _usage_format_tests(usage: litellm.Usage):
     """
     OpenAI prompt caching
@@ -1416,6 +1446,19 @@ class BaseLLMChatTest(ABC):
             print(response)
         except litellm.ServiceUnavailableError:
             pass
+        except (
+            litellm.BadRequestError,
+            litellm.AuthenticationError,
+            litellm.RateLimitError,
+        ) as e:
+            # Some providers return billing/quota/permission errors as 400/401/429.
+            # These are CI account-state conditions, not LiteLLM regressions -- skip
+            # the test rather than fail the pipeline. Any other BadRequestError /
+            # AuthenticationError will still propagate and fail normally (e.g. a
+            # genuine transformation regression).
+            if _is_env_provider_error(e):
+                pytest.skip(f"Skipping due to provider env/account condition: {e}")
+            raise
 
     def test_reasoning_effort(self):
         """Test that reasoning_effort is passed correctly to the model"""

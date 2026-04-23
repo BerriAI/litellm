@@ -15,6 +15,34 @@ import asyncio
 import litellm
 
 
+# Substrings that indicate the failure is caused by the CI provider account
+# (billing, quota, missing scope) rather than a LiteLLM regression. When any of
+# these appear in a provider error message, the test should `pytest.skip` rather
+# than fail, so CircleCI flakiness from upstream account state stops bleeding
+# into the pipeline signal. Keep this list narrow and allow-listed.
+_ENV_ERROR_SUBSTRINGS = (
+    "missing scopes",
+    "insufficient permissions",
+    "insufficient_quota",
+    "credit balance is too low",
+    "exceeded your current quota",
+    "billing",
+)
+
+
+def _is_env_error(message: str) -> bool:
+    """Return True when `message` matches a known provider env/account condition.
+
+    Matches are case-insensitive substring checks against the allow-list above.
+    Used to distinguish "CI credentials are temporarily unhealthy" from a real
+    LiteLLM regression.
+    """
+    if not message:
+        return False
+    lowered = message.lower()
+    return any(needle in lowered for needle in _ENV_ERROR_SUBSTRINGS)
+
+
 @pytest.mark.asyncio
 async def test_azure_health_check():
     response = await litellm.ahealth_check(
@@ -206,6 +234,11 @@ async def test_audio_speech_health_check():
         prompt="Hey",
     )
 
+    if "error" in response and _is_env_error(str(response.get("error", ""))):
+        pytest.skip(
+            f"Skipping due to provider env/account condition: {response.get('error')}"
+        )
+
     assert "error" not in response
 
     print(response)
@@ -222,6 +255,11 @@ async def test_audio_speech_health_check_with_another_voice():
         mode="audio_speech",
         prompt="Hey",
     )
+
+    if "error" in response and _is_env_error(str(response.get("error", ""))):
+        pytest.skip(
+            f"Skipping due to provider env/account condition: {response.get('error')}"
+        )
 
     assert "error" not in response
 
