@@ -10,6 +10,9 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
+from litellm.proxy._experimental.mcp_server.oauth_utils import (
+    validate_loopback_redirect_uri,
+)
 from litellm.proxy.auth.ip_address_utils import IPAddressUtils
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     decrypt_value_helper,
@@ -322,15 +325,13 @@ async def authorize_with_server(
             status_code=400, detail="MCP server authorization url is not set"
         )
 
+    # Loopback-only redirect_uri. The URI is encrypted into the OAuth
+    # state and decoded on /callback to redirect the user back; a non-
+    # loopback URI would be an open-redirect + code-theft primitive
+    # (VERIA-57 root cause B). MCP clients are native apps — loopback is
+    # the spec-compliant callback pattern.
+    validate_loopback_redirect_uri(redirect_uri)
     parsed = urlparse(redirect_uri)
-    if parsed.scheme not in ("http", "https"):
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "error": "invalid_redirect_uri",
-                "message": "redirect_uri must use http or https scheme",
-            },
-        )
     base_url = urlunparse(parsed._replace(query=""))
     request_base_url = get_request_base_url(request)
     encoded_state = encode_state_with_base_url(
