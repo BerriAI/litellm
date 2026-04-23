@@ -1,8 +1,10 @@
 """
 Tests for moving teams to organizations.
 
-Covers the SSO/Entra scenario where team members are not pre-added as org members
-and the move should auto-add them rather than blocking.
+Covers the SSO/Entra scenario where:
+- Proxy admins can move teams freely; missing members are auto-added to the org.
+- Non-proxy-admins (team admins) must have all team members pre-added to the org,
+  preserving the original security model (no privilege escalation via team move).
 """
 from unittest.mock import AsyncMock, MagicMock
 
@@ -78,22 +80,65 @@ def _make_org_membership(user_id):
 
 
 class TestValidateTeamOrgChange:
-    def test_no_block_when_team_members_not_in_org(self):
-        """The membership check must NOT block the move."""
+    def test_proxy_admin_not_blocked_when_members_not_in_org(self):
+        """Proxy admins bypass the membership check — auto-add handles it instead."""
         router = MagicMock(spec=Router)
         team = _make_team(member_ids=["sso-user-001", "sso-user-002"])
-        org = _make_org(members=[])  # org has zero members
+        org = _make_org(members=[])
 
-        # Should not raise
-        result = validate_team_org_change(team=team, organization=org, llm_router=router)
+        result = validate_team_org_change(
+            team=team, organization=org, llm_router=router, is_proxy_admin=True
+        )
+        assert result is True
+
+    def test_non_admin_blocked_when_members_not_in_org(self):
+        """Team admins (non-proxy-admin) must have all members pre-added to the org."""
+        router = MagicMock(spec=Router)
+        team = _make_team(member_ids=["sso-user-001"])
+        org = _make_org(members=[])
+
+        with pytest.raises(Exception) as exc_info:
+            validate_team_org_change(
+                team=team, organization=org, llm_router=router, is_proxy_admin=False
+            )
+        assert "403" in str(exc_info.value) or "not a member" in str(exc_info.value)
+
+    def test_non_admin_passes_when_all_members_in_org(self):
+        """Team admin move succeeds when all team members are already org members."""
+        router = MagicMock(spec=Router)
+        team = _make_team(member_ids=["u1"])
+        org = _make_org(members=[_make_org_membership("u1")])
+
+        result = validate_team_org_change(
+            team=team, organization=org, llm_router=router, is_proxy_admin=False
+        )
         assert result is True
 
     def test_same_org_short_circuits(self):
+        """Moving to the same org is always a no-op, regardless of role."""
         router = MagicMock(spec=Router)
         team = _make_team(member_ids=["u1"], organization_id="org-1")
         org = _make_org(organization_id="org-1")
 
-        assert validate_team_org_change(team=team, organization=org, llm_router=router) is True
+        assert validate_team_org_change(
+            team=team, organization=org, llm_router=router, is_proxy_admin=False
+        ) is True
+        assert validate_team_org_change(
+            team=team, organization=org, llm_router=router, is_proxy_admin=True
+        ) is True
+
+    def test_default_user_excluded_from_membership_check(self):
+        """default_user_id is never checked for org membership."""
+        router = MagicMock(spec=Router)
+        # Team has only default_user_id (added by _make_team)
+        team = _make_team(member_ids=[])
+        org = _make_org(members=[])
+
+        # Should not raise even for non-proxy-admin
+        result = validate_team_org_change(
+            team=team, organization=org, llm_router=router, is_proxy_admin=False
+        )
+        assert result is True
 
 
 class TestAutoAddTeamMembersToOrg:
@@ -116,7 +161,6 @@ class TestAutoAddTeamMembersToOrg:
         finally:
             te.add_member_to_organization = original
 
-        # Should have been called once per non-default SSO user
         assert mock_add.call_count == 2
         called_user_ids = {
             call.kwargs["member"].user_id for call in mock_add.call_args_list
@@ -142,14 +186,13 @@ class TestAutoAddTeamMembersToOrg:
         finally:
             te.add_member_to_organization = original
 
-        # Only u2 should be added; u1 is already in org
         assert mock_add.call_count == 1
         assert mock_add.call_args.kwargs["member"].user_id == "u2"
 
     @pytest.mark.asyncio
     async def test_skips_default_user(self):
         """default_user_id should never be added as an org member."""
-        team = _make_team(member_ids=[])  # only has default_user_id from _make_team
+        team = _make_team(member_ids=[])
         org = _make_org(members=[])
 
         mock_add = AsyncMock()
@@ -169,8 +212,8 @@ class TestAutoAddTeamMembersToOrg:
         assert mock_add.call_count == 0
 
     @pytest.mark.asyncio
-    async def test_silently_ignores_errors(self):
-        """Errors (e.g. duplicate key) must not propagate."""
+    async def test_logs_and_continues_on_error(self):
+        """Errors must not propagate — they are logged at DEBUG and skipped."""
         team = _make_team(member_ids=["u1"])
         org = _make_org(members=[])
 
@@ -180,7 +223,6 @@ class TestAutoAddTeamMembersToOrg:
         te.add_member_to_organization = mock_add
 
         try:
-            # Should not raise
             await _auto_add_team_members_to_organization(
                 team=team,
                 organization=org,
