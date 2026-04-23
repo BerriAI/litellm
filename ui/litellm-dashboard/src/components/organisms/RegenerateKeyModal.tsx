@@ -1,14 +1,21 @@
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
-import { CheckOutlined, CopyOutlined, SyncOutlined } from "@ant-design/icons";
-import { Alert, Button, Col, Flex, Form, Input, InputNumber, Modal, Row, Space, Typography } from "antd";
+import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Check, Copy, AlertTriangle, RefreshCw } from "lucide-react";
+import { Form, InputNumber, Input as AntInput } from "antd";
 import { add } from "date-fns";
 import { useEffect, useState } from "react";
 import { CopyToClipboard } from "react-copy-to-clipboard";
 import { KeyResponse } from "../key_team_helpers/key_list";
 import NotificationManager from "../molecules/notifications_manager";
 import { regenerateKeyCall } from "../networking";
-
-const { Text } = Typography;
 
 interface RegenerateKeyModalProps {
   selectedToken: KeyResponse | null;
@@ -17,10 +24,16 @@ interface RegenerateKeyModalProps {
   onKeyUpdate?: (updatedKeyData: Partial<KeyResponse>) => void;
 }
 
-export function RegenerateKeyModal({ selectedToken, visible, onClose, onKeyUpdate }: RegenerateKeyModalProps) {
+export function RegenerateKeyModal({
+  selectedToken,
+  visible,
+  onClose,
+  onKeyUpdate,
+}: RegenerateKeyModalProps) {
   const { accessToken } = useAuthorized();
   const [form] = Form.useForm();
   const [regeneratedKey, setRegeneratedKey] = useState<string | null>(null);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const [regenerateFormData, setRegenerateFormData] = useState<any>(null);
   const [newExpiryTime, setNewExpiryTime] = useState<string | null>(null);
   const [isRegenerating, setIsRegenerating] = useState(false);
@@ -39,7 +52,9 @@ export function RegenerateKeyModal({ selectedToken, visible, onClose, onKeyUpdat
     }
   }, [visible, selectedToken, form, accessToken]);
 
-  const calculateNewExpiryTime = (duration: string | undefined): string | null => {
+  const calculateNewExpiryTime = (
+    duration: string | undefined,
+  ): string | null => {
     if (!duration) return null;
 
     try {
@@ -67,7 +82,8 @@ export function RegenerateKeyModal({ selectedToken, visible, onClose, onKeyUpdat
       }
 
       return newExpiry.toLocaleString();
-    } catch (error) {
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    } catch (_error) {
       return null;
     }
   };
@@ -95,10 +111,6 @@ export function RegenerateKeyModal({ selectedToken, visible, onClose, onKeyUpdat
       setRegeneratedKey(response.key);
       NotificationManager.success("Virtual Key regenerated successfully");
 
-      // Build the update payload. Spread the API response first so any new
-      // fields it returns (new token, timestamps, etc.) are captured, then
-      // override with the explicit form values — the user's just-submitted
-      // edits must win over whatever the API echoes back.
       const updatedKeyData: Partial<KeyResponse> = {
         ...response,
         token: response.token || response.key_id || selectedToken.token,
@@ -107,11 +119,11 @@ export function RegenerateKeyModal({ selectedToken, visible, onClose, onKeyUpdat
         tpm_limit: formValues.tpm_limit,
         rpm_limit: formValues.rpm_limit,
         expires: formValues.duration
-          ? (calculateNewExpiryTime(formValues.duration) ?? selectedToken.expires)
+          ? (calculateNewExpiryTime(formValues.duration) ??
+            selectedToken.expires)
           : selectedToken.expires,
       };
 
-      // Update the parent component with new key data
       if (onKeyUpdate) {
         onKeyUpdate(updatedKeyData);
       }
@@ -120,7 +132,7 @@ export function RegenerateKeyModal({ selectedToken, visible, onClose, onKeyUpdat
     } catch (error) {
       console.error("Error regenerating key:", error);
       NotificationManager.fromBackend(error);
-      setIsRegenerating(false); // Reset regenerating state on error
+      setIsRegenerating(false);
     }
   };
 
@@ -137,143 +149,158 @@ export function RegenerateKeyModal({ selectedToken, visible, onClose, onKeyUpdat
   };
 
   return (
-    <Modal
-      title="Regenerate Virtual Key"
-      open={visible}
-      onCancel={handleClose}
-      width={520}
-      maskClosable={false}
-      footer={
-        regeneratedKey
-          ? [
-              <Space key="footer-actions">
-                <Button onClick={handleClose}>Close</Button>
-                <CopyToClipboard text={regeneratedKey} onCopy={handleCopyKey}>
-                  <Button type="primary" icon={copied ? <CheckOutlined /> : <CopyOutlined />}>
-                    {copied ? "Copied" : "Copy Key"}
-                  </Button>
-                </CopyToClipboard>
-              </Space>,
-            ]
-          : [
-              <Space key="footer-actions">
-                <Button onClick={handleClose}>Cancel</Button>
-                <Button type="primary" icon={<SyncOutlined />} onClick={handleRegenerateKey} loading={isRegenerating}>
-                  Regenerate
-                </Button>
-              </Space>,
-            ]
-      }
-    >
-      {regeneratedKey ? (
-        <Flex vertical gap="middle">
-          <Alert type="warning" showIcon message="Save it now, you will not see it again" />
+    <Dialog open={visible} onOpenChange={(o) => (!o ? handleClose() : undefined)}>
+      <DialogContent
+        className="max-w-[520px]"
+        onInteractOutside={(e) => e.preventDefault()}
+      >
+        <DialogHeader>
+          <DialogTitle>Regenerate Virtual Key</DialogTitle>
+        </DialogHeader>
 
-          <Flex vertical gap={2}>
-            <Text type="secondary" style={{ fontSize: 12 }}>
-              Key Alias
-            </Text>
-            <Text>{selectedToken?.key_alias || "No alias set"}</Text>
-          </Flex>
-
-          <Flex vertical gap={6}>
-            <Text type="secondary" style={{ fontSize: 12 }}>
-              Virtual Key
-            </Text>
-            <div
-              style={{
-                background: "#f5f5f5",
-                border: "1px solid #e8e8e8",
-                borderRadius: 6,
-                padding: "14px 16px",
-                fontFamily: "SFMono-Regular, Consolas, 'Liberation Mono', Menlo, monospace",
-                fontSize: 16,
-                wordBreak: "break-all",
-                color: "#262626",
-              }}
-            >
-              {regeneratedKey}
+        {regeneratedKey ? (
+          <div className="flex flex-col gap-4">
+            {/* eslint-disable-next-line litellm-ui/no-raw-tailwind-colors */}
+            <div className="flex gap-2 items-start p-3 rounded-md bg-amber-50 border border-amber-200 text-amber-800 dark:bg-amber-950/30 dark:border-amber-900 dark:text-amber-200">
+              <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" />
+              <span className="text-sm">
+                Save it now, you will not see it again
+              </span>
             </div>
-          </Flex>
-        </Flex>
-      ) : (
-        <Form
-          form={form}
-          layout="vertical"
-          style={{ marginTop: 4 }}
-          onValuesChange={(changedValues) => {
-            if ("duration" in changedValues) {
-              setRegenerateFormData((prev: { duration?: string }) => ({ ...prev, duration: changedValues.duration }));
-            }
-          }}
-        >
-          <Form.Item name="key_alias" label="Key Alias">
-            <Input disabled />
-          </Form.Item>
 
-          <Row gutter={12}>
-            <Col span={8}>
+            <div className="flex flex-col gap-0.5">
+              <span className="text-muted-foreground text-xs">Key Alias</span>
+              <span>{selectedToken?.key_alias || "No alias set"}</span>
+            </div>
+
+            <div className="flex flex-col gap-1.5">
+              <span className="text-muted-foreground text-xs">
+                Virtual Key
+              </span>
+              <div className="bg-muted border border-border rounded-md px-4 py-3.5 font-mono text-base break-all">
+                {regeneratedKey}
+              </div>
+            </div>
+          </div>
+        ) : (
+          <Form
+            form={form}
+            layout="vertical"
+            className="mt-1"
+            onValuesChange={(changedValues) => {
+              if ("duration" in changedValues) {
+                setRegenerateFormData(
+                  (prev: { duration?: string }) => ({
+                    ...prev,
+                    duration: changedValues.duration,
+                  }),
+                );
+              }
+            }}
+          >
+            <Form.Item name="key_alias" label="Key Alias">
+              <Input disabled />
+            </Form.Item>
+
+            <div className="grid grid-cols-3 gap-3">
               <Form.Item name="max_budget" label="Max Budget (USD)">
-                <InputNumber step={0.01} precision={2} style={{ width: "100%" }} />
+                <InputNumber
+                  step={0.01}
+                  precision={2}
+                  style={{ width: "100%" }}
+                />
               </Form.Item>
-            </Col>
-            <Col span={8}>
               <Form.Item name="tpm_limit" label="TPM Limit">
                 <InputNumber style={{ width: "100%" }} />
               </Form.Item>
-            </Col>
-            <Col span={8}>
               <Form.Item name="rpm_limit" label="RPM Limit">
                 <InputNumber style={{ width: "100%" }} />
               </Form.Item>
-            </Col>
-          </Row>
+            </div>
 
-          <Row gutter={12}>
-            <Col span={12}>
+            <div className="grid grid-cols-2 gap-3">
               <Form.Item
                 name="duration"
                 label="Expire Key"
                 extra={
-                  <Flex vertical gap={2}>
-                    <Text type="secondary" style={{ fontSize: 12 }}>
+                  <div className="flex flex-col gap-0.5">
+                    <span className="text-muted-foreground text-xs">
                       Current expiry:{" "}
-                      {selectedToken?.expires ? new Date(selectedToken.expires).toLocaleString() : "Never"}
-                    </Text>
+                      {selectedToken?.expires
+                        ? new Date(selectedToken.expires).toLocaleString()
+                        : "Never"}
+                    </span>
                     {newExpiryTime && (
-                      <Text type="success" style={{ fontSize: 12 }}>
+                      // eslint-disable-next-line litellm-ui/no-raw-tailwind-colors
+                      <span className="text-emerald-600 text-xs">
                         New expiry: {newExpiryTime}
-                      </Text>
+                      </span>
                     )}
-                  </Flex>
+                  </div>
                 }
               >
-                <Input placeholder="e.g. 30s, 30h, 30d" />
+                <AntInput placeholder="e.g. 30s, 30h, 30d" />
               </Form.Item>
-            </Col>
-            <Col span={12}>
               <Form.Item
                 name="grace_period"
                 label="Grace Period"
                 tooltip="Keep the old key valid for this duration after rotation. Both keys work during this period for seamless cutover. Empty = immediate revoke."
                 extra={
-                  <Text type="secondary" style={{ fontSize: 12 }}>
+                  <span className="text-muted-foreground text-xs">
                     Recommended: 24h to 72h for production keys
-                  </Text>
+                  </span>
                 }
                 rules={[
                   {
                     pattern: /^(\d+(s|m|h|d|w|mo))?$/,
-                    message: "Must be a duration like 30s, 30m, 24h, 2d, 1w, or 1mo",
+                    message:
+                      "Must be a duration like 30s, 30m, 24h, 2d, 1w, or 1mo",
                   },
                 ]}
               >
-                <Input placeholder="e.g. 24h, 2d" />
+                <AntInput placeholder="e.g. 24h, 2d" />
               </Form.Item>
-            </Col>
-          </Row>
-        </Form>
-      )}
-    </Modal>
+            </div>
+          </Form>
+        )}
+
+        <DialogFooter>
+          {regeneratedKey ? (
+            <>
+              <Button variant="outline" onClick={handleClose}>
+                Close
+              </Button>
+              <CopyToClipboard text={regeneratedKey} onCopy={handleCopyKey}>
+                <Button>
+                  {copied ? (
+                    <Check className="h-4 w-4" />
+                  ) : (
+                    <Copy className="h-4 w-4" />
+                  )}
+                  {copied ? "Copied" : "Copy Key"}
+                </Button>
+              </CopyToClipboard>
+            </>
+          ) : (
+            <>
+              <Button variant="outline" onClick={handleClose}>
+                Cancel
+              </Button>
+              <Button
+                onClick={handleRegenerateKey}
+                disabled={isRegenerating}
+              >
+                <RefreshCw
+                  className={
+                    isRegenerating ? "h-4 w-4 animate-spin" : "h-4 w-4"
+                  }
+                />
+                Regenerate
+              </Button>
+            </>
+          )}
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
