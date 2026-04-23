@@ -1,7 +1,6 @@
-import React, { useState, useEffect } from "react";
+import React, { useCallback, useState, useEffect } from "react";
+// eslint-disable-next-line litellm-ui/no-banned-ui-imports
 import {
-  Title,
-  Subtitle,
   Table,
   TableHead,
   TableRow,
@@ -9,14 +8,13 @@ import {
   TableBody,
   TableCell,
   BarChart,
-  Text,
-  Button,
   Tab,
   TabGroup,
   TabList,
   TabPanel,
   TabPanels,
 } from "@tremor/react";
+import { Button } from "@/components/ui/button";
 import { perUserAnalyticsCall } from "./networking";
 
 interface PerUserMetrics {
@@ -55,10 +53,11 @@ const PerUserUsage: React.FC<PerUserUsageProps> = ({ accessToken, selectedTags, 
     total_pages: 0,
   });
 
-  const [loading, setLoading] = useState(false);
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const [_loading, setLoading] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
 
-  const fetchPerUserData = async () => {
+  const fetchPerUserData = useCallback(async () => {
     if (!accessToken) return;
 
     setLoading(true);
@@ -75,11 +74,11 @@ const PerUserUsage: React.FC<PerUserUsageProps> = ({ accessToken, selectedTags, 
     } finally {
       setLoading(false);
     }
-  };
+  }, [accessToken, currentPage, selectedTags]);
 
   useEffect(() => {
     fetchPerUserData();
-  }, [accessToken, selectedTags, currentPage]);
+  }, [fetchPerUserData]);
 
   const handleNextPage = () => {
     if (currentPage < perUserData.total_pages) {
@@ -95,8 +94,10 @@ const PerUserUsage: React.FC<PerUserUsageProps> = ({ accessToken, selectedTags, 
 
   return (
     <div className="mb-6">
-      <Title>Per User Usage</Title>
-      <Subtitle>Individual developer usage metrics</Subtitle>
+      <h2 className="text-2xl font-semibold">Per User Usage</h2>
+      <p className="text-muted-foreground">
+        Individual developer usage metrics
+      </p>
 
       <TabGroup>
         <TabList className="mb-6">
@@ -120,39 +121,56 @@ const PerUserUsage: React.FC<PerUserUsageProps> = ({ accessToken, selectedTags, 
                 </TableRow>
               </TableHead>
               <TableBody>
-                {perUserData.results.slice(0, 10).map((item: PerUserMetrics, index: number) => (
-                  <TableRow key={index}>
-                    <TableCell>
-                      <Text className="font-medium">{item.user_id}</Text>
-                    </TableCell>
-                    <TableCell>
-                      <Text>{item.user_email || "N/A"}</Text>
-                    </TableCell>
-                    <TableCell>
-                      <Text>{item.user_agent || "Unknown"}</Text>
-                    </TableCell>
-                    <TableCell className="text-right">
-                      <Text>{formatAbbreviatedNumber(item.successful_requests)}</Text>
-                    </TableCell>
-                    <TableCell className="text-right">
-                      <Text>{formatAbbreviatedNumber(item.total_tokens)}</Text>
-                    </TableCell>
-                    <TableCell className="text-right">
-                      <Text>{formatAbbreviatedNumber(item.failed_requests)}</Text>
-                    </TableCell>
-                    <TableCell className="text-right">
-                      <Text>${formatAbbreviatedNumber(item.spend, 4)}</Text>
-                    </TableCell>
-                  </TableRow>
-                ))}
+                {perUserData.results
+                  .slice(0, 10)
+                  .map((item: PerUserMetrics, index: number) => (
+                    <TableRow key={index}>
+                      <TableCell>
+                        <span className="font-medium">{item.user_id}</span>
+                      </TableCell>
+                      <TableCell>
+                        <span>{item.user_email || "N/A"}</span>
+                      </TableCell>
+                      <TableCell>
+                        <span>{item.user_agent || "Unknown"}</span>
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <span>
+                          {formatAbbreviatedNumber(item.successful_requests)}
+                        </span>
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <span>
+                          {formatAbbreviatedNumber(item.total_tokens)}
+                        </span>
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <span>
+                          {formatAbbreviatedNumber(item.failed_requests)}
+                        </span>
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <span>
+                          ${formatAbbreviatedNumber(item.spend, 4)}
+                        </span>
+                      </TableCell>
+                    </TableRow>
+                  ))}
               </TableBody>
             </Table>
 
             {perUserData.results.length > 10 && (
               <div className="mt-4 flex justify-between items-center">
-                <Text className="text-sm text-gray-500">Showing 10 of {perUserData.total_count} results</Text>
+                <span className="text-sm text-muted-foreground">
+                  Showing 10 of {perUserData.total_count} results
+                </span>
                 <div className="flex gap-2">
-                  <Button size="sm" variant="secondary" onClick={handlePrevPage} disabled={currentPage === 1}>
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    onClick={handlePrevPage}
+                    disabled={currentPage === 1}
+                  >
                     Previous
                   </Button>
                   <Button
@@ -171,8 +189,12 @@ const PerUserUsage: React.FC<PerUserUsageProps> = ({ accessToken, selectedTags, 
           {/* Tab 2: Usage Distribution Histogram */}
           <TabPanel>
             <div className="mb-4">
-              <Title className="text-lg">User Usage Distribution</Title>
-              <Subtitle>Number of users by successful request frequency</Subtitle>
+              <h3 className="text-lg font-semibold">
+                User Usage Distribution
+              </h3>
+              <p className="text-muted-foreground">
+                Number of users by successful request frequency
+              </p>
             </div>
 
             <BarChart
@@ -218,16 +240,21 @@ const PerUserUsage: React.FC<PerUserUsageProps> = ({ accessToken, selectedTags, 
                 });
 
                 // Convert to chart data format for stacked bar chart
-                return Object.entries(categories).map(([categoryName, category]) => {
-                  const dataPoint: Record<string, any> = { category: categoryName };
+                return Object.entries(categories).map(
+                  ([categoryName, category]) => {
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                    const dataPoint: Record<string, any> = {
+                      category: categoryName,
+                    };
 
-                  // Add count for each top user agent
-                  topUserAgents.forEach((agent) => {
-                    dataPoint[agent] = category.agents[agent] || 0;
-                  });
+                    // Add count for each top user agent
+                    topUserAgents.forEach((agent) => {
+                      dataPoint[agent] = category.agents[agent] || 0;
+                    });
 
-                  return dataPoint;
-                });
+                    return dataPoint;
+                  },
+                );
               })()}
               index="category"
               categories={(() => {
