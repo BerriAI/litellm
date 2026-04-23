@@ -62,6 +62,7 @@
         "src/components/Settings/RouterSettings/Fallbacks/FallbackGroupConfig.tsx",
         "src/components/prompts/variable_textarea.tsx",
         "src/components/chat/MCPCredentialsTab.tsx",
+        "src/components/common_components/KeyLifecycleSettings.tsx",
         "src/components/prompts/prompt_editor_view/PromptEditorHeader.tsx",
         "src/components/prompts/prompt_editor_view/VersionHistorySidePanel.tsx",
         "src/app/(dashboard)/teams/components/TeamsTable/ModelsCell.tsx",

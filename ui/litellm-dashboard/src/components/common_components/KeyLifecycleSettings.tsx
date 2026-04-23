@@ -1,20 +1,47 @@
 import React, { useState } from "react";
-import { Select, Tooltip, Divider, Switch, Checkbox } from "antd";
-import { InfoCircleOutlined } from "@ant-design/icons";
-import { TextInput } from "@tremor/react";
-
-const { Option } = Select;
+import { Checkbox } from "@/components/ui/checkbox";
+import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import { Info } from "lucide-react";
 
 interface KeyLifecycleSettingsProps {
-  form: any; // Form instance from parent
+  // Form instance from parent (antd Form)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  form: any;
   autoRotationEnabled: boolean;
   onAutoRotationChange: (enabled: boolean) => void;
   rotationInterval: string;
   onRotationIntervalChange: (interval: string) => void;
-  isCreateMode?: boolean; // If true, shows "leave empty to never expire" instead of "-1 to never expire"
+  isCreateMode?: boolean;
   neverExpire?: boolean;
   onNeverExpireChange?: (checked: boolean) => void;
 }
+
+const InfoTooltip: React.FC<{ children: React.ReactNode }> = ({
+  children,
+}) => (
+  <TooltipProvider>
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Info className="h-3 w-3 text-muted-foreground cursor-help" />
+      </TooltipTrigger>
+      <TooltipContent className="max-w-xs">{children}</TooltipContent>
+    </Tooltip>
+  </TooltipProvider>
+);
 
 const KeyLifecycleSettings: React.FC<KeyLifecycleSettingsProps> = ({
   form,
@@ -26,20 +53,22 @@ const KeyLifecycleSettings: React.FC<KeyLifecycleSettingsProps> = ({
   neverExpire = false,
   onNeverExpireChange,
 }) => {
-  // Predefined intervals
   const predefinedIntervals = ["7d", "30d", "90d", "180d", "365d"];
 
-  // Check if current interval is custom
-  const isCustomInterval = rotationInterval && !predefinedIntervals.includes(rotationInterval);
+  const isCustomInterval =
+    rotationInterval && !predefinedIntervals.includes(rotationInterval);
 
   const [showCustomInput, setShowCustomInput] = useState(isCustomInterval);
-  const [customInterval, setCustomInterval] = useState(isCustomInterval ? rotationInterval : "");
-  const [durationValue, setDurationValue] = useState<string>(form?.getFieldValue?.("duration") || "");
+  const [customInterval, setCustomInterval] = useState(
+    isCustomInterval ? rotationInterval : "",
+  );
+  const [durationValue, setDurationValue] = useState<string>(
+    form?.getFieldValue?.("duration") || "",
+  );
 
   const handleIntervalChange = (value: string) => {
     if (value === "custom") {
       setShowCustomInput(true);
-      // Don't change the actual interval yet, wait for custom input
     } else {
       setShowCustomInput(false);
       setCustomInterval("");
@@ -47,7 +76,9 @@ const KeyLifecycleSettings: React.FC<KeyLifecycleSettingsProps> = ({
     }
   };
 
-  const handleCustomIntervalChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleCustomIntervalChange = (
+    e: React.ChangeEvent<HTMLInputElement>,
+  ) => {
     const value = e.target.value;
     setCustomInterval(value);
     onRotationIntervalChange(value);
@@ -61,106 +92,120 @@ const KeyLifecycleSettings: React.FC<KeyLifecycleSettingsProps> = ({
       form.setFieldsValue({ duration: value });
     }
   };
+
   return (
     <div className="space-y-6">
-      {/* Key Expiry Section */}
       <div className="space-y-4">
-        <span className="text-sm font-medium text-gray-700">Key Expiry Settings</span>
+        <span className="text-sm font-medium text-foreground">
+          Key Expiry Settings
+        </span>
 
         <div className="space-y-2">
-          <label className="text-sm font-medium text-gray-700 flex items-center space-x-1">
+          <div className="text-sm font-medium text-foreground flex items-center space-x-1">
             <span>Expire Key</span>
-            <Tooltip
-              title="Set when this key should expire. Format: 30s (seconds), 30m (minutes), 30h (hours), 30d (days). Leave empty to keep the current expiry unchanged."
-            >
-              <InfoCircleOutlined className="text-gray-400 cursor-help text-xs" />
-            </Tooltip>
+            <InfoTooltip>
+              Set when this key should expire. Format: 30s (seconds), 30m
+              (minutes), 30h (hours), 30d (days). Leave empty to keep the
+              current expiry unchanged.
+            </InfoTooltip>
             {!isCreateMode && onNeverExpireChange && (
-              <Checkbox
-                checked={neverExpire}
-                onChange={(e) => {
-                  const checked = e.target.checked;
-                  onNeverExpireChange(checked);
-                  if (checked) {
-                    setDurationValue("");
-                    if (form && typeof form.setFieldValue === "function") {
-                      form.setFieldValue("duration", "");
-                    } else if (form && typeof form.setFieldsValue === "function") {
-                      form.setFieldsValue({ duration: "" });
+              <label className="ml-2 inline-flex items-center gap-1 text-sm font-normal text-muted-foreground">
+                <Checkbox
+                  checked={neverExpire}
+                  onCheckedChange={(c) => {
+                    const checked = c === true;
+                    onNeverExpireChange(checked);
+                    if (checked) {
+                      setDurationValue("");
+                      if (form && typeof form.setFieldValue === "function") {
+                        form.setFieldValue("duration", "");
+                      } else if (
+                        form &&
+                        typeof form.setFieldsValue === "function"
+                      ) {
+                        form.setFieldsValue({ duration: "" });
+                      }
                     }
-                  }
-                }}
-                className="ml-2 text-sm font-normal text-gray-600"
-              >
+                  }}
+                />
                 Never Expire
-              </Checkbox>
+              </label>
             )}
-          </label>
-          <TextInput
+          </div>
+          <Input
             name="duration"
-            placeholder={isCreateMode ? "e.g., 30d or leave empty to never expire" : "e.g., 30d"}
+            placeholder={
+              isCreateMode
+                ? "e.g., 30d or leave empty to never expire"
+                : "e.g., 30d"
+            }
             className="w-full"
             value={durationValue}
-            onValueChange={handleDurationChange}
+            onChange={(e) => handleDurationChange(e.target.value)}
             disabled={!isCreateMode && neverExpire}
           />
         </div>
       </div>
 
-      <Divider />
+      <hr className="border-border" />
 
-      {/* Auto-Rotation Section */}
       <div className="space-y-4">
-        <span className="text-sm font-medium text-gray-700">Auto-Rotation Settings</span>
+        <span className="text-sm font-medium text-foreground">
+          Auto-Rotation Settings
+        </span>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div className="space-y-2">
-            <label className="text-sm font-medium text-gray-700 flex items-center space-x-1">
+            <label className="text-sm font-medium text-foreground flex items-center space-x-1">
               <span>Enable Auto-Rotation</span>
-              <Tooltip title="Key will automatically regenerate at the specified interval for enhanced security.">
-                <InfoCircleOutlined className="text-gray-400 cursor-help text-xs" />
-              </Tooltip>
+              <InfoTooltip>
+                Key will automatically regenerate at the specified interval
+                for enhanced security.
+              </InfoTooltip>
             </label>
             <Switch
               checked={autoRotationEnabled}
-              onChange={onAutoRotationChange}
-              size="default"
-              className={autoRotationEnabled ? "" : "bg-gray-400"}
+              onCheckedChange={onAutoRotationChange}
             />
           </div>
 
           {autoRotationEnabled && (
             <div className="space-y-2">
-              <label className="text-sm font-medium text-gray-700 flex items-center space-x-1">
+              <label className="text-sm font-medium text-foreground flex items-center space-x-1">
                 <span>Rotation Interval</span>
-                <Tooltip title="How often the key should be automatically rotated. Choose the interval that best fits your security requirements.">
-                  <InfoCircleOutlined className="text-gray-400 cursor-help text-xs" />
-                </Tooltip>
+                <InfoTooltip>
+                  How often the key should be automatically rotated. Choose
+                  the interval that best fits your security requirements.
+                </InfoTooltip>
               </label>
               <div className="space-y-2">
                 <Select
                   value={showCustomInput ? "custom" : rotationInterval}
-                  onChange={handleIntervalChange}
-                  className="w-full"
-                  placeholder="Select interval"
+                  onValueChange={handleIntervalChange}
                 >
-                  <Option value="7d">7 days</Option>
-                  <Option value="30d">30 days</Option>
-                  <Option value="90d">90 days</Option>
-                  <Option value="180d">180 days</Option>
-                  <Option value="365d">365 days</Option>
-                  <Option value="custom">Custom interval</Option>
+                  <SelectTrigger className="w-full">
+                    <SelectValue placeholder="Select interval" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="7d">7 days</SelectItem>
+                    <SelectItem value="30d">30 days</SelectItem>
+                    <SelectItem value="90d">90 days</SelectItem>
+                    <SelectItem value="180d">180 days</SelectItem>
+                    <SelectItem value="365d">365 days</SelectItem>
+                    <SelectItem value="custom">Custom interval</SelectItem>
+                  </SelectContent>
                 </Select>
 
                 {showCustomInput && (
                   <div className="space-y-1">
-                    <TextInput
+                    <Input
                       value={customInterval}
                       onChange={handleCustomIntervalChange}
                       placeholder="e.g., 1s, 5m, 2h, 14d"
                     />
-                    <div className="text-xs text-gray-500">
-                      Supported formats: seconds (s), minutes (m), hours (h), days (d)
+                    <div className="text-xs text-muted-foreground">
+                      Supported formats: seconds (s), minutes (m), hours (h),
+                      days (d)
                     </div>
                   </div>
                 )}
@@ -170,9 +215,10 @@ const KeyLifecycleSettings: React.FC<KeyLifecycleSettingsProps> = ({
         </div>
 
         {autoRotationEnabled && (
-          <div className="bg-blue-50 p-3 rounded-md text-sm text-blue-700">
-            When rotation occurs, you&apos;ll receive a notification with the new key. The old key will be deactivated
-            after a brief grace period.
+          <div className="bg-blue-50 dark:bg-blue-950/30 p-3 rounded-md text-sm text-blue-700 dark:text-blue-300">
+            When rotation occurs, you&apos;ll receive a notification with the
+            new key. The old key will be deactivated after a brief grace
+            period.
           </div>
         )}
       </div>
