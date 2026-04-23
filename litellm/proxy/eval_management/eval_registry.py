@@ -16,7 +16,7 @@ async def add_eval_to_db(
     created = await prisma_client.db.litellm_evalstable.create(
         data={
             "eval_name": eval_config["eval_name"],
-            "criteria": json.dumps(criteria),
+            "criteria": criteria,
             "judge_model": eval_config["judge_model"],
             "description": eval_config.get("description"),
             "overall_threshold": eval_config.get("overall_threshold"),
@@ -63,7 +63,7 @@ async def update_eval_in_db(
 ) -> Dict[str, Any]:
     data: Dict[str, Any] = {"version": {"increment": 1}}
     if "criteria" in update:
-        data["criteria"] = json.dumps(update["criteria"])
+        data["criteria"] = update["criteria"]
     for field in ("judge_model", "description", "overall_threshold", "max_iterations"):
         if field in update:
             data[field] = update[field]
