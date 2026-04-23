@@ -74,6 +74,7 @@ from ..common_utils import (
     get_anthropic_beta_from_headers,
     get_bedrock_tool_name,
     is_claude_4_5_on_bedrock,
+    strip_bedrock_routing_prefix,
 )
 
 # Computer use tool prefixes supported by Bedrock
@@ -1202,8 +1203,16 @@ class AmazonConverseConfig(BaseConfig):
         output_config: Optional[OutputConfigBlock] = inference_params.pop(
             "outputConfig", None
         )
+        # Strip routing prefixes (e.g. ``converse/``) and pass the provider
+        # explicitly so the declarative ``supports_output_config`` flag in
+        # ``model_prices_and_context_window.json`` is actually consulted.
+        # Passing ``custom_llm_provider=None`` would make ``_supports_factory``
+        # silently return False for any model whose name doesn't resolve to a
+        # known provider prefix on its own.
         if not _supports_factory(
-            model=model, custom_llm_provider=None, key="supports_output_config"
+            model=strip_bedrock_routing_prefix(model),
+            custom_llm_provider="bedrock",
+            key="supports_output_config",
         ):
             inference_params.pop("output_config", None)
 

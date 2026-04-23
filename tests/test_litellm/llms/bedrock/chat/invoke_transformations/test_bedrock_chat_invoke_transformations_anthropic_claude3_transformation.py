@@ -440,6 +440,48 @@ def test_output_config_removed_from_bedrock_chat_invoke_request():
     assert result["max_tokens"] == 100
 
 
+def test_output_config_preserved_for_claude_4_6_with_invoke_prefix():
+    """
+    Regression test: when the proxy routes ``bedrock/invoke/us.anthropic.
+    claude-opus-4-6-v1``, the transformation sees ``model=invoke/us.
+    anthropic.claude-opus-4-6-v1``. The ``invoke/`` prefix is not a valid
+    provider, so a naive ``_supports_factory(model, custom_llm_provider=None)``
+    call silently returns False and drops the user's ``output_config``.
+
+    This test forces the local cost map (so ``supports_output_config: true``
+    from the bundled JSON is visible) and asserts the Anthropic-style
+    ``output_config.effort`` is forwarded to Bedrock.
+    """
+    import os
+
+    import litellm
+
+    old_env = os.environ.get("LITELLM_LOCAL_MODEL_COST_MAP")
+    old_cost = litellm.model_cost
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    try:
+        config = AmazonAnthropicClaudeConfig()
+        result = config.transform_request(
+            model="invoke/us.anthropic.claude-opus-4-6-v1",
+            messages=[{"role": "user", "content": "hello"}],
+            optional_params={
+                "max_tokens": 64,
+                "output_config": {"effort": "medium"},
+            },
+            litellm_params={},
+            headers={},
+        )
+
+        assert result.get("output_config") == {"effort": "medium"}
+    finally:
+        litellm.model_cost = old_cost
+        if old_env is None:
+            os.environ.pop("LITELLM_LOCAL_MODEL_COST_MAP", None)
+        else:
+            os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = old_env
+
+
 def test_output_format_removed_from_bedrock_invoke_request():
     """
     Test that output_format parameter is removed from Bedrock Invoke requests.
