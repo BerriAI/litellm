@@ -5061,6 +5061,12 @@ interface ListGuardrailSubmissionsResponse {
   summary: GuardrailSubmissionSummary;
 }
 
+export interface TestGuardrailSubmissionResponse {
+  success: boolean;
+  action: string;
+  message: string;
+}
+
 export const listGuardrailSubmissions = async (
   accessToken: string,
   params?: { status?: string; team_id?: string; team_guardrail?: boolean; search?: string }
@@ -5074,6 +5080,29 @@ export const listGuardrailSubmissions = async (
   const fullUrl = searchParams.toString() ? `${url}?${searchParams.toString()}` : url;
   const response = await fetch(fullUrl, {
     method: "GET",
+    headers: {
+      [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+  });
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    const errorMessage = deriveErrorMessage(errorData);
+    handleError(errorMessage);
+    throw new Error(errorMessage);
+  }
+  return response.json();
+};
+
+export const testGuardrailSubmission = async (
+  accessToken: string,
+  guardrailId: string
+): Promise<TestGuardrailSubmissionResponse> => {
+  const url = proxyBaseUrl
+    ? `${proxyBaseUrl}/guardrails/submissions/${encodeURIComponent(guardrailId)}/test`
+    : `/guardrails/submissions/${encodeURIComponent(guardrailId)}/test`;
+  const response = await fetch(url, {
+    method: "POST",
     headers: {
       [globalLitellmHeaderName]: `Bearer ${accessToken}`,
       "Content-Type": "application/json",

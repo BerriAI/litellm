@@ -19,6 +19,7 @@ import {
   listGuardrailSubmissions,
   approveGuardrailSubmission,
   rejectGuardrailSubmission,
+  testGuardrailSubmission,
   updateGuardrailCall,
   type GuardrailSubmissionItem,
 } from "@/components/networking";
@@ -394,6 +395,8 @@ type DetailPanelProps = {
   onClose: () => void;
   onApprove: () => void;
   onReject: () => void;
+  onTestEndpoint: () => Promise<void>;
+  isTestingEndpoint: boolean;
   onToggleForwardKey: () => void;
   onUpdateCustomHeaders: (
     customHeaders: { key: string; value: string }[]
@@ -406,6 +409,8 @@ function DetailPanel({
   onClose,
   onApprove,
   onReject,
+  onTestEndpoint,
+  isTestingEndpoint,
   onToggleForwardKey,
   onUpdateCustomHeaders,
   onUpdateExtraHeaders,
@@ -704,10 +709,12 @@ function DetailPanel({
         <div className="mt-5 pt-4 border-t border-gray-100 space-y-2">
           <button
             type="button"
-            className="w-full flex items-center justify-center gap-2 border border-gray-300 text-gray-700 hover:bg-gray-50 text-sm font-medium py-2 rounded-md transition-colors"
+            onClick={() => void onTestEndpoint()}
+            disabled={isTestingEndpoint}
+            className="w-full flex items-center justify-center gap-2 border border-gray-300 text-gray-700 hover:bg-gray-50 disabled:opacity-60 disabled:cursor-not-allowed text-sm font-medium py-2 rounded-md transition-colors"
           >
             <ExternalLinkIcon className="h-4 w-4" />
-            Test Endpoint
+            {isTestingEndpoint ? "Testing Endpoint..." : "Test Endpoint"}
           </button>
           {g.status === "pending" && (
             <div className="flex gap-2">
@@ -824,6 +831,7 @@ export function TeamGuardrailsTab({ accessToken }: TeamGuardrailsTabProps) {
   const [error, setError] = useState<string | null>(null);
   const [searchDebounced, setSearchDebounced] = useState("");
   const [isSubmitModalOpen, setIsSubmitModalOpen] = useState(false);
+  const [testingEndpointId, setTestingEndpointId] = useState<string | null>(null);
   const [submitForm] = Form.useForm();
   const registerGuardrail = useRegisterGuardrail();
 
@@ -943,8 +951,10 @@ export function TeamGuardrailsTab({ accessToken }: TeamGuardrailsTabProps) {
       if (selectedId === id) setSelectedId(null);
       await fetchSubmissions();
       NotificationsManager.success("Guardrail approved");
-    } catch {
-      NotificationsManager.fromBackend("Failed to approve guardrail");
+    } catch (err) {
+      NotificationsManager.fromBackend(
+        err instanceof Error ? err.message : "Failed to approve guardrail"
+      );
     }
   }
 
@@ -958,6 +968,25 @@ export function TeamGuardrailsTab({ accessToken }: TeamGuardrailsTabProps) {
       NotificationsManager.success("Guardrail rejected");
     } catch {
       NotificationsManager.fromBackend("Failed to reject guardrail");
+    }
+  }
+
+  async function handleTestEndpoint(id: string) {
+    if (!accessToken) return;
+    setTestingEndpointId(id);
+    try {
+      const result = await testGuardrailSubmission(accessToken, id);
+      NotificationsManager.success(
+        result.action === "NONE"
+          ? result.message
+          : `${result.message} (${result.action})`
+      );
+    } catch (err) {
+      NotificationsManager.fromBackend(
+        err instanceof Error ? err.message : "Failed to reach guardrail endpoint"
+      );
+    } finally {
+      setTestingEndpointId((current) => (current === id ? null : current));
     }
   }
 
@@ -1060,6 +1089,8 @@ export function TeamGuardrailsTab({ accessToken }: TeamGuardrailsTabProps) {
           onReject={() =>
             setConfirmAction({ id: selected.id, action: "reject" })
           }
+          onTestEndpoint={() => handleTestEndpoint(selected.id)}
+          isTestingEndpoint={testingEndpointId === selected.id}
           onToggleForwardKey={() => toggleForwardKey(selected.id)}
           onUpdateCustomHeaders={(customHeaders) =>
             updateCustomHeaders(selected.id, customHeaders)
