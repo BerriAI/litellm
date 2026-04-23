@@ -52,6 +52,7 @@
         "src/components/agents/agent_card.tsx",
         "src/components/permissions/VectorStorePermissions.tsx",
         "src/components/permissions/AgentPermissions.tsx",
+        "src/components/permissions/MCPServerPermissions.tsx",
         "src/components/DeletedKeysPage/DeletedKeysPage.tsx",
         "src/components/DeletedTeamsPage/DeletedTeamsPage.tsx"
       ],
