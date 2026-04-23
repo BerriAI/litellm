@@ -92,6 +92,7 @@
         "src/components/Navbar/UserDropdown/UserDropdown.tsx",
         "src/components/playground/chat_ui/ChatMessageBubble.tsx",
         "src/components/view_logs/AuditLogDrawer/AuditLogDrawer.tsx",
+        "src/components/Settings/RouterSettings/Fallbacks/FallbackGroupConfig.tsx",
         "src/components/permissions/VectorStorePermissions.tsx",
         "src/components/permissions/AgentPermissions.tsx",
         "src/components/permissions/MCPServerPermissions.tsx",
