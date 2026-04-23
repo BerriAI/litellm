@@ -1,7 +1,14 @@
-import React, { useState, useEffect } from "react";
-import { Icon, Button as TremorButton, Col, Text, Grid, TabGroup, TabList, Tab, TabPanels, TabPanel } from "@tremor/react";
-import { RefreshIcon } from "@heroicons/react/outline";
-import { vectorStoreListCall, vectorStoreDeleteCall, credentialListCall, CredentialItem } from "../networking";
+import React, { useCallback, useState, useEffect } from "react";
+// eslint-disable-next-line litellm-ui/no-banned-ui-imports
+import { TabGroup, TabList, Tab, TabPanels, TabPanel } from "@tremor/react";
+import { RefreshCcw } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import {
+  vectorStoreListCall,
+  vectorStoreDeleteCall,
+  credentialListCall,
+  CredentialItem,
+} from "../networking";
 import { VectorStore } from "./types";
 import VectorStoreTable from "./VectorStoreTable";
 import VectorStoreForm from "./VectorStoreForm";
@@ -29,29 +36,29 @@ const VectorStoreManagement: React.FC<VectorStoreProps> = ({ accessToken, userID
   const [editVectorStore, setEditVectorStore] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
 
-  const fetchVectorStores = async () => {
+  const fetchVectorStores = useCallback(async () => {
     if (!accessToken) return;
     try {
       const response = await vectorStoreListCall(accessToken);
-      console.log("List vector stores response:", response);
       setVectorStores(response.data || []);
     } catch (error) {
       console.error("Error fetching vector stores:", error);
-      NotificationsManager.fromBackend("Error fetching vector stores: " + error);
+      NotificationsManager.fromBackend(
+        "Error fetching vector stores: " + error,
+      );
     }
-  };
+  }, [accessToken]);
 
-  const fetchCredentials = async () => {
+  const fetchCredentials = useCallback(async () => {
     if (!accessToken) return;
     try {
       const response = await credentialListCall(accessToken);
-      console.log("List credentials response:", response);
       setCredentials(response.credentials || []);
     } catch (error) {
       console.error("Error fetching credentials:", error);
       NotificationsManager.fromBackend("Error fetching credentials: " + error);
     }
-  };
+  }, [accessToken]);
 
   const handleRefreshClick = () => {
     fetchVectorStores();
@@ -112,7 +119,7 @@ const VectorStoreManagement: React.FC<VectorStoreProps> = ({ accessToken, userID
   useEffect(() => {
     fetchVectorStores();
     fetchCredentials();
-  }, [accessToken]);
+  }, [fetchVectorStores, fetchCredentials]);
 
   return selectedVectorStoreId ? (
     <div className="w-full h-full">
@@ -130,20 +137,25 @@ const VectorStoreManagement: React.FC<VectorStoreProps> = ({ accessToken, userID
         <div className="flex justify-between mt-2 w-full items-center mb-4">
           <h1>Vector Store Management</h1>
           <div className="flex items-center space-x-2">
-            {lastRefreshed && <Text>Last Refreshed: {lastRefreshed}</Text>}
-            <Icon
-              icon={RefreshIcon}
-              variant="shadow"
-              size="xs"
-              className="self-center cursor-pointer"
+            {lastRefreshed && (
+              <span className="text-sm text-muted-foreground">
+                Last Refreshed: {lastRefreshed}
+              </span>
+            )}
+            <button
+              type="button"
               onClick={handleRefreshClick}
-            />
+              className="p-1.5 rounded-md border border-border shadow-sm hover:bg-muted transition-colors self-center"
+              aria-label="Refresh"
+            >
+              <RefreshCcw className="h-3.5 w-3.5" />
+            </button>
           </div>
         </div>
 
-        <Text className="mb-4">
-          <p>You can use vector stores to store and retrieve LLM embeddings.</p>
-        </Text>
+        <p className="mb-4 text-sm">
+          You can use vector stores to store and retrieve LLM embeddings.
+        </p>
 
         <TabGroup>
           <TabList className="mb-6">
@@ -160,20 +172,23 @@ const VectorStoreManagement: React.FC<VectorStoreProps> = ({ accessToken, userID
 
             {/* Tab 2: Manage Vector Stores */}
             <TabPanel>
-              <TremorButton className="mb-4" onClick={() => setIsCreateModalVisible(true)}>
+              <Button
+                className="mb-4"
+                onClick={() => setIsCreateModalVisible(true)}
+              >
                 + Add Vector Store
-              </TremorButton>
+              </Button>
 
-              <Grid numItems={1} className="gap-2 pt-2 pb-2 w-full mt-2">
-                <Col numColSpan={1}>
+              <div className="grid grid-cols-1 gap-2 pt-2 pb-2 w-full mt-2">
+                <div className="col-span-1">
                   <VectorStoreTable
                     data={vectorStores}
                     onView={handleView}
                     onEdit={handleEdit}
                     onDelete={handleDelete}
                   />
-                </Col>
-              </Grid>
+                </div>
+              </div>
             </TabPanel>
 
             {/* Tab 3: Test Vector Store */}
