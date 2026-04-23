@@ -109,8 +109,69 @@ LiteLLM is a unified interface for 100+ LLM providers with two main components:
 ### UI / Backend Consistency
 - When wiring a new UI entity type to an existing backend endpoint, verify the backend API contract (single value vs. array, required vs. optional params) and ensure the UI controls match — e.g., use a single-select dropdown when the backend accepts a single value, not a multi-select
 
-### UI Component Library
-- **Always use `antd` for new UI components** — we are migrating off of `@tremor/react`. Do not introduce new `Badge`, `Text`, `Card`, `Grid`, `Title`, or other imports from `@tremor/react` in any new or modified file. Use `antd` equivalents: `Tag` for labels, `Typography.Text` / `Typography.Title` / `Typography.Paragraph` for textual content (avoid plain text-only `<span>`, `<p>`, `<h*>` when Typography fits), and `Card` from `antd`. Note that `antd` has no `"yellow"` Tag color — use `"gold"` for amber/yellow.
+### UI
+
+The UI lives at `ui/litellm-dashboard/`. Phase-1 of the shadcn migration is
+in-flight; new files must follow the post-migration stack. Translation
+rules and pattern library are in
+[`ui/litellm-dashboard/docs/BLUEPRINT.md`](ui/litellm-dashboard/docs/BLUEPRINT.md)
+(locked at end of Section 1, Access Groups).
+
+**Stack**
+- Primitives: shadcn/ui in `src/components/ui/`. No new `antd` imports.
+  `@tremor/react` is allowed **only for charts** (files under a `charts/`
+  directory or with `chart` in the basename).
+- Icons: `lucide-react` only. No new imports from `@ant-design/icons`,
+  `@heroicons/react`, or `@remixicon/react`.
+- Forms: `react-hook-form` + `zod` + shadcn `<Form>` (or direct `register`
+  for simple forms). No new `antd.Form` / `Form.useForm`.
+- Toasts: `sonner` via the `MessageManager` / `NotificationManager`
+  wrappers in `src/components/molecules/`. Do not import `antd.message` or
+  `antd.notification` directly.
+- Tables: shadcn `<Table>` + `@tanstack/react-table`.
+- Charts: `@tremor/react` — only for charts.
+
+**Style rules**
+- Semantic Tailwind tokens only: `bg-primary`, `bg-muted`,
+  `text-foreground`, `border-border`, `text-destructive`. Never raw
+  colors (`bg-slate-500`, `text-blue-600`, etc.). Exceptions are recorded
+  in `ui/litellm-dashboard/docs/DEVIATIONS.md` and in the override list in
+  `ui/litellm-dashboard/.eslintrc.json`.
+- Light + dark theme via shadcn CSS variables (`:root` + `.dark` blocks in
+  `globals.css`). Every new component must render correctly in both.
+- Compact density — default shadcn spacing is overridden via the
+  `compact-1..compact-4` tokens in `tailwind.config.ts`. Don't restore
+  the stock shadcn density.
+
+**Lint enforcement**
+- `ui/litellm-dashboard/eslint-plugin-litellm-ui/rules/no-banned-ui-imports.js` —
+  blocks antd, @ant-design/icons, @heroicons/react, @remixicon/react, and
+  non-chart @tremor/react.
+- `ui/litellm-dashboard/eslint-plugin-litellm-ui/rules/no-raw-tailwind-colors.js` —
+  blocks raw Tailwind color classes.
+- Run lint with `npm run lint` (direct eslint, since `next lint` was
+  removed in Next 16).
+
+**During migration**
+Until all 33 sections listed in
+[`ui/litellm-dashboard/docs/MIGRATION_REPORT.md`](ui/litellm-dashboard/docs/MIGRATION_REPORT.md)
+are migrated, un-migrated sections still import antd and are reported as
+lint violations. These are expected; do not silence them. Each section's
+migration is a self-contained commit that removes all banned imports
+within its scope.
+
+**Phase 2 (future work, not started)**
+The phase-1 migration deliberately left the following for phase 2:
+- React Query adoption for all fetches (library installed, not adopted)
+- File-layout restructure to route-colocated `_lib` / `_components` with
+  `src/features/` promotion
+- Nested detail routes (e.g. `/ui/key/{keyId}/settings`)
+- URL-state convention via `useSearchParams`
+- `date-fns` consolidation (currently `moment` + `dayjs` still present)
+- ESLint flat config migration
+
+Until phase 2 ships, existing fetch patterns, file layout, routes, and
+date libraries are preserved as-is.
 
 ### MCP OAuth / OpenAPI Transport Mapping
 - `TRANSPORT.OPENAPI` is a UI-only concept. The backend only accepts `"http"`, `"sse"`, or `"stdio"`. Always map it to `"http"` before any API call (including pre-OAuth temp-session calls).
