@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Literal, Optional, Tuple, Union, get_type_hints
 
 import httpx
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from typing_extensions import Required, TypedDict
 
 from litellm._uuid import uuid
@@ -220,6 +220,13 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     # complexity-router params
     complexity_router_config: Optional[Dict] = None
     complexity_router_default_model: Optional[str] = None
+
+    # adaptive-router params
+    adaptive_router_default_model: Optional[str] = None
+    adaptive_router_config: Optional[Dict] = None
+    # quality-router params
+    quality_router_config: Optional[Dict] = None
+    quality_router_default_model: Optional[str] = None
 
     # Batch/File API Params
     s3_bucket_name: Optional[str] = None
@@ -790,3 +797,44 @@ class PreRoutingHookResponse(BaseModel):
 
     model: str
     messages: Optional[List[Dict[str, Any]]]
+
+
+class RequestType(str, enum.Enum):
+    """Fixed v0 taxonomy. User-extensible types come in v1."""
+
+    CODE_GENERATION = "code_generation"
+    CODE_UNDERSTANDING = "code_understanding"
+    TECHNICAL_DESIGN = "technical_design"
+    ANALYTICAL_REASONING = "analytical_reasoning"
+    WRITING = "writing"
+    FACTUAL_LOOKUP = "factual_lookup"
+    GENERAL = "general"
+
+
+class AdaptiveRouterWeights(BaseModel):
+    quality: float = Field(default=0.7, ge=0.0, le=1.0)
+    cost: float = Field(default=0.3, ge=0.0, le=1.0)
+
+    @field_validator("cost")
+    @classmethod
+    def _weights_sum_to_one(cls, v, info):
+        q = info.data.get("quality", 0.7)
+        if abs(q + v - 1.0) > 0.001:
+            raise ValueError(
+                f"weights must sum to 1.0, got quality={q} + cost={v} = {q + v}"
+            )
+        return v
+
+
+class AdaptiveRouterConfig(BaseModel):
+    available_models: List[str]
+    weights: AdaptiveRouterWeights = Field(default_factory=AdaptiveRouterWeights)
+
+
+class AdaptiveRouterPreferences(BaseModel):
+    """model_info.adaptive_router_preferences — declared by each model."""
+
+    model_config = ConfigDict(use_enum_values=False)
+
+    quality_tier: int = Field(ge=1, le=3)
+    strengths: List[RequestType] = Field(default_factory=list)

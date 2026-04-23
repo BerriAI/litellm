@@ -95,7 +95,7 @@ class TestAnthropicBetaHeaderSupport:
     def test_messages_transformation_anthropic_beta(self):
         """Test that Messages API transformation includes anthropic_beta in request."""
         config = AmazonAnthropicClaudeMessagesConfig()
-        headers = {"anthropic-beta": "output-128k-2025-02-19"}
+        headers = {"anthropic-beta": "context-1m-2025-08-07"}
 
         result = config.transform_anthropic_messages_request(
             model="anthropic.claude-haiku-4-5-20251001-v1:0",
@@ -107,7 +107,7 @@ class TestAnthropicBetaHeaderSupport:
 
         assert "anthropic_beta" in result
         # Sort both arrays before comparing to avoid flakiness from ordering differences
-        assert sorted(result["anthropic_beta"]) == sorted(["output-128k-2025-02-19"])
+        assert sorted(result["anthropic_beta"]) == sorted(["context-1m-2025-08-07"])
 
     def test_converse_computer_use_compatibility(self):
         """Test that user anthropic_beta headers work with computer use tools."""

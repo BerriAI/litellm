@@ -47,7 +47,7 @@ def get_current_weather(location, unit="fahrenheit"):
     [
         "gpt-3.5-turbo-1106",
         "mistral/mistral-large-latest",
-        "claude-3-haiku-20240307",
+        "claude-haiku-4-5-20251001",
         "gemini/gemini-2.5-flash-lite",
         "anthropic.claude-3-sonnet-20240229-v1:0",
     ],
@@ -275,7 +275,7 @@ from litellm.types.utils import ChatCompletionMessageToolCall, Function, Message
             "anthropic.claude-3-sonnet-20240229-v1:0",
             "bedrock",
         ),
-        ("claude-3-haiku-20240307", "anthropic"),
+        ("claude-haiku-4-5-20251001", "anthropic"),
     ],
 )
 @pytest.mark.parametrize(

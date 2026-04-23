@@ -4,6 +4,7 @@ import sys
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -784,3 +785,37 @@ def test_reset_budget_skips_null_budget_id_endusers_when_default_not_in_reset_li
     assert len(find_many_calls) == 0
 
     litellm.max_end_user_budget_id = None
+
+
+def test_reset_budget_for_team_members_preserves_total_spend():
+    """Regression guard: reset_budget_for_litellm_team_members must zero `spend`
+    but leave `total_spend` untouched.
+
+    The reset writes `data={"spend": 0}` explicitly. If a future refactor adds
+    `"total_spend": 0` to that dict, this test fails immediately.
+    """
+    expired_budget = type(
+        "LiteLLM_BudgetTableFull",
+        (),
+        {"budget_id": "budget-1"},
+    )
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_teammembership.find_many = AsyncMock(return_value=[])
+    mock_prisma_client.db.litellm_teammembership.update_many = AsyncMock(
+        return_value={"count": 1}
+    )
+
+    job = ResetBudgetJob(
+        proxy_logging_obj=MagicMock(), prisma_client=mock_prisma_client
+    )
+
+    asyncio.run(job.reset_budget_for_litellm_team_members([expired_budget]))
+
+    mock_prisma_client.db.litellm_teammembership.update_many.assert_called_once()
+    call_kwargs = (
+        mock_prisma_client.db.litellm_teammembership.update_many.call_args.kwargs
+    )
+    assert call_kwargs["where"]["budget_id"]["in"] == ["budget-1"]
+    assert call_kwargs["data"] == {"spend": 0}
+    assert "total_spend" not in call_kwargs["data"]

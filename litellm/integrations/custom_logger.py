@@ -20,6 +20,7 @@ from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH_SENSITIVE_DATA_MASKER
 from litellm.types.integrations.argilla import ArgillaItem
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionRequest
 from litellm.types.prompts.init_prompts import PromptSpec
+from litellm.types.integrations.custom_logger import AgenticLoopPlan
 from litellm.types.utils import (
     AdapterCompletionStreamWrapper,
     CallTypes,
@@ -239,7 +240,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         self,
         model: str,
         request_kwargs: Dict,
-        messages: Optional[List[Dict[str, str]]] = None,
+        messages: Optional[List[Dict[str, Any]]] = None,
         input: Optional[Union[str, List]] = None,
         specific_deployment: Optional[bool] = False,
     ) -> Optional[PreRoutingHookResponse]:
@@ -676,6 +677,26 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         """
         pass
 
+    async def async_build_agentic_loop_plan(
+        self,
+        tools: Dict,
+        model: str,
+        messages: List[Dict],
+        response: Any,
+        anthropic_messages_provider_config: Any,
+        anthropic_messages_optional_request_params: Dict,
+        logging_obj: "LiteLLMLoggingObj",
+        stream: bool,
+        kwargs: Dict,
+    ) -> AgenticLoopPlan:
+        """
+        Build a typed rerun plan for Anthropic Messages agentic loops.
+
+        Override this method to separate callback decision/tool execution from
+        follow-up request execution (handled by BaseLLMHTTPHandler).
+        """
+        return AgenticLoopPlan(run_agentic_loop=False)
+
     async def async_should_run_chat_completion_agentic_loop(
         self,
         response: Any,
@@ -706,6 +727,22 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         Hook to execute chat completion agentic loop based on context from should_run hook.
         """
         pass
+
+    async def async_build_chat_completion_agentic_loop_plan(
+        self,
+        tools: Dict,
+        model: str,
+        messages: List[Dict],
+        response: Any,
+        optional_params: Dict,
+        logging_obj: "LiteLLMLoggingObj",
+        stream: bool,
+        kwargs: Dict,
+    ) -> AgenticLoopPlan:
+        """
+        Build a typed rerun plan for chat-completions agentic loops.
+        """
+        return AgenticLoopPlan(run_agentic_loop=False)
 
     # Useful helpers for custom logger classes
 

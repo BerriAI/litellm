@@ -403,9 +403,17 @@ class PrismaManager:
         return dname
 
     @staticmethod
-    def setup_database(use_migrate: bool = False) -> bool:
+    def setup_database(
+        use_migrate: bool = False, use_v2_resolver: bool = False
+    ) -> bool:
         """
         Set up the database using either prisma migrate or prisma db push
+
+        Args:
+            use_migrate: Use `prisma migrate deploy` instead of `db push`.
+            use_v2_resolver: Opt into the v2 migration resolver that avoids
+                the diff-and-force recovery behavior (which caused schema
+                thrashing during rolling deploys). Defaults to False.
 
         Returns:
             bool: True if setup was successful, False otherwise
@@ -427,7 +435,10 @@ class PrismaManager:
 
                     prisma_dir = PrismaManager._get_prisma_dir()
 
-                    return ProxyExtrasDBManager.setup_database(use_migrate=use_migrate)
+                    return ProxyExtrasDBManager.setup_database(
+                        use_migrate=use_migrate,
+                        use_v2_resolver=use_v2_resolver,
+                    )
                 else:
                     # Use prisma db push with increased timeout
                     subprocess.run(
