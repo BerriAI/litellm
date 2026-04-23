@@ -32,9 +32,6 @@ const EditSSOSettingsModal: React.FC<EditSSOSettingsModalProps> = ({ isVisible, 
   useEffect(() => {
     if (isVisible && ssoSettings.data && ssoSettings.data.values) {
       const ssoData = ssoSettings.data;
-      console.log("Raw SSO data received:", ssoData); // Debug log
-      console.log("SSO values:", ssoData.values); // Debug log
-      console.log("user_email from API:", ssoData.values.user_email); // Debug log
 
       // Determine which SSO provider is configured
       let selectedProvider = null;
@@ -94,18 +91,16 @@ const EditSSOSettingsModal: React.FC<EditSSOSettingsModalProps> = ({ isVisible, 
         ...teamMappingFields,
       };
 
-      console.log("Setting form values:", formValues); // Debug log
-
       // Clear form first, then set values with a small delay to ensure proper initialization
       form.resetFields();
       setTimeout(() => {
         form.setFieldsValue(formValues);
-        console.log("Form values set, current form values:", form.getFieldsValue()); // Debug log
       }, 100);
     }
   }, [isVisible, ssoSettings.data, form]);
 
   // Enhanced form submission handler
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const handleFormSubmit = async (formValues: Record<string, any>) => {
     try {
       const payload = processSSOSettingsPayload(formValues);
