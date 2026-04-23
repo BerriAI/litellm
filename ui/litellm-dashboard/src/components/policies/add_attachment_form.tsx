@@ -1,14 +1,24 @@
-import React, { useState, useEffect } from "react";
-import { Modal, Form, Select, Radio, Divider, Typography } from "antd";
-import { Button } from "@tremor/react";
+import React, { useCallback, useState, useEffect } from "react";
+import { Form, Select } from "antd";
+import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Policy } from "./types";
-import { teamListCall, keyListCall, modelAvailableCall, estimateAttachmentImpactCall } from "../networking";
+import {
+  teamListCall,
+  keyListCall,
+  modelAvailableCall,
+  estimateAttachmentImpactCall,
+} from "../networking";
 import NotificationsManager from "../molecules/notifications_manager";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { buildAttachmentData } from "./build_attachment_data";
 import ImpactPreviewAlert from "./impact_preview_alert";
-
-const { Text } = Typography;
 
 interface AddAttachmentFormProps {
   visible: boolean;
@@ -16,6 +26,7 @@ interface AddAttachmentFormProps {
   onSuccess: () => void;
   accessToken: string | null;
   policies: Policy[];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   createAttachment: (accessToken: string, attachmentData: any) => Promise<any>;
 }
 
@@ -37,25 +48,21 @@ const AddAttachmentForm: React.FC<AddAttachmentFormProps> = ({
   const [isLoadingKeys, setIsLoadingKeys] = useState(false);
   const [isLoadingModels, setIsLoadingModels] = useState(false);
   const [isEstimating, setIsEstimating] = useState(false);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const [impactResult, setImpactResult] = useState<any>(null);
   const { userId, userRole } = useAuthorized();
 
-  useEffect(() => {
-    if (visible && accessToken) {
-      loadTeamsKeysAndModels();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [visible, accessToken]);
-
-  const loadTeamsKeysAndModels = async () => {
+  const loadTeamsKeysAndModels = useCallback(async () => {
     if (!accessToken) return;
 
-    // Load teams — teamListCall returns a plain array of team objects
     setIsLoadingTeams(true);
     try {
       const teamsResponse = await teamListCall(accessToken, null, userId);
-      const teamsArray = Array.isArray(teamsResponse) ? teamsResponse : (teamsResponse?.data || []);
+      const teamsArray = Array.isArray(teamsResponse)
+        ? teamsResponse
+        : teamsResponse?.data || [];
       const teamAliases = teamsArray
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         .map((t: any) => t.team_alias)
         .filter(Boolean);
       setAvailableTeams(teamAliases);
@@ -65,12 +72,21 @@ const AddAttachmentForm: React.FC<AddAttachmentFormProps> = ({
       setIsLoadingTeams(false);
     }
 
-    // Load keys — keyListCall returns {keys: [...], total_count, ...}
     setIsLoadingKeys(true);
     try {
-      const keysResponse = await keyListCall(accessToken, null, null, null, null, null, 1, 100);
+      const keysResponse = await keyListCall(
+        accessToken,
+        null,
+        null,
+        null,
+        null,
+        null,
+        1,
+        100,
+      );
       const keysArray = keysResponse?.keys || keysResponse?.data || [];
       const keyAliases = keysArray
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         .map((k: any) => k.key_alias)
         .filter(Boolean);
       setAvailableKeys(keyAliases);
@@ -80,12 +96,18 @@ const AddAttachmentForm: React.FC<AddAttachmentFormProps> = ({
       setIsLoadingKeys(false);
     }
 
-    // Load models
     setIsLoadingModels(true);
     try {
-      const modelsResponse = await modelAvailableCall(accessToken, userId || "", userRole || "");
-      const modelsArray = modelsResponse?.data || (Array.isArray(modelsResponse) ? modelsResponse : []);
+      const modelsResponse = await modelAvailableCall(
+        accessToken,
+        userId || "",
+        userRole || "",
+      );
+      const modelsArray =
+        modelsResponse?.data ||
+        (Array.isArray(modelsResponse) ? modelsResponse : []);
       const modelIds = modelsArray
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         .map((m: any) => m.id || m.model_name)
         .filter(Boolean);
       setAvailableModels(modelIds);
@@ -94,7 +116,13 @@ const AddAttachmentForm: React.FC<AddAttachmentFormProps> = ({
     } finally {
       setIsLoadingModels(false);
     }
-  };
+  }, [accessToken, userId, userRole]);
+
+  useEffect(() => {
+    if (visible && accessToken) {
+      loadTeamsKeysAndModels();
+    }
+  }, [visible, accessToken, loadTeamsKeysAndModels]);
 
   const resetForm = () => {
     form.resetFields();
@@ -200,50 +228,68 @@ const AddAttachmentForm: React.FC<AddAttachmentFormProps> = ({
   }));
 
   return (
-    <Modal
-      title="Create Policy Attachment"
+    <Dialog
       open={visible}
-      onCancel={handleClose}
-      footer={null}
-      width={600}
+      onOpenChange={(o) => (!o ? handleClose() : undefined)}
     >
-      <Form
-        form={form}
-        layout="vertical"
-        initialValues={{
-          scope_type: "global",
-        }}
-      >
-        <Form.Item
-          name="policy_names"
-          label="Policies"
-          rules={[{ required: true, message: "Please select at least one policy" }]}
+      <DialogContent className="max-w-[600px]">
+        <DialogHeader>
+          <DialogTitle>Create Policy Attachment</DialogTitle>
+        </DialogHeader>
+        <Form
+          form={form}
+          layout="vertical"
+          initialValues={{
+            scope_type: "global",
+          }}
         >
-          <Select
-            mode="multiple"
-            placeholder="Select policies to attach"
-            options={policyOptions}
-            showSearch
-            filterOption={(input, option) =>
-              (option?.label ?? "").toLowerCase().includes(input.toLowerCase())
-            }
-            style={{ width: "100%" }}
-          />
-        </Form.Item>
-
-        <Divider orientation="left">
-          <Text strong>Scope</Text>
-        </Divider>
-
-        <Form.Item label="Scope Type">
-          <Radio.Group
-            value={scopeType}
-            onChange={(e) => setScopeType(e.target.value)}
+          <Form.Item
+            name="policy_names"
+            label="Policies"
+            rules={[
+              {
+                required: true,
+                message: "Please select at least one policy",
+              },
+            ]}
           >
-            <Radio value="specific">Specific (teams, keys, models, or tags)</Radio>
-            <Radio value="global">Global (applies to all requests)</Radio>
-          </Radio.Group>
-        </Form.Item>
+            <Select
+              mode="multiple"
+              placeholder="Select policies to attach"
+              options={policyOptions}
+              showSearch
+              filterOption={(input, option) =>
+                (option?.label ?? "")
+                  .toLowerCase()
+                  .includes(input.toLowerCase())
+              }
+              style={{ width: "100%" }}
+            />
+          </Form.Item>
+
+          <div className="flex items-center gap-2 mb-2">
+            <span className="font-bold">Scope</span>
+            <hr className="flex-1 border-border" />
+          </div>
+
+          <Form.Item label="Scope Type">
+            <RadioGroup
+              value={scopeType}
+              onValueChange={(v) =>
+                setScopeType(v as "global" | "specific")
+              }
+              className="flex flex-col gap-2"
+            >
+              <label className="flex items-center gap-2 cursor-pointer">
+                <RadioGroupItem value="specific" />
+                Specific (teams, keys, models, or tags)
+              </label>
+              <label className="flex items-center gap-2 cursor-pointer">
+                <RadioGroupItem value="global" />
+                Global (applies to all requests)
+              </label>
+            </RadioGroup>
+          </Form.Item>
 
         {scopeType === "specific" && (
           <>
@@ -318,9 +364,13 @@ const AddAttachmentForm: React.FC<AddAttachmentFormProps> = ({
               label="Tags"
               tooltip="Match against tags set in key or team metadata. Use exact values (e.g., healthcare) or wildcard patterns (e.g., health-*) where * matches any suffix."
               extra={
-                <Text type="secondary" style={{ fontSize: 12 }}>
-                  Matches tags from key/team <code>metadata.tags</code> or tags passed dynamically in the request body. Use <code>*</code> as a suffix wildcard (e.g., <code>prod-*</code> matches <code>prod-us</code>, <code>prod-eu</code>).
-                </Text>
+                <span className="text-xs text-muted-foreground">
+                  Matches tags from key/team <code>metadata.tags</code> or
+                  tags passed dynamically in the request body. Use{" "}
+                  <code>*</code> as a suffix wildcard (e.g.,{" "}
+                  <code>prod-*</code> matches <code>prod-us</code>,{" "}
+                  <code>prod-eu</code>).
+                </span>
               }
             >
               <Select
@@ -338,21 +388,26 @@ const AddAttachmentForm: React.FC<AddAttachmentFormProps> = ({
 
         {impactResult && <ImpactPreviewAlert impactResult={impactResult} />}
 
-        <div className="flex justify-end space-x-2 mt-4">
-          <Button variant="secondary" onClick={handleClose}>
-            Cancel
-          </Button>
-          {scopeType === "specific" && (
-            <Button variant="secondary" onClick={handlePreviewImpact} loading={isEstimating}>
-              Estimate Impact
+          <div className="flex justify-end space-x-2 mt-4">
+            <Button variant="outline" onClick={handleClose}>
+              Cancel
             </Button>
-          )}
-          <Button onClick={handleSubmit} loading={isSubmitting}>
-            Create Attachment
-          </Button>
-        </div>
-      </Form>
-    </Modal>
+            {scopeType === "specific" && (
+              <Button
+                variant="secondary"
+                onClick={handlePreviewImpact}
+                disabled={isEstimating}
+              >
+                {isEstimating ? "Estimating..." : "Estimate Impact"}
+              </Button>
+            )}
+            <Button onClick={handleSubmit} disabled={isSubmitting}>
+              {isSubmitting ? "Creating..." : "Create Attachment"}
+            </Button>
+          </div>
+        </Form>
+      </DialogContent>
+    </Dialog>
   );
 };
 
