@@ -79,7 +79,9 @@ class BasePassthroughUtils:
         for header_name, header_value in request_headers.items():
             if header_name.lower().startswith(PASS_THROUGH_HEADER_PREFIX):
                 # Strip the 'x-pass-' prefix and normalize to lowercase
-                actual_header_name = header_name[len(PASS_THROUGH_HEADER_PREFIX) :].lower()
+                actual_header_name = header_name[
+                    len(PASS_THROUGH_HEADER_PREFIX) :
+                ].lower()
                 if actual_header_name in _PASS_THROUGH_PROTECTED_HEADERS or any(
                     actual_header_name.startswith(p)
                     for p in _PASS_THROUGH_PROTECTED_HEADER_PREFIXES
