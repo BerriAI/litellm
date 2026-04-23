@@ -1,12 +1,12 @@
 import React, { useState, useEffect, useCallback } from "react";
-import { Card, Badge, Button } from "@tremor/react";
-import { ArrowLeftIcon, PencilIcon } from "@heroicons/react/outline";
-import { Descriptions, Tag, Spin, Divider, Typography, Alert } from "antd";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { cn } from "@/lib/utils";
+import { ArrowLeft, Info, Loader2, Pencil } from "lucide-react";
 import { Policy } from "./types";
 import { PipelineInfoDisplay } from "./pipeline_flow_builder";
 import { getResolvedGuardrails } from "../networking";
-
-const { Title, Text } = Typography;
 
 interface PolicyInfoViewProps {
   policyId: string;
@@ -14,8 +14,51 @@ interface PolicyInfoViewProps {
   onEdit: (policy: Policy) => void;
   accessToken: string | null;
   isAdmin: boolean;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   getPolicy: (accessToken: string, policyId: string) => Promise<any>;
 }
+
+const Section: React.FC<{
+  title: string;
+  children: React.ReactNode;
+}> = ({ title, children }) => (
+  <div>
+    <div className="flex items-center gap-2 mb-3">
+      <span className="font-bold">{title}</span>
+      <hr className="flex-1 border-border" />
+    </div>
+    {children}
+  </div>
+);
+
+const InfoAlert: React.FC<{
+  title: React.ReactNode;
+  description?: React.ReactNode;
+}> = ({ title, description }) => (
+  <div className="flex gap-2 items-start p-3 rounded-md bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-900 text-blue-800 dark:text-blue-200 mb-4">
+    <Info className="h-4 w-4 mt-0.5 shrink-0" />
+    <div className="flex-1">
+      <div className="font-semibold">{title}</div>
+      {description && <div className="text-sm mt-1">{description}</div>}
+    </div>
+  </div>
+);
+
+const DescRow: React.FC<{
+  label: string;
+  children: React.ReactNode;
+  first?: boolean;
+}> = ({ label, children, first }) => (
+  <div
+    className={cn(
+      "grid grid-cols-[minmax(160px,220px)_1fr]",
+      !first && "border-t border-border",
+    )}
+  >
+    <div className="bg-muted px-4 py-2.5 font-medium">{label}</div>
+    <div className="px-4 py-2.5">{children}</div>
+  </div>
+);
 
 const PolicyInfoView: React.FC<PolicyInfoViewProps> = ({
   policyId,
@@ -28,7 +71,6 @@ const PolicyInfoView: React.FC<PolicyInfoViewProps> = ({
   const [policy, setPolicy] = useState<Policy | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [resolvedGuardrails, setResolvedGuardrails] = useState<string[]>([]);
-  const [isLoadingResolved, setIsLoadingResolved] = useState(false);
 
   const fetchPolicy = useCallback(async () => {
     if (!accessToken || !policyId) return;
@@ -37,16 +79,12 @@ const PolicyInfoView: React.FC<PolicyInfoViewProps> = ({
     try {
       const data = await getPolicy(accessToken, policyId);
       setPolicy(data);
-      
-      // Also fetch resolved guardrails
-      setIsLoadingResolved(true);
+
       try {
         const resolvedData = await getResolvedGuardrails(accessToken, policyId);
         setResolvedGuardrails(resolvedData.resolved_guardrails || []);
       } catch (error) {
         console.error("Error fetching resolved guardrails:", error);
-      } finally {
-        setIsLoadingResolved(false);
       }
     } catch (error) {
       console.error("Error fetching policy:", error);
@@ -62,17 +100,16 @@ const PolicyInfoView: React.FC<PolicyInfoViewProps> = ({
   if (isLoading) {
     return (
       <div className="flex justify-center items-center p-12">
-        <Spin size="large" />
+        <Loader2 className="h-6 w-6 animate-spin text-primary" />
       </div>
     );
   }
 
   if (!policy) {
     return (
-      <Card>
-        <Text type="danger">Policy not found</Text>
-        <br />
-        <Button onClick={onClose} className="mt-4">
+      <Card className="p-4">
+        <p className="text-destructive">Policy not found</p>
+        <Button onClick={onClose} className="mt-4" variant="secondary">
           Go Back
         </Button>
       </Card>
@@ -80,142 +117,145 @@ const PolicyInfoView: React.FC<PolicyInfoViewProps> = ({
   }
 
   return (
-    <Card>
+    <Card className="p-6">
       <div className="space-y-6">
         <div className="flex justify-between items-center">
-          <Button
-            variant="secondary"
-            icon={ArrowLeftIcon}
-            onClick={onClose}
-          >
+          <Button variant="secondary" onClick={onClose}>
+            <ArrowLeft className="h-4 w-4" />
             Back to Policies
           </Button>
           {isAdmin && (
-            <Button
-              icon={PencilIcon}
-              onClick={() => onEdit(policy)}
-            >
+            <Button onClick={() => onEdit(policy)}>
+              <Pencil className="h-4 w-4" />
               Edit Policy
             </Button>
           )}
         </div>
 
-        <Title level={4}>{policy.policy_name}</Title>
+        <h4 className="text-xl font-semibold">{policy.policy_name}</h4>
 
-        <Descriptions bordered column={1}>
-          <Descriptions.Item label="Policy ID">
-            <code className="text-xs bg-gray-100 px-2 py-1 rounded">{policy.policy_id}</code>
-          </Descriptions.Item>
-          <Descriptions.Item label="Description">
-            {policy.description || <Text type="secondary">No description</Text>}
-          </Descriptions.Item>
-          <Descriptions.Item label="Inherits From">
-            {policy.inherit ? (
-              <Badge color="blue" size="sm">{policy.inherit}</Badge>
-            ) : (
-              <Text type="secondary">None</Text>
+        <div className="border border-border rounded-md overflow-hidden">
+          <DescRow label="Policy ID" first>
+            <code className="text-xs bg-muted px-2 py-1 rounded">
+              {policy.policy_id}
+            </code>
+          </DescRow>
+          <DescRow label="Description">
+            {policy.description || (
+              <span className="text-muted-foreground">No description</span>
             )}
-          </Descriptions.Item>
-          <Descriptions.Item label="Created At">
+          </DescRow>
+          <DescRow label="Inherits From">
+            {policy.inherit ? (
+              <Badge className="bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300">
+                {policy.inherit}
+              </Badge>
+            ) : (
+              <span className="text-muted-foreground">None</span>
+            )}
+          </DescRow>
+          <DescRow label="Created At">
             {policy.created_at
               ? new Date(policy.created_at).toLocaleString()
               : "-"}
-          </Descriptions.Item>
-          <Descriptions.Item label="Updated At">
+          </DescRow>
+          <DescRow label="Updated At">
             {policy.updated_at
               ? new Date(policy.updated_at).toLocaleString()
               : "-"}
-          </Descriptions.Item>
-        </Descriptions>
+          </DescRow>
+        </div>
 
         {policy.pipeline && (
           <>
-            <Divider orientation="left">
-              <Text strong>Pipeline Flow</Text>
-            </Divider>
-            <Alert
-              message={`Pipeline (${policy.pipeline.mode} mode, ${policy.pipeline.steps.length} step${policy.pipeline.steps.length !== 1 ? "s" : ""})`}
-              type="info"
-              showIcon
-              style={{ marginBottom: 16 }}
-            />
-            <PipelineInfoDisplay pipeline={policy.pipeline} />
+            <Section title="Pipeline Flow">
+              <InfoAlert
+                title={`Pipeline (${policy.pipeline.mode} mode, ${policy.pipeline.steps.length} step${policy.pipeline.steps.length !== 1 ? "s" : ""})`}
+              />
+              <PipelineInfoDisplay pipeline={policy.pipeline} />
+            </Section>
           </>
         )}
 
-        <Divider orientation="left">
-          <Text strong>Guardrails Configuration</Text>
-        </Divider>
-
-        {resolvedGuardrails.length > 0 && (
-          <Alert
-            message="Resolved Guardrails"
-            description={
-              <div>
-                <Text type="secondary" style={{ display: "block", marginBottom: 8 }}>
-                  Final guardrails that will be applied (including inheritance):
-                </Text>
-                <div className="flex flex-wrap gap-1">
-                  {resolvedGuardrails.map((g) => (
-                    <Tag key={g} color="blue">
-                      {g}
-                    </Tag>
-                  ))}
+        <Section title="Guardrails Configuration">
+          {resolvedGuardrails.length > 0 && (
+            <InfoAlert
+              title="Resolved Guardrails"
+              description={
+                <div>
+                  <div className="text-muted-foreground mb-2">
+                    Final guardrails that will be applied (including
+                    inheritance):
+                  </div>
+                  <div className="flex flex-wrap gap-1">
+                    {resolvedGuardrails.map((g) => (
+                      <Badge
+                        key={g}
+                        className="bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300"
+                      >
+                        {g}
+                      </Badge>
+                    ))}
+                  </div>
                 </div>
+              }
+            />
+          )}
+
+          <div className="border border-border rounded-md overflow-hidden">
+            <DescRow label="Guardrails to Add" first>
+              <div className="flex flex-wrap gap-1">
+                {policy.guardrails_add && policy.guardrails_add.length > 0 ? (
+                  policy.guardrails_add.map((g) => (
+                    <Badge
+                      key={g}
+                      className="bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300"
+                    >
+                      {g}
+                    </Badge>
+                  ))
+                ) : (
+                  <span className="text-muted-foreground">None</span>
+                )}
               </div>
-            }
-            type="info"
-            showIcon
-            style={{ marginBottom: 16 }}
-          />
-        )}
+            </DescRow>
+            <DescRow label="Guardrails to Remove">
+              <div className="flex flex-wrap gap-1">
+                {policy.guardrails_remove &&
+                policy.guardrails_remove.length > 0 ? (
+                  policy.guardrails_remove.map((g) => (
+                    <Badge
+                      key={g}
+                      className="bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300"
+                    >
+                      {g}
+                    </Badge>
+                  ))
+                ) : (
+                  <span className="text-muted-foreground">None</span>
+                )}
+              </div>
+            </DescRow>
+          </div>
+        </Section>
 
-        <Descriptions bordered column={1}>
-          <Descriptions.Item label="Guardrails to Add">
-            <div className="flex flex-wrap gap-1">
-              {policy.guardrails_add && policy.guardrails_add.length > 0 ? (
-                policy.guardrails_add.map((g) => (
-                  <Tag key={g} color="green">
-                    {g}
-                  </Tag>
-                ))
+        <Section title="Conditions">
+          <div className="border border-border rounded-md overflow-hidden">
+            <DescRow label="Model Condition" first>
+              {policy.condition?.model ? (
+                <Badge className="bg-purple-100 text-purple-700 dark:bg-purple-950 dark:text-purple-300">
+                  {typeof policy.condition.model === "string"
+                    ? policy.condition.model
+                    : JSON.stringify(policy.condition.model)}
+                </Badge>
               ) : (
-                <Text type="secondary">None</Text>
+                <span className="text-muted-foreground">
+                  No model condition (applies to all models)
+                </span>
               )}
-            </div>
-          </Descriptions.Item>
-          <Descriptions.Item label="Guardrails to Remove">
-            <div className="flex flex-wrap gap-1">
-              {policy.guardrails_remove && policy.guardrails_remove.length > 0 ? (
-                policy.guardrails_remove.map((g) => (
-                  <Tag key={g} color="red">
-                    {g}
-                  </Tag>
-                ))
-              ) : (
-                <Text type="secondary">None</Text>
-              )}
-            </div>
-          </Descriptions.Item>
-        </Descriptions>
-
-        <Divider orientation="left">
-          <Text strong>Conditions</Text>
-        </Divider>
-
-        <Descriptions bordered column={1}>
-          <Descriptions.Item label="Model Condition">
-            {policy.condition?.model ? (
-              <Tag color="purple">
-                {typeof policy.condition.model === "string"
-                  ? policy.condition.model
-                  : JSON.stringify(policy.condition.model)}
-              </Tag>
-            ) : (
-              <Text type="secondary">No model condition (applies to all models)</Text>
-            )}
-          </Descriptions.Item>
-        </Descriptions>
+            </DescRow>
+          </div>
+        </Section>
       </div>
     </Card>
   );

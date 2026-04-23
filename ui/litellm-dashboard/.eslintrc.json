@@ -71,6 +71,7 @@
         "src/components/view_logs/GuardrailViewer/CompliancePanel.tsx",
         "src/components/view_logs/LogDetailsDrawer/DrawerHeader.tsx",
         "src/components/guardrails/pii_components.tsx",
+        "src/components/policies/policy_info.tsx",
         "src/components/prompts/prompt_editor_view/PromptEditorHeader.tsx",
         "src/components/prompts/prompt_editor_view/VersionHistorySidePanel.tsx",
         "src/app/(dashboard)/teams/components/TeamsTable/ModelsCell.tsx",
