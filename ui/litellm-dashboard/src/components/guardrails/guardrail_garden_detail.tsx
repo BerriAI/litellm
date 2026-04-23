@@ -1,6 +1,7 @@
 import React, { useState } from "react";
-import { Button } from "antd";
-import { ArrowLeftOutlined } from "@ant-design/icons";
+import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
+import { ArrowLeft } from "lucide-react";
 import AddGuardrailForm from "./add_guardrail_form";
 import { GUARDRAIL_PRESETS } from "./guardrail_garden_configs";
 import { GuardrailCardInfo } from "./guardrail_garden_data";
@@ -22,11 +23,25 @@ const GuardrailDetailView: React.FC<GuardrailDetailViewProps> = ({
   const [activeTab, setActiveTab] = useState("overview");
 
   const detailRows = [
-    { property: "Provider", value: card.category === "litellm" ? "LiteLLM Content Filter" : "Partner Guardrail" },
-    ...(card.subcategory ? [{ property: "Subcategory", value: card.subcategory }] : []),
-    ...(card.category === "litellm" ? [{ property: "Cost", value: "$0 / request" }] : []),
-    ...(card.category === "litellm" ? [{ property: "External Dependencies", value: "None" }] : []),
-    ...(card.category === "litellm" ? [{ property: "Latency", value: card.eval?.latency || "<1ms" }] : []),
+    {
+      property: "Provider",
+      value:
+        card.category === "litellm"
+          ? "LiteLLM Content Filter"
+          : "Partner Guardrail",
+    },
+    ...(card.subcategory
+      ? [{ property: "Subcategory", value: card.subcategory }]
+      : []),
+    ...(card.category === "litellm"
+      ? [{ property: "Cost", value: "$0 / request" }]
+      : []),
+    ...(card.category === "litellm"
+      ? [{ property: "External Dependencies", value: "None" }]
+      : []),
+    ...(card.category === "litellm"
+      ? [{ property: "Latency", value: card.eval?.latency || "<1ms" }]
+      : []),
   ];
 
   const evalRows = card.eval
@@ -47,147 +62,135 @@ const GuardrailDetailView: React.FC<GuardrailDetailViewProps> = ({
   ];
 
   return (
-    <div style={{ maxWidth: 960, margin: "0 auto" }}>
+    <div className="max-w-[960px] mx-auto">
       {/* Back link */}
-      <div
+      <button
+        type="button"
         onClick={onBack}
-        style={{
-          display: "inline-flex",
-          alignItems: "center",
-          gap: 6,
-          color: "#5f6368",
-          cursor: "pointer",
-          fontSize: 14,
-          marginBottom: 24,
-        }}
+        className="inline-flex items-center gap-1.5 text-muted-foreground hover:text-foreground cursor-pointer text-sm mb-6"
       >
-        <ArrowLeftOutlined style={{ fontSize: 11 }} />
+        <ArrowLeft className="h-3 w-3" />
         <span>{card.name}</span>
-      </div>
+      </button>
 
-      {/* ── Header block (Vertex-style) ── */}
-      <div style={{ display: "flex", alignItems: "center", gap: 16, marginBottom: 8 }}>
+      {/* Header block */}
+      <div className="flex items-center gap-4 mb-2">
+        {/* eslint-disable-next-line @next/next/no-img-element */}
         <img
           src={card.logo}
           alt=""
-          style={{ width: 40, height: 40, borderRadius: 8, objectFit: "contain" }}
-          onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
+          className="w-10 h-10 rounded-lg object-contain"
+          onError={(e) => {
+            (e.target as HTMLImageElement).style.display = "none";
+          }}
         />
-        <h1 style={{ fontSize: 28, fontWeight: 400, color: "#202124", margin: 0, lineHeight: 1.2 }}>
+        <h1 className="text-[28px] font-normal text-foreground m-0 leading-tight">
           {card.name}
         </h1>
       </div>
 
-      <p style={{ fontSize: 14, color: "#5f6368", margin: "0 0 20px 0", lineHeight: 1.6 }}>
+      <p className="text-sm text-muted-foreground mt-0 mb-5 leading-relaxed">
         {card.description}
       </p>
 
-      {/* Action buttons — outlined style like Vertex */}
-      <div style={{ display: "flex", gap: 10, marginBottom: 32 }}>
+      {/* Action buttons */}
+      <div className="flex gap-2.5 mb-8">
         <Button
+          variant="outline"
           onClick={() => setIsAddFormVisible(true)}
-          style={{
-            borderRadius: 20,
-            padding: "4px 20px",
-            height: 36,
-            borderColor: "#dadce0",
-            color: "#1a73e8",
-            fontWeight: 500,
-            fontSize: 14,
-          }}
+          className="rounded-full px-5 h-9 text-primary font-medium"
         >
           Create Guardrail
         </Button>
       </div>
 
-      {/* ── Tab bar ──────────────────────────────────── */}
-      <div style={{ borderBottom: "1px solid #dadce0", marginBottom: 28 }}>
-        <div style={{ display: "flex", gap: 0 }}>
+      {/* Tab bar */}
+      <div className="border-b border-border mb-7">
+        <div className="flex gap-0">
           {tabs.map((tab) => (
-            <div
+            <button
+              type="button"
               key={tab.key}
               onClick={() => setActiveTab(tab.key)}
-              style={{
-                padding: "12px 20px",
-                fontSize: 14,
-                color: activeTab === tab.key ? "#1a73e8" : "#5f6368",
-                borderBottom: activeTab === tab.key ? "3px solid #1a73e8" : "3px solid transparent",
-                cursor: "pointer",
-                fontWeight: activeTab === tab.key ? 500 : 400,
-                marginBottom: -1,
-              }}
+              className={cn(
+                "px-5 py-3 text-sm cursor-pointer -mb-px border-b-[3px] border-transparent",
+                activeTab === tab.key
+                  ? "text-primary border-primary font-medium"
+                  : "text-muted-foreground",
+              )}
             >
               {tab.label}
-            </div>
+            </button>
           ))}
         </div>
       </div>
 
-      {/* ── Tab content ──────────────────────────────── */}
+      {/* Tab content */}
       {activeTab === "overview" && (
-        <div style={{ display: "flex", gap: 64 }}>
-          {/* Left column — overview + details table */}
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <h2 style={{ fontSize: 18, fontWeight: 400, color: "#202124", margin: "0 0 12px 0" }}>Overview</h2>
-            <p style={{ fontSize: 14, color: "#3c4043", lineHeight: 1.7, margin: "0 0 32px 0" }}>
+        <div className="flex gap-16">
+          <div className="flex-1 min-w-0">
+            <h2 className="text-lg font-normal text-foreground mt-0 mb-3">
+              Overview
+            </h2>
+            <p className="text-sm text-foreground/90 leading-relaxed m-0 mb-8">
               {card.description}
             </p>
 
-            <h2 style={{ fontSize: 18, fontWeight: 400, color: "#202124", margin: "0 0 4px 0" }}>Guardrail Details</h2>
-            <p style={{ fontSize: 13, color: "#5f6368", margin: "0 0 16px 0" }}>Details are as follows</p>
+            <h2 className="text-lg font-normal text-foreground mt-0 mb-1">
+              Guardrail Details
+            </h2>
+            <p className="text-xs text-muted-foreground m-0 mb-4">
+              Details are as follows
+            </p>
 
-            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14 }}>
+            <table className="w-full border-collapse text-sm">
               <thead>
-                <tr style={{ borderBottom: "1px solid #dadce0" }}>
-                  <th style={{ textAlign: "left", padding: "12px 0", color: "#5f6368", fontWeight: 500, width: 200 }}>Property</th>
-                  <th style={{ textAlign: "left", padding: "12px 0", color: "#5f6368", fontWeight: 500 }}>{card.name}</th>
+                <tr className="border-b border-border">
+                  <th className="text-left py-3 text-muted-foreground font-medium w-[200px]">
+                    Property
+                  </th>
+                  <th className="text-left py-3 text-muted-foreground font-medium">
+                    {card.name}
+                  </th>
                 </tr>
               </thead>
               <tbody>
                 {detailRows.map((row, i) => (
-                  <tr key={i} style={{ borderBottom: "1px solid #f1f3f4" }}>
-                    <td style={{ padding: "12px 0", color: "#3c4043" }}>{row.property}</td>
-                    <td style={{ padding: "12px 0", color: "#202124" }}>{row.value}</td>
+                  <tr key={i} className="border-b border-border/60">
+                    <td className="py-3 text-foreground/90">{row.property}</td>
+                    <td className="py-3 text-foreground">{row.value}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
 
-          {/* Right column — metadata sidebar like Vertex */}
-          <div style={{ width: 240, flexShrink: 0 }}>
-            {/* Guardrail ID */}
-            <div style={{ marginBottom: 28 }}>
-              <div style={{ fontSize: 12, color: "#5f6368", marginBottom: 4 }}>Guardrail ID</div>
-              <div style={{ fontSize: 13, color: "#202124", wordBreak: "break-all" }}>
+          {/* Right column — metadata sidebar */}
+          <div className="w-60 flex-shrink-0">
+            <div className="mb-7">
+              <div className="text-xs text-muted-foreground mb-1">
+                Guardrail ID
+              </div>
+              <div className="text-sm text-foreground break-all">
                 litellm/{card.id}
               </div>
             </div>
 
-            {/* Type */}
-            <div style={{ marginBottom: 28 }}>
-              <div style={{ fontSize: 12, color: "#5f6368", marginBottom: 4 }}>Type</div>
-              <div style={{ fontSize: 13, color: "#202124" }}>
+            <div className="mb-7">
+              <div className="text-xs text-muted-foreground mb-1">Type</div>
+              <div className="text-sm text-foreground">
                 {card.category === "litellm" ? "Content Filter" : "Partner"}
               </div>
             </div>
 
-            {/* Tags — pill style like Vertex */}
             {card.tags.length > 0 && (
-              <div style={{ marginBottom: 28 }}>
-                <div style={{ fontSize: 12, color: "#5f6368", marginBottom: 8 }}>Tags</div>
-                <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+              <div className="mb-7">
+                <div className="text-xs text-muted-foreground mb-2">Tags</div>
+                <div className="flex flex-wrap gap-1.5">
                   {card.tags.map((tag) => (
                     <span
                       key={tag}
-                      style={{
-                        fontSize: 12,
-                        padding: "4px 12px",
-                        borderRadius: 16,
-                        border: "1px solid #dadce0",
-                        color: "#3c4043",
-                        backgroundColor: "#fff",
-                      }}
+                      className="text-xs px-3 py-1 rounded-2xl border border-border text-foreground/90 bg-background"
                     >
                       {tag}
                     </span>
@@ -201,19 +204,27 @@ const GuardrailDetailView: React.FC<GuardrailDetailViewProps> = ({
 
       {activeTab === "eval" && (
         <div>
-          <h2 style={{ fontSize: 18, fontWeight: 400, color: "#202124", margin: "0 0 16px 0" }}>Eval Results</h2>
-          <table style={{ width: "100%", maxWidth: 560, borderCollapse: "collapse", fontSize: 14 }}>
+          <h2 className="text-lg font-normal text-foreground mt-0 mb-4">
+            Eval Results
+          </h2>
+          <table className="w-full max-w-[560px] border-collapse text-sm">
             <thead>
-              <tr style={{ backgroundColor: "#f8f9fa", borderBottom: "1px solid #dadce0" }}>
-                <th style={{ textAlign: "left", padding: "12px 16px", color: "#5f6368", fontWeight: 500 }}>Metric</th>
-                <th style={{ textAlign: "left", padding: "12px 16px", color: "#5f6368", fontWeight: 500 }}>Value</th>
+              <tr className="bg-muted border-b border-border">
+                <th className="text-left px-4 py-3 text-muted-foreground font-medium">
+                  Metric
+                </th>
+                <th className="text-left px-4 py-3 text-muted-foreground font-medium">
+                  Value
+                </th>
               </tr>
             </thead>
             <tbody>
               {evalRows.map((row, i) => (
-                <tr key={i} style={{ borderBottom: "1px solid #f1f3f4" }}>
-                  <td style={{ padding: "12px 16px", color: "#3c4043" }}>{row.metric}</td>
-                  <td style={{ padding: "12px 16px", color: "#202124", fontWeight: 500 }}>{row.value}</td>
+                <tr key={i} className="border-b border-border/60">
+                  <td className="px-4 py-3 text-foreground/90">{row.metric}</td>
+                  <td className="px-4 py-3 text-foreground font-medium">
+                    {row.value}
+                  </td>
                 </tr>
               ))}
             </tbody>
