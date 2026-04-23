@@ -299,6 +299,20 @@ export function useLogFilterLogic({
     setCurrentPage(1);
   };
 
+  // Expose a filter-aware refetch so callers (e.g. the manual Fetch button) can
+  // refresh results while keeping all active backend filters intact.  The plain
+  // `logs.refetch()` in the parent only re-runs the main TanStack Query, which
+  // does not carry key_alias or other backend-only filter params.
+  const refetchWithFilters = useCallback(
+    (page = currentPage) => {
+      if (hasBackendFilters && accessToken) {
+        debouncedSearch.cancel();
+        performSearch(filters, page);
+      }
+    },
+    [hasBackendFilters, accessToken, filters, currentPage, performSearch, debouncedSearch],
+  );
+
   return {
     filters,
     filteredLogs,
@@ -306,5 +320,6 @@ export function useLogFilterLogic({
     allTeams,
     handleFilterChange,
     handleFilterReset,
+    refetchWithFilters,
   };
 }
