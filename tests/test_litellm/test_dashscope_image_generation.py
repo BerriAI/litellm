@@ -49,7 +49,9 @@ def test_get_llm_provider_returns_dashscope(model_string: str):
         ("dashscope/qwen-image-2.0-pro", "dashscope"),
     ],
 )
-def test_get_model_info_mode_is_image_generation(model_string: str, custom_provider: str):
+def test_get_model_info_mode_is_image_generation(
+    model_string: str, custom_provider: str
+):
     import os
 
     prev_env = os.environ.get("LITELLM_LOCAL_MODEL_COST_MAP")
@@ -58,10 +60,12 @@ def test_get_model_info_mode_is_image_generation(model_string: str, custom_provi
         os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
         litellm.model_cost = litellm.get_model_cost_map(url="")
 
-        info = litellm.get_model_info(model=model_string, custom_llm_provider=custom_provider)
-        assert info["mode"] == "image_generation", (
-            f"Expected mode='image_generation', got '{info['mode']}'"
+        info = litellm.get_model_info(
+            model=model_string, custom_llm_provider=custom_provider
         )
+        assert (
+            info["mode"] == "image_generation"
+        ), f"Expected mode='image_generation', got '{info['mode']}'"
     finally:
         if prev_env is None:
             os.environ.pop("LITELLM_LOCAL_MODEL_COST_MAP", None)
@@ -101,7 +105,10 @@ class TestDashScopeImageGenerationConfig:
         assert headers["Content-Type"] == "application/json"
 
     def test_validate_environment_raises_without_key(self):
-        with patch("litellm.llms.dashscope.image_generation.transformation.get_secret_str", return_value=None):
+        with patch(
+            "litellm.llms.dashscope.image_generation.transformation.get_secret_str",
+            return_value=None,
+        ):
             with pytest.raises(ValueError, match="DASHSCOPE_API_KEY"):
                 self.cfg.validate_environment(
                     headers={},
@@ -192,8 +199,20 @@ class TestDashScopeImageGenerationConfig:
         body = {
             "output": {
                 "choices": [
-                    {"finish_reason": "stop", "message": {"role": "assistant", "content": [{"image": "https://example.com/img1.png"}]}},
-                    {"finish_reason": "stop", "message": {"role": "assistant", "content": [{"image": "https://example.com/img2.png"}]}},
+                    {
+                        "finish_reason": "stop",
+                        "message": {
+                            "role": "assistant",
+                            "content": [{"image": "https://example.com/img1.png"}],
+                        },
+                    },
+                    {
+                        "finish_reason": "stop",
+                        "message": {
+                            "role": "assistant",
+                            "content": [{"image": "https://example.com/img2.png"}],
+                        },
+                    },
                 ]
             },
             "usage": {},
@@ -217,6 +236,49 @@ class TestDashScopeImageGenerationConfig:
         assert len(result.data) == 2
         assert result.data[0].url == "https://example.com/img1.png"
         assert result.data[1].url == "https://example.com/img2.png"
+
+    def test_transform_response_raises_on_non_200_status(self):
+        mock_resp = MagicMock(spec=httpx.Response)
+        mock_resp.status_code = 400
+        mock_resp.headers = {}
+        mock_resp.text = '{"code":"InvalidParameter","message":"Size not supported"}'
+        mock_resp.json.return_value = {
+            "code": "InvalidParameter",
+            "message": "Size not supported",
+        }
+
+        with pytest.raises(Exception):
+            self.cfg.transform_image_generation_response(
+                model="qwen-image-2.0",
+                raw_response=mock_resp,
+                model_response=ImageResponse(),
+                logging_obj=MagicMock(),
+                request_data={},
+                optional_params={},
+                litellm_params={},
+                encoding=None,
+            )
+
+    def test_transform_response_raises_on_api_error_body(self):
+        mock_resp = MagicMock(spec=httpx.Response)
+        mock_resp.status_code = 200
+        mock_resp.headers = {}
+        mock_resp.json.return_value = {
+            "code": "InvalidParameter",
+            "message": "Size not supported",
+        }
+
+        with pytest.raises(Exception):
+            self.cfg.transform_image_generation_response(
+                model="qwen-image-2.0",
+                raw_response=mock_resp,
+                model_response=ImageResponse(),
+                logging_obj=MagicMock(),
+                request_data={},
+                optional_params={},
+                litellm_params={},
+                encoding=None,
+            )
 
     # ---------------------------------------------------------------------------
     # 5. OpenAI → DashScope parameter mapping
@@ -284,13 +346,21 @@ def test_litellm_image_generation_dashscope_end_to_end():
                     "message": {
                         "role": "assistant",
                         "content": [
-                            {"image": "https://dashscope-result.oss.aliyuncs.com/test.png"}
+                            {
+                                "image": "https://dashscope-result.oss.aliyuncs.com/test.png"
+                            }
                         ],
                     },
                 }
             ]
         },
-        "usage": {"input_tokens": 0, "output_tokens": 0, "width": 1024, "height": 1024, "image_count": 1},
+        "usage": {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "width": 1024,
+            "height": 1024,
+            "image_count": 1,
+        },
     }
 
     with patch(
@@ -312,11 +382,15 @@ def test_litellm_image_generation_dashscope_end_to_end():
         assert response is not None
         assert response.data is not None
         assert len(response.data) == 1
-        assert response.data[0].url == "https://dashscope-result.oss.aliyuncs.com/test.png"
+        assert (
+            response.data[0].url == "https://dashscope-result.oss.aliyuncs.com/test.png"
+        )
 
         # Verify the HTTP call was made to the DashScope endpoint
         call_args = mock_post.call_args
-        called_url = call_args[0][0] if call_args[0] else call_args.kwargs.get("url", "")
+        called_url = (
+            call_args[0][0] if call_args[0] else call_args.kwargs.get("url", "")
+        )
         assert "dashscope" in called_url or "aliyuncs" in called_url
 
         # Verify request body contains DashScope format
@@ -325,4 +399,3 @@ def test_litellm_image_generation_dashscope_end_to_end():
             body = call_kwargs["json"]
             assert "input" in body
             assert "messages" in body["input"]
-
