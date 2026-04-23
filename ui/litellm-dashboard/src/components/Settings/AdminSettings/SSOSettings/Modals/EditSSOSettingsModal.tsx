@@ -1,6 +1,14 @@
 "use client";
 
-import { Button, Form, Modal, Space } from "antd";
+import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Form } from "antd";
 import React, { useEffect } from "react";
 import BaseSSOSettingsForm from "./BaseSSOSettingsForm";
 import NotificationsManager from "@/components/molecules/notifications_manager";
@@ -123,24 +131,25 @@ const EditSSOSettingsModal: React.FC<EditSSOSettingsModalProps> = ({ isVisible, 
   };
 
   return (
-    <Modal
-      title="Edit SSO Settings"
+    <Dialog
       open={isVisible}
-      width={800}
-      footer={
-        <Space>
-          <Button onClick={handleCancel} disabled={isPending}>
+      onOpenChange={(o) => (!o ? handleCancel() : undefined)}
+    >
+      <DialogContent className="max-w-[800px]">
+        <DialogHeader>
+          <DialogTitle>Edit SSO Settings</DialogTitle>
+        </DialogHeader>
+        <BaseSSOSettingsForm form={form} onFormSubmit={handleFormSubmit} />
+        <DialogFooter>
+          <Button variant="outline" onClick={handleCancel} disabled={isPending}>
             Cancel
           </Button>
-          <Button loading={isPending} onClick={() => form.submit()}>
+          <Button onClick={() => form.submit()} disabled={isPending}>
             {isPending ? "Saving..." : "Save"}
           </Button>
-        </Space>
-      }
-      onCancel={handleCancel}
-    >
-      <BaseSSOSettingsForm form={form} onFormSubmit={handleFormSubmit} />
-    </Modal>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 };
 
