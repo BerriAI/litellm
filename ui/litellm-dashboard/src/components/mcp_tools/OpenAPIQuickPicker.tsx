@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
-import { Spin } from "antd";
+import { Loader2 } from "lucide-react";
+import { cn } from "@/lib/utils";
 import { fetchOpenAPIRegistry } from "../networking";
 
 export interface OpenAPIKeyTool {
@@ -53,9 +54,11 @@ const OpenAPIQuickPicker: React.FC<OpenAPIQuickPickerProps> = ({
   if (loading) {
     return (
       <div className="mb-4">
-        <span className="text-sm font-medium text-gray-700">Popular APIs</span>
+        <span className="text-sm font-medium text-foreground">
+          Popular APIs
+        </span>
         <div className="flex justify-center py-6">
-          <Spin size="small" />
+          <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
         </div>
       </div>
     );
@@ -65,7 +68,9 @@ const OpenAPIQuickPicker: React.FC<OpenAPIQuickPickerProps> = ({
 
   return (
     <div className="mb-4">
-      <span className="text-sm font-medium text-gray-700 block mb-2">Popular APIs</span>
+      <span className="text-sm font-medium text-foreground block mb-2">
+        Popular APIs
+      </span>
 
       <div className="grid grid-cols-5 gap-2">
         {apis.map((api) => {
@@ -77,18 +82,19 @@ const OpenAPIQuickPicker: React.FC<OpenAPIQuickPickerProps> = ({
               type="button"
               title={api.description}
               onClick={() => onSelect(api)}
-              className={`flex flex-col items-center gap-1.5 p-3 rounded-lg border transition-all cursor-pointer
-                ${
-                  isSelected
-                    ? "border-blue-500 bg-blue-50 shadow-sm"
-                    : "border-gray-200 hover:border-blue-300 hover:bg-gray-50"
-                }`}
+              className={cn(
+                "flex flex-col items-center gap-1.5 p-3 rounded-lg border transition-all cursor-pointer",
+                isSelected
+                  ? "border-primary bg-primary/10 shadow-sm"
+                  : "border-border hover:border-primary/50 hover:bg-muted",
+              )}
             >
               {imgFailed ? (
-                <span className="w-7 h-7 rounded-full bg-gray-200 flex items-center justify-center text-sm font-bold text-gray-600">
+                <span className="w-7 h-7 rounded-full bg-muted flex items-center justify-center text-sm font-bold text-foreground">
                   {api.title.charAt(0)}
                 </span>
               ) : (
+                // eslint-disable-next-line @next/next/no-img-element
                 <img
                   src={api.icon_url}
                   alt={api.title}
@@ -96,7 +102,7 @@ const OpenAPIQuickPicker: React.FC<OpenAPIQuickPickerProps> = ({
                   onError={() => handleImgError(api.name)}
                 />
               )}
-              <span className="text-xs text-gray-600 text-center leading-tight font-medium">
+              <span className="text-xs text-muted-foreground text-center leading-tight font-medium">
                 {api.title}
               </span>
             </button>
@@ -104,7 +110,7 @@ const OpenAPIQuickPicker: React.FC<OpenAPIQuickPickerProps> = ({
         })}
       </div>
 
-      <p className="text-xs text-gray-400 mt-2">
+      <p className="text-xs text-muted-foreground mt-2">
         Select an API to pre-fill the spec URL and OAuth 2.0 settings, or enter
         your own spec URL below.
       </p>
