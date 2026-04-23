@@ -1,5 +1,6 @@
 import React from "react";
-import { Radio } from "antd";
+import { Label } from "@/components/ui/label";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import type { ExportScope, EntityType } from "./types";
 
 interface ExportTypeSelectorProps {
@@ -8,37 +9,58 @@ interface ExportTypeSelectorProps {
   entityType: EntityType;
 }
 
-const ExportTypeSelector: React.FC<ExportTypeSelectorProps> = ({ value, onChange, entityType }) => {
+const items: Array<{
+  value: ExportScope;
+  title: (t: EntityType) => string;
+  description: (t: EntityType) => string;
+}> = [
+  {
+    value: "daily",
+    title: (t) => `Day-by-day breakdown by ${t}`,
+    description: (t) => `Daily metrics for each ${t}`,
+  },
+  {
+    value: "daily_with_keys",
+    title: (t) => `Day-by-day breakdown by ${t} and key`,
+    description: (t) => `Daily metrics for each ${t}, split by API key`,
+  },
+  {
+    value: "daily_with_models",
+    title: (t) => `Day-by-day by ${t} and model`,
+    description: () => `Daily metrics split by model`,
+  },
+];
+
+const ExportTypeSelector: React.FC<ExportTypeSelectorProps> = ({
+  value,
+  onChange,
+  entityType,
+}) => {
   return (
     <div>
-      <label className="text-sm font-medium text-gray-700 block mb-2">Export type</label>
-      <Radio.Group value={value} onChange={(e) => onChange(e.target.value)} className="w-full">
-        <div className="space-y-2">
-          <label className="flex items-start p-3 border border-gray-200 rounded-lg hover:bg-gray-50 cursor-pointer transition-colors">
-            <Radio value="daily" className="mt-0.5" />
+      <Label className="text-sm font-medium block mb-2">Export type</Label>
+      <RadioGroup
+        value={value}
+        onValueChange={(v) => onChange(v as ExportScope)}
+        className="w-full space-y-2"
+      >
+        {items.map((item) => (
+          <label
+            key={item.value}
+            className="flex items-start p-3 border border-border rounded-lg hover:bg-muted cursor-pointer transition-colors"
+          >
+            <RadioGroupItem value={item.value} className="mt-0.5" />
             <div className="ml-3 flex-1">
-              <div className="font-medium text-sm">Day-by-day breakdown by {entityType}</div>
-              <div className="text-xs text-gray-500 mt-0.5">Daily metrics for each {entityType}</div>
+              <div className="font-medium text-sm">
+                {item.title(entityType)}
+              </div>
+              <div className="text-xs text-muted-foreground mt-0.5">
+                {item.description(entityType)}
+              </div>
             </div>
           </label>
-
-          <label className="flex items-start p-3 border border-gray-200 rounded-lg hover:bg-gray-50 cursor-pointer transition-colors">
-            <Radio value="daily_with_keys" className="mt-0.5" />
-            <div className="ml-3 flex-1">
-              <div className="font-medium text-sm">Day-by-day breakdown by {entityType} and key</div>
-              <div className="text-xs text-gray-500 mt-0.5">Daily metrics for each {entityType}, split by API key</div>
-            </div>
-          </label>
-
-          <label className="flex items-start p-3 border border-gray-200 rounded-lg hover:bg-gray-50 cursor-pointer transition-colors">
-            <Radio value="daily_with_models" className="mt-0.5" />
-            <div className="ml-3 flex-1">
-              <div className="font-medium text-sm">Day-by-day by {entityType} and model</div>
-              <div className="text-xs text-gray-500 mt-0.5">Daily metrics split by model</div>
-            </div>
-          </label>
-        </div>
-      </Radio.Group>
+        ))}
+      </RadioGroup>
     </div>
   );
 };
