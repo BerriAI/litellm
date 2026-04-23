@@ -1908,34 +1908,102 @@ async def increment_spend_counters(
         )
 
 
+async def _reseed_spend_from_db(counter_key: str) -> float:
+    """
+    Read the authoritative spend for a missing counter from the DB. The
+    counter_key prefix encodes the table to query:
+
+        spend:key:{token}                 -> LiteLLM_VerificationToken.spend
+        spend:team:{team_id}              -> LiteLLM_TeamTable.spend
+        spend:team_member:{uid}:{tid}     -> LiteLLM_TeamMembership.spend
+        spend:user:{user_id}              -> LiteLLM_UserTable.spend
+        spend:org:{org_id}                -> LiteLLM_OrganizationTable.spend
+
+    Returns 0.0 if prisma is unavailable, the row is missing, or the
+    key format is unrecognized. On failure, logs and returns 0.0 rather
+    than raising so the caller can still record the current increment.
+    """
+    if prisma_client is None:
+        return 0.0
+    # Per-window counters (spend:*:window:{duration}) share prefixes with
+    # primary counters but don't correspond to a DB row; their ambiguity
+    # would otherwise be silently parsed as a regular counter and miss.
+    if ":window:" in counter_key:
+        return 0.0
+    try:
+        if counter_key.startswith("spend:key:"):
+            token = counter_key[len("spend:key:") :]
+            row = await prisma_client.db.litellm_verificationtoken.find_unique(
+                where={"token": token}
+            )
+        elif counter_key.startswith("spend:team_member:"):
+            suffix = counter_key[len("spend:team_member:") :]
+            if ":" not in suffix:
+                return 0.0
+            user_id, team_id = suffix.rsplit(":", 1)
+            row = await prisma_client.db.litellm_teammembership.find_unique(
+                where={"user_id_team_id": {"user_id": user_id, "team_id": team_id}}
+            )
+        elif counter_key.startswith("spend:team:"):
+            team_id = counter_key[len("spend:team:") :]
+            row = await prisma_client.db.litellm_teamtable.find_unique(
+                where={"team_id": team_id}
+            )
+        elif counter_key.startswith("spend:user:"):
+            user_id = counter_key[len("spend:user:") :]
+            row = await prisma_client.db.litellm_usertable.find_unique(
+                where={"user_id": user_id}
+            )
+        elif counter_key.startswith("spend:org:"):
+            org_id = counter_key[len("spend:org:") :]
+            row = await prisma_client.db.litellm_organizationtable.find_unique(
+                where={"organization_id": org_id}
+            )
+        else:
+            return 0.0
+    except Exception:
+        verbose_proxy_logger.exception(
+            "Failed to reseed spend counter %s from DB", counter_key
+        )
+        return 0.0
+    if row is None:
+        return 0.0
+    return float(getattr(row, "spend", 0.0) or 0.0)
+
+
 async def _init_and_increment_spend_counter(
     counter_key: str,
     source_cache_key: str,
     increment: float,
 ):
     """
-    Initialize counter from cached object's DB-loaded spend if not yet set,
-    then atomically increment in both in-memory and Redis.
+    Initialize counter from the authoritative DB spend value if not yet
+    set, then atomically increment in both in-memory and Redis.
 
     On first access per pod:
-    1. Check spend_counter_cache (in-memory -> Redis via DualCache for init check)
-    2. If not found anywhere, read base spend from user_api_key_cache (DB-loaded object)
+    1. Check spend_counter_cache (in-memory -> Redis via DualCache)
+    2. If not found, reseed from the DB (`_reseed_spend_from_db`). Falls
+       back to the cached object's `.spend` via user_api_key_cache only
+       if prisma is unavailable, since that value can lag the flusher.
     3. Seed counter via async_increment_cache (not async_set_cache) to avoid a
        check-then-set race: if two pods cold-start simultaneously, both may see
-       the counter as absent and seed it. Using increment instead of set means
-       the worst case is over-counting (conservative — blocks slightly early)
-       rather than under-counting (would allow overspend).
+       the counter as absent and seed it. Using increment means the worst case
+       is over-counting (conservative, blocks slightly early) rather than
+       under-counting (would allow overspend).
     4. Increment atomically (both in-memory + Redis)
     """
     current = await spend_counter_cache.async_get_cache(key=counter_key)
     if current is None:
-        source = await user_api_key_cache.async_get_cache(key=source_cache_key)
-        base_spend = 0.0
-        if source is not None:
-            if isinstance(source, dict):
-                base_spend = source.get("spend", 0.0) or 0.0
-            else:
-                base_spend = getattr(source, "spend", 0.0) or 0.0
+        base_spend = await _reseed_spend_from_db(counter_key)
+        if prisma_client is None:
+            # Best-effort fallback when prisma is unavailable (tests or
+            # early-startup paths). May be stale but avoids resetting to 0.
+            source = await user_api_key_cache.async_get_cache(key=source_cache_key)
+            if source is not None:
+                if isinstance(source, dict):
+                    base_spend = source.get("spend", 0.0) or 0.0
+                else:
+                    base_spend = getattr(source, "spend", 0.0) or 0.0
         if base_spend > 0:
             await spend_counter_cache.async_increment_cache(
                 key=counter_key, value=base_spend
@@ -7289,6 +7357,7 @@ async def chat_completion(  # noqa: PLR0915
             and user_api_key_dict.agent_id is not None
         ):
             data["metadata"]["agent_id"] = user_api_key_dict.agent_id
+
     base_llm_response_processor = ProxyBaseLLMRequestProcessing(data=data)
     try:
         result = await base_llm_response_processor.base_process_llm_request(
