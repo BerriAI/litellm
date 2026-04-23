@@ -2608,6 +2608,15 @@ async def team_member_update(
             identified_budget_id = tm.budget_id
             break
 
+    # If this membership still points at the team's shared default member
+    # budget, _upsert_budget_and_membership will clone-on-write so that the
+    # update only touches this user (not every member sharing the default).
+    team_default_budget_id: Optional[str] = None
+    if team_table.metadata is not None:
+        raw_default_budget_id = team_table.metadata.get("team_member_budget_id")
+        if isinstance(raw_default_budget_id, str):
+            team_default_budget_id = raw_default_budget_id
+
     ### upsert new budget
     async with prisma_client.db.tx() as tx:
         await _upsert_budget_and_membership(
@@ -2620,6 +2629,7 @@ async def team_member_update(
             tpm_limit=data.tpm_limit,
             rpm_limit=data.rpm_limit,
             allowed_models=data.allowed_models,
+            team_default_budget_id=team_default_budget_id,
         )
 
     ### update team member role
