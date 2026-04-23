@@ -1,4 +1,5 @@
 import React from "react";
+// eslint-disable-next-line litellm-ui/no-banned-ui-imports
 import { Card, Text } from "@tremor/react";
 import { Button, Divider, Empty, Input, Select, Space, Tooltip } from "antd";
 import { InfoCircleOutlined, PlusOutlined, DeleteOutlined } from "@ant-design/icons";

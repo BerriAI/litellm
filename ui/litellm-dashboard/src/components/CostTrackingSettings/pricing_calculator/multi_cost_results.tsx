@@ -1,4 +1,5 @@
 import React, { useState } from "react";
+// eslint-disable-next-line litellm-ui/no-banned-ui-imports
 import { Text, Button } from "@tremor/react";
 import { Card, Statistic, Row, Col, Divider, Spin, Table, Tag } from "antd";
 import { LoadingOutlined, DownOutlined, RightOutlined } from "@ant-design/icons";

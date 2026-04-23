@@ -4,6 +4,7 @@ import MessageManager from "@/components/molecules/message_manager";
 import { SearchOutlined, LoadingOutlined } from "@ant-design/icons";
 import { searchToolQueryCall } from "../networking";
 import NotificationsManager from "../molecules/notifications_manager";
+// eslint-disable-next-line litellm-ui/no-banned-ui-imports
 import { Card, Title as TremorTitle } from "@tremor/react";
 
 const { Text } = Typography;

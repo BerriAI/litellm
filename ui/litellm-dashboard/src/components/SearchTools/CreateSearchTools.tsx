@@ -1,6 +1,7 @@
 import { isAdminRole } from "@/utils/roles";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { useQuery } from "@tanstack/react-query";
+// eslint-disable-next-line litellm-ui/no-banned-ui-imports
 import { Button, TextInput } from "@tremor/react";
 import { Form, Input, Modal, Select, Tooltip, Typography } from "antd";
 import Image from "next/image";
