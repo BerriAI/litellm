@@ -1,18 +1,39 @@
 import React, { useState, useEffect } from "react";
 import {
-  Button,
-  Card,
+  Alert,
+  AlertDescription,
+  AlertTitle,
+} from "@/components/ui/alert";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Switch } from "@/components/ui/switch";
+import {
   Table,
   TableBody,
   TableCell,
   TableHead,
-  TableHeaderCell,
+  TableHeader,
   TableRow,
-  Badge,
-  Text,
-} from "@tremor/react";
-import { Modal, Alert, Tooltip, Skeleton, Switch } from "antd";
-import { CheckCircleOutlined } from "@ant-design/icons";
+} from "@/components/ui/table";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import { CheckCircle, Info } from "lucide-react";
 import { getAgentsList, deleteAgentCall, keyListCall } from "./networking";
 import AddAgentForm from "./agents/add_agent_form";
 import { isAdminRole } from "@/utils/roles";
@@ -33,26 +54,35 @@ interface AgentsResponse {
   agents: Agent[];
 }
 
-const AgentsPanel: React.FC<AgentsPanelProps> = ({ accessToken, userRole, teams }) => {
+const AgentsPanel: React.FC<AgentsPanelProps> = ({
+  accessToken,
+  userRole,
+  teams,
+}) => {
   const [agentsList, setAgentsList] = useState<Agent[]>([]);
-  const [keyInfoMap, setKeyInfoMap] = useState<Record<string, AgentKeyInfo>>({});
+  const [keyInfoMap, setKeyInfoMap] = useState<Record<string, AgentKeyInfo>>(
+    {},
+  );
   const [isAddModalVisible, setIsAddModalVisible] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
-  const [agentToDelete, setAgentToDelete] = useState<{ id: string; name: string } | null>(null);
+  const [agentToDelete, setAgentToDelete] = useState<{
+    id: string;
+    name: string;
+  } | null>(null);
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
   const [healthCheckEnabled, setHealthCheckEnabled] = useState(false);
 
   const isAdmin = userRole ? isAdminRole(userRole) : false;
 
   const fetchAgents = async (healthCheck?: boolean) => {
-    if (!accessToken) {
-      return;
-    }
-
+    if (!accessToken) return;
     setIsLoading(true);
     try {
-      const response: AgentsResponse = await getAgentsList(accessToken, healthCheck ?? healthCheckEnabled);
+      const response: AgentsResponse = await getAgentsList(
+        accessToken,
+        healthCheck ?? healthCheckEnabled,
+      );
       setAgentsList(response.agents || []);
     } catch (error) {
       console.error("Error fetching agents:", error);
@@ -72,7 +102,7 @@ const AgentsPanel: React.FC<AgentsPanelProps> = ({ accessToken, userRole, teams 
         null,
         null,
         1,
-        500
+        500,
       );
       const map: Record<string, AgentKeyInfo> = {};
       for (const key of keys) {
@@ -95,6 +125,7 @@ const AgentsPanel: React.FC<AgentsPanelProps> = ({ accessToken, userRole, teams 
 
   useEffect(() => {
     fetchAgents();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [accessToken]);
 
   useEffect(() => {
@@ -103,6 +134,7 @@ const AgentsPanel: React.FC<AgentsPanelProps> = ({ accessToken, userRole, teams 
     } else if (agentsList.length === 0) {
       setKeyInfoMap({});
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [accessToken, agentsList.length]);
 
   const handleHealthCheckToggle = (checked: boolean) => {
@@ -111,31 +143,18 @@ const AgentsPanel: React.FC<AgentsPanelProps> = ({ accessToken, userRole, teams 
   };
 
   const handleAddAgent = () => {
-    if (selectedAgentId) {
-      setSelectedAgentId(null);
-    }
+    if (selectedAgentId) setSelectedAgentId(null);
     setIsAddModalVisible(true);
-  };
-
-  const handleCloseModal = () => {
-    setIsAddModalVisible(false);
-  };
-
-  const handleSuccess = () => {
-    fetchAgents();
-  };
-
-  const handleDeleteClick = (agentId: string, agentName: string) => {
-    setAgentToDelete({ id: agentId, name: agentName });
   };
 
   const handleDeleteConfirm = async () => {
     if (!agentToDelete || !accessToken) return;
-
     setIsDeleting(true);
     try {
       await deleteAgentCall(accessToken, agentToDelete.id);
-      NotificationsManager.success(`Agent "${agentToDelete.name}" deleted successfully`);
+      NotificationsManager.success(
+        `Agent "${agentToDelete.name}" deleted successfully`,
+      );
       fetchAgents();
     } catch (error) {
       console.error("Error deleting agent:", error);
@@ -144,10 +163,6 @@ const AgentsPanel: React.FC<AgentsPanelProps> = ({ accessToken, userRole, teams 
       setIsDeleting(false);
       setAgentToDelete(null);
     }
-  };
-
-  const handleDeleteCancel = () => {
-    setAgentToDelete(null);
   };
 
   const sortedAgents = [...agentsList].sort((a, b) => {
@@ -162,32 +177,49 @@ const AgentsPanel: React.FC<AgentsPanelProps> = ({ accessToken, userRole, teams 
     <div className="w-full mx-auto flex-auto overflow-y-auto m-8 p-2">
       <div className="flex flex-col gap-2 mb-4">
         <h1 className="text-2xl font-bold">Agents</h1>
-        <p className="text-sm text-gray-600">List of A2A-spec agents that are available to be used in your organization. Go to AI Hub, to make agents public.</p>
-        <Alert
-          message="Why do agents need keys?"
-          description="Keys scope access to an agent and allow it to call MCP tools. Assign a key when creating an agent or from the Virtual Keys page."
-          type="info"
-          showIcon
-          className="mb-3"
-        />
+        <p className="text-sm text-muted-foreground">
+          List of A2A-spec agents that are available to be used in your
+          organization. Go to AI Hub, to make agents public.
+        </p>
+        <Alert className="mb-3">
+          <Info className="h-4 w-4" />
+          <AlertTitle>Why do agents need keys?</AlertTitle>
+          <AlertDescription>
+            Keys scope access to an agent and allow it to call MCP tools.
+            Assign a key when creating an agent or from the Virtual Keys page.
+          </AlertDescription>
+        </Alert>
         <div className="mt-2 flex items-center gap-4">
           {isAdmin && (
             <Button onClick={handleAddAgent} disabled={!accessToken}>
               + Add New Agent
             </Button>
           )}
-          <Tooltip title="When enabled, only agents with reachable URLs are shown">
-            <div className="flex items-center gap-2">
-              <CheckCircleOutlined className={healthCheckEnabled ? "text-green-500" : "text-gray-400"} />
-              <span className="text-sm text-gray-600">Health Check</span>
-              <Switch
-                size="small"
-                checked={healthCheckEnabled}
-                onChange={handleHealthCheckToggle}
-                loading={isLoading && healthCheckEnabled}
-              />
-            </div>
-          </Tooltip>
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <div className="flex items-center gap-2">
+                  <CheckCircle
+                    className={
+                      healthCheckEnabled
+                        ? "h-4 w-4 text-emerald-500"
+                        : "h-4 w-4 text-muted-foreground"
+                    }
+                  />
+                  <span className="text-sm text-muted-foreground">
+                    Health Check
+                  </span>
+                  <Switch
+                    checked={healthCheckEnabled}
+                    onCheckedChange={handleHealthCheckToggle}
+                  />
+                </div>
+              </TooltipTrigger>
+              <TooltipContent>
+                When enabled, only agents with reachable URLs are shown
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
         </div>
       </div>
 
@@ -199,74 +231,90 @@ const AgentsPanel: React.FC<AgentsPanelProps> = ({ accessToken, userRole, teams 
           isAdmin={isAdmin}
         />
       ) : (
-        <Card>
+        <Card className="p-6">
           {isLoading ? (
-            <Skeleton active paragraph={{ rows: 3 }} />
+            <div className="space-y-2">
+              <Skeleton className="h-5 w-full" />
+              <Skeleton className="h-5 w-full" />
+              <Skeleton className="h-5 w-3/4" />
+            </div>
           ) : (
             <Table>
-              <TableHead>
+              <TableHeader>
                 <TableRow>
-                  <TableHeaderCell>Agent Name</TableHeaderCell>
-                  <TableHeaderCell>Agent ID</TableHeaderCell>
-                  <TableHeaderCell>Spend (USD)</TableHeaderCell>
-                  <TableHeaderCell>Model</TableHeaderCell>
-                  <TableHeaderCell>Created</TableHeaderCell>
-                  <TableHeaderCell>Status</TableHeaderCell>
-                  {isAdmin && <TableHeaderCell>Actions</TableHeaderCell>}
+                  <TableHead>Agent Name</TableHead>
+                  <TableHead>Agent ID</TableHead>
+                  <TableHead>Spend (USD)</TableHead>
+                  <TableHead>Model</TableHead>
+                  <TableHead>Created</TableHead>
+                  <TableHead>Status</TableHead>
+                  {isAdmin && <TableHead>Actions</TableHead>}
                 </TableRow>
-              </TableHead>
+              </TableHeader>
               <TableBody>
                 {sortedAgents.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={columnCount}>
-                      <Text className="text-center">No agents found. Click &quot;+ Add New Agent&quot; to create one.</Text>
+                    <TableCell
+                      colSpan={columnCount}
+                      className="text-center text-muted-foreground py-8"
+                    >
+                      No agents found. Click &quot;+ Add New Agent&quot; to
+                      create one.
                     </TableCell>
                   </TableRow>
                 ) : (
                   sortedAgents.map((agent) => (
                     <TableRow key={agent.agent_id}>
+                      <TableCell>{agent.agent_name}</TableCell>
                       <TableCell>
-                        <Text>{agent.agent_name}</Text>
+                        <TooltipProvider>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="font-mono text-primary bg-primary/10 hover:bg-primary/20 text-xs font-normal px-2 py-0.5 h-auto text-left overflow-hidden truncate max-w-[200px]"
+                                onClick={() =>
+                                  setSelectedAgentId(agent.agent_id)
+                                }
+                              >
+                                {agent.agent_id.slice(0, 7)}...
+                              </Button>
+                            </TooltipTrigger>
+                            <TooltipContent>{agent.agent_id}</TooltipContent>
+                          </Tooltip>
+                        </TooltipProvider>
                       </TableCell>
                       <TableCell>
-                        <Tooltip title={agent.agent_id}>
-                          <Button
-                            size="xs"
-                            variant="light"
-                            className="font-mono text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs font-normal px-2 py-0.5 text-left overflow-hidden truncate max-w-[200px]"
-                            onClick={() => setSelectedAgentId(agent.agent_id)}
-                          >
-                            {agent.agent_id.slice(0, 7)}...
-                          </Button>
-                        </Tooltip>
+                        {formatNumberWithCommas(agent.spend, 4)}
                       </TableCell>
                       <TableCell>
-                        <Text>{formatNumberWithCommas(agent.spend, 4)}</Text>
-                      </TableCell>
-                      <TableCell>
-                        <Badge size="xs" color="blue">
+                        <Badge variant="secondary">
                           {agent.litellm_params?.model || "N/A"}
                         </Badge>
                       </TableCell>
                       <TableCell>
-                        <Text>
-                          {agent.created_at
-                            ? new Date(agent.created_at).toLocaleDateString()
-                            : "N/A"}
-                        </Text>
+                        {agent.created_at
+                          ? new Date(agent.created_at).toLocaleDateString()
+                          : "N/A"}
                       </TableCell>
                       <TableCell>
                         {keyInfoMap[agent.agent_id]?.has_key ? (
-                          <Badge color="green">Active</Badge>
+                          <Badge variant="default">Active</Badge>
                         ) : (
-                          <Badge color="yellow">Needs Setup</Badge>
+                          <Badge variant="secondary">Needs Setup</Badge>
                         )}
                       </TableCell>
                       {isAdmin && (
                         <TableCell>
                           <TableIconActionButton
                             variant="Delete"
-                            onClick={() => handleDeleteClick(agent.agent_id, agent.agent_name)}
+                            onClick={() =>
+                              setAgentToDelete({
+                                id: agent.agent_id,
+                                name: agent.agent_name,
+                              })
+                            }
                           />
                         </TableCell>
                       )}
@@ -281,26 +329,37 @@ const AgentsPanel: React.FC<AgentsPanelProps> = ({ accessToken, userRole, teams 
 
       <AddAgentForm
         visible={isAddModalVisible}
-        onClose={handleCloseModal}
+        onClose={() => setIsAddModalVisible(false)}
         accessToken={accessToken}
-        onSuccess={handleSuccess}
+        onSuccess={fetchAgents}
         teams={teams}
       />
 
-      {agentToDelete && (
-        <Modal
-          title="Delete Agent"
-          open={agentToDelete !== null}
-          onOk={handleDeleteConfirm}
-          onCancel={handleDeleteCancel}
-          confirmLoading={isDeleting}
-          okText="Delete"
-          okButtonProps={{ danger: true }}
-        >
-          <p>Are you sure you want to delete agent: {agentToDelete.name}?</p>
-          <p>This action cannot be undone.</p>
-        </Modal>
-      )}
+      <AlertDialog
+        open={agentToDelete !== null}
+        onOpenChange={(o) => (!o ? setAgentToDelete(null) : undefined)}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete Agent</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to delete agent: {agentToDelete?.name}?
+              <br />
+              This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={isDeleting}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={handleDeleteConfirm}
+              disabled={isDeleting}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              {isDeleting ? "Deleting…" : "Delete"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 };
