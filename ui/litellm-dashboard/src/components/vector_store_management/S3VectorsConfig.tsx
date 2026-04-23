@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from "react";
-import { Form, Input, Select } from "antd";
+import { Form, Select } from "antd";
+import { Input } from "@/components/ui/input";
 import {
   Tooltip,
   TooltipContent,
@@ -128,7 +129,6 @@ const S3VectorsConfig: React.FC<S3VectorsConfigProps> = ({
           value={providerParams.vector_bucket_name || ""}
           onChange={(e) => handleFieldChange("vector_bucket_name", e.target.value)}
           placeholder="my-vector-bucket (min 3 chars)"
-          size="large"
           className="rounded-md"
         />
       </Form.Item>
@@ -167,7 +167,6 @@ const S3VectorsConfig: React.FC<S3VectorsConfigProps> = ({
           value={providerParams.index_name || ""}
           onChange={(e) => handleFieldChange("index_name", e.target.value)}
           placeholder="my-vector-index (optional, min 3 chars)"
-          size="large"
           className="rounded-md"
         />
       </Form.Item>
@@ -195,7 +194,6 @@ const S3VectorsConfig: React.FC<S3VectorsConfigProps> = ({
           value={providerParams.aws_region_name || ""}
           onChange={(e) => handleFieldChange("aws_region_name", e.target.value)}
           placeholder="us-west-2"
-          size="large"
           className="rounded-md"
         />
       </Form.Item>
