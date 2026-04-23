@@ -1,10 +1,15 @@
 import React, { useState } from "react";
-import { Button, Card } from "@tremor/react";
-import { Typography } from "antd";
-import { CopyOutlined, CheckCircleOutlined, ClockCircleOutlined, DownOutlined, RightOutlined } from "@ant-design/icons";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import {
+  CheckCircle2,
+  ChevronDown,
+  ChevronRight,
+  Clock,
+  Copy,
+  XCircle,
+} from "lucide-react";
 import NotificationsManager from "../molecules/notifications_manager";
-
-const { Text } = Typography;
 
 interface TestResult {
   guardrailName: string;
@@ -23,8 +28,13 @@ interface GuardrailTestResultsProps {
   errors: TestError[] | null;
 }
 
-export function GuardrailTestResults({ results, errors }: GuardrailTestResultsProps) {
-  const [collapsedResults, setCollapsedResults] = useState<Set<string>>(new Set());
+export function GuardrailTestResults({
+  results,
+  errors,
+}: GuardrailTestResultsProps) {
+  const [collapsedResults, setCollapsedResults] = useState<Set<string>>(
+    new Set(),
+  );
 
   const toggleResultCollapse = (guardrailName: string) => {
     const newCollapsed = new Set(collapsedResults);
@@ -69,50 +79,58 @@ export function GuardrailTestResults({ results, errors }: GuardrailTestResultsPr
   }
 
   return (
-    <div className="space-y-3 pt-4 border-t border-gray-200">
-      <h3 className="text-sm font-semibold text-gray-900">Results</h3>
+    <div className="space-y-3 pt-4 border-t border-border">
+      <h3 className="text-sm font-semibold text-foreground">Results</h3>
 
-      {/* Success Results */}
       {results &&
         results.map((result) => {
           const isCollapsed = collapsedResults.has(result.guardrailName);
           return (
-            <Card key={result.guardrailName} className="bg-green-50 border-green-200">
+            <Card
+              key={result.guardrailName}
+              className="bg-emerald-50 border-emerald-200 dark:bg-emerald-950/30 dark:border-emerald-900 p-4"
+            >
               <div className="space-y-3">
                 <div className="flex items-center justify-between">
-                  <div 
+                  <div
                     className="flex items-center space-x-2 cursor-pointer flex-1"
                     onClick={() => toggleResultCollapse(result.guardrailName)}
                   >
                     {isCollapsed ? (
-                      <RightOutlined className="text-gray-500 text-xs" />
+                      <ChevronRight className="h-3 w-3 text-muted-foreground" />
                     ) : (
-                      <DownOutlined className="text-gray-500 text-xs" />
+                      <ChevronDown className="h-3 w-3 text-muted-foreground" />
                     )}
-                    <CheckCircleOutlined className="text-green-600 text-lg" />
-                    <span className="text-sm font-medium text-green-800">
+                    <CheckCircle2 className="h-5 w-5 text-emerald-600 dark:text-emerald-400" />
+                    <span className="text-sm font-medium text-emerald-800 dark:text-emerald-200">
                       {result.guardrailName}
                     </span>
                   </div>
                   <div className="flex items-center gap-3">
-                    <div className="flex items-center space-x-1 text-xs text-gray-600">
-                      <ClockCircleOutlined />
+                    <div className="flex items-center space-x-1 text-xs text-muted-foreground">
+                      <Clock className="h-3 w-3" />
                       <span className="font-medium">{result.latency}ms</span>
                     </div>
                     {!isCollapsed && (
                       <Button
-                        size="xs"
+                        size="sm"
                         variant="secondary"
-                        icon={CopyOutlined}
                         onClick={async () => {
-                          const success = await copyToClipboard(result.response_text);
+                          const success = await copyToClipboard(
+                            result.response_text,
+                          );
                           if (success) {
-                            NotificationsManager.success("Result copied to clipboard");
+                            NotificationsManager.success(
+                              "Result copied to clipboard",
+                            );
                           } else {
-                            NotificationsManager.fromBackend("Failed to copy result");
+                            NotificationsManager.fromBackend(
+                              "Failed to copy result",
+                            );
                           }
                         }}
                       >
+                        <Copy className="h-3 w-3" />
                         Copy
                       </Button>
                     )}
@@ -120,16 +138,17 @@ export function GuardrailTestResults({ results, errors }: GuardrailTestResultsPr
                 </div>
                 {!isCollapsed && (
                   <>
-                    <div className="bg-white border border-green-200 rounded p-3">
-                      <label className="text-xs font-medium text-gray-600 mb-2 block">
+                    <div className="bg-background border border-emerald-200 dark:border-emerald-900 rounded p-3">
+                      <label className="text-xs font-medium text-muted-foreground mb-2 block">
                         Output Text
                       </label>
-                      <div className="font-mono text-sm text-gray-900 whitespace-pre-wrap break-words">
+                      <div className="font-mono text-sm text-foreground whitespace-pre-wrap break-words">
                         {result.response_text}
                       </div>
                     </div>
-                    <div className="text-xs text-gray-600">
-                      <span className="font-medium">Characters:</span> {result.response_text.length}
+                    <div className="text-xs text-muted-foreground">
+                      <span className="font-medium">Characters:</span>{" "}
+                      {result.response_text.length}
                     </div>
                   </>
                 )}
@@ -138,47 +157,49 @@ export function GuardrailTestResults({ results, errors }: GuardrailTestResultsPr
           );
         })}
 
-      {/* Error Results */}
       {errors &&
         errors.map((errorItem) => {
           const isCollapsed = collapsedResults.has(errorItem.guardrailName);
           return (
-            <Card key={errorItem.guardrailName} className="bg-red-50 border-red-200">
+            <Card
+              key={errorItem.guardrailName}
+              className="bg-red-50 border-red-200 dark:bg-red-950/30 dark:border-red-900 p-4"
+            >
               <div className="flex items-start space-x-2">
-                <div 
+                <div
                   className="cursor-pointer mt-0.5"
-                  onClick={() => toggleResultCollapse(errorItem.guardrailName)}
+                  onClick={() =>
+                    toggleResultCollapse(errorItem.guardrailName)
+                  }
                 >
                   {isCollapsed ? (
-                    <RightOutlined className="text-gray-500 text-xs" />
+                    <ChevronRight className="h-3 w-3 text-muted-foreground" />
                   ) : (
-                    <DownOutlined className="text-gray-500 text-xs" />
+                    <ChevronDown className="h-3 w-3 text-muted-foreground" />
                   )}
                 </div>
-                <div className="text-red-600 mt-0.5">
-                  <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
-                    <path
-                      fillRule="evenodd"
-                      d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z"
-                      clipRule="evenodd"
-                    />
-                  </svg>
-                </div>
+                <XCircle className="h-5 w-5 text-red-600 dark:text-red-400 mt-0.5" />
                 <div className="flex-1">
                   <div className="flex items-center justify-between mb-1">
-                    <p 
-                      className="text-sm font-medium text-red-800 cursor-pointer"
-                      onClick={() => toggleResultCollapse(errorItem.guardrailName)}
+                    <p
+                      className="text-sm font-medium text-red-800 dark:text-red-200 cursor-pointer"
+                      onClick={() =>
+                        toggleResultCollapse(errorItem.guardrailName)
+                      }
                     >
                       {errorItem.guardrailName} - Error
                     </p>
-                    <div className="flex items-center space-x-1 text-xs text-gray-600">
-                      <ClockCircleOutlined />
-                      <span className="font-medium">{errorItem.latency}ms</span>
+                    <div className="flex items-center space-x-1 text-xs text-muted-foreground">
+                      <Clock className="h-3 w-3" />
+                      <span className="font-medium">
+                        {errorItem.latency}ms
+                      </span>
                     </div>
                   </div>
                   {!isCollapsed && (
-                    <p className="text-sm text-red-700 mt-1">{errorItem.error.message}</p>
+                    <p className="text-sm text-red-700 dark:text-red-300 mt-1">
+                      {errorItem.error.message}
+                    </p>
                   )}
                 </div>
               </div>
@@ -190,4 +211,3 @@ export function GuardrailTestResults({ results, errors }: GuardrailTestResultsPr
 }
 
 export default GuardrailTestResults;
-
