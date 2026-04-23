@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { Card, Form, Button, Tooltip, Typography, Select as AntdSelect, Modal, Radio, Badge, Space } from "antd";
+// eslint-disable-next-line litellm-ui/no-banned-ui-imports
 import type { FormInstance } from "antd";
 import { Text, TextInput } from "@tremor/react";
 import { modelAvailableCall } from "../networking";

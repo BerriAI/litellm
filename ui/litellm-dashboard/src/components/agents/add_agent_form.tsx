@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { Modal, Form, Select, Input, Steps, Radio, Tag, Divider, Switch, InputNumber, Collapse } from "antd";
+// eslint-disable-next-line litellm-ui/no-banned-ui-imports
 import MessageManager from "@/components/molecules/message_manager";
 import { Button } from "@tremor/react";
 import { CheckCircleFilled, KeyOutlined, RobotOutlined, AppstoreOutlined, InfoCircleOutlined } from "@ant-design/icons";

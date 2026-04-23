@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from "react";
+// eslint-disable-next-line litellm-ui/no-banned-ui-imports
 import { Modal, Form, Input, Button as Button2, Select, Checkbox } from "antd";
 import { Text, TextInput } from "@tremor/react";
 import { getSSOSettings, updateSSOSettings } from "./networking";

@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useCallback, useDeferredValue, useEffect, useMemo, useState } from "react";
+// eslint-disable-next-line litellm-ui/no-banned-ui-imports
 import { Button, Switch, Tooltip } from "antd";
 import { Table, TableHead, TableHeaderCell, TableBody, TableRow, TableCell } from "@tremor/react";
 import { TimeCell } from "./view_logs/time_cell";

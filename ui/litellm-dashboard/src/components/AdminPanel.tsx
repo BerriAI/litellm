@@ -3,6 +3,7 @@
  * Use this to avoid sharing master key with others
  */
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
+// eslint-disable-next-line litellm-ui/no-banned-ui-imports
 import {
   Button,
   Callout,

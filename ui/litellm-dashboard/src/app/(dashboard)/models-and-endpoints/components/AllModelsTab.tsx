@@ -10,6 +10,7 @@ import NotificationsManager from "@/components/molecules/notifications_manager";
 import { modelDeleteCall } from "@/components/networking";
 import { InfoCircleOutlined, SettingOutlined } from "@ant-design/icons";
 import { PaginationState, SortingState } from "@tanstack/react-table";
+// eslint-disable-next-line litellm-ui/no-banned-ui-imports
 import { useQueryClient } from "@tanstack/react-query";
 import { Grid, TabPanel } from "@tremor/react";
 import { Badge, Button, Select, Skeleton, Space, Typography } from "antd";

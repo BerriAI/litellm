@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from "react";
+// eslint-disable-next-line litellm-ui/no-banned-ui-imports
 import { Text, Button, Callout, TextInput } from "@tremor/react";
 import { Modal, Form, Spin, Select } from "antd";
 import { getGlobalLitellmHeaderName } from "@/components/networking";

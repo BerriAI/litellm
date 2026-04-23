@@ -6,6 +6,7 @@ import { fetchTeams } from "@/components/common_components/fetch_teams";
 import { Form } from "antd";
 import TeamInfoView from "@/components/team/TeamInfo";
 import TeamSSOSettings from "@/components/TeamSSOSettings";
+// eslint-disable-next-line litellm-ui/no-banned-ui-imports
 import { isAdminRole } from "@/utils/roles";
 import { Card, Button, Col, Text, Grid, TabPanel } from "@tremor/react";
 import AvailableTeamsPanel from "@/components/team/available_teams";

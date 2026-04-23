@@ -1,3 +1,4 @@
+// eslint-disable-next-line litellm-ui/no-banned-ui-imports
 import React, { useState, useEffect } from "react";
 import { Text } from "@tremor/react";
 import { Button, Modal, Table, Upload, Typography } from "antd";

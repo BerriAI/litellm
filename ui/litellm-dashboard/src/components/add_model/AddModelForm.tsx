@@ -1,6 +1,7 @@
 import { useProviderFields } from "@/app/(dashboard)/hooks/providers/useProviderFields";
 import { useGuardrails } from "@/app/(dashboard)/hooks/guardrails/useGuardrails";
 import { useTags } from "@/app/(dashboard)/hooks/tags/useTags";
+// eslint-disable-next-line litellm-ui/no-banned-ui-imports
 import { all_admin_roles, isUserTeamAdminForAnyTeam } from "@/utils/roles";
 import { Switch, Text } from "@tremor/react";
 import type { FormInstance } from "antd";

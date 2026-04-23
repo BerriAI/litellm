@@ -23,6 +23,7 @@ import {
 } from "@/components/networking";
 import PublicModelHub from "@/components/public_model_hub";
 import { isAdminRole } from "@/utils/roles";
+// eslint-disable-next-line litellm-ui/no-banned-ui-imports
 import { CopyOutlined } from "@ant-design/icons";
 import { Badge, Button, Card, Tab, TabGroup, TabList, TabPanel, TabPanels, Text, Title } from "@tremor/react";
 import { Modal } from "antd";

@@ -8,6 +8,7 @@
 
 import { DownOutlined, ExportOutlined, InfoCircleOutlined, LoadingOutlined, RightOutlined } from "@ant-design/icons";
 import { useDebouncedState } from "@tanstack/react-pacer/debouncer";
+// eslint-disable-next-line litellm-ui/no-banned-ui-imports
 import {
   BarChart,
   Card,

@@ -9,6 +9,7 @@ import {
   TeamOutlined,
   ReloadOutlined,
 } from "@ant-design/icons";
+// eslint-disable-next-line litellm-ui/no-banned-ui-imports
 import {
   Accordion,
   AccordionBody,

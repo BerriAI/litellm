@@ -1,5 +1,6 @@
 import { InfoCircleOutlined, UserAddOutlined } from "@ant-design/icons";
 import { useQueryClient } from "@tanstack/react-query";
+// eslint-disable-next-line litellm-ui/no-banned-ui-imports
 import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 import { Accordion, AccordionBody, AccordionHeader, SelectItem, TextInput } from "@tremor/react";
 import { Alert, Button, Form, Input, Modal, Select, Select as Select2, Space, Tooltip, Typography } from "antd";

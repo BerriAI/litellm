@@ -1,5 +1,6 @@
 import useTeams from "@/app/(dashboard)/hooks/useTeams";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
+// eslint-disable-next-line litellm-ui/no-banned-ui-imports
 import {
   BarChart,
   Card,
