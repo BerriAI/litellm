@@ -1229,7 +1229,7 @@ model LiteLLM_ClaudeCodePluginTable {
 // `metadata` is an optional JSON envelope for structured tags without schema changes.
 model LiteLLM_MemoryTable {
   memory_id   String   @id @default(uuid())
-  key         String
+  key         String   @unique
   value       String
   metadata    Json?
   user_id     String?
@@ -1239,7 +1239,6 @@ model LiteLLM_MemoryTable {
   updated_at  DateTime @default(now()) @updatedAt
   updated_by  String?
 
-  @@unique([key, user_id, team_id])
   @@index([user_id])
   @@index([team_id])
 }

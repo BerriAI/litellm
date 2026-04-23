@@ -138,12 +138,12 @@ async def create_memory(
     try:
         row = await prisma_client.db.litellm_memorytable.create(data=create_data)
     except Exception as e:
-        # Unique constraint (key, user_id, team_id) → 409.
+        # Key is globally unique. Any duplicate → 409.
         msg = str(e)
         if "Unique" in msg or "unique" in msg or "UniqueViolation" in msg:
             raise HTTPException(
                 status_code=409,
-                detail=f"Memory with key '{body.key}' already exists for this scope.",
+                detail=f"Memory with key '{body.key}' already exists.",
             )
         verbose_proxy_logger.exception("Error creating memory: %s", e)
         raise HTTPException(status_code=500, detail=str(e))

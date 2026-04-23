@@ -14,8 +14,9 @@ CREATE TABLE IF NOT EXISTS "LiteLLM_MemoryTable" (
     CONSTRAINT "LiteLLM_MemoryTable_pkey" PRIMARY KEY ("memory_id")
 );
 
--- CreateIndex
-CREATE UNIQUE INDEX IF NOT EXISTS "LiteLLM_MemoryTable_key_user_id_team_id_key" ON "LiteLLM_MemoryTable"("key", "user_id", "team_id");
+-- CreateIndex (key is globally unique — one row per key, period)
+CREATE UNIQUE INDEX IF NOT EXISTS "LiteLLM_MemoryTable_key_key"
+    ON "LiteLLM_MemoryTable"("key");
 
 -- CreateIndex
 CREATE INDEX IF NOT EXISTS "LiteLLM_MemoryTable_user_id_idx" ON "LiteLLM_MemoryTable"("user_id");

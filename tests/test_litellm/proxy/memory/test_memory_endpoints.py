@@ -84,12 +84,9 @@ class _InMemoryMemoryTable:
         return [r for r in self.rows if self._matches(r, where)]
 
     async def create(self, data: Dict[str, Any]) -> MagicMock:
+        # Key is globally unique.
         for r in self.rows:
-            if (
-                r.key == data["key"]
-                and r.user_id == data.get("user_id")
-                and r.team_id == data.get("team_id")
-            ):
+            if r.key == data["key"]:
                 raise Exception("UniqueViolation: duplicate key")
         self._counter += 1
         row = _make_row(
