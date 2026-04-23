@@ -1,28 +1,28 @@
-import {
-  BarChart,
-  Card,
-  Col,
-  DateRangePickerValue,
-  Grid,
-  Icon,
-  MultiSelect,
-  MultiSelectItem,
-  Subtitle,
-  Tab,
-  TabGroup,
-  TabList,
-  TabPanel,
-  TabPanels,
-  Text,
-} from "@tremor/react";
+import { BarChart } from "@tremor/react";
+import type { DateRangePickerValue } from "@tremor/react";
 import React, { useEffect, useState } from "react";
+import { Card } from "@/components/ui/card";
+import {
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+} from "@/components/ui/tabs";
+import { Button } from "@/components/ui/button";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Badge } from "@/components/ui/badge";
+import { RefreshCw, X } from "lucide-react";
 import NotificationsManager from "./molecules/notifications_manager";
 import UsageDatePicker from "./shared/usage_date_picker";
 
-import { RefreshIcon } from "@heroicons/react/outline";
 import { adminGlobalCacheActivity, cachingHealthCheckCall } from "./networking";
 
-// Import the new component
 import { CacheHealthTab } from "./cache_health";
 import CacheSettings from "./cache_settings";
 
@@ -37,7 +37,6 @@ function valueFormatterNumbers(number: number) {
     notation: "compact",
     compactDisplay: "short",
   });
-
   return formatter.format(number);
 }
 
@@ -57,8 +56,6 @@ interface cacheDataItem {
   total_rows: number;
   generated_completion_tokens: number;
   call_type: string;
-
-  // Add other properties as needed
 }
 
 interface uiData {
@@ -69,34 +66,72 @@ interface uiData {
   "Generated Completion Tokens": number;
 }
 
-interface CacheHealthResponse {
-  status?: string;
-  cache_type?: string;
-  ping_response?: boolean;
-  set_cache_response?: string;
-  litellm_cache_params?: string;
-  error?: {
-    message: string;
-    type: string;
-    param: string;
-    code: string;
-  };
+/**
+ * Multi-select chips wrapper around shadcn Select. Used for the API-key /
+ * model filter rows.
+ */
+function ChipMultiSelect({
+  placeholder,
+  options,
+  value,
+  onChange,
+}: {
+  placeholder: string;
+  options: string[];
+  value: string[];
+  onChange: (next: string[]) => void;
+}) {
+  const remaining = options.filter((o) => !value.includes(o));
+  return (
+    <div className="space-y-2">
+      <Select
+        value=""
+        onValueChange={(v) => {
+          if (v) onChange([...value, v]);
+        }}
+      >
+        <SelectTrigger>
+          <SelectValue placeholder={placeholder} />
+        </SelectTrigger>
+        <SelectContent>
+          {remaining.length === 0 ? (
+            <div className="py-2 px-3 text-sm text-muted-foreground">
+              No more options
+            </div>
+          ) : (
+            remaining.map((opt) => (
+              <SelectItem key={opt} value={opt}>
+                {opt}
+              </SelectItem>
+            ))
+          )}
+        </SelectContent>
+      </Select>
+      {value.length > 0 && (
+        <div className="flex flex-wrap gap-1">
+          {value.map((v) => (
+            <Badge key={v} variant="secondary" className="gap-1">
+              {v}
+              <button
+                type="button"
+                onClick={() => onChange(value.filter((s) => s !== v))}
+                aria-label={`Remove ${v}`}
+              >
+                <X size={10} />
+              </button>
+            </Badge>
+          ))}
+        </div>
+      )}
+    </div>
+  );
 }
 
-// Helper function to deep-parse a JSON string if possible
-const deepParse = (input: any) => {
-  let parsed = input;
-  if (typeof parsed === "string") {
-    try {
-      parsed = JSON.parse(parsed);
-    } catch {
-      return parsed;
-    }
-  }
-  return parsed;
-};
-
-const CacheDashboard: React.FC<CachePageProps> = ({ accessToken, token, userRole, userID, premiumUser }) => {
+const CacheDashboard: React.FC<CachePageProps> = ({
+  accessToken,
+  userRole,
+  userID,
+}) => {
   const [filteredData, setFilteredData] = useState<uiData[]>([]);
   const [selectedApiKeys, setSelectedApiKeys] = useState<string[]>([]);
   const [selectedModels, setSelectedModels] = useState<string[]>([]);
@@ -111,12 +146,11 @@ const CacheDashboard: React.FC<CachePageProps> = ({ accessToken, token, userRole
   });
 
   const [lastRefreshed, setLastRefreshed] = useState("");
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const [healthCheckResponse, setHealthCheckResponse] = useState<any>("");
 
   useEffect(() => {
-    if (!accessToken || !dateValue) {
-      return;
-    }
+    if (!accessToken || !dateValue) return;
     const fetchData = async () => {
       const response = await adminGlobalCacheActivity(
         accessToken,
@@ -126,87 +160,64 @@ const CacheDashboard: React.FC<CachePageProps> = ({ accessToken, token, userRole
       setData(response);
     };
     fetchData();
-
-    const currentDate = new Date();
-    setLastRefreshed(currentDate.toLocaleString());
+    setLastRefreshed(new Date().toLocaleString());
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [accessToken]);
 
-  const uniqueApiKeys = Array.from(new Set(data.map((item) => item?.api_key ?? "")));
-  const uniqueModels = Array.from(new Set(data.map((item) => item?.model ?? "")));
-  const uniqueCallTypes = Array.from(new Set(data.map((item) => item?.call_type ?? "")));
+  const uniqueApiKeys = Array.from(
+    new Set(data.map((item) => item?.api_key ?? "")),
+  );
+  const uniqueModels = Array.from(
+    new Set(data.map((item) => item?.model ?? "")),
+  );
 
-  const updateCachingData = async (startTime: Date | undefined, endTime: Date | undefined) => {
-    if (!startTime || !endTime || !accessToken) {
-      return;
-    }
-
-    let new_cache_data = await adminGlobalCacheActivity(
+  const updateCachingData = async (
+    startTime: Date | undefined,
+    endTime: Date | undefined,
+  ) => {
+    if (!startTime || !endTime || !accessToken) return;
+    const new_cache_data = await adminGlobalCacheActivity(
       accessToken,
       formatDateWithoutTZ(startTime),
       formatDateWithoutTZ(endTime),
     );
-
     setData(new_cache_data);
   };
 
   useEffect(() => {
-    console.log("DATA IN CACHE DASHBOARD", data);
     let newData: cacheDataItem[] = data;
     if (selectedApiKeys.length > 0) {
-      newData = newData.filter((item) => selectedApiKeys.includes(item.api_key));
+      newData = newData.filter((item) =>
+        selectedApiKeys.includes(item.api_key),
+      );
     }
-
     if (selectedModels.length > 0) {
       newData = newData.filter((item) => selectedModels.includes(item.model));
     }
-
-    /* 
-    Data looks like this 
-    [{"api_key":"sk-test-mock-key-001","call_type":"acompletion","model":"llama3-8b-8192","total_rows":13,"cache_hit_true_rows":0},
-    {"api_key":"sk-test-mock-key-002","call_type":"None","model":"chatgpt-v-2","total_rows":1,"cache_hit_true_rows":0},
-    {"api_key":"sk-test-mock-key-123","call_type":"acompletion","model":"gpt-3.5-turbo","total_rows":19,"cache_hit_true_rows":0},
-    {"api_key":"sk-test-mock-key-123","call_type":"aimage_generation","model":"","total_rows":3,"cache_hit_true_rows":0},
-    {"api_key":"sk-test-mock-key-003","call_type":"None","model":"chatgpt-v-2","total_rows":1,"cache_hit_true_rows":0},
-    {"api_key":"sk-test-mock-key-004","call_type":"","model":"chatgpt-v-2","total_rows":1,"cache_hit_true_rows":0},
-    {"api_key":"sk-test-mock-key-005","call_type":"","model":"chatgpt-v-2","total_rows":1,"cache_hit_true_rows":0},
-    */
-
-    // What data we need for bar chat
-    // ui_data = [
-    //     {
-    //         name: "Call Type",
-    //         Cache hit: 20,
-    //         LLM API requests: 10,
-    //     }
-    // ]
-
-    console.log("before processed data in cache dashboard", newData);
 
     let llm_api_requests = 0;
     let cache_hits = 0;
     let cached_tokens = 0;
     const processedData = newData.reduce((acc: uiData[], item) => {
-      console.log("Processing item:", item);
-
-      if (!item.call_type) {
-        console.log("Item has no call_type:", item);
-        item.call_type = "Unknown";
-      }
-
-      llm_api_requests += (item.total_rows || 0) - (item.cache_hit_true_rows || 0);
+      if (!item.call_type) item.call_type = "Unknown";
+      llm_api_requests +=
+        (item.total_rows || 0) - (item.cache_hit_true_rows || 0);
       cache_hits += item.cache_hit_true_rows || 0;
       cached_tokens += item.cached_completion_tokens || 0;
-
       const existingItem = acc.find((i) => i.name === item.call_type);
       if (existingItem) {
-        existingItem["LLM API requests"] += (item.total_rows || 0) - (item.cache_hit_true_rows || 0);
+        existingItem["LLM API requests"] +=
+          (item.total_rows || 0) - (item.cache_hit_true_rows || 0);
         existingItem["Cache hit"] += item.cache_hit_true_rows || 0;
-        existingItem["Cached Completion Tokens"] += item.cached_completion_tokens || 0;
-        existingItem["Generated Completion Tokens"] += item.generated_completion_tokens || 0;
+        existingItem["Cached Completion Tokens"] +=
+          item.cached_completion_tokens || 0;
+        existingItem["Generated Completion Tokens"] +=
+          item.generated_completion_tokens || 0;
       } else {
         acc.push({
           name: item.call_type,
-          "LLM API requests": (item.total_rows || 0) - (item.cache_hit_true_rows || 0),
+          "LLM API requests":
+            (item.total_rows || 0) - (item.cache_hit_true_rows || 0),
           "Cache hit": item.cache_hit_true_rows || 0,
           "Cached Completion Tokens": item.cached_completion_tokens || 0,
           "Generated Completion Tokens": item.generated_completion_tokens || 0,
@@ -215,48 +226,38 @@ const CacheDashboard: React.FC<CachePageProps> = ({ accessToken, token, userRole
       return acc;
     }, []);
 
-    // set header cache statistics
     setCachedResponses(valueFormatterNumbers(cache_hits));
     setCachedTokens(valueFormatterNumbers(cached_tokens));
-    let allRequests = cache_hits + llm_api_requests;
-    if (allRequests > 0) {
-      let cache_hit_ratio = ((cache_hits / allRequests) * 100).toFixed(2);
-      setCacheHitRatio(cache_hit_ratio);
-    } else {
-      setCacheHitRatio("0");
-    }
-
+    const allRequests = cache_hits + llm_api_requests;
+    setCacheHitRatio(
+      allRequests > 0 ? ((cache_hits / allRequests) * 100).toFixed(2) : "0",
+    );
     setFilteredData(processedData);
-
-    console.log("PROCESSED DATA IN CACHE DASHBOARD", processedData);
   }, [selectedApiKeys, selectedModels, dateValue, data]);
 
   const handleRefreshClick = () => {
-    // Update the 'lastRefreshed' state to the current date and time
-    const currentDate = new Date();
-    setLastRefreshed(currentDate.toLocaleString());
+    setLastRefreshed(new Date().toLocaleString());
   };
 
   const runCachingHealthCheck = async () => {
     try {
       NotificationsManager.info("Running cache health check...");
       setHealthCheckResponse("");
-      const response = await cachingHealthCheckCall(accessToken !== null ? accessToken : "");
-      console.log("CACHING HEALTH CHECK RESPONSE", response);
+      const response = await cachingHealthCheckCall(
+        accessToken !== null ? accessToken : "",
+      );
       setHealthCheckResponse(response);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
     } catch (error: any) {
       console.error("Error running health check:", error);
-      let errorData;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      let errorData: any;
       if (error && error.message) {
         try {
-          // Parse the error message which may contain a nested error layer.
           let parsedData = JSON.parse(error.message);
-          // If the parsed object is wrapped (e.g. { error: { ... } }), unwrap it.
-          if (parsedData.error) {
-            parsedData = parsedData.error;
-          }
+          if (parsedData.error) parsedData = parsedData.error;
           errorData = parsedData;
-        } catch (e) {
+        } catch {
           errorData = { message: error.message };
         }
       } else {
@@ -267,133 +268,144 @@ const CacheDashboard: React.FC<CachePageProps> = ({ accessToken, token, userRole
   };
 
   return (
-    <TabGroup className="gap-2 p-8 h-full w-full mt-2 mb-8">
-      <TabList className="flex justify-between mt-2 w-full items-center">
-        <div className="flex">
-          <Tab>Cache Analytics</Tab>
-          <Tab>Cache Health</Tab>
-          <Tab>Cache Settings</Tab>
-        </div>
+    <Tabs
+      defaultValue="analytics"
+      className="gap-2 p-8 h-full w-full mt-2 mb-8"
+    >
+      <div className="flex justify-between mt-2 w-full items-center">
+        <TabsList>
+          <TabsTrigger value="analytics">Cache Analytics</TabsTrigger>
+          <TabsTrigger value="health">Cache Health</TabsTrigger>
+          <TabsTrigger value="settings">Cache Settings</TabsTrigger>
+        </TabsList>
 
         <div className="flex items-center space-x-2">
-          {lastRefreshed && <Text>Last Refreshed: {lastRefreshed}</Text>}
-          <Icon
-            icon={RefreshIcon} // Modify as necessary for correct icon name
-            variant="shadow"
-            size="xs"
-            className="self-center"
+          {lastRefreshed && (
+            <span className="text-sm text-muted-foreground">
+              Last Refreshed: {lastRefreshed}
+            </span>
+          )}
+          <Button
+            variant="outline"
+            size="icon"
             onClick={handleRefreshClick}
-          />
+            aria-label="Refresh"
+          >
+            <RefreshCw className="h-4 w-4" />
+          </Button>
         </div>
-      </TabList>
-      <TabPanels>
-        <TabPanel>
-          <Card>
-            <Grid numItems={3} className="gap-4 mt-4">
-              <Col>
-                <MultiSelect
-                  placeholder="Select Virtual Keys"
-                  value={selectedApiKeys}
-                  onValueChange={setSelectedApiKeys}
-                >
-                  {uniqueApiKeys.map((key) => (
-                    <MultiSelectItem key={key} value={key}>
-                      {key}
-                    </MultiSelectItem>
-                  ))}
-                </MultiSelect>
-              </Col>
-              <Col>
-                <MultiSelect placeholder="Select Models" value={selectedModels} onValueChange={setSelectedModels}>
-                  {uniqueModels.map((model) => (
-                    <MultiSelectItem key={model} value={model}>
-                      {model}
-                    </MultiSelectItem>
-                  ))}
-                </MultiSelect>
-              </Col>
-              <Col>
-                <UsageDatePicker
-                  value={dateValue}
-                  onValueChange={(value) => {
-                    setDateValue(value);
-                    updateCachingData(value.from, value.to);
-                  }}
-                />
-              </Col>
-            </Grid>
+      </div>
 
-            <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3 mt-4">
-              <Card>
-                <p className="text-tremor-default font-medium text-tremor-content dark:text-dark-tremor-content">
-                  Cache Hit Ratio
-                </p>
-                <div className="mt-2 flex items-baseline space-x-2.5">
-                  <p className="text-tremor-metric font-semibold text-tremor-content-strong dark:text-dark-tremor-content-strong">
-                    {cacheHitRatio}%
-                  </p>
-                </div>
-              </Card>
-              <Card>
-                <p className="text-tremor-default font-medium text-tremor-content dark:text-dark-tremor-content">
-                  Cache Hits
-                </p>
-                <div className="mt-2 flex items-baseline space-x-2.5">
-                  <p className="text-tremor-metric font-semibold text-tremor-content-strong dark:text-dark-tremor-content-strong">
-                    {cachedResponses}
-                  </p>
-                </div>
-              </Card>
-
-              <Card>
-                <p className="text-tremor-default font-medium text-tremor-content dark:text-dark-tremor-content">
-                  Cached Tokens
-                </p>
-                <div className="mt-2 flex items-baseline space-x-2.5">
-                  <p className="text-tremor-metric font-semibold text-tremor-content-strong dark:text-dark-tremor-content-strong">
-                    {cachedTokens}
-                  </p>
-                </div>
-              </Card>
+      <TabsContent value="analytics">
+        <Card className="p-6">
+          <div className="grid grid-cols-3 gap-4 mt-4">
+            <div>
+              <ChipMultiSelect
+                placeholder="Select Virtual Keys"
+                options={uniqueApiKeys}
+                value={selectedApiKeys}
+                onChange={setSelectedApiKeys}
+              />
             </div>
+            <div>
+              <ChipMultiSelect
+                placeholder="Select Models"
+                options={uniqueModels}
+                value={selectedModels}
+                onChange={setSelectedModels}
+              />
+            </div>
+            <div>
+              <UsageDatePicker
+                value={dateValue}
+                onValueChange={(value) => {
+                  setDateValue(value);
+                  updateCachingData(value.from, value.to);
+                }}
+              />
+            </div>
+          </div>
 
-            <Subtitle className="mt-4">Cache Hits vs API Requests</Subtitle>
-            <BarChart
-              title="Cache Hits vs API Requests"
-              data={filteredData}
-              stack={true}
-              index="name"
-              valueFormatter={valueFormatterNumbers}
-              categories={["LLM API requests", "Cache hit"]}
-              colors={["sky", "teal"]}
-              yAxisWidth={48}
-            />
+          <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3 mt-4">
+            <Card className="p-4">
+              <p className="text-sm font-medium text-muted-foreground">
+                Cache Hit Ratio
+              </p>
+              <div className="mt-2 flex items-baseline space-x-2.5">
+                <p className="text-3xl font-semibold text-foreground">
+                  {cacheHitRatio}%
+                </p>
+              </div>
+            </Card>
+            <Card className="p-4">
+              <p className="text-sm font-medium text-muted-foreground">
+                Cache Hits
+              </p>
+              <div className="mt-2 flex items-baseline space-x-2.5">
+                <p className="text-3xl font-semibold text-foreground">
+                  {cachedResponses}
+                </p>
+              </div>
+            </Card>
+            <Card className="p-4">
+              <p className="text-sm font-medium text-muted-foreground">
+                Cached Tokens
+              </p>
+              <div className="mt-2 flex items-baseline space-x-2.5">
+                <p className="text-3xl font-semibold text-foreground">
+                  {cachedTokens}
+                </p>
+              </div>
+            </Card>
+          </div>
 
-            <Subtitle className="mt-4">Cached Completion Tokens vs Generated Completion Tokens</Subtitle>
-            <BarChart
-              className="mt-6"
-              data={filteredData}
-              stack={true}
-              index="name"
-              valueFormatter={valueFormatterNumbers}
-              categories={["Generated Completion Tokens", "Cached Completion Tokens"]}
-              colors={["sky", "teal"]}
-              yAxisWidth={48}
-            />
-          </Card>
-        </TabPanel>
-        <TabPanel>
-          <CacheHealthTab
-            accessToken={accessToken}
-            healthCheckResponse={healthCheckResponse}
-            runCachingHealthCheck={runCachingHealthCheck}
+          <p className="mt-4 text-sm text-muted-foreground">
+            Cache Hits vs API Requests
+          </p>
+          <BarChart
+            title="Cache Hits vs API Requests"
+            data={filteredData}
+            stack={true}
+            index="name"
+            valueFormatter={valueFormatterNumbers}
+            categories={["LLM API requests", "Cache hit"]}
+            colors={["sky", "teal"]}
+            yAxisWidth={48}
           />
-        </TabPanel>
-        <TabPanel>
-          <CacheSettings accessToken={accessToken} userRole={userRole} userID={userID} />
-        </TabPanel>
-      </TabPanels>
-    </TabGroup>
+
+          <p className="mt-4 text-sm text-muted-foreground">
+            Cached Completion Tokens vs Generated Completion Tokens
+          </p>
+          <BarChart
+            className="mt-6"
+            data={filteredData}
+            stack={true}
+            index="name"
+            valueFormatter={valueFormatterNumbers}
+            categories={[
+              "Generated Completion Tokens",
+              "Cached Completion Tokens",
+            ]}
+            colors={["sky", "teal"]}
+            yAxisWidth={48}
+          />
+        </Card>
+      </TabsContent>
+      <TabsContent value="health">
+        <CacheHealthTab
+          accessToken={accessToken}
+          healthCheckResponse={healthCheckResponse}
+          runCachingHealthCheck={runCachingHealthCheck}
+        />
+      </TabsContent>
+      <TabsContent value="settings">
+        <CacheSettings
+          accessToken={accessToken}
+          userRole={userRole}
+          userID={userID}
+        />
+      </TabsContent>
+    </Tabs>
   );
 };
 
