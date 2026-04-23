@@ -1,8 +1,10 @@
 import asyncio
+import json
 import os
 import sys
 import time
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 from typing import Any, Dict, List
 from unittest.mock import AsyncMock, MagicMock
 
@@ -696,9 +698,9 @@ def test_reset_budget_resets_endusers_with_null_budget_id(
 
     # Both end users should have been reset
     updated = mock_prisma_client.updated_data["enduser"]
-    assert len(updated) == 2, (
-        f"Expected 2 endusers reset (1 explicit + 1 implicit), got {len(updated)}"
-    )
+    assert (
+        len(updated) == 2
+    ), f"Expected 2 endusers reset (1 explicit + 1 implicit), got {len(updated)}"
 
     user_ids = {u.user_id for u in updated}
     assert "enduser-explicit" in user_ids
@@ -819,3 +821,86 @@ def test_reset_budget_for_team_members_preserves_total_spend():
     assert call_kwargs["where"]["budget_id"]["in"] == ["budget-1"]
     assert call_kwargs["data"] == {"spend": 0}
     assert "total_spend" not in call_kwargs["data"]
+
+
+@pytest.mark.asyncio
+async def test_reset_budget_windows_uses_plain_find_many_and_resets_key_and_team(
+    monkeypatch,
+):
+    class _InMemoryCache:
+        def __init__(self):
+            self.calls = []
+
+        def set_cache(self, key: str, value: float) -> None:
+            self.calls.append((key, value))
+
+    spend_counter_cache = SimpleNamespace(
+        in_memory_cache=_InMemoryCache(),
+        redis_cache=None,
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "litellm.proxy.proxy_server",
+        SimpleNamespace(spend_counter_cache=spend_counter_cache),
+    )
+
+    expired_at = (datetime.utcnow() - timedelta(minutes=5)).isoformat()
+    future_at = (datetime.utcnow() + timedelta(minutes=5)).isoformat()
+
+    key_row = SimpleNamespace(
+        token="key-1",
+        budget_limits=[
+            {"budget_duration": "1d", "reset_at": expired_at},
+            {"budget_duration": "7d", "reset_at": future_at},
+        ],
+    )
+    key_without_limits = SimpleNamespace(token="key-2", budget_limits=None)
+
+    team_row = SimpleNamespace(
+        team_id="team-1",
+        budget_limits=json.dumps([{"budget_duration": "1d", "reset_at": expired_at}]),
+    )
+    team_without_limits = SimpleNamespace(team_id="team-2", budget_limits=None)
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_verificationtoken.find_many = AsyncMock(
+        return_value=[key_row, key_without_limits]
+    )
+    mock_prisma_client.db.litellm_verificationtoken.update = AsyncMock()
+    mock_prisma_client.db.litellm_teamtable.find_many = AsyncMock(
+        return_value=[team_row, team_without_limits]
+    )
+    mock_prisma_client.db.litellm_teamtable.update = AsyncMock()
+
+    job = ResetBudgetJob(
+        proxy_logging_obj=MagicMock(), prisma_client=mock_prisma_client
+    )
+
+    await job.reset_budget_windows()
+
+    mock_prisma_client.db.litellm_verificationtoken.find_many.assert_called_once_with(
+        where={"budget_limits": {"not": None}}
+    )
+    mock_prisma_client.db.litellm_teamtable.find_many.assert_called_once_with(
+        where={"budget_limits": {"not": None}}
+    )
+
+    mock_prisma_client.db.litellm_verificationtoken.update.assert_called_once()
+    key_update_kwargs = (
+        mock_prisma_client.db.litellm_verificationtoken.update.call_args.kwargs
+    )
+    assert key_update_kwargs["where"] == {"token": "key-1"}
+    updated_key_windows = json.loads(key_update_kwargs["data"]["budget_limits"])
+    assert updated_key_windows[0]["reset_at"] != expired_at
+    assert updated_key_windows[1]["reset_at"] == future_at
+
+    mock_prisma_client.db.litellm_teamtable.update.assert_called_once()
+    team_update_kwargs = mock_prisma_client.db.litellm_teamtable.update.call_args.kwargs
+    assert team_update_kwargs["where"] == {"team_id": "team-1"}
+    updated_team_windows = json.loads(team_update_kwargs["data"]["budget_limits"])
+    assert updated_team_windows[0]["reset_at"] != expired_at
+
+    assert spend_counter_cache.in_memory_cache.calls == [
+        ("spend:key:key-1:window:1d", 0.0),
+        ("spend:team:team-1:window:1d", 0.0),
+    ]
