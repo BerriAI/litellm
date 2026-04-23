@@ -1,9 +1,9 @@
 import React, { useState, useEffect } from "react";
 import { Card, Title, Text, Button as TremorButton, Tab, TabGroup, TabList, TabPanel, TabPanels} from "@tremor/react";
-import { Form, Input, InputNumber, Button as AntButton, Spin, Descriptions, Divider, Modal, Tag, Space, Table, Popconfirm, message, Typography, Select as AntSelect } from "antd";
+import { Form, Input, InputNumber, Button as AntButton, Spin, Descriptions, Divider, Modal, Tag } from "antd";
 import MessageManager from "@/components/molecules/message_manager";
 import { ArrowLeftIcon } from "@heroicons/react/outline";
-import { getAgentInfo, patchAgentCall, getAgentCreateMetadata, AgentCreateInfo, getAgentEvals, listLiteLLMEvals, attachEvalToAgent, detachEvalFromAgent } from "../networking";
+import { getAgentInfo, patchAgentCall, getAgentCreateMetadata, AgentCreateInfo } from "../networking";
 import { Agent } from "./types";
 import AgentFormFields from "./agent_form_fields";
 import DynamicAgentFormFields, { buildDynamicAgentData } from "./dynamic_agent_form_fields";
@@ -11,176 +11,6 @@ import { buildAgentDataFromForm, parseAgentForForm } from "./agent_config";
 import AgentCostView from "./agent_cost_view";
 import { detectAgentType, parseDynamicAgentForForm } from "./agent_type_utils";
 
-function AgentEvalsTab({ agentId, accessToken }: { agentId: string; accessToken: string | null }) {
-  const [attachedEvals, setAttachedEvals] = React.useState<any[]>([]);
-  const [allEvals, setAllEvals] = React.useState<any[]>([]);
-  const [loading, setLoading] = React.useState(false);
-  const [modalOpen, setModalOpen] = React.useState(false);
-  const [selectedEvalId, setSelectedEvalId] = React.useState<string | undefined>();
-  const [onFailure, setOnFailure] = React.useState<"block" | "log">("block");
-  const [attaching, setAttaching] = React.useState(false);
-
-  const fetchData = React.useCallback(async () => {
-    if (!accessToken || !agentId) return;
-    setLoading(true);
-    try {
-      const [attached, catalog] = await Promise.all([
-        getAgentEvals(accessToken, agentId),
-        listLiteLLMEvals(accessToken),
-      ]);
-      setAttachedEvals(attached);
-      setAllEvals(catalog);
-    } catch (e: any) {
-      message.error(`Failed to load evals: ${e.message}`);
-    } finally {
-      setLoading(false);
-    }
-  }, [accessToken, agentId]);
-
-  React.useEffect(() => {
-    fetchData();
-  }, [fetchData]);
-
-  const handleAttach = async () => {
-    if (!accessToken || !selectedEvalId) return;
-    setAttaching(true);
-    try {
-      await attachEvalToAgent(accessToken, agentId, { eval_id: selectedEvalId, on_failure: onFailure });
-      message.success("Eval attached");
-      setModalOpen(false);
-      setSelectedEvalId(undefined);
-      fetchData();
-    } catch (e: any) {
-      message.error(`Failed to attach eval: ${e.message}`);
-    } finally {
-      setAttaching(false);
-    }
-  };
-
-  const handleDetach = async (evalId: string) => {
-    if (!accessToken) return;
-    try {
-      await detachEvalFromAgent(accessToken, agentId, evalId);
-      message.success("Eval detached");
-      fetchData();
-    } catch (e: any) {
-      message.error(`Failed to detach eval: ${e.message}`);
-    }
-  };
-
-  const attachedEvalIds = new Set(attachedEvals.map((e: any) => e.eval_id));
-  const availableToAttach = allEvals.filter((e: any) => !attachedEvalIds.has(e.eval_id));
-
-  const evalColumns = [
-    {
-      title: "Eval Name",
-      dataIndex: "eval_name",
-      key: "eval_name",
-      render: (v: string) => <Typography.Text strong>{v}</Typography.Text>,
-    },
-    {
-      title: "On Failure",
-      dataIndex: "on_failure",
-      key: "on_failure",
-      render: (v: string) => (
-        <Tag color={v === "block" ? "red" : "orange"}>{v === "block" ? "Block" : "Log only"}</Tag>
-      ),
-    },
-    {
-      title: "Threshold",
-      key: "threshold",
-      render: (_: any, r: any) => {
-        const t = r.overall_threshold_override ?? r.eval?.overall_threshold;
-        return t != null ? <Tag color="blue">≥ {t}</Tag> : <Typography.Text type="secondary">default</Typography.Text>;
-      },
-    },
-    {
-      title: "Judge Model",
-      key: "judge_model",
-      render: (_: any, r: any) => r.eval?.judge_model || "—",
-    },
-    {
-      title: "Actions",
-      key: "actions",
-      render: (_: any, r: any) => (
-        <Popconfirm
-          title="Remove this eval?"
-          onConfirm={() => handleDetach(r.eval_id)}
-          okText="Remove"
-          okButtonProps={{ danger: true }}
-        >
-          <AntButton danger size="small">Remove</AntButton>
-        </Popconfirm>
-      ),
-    },
-  ];
-
-  return (
-    <div>
-      <div
-        style={{
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "center",
-          marginBottom: 16,
-        }}
-      >
-        <Typography.Text type="secondary">
-          Evals gate this agent&apos;s responses. Hard-gate (Block) returns 422 on failure; Soft-observer (Log) records the result without blocking.
-        </Typography.Text>
-        <AntButton
-          type="primary"
-          onClick={() => setModalOpen(true)}
-          disabled={availableToAttach.length === 0}
-        >
-          Attach Eval
-        </AntButton>
-      </div>
-      <Table
-        dataSource={attachedEvals}
-        columns={evalColumns}
-        rowKey="eval_id"
-        loading={loading}
-        locale={{ emptyText: "No evals attached yet." }}
-      />
-      <Modal
-        title={
-          <Space>
-            Attach Eval <Tag color="blue">Beta</Tag>
-          </Space>
-        }
-        open={modalOpen}
-        onCancel={() => { setModalOpen(false); setSelectedEvalId(undefined); }}
-        onOk={handleAttach}
-        confirmLoading={attaching}
-        okText="Attach"
-      >
-        <Form layout="vertical">
-          <Form.Item label="Select Eval" required>
-            <AntSelect
-              placeholder="Choose an eval"
-              value={selectedEvalId}
-              onChange={(val: string) => setSelectedEvalId(val)}
-              style={{ width: "100%" }}
-              options={availableToAttach.map((e: any) => ({ label: e.eval_name, value: e.eval_id }))}
-            />
-          </Form.Item>
-          <Form.Item label="On Failure">
-            <AntSelect
-              value={onFailure}
-              onChange={(val: "block" | "log") => setOnFailure(val)}
-              style={{ width: "100%" }}
-              options={[
-                { label: "Block (return 422)", value: "block" },
-                { label: "Log only (observe)", value: "log" },
-              ]}
-            />
-          </Form.Item>
-        </Form>
-      </Modal>
-    </div>
-  );
-}
 
 interface AgentInfoViewProps {
   agentId: string;
@@ -336,7 +166,6 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({
         <TabList className="mb-4">
           <Tab key="overview">Overview</Tab>
           {isAdmin ? <Tab key="settings">Settings</Tab> : <></>}
-          <Tab key="evals"><Space>Evals <Tag color="blue">Beta</Tag></Space></Tab>
         </TabList>
 
         <TabPanels>
@@ -509,10 +338,6 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({
               </Card>
             </TabPanel>
           )}
-          {/* Evals Panel */}
-          <TabPanel>
-            <AgentEvalsTab agentId={agent.agent_id} accessToken={accessToken} />
-          </TabPanel>
         </TabPanels>
       </TabGroup>
     </div>
