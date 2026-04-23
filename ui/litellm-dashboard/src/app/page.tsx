@@ -13,7 +13,6 @@ import LoadingScreen from "@/components/common_components/LoadingScreen";
 import { CostTrackingSettings } from "@/components/CostTrackingSettings";
 import GeneralSettings from "@/components/general_settings";
 import GuardrailsMonitorView from "@/components/GuardrailsMonitor/GuardrailsMonitorView";
-import EvalsCatalog from "@/components/evals/EvalsCatalog";
 import GuardrailsPanel from "@/components/guardrails";
 import PoliciesPanel from "@/components/policies";
 import { Team } from "@/components/key_team_helpers/key_list";
@@ -559,12 +558,6 @@ function CreateKeyPageContent() {
                     <Settings userID={userID} userRole={userRole} accessToken={accessToken} premiumUser={premiumUser} />
                   ) : page == "budgets" ? (
                     <BudgetPanel accessToken={accessToken} />
-                  ) : page == "evals" ? (
-                    <EvalsCatalog
-                      accessToken={accessToken}
-                      userRole={userRole}
-                      availableModels={modelData?.data?.map((m: any) => m.model_name) ?? []}
-                    />
                   ) : page == "guardrails" ? (
                     <GuardrailsPanel accessToken={accessToken} userRole={userRole} />
                   ) : page == "policies" ? (
