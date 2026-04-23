@@ -5893,8 +5893,14 @@ def _get_model_info_helper(  # noqa: PLR0915
                 supports_none_reasoning_effort=_model_info.get(
                     "supports_none_reasoning_effort", None
                 ),
+                supports_minimal_reasoning_effort=_model_info.get(
+                    "supports_minimal_reasoning_effort", None
+                ),
                 supports_xhigh_reasoning_effort=_model_info.get(
                     "supports_xhigh_reasoning_effort", None
+                ),
+                supports_max_reasoning_effort=_model_info.get(
+                    "supports_max_reasoning_effort", None
                 ),
                 supports_computer_use=_model_info.get("supports_computer_use", None),
                 search_context_cost_per_query=_model_info.get(
