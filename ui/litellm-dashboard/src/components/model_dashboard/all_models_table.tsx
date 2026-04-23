@@ -11,8 +11,19 @@ import {
   OnChangeFn,
 } from "@tanstack/react-table";
 import React from "react";
-import { Table, TableHead, TableHeaderCell, TableBody, TableRow, TableCell } from "@tremor/react";
-import { TableHeaderSortDropdown, SortState } from "../common_components/TableHeaderSortDropdown/TableHeaderSortDropdown";
+// eslint-disable-next-line litellm-ui/no-banned-ui-imports
+import {
+  Table,
+  TableHead,
+  TableHeaderCell,
+  TableBody,
+  TableRow,
+  TableCell,
+} from "@tremor/react";
+import {
+  TableHeaderSortDropdown,
+  SortState,
+} from "../common_components/TableHeaderSortDropdown/TableHeaderSortDropdown";
 
 // Extend the column meta type to include className
 declare module "@tanstack/react-table" {
@@ -74,25 +85,6 @@ export function AllModelsDataTable<TData, TValue>({
     },
   });
 
-  const getHeaderText = (header: any): string => {
-    if (typeof header === "string") {
-      return header;
-    }
-    if (typeof header === "function") {
-      const headerElement = header();
-      if (headerElement && headerElement.props && headerElement.props.children) {
-        const children = headerElement.props.children;
-        if (typeof children === "string") {
-          return children;
-        }
-        if (children.props && children.props.children) {
-          return children.props.children;
-        }
-      }
-    }
-    return "";
-  };
-
   return (
     <div className="rounded-lg custom-border relative">
       <div className="overflow-x-auto">
@@ -111,10 +103,11 @@ export function AllModelsDataTable<TData, TValue>({
                   {headerGroup.headers.map((header) => (
                     <TableHeaderCell
                       key={header.id}
-                      className={`py-1 h-8 relative ${header.id === "actions"
-                        ? "sticky right-0 bg-white shadow-[-4px_0_8px_-6px_rgba(0,0,0,0.1)] w-[120px] ml-8"
-                        : ""
-                        } ${header.column.columnDef.meta?.className || ""}`}
+                      className={`py-1 h-8 relative ${
+                        header.id === "actions"
+                          ? "sticky right-0 bg-background shadow-[-4px_0_8px_-6px_rgba(0,0,0,0.1)] w-[120px] ml-8"
+                          : ""
+                      } ${header.column.columnDef.meta?.className || ""}`}
                       style={{
                         width: header.id === "actions" ? 120 : header.getSize(),
                         position: header.id === "actions" ? "sticky" : "relative",
@@ -156,8 +149,11 @@ export function AllModelsDataTable<TData, TValue>({
                         <div
                           onMouseDown={header.getResizeHandler()}
                           onTouchStart={header.getResizeHandler()}
-                          className={`absolute right-0 top-0 h-full w-2 cursor-col-resize select-none touch-none ${header.column.getIsResizing() ? "bg-blue-500" : "hover:bg-blue-200"
-                            }`}
+                          className={`absolute right-0 top-0 h-full w-2 cursor-col-resize select-none touch-none ${
+                            header.column.getIsResizing()
+                              ? "bg-primary"
+                              : "hover:bg-primary/20"
+                          }`}
                         />
                       )}
                     </TableHeaderCell>
@@ -168,8 +164,11 @@ export function AllModelsDataTable<TData, TValue>({
             <TableBody>
               {isLoading ? (
                 <TableRow>
-                  <TableCell colSpan={columns.length} className="h-8 text-center">
-                    <div className="text-center text-gray-500">
+                  <TableCell
+                    colSpan={columns.length}
+                    className="h-8 text-center"
+                  >
+                    <div className="text-center text-muted-foreground">
                       <p>🚅 Loading models...</p>
                     </div>
                   </TableCell>
@@ -178,16 +177,19 @@ export function AllModelsDataTable<TData, TValue>({
                 tableInstance.getRowModel().rows.map((row) => (
                   <TableRow
                     key={row.id}
-                    className={onRowClick ? "cursor-pointer hover:bg-gray-50" : ""}
+                    className={
+                      onRowClick ? "cursor-pointer hover:bg-muted" : ""
+                    }
                     onClick={() => onRowClick?.(row.original)}
                   >
                     {row.getVisibleCells().map((cell) => (
                       <TableCell
                         key={cell.id}
-                        className={`py-0.5 overflow-hidden ${cell.column.id === "actions"
-                          ? "sticky right-0 bg-white shadow-[-4px_0_8px_-6px_rgba(0,0,0,0.1)] w-[120px] ml-8"
-                          : ""
-                          } ${cell.column.columnDef.meta?.className || ""}`}
+                        className={`py-0.5 overflow-hidden ${
+                          cell.column.id === "actions"
+                            ? "sticky right-0 bg-background shadow-[-4px_0_8px_-6px_rgba(0,0,0,0.1)] w-[120px] ml-8"
+                            : ""
+                        } ${cell.column.columnDef.meta?.className || ""}`}
                         style={{
                           width: cell.column.id === "actions" ? 120 : cell.column.getSize(),
                           position: cell.column.id === "actions" ? "sticky" : "relative",
@@ -201,8 +203,11 @@ export function AllModelsDataTable<TData, TValue>({
                 ))
               ) : (
                 <TableRow>
-                  <TableCell colSpan={columns.length} className="h-8 text-center">
-                    <div className="text-center text-gray-500">
+                  <TableCell
+                    colSpan={columns.length}
+                    className="h-8 text-center"
+                  >
+                    <div className="text-center text-muted-foreground">
                       <p>No models found</p>
                     </div>
                   </TableCell>
