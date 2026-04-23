@@ -1,7 +1,5 @@
 "use client";
 import { clearTokenCookies, getCookie } from "@/utils/cookieUtils";
-import { Col, Grid } from "@tremor/react";
-import { Typography } from "antd";
 import { jwtDecode } from "jwt-decode";
 import { useSearchParams } from "next/navigation";
 import React, { useEffect, useState } from "react";
@@ -318,21 +316,20 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
   }
 
   if (userRole && userRole == "Admin Viewer") {
-    const { Title, Paragraph } = Typography;
     return (
       <div>
-        <Title level={1}>Access Denied</Title>
-        <Paragraph>Ask your proxy admin for access to create keys</Paragraph>
+        <h1 className="text-3xl font-semibold">Access Denied</h1>
+        <p className="text-muted-foreground">
+          Ask your proxy admin for access to create keys
+        </p>
       </div>
     );
   }
 
-  console.log("inside user dashboard, selected team", selectedTeam);
-  console.log("All cookies after redirect:", document.cookie);
   return (
     <div className="w-full mx-4 h-[75vh]">
-      <Grid numItems={1} className="gap-2 p-8 w-full mt-2">
-        <Col numColSpan={1} className="flex flex-col gap-2">
+      <div className="grid grid-cols-1 gap-2 p-8 w-full mt-2">
+        <div className="col-span-1 flex flex-col gap-2">
           <CreateKey
             key={selectedTeam ? selectedTeam.team_id : null}
             team={selectedTeam as Team | null}
@@ -343,8 +340,8 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
             prefillData={prefillData}
           />
           <VirtualKeysTable teams={teams} organizations={organizations} />
-        </Col>
-      </Grid>
+        </div>
+      </div>
     </div>
   );
 };
