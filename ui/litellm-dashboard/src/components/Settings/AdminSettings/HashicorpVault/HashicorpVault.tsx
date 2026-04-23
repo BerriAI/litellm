@@ -8,14 +8,20 @@ import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import DeleteResourceModal from "@/components/common_components/DeleteResourceModal";
 import NotificationManager from "@/components/molecules/notifications_manager";
 import { testHashicorpVaultConnection } from "@/app/(dashboard)/hooks/configOverrides/hashicorpVaultApi";
-import { Alert, Button, Card, Descriptions, Flex, Skeleton, Space, Typography } from "antd";
+import {
+  Alert,
+  AlertDescription,
+  AlertTitle,
+} from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Edit, KeyRound, PlugZap, Trash2 } from "lucide-react";
 import { SENSITIVE_FIELDS, FIELD_LABELS } from "./constants";
 import EditHashicorpVaultModal from "./EditHashicorpVaultModal";
 import HashicorpVaultEmptyPlaceholder from "./HashicorpVaultEmptyPlaceholder";
 
-const { Title, Text } = Typography;
-
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 function detectAuthMethod(values: Record<string, any>): string {
   if (values.approle_role_id || values.approle_secret_id) return "AppRole";
   if (values.client_cert && values.client_key) return "TLS Certificate";
@@ -23,22 +29,21 @@ function detectAuthMethod(values: Record<string, any>): string {
   return "None";
 }
 
-const descriptionsConfig = {
-  column: { xxl: 1, xl: 1, lg: 1, md: 1, sm: 1, xs: 1 },
-};
-
 export default function HashicorpVault() {
   const { accessToken } = useAuthorized();
   const { data, isLoading, isError, error } = useHashicorpVaultConfig();
-  const { mutate: deleteConfig, isPending: isDeleting } = useDeleteHashicorpVaultConfig(accessToken);
-  const { mutate: updateConfig, isPending: isClearingField } = useUpdateHashicorpVaultConfig(accessToken);
+  const { mutate: deleteConfig, isPending: isDeleting } =
+    useDeleteHashicorpVaultConfig(accessToken);
+  const { mutate: updateConfig, isPending: isClearingField } =
+    useUpdateHashicorpVaultConfig(accessToken);
 
   const [isEditModalVisible, setIsEditModalVisible] = useState(false);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [clearingField, setClearingField] = useState<string | null>(null);
   const [isTesting, setIsTesting] = useState(false);
 
-  const rawValues = data?.values ?? {};
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const rawValues: Record<string, any> = data?.values ?? {};
   const isConfigured = Boolean(rawValues.vault_addr);
 
   const handleTestConnection = async () => {
@@ -46,7 +51,9 @@ export default function HashicorpVault() {
     setIsTesting(true);
     try {
       const result = await testHashicorpVaultConnection(accessToken);
-      NotificationManager.success(result.message || "Connection to Vault successful!");
+      NotificationManager.success(
+        result.message || "Connection to Vault successful!",
+      );
     } catch (err) {
       NotificationManager.fromBackend(err);
     } finally {
@@ -57,7 +64,9 @@ export default function HashicorpVault() {
   const handleDelete = () => {
     deleteConfig(undefined, {
       onSuccess: () => {
-        NotificationManager.success("Hashicorp Vault configuration deleted");
+        NotificationManager.success(
+          "Hashicorp Vault configuration deleted",
+        );
         setIsDeleteModalOpen(false);
       },
       onError: (err) => {
@@ -68,142 +77,167 @@ export default function HashicorpVault() {
 
   const handleClearField = () => {
     if (!clearingField) return;
-    updateConfig({ [clearingField]: "" }, {
-      onSuccess: () => {
-        NotificationManager.success(`${FIELD_LABELS[clearingField] ?? clearingField} cleared`);
-        setClearingField(null);
+    updateConfig(
+      { [clearingField]: "" },
+      {
+        onSuccess: () => {
+          NotificationManager.success(
+            `${FIELD_LABELS[clearingField] ?? clearingField} cleared`,
+          );
+          setClearingField(null);
+        },
+        onError: (err) => {
+          NotificationManager.fromBackend(err);
+        },
       },
-      onError: (err) => {
-        NotificationManager.fromBackend(err);
-      },
-    });
+    );
   };
 
   const renderValue = (key: string) => {
     const value = rawValues[key];
     if (!value) {
-      return <span className="text-gray-400 italic">Not configured</span>;
+      return (
+        <span className="text-muted-foreground italic">Not configured</span>
+      );
     }
     if (SENSITIVE_FIELDS.has(key)) {
       return (
-        <Flex justify="space-between" align="center">
-          <Text className="font-mono text-gray-600">{value}</Text>
+        <div className="flex justify-between items-center">
+          <span className="font-mono text-muted-foreground">{value}</span>
           <Button
-            type="text"
-            size="small"
-            danger
-            icon={<Trash2 className="w-3.5 h-3.5" />}
+            variant="ghost"
+            size="icon"
+            className="h-7 w-7 text-destructive hover:text-destructive"
             onClick={() => setClearingField(key)}
-          />
-        </Flex>
+            aria-label={`Clear ${FIELD_LABELS[key] ?? key}`}
+          >
+            <Trash2 className="w-3.5 h-3.5" />
+          </Button>
+        </div>
       );
     }
-    return <Text className="font-mono text-gray-600">{value}</Text>;
+    return <span className="font-mono text-muted-foreground">{value}</span>;
   };
 
   const renderSettings = () => {
-    // Only show fields that have values, plus auth method
     const fieldsToShow = Object.entries(rawValues).filter(
-      ([_, value]) => value != null && value !== ""
+      ([, value]) => value != null && value !== "",
     );
-
     if (fieldsToShow.length === 0) return null;
-
     return (
-      <Descriptions bordered {...descriptionsConfig}>
-        <Descriptions.Item label="Auth Method">
-          <Text>{detectAuthMethod(rawValues)}</Text>
-        </Descriptions.Item>
-        {fieldsToShow.map(([key]) => (
-          <Descriptions.Item key={key} label={FIELD_LABELS[key] ?? key}>
-            {renderValue(key)}
-          </Descriptions.Item>
+      <dl className="border border-border rounded-md overflow-hidden text-sm">
+        <div className="grid grid-cols-[200px_1fr] border-b border-border">
+          <dt className="bg-muted px-4 py-3 font-medium">Auth Method</dt>
+          <dd className="px-4 py-3">{detectAuthMethod(rawValues)}</dd>
+        </div>
+        {fieldsToShow.map(([key], i) => (
+          <div
+            key={key}
+            className={`grid grid-cols-[200px_1fr] ${
+              i < fieldsToShow.length - 1 ? "border-b border-border" : ""
+            }`}
+          >
+            <dt className="bg-muted px-4 py-3 font-medium">
+              {FIELD_LABELS[key] ?? key}
+            </dt>
+            <dd className="px-4 py-3">{renderValue(key)}</dd>
+          </div>
         ))}
-      </Descriptions>
+      </dl>
     );
   };
 
   return (
     <>
       {isLoading ? (
-        <Card>
-          <Skeleton active />
+        <Card className="p-6">
+          <Skeleton className="h-32 w-full" />
         </Card>
       ) : isError ? (
-        <Card>
-          <Alert
-            type="error"
-            message="Could not load Hashicorp Vault configuration"
-            description={error instanceof Error ? error.message : undefined}
-          />
+        <Card className="p-6">
+          <Alert variant="destructive">
+            <AlertTitle>Could not load Hashicorp Vault configuration</AlertTitle>
+            {error instanceof Error && (
+              <AlertDescription>{error.message}</AlertDescription>
+            )}
+          </Alert>
         </Card>
       ) : (
-        <Card>
-          <Space direction="vertical" size="large" className="w-full">
-            {/* Header */}
-            <Flex justify="space-between" align="center">
-              <Flex align="center" gap={12}>
-                <KeyRound className="w-6 h-6 text-gray-400" />
+        <Card className="p-6">
+          <div className="space-y-6 w-full">
+            <div className="flex justify-between items-center">
+              <div className="flex items-center gap-3">
+                <KeyRound className="w-6 h-6 text-muted-foreground" />
                 <div>
-                  <Title level={3} style={{ marginBottom: 0 }}>Hashicorp Vault</Title>
-                  <Text type="secondary">Manage secret manager configuration</Text>
+                  <h3 className="text-lg font-semibold m-0">
+                    Hashicorp Vault
+                  </h3>
+                  <p className="text-sm text-muted-foreground">
+                    Manage secret manager configuration
+                  </p>
                 </div>
-              </Flex>
+              </div>
 
-              <Space>
+              <div className="flex gap-2">
                 {isConfigured && (
                   <>
                     <Button
-                      icon={<PlugZap className="w-4 h-4" />}
-                      loading={isTesting}
+                      variant="outline"
                       onClick={handleTestConnection}
+                      disabled={isTesting}
                     >
-                      Test Connection
+                      <PlugZap className="w-4 h-4" />
+                      {isTesting ? "Testing…" : "Test Connection"}
                     </Button>
                     <Button
-                      icon={<Edit className="w-4 h-4" />}
+                      variant="outline"
                       onClick={() => setIsEditModalVisible(true)}
                     >
+                      <Edit className="w-4 h-4" />
                       Edit Configuration
                     </Button>
                     <Button
-                      danger
-                      icon={<Trash2 className="w-4 h-4" />}
+                      variant="destructive"
                       onClick={() => setIsDeleteModalOpen(true)}
                     >
+                      <Trash2 className="w-4 h-4" />
                       Delete Configuration
                     </Button>
                   </>
                 )}
-              </Space>
-            </Flex>
+              </div>
+            </div>
 
             {isConfigured && (
-              <Alert
-                type="info"
-                showIcon
-                message={'Secrets must be stored with the field name "key"'}
-                description={
-                  <>
-                    <Text code>vault kv put secret/SECRET_NAME key=secret_value</Text>
-                    <br />
-                    <Typography.Link
-                      href="https://docs.litellm.ai/docs/secret_managers/hashicorp_vault"
-                      target="_blank"
-                    >
-                      View documentation
-                    </Typography.Link>
-                  </>
-                }
-              />
+              <Alert>
+                <AlertTitle>
+                  Secrets must be stored with the field name &quot;key&quot;
+                </AlertTitle>
+                <AlertDescription>
+                  <code className="bg-muted px-1 py-0.5 rounded text-xs">
+                    vault kv put secret/SECRET_NAME key=secret_value
+                  </code>
+                  <br />
+                  <a
+                    href="https://docs.litellm.ai/docs/secret_managers/hashicorp_vault"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-primary hover:underline"
+                  >
+                    View documentation
+                  </a>
+                </AlertDescription>
+              </Alert>
             )}
 
             {isConfigured ? (
               renderSettings()
             ) : (
-              <HashicorpVaultEmptyPlaceholder onAdd={() => setIsEditModalVisible(true)} />
+              <HashicorpVaultEmptyPlaceholder
+                onAdd={() => setIsEditModalVisible(true)}
+              />
             )}
-          </Space>
+          </div>
         </Card>
       )}
 
@@ -232,7 +266,12 @@ export default function HashicorpVault() {
         message="This will remove the stored value."
         resourceInformationTitle="Field"
         resourceInformation={[
-          { label: "Field", value: clearingField ? (FIELD_LABELS[clearingField] ?? clearingField) : "" },
+          {
+            label: "Field",
+            value: clearingField
+              ? (FIELD_LABELS[clearingField] ?? clearingField)
+              : "",
+          },
         ]}
         onCancel={() => setClearingField(null)}
         onOk={handleClearField}
