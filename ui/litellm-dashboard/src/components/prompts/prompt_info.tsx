@@ -20,7 +20,7 @@ import {
   TableRow,
 } from "@tremor/react";
 import { Button, Modal } from "antd";
-import { ArrowLeftIcon, TrashIcon, PencilIcon } from "@heroicons/react/outline";
+import { ArrowLeft as ArrowLeftIcon, Trash2 as TrashIcon, Pencil as PencilIcon } from "lucide-react";
 import { getPromptInfo, getPromptVersions, PromptSpec, PromptTemplateBase, deletePromptCall } from "@/components/networking";
 import { copyToClipboard as utilCopyToClipboard } from "@/utils/dataUtils";
 import { CheckIcon, CopyIcon } from "lucide-react";

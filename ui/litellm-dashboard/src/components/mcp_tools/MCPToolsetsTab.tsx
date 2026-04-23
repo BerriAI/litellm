@@ -2,7 +2,7 @@ import React, { useState, useCallback } from "react";
 // eslint-disable-next-line litellm-ui/no-banned-ui-imports
 import { Button, Text, Title } from "@tremor/react";
 import { Modal, Form, Input, message, Spin, Card, Typography, Space } from "antd";
-import { PlusIcon, PencilIcon, TrashIcon } from "@heroicons/react/outline";
+import { Plus as PlusIcon, Pencil as PencilIcon, Trash2 as TrashIcon } from "lucide-react";
 import { ColumnDef } from "@tanstack/react-table";
 import { useMCPToolsets } from "@/app/(dashboard)/hooks/mcpServers/useMCPToolsets";
 import { useMCPServers } from "@/app/(dashboard)/hooks/mcpServers/useMCPServers";

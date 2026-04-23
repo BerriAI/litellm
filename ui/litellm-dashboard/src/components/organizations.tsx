@@ -1,6 +1,6 @@
 import OrganizationFilters, { FilterState } from "@/app/(dashboard)/organizations/OrganizationFilters";
 import { InfoCircleOutlined } from "@ant-design/icons";
-import { ChevronDownIcon, ChevronRightIcon, RefreshIcon } from "@heroicons/react/outline";
+import { ChevronDown as ChevronDownIcon, ChevronRight as ChevronRightIcon, RefreshCcw as RefreshIcon } from "lucide-react";
 // eslint-disable-next-line litellm-ui/no-banned-ui-imports
 import {
   Badge,
