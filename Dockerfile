@@ -27,10 +27,8 @@ RUN apk add --no-cache \
     npm \
     libsndfile
 
-ENV PRISMA_BINARY_CACHE_DIR=/app/.cache/prisma-python/binaries \
-    UV_PROJECT_ENVIRONMENT=/app/.venv \
+ENV UV_PROJECT_ENVIRONMENT=/app/.venv \
     UV_LINK_MODE=copy \
-    XDG_CACHE_HOME=/app/.cache \
     PATH="/app/.venv/bin:${PATH}"
 
 # Copy dependency metadata first for layer caching
@@ -94,11 +92,14 @@ RUN apk add --no-cache bash openssl tzdata nodejs npm python3 libsndfile supervi
     { apk del --no-cache npm 2>/dev/null || true; }
 
 WORKDIR /app
-ENV PRISMA_BINARY_CACHE_DIR=/app/.cache/prisma-python/binaries \
-    XDG_CACHE_HOME=/app/.cache \
-    PATH="/app/.venv/bin:${PATH}"
+ENV PATH="/app/.venv/bin:${PATH}"
 
 COPY --from=builder /app /app
+# Prisma binaries live in $HOME/.cache (default prisma-python location),
+# which is /root/.cache here. Copy them from the builder so they survive
+# deployments that volume-mount /app/.cache (e.g. readOnlyRootFilesystem
+# + emptyDir) — otherwise the mount would shadow the baked-in query engine.
+COPY --from=builder /root/.cache /root/.cache
 
 RUN find /app/.venv -type f -path "*/tornado/test/*" -delete && \
     find /app/.venv -type d -path "*/tornado/test" -delete

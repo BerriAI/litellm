@@ -1055,3 +1055,50 @@ class TestTracingFieldsPopulation:
         assert slg["classification"] == classification
         assert slg["detection_method"] == "llm-judge"
         assert slg["confidence_score"] == 0.94
+
+
+class TestCustomGuardrailSpendLogMatchRedaction:
+    """Guardrail JSON persisted via standard_logging must not contain raw match spans."""
+
+    def test_add_standard_logging_redacts_nested_match(self):
+        cg = CustomGuardrail(guardrail_name="test-rail")
+        raw = {
+            "assessments": [
+                {
+                    "sensitiveInformationPolicy": {
+                        "piiEntities": [
+                            {"type": "NAME", "match": "GG", "action": "BLOCKED"}
+                        ]
+                    }
+                }
+            ]
+        }
+        request_data: dict = {"metadata": {}}
+        cg.add_standard_logging_guardrail_information_to_request_data(
+            guardrail_json_response=raw,
+            request_data=request_data,
+            guardrail_status="guardrail_intervened",
+        )
+        slg = request_data["metadata"]["standard_logging_guardrail_information"][0]
+        assert (
+            slg["guardrail_response"]["assessments"][0]["sensitiveInformationPolicy"][
+                "piiEntities"
+            ][0]["match"]
+            == "[REDACTED]"
+        )
+        assert raw["assessments"][0]["sensitiveInformationPolicy"]["piiEntities"][0][
+            "match"
+        ] == "GG"
+
+    def test_add_standard_logging_redacts_regex_field(self):
+        cg = CustomGuardrail(guardrail_name="test-rail")
+        raw = {"filters": [{"regex": r"\d{3}-\d{2}-\d{4}", "action": "BLOCKED"}]}
+        request_data: dict = {"metadata": {}}
+        cg.add_standard_logging_guardrail_information_to_request_data(
+            guardrail_json_response=raw,
+            request_data=request_data,
+            guardrail_status="success",
+        )
+        slg = request_data["metadata"]["standard_logging_guardrail_information"][0]
+        assert slg["guardrail_response"]["filters"][0]["regex"] == "[REDACTED]"
+        assert raw["filters"][0]["regex"] == r"\d{3}-\d{2}-\d{4}"
