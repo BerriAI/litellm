@@ -9,6 +9,7 @@ from urllib.parse import urlparse
 
 import httpx
 
+from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 
 try:
@@ -456,13 +457,18 @@ def resolve_oci_schema_refs(schema: Dict[str, Any]) -> Dict[str, Any]:
     return resolved
 
 
-def resolve_oci_schema_anyof(obj: Any) -> Any:
+def resolve_oci_schema_anyof(obj: Any, depth: int = 0) -> Any:
     """Resolve Pydantic v2 ``Optional[T]`` → ``anyOf`` patterns.
 
     Pydantic v2 emits ``{"anyOf": [{"type": "T"}, {"type": "null"}]}`` for
     ``Optional[T]``.  OCI models don't understand ``anyOf``, so we pick the
     first non-null branch and merge top-level metadata into it.
     """
+    if depth > DEFAULT_MAX_RECURSE_DEPTH:
+        raise ValueError(
+            f"Max depth of {DEFAULT_MAX_RECURSE_DEPTH} exceeded while resolving OCI schema anyOf. "
+            "Please check the schema for excessive nesting."
+        )
     if isinstance(obj, dict):
         if "anyOf" in obj and "type" not in obj:
             non_null = [
@@ -473,22 +479,27 @@ def resolve_oci_schema_anyof(obj: Any) -> Any:
             if non_null:
                 resolved = {**obj, **non_null[0]}
                 resolved.pop("anyOf", None)
-                return resolve_oci_schema_anyof(resolved)
-        return {k: resolve_oci_schema_anyof(v) for k, v in obj.items()}
+                return resolve_oci_schema_anyof(resolved, depth=depth + 1)
+        return {k: resolve_oci_schema_anyof(v, depth=depth + 1) for k, v in obj.items()}
     if isinstance(obj, list):
-        return [resolve_oci_schema_anyof(item) for item in obj]
+        return [resolve_oci_schema_anyof(item, depth=depth + 1) for item in obj]
     return obj
 
 
-def sanitize_oci_schema(schema: Any) -> Any:
+def sanitize_oci_schema(schema: Any, depth: int = 0) -> Any:
     """Recursively remove OCI-incompatible fields from a JSON schema.
 
     Strips ``title`` keys, removes ``None``-valued ``default`` entries,
     normalises ``type: [T, "null"]`` list types, and ensures arrays carry an
     ``items`` definition.
     """
+    if depth > DEFAULT_MAX_RECURSE_DEPTH:
+        raise ValueError(
+            f"Max depth of {DEFAULT_MAX_RECURSE_DEPTH} exceeded while sanitizing OCI schema. "
+            "Please check the schema for excessive nesting."
+        )
     if isinstance(schema, list):
-        return [sanitize_oci_schema(item) for item in schema]
+        return [sanitize_oci_schema(item, depth=depth + 1) for item in schema]
     if not isinstance(schema, dict):
         return schema
 
@@ -506,7 +517,7 @@ def sanitize_oci_schema(schema: Any) -> Any:
                 non_null = [t for t in value if t != "null"]
                 sanitized[key] = non_null[0] if non_null else "string"
                 continue
-        sanitized[key] = sanitize_oci_schema(value)
+        sanitized[key] = sanitize_oci_schema(value, depth=depth + 1)
 
     if sanitized.get("type") == "array" and "items" not in sanitized:
         sanitized["items"] = {"type": "object"}
