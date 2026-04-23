@@ -1,4 +1,4 @@
-import { ChevronDownIcon, ChevronUpIcon, SwitchVerticalIcon } from "@heroicons/react/outline";
+import { ArrowUpDown, ChevronDown, ChevronUp } from "lucide-react";
 import {
   ColumnDef,
   flexRender,
@@ -7,8 +7,21 @@ import {
   SortingState,
   useReactTable,
 } from "@tanstack/react-table";
-import { Table, TableBody, TableCell, TableHead, TableHeaderCell, TableRow } from "@tremor/react";
-import { Tooltip } from "antd";
+// eslint-disable-next-line litellm-ui/no-banned-ui-imports
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeaderCell,
+  TableRow,
+} from "@tremor/react";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import React from "react";
 import TableIconActionButton from "../common_components/IconActionButton/TableIconActionButtons/TableIconActionButton";
 import { getProviderLogoAndName } from "../provider_info_helpers";
@@ -32,8 +45,9 @@ const VectorStoreTable: React.FC<VectorStoreTableProps> = ({ data, onView, onEdi
         const vectorStore = row.original;
         return (
           <button
+            type="button"
             onClick={() => onView(vectorStore.vector_store_id)}
-            className="font-mono text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs font-normal px-2 py-0.5 text-left w-full truncate whitespace-nowrap cursor-pointer max-w-[15ch]"
+            className="font-mono text-blue-500 bg-blue-50 hover:bg-blue-100 dark:bg-blue-950/30 dark:hover:bg-blue-950/60 text-xs font-normal px-2 py-0.5 text-left w-full truncate whitespace-nowrap cursor-pointer max-w-[15ch] rounded"
           >
             {vectorStore.vector_store_id.length > 15
               ? `${vectorStore.vector_store_id.slice(0, 15)}...`
@@ -48,9 +62,18 @@ const VectorStoreTable: React.FC<VectorStoreTableProps> = ({ data, onView, onEdi
       cell: ({ row }) => {
         const vectorStore = row.original;
         return (
-          <Tooltip title={vectorStore.vector_store_name}>
-            <span className="text-xs">{vectorStore.vector_store_name || "-"}</span>
-          </Tooltip>
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span className="text-xs">
+                  {vectorStore.vector_store_name || "-"}
+                </span>
+              </TooltipTrigger>
+              {vectorStore.vector_store_name && (
+                <TooltipContent>{vectorStore.vector_store_name}</TooltipContent>
+              )}
+            </Tooltip>
+          </TooltipProvider>
         );
       },
     },
@@ -60,9 +83,20 @@ const VectorStoreTable: React.FC<VectorStoreTableProps> = ({ data, onView, onEdi
       cell: ({ row }) => {
         const vectorStore = row.original;
         return (
-          <Tooltip title={vectorStore.vector_store_description}>
-            <span className="text-xs">{vectorStore.vector_store_description || "-"}</span>
-          </Tooltip>
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span className="text-xs">
+                  {vectorStore.vector_store_description || "-"}
+                </span>
+              </TooltipTrigger>
+              {vectorStore.vector_store_description && (
+                <TooltipContent>
+                  {vectorStore.vector_store_description}
+                </TooltipContent>
+              )}
+            </Tooltip>
+          </TooltipProvider>
         );
       },
     },
@@ -74,21 +108,29 @@ const VectorStoreTable: React.FC<VectorStoreTableProps> = ({ data, onView, onEdi
         const ingestedFiles = vectorStore.vector_store_metadata?.ingested_files || [];
         
         if (ingestedFiles.length === 0) {
-          return <span className="text-xs text-gray-400">-</span>;
+          return <span className="text-xs text-muted-foreground">-</span>;
         }
-        
+
         const filenames = ingestedFiles
           .map((file) => file.filename || file.file_url || "Unknown")
           .join(", ");
-        
-        const displayText = ingestedFiles.length === 1 
-          ? ingestedFiles[0].filename || ingestedFiles[0].file_url || "1 file"
-          : `${ingestedFiles.length} files`;
-        
+
+        const displayText =
+          ingestedFiles.length === 1
+            ? ingestedFiles[0].filename || ingestedFiles[0].file_url || "1 file"
+            : `${ingestedFiles.length} files`;
+
         return (
-          <Tooltip title={filenames}>
-            <span className="text-xs text-blue-600">{displayText}</span>
-          </Tooltip>
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span className="text-xs text-blue-600 dark:text-blue-300">
+                  {displayText}
+                </span>
+              </TooltipTrigger>
+              <TooltipContent>{filenames}</TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
         );
       },
     },
@@ -97,10 +139,15 @@ const VectorStoreTable: React.FC<VectorStoreTableProps> = ({ data, onView, onEdi
       accessorKey: "custom_llm_provider",
       cell: ({ row }) => {
         const vectorStore = row.original;
-        const { displayName, logo } = getProviderLogoAndName(vectorStore.custom_llm_provider);
+        const { displayName, logo } = getProviderLogoAndName(
+          vectorStore.custom_llm_provider,
+        );
         return (
           <div className="flex items-center space-x-2">
-            {logo && <img src={logo} alt={displayName} className="h-4 w-4" />}
+            {logo && (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={logo} alt={displayName} className="h-4 w-4" />
+            )}
             <span className="text-xs">{displayName}</span>
           </div>
         );
@@ -170,7 +217,9 @@ const VectorStoreTable: React.FC<VectorStoreTableProps> = ({ data, onView, onEdi
                   <TableHeaderCell
                     key={header.id}
                     className={`py-1 h-8 ${
-                      header.id === "actions" ? "sticky right-0 bg-white shadow-[-4px_0_8px_-6px_rgba(0,0,0,0.1)]" : ""
+                      header.id === "actions"
+                        ? "sticky right-0 bg-background shadow-[-4px_0_8px_-6px_rgba(0,0,0,0.1)]"
+                        : ""
                     }`}
                     onClick={header.column.getToggleSortingHandler()}
                   >
@@ -182,11 +231,15 @@ const VectorStoreTable: React.FC<VectorStoreTableProps> = ({ data, onView, onEdi
                         <div className="w-4">
                           {header.column.getIsSorted() ? (
                             {
-                              asc: <ChevronUpIcon className="h-4 w-4 text-blue-500" />,
-                              desc: <ChevronDownIcon className="h-4 w-4 text-blue-500" />,
+                              asc: (
+                                <ChevronUp className="h-4 w-4 text-primary" />
+                              ),
+                              desc: (
+                                <ChevronDown className="h-4 w-4 text-primary" />
+                              ),
                             }[header.column.getIsSorted() as string]
                           ) : (
-                            <SwitchVerticalIcon className="h-4 w-4 text-gray-400" />
+                            <ArrowUpDown className="h-4 w-4 text-muted-foreground" />
                           )}
                         </div>
                       )}
@@ -205,7 +258,7 @@ const VectorStoreTable: React.FC<VectorStoreTableProps> = ({ data, onView, onEdi
                       key={cell.id}
                       className={`py-0.5 max-h-8 overflow-hidden text-ellipsis whitespace-nowrap ${
                         cell.column.id === "actions"
-                          ? "sticky right-0 bg-white shadow-[-4px_0_8px_-6px_rgba(0,0,0,0.1)]"
+                          ? "sticky right-0 bg-background shadow-[-4px_0_8px_-6px_rgba(0,0,0,0.1)]"
                           : ""
                       }`}
                     >
@@ -217,7 +270,7 @@ const VectorStoreTable: React.FC<VectorStoreTableProps> = ({ data, onView, onEdi
             ) : (
               <TableRow>
                 <TableCell colSpan={columns.length} className="h-8 text-center">
-                  <div className="text-center text-gray-500">
+                  <div className="text-center text-muted-foreground">
                     <p>No vector stores found</p>
                   </div>
                 </TableCell>
