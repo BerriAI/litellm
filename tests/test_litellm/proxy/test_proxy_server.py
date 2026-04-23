@@ -4965,3 +4965,168 @@ async def test_increment_spend_counters_team_and_member():
     finally:
         ps.user_api_key_cache = original_key_cache
         ps.spend_counter_cache = original_counter_cache
+
+
+@pytest.mark.asyncio
+async def test_increment_spend_counters_sets_long_redis_ttl():
+    """Regression for PR #24682 TTL bug: counter writes must pass an explicit
+    long TTL, not rely on BaseCache.default_ttl=60 which silently expires the
+    counter every minute and reseeds it from stale DB state."""
+    from litellm.caching.dual_cache import DualCache
+    from litellm.proxy._types import LiteLLM_VerificationTokenView, hash_token
+
+    key_cache = DualCache()
+    counter_cache = DualCache()
+
+    # Mock Redis that records every async_increment call with its ttl kwarg.
+    recorded_ttls: list = []
+
+    async def fake_async_increment(key, value, ttl=None, **kwargs):
+        recorded_ttls.append(ttl)
+        return value
+
+    mock_redis = AsyncMock()
+    mock_redis.async_increment = fake_async_increment
+    mock_redis.async_get_cache = AsyncMock(return_value=None)
+    counter_cache.redis_cache = mock_redis
+
+    hashed_token = hash_token("sk-ttl-regression")
+    key_cache.in_memory_cache.set_cache(
+        key=hashed_token,
+        value=LiteLLM_VerificationTokenView(
+            token=hashed_token, spend=3.0, max_budget=10.0
+        ),
+    )
+
+    import litellm.proxy.proxy_server as ps
+
+    original_key_cache = ps.user_api_key_cache
+    original_counter_cache = ps.spend_counter_cache
+    ps.user_api_key_cache = key_cache
+    ps.spend_counter_cache = counter_cache
+    try:
+        from litellm.proxy.proxy_server import (
+            SPEND_COUNTER_REDIS_TTL_SECONDS,
+            increment_spend_counters,
+        )
+
+        await increment_spend_counters(
+            token=hashed_token, team_id=None, user_id=None, response_cost=0.25
+        )
+
+        # First call seeds from base_spend (3.0), second increments by 0.25.
+        # Both writes must carry the long TTL.
+        assert len(recorded_ttls) == 2
+        assert all(t == SPEND_COUNTER_REDIS_TTL_SECONDS for t in recorded_ttls)
+        # And definitely not the 60s default that caused the bug.
+        assert 60 not in recorded_ttls
+    finally:
+        ps.user_api_key_cache = original_key_cache
+        ps.spend_counter_cache = original_counter_cache
+
+
+@pytest.mark.asyncio
+async def test_init_and_increment_redis_first_init_check():
+    """Seed block must not be short-circuited by a stale in-memory hit.
+    After a Redis TTL expiry, a pod that still has an in-memory value must
+    re-read Redis (empty), fall through to the seed block, and re-initialize
+    from team_membership.spend — otherwise the new Redis key would start at
+    just the current increment, dropping all prior accumulation."""
+    from litellm.caching.dual_cache import DualCache
+
+    key_cache = DualCache()
+    counter_cache = DualCache()
+
+    # Stale in-memory value on the counter (simulates pre-expiry state).
+    counter_cache.in_memory_cache.set_cache(key="spend:team_member:u1:t1", value=7.0)
+
+    # Redis is empty (simulates post-TTL-expiry state on every pod).
+    mock_redis = AsyncMock()
+    mock_redis.async_get_cache = AsyncMock(return_value=None)
+    incremented_values: list = []
+
+    async def fake_async_increment(key, value, ttl=None, **kwargs):
+        incremented_values.append(value)
+        return value
+
+    mock_redis.async_increment = fake_async_increment
+    counter_cache.redis_cache = mock_redis
+
+    # DB-loaded team_membership with authoritative spend.
+    key_cache.in_memory_cache.set_cache(
+        key="team_membership:u1:t1",
+        value={"user_id": "u1", "team_id": "t1", "spend": 70.0},
+    )
+
+    import litellm.proxy.proxy_server as ps
+
+    original_key_cache = ps.user_api_key_cache
+    original_counter_cache = ps.spend_counter_cache
+    ps.user_api_key_cache = key_cache
+    ps.spend_counter_cache = counter_cache
+    try:
+        from litellm.proxy.proxy_server import increment_spend_counters
+
+        await increment_spend_counters(
+            token=None, team_id="t1", user_id="u1", response_cost=0.50
+        )
+
+        # Must seed with 70.0 THEN increment with 0.50 — not just 0.50.
+        assert 70.0 in incremented_values
+        assert 0.50 in incremented_values
+    finally:
+        ps.user_api_key_cache = original_key_cache
+        ps.spend_counter_cache = original_counter_cache
+
+
+@pytest.mark.asyncio
+async def test_reset_budget_for_team_members_sets_long_ttl():
+    """Budget reset must pass the long TTL explicitly — otherwise the freshly
+    reset counter inherits the 60s Redis default and the TTL bug reappears
+    immediately after every reset cycle."""
+    from litellm.caching.dual_cache import DualCache
+    from litellm.proxy.common_utils.reset_budget_job import ResetBudgetJob
+
+    counter_cache = DualCache()
+    recorded_redis: list = []
+
+    async def fake_async_set_cache(key, value, ttl=None, **kwargs):
+        recorded_redis.append((key, value, ttl))
+
+    mock_redis = AsyncMock()
+    mock_redis.async_set_cache = fake_async_set_cache
+    counter_cache.redis_cache = mock_redis
+
+    import litellm.proxy.proxy_server as ps
+
+    original_counter_cache = ps.spend_counter_cache
+    ps.spend_counter_cache = counter_cache
+
+    # Minimal prisma mock — one team member linked to the reset budget.
+    mock_prisma = MagicMock()
+    mock_membership = MagicMock(user_id="u1", team_id="t1")
+    mock_prisma.db.litellm_teammembership.find_many = AsyncMock(
+        return_value=[mock_membership]
+    )
+    mock_prisma.db.litellm_teammembership.update_many = AsyncMock()
+
+    # Minimal budget mock — reset path only reads .budget_id
+    mock_budget = MagicMock(budget_id="b1")
+
+    try:
+        job = ResetBudgetJob(proxy_logging_obj=MagicMock(), prisma_client=mock_prisma)
+        await job.reset_budget_for_litellm_team_members(budgets_to_reset=[mock_budget])
+
+        from litellm.proxy.proxy_server import SPEND_COUNTER_REDIS_TTL_SECONDS
+
+        assert recorded_redis == [
+            ("spend:team_member:u1:t1", 0.0, SPEND_COUNTER_REDIS_TTL_SECONDS)
+        ]
+        # In-memory reset must also land at 0.0 (ttl is an override hint for
+        # in-memory; the value is what the gate reads).
+        assert (
+            counter_cache.in_memory_cache.get_cache(key="spend:team_member:u1:t1")
+            == 0.0
+        )
+    finally:
+        ps.spend_counter_cache = original_counter_cache

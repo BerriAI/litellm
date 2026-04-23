@@ -68,7 +68,10 @@ class ResetBudgetJob:
         # Reset Redis directly so a transient failure doesn't leave stale
         # counters that get_current_spend would read as authoritative.
         try:
-            from litellm.proxy.proxy_server import spend_counter_cache
+            from litellm.proxy.proxy_server import (
+                SPEND_COUNTER_REDIS_TTL_SECONDS,
+                spend_counter_cache,
+            )
 
             memberships = await self.prisma_client.db.litellm_teammembership.find_many(
                 where={"budget_id": {"in": budget_ids}}
@@ -77,13 +80,17 @@ class ResetBudgetJob:
                 counter_key = f"spend:team_member:{m.user_id}:{m.team_id}"
                 # Always reset in-memory
                 spend_counter_cache.in_memory_cache.set_cache(
-                    key=counter_key, value=0.0
+                    key=counter_key,
+                    value=0.0,
+                    ttl=SPEND_COUNTER_REDIS_TTL_SECONDS,
                 )
                 # Explicitly reset Redis with warning on failure
                 if spend_counter_cache.redis_cache is not None:
                     try:
                         await spend_counter_cache.redis_cache.async_set_cache(
-                            key=counter_key, value=0.0
+                            key=counter_key,
+                            value=0.0,
+                            ttl=SPEND_COUNTER_REDIS_TTL_SECONDS,
                         )
                     except Exception as redis_err:
                         verbose_proxy_logger.warning(
@@ -708,7 +715,10 @@ class ResetBudgetJob:
             # Reset Redis directly (not via DualCache) so a Redis failure
             # doesn't silently leave a stale counter that get_current_spend
             # would read as authoritative, permanently blocking the user.
-            from litellm.proxy.proxy_server import spend_counter_cache
+            from litellm.proxy.proxy_server import (
+                SPEND_COUNTER_REDIS_TTL_SECONDS,
+                spend_counter_cache,
+            )
 
             counter_key = None
             if item_type == "key" and hasattr(item, "token") and item.token is not None:  # type: ignore[union-attr]
@@ -723,13 +733,17 @@ class ResetBudgetJob:
             if counter_key is not None:
                 # Always reset in-memory (local fallback)
                 spend_counter_cache.in_memory_cache.set_cache(
-                    key=counter_key, value=0.0
+                    key=counter_key,
+                    value=0.0,
+                    ttl=SPEND_COUNTER_REDIS_TTL_SECONDS,
                 )
                 # Explicitly reset Redis with warning on failure
                 if spend_counter_cache.redis_cache is not None:
                     try:
                         await spend_counter_cache.redis_cache.async_set_cache(
-                            key=counter_key, value=0.0
+                            key=counter_key,
+                            value=0.0,
+                            ttl=SPEND_COUNTER_REDIS_TTL_SECONDS,
                         )
                     except Exception as redis_err:
                         verbose_proxy_logger.warning(

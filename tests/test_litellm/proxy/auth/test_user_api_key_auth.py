@@ -1732,3 +1732,176 @@ async def test_user_api_key_auth_builder_no_blocking_calls():
     finally:
         for k, v in _originals.items():
             setattr(_proxy_server_mod, k, v)
+
+
+async def _run_team_member_budget_auth(
+    valid_token,
+    team_member_info,
+    current_spend: float,
+):
+    """Shared helper: run _user_api_key_auth_builder through the team_member_budget
+    branch, patching everything up to that branch. Returns after the auth completes
+    (or raises BudgetExceededError from within the target branch)."""
+    from starlette.datastructures import URL
+    from starlette.requests import Request
+
+    from litellm.proxy.auth.user_api_key_auth import _user_api_key_auth_builder
+
+    # Cache stub: return team_member_info for the team-member lookup key only.
+    # Everything else returns None so the auth flow falls through to patched helpers.
+    cache_key = f"{valid_token.team_id}_{valid_token.user_id}"
+
+    async def fake_async_get_cache(key=None, **kwargs):
+        if key == cache_key:
+            return team_member_info
+        return None
+
+    mock_cache = AsyncMock()
+    mock_cache.async_get_cache = AsyncMock(side_effect=fake_async_get_cache)
+    mock_cache.async_set_cache = AsyncMock(return_value=None)
+
+    mock_proxy_logging_obj = MagicMock()
+    mock_proxy_logging_obj.internal_usage_cache = MagicMock()
+    mock_proxy_logging_obj.internal_usage_cache.dual_cache = AsyncMock()
+    mock_proxy_logging_obj.internal_usage_cache.dual_cache.async_delete_cache = (
+        AsyncMock()
+    )
+    mock_proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
+    mock_proxy_logging_obj.pre_call_hook = AsyncMock(return_value=None)
+
+    import litellm.proxy.proxy_server as _proxy_server_mod
+
+    _attrs = {
+        "prisma_client": MagicMock(),
+        "user_api_key_cache": mock_cache,
+        "proxy_logging_obj": mock_proxy_logging_obj,
+        "master_key": "sk-master-key",
+        "general_settings": {},
+        "llm_model_list": [],
+        "llm_router": None,
+        "open_telemetry_logger": None,
+        "model_max_budget_limiter": MagicMock(),
+        "user_custom_auth": None,
+        "jwt_handler": None,
+        "litellm_proxy_admin_name": "admin",
+    }
+    _originals = {k: getattr(_proxy_server_mod, k, None) for k in _attrs}
+
+    request = Request(scope={"type": "http"})
+    request._url = URL(url="/chat/completions")
+
+    try:
+        for k, v in _attrs.items():
+            setattr(_proxy_server_mod, k, v)
+
+        with patch(
+            "litellm.proxy.auth.user_api_key_auth.get_key_object",
+            new_callable=AsyncMock,
+            return_value=valid_token,
+        ), patch(
+            "litellm.proxy.auth.user_api_key_auth.get_team_object",
+            new_callable=AsyncMock,
+            return_value=None,
+        ), patch(
+            "litellm.proxy.auth.user_api_key_auth._enforce_key_and_fallback_model_access",
+            new_callable=AsyncMock,
+            return_value=None,
+        ), patch(
+            "litellm.proxy.auth.user_api_key_auth.get_user_object",
+            new_callable=AsyncMock,
+            return_value=None,
+        ), patch(
+            "litellm.proxy.auth.user_api_key_auth.common_checks",
+            new_callable=AsyncMock,
+            return_value=True,
+        ), patch(
+            "litellm.proxy.proxy_server.get_current_spend",
+            new_callable=AsyncMock,
+            return_value=current_spend,
+        ):
+            return await _user_api_key_auth_builder(
+                request=request,
+                api_key=f"Bearer {valid_token.token}",
+                azure_api_key_header="",
+                anthropic_api_key_header=None,
+                google_ai_studio_api_key_header=None,
+                azure_apim_header=None,
+                request_data={},
+            )
+    finally:
+        for k, v in _originals.items():
+            setattr(_proxy_server_mod, k, v)
+
+
+@pytest.mark.asyncio
+async def test_team_member_budget_enforced_when_team_member_spend_is_none():
+    """Regression: user_api_key_auth must read the Redis spend counter even when
+    valid_token.team_member_spend is None (fresh team member, no DB spend row).
+    Pre-fix, the `is not None` gate skipped the entire check, letting the first
+    over-budget request through."""
+    from litellm.proxy._types import (
+        LiteLLM_BudgetTable,
+        LiteLLM_TeamMembership,
+        LitellmUserRoles,
+    )
+
+    valid_token = UserAPIKeyAuth(
+        token="sk-test-none-spend-regression",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        team_id="team-xyz",
+        user_id="user-xyz",
+        team_member_spend=None,  # fresh team member, no DB spend row
+    )
+
+    team_member_info = LiteLLM_TeamMembership(
+        user_id="user-xyz",
+        team_id="team-xyz",
+        spend=0.0,
+        litellm_budget_table=LiteLLM_BudgetTable(max_budget=1.0),
+    )
+
+    # The auth exception handler wraps BudgetExceededError as ProxyException
+    # with type=budget_exceeded, so that's what the caller actually sees.
+    with pytest.raises(ProxyException) as exc_info:
+        await _run_team_member_budget_auth(
+            valid_token=valid_token,
+            team_member_info=team_member_info,
+            current_spend=5.0,  # Redis counter is over the $1 cap
+        )
+    assert exc_info.value.type == ProxyErrorTypes.budget_exceeded
+    assert "Budget has been exceeded" in exc_info.value.message
+
+
+@pytest.mark.asyncio
+async def test_team_member_budget_blocks_at_exact_boundary():
+    """Regression: user_api_key_auth must block at spend == budget (>=), matching
+    _check_team_member_budget in auth_checks.py. Pre-fix, the `>` comparison let
+    the exact boundary through, creating an off-by-one at rollover."""
+    from litellm.proxy._types import (
+        LiteLLM_BudgetTable,
+        LiteLLM_TeamMembership,
+        LitellmUserRoles,
+    )
+
+    valid_token = UserAPIKeyAuth(
+        token="sk-test-boundary-regression",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        team_id="team-boundary",
+        user_id="user-boundary",
+        team_member_spend=0.5,
+    )
+
+    team_member_info = LiteLLM_TeamMembership(
+        user_id="user-boundary",
+        team_id="team-boundary",
+        spend=0.5,
+        litellm_budget_table=LiteLLM_BudgetTable(max_budget=1.0),
+    )
+
+    with pytest.raises(ProxyException) as exc_info:
+        await _run_team_member_budget_auth(
+            valid_token=valid_token,
+            team_member_info=team_member_info,
+            current_spend=1.0,  # exactly at the budget
+        )
+    assert exc_info.value.type == ProxyErrorTypes.budget_exceeded

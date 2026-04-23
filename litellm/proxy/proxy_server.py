@@ -1597,6 +1597,11 @@ shared_aiohttp_session: Optional["ClientSession"] = (
 user_api_key_cache = DualCache(
     default_in_memory_ttl=UserAPIKeyCacheTTLEnum.in_memory_cache_ttl.value
 )
+# Long TTL for cross-pod spend counter keys. Counters are reset explicitly by
+# reset_budget_job, so the TTL is only a safety net for orphaned counters
+# (deleted users/teams/keys). Must be larger than any realistic budget period
+# (weekly/monthly) to avoid silent mid-cycle expiry. See PR #24682 regression.
+SPEND_COUNTER_REDIS_TTL_SECONDS: int = 60 * 60 * 24 * 30  # 30 days
 spend_counter_cache = DualCache(
     default_in_memory_ttl=UserAPIKeyCacheTTLEnum.in_memory_cache_ttl.value
 )
@@ -1927,7 +1932,28 @@ async def _init_and_increment_spend_counter(
        rather than under-counting (would allow overspend).
     4. Increment atomically (both in-memory + Redis)
     """
-    current = await spend_counter_cache.async_get_cache(key=counter_key)
+    # Redis-first: when Redis is configured it is the authoritative cross-pod
+    # source. A stale per-pod in-memory hit must not short-circuit the seed
+    # block, or a fresh Redis key (post-TTL-expiry) would start from just
+    # `increment` rather than base_spend + increment. In-memory is only
+    # consulted when Redis is absent or errors on read.
+    current: Optional[float] = None
+    if spend_counter_cache.redis_cache is not None:
+        try:
+            current = await spend_counter_cache.redis_cache.async_get_cache(
+                key=counter_key
+            )
+        except Exception as e:
+            verbose_proxy_logger.debug(
+                "_init_and_increment_spend_counter: Redis read failed for %s, "
+                "falling back to in-memory: %s",
+                counter_key,
+                e,
+            )
+            current = spend_counter_cache.in_memory_cache.get_cache(key=counter_key)
+    else:
+        current = spend_counter_cache.in_memory_cache.get_cache(key=counter_key)
+
     if current is None:
         source = await user_api_key_cache.async_get_cache(key=source_cache_key)
         base_spend = 0.0
@@ -1938,10 +1964,16 @@ async def _init_and_increment_spend_counter(
                 base_spend = getattr(source, "spend", 0.0) or 0.0
         if base_spend > 0:
             await spend_counter_cache.async_increment_cache(
-                key=counter_key, value=base_spend
+                key=counter_key,
+                value=base_spend,
+                ttl=SPEND_COUNTER_REDIS_TTL_SECONDS,
             )
 
-    await spend_counter_cache.async_increment_cache(key=counter_key, value=increment)
+    await spend_counter_cache.async_increment_cache(
+        key=counter_key,
+        value=increment,
+        ttl=SPEND_COUNTER_REDIS_TTL_SECONDS,
+    )
 
 
 async def update_cache(  # noqa: PLR0915

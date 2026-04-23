@@ -1290,7 +1290,15 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                     )
 
             # Check 3. Check if user is in their team budget
-            if not skip_budget_checks and valid_token.team_member_spend is not None:
+            # Note: intentionally do NOT gate on `valid_token.team_member_spend is not None`.
+            # That field is LEFT-JOINed from LiteLLM_TeamMembership and is None for a
+            # team member that has never recorded any spend — gating on it would skip the
+            # authoritative Redis counter read and let the first over-budget request through.
+            if (
+                not skip_budget_checks
+                and valid_token.team_id is not None
+                and valid_token.user_id is not None
+            ):
                 if prisma_client is not None:
                     _cache_key = f"{valid_token.team_id}_{valid_token.user_id}"
 
@@ -1327,16 +1335,15 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                             # Read from cross-pod counter (Redis-first) if available
                             from litellm.proxy.proxy_server import get_current_spend
 
-                            team_member_spend = valid_token.team_member_spend
-                            if (
-                                valid_token.user_id is not None
-                                and valid_token.team_id is not None
-                            ):
-                                team_member_spend = await get_current_spend(
-                                    counter_key=f"spend:team_member:{valid_token.user_id}:{valid_token.team_id}",
-                                    fallback_spend=team_member_spend,
-                                )
-                            if team_member_spend > team_member_budget:
+                            # valid_token.team_member_spend is None for team members
+                            # with no prior spend row — treat as 0.0 and let the
+                            # Redis counter read be authoritative.
+                            team_member_spend = valid_token.team_member_spend or 0.0
+                            team_member_spend = await get_current_spend(
+                                counter_key=f"spend:team_member:{valid_token.user_id}:{valid_token.team_id}",
+                                fallback_spend=team_member_spend,
+                            )
+                            if team_member_spend >= team_member_budget:
                                 raise litellm.BudgetExceededError(
                                     current_cost=team_member_spend,
                                     max_budget=team_member_budget,
