@@ -66,6 +66,7 @@
         "src/components/guardrails/GuardrailTestPanel.tsx",
         "src/components/guardrails/GuardrailTestResults.tsx",
         "src/components/guardrails/GuardrailTestPlayground.tsx",
+        "src/components/vector_store_management/S3VectorsConfig.tsx",
         "src/components/prompts/prompt_editor_view/PromptEditorHeader.tsx",
         "src/components/prompts/prompt_editor_view/VersionHistorySidePanel.tsx",
         "src/app/(dashboard)/teams/components/TeamsTable/ModelsCell.tsx",

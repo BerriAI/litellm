@@ -1,11 +1,22 @@
 import React, { useState, useEffect } from "react";
-import { Alert, Form, Input, Select, Tooltip } from "antd";
-import { InfoCircleOutlined } from "@ant-design/icons";
-import { fetchAvailableModels, ModelGroup } from "../playground/llm_calls/fetch_models";
+import { Form, Input, Select } from "antd";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import { Info } from "lucide-react";
+import {
+  fetchAvailableModels,
+  ModelGroup,
+} from "../playground/llm_calls/fetch_models";
 
 interface S3VectorsConfigProps {
   accessToken: string | null;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   providerParams: Record<string, any>;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   onParamsChange: (params: Record<string, any>) => void;
 }
 
@@ -46,42 +57,59 @@ const S3VectorsConfig: React.FC<S3VectorsConfigProps> = ({
 
   return (
     <>
-      {/* S3 Vectors Setup Instructions */}
-      <Alert
-        message="AWS S3 Vectors Setup"
-        description={
-          <div>
-            <p>AWS S3 Vectors allows you to store and query vector embeddings directly in S3:</p>
-            <ul style={{ marginLeft: "16px", marginTop: "8px" }}>
-              <li>Vector buckets and indexes will be automatically created if they don&apos;t exist</li>
-              <li>Vector dimensions are auto-detected from your selected embedding model</li>
-              <li>Ensure your AWS credentials have permissions for S3 Vectors operations</li>
-              <li>
-                Learn more:{" "}
-                <a
-                  href="https://docs.aws.amazon.com/AmazonS3/latest/userguide/s3-vector-buckets.html"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                >
-                  AWS S3 Vectors Documentation
-                </a>
-              </li>
-            </ul>
-          </div>
-        }
-        type="info"
-        showIcon
-        style={{ marginBottom: "16px" }}
-      />
+      <div className="mb-4 flex gap-2 items-start p-3 rounded-md bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-900 text-blue-800 dark:text-blue-200">
+        <Info className="h-4 w-4 mt-0.5 shrink-0" />
+        <div className="flex-1">
+          <div className="font-semibold">AWS S3 Vectors Setup</div>
+          <p className="text-sm mt-1">
+            AWS S3 Vectors allows you to store and query vector embeddings
+            directly in S3:
+          </p>
+          <ul className="ml-4 mt-2 text-sm list-disc">
+            <li>
+              Vector buckets and indexes will be automatically created if they
+              don&apos;t exist
+            </li>
+            <li>
+              Vector dimensions are auto-detected from your selected embedding
+              model
+            </li>
+            <li>
+              Ensure your AWS credentials have permissions for S3 Vectors
+              operations
+            </li>
+            <li>
+              Learn more:{" "}
+              <a
+                href="https://docs.aws.amazon.com/AmazonS3/latest/userguide/s3-vector-buckets.html"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="underline"
+              >
+                AWS S3 Vectors Documentation
+              </a>
+            </li>
+          </ul>
+        </div>
+      </div>
 
       {/* Vector Bucket Name */}
       <Form.Item
         label={
           <span>
             Vector Bucket Name{" "}
-            <Tooltip title="S3 bucket name for vector storage (must be at least 3 characters, lowercase letters, numbers, hyphens, and periods only)">
-              <InfoCircleOutlined style={{ marginLeft: "4px" }} />
-            </Tooltip>
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Info className="ml-1 h-3 w-3 inline text-muted-foreground" />
+                </TooltipTrigger>
+                <TooltipContent className="max-w-xs">
+                  S3 bucket name for vector storage (must be at least 3
+                  characters, lowercase letters, numbers, hyphens, and
+                  periods only)
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
           </span>
         }
         required
@@ -110,9 +138,18 @@ const S3VectorsConfig: React.FC<S3VectorsConfigProps> = ({
         label={
           <span>
             Index Name{" "}
-            <Tooltip title="Name for the vector index (optional, will be auto-generated if not provided). If provided, must be at least 3 characters.">
-              <InfoCircleOutlined style={{ marginLeft: "4px" }} />
-            </Tooltip>
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Info className="ml-1 h-3 w-3 inline text-muted-foreground" />
+                </TooltipTrigger>
+                <TooltipContent className="max-w-xs">
+                  Name for the vector index (optional, will be auto-generated
+                  if not provided). If provided, must be at least 3
+                  characters.
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
           </span>
         }
         validateStatus={
@@ -140,9 +177,16 @@ const S3VectorsConfig: React.FC<S3VectorsConfigProps> = ({
         label={
           <span>
             AWS Region{" "}
-            <Tooltip title="AWS region where the S3 bucket is located (e.g., us-west-2)">
-              <InfoCircleOutlined style={{ marginLeft: "4px" }} />
-            </Tooltip>
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Info className="ml-1 h-3 w-3 inline text-muted-foreground" />
+                </TooltipTrigger>
+                <TooltipContent className="max-w-xs">
+                  AWS region where the S3 bucket is located (e.g., us-west-2)
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
           </span>
         }
         required
@@ -161,9 +205,16 @@ const S3VectorsConfig: React.FC<S3VectorsConfigProps> = ({
         label={
           <span>
             Embedding Model{" "}
-            <Tooltip title="Select the embedding model to use for vector generation">
-              <InfoCircleOutlined style={{ marginLeft: "4px" }} />
-            </Tooltip>
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Info className="ml-1 h-3 w-3 inline text-muted-foreground" />
+                </TooltipTrigger>
+                <TooltipContent className="max-w-xs">
+                  Select the embedding model to use for vector generation
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
           </span>
         }
         required
