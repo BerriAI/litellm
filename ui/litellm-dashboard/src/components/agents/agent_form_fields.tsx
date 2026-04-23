@@ -1,12 +1,31 @@
 import React from "react";
-import { Form, Input, Switch, Collapse, Select, Space, Tooltip } from "antd";
-import { Button as AntButton } from "antd";
-import { PlusOutlined, MinusCircleOutlined, InfoCircleOutlined } from "@ant-design/icons";
+import { Form, Switch, Collapse, Select } from "antd";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import { Info, MinusCircle, Plus } from "lucide-react";
 import { AGENT_FORM_CONFIG, SKILL_FIELD_CONFIG } from "./agent_config";
 
 import CostConfigFields from "./cost_config_fields";
 
 const { Panel } = Collapse;
+
+const InfoTip: React.FC<{ children: React.ReactNode }> = ({ children }) => (
+  <TooltipProvider>
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Info className="ml-1 inline h-3 w-3 text-muted-foreground" />
+      </TooltipTrigger>
+      <TooltipContent className="max-w-xs">{children}</TooltipContent>
+    </Tooltip>
+  </TooltipProvider>
+);
 
 interface AgentFormFieldsProps {
   showAgentName?: boolean;
@@ -45,7 +64,7 @@ const AgentFormFields: React.FC<AgentFormFieldsProps> = ({ showAgentName = true,
               tooltip={field.tooltip}
             >
               {field.type === 'textarea' ? (
-                <Input.TextArea rows={field.rows} placeholder={field.placeholder} />
+                <Textarea rows={field.rows} placeholder={field.placeholder} />
               ) : (
                 <Input placeholder={field.placeholder} />
               )}
@@ -86,7 +105,7 @@ const AgentFormFields: React.FC<AgentFormFieldsProps> = ({ showAgentName = true,
                       name={[field.name, 'description']}
                       rules={[{ required: SKILL_FIELD_CONFIG.description.required, message: 'Required' }]}
                     >
-                      <Input.TextArea rows={SKILL_FIELD_CONFIG.description.rows} placeholder={SKILL_FIELD_CONFIG.description.placeholder} />
+                      <Textarea rows={SKILL_FIELD_CONFIG.description.rows} placeholder={SKILL_FIELD_CONFIG.description.placeholder} />
                     </Form.Item>
                     
                     <Form.Item
@@ -110,24 +129,26 @@ const AgentFormFields: React.FC<AgentFormFieldsProps> = ({ showAgentName = true,
                       <Input placeholder={SKILL_FIELD_CONFIG.examples.placeholder} />
                     </Form.Item>
                     
-                    <AntButton 
-                      type="link" 
-                      danger 
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      className="text-destructive hover:text-destructive"
                       onClick={() => remove(field.name)}
-                      icon={<MinusCircleOutlined />}
                     >
+                      <MinusCircle className="h-4 w-4" />
                       Remove Skill
-                    </AntButton>
+                    </Button>
                   </div>
                 ))}
-                <AntButton 
-                  type="dashed" 
-                  onClick={() => add()} 
-                  icon={<PlusOutlined />}
-                  style={{ width: '100%' }}
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => add()}
+                  className="w-full border-dashed"
                 >
+                  <Plus className="h-4 w-4" />
                   Add Skill
-                </AntButton>
+                </Button>
               </>
             )}
           </Form.List>
@@ -197,9 +218,10 @@ const AgentFormFields: React.FC<AgentFormFieldsProps> = ({ showAgentName = true,
             label={
               <span>
                 Static Headers{" "}
-                <Tooltip title="Headers always sent to the backend agent, regardless of the client request. Admin-configured, static wins on conflict.">
-                  <InfoCircleOutlined style={{ color: "#8c8c8c" }} />
-                </Tooltip>
+                <InfoTip>
+                  Headers always sent to the backend agent, regardless of the
+                  client request. Admin-configured, static wins on conflict.
+                </InfoTip>
               </span>
             }
           >
@@ -207,27 +229,58 @@ const AgentFormFields: React.FC<AgentFormFieldsProps> = ({ showAgentName = true,
               {(fields, { add, remove }) => (
                 <>
                   {fields.map(({ key, name, ...restField }) => (
-                    <Space key={key} style={{ display: "flex", marginBottom: 8 }} align="baseline">
+                    <div
+                      key={key}
+                      className="flex items-baseline gap-2 mb-2"
+                    >
                       <Form.Item
                         {...restField}
                         name={[name, "header"]}
-                        rules={[{ required: true, message: "Header name required" }]}
+                        rules={[
+                          {
+                            required: true,
+                            message: "Header name required",
+                          },
+                        ]}
+                        className="mb-0"
                       >
-                        <Input placeholder="Header name (e.g. Authorization)" style={{ width: 220 }} />
+                        <Input
+                          placeholder="Header name (e.g. Authorization)"
+                          className="w-[220px]"
+                        />
                       </Form.Item>
                       <Form.Item
                         {...restField}
                         name={[name, "value"]}
-                        rules={[{ required: true, message: "Value required" }]}
+                        rules={[
+                          { required: true, message: "Value required" },
+                        ]}
+                        className="mb-0"
                       >
-                        <Input placeholder="Value (e.g. Bearer token123)" style={{ width: 260 }} />
+                        <Input
+                          placeholder="Value (e.g. Bearer token123)"
+                          className="w-[260px]"
+                        />
                       </Form.Item>
-                      <MinusCircleOutlined onClick={() => remove(name)} style={{ color: "#ff4d4f" }} />
-                    </Space>
+                      <button
+                        type="button"
+                        onClick={() => remove(name)}
+                        className="text-destructive"
+                        aria-label="Remove header"
+                      >
+                        <MinusCircle className="h-4 w-4" />
+                      </button>
+                    </div>
                   ))}
-                  <AntButton type="dashed" onClick={() => add()} icon={<PlusOutlined />} style={{ width: "100%" }}>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => add()}
+                    className="w-full border-dashed"
+                  >
+                    <Plus className="h-4 w-4" />
                     Add Static Header
-                  </AntButton>
+                  </Button>
                 </>
               )}
             </Form.List>
@@ -238,9 +291,10 @@ const AgentFormFields: React.FC<AgentFormFieldsProps> = ({ showAgentName = true,
             label={
               <span>
                 Forward Client Headers{" "}
-                <Tooltip title="Header names to extract from the client's request and forward to the agent. Type a name and press Enter.">
-                  <InfoCircleOutlined style={{ color: "#8c8c8c" }} />
-                </Tooltip>
+                <InfoTip>
+                  Header names to extract from the client&apos;s request and
+                  forward to the agent. Type a name and press Enter.
+                </InfoTip>
               </span>
             }
             name="extra_headers"
