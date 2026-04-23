@@ -1,5 +1,6 @@
 import React, { useState } from "react";
-import { Form, Input } from "antd";
+import { Form } from "antd";
+import { Input } from "@/components/ui/input";
 import {
   Tooltip,
   TooltipContent,
