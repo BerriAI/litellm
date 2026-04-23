@@ -77,6 +77,18 @@ Layer abbreviations: **TS** (tsc --noEmit), **Lint** (eslint), **Vitest**
   - cycle 1: TS ✓ | Lint ✓ | Vitest ✓ (4/4) | Build ✓ | Parity ⏭ | Snap ⏭
 - Final status: **done (organization_view.tsx; OrganizationFilters and the route page already had no banned imports)**
 
+## 4. Tag Management (tag-management)
+
+- Cycles used: 1 / 7
+- Layer outcomes per cycle:
+  - cycle 1: TS ✓ | Lint ✓ | Vitest ✓ (14/14) | Build ✓ | Parity ⏭ | Snap ⏭
+- Final status: **done**
+- Scope: TagSelector (rewritten as chip-input over shadcn Popover/Input/Badge),
+  TagTable (shadcn Table + tanstack-react-table), CreateTagModal (rhf + Dialog),
+  index (shadcn Dialog for delete confirmation), tag_info (rhf + Card/Accordion).
+  Tests updated to use semantic queries (button disabled state) and to match
+  the rhf submit shape (object containing tag_name).
+
 ## 24. Guardrails Monitor (guardrails-monitor)
 
 - Cycles used: 1 / 7

@@ -40,15 +40,18 @@ describe("CreateTagModal", () => {
     const user = userEvent.setup();
     render(<CreateTagModal {...defaultProps} />);
 
-    const tagNameInput = screen.getByLabelText("Tag Name");
+    // The label includes a required indicator; match by partial text via regex.
+    const tagNameInput = screen.getByLabelText(/Tag Name/);
     await user.type(tagNameInput, "test-tag");
 
     const submitButton = screen.getByRole("button", { name: /Create Tag/i });
     await user.click(submitButton);
 
-    expect(mockOnSubmit).toHaveBeenCalledWith({
-      tag_name: "test-tag",
-    });
+    // Post phase-1: rhf submits the full default values bag, not just the
+    // touched fields. Assert the tag_name made it through.
+    expect(mockOnSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({ tag_name: "test-tag" }),
+    );
   });
 
   it("should not submit form when tag name is missing", async () => {

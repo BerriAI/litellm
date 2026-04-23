@@ -87,15 +87,18 @@ describe("TagTable", () => {
 
   it("should disable edit icon for dynamic spend tags", () => {
     render(<TagTable {...defaultProps} data={[mockDynamicSpendTag]} />);
-    const editIcon = screen.getByLabelText("Edit tag (disabled)");
-    expect(editIcon).toBeInTheDocument();
-    expect(editIcon).toHaveClass("cursor-not-allowed");
+    // Post phase-1 migration the action buttons are <button> elements with
+    // semantic aria-labels; disabled state is conveyed via the button's
+    // disabled attribute rather than an explicit "(disabled)" suffix.
+    const editButton = screen.getByLabelText("Edit tag");
+    expect(editButton).toBeInTheDocument();
+    expect(editButton).toBeDisabled();
   });
 
   it("should disable delete icon for dynamic spend tags", () => {
     render(<TagTable {...defaultProps} data={[mockDynamicSpendTag]} />);
-    const deleteIcon = screen.getByLabelText("Delete tag (disabled)");
-    expect(deleteIcon).toBeInTheDocument();
-    expect(deleteIcon).toHaveClass("cursor-not-allowed");
+    const deleteButton = screen.getByLabelText("Delete tag");
+    expect(deleteButton).toBeInTheDocument();
+    expect(deleteButton).toBeDisabled();
   });
 });

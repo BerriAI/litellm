@@ -1,17 +1,29 @@
 import React, { useState, useEffect } from "react";
 import {
-  Card,
-  Text,
-  Title,
-  Button,
-  Badge,
   Accordion,
-  AccordionHeader,
-  AccordionBody,
-  Title as TremorTitle,
-} from "@tremor/react";
-import { Form, Input, Select as Select2, Tooltip } from "antd";
-import { InfoCircleOutlined } from "@ant-design/icons";
+  AccordionContent,
+  AccordionItem,
+  AccordionTrigger,
+} from "@/components/ui/accordion";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Textarea } from "@/components/ui/textarea";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { fetchUserModels } from "../organisms/create_key_button";
 import { getModelDisplayName } from "../key_team_helpers/fetch_available_models_team_key";
 import { tagInfoCall, tagUpdateCall } from "../networking";
@@ -20,8 +32,8 @@ import NotificationsManager from "../molecules/notifications_manager";
 import NumericalInput from "../shared/numerical_input";
 import BudgetDurationDropdown from "../common_components/budget_duration_dropdown";
 import { copyToClipboard as utilCopyToClipboard } from "@/utils/dataUtils";
-import { CheckIcon, CopyIcon } from "lucide-react";
-import { Button as AntdButton } from "antd";
+import { CheckIcon, CopyIcon, Info, X } from "lucide-react";
+import { Controller, FormProvider, useForm } from "react-hook-form";
 
 interface TagInfoViewProps {
   tagId: string;
@@ -31,14 +43,53 @@ interface TagInfoViewProps {
   editTag: boolean;
 }
 
-const TagInfoView: React.FC<TagInfoViewProps> = ({ tagId, onClose, accessToken, is_admin, editTag }) => {
-  const [form] = Form.useForm();
+interface TagEditValues {
+  name: string;
+  description: string;
+  models: string[];
+  max_budget: number | null;
+  budget_duration: string | null;
+}
+
+function InfoTip({ children }: { children: React.ReactNode }) {
+  return (
+    <TooltipProvider>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Info className="inline-block ml-1 h-3 w-3 text-muted-foreground cursor-help" />
+        </TooltipTrigger>
+        <TooltipContent>{children}</TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
+  );
+}
+
+const TagInfoView: React.FC<TagInfoViewProps> = ({
+  tagId,
+  onClose,
+  accessToken,
+  is_admin,
+  editTag,
+}) => {
+  const form = useForm<TagEditValues>({
+    defaultValues: {
+      name: "",
+      description: "",
+      models: [],
+      max_budget: null,
+      budget_duration: null,
+    },
+    mode: "onSubmit",
+  });
   const [tagDetails, setTagDetails] = useState<Tag | null>(null);
   const [isEditing, setIsEditing] = useState<boolean>(editTag);
   const [userModels, setUserModels] = useState<string[]>([]);
   const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({});
 
-  const copyToClipboard = async (text: string | null | undefined, key: string) => {
+  const copyToClipboard = async (
+    text: string | null | undefined,
+    key: string,
+  ) => {
     const success = await utilCopyToClipboard(text);
     if (success) {
       setCopiedStates((prev) => ({ ...prev, [key]: true }));
@@ -56,12 +107,13 @@ const TagInfoView: React.FC<TagInfoViewProps> = ({ tagId, onClose, accessToken, 
       if (tagData) {
         setTagDetails(tagData);
         if (editTag) {
-          form.setFieldsValue({
+          form.reset({
             name: tagData.name,
-            description: tagData.description,
-            models: tagData.models,
-            max_budget: tagData.litellm_budget_table?.max_budget,
-            budget_duration: tagData.litellm_budget_table?.budget_duration,
+            description: tagData.description ?? "",
+            models: tagData.models ?? [],
+            max_budget: tagData.litellm_budget_table?.max_budget ?? null,
+            budget_duration:
+              tagData.litellm_budget_table?.budget_duration ?? null,
           });
         }
       }
@@ -73,27 +125,24 @@ const TagInfoView: React.FC<TagInfoViewProps> = ({ tagId, onClose, accessToken, 
 
   useEffect(() => {
     fetchTagDetails();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tagId, accessToken]);
 
   useEffect(() => {
     if (accessToken) {
-      // Using dummy values for userID and userRole since they're required by the function
-      // TODO: Pass these as props if needed for the actual API implementation
       fetchUserModels("dummy-user", "Admin", accessToken, setUserModels);
     }
   }, [accessToken]);
 
-  const handleSave = async (values: any) => {
+  const handleSave = form.handleSubmit(async (values) => {
     if (!accessToken) return;
     try {
       await tagUpdateCall(accessToken, {
         name: values.name,
         description: values.description,
         models: values.models,
-        max_budget: values.max_budget,
-        tpm_limit: values.tpm_limit,
-        rpm_limit: values.rpm_limit,
-        budget_duration: values.budget_duration,
+        max_budget: values.max_budget ?? undefined,
+        budget_duration: values.budget_duration ?? undefined,
       });
       NotificationsManager.success("Tag updated successfully");
       setIsEditing(false);
@@ -102,195 +151,313 @@ const TagInfoView: React.FC<TagInfoViewProps> = ({ tagId, onClose, accessToken, 
       console.error("Error updating tag:", error);
       NotificationsManager.fromBackend("Error updating tag: " + error);
     }
-  };
+  });
 
-  if (!tagDetails) {
-    return <div>Loading...</div>;
-  }
+  if (!tagDetails) return <div>Loading...</div>;
 
   return (
     <div className="p-4">
       <div className="flex justify-between items-center mb-6">
         <div>
-          <Button onClick={onClose} className="mb-4">
+          <Button onClick={onClose} variant="outline" className="mb-4">
             ← Back to Tags
           </Button>
           <div className="flex items-center gap-2">
-            <Text className="font-medium">Tag Name:</Text>
-            <span className="font-mono px-2 py-1 bg-gray-100 rounded text-sm border border-gray-200">
+            <span className="font-medium">Tag Name:</span>
+            <span className="font-mono px-2 py-1 bg-muted rounded text-sm border border-border">
               {tagDetails.name}
             </span>
-            <AntdButton
-              type="text"
-              size="small"
-              icon={copiedStates["tag-name"] ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
+            <Button
+              variant="ghost"
+              size="icon"
               onClick={() => copyToClipboard(tagDetails.name, "tag-name")}
-              className={`transition-all duration-200 ${
-                copiedStates["tag-name"]
-                  ? "text-green-600 bg-green-50 border-green-200"
-                  : "text-gray-500 hover:text-gray-700 hover:bg-gray-100"
-              }`}
-            />
+              aria-label="Copy tag name"
+              className="h-7 w-7"
+            >
+              {copiedStates["tag-name"] ? (
+                <CheckIcon size={12} />
+              ) : (
+                <CopyIcon size={12} />
+              )}
+            </Button>
           </div>
-          <Text className="text-gray-500">{tagDetails.description || "No description"}</Text>
+          <p className="text-muted-foreground text-sm">
+            {tagDetails.description || "No description"}
+          </p>
         </div>
-        {is_admin && !isEditing && <Button onClick={() => setIsEditing(true)}>Edit Tag</Button>}
+        {is_admin && !isEditing && (
+          <Button onClick={() => setIsEditing(true)}>Edit Tag</Button>
+        )}
       </div>
 
       {isEditing ? (
-        <Card>
-          <Form form={form} onFinish={handleSave} layout="vertical" initialValues={tagDetails}>
-            <Form.Item label="Tag Name" name="name" rules={[{ required: true, message: "Please input a tag name" }]}>
-              <Input className="rounded-md border-gray-300" />
-            </Form.Item>
-
-            <Form.Item label="Description" name="description">
-              <Input.TextArea rows={4} />
-            </Form.Item>
-
-            <Form.Item
-              label={
-                <span>
-                  Allowed Models
-                  <Tooltip title="Select which models are allowed to process this type of data">
-                    <InfoCircleOutlined style={{ marginLeft: "4px" }} />
-                  </Tooltip>
-                </span>
-              }
-              name="models"
-            >
-              <Select2 mode="multiple" placeholder="Select Models">
-                {userModels.map((modelId) => (
-                  <Select2.Option key={modelId} value={modelId}>
-                    {getModelDisplayName(modelId)}
-                  </Select2.Option>
-                ))}
-              </Select2>
-            </Form.Item>
-
-            <Accordion className="mt-4 mb-4">
-              <AccordionHeader>
-                <TremorTitle className="m-0">Budget & Rate Limits</TremorTitle>
-              </AccordionHeader>
-              <AccordionBody>
-                <Form.Item
-                  label={
-                    <span>
-                      Max Budget (USD){" "}
-                      <Tooltip title="Maximum amount in USD this tag can spend">
-                        <InfoCircleOutlined style={{ marginLeft: "4px" }} />
-                      </Tooltip>
-                    </span>
-                  }
-                  name="max_budget"
-                >
-                  <NumericalInput step={0.01} precision={2} width={200} />
-                </Form.Item>
-
-                <Form.Item
-                  label={
-                    <span>
-                      Reset Budget{" "}
-                      <Tooltip title="How often the budget should reset">
-                        <InfoCircleOutlined style={{ marginLeft: "4px" }} />
-                      </Tooltip>
-                    </span>
-                  }
-                  name="budget_duration"
-                >
-                  <BudgetDurationDropdown onChange={(value) => form.setFieldValue("budget_duration", value)} />
-                </Form.Item>
-
-                <div className="mt-4 p-3 bg-gray-50 rounded-md border border-gray-200">
-                  <p className="text-sm text-gray-600">
-                    TPM/RPM limits for tags are not currently supported. If you need this feature, please{" "}
-                    <a
-                      href="https://github.com/BerriAI/litellm/issues/new"
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-blue-600 hover:text-blue-800 underline"
-                    >
-                      create a GitHub issue
-                    </a>
-                    .
+        <Card className="p-6">
+          <FormProvider {...form}>
+            <form onSubmit={handleSave} className="space-y-4">
+              <div className="space-y-2">
+                <Label htmlFor="name">
+                  Tag Name <span className="text-destructive">*</span>
+                </Label>
+                <Input
+                  id="name"
+                  {...form.register("name", {
+                    required: "Please input a tag name",
+                  })}
+                />
+                {form.formState.errors.name && (
+                  <p className="text-sm text-destructive">
+                    {form.formState.errors.name.message as string}
                   </p>
-                </div>
-              </AccordionBody>
-            </Accordion>
+                )}
+              </div>
 
-            <div className="flex justify-end space-x-2">
-              <Button onClick={() => setIsEditing(false)}>Cancel</Button>
-              <Button type="submit">Save Changes</Button>
-            </div>
-          </Form>
+              <div className="space-y-2">
+                <Label htmlFor="description">Description</Label>
+                <Textarea
+                  id="description"
+                  rows={4}
+                  {...form.register("description")}
+                />
+              </div>
+
+              <div className="space-y-2">
+                <Label>
+                  Allowed Models
+                  <InfoTip>
+                    Select which models are allowed to process this type of data
+                  </InfoTip>
+                </Label>
+                <Controller
+                  control={form.control}
+                  name="models"
+                  render={({ field }) => {
+                    const remaining = userModels.filter(
+                      (m) => !field.value.includes(m),
+                    );
+                    return (
+                      <div className="space-y-2">
+                        <Select
+                          value=""
+                          onValueChange={(v) => {
+                            if (v) field.onChange([...field.value, v]);
+                          }}
+                        >
+                          <SelectTrigger>
+                            <SelectValue placeholder="Select Models" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {remaining.length === 0 ? (
+                              <div className="py-2 px-3 text-sm text-muted-foreground">
+                                No more models available
+                              </div>
+                            ) : (
+                              remaining.map((modelId) => (
+                                <SelectItem key={modelId} value={modelId}>
+                                  {getModelDisplayName(modelId)}
+                                </SelectItem>
+                              ))
+                            )}
+                          </SelectContent>
+                        </Select>
+                        {field.value.length > 0 && (
+                          <div className="flex flex-wrap gap-1">
+                            {field.value.map((id) => (
+                              <Badge
+                                key={id}
+                                variant="secondary"
+                                className="gap-1"
+                              >
+                                {getModelDisplayName(id)}
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    field.onChange(
+                                      field.value.filter((v) => v !== id),
+                                    )
+                                  }
+                                  aria-label={`Remove ${id}`}
+                                >
+                                  <X size={10} />
+                                </button>
+                              </Badge>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  }}
+                />
+              </div>
+
+              <Accordion type="single" collapsible className="mt-4 mb-4">
+                <AccordionItem value="budget">
+                  <AccordionTrigger className="font-semibold">
+                    Budget &amp; Rate Limits
+                  </AccordionTrigger>
+                  <AccordionContent>
+                    <div className="space-y-4">
+                      <div className="space-y-2">
+                        <Label>
+                          Max Budget (USD)
+                          <InfoTip>
+                            Maximum amount in USD this tag can spend
+                          </InfoTip>
+                        </Label>
+                        <Controller
+                          control={form.control}
+                          name="max_budget"
+                          render={({ field }) => (
+                            <NumericalInput
+                              step={0.01}
+                              precision={2}
+                              style={{ width: "100%" }}
+                              value={field.value ?? ""}
+                              onChange={(v: number | null | undefined) =>
+                                field.onChange(v ?? null)
+                              }
+                            />
+                          )}
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <Label>
+                          Reset Budget
+                          <InfoTip>
+                            How often the budget should reset
+                          </InfoTip>
+                        </Label>
+                        <Controller
+                          control={form.control}
+                          name="budget_duration"
+                          render={({ field }) => (
+                            <BudgetDurationDropdown
+                              value={field.value ?? undefined}
+                              onChange={(value) =>
+                                field.onChange((value as string) ?? null)
+                              }
+                            />
+                          )}
+                        />
+                      </div>
+                      <div className="mt-4 p-3 bg-muted rounded-md border border-border">
+                        <p className="text-sm text-muted-foreground">
+                          TPM/RPM limits for tags are not currently supported.
+                          If you need this feature, please{" "}
+                          <a
+                            href="https://github.com/BerriAI/litellm/issues/new"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-primary hover:underline"
+                          >
+                            create a GitHub issue
+                          </a>
+                          .
+                        </p>
+                      </div>
+                    </div>
+                  </AccordionContent>
+                </AccordionItem>
+              </Accordion>
+
+              <div className="flex justify-end space-x-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => setIsEditing(false)}
+                >
+                  Cancel
+                </Button>
+                <Button type="submit">Save Changes</Button>
+              </div>
+            </form>
+          </FormProvider>
         </Card>
       ) : (
         <div className="space-y-6">
-          <Card>
-            <Title>Tag Details</Title>
-            <div className="space-y-4 mt-4">
+          <Card className="p-6">
+            <h3 className="text-lg font-semibold">Tag Details</h3>
+            <div className="space-y-4 mt-4 text-sm">
               <div>
-                <Text className="font-medium">Name</Text>
-                <Text>{tagDetails.name}</Text>
+                <p className="font-medium">Name</p>
+                <p>{tagDetails.name}</p>
               </div>
               <div>
-                <Text className="font-medium">Description</Text>
-                <Text>{tagDetails.description || "-"}</Text>
+                <p className="font-medium">Description</p>
+                <p>{tagDetails.description || "-"}</p>
               </div>
               <div>
-                <Text className="font-medium">Allowed Models</Text>
+                <p className="font-medium">Allowed Models</p>
                 <div className="flex flex-wrap gap-2 mt-2">
                   {!tagDetails.models || tagDetails.models.length === 0 ? (
-                    <Badge color="red">All Models</Badge>
+                    <Badge variant="destructive">All Models</Badge>
                   ) : (
                     tagDetails.models.map((modelId) => (
-                      <Badge key={modelId} color="blue">
-                        <Tooltip title={`ID: ${modelId}`}>{tagDetails.model_info?.[modelId] || modelId}</Tooltip>
-                      </Badge>
+                      <TooltipProvider key={modelId}>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Badge variant="secondary">
+                              {tagDetails.model_info?.[modelId] || modelId}
+                            </Badge>
+                          </TooltipTrigger>
+                          <TooltipContent>{`ID: ${modelId}`}</TooltipContent>
+                        </Tooltip>
+                      </TooltipProvider>
                     ))
                   )}
                 </div>
               </div>
               <div>
-                <Text className="font-medium">Created</Text>
-                <Text>{tagDetails.created_at ? new Date(tagDetails.created_at).toLocaleString() : "-"}</Text>
+                <p className="font-medium">Created</p>
+                <p>
+                  {tagDetails.created_at
+                    ? new Date(tagDetails.created_at).toLocaleString()
+                    : "-"}
+                </p>
               </div>
               <div>
-                <Text className="font-medium">Last Updated</Text>
-                <Text>{tagDetails.updated_at ? new Date(tagDetails.updated_at).toLocaleString() : "-"}</Text>
+                <p className="font-medium">Last Updated</p>
+                <p>
+                  {tagDetails.updated_at
+                    ? new Date(tagDetails.updated_at).toLocaleString()
+                    : "-"}
+                </p>
               </div>
             </div>
           </Card>
 
           {tagDetails.litellm_budget_table && (
-            <Card>
-              <Title>Budget & Rate Limits</Title>
-              <div className="space-y-4 mt-4">
+            <Card className="p-6">
+              <h3 className="text-lg font-semibold">Budget &amp; Rate Limits</h3>
+              <div className="space-y-4 mt-4 text-sm">
                 {tagDetails.litellm_budget_table.max_budget !== undefined &&
                   tagDetails.litellm_budget_table.max_budget !== null && (
                     <div>
-                      <Text className="font-medium">Max Budget</Text>
-                      <Text>${tagDetails.litellm_budget_table.max_budget}</Text>
+                      <p className="font-medium">Max Budget</p>
+                      <p>${tagDetails.litellm_budget_table.max_budget}</p>
                     </div>
                   )}
                 {tagDetails.litellm_budget_table.budget_duration && (
                   <div>
-                    <Text className="font-medium">Budget Duration</Text>
-                    <Text>{tagDetails.litellm_budget_table.budget_duration}</Text>
+                    <p className="font-medium">Budget Duration</p>
+                    <p>{tagDetails.litellm_budget_table.budget_duration}</p>
                   </div>
                 )}
                 {tagDetails.litellm_budget_table.tpm_limit !== undefined &&
                   tagDetails.litellm_budget_table.tpm_limit !== null && (
                     <div>
-                      <Text className="font-medium">TPM Limit</Text>
-                      <Text>{tagDetails.litellm_budget_table.tpm_limit.toLocaleString()}</Text>
+                      <p className="font-medium">TPM Limit</p>
+                      <p>
+                        {tagDetails.litellm_budget_table.tpm_limit.toLocaleString()}
+                      </p>
                     </div>
                   )}
                 {tagDetails.litellm_budget_table.rpm_limit !== undefined &&
                   tagDetails.litellm_budget_table.rpm_limit !== null && (
                     <div>
-                      <Text className="font-medium">RPM Limit</Text>
-                      <Text>{tagDetails.litellm_budget_table.rpm_limit.toLocaleString()}</Text>
+                      <p className="font-medium">RPM Limit</p>
+                      <p>
+                        {tagDetails.litellm_budget_table.rpm_limit.toLocaleString()}
+                      </p>
                     </div>
                   )}
               </div>
