@@ -1,7 +1,20 @@
 import React, { useState } from "react";
-import { Modal, Select, Button as AntdButton, Tabs } from "antd";
-import { CodeOutlined } from "@ant-design/icons";
-import { Button as TremorButton, Text } from "@tremor/react";
+import { Tabs } from "antd";
+import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Code } from "lucide-react";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { coy } from "react-syntax-highlighter/dist/esm/styles/prism";
 import NotificationsManager from "../../molecules/notifications_manager";
@@ -210,72 +223,88 @@ main();`;
 
   return (
     <>
-      <TremorButton
-        variant="secondary"
-        icon={CodeOutlined}
-        onClick={showModal}
-      >
+      <Button variant="secondary" onClick={showModal}>
+        <Code className="h-4 w-4" />
         Get Code
-      </TremorButton>
+      </Button>
 
-      <Modal
-        title="Generated Code"
+      <Dialog
         open={isModalVisible}
-        onCancel={handleCancel}
-        footer={null}
-        width={800}
+        onOpenChange={(o) => (!o ? handleCancel() : undefined)}
       >
-        <div className="flex justify-between items-center mb-4">
-          <div>
-            <Text className="font-medium block mb-1 text-gray-700">Language</Text>
-            <Select
-              value={selectedLanguage}
-              onChange={(value) => setSelectedLanguage(value as "curl" | "python" | "javascript")}
-              style={{ width: 180 }}
-              options={[
-                { value: "curl", label: "cURL" },
-                { value: "python", label: "Python (OpenAI SDK)" },
-                { value: "javascript", label: "JavaScript (OpenAI SDK)" },
-              ]}
-            />
+        <DialogContent className="max-w-[800px]">
+          <DialogHeader>
+            <DialogTitle>Generated Code</DialogTitle>
+          </DialogHeader>
+          <div className="flex justify-between items-center mb-4">
+            <div>
+              <p className="font-medium block mb-1 text-foreground">Language</p>
+              <Select
+                value={selectedLanguage}
+                onValueChange={(value) =>
+                  setSelectedLanguage(
+                    value as "curl" | "python" | "javascript",
+                  )
+                }
+              >
+                <SelectTrigger className="w-[180px]">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="curl">cURL</SelectItem>
+                  <SelectItem value="python">Python (OpenAI SDK)</SelectItem>
+                  <SelectItem value="javascript">
+                    JavaScript (OpenAI SDK)
+                  </SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <Button
+              variant="outline"
+              onClick={() => {
+                navigator.clipboard.writeText(generatedCode);
+                NotificationsManager.success("Copied to clipboard!");
+              }}
+            >
+              Copy to Clipboard
+            </Button>
           </div>
-          <AntdButton
-            onClick={() => {
-              navigator.clipboard.writeText(generatedCode);
-              NotificationsManager.success("Copied to clipboard!");
+
+          <Tabs
+            activeKey={selectedTab}
+            onChange={setSelectedTab}
+            items={[
+              { label: "Basic", key: "basic" },
+              { label: "With Messages", key: "messages" },
+              { label: "With Version", key: "version" },
+            ]}
+          />
+
+          <SyntaxHighlighter
+            language={
+              selectedLanguage === "curl"
+                ? "bash"
+                : selectedLanguage === "python"
+                  ? "python"
+                  : "javascript"
+            }
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            style={coy as any}
+            wrapLines={true}
+            wrapLongLines={true}
+            className="rounded-md mt-0"
+            customStyle={{
+              maxHeight: "60vh",
+              overflowY: "auto",
+              marginTop: 0,
+              borderTopLeftRadius: 0,
+              borderTopRightRadius: 0,
             }}
           >
-            Copy to Clipboard
-          </AntdButton>
-        </div>
-
-        <Tabs 
-          activeKey={selectedTab}
-          onChange={setSelectedTab}
-          items={[
-            { label: "Basic", key: "basic" },
-            { label: "With Messages", key: "messages" },
-            { label: "With Version", key: "version" },
-          ]}
-        />
-
-        <SyntaxHighlighter
-          language={selectedLanguage === "curl" ? "bash" : selectedLanguage === "python" ? "python" : "javascript"}
-          style={coy as any}
-          wrapLines={true}
-          wrapLongLines={true}
-          className="rounded-md mt-0"
-          customStyle={{
-            maxHeight: "60vh",
-            overflowY: "auto",
-            marginTop: 0,
-            borderTopLeftRadius: 0,
-            borderTopRightRadius: 0,
-          }}
-        >
-          {generatedCode}
-        </SyntaxHighlighter>
-      </Modal>
+            {generatedCode}
+          </SyntaxHighlighter>
+        </DialogContent>
+      </Dialog>
     </>
   );
 };
