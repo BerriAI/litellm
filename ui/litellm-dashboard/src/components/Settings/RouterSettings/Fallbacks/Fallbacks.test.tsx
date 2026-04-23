@@ -201,7 +201,7 @@ describe("Fallbacks", () => {
       expect(screen.getByTestId("delete-modal")).toBeInTheDocument();
     });
 
-    const confirmButton = screen.getByRole("button", { name: /delete/i });
+    const confirmButton = screen.getByRole("button", { name: "Delete" });
     await user.click(confirmButton);
 
     await waitFor(() => {
@@ -256,7 +256,7 @@ describe("Fallbacks", () => {
       expect(screen.getByTestId("delete-modal")).toBeInTheDocument();
     });
 
-    const confirmButton = screen.getByRole("button", { name: /delete/i });
+    const confirmButton = screen.getByRole("button", { name: "Delete" });
     await user.click(confirmButton);
 
     await waitFor(() => {
@@ -283,7 +283,7 @@ describe("Fallbacks", () => {
       expect(screen.getByTestId("delete-modal")).toBeInTheDocument();
     });
 
-    const confirmButton = screen.getByRole("button", { name: /delete/i });
+    const confirmButton = screen.getByRole("button", { name: "Delete" });
     await user.click(confirmButton);
 
     await waitFor(() => {

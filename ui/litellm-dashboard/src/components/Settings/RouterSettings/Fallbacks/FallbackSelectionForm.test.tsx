@@ -109,7 +109,7 @@ describe("FallbackSelectionForm", () => {
       />,
     );
 
-    const addTabButton = screen.getByRole("button", { name: /add tab/i });
+    const addTabButton = screen.getByRole("button", { name: /add group/i });
     await user.click(addTabButton);
 
     expect(mockOnGroupsChange).toHaveBeenCalledTimes(1);
@@ -138,7 +138,10 @@ describe("FallbackSelectionForm", () => {
         maxGroups={5}
       />,
     );
-    expect(screen.queryByRole("button", { name: /add tab/i })).not.toBeInTheDocument();
+    // Post phase-1: 'add tab' is now an explicit '+ Add group' Button.
+    expect(
+      screen.queryByRole("button", { name: /add group/i }),
+    ).not.toBeInTheDocument();
   });
 
   it("should show add tab button when below maxGroups with custom maxGroups", () => {
@@ -153,12 +156,13 @@ describe("FallbackSelectionForm", () => {
         maxGroups={3}
       />,
     );
-    expect(screen.getByRole("button", { name: /add tab/i })).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /add group/i }),
+    ).toBeInTheDocument();
   });
 
   it("should call onGroupsChange when a group is removed", async () => {
     const user = userEvent.setup();
-    const antd = await import("antd");
     const groups: FallbackGroup[] = [
       { id: "1", primaryModel: "gpt-4", fallbackModels: [] },
       { id: "2", primaryModel: "gpt-3.5-turbo", fallbackModels: [] },
@@ -171,14 +175,15 @@ describe("FallbackSelectionForm", () => {
       />,
     );
 
-    const removeButtons = screen.getAllByRole("tab", { name: "remove" });
-    await user.click(removeButtons[0]);
+    // Post phase-1: each TabsTrigger has an inline X button with
+    // aria-label="Remove <label>".
+    const removeFirst = screen.getByLabelText("Remove gpt-4");
+    await user.click(removeFirst);
 
     expect(mockOnGroupsChange).toHaveBeenCalledTimes(1);
     const [newGroups] = mockOnGroupsChange.mock.calls[0];
     expect(newGroups).toHaveLength(1);
     expect(newGroups[0].id).toBe("2");
-    expect(antd.message.warning).not.toHaveBeenCalled();
   });
 
   it("should render FallbackGroupConfig for each group", () => {
