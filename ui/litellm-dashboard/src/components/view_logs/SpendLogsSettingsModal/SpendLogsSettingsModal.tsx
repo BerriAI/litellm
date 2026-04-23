@@ -14,7 +14,8 @@ import {
 } from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Clock } from "lucide-react";
-import { Form, Input, Switch } from "antd";
+import { Input } from "@/components/ui/input";
+import { Form, Switch } from "antd";
 import React, { useEffect, useMemo } from "react";
 
 interface SpendLogsSettingsModalProps {
@@ -166,10 +167,10 @@ const SpendLogsSettingsModal: React.FC<SpendLogsSettingsModalProps> = ({ isVisib
             {isLoadingConfig ? (
               <Skeleton className="h-6 w-full" />
             ) : (
-              <Input
-                placeholder="e.g., 7d, 30d"
-                prefix={<Clock className="h-3.5 w-3.5" />}
-              />
+              <div className="relative">
+                <Clock className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
+                <Input placeholder="e.g., 7d, 30d" className="pl-8" />
+              </div>
             )}
           </Form.Item>
         </Form>
