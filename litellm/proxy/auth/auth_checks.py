@@ -3290,10 +3290,15 @@ async def _check_team_member_budget(
         # Per-member override wins; otherwise fall back to the team-level
         # default configured via team.metadata["team_member_budget_id"].
         team_member_budget: Optional[float] = None
-        if team_membership is not None and team_membership.litellm_budget_table is not None:
+        if (
+            team_membership is not None
+            and team_membership.litellm_budget_table is not None
+        ):
             team_member_budget = team_membership.litellm_budget_table.max_budget
         else:
-            default_budget_id = (team_object.metadata or {}).get("team_member_budget_id")
+            default_budget_id = (team_object.metadata or {}).get(
+                "team_member_budget_id"
+            )
             if isinstance(default_budget_id, str):
                 default_budget = await get_team_member_default_budget(
                     budget_id=default_budget_id,
