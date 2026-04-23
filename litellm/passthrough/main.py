@@ -56,7 +56,7 @@ async def allm_passthrough_route(
     **kwargs,
 ) -> Union[httpx.Response, AsyncGenerator[Any, Any]]:
     """
-    Async: Reranks a list of documents based on their relevance to the query
+    Async pass-through: forward a request to the target LLM provider's HTTP API with minimal transformation.
     """
     try:
         loop = asyncio.get_event_loop()
