@@ -1,20 +1,30 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import SpendLogsTable, { RequestViewer } from "./index";
-import type { LogEntry } from "./columns";
-import type { Row } from "@tanstack/react-table";
+import SpendLogsTable from "./index";
 import { renderWithProviders } from "../../../tests/test-utils";
 
 const mockHandleFilterResetFromHook = vi.fn();
 vi.mock("./log_filter_logic", () => ({
   useLogFilterLogic: vi.fn(() => ({
-    filters: {},
+    logsQuery: { isLoading: false, isFetching: false, refetch: vi.fn() },
     filteredLogs: { data: [], total: 0, page: 1, page_size: 50, total_pages: 1 },
     allTeams: [],
     handleFilterChange: vi.fn(),
     handleFilterReset: mockHandleFilterResetFromHook,
   })),
+  defaultFilters: {
+    "Team ID": "",
+    "Key Hash": "",
+    "Request ID": "",
+    "Model": "",
+    "User ID": "",
+    "End User": "",
+    "Status": "",
+    "Key Alias": "",
+    "Error Code": "",
+    "Error Message": "",
+  },
 }));
 
 vi.mock("../networking", async (importOriginal) => {
@@ -37,139 +47,6 @@ vi.mock("../networking", async (importOriginal) => {
 vi.mock("../key_team_helpers/filter_helpers", () => ({
   fetchAllTeams: vi.fn().mockResolvedValue([]),
 }));
-
-const baseLogEntry: LogEntry = {
-  request_id: "chatcmpl-test-id",
-  api_key: "api-key",
-  team_id: "team-id",
-  model: "gpt-4",
-  model_id: "gpt-4",
-  call_type: "chat",
-  spend: 0,
-  total_tokens: 0,
-  prompt_tokens: 0,
-  completion_tokens: 0,
-  startTime: "2025-11-14T00:00:00Z",
-  endTime: "2025-11-14T00:00:00Z",
-  cache_hit: "miss",
-  request_duration_ms: 1000,
-  messages: [{ role: "user", content: "hello" }],
-  response: { status: "ok" },
-  metadata: {
-    status: "success",
-    additional_usage_values: {
-      cache_read_input_tokens: 0,
-      cache_creation_input_tokens: 0,
-    },
-  },
-  request_tags: {},
-  custom_llm_provider: "openai",
-  api_base: "https://api.example.com",
-};
-
-const createRow = (overrides: Partial<LogEntry> = {}): Row<LogEntry> =>
-  ({
-    original: {
-      ...baseLogEntry,
-      ...overrides,
-    },
-  }) as unknown as Row<LogEntry>;
-
-describe("Request Viewer", () => {
-  it("renders the request details heading", () => {
-    render(<RequestViewer row={createRow()} />);
-    expect(screen.getByText("Request Details")).toBeInTheDocument();
-  });
-
-  it("should truncate the request id if it is longer than 64 characters", () => {
-    const LONG_REQUEST_ID = "a".repeat(128);
-    const TRUNCATED_REQUEST_ID = `${"a".repeat(64)}...`;
-    render(
-      <RequestViewer
-        row={createRow({
-          request_id: LONG_REQUEST_ID,
-        })}
-      />,
-    );
-
-    expect(screen.getByText(TRUNCATED_REQUEST_ID)).toBeInTheDocument();
-  });
-
-  it("should display LiteLLM Overhead when litellm_overhead_time_ms is present in metadata", () => {
-    render(
-      <RequestViewer
-        row={createRow({
-          metadata: {
-            status: "success",
-            litellm_overhead_time_ms: 150,
-            additional_usage_values: {
-              cache_read_input_tokens: 0,
-              cache_creation_input_tokens: 0,
-            },
-          },
-        })}
-      />,
-    );
-
-    expect(screen.getByText("LiteLLM Overhead:")).toBeInTheDocument();
-    expect(screen.getByText("150 ms")).toBeInTheDocument();
-  });
-
-  it("should not display LiteLLM Overhead when litellm_overhead_time_ms is not present in metadata", () => {
-    render(<RequestViewer row={createRow()} />);
-
-    expect(screen.queryByText("LiteLLM Overhead:")).not.toBeInTheDocument();
-  });
-
-  it("should display retry count when attempted_retries > 0 in metadata", () => {
-    render(
-      <RequestViewer
-        row={createRow({
-          metadata: {
-            status: "success",
-            attempted_retries: 2,
-            max_retries: 3,
-            additional_usage_values: {
-              cache_read_input_tokens: 0,
-              cache_creation_input_tokens: 0,
-            },
-          },
-        })}
-      />,
-    );
-
-    expect(screen.getByText("Retries:")).toBeInTheDocument();
-    expect(screen.getByText("2 / 3")).toBeInTheDocument();
-  });
-
-  it("should display green 'None' tag when attempted_retries is 0", () => {
-    render(
-      <RequestViewer
-        row={createRow({
-          metadata: {
-            status: "success",
-            attempted_retries: 0,
-            max_retries: 3,
-            additional_usage_values: {
-              cache_read_input_tokens: 0,
-              cache_creation_input_tokens: 0,
-            },
-          },
-        })}
-      />,
-    );
-
-    expect(screen.getByText("Retries:")).toBeInTheDocument();
-    expect(screen.getByText("None")).toBeInTheDocument();
-  });
-
-  it("should display '-' for Retries when attempted_retries is not present in metadata", () => {
-    render(<RequestViewer row={createRow()} />);
-
-    expect(screen.getByText("Retries:")).toBeInTheDocument();
-    expect(screen.getByText("-")).toBeInTheDocument();
-  });
-});
 
 describe("SpendLogsTable", () => {
   const defaultProps = {

@@ -1,10 +1,14 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, renderHook, waitFor } from "@testing-library/react";
-import React, { ReactNode } from "react";
+import React, { ReactNode, useState } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { PaginatedResponse } from ".";
-import type { LogEntry, LogsSortField } from "./columns";
-import { useLogFilterLogic } from "./log_filter_logic";
+import type { LogsSortField } from "./columns";
+import {
+  defaultFilters,
+  useLogFilterLogic,
+  type LogFilterState,
+  type PaginatedResponse,
+} from "./log_filter_logic";
 
 vi.mock("../networking", () => ({
   uiSpendLogsCall: vi.fn(),
@@ -16,721 +20,558 @@ vi.mock("@/components/key_team_helpers/filter_helpers", () => ({
 
 import { uiSpendLogsCall } from "../networking";
 
-const createLogEntry = (overrides: Partial<LogEntry> = {}): LogEntry =>
-({
-  request_id: "req-1",
-  api_key: "key-1",
-  team_id: "team-1",
-  model: "gpt-4",
-  model_id: "gpt-4",
-  call_type: "chat",
-  spend: 0,
-  total_tokens: 0,
-  prompt_tokens: 0,
-  completion_tokens: 0,
-  startTime: "2025-01-01T00:00:00Z",
-  endTime: "2025-01-01T00:01:00Z",
-  cache_hit: "miss",
-  messages: [],
-  response: {},
-  metadata: {},
-  request_tags: {},
-  ...overrides,
-} as LogEntry);
-
-const createPaginatedResponse = (data: LogEntry[]): PaginatedResponse => ({
-  data,
-  total: data.length,
+const emptyResponse: PaginatedResponse = {
+  data: [],
+  total: 0,
   page: 1,
   page_size: 50,
-  total_pages: 1,
-});
+  total_pages: 0,
+};
 
 const defaultProps = {
-  logs: createPaginatedResponse([]),
-  accessToken: "test-token",
+  accessToken: "test-token" as string | null,
+  token: "test-token" as string | null,
+  userRole: "Admin" as string | null,
+  userID: "user-1" as string | null,
+  filterByCurrentUser: false,
+  activeTab: "request logs",
+  isLiveTail: false,
   startTime: "2025-01-01T00:00:00",
   endTime: "2025-01-01T23:59:59",
   isCustomDate: true,
-  setCurrentPage: vi.fn(),
-  userID: "user-1",
-  userRole: "Admin",
+  sortBy: "startTime" as LogsSortField,
+  sortOrder: "desc" as "asc" | "desc",
+  currentPage: 1,
 };
+
+type HookOverrides = Partial<Omit<Parameters<typeof useLogFilterLogic>[0], "filters" | "setFilters">>;
 
 describe("useLogFilterLogic", () => {
   let queryClient: QueryClient;
 
   beforeEach(() => {
     queryClient = new QueryClient({
-      defaultOptions: {
-        queries: {
-          retry: false,
-        },
-      },
+      defaultOptions: { queries: { retry: false } },
     });
     vi.clearAllMocks();
-    vi.mocked(uiSpendLogsCall).mockResolvedValue({
-      data: [],
-      total: 0,
-      page: 1,
-      page_size: 50,
-      total_pages: 0,
-    });
+    vi.mocked(uiSpendLogsCall).mockResolvedValue(emptyResponse);
   });
 
   const wrapper = ({ children }: { children: ReactNode }) =>
     React.createElement(QueryClientProvider, { client: queryClient }, children);
 
-  it("should return filters, filteredLogs, allTeams, handleFilterChange, and handleFilterReset", () => {
-    const { result } = renderHook(
-      () =>
-        useLogFilterLogic({
+  function renderFilterHook(overrides: HookOverrides = {}) {
+    const setCurrentPage = overrides.setCurrentPage ?? vi.fn();
+    const rendered = renderHook(
+      () => {
+        const [filters, setFilters] = useState<LogFilterState>(defaultFilters);
+        const hook = useLogFilterLogic({
           ...defaultProps,
-          logs: createPaginatedResponse([createLogEntry()]),
-        }),
+          ...overrides,
+          filters,
+          setFilters,
+          setCurrentPage,
+        });
+        return { ...hook, filters, setFilters };
+      },
       { wrapper },
     );
+    return { ...rendered, setCurrentPage };
+  }
 
-    expect(result.current.filters).toBeDefined();
-    expect(result.current.filteredLogs).toBeDefined();
-    expect(result.current).toHaveProperty("allTeams");
-    expect(result.current.handleFilterChange).toBeDefined();
-    expect(result.current.handleFilterReset).toBeDefined();
+  describe("return shape", () => {
+    it("exposes filteredLogs, allTeams, handleFilterChange, handleFilterReset", () => {
+      const { result } = renderFilterHook();
+
+      expect(result.current.filteredLogs).toBeDefined();
+      expect(result.current).toHaveProperty("allTeams");
+      expect(result.current.handleFilterChange).toBeInstanceOf(Function);
+      expect(result.current.handleFilterReset).toBeInstanceOf(Function);
+    });
   });
 
-  it("should initialize filters with all keys empty", () => {
-    const { result } = renderHook(() => useLogFilterLogic(defaultProps), { wrapper });
+  describe("handleFilterReset", () => {
+    it("restores filters to defaults after changes", () => {
+      const { result } = renderFilterHook();
 
-    const filters = result.current.filters;
-    expect(filters["Team ID"]).toBe("");
-    expect(filters["Key Hash"]).toBe("");
-    expect(filters["Request ID"]).toBe("");
-    expect(filters["Model"]).toBe("");
-    expect(filters["User ID"]).toBe("");
-    expect(filters["End User"]).toBe("");
-    expect(filters["Status"]).toBe("");
-    expect(filters["Key Alias"]).toBe("");
-    expect(filters["Error Code"]).toBe("");
-    expect(filters["Error Message"]).toBe("");
-  });
+      act(() => {
+        result.current.handleFilterChange({ "Team ID": "team-1", Status: "success" });
+      });
 
-  it("should return all logs when no filters are applied", () => {
-    const logs = createPaginatedResponse([
-      createLogEntry({ request_id: "req-1" }),
-      createLogEntry({ request_id: "req-2" }),
-    ]);
-    const { result } = renderHook(() => useLogFilterLogic({ ...defaultProps, logs }), { wrapper });
+      expect(result.current.filters["Team ID"]).toBe("team-1");
+      expect(result.current.filters["Status"]).toBe("success");
 
-    expect(result.current.filteredLogs.data).toHaveLength(2);
-    expect(result.current.filteredLogs.data).toEqual(logs.data);
-  });
+      act(() => {
+        result.current.handleFilterReset();
+      });
 
-  it("should filter logs by team_id when Team ID filter is set", () => {
-    const logs = createPaginatedResponse([
-      createLogEntry({ request_id: "req-1", team_id: "team-a" }),
-      createLogEntry({ request_id: "req-2", team_id: "team-b" }),
-      createLogEntry({ request_id: "req-3", team_id: "team-a" }),
-    ]);
-    const { result } = renderHook(() => useLogFilterLogic({ ...defaultProps, logs }), { wrapper });
-
-    act(() => {
-      result.current.handleFilterChange({ "Team ID": "team-a" });
+      expect(result.current.filters["Team ID"]).toBe("");
+      expect(result.current.filters["Status"]).toBe("");
     });
 
-    expect(result.current.filteredLogs.data).toHaveLength(2);
-    expect(result.current.filteredLogs.data.every((log) => log.team_id === "team-a")).toBe(true);
-  });
+    it("calls setCurrentPage(1)", () => {
+      const setCurrentPage = vi.fn();
+      const { result } = renderFilterHook({ setCurrentPage });
 
-  it("should filter logs by status when Status filter is set to success", () => {
-    const logs = createPaginatedResponse([
-      createLogEntry({ request_id: "req-1", status: "success" }),
-      createLogEntry({ request_id: "req-2" }),
-      createLogEntry({ request_id: "req-3", status: "error" }),
-    ]);
-    const { result } = renderHook(() => useLogFilterLogic({ ...defaultProps, logs }), { wrapper });
+      act(() => {
+        result.current.handleFilterReset();
+      });
 
-    act(() => {
-      result.current.handleFilterChange({ Status: "success" });
+      expect(setCurrentPage).toHaveBeenCalledWith(1);
     });
 
-    expect(result.current.filteredLogs.data).toHaveLength(2);
-    expect(result.current.filteredLogs.data.every((log) => !log.status || log.status === "success")).toBe(true);
-  });
+    it("triggers a fetch with all filter params undefined", async () => {
+      vi.mocked(uiSpendLogsCall).mockResolvedValue(emptyResponse);
+      const { result } = renderFilterHook();
 
-  it("should filter logs by status when Status filter is set to error", () => {
-    const logs = createPaginatedResponse([
-      createLogEntry({ request_id: "req-1", status: "success" }),
-      createLogEntry({ request_id: "req-2", status: "error" }),
-    ]);
-    const { result } = renderHook(() => useLogFilterLogic({ ...defaultProps, logs }), { wrapper });
+      act(() => {
+        result.current.handleFilterChange({ "Key Alias": "alias-1" });
+      });
 
-    act(() => {
-      result.current.handleFilterChange({ Status: "error" });
-    });
+      await waitFor(() => expect(uiSpendLogsCall).toHaveBeenCalled(), { timeout: 500 });
 
-    expect(result.current.filteredLogs.data).toHaveLength(1);
-    expect(result.current.filteredLogs.data[0].status).toBe("error");
-  });
+      act(() => {
+        result.current.handleFilterReset();
+      });
 
-  it("should filter logs by model_id when Model filter is set", async () => {
-    const filteredLogs = [
-      createLogEntry({ request_id: "req-1", model_id: "gpt-4" }),
-      createLogEntry({ request_id: "req-3", model_id: "gpt-4" }),
-    ];
-    vi.mocked(uiSpendLogsCall).mockResolvedValue(
-      createPaginatedResponse(filteredLogs),
-    );
-    const logs = createPaginatedResponse([
-      createLogEntry({ request_id: "req-1", model_id: "gpt-4" }),
-      createLogEntry({ request_id: "req-2", model_id: "gpt-3.5" }),
-      createLogEntry({ request_id: "req-3", model_id: "gpt-4" }),
-    ]);
-    const { result } = renderHook(() => useLogFilterLogic({ ...defaultProps, logs }), { wrapper });
-
-    act(() => {
-      result.current.handleFilterChange({ Model: "gpt-4" });
-    });
-
-    await waitFor(
-      () => {
-        expect(result.current.filteredLogs.data).toHaveLength(2);
-        expect(result.current.filteredLogs.data.every((log) => log.model_id === "gpt-4")).toBe(true);
-      },
-      { timeout: 500 },
-    );
-  });
-
-  it("should filter logs by api_key when Key Hash filter is set", async () => {
-    const filteredLog = createLogEntry({ request_id: "req-1", api_key: "key-x" });
-    vi.mocked(uiSpendLogsCall).mockResolvedValue(
-      createPaginatedResponse([filteredLog]),
-    );
-    const logs = createPaginatedResponse([
-      createLogEntry({ request_id: "req-1", api_key: "key-x" }),
-      createLogEntry({ request_id: "req-2", api_key: "key-y" }),
-    ]);
-    const { result } = renderHook(() => useLogFilterLogic({ ...defaultProps, logs }), { wrapper });
-
-    act(() => {
-      result.current.handleFilterChange({ "Key Hash": "key-x" });
-    });
-
-    await waitFor(
-      () => {
-        expect(result.current.filteredLogs.data).toHaveLength(1);
-        expect(result.current.filteredLogs.data[0].api_key).toBe("key-x");
-      },
-      { timeout: 500 },
-    );
-  });
-
-  it("should filter logs by end_user when End User filter is set", async () => {
-    const filteredLog = createLogEntry({ request_id: "req-1", end_user: "user-a" });
-    vi.mocked(uiSpendLogsCall).mockResolvedValue(
-      createPaginatedResponse([filteredLog]),
-    );
-    const logs = createPaginatedResponse([
-      createLogEntry({ request_id: "req-1", end_user: "user-a" }),
-      createLogEntry({ request_id: "req-2", end_user: "user-b" }),
-    ]);
-    const { result } = renderHook(() => useLogFilterLogic({ ...defaultProps, logs }), { wrapper });
-
-    act(() => {
-      result.current.handleFilterChange({ "End User": "user-a" });
-    });
-
-    await waitFor(
-      () => {
-        expect(result.current.filteredLogs.data).toHaveLength(1);
-        expect(result.current.filteredLogs.data[0].end_user).toBe("user-a");
-      },
-      { timeout: 500 },
-    );
-  });
-
-  it("should filter logs by error_code when Error Code filter is set", async () => {
-    const filteredLog = createLogEntry({
-      request_id: "req-1",
-      metadata: { error_information: { error_code: "429" } },
-    });
-    vi.mocked(uiSpendLogsCall).mockResolvedValue(
-      createPaginatedResponse([filteredLog]),
-    );
-    const logs = createPaginatedResponse([
-      createLogEntry({
-        request_id: "req-1",
-        metadata: { error_information: { error_code: "429" } },
-      }),
-      createLogEntry({
-        request_id: "req-2",
-        metadata: { error_information: { error_code: "500" } },
-      }),
-    ]);
-    const { result } = renderHook(() => useLogFilterLogic({ ...defaultProps, logs }), { wrapper });
-
-    act(() => {
-      result.current.handleFilterChange({ "Error Code": "429" });
-    });
-
-    await waitFor(
-      () => {
-        expect(result.current.filteredLogs.data).toHaveLength(1);
-        expect(result.current.filteredLogs.data[0].metadata?.error_information?.error_code).toBe("429");
-      },
-      { timeout: 500 },
-    );
-  });
-
-  it("should return empty data when logs is null or has no data", () => {
-    const { result } = renderHook(
-      () =>
-        useLogFilterLogic({
-          ...defaultProps,
-          logs: { data: [], total: 0, page: 1, page_size: 50, total_pages: 0 },
-        }),
-      { wrapper },
-    );
-
-    expect(result.current.filteredLogs.data).toEqual([]);
-    expect(result.current.filteredLogs.total).toBe(0);
-  });
-
-  it("should reset filters when handleFilterReset is called", () => {
-    const logs = createPaginatedResponse([createLogEntry()]);
-    const { result } = renderHook(() => useLogFilterLogic({ ...defaultProps, logs }), { wrapper });
-
-    act(() => {
-      result.current.handleFilterChange({ "Team ID": "team-1", Status: "success" });
-    });
-
-    expect(result.current.filters["Team ID"]).toBe("team-1");
-    expect(result.current.filters["Status"]).toBe("success");
-
-    act(() => {
-      result.current.handleFilterReset();
-    });
-
-    expect(result.current.filters["Team ID"]).toBe("");
-    expect(result.current.filters["Status"]).toBe("");
-  });
-
-  it("should call setCurrentPage with 1 when handleFilterChange is invoked", () => {
-    const setCurrentPage = vi.fn();
-    const logs = createPaginatedResponse([createLogEntry()]);
-    const { result } = renderHook(
-      () => useLogFilterLogic({ ...defaultProps, logs, setCurrentPage }),
-      { wrapper },
-    );
-
-    act(() => {
-      result.current.handleFilterChange({ "Team ID": "team-1" });
-    });
-
-    expect(setCurrentPage).toHaveBeenCalledWith(1);
-  });
-
-  it("should call uiSpendLogsCall when backend filter is set and debounce elapses", async () => {
-    const logs = createPaginatedResponse([createLogEntry()]);
-    const { result } = renderHook(() => useLogFilterLogic({ ...defaultProps, logs }), { wrapper });
-
-    act(() => {
-      result.current.handleFilterChange({ "Key Alias": "alias-1" });
-    });
-
-    await waitFor(
-      () => {
-        expect(uiSpendLogsCall).toHaveBeenCalled();
-      },
-      { timeout: 500 },
-    );
-  });
-
-  it("should not call uiSpendLogsCall when accessToken is null", async () => {
-    const logs = createPaginatedResponse([createLogEntry()]);
-    const { result } = renderHook(
-      () => useLogFilterLogic({ ...defaultProps, logs, accessToken: null }),
-      { wrapper },
-    );
-
-    act(() => {
-      result.current.handleFilterChange({ "Key Alias": "alias-1" });
-    });
-
-    await new Promise((resolve) => setTimeout(resolve, 350));
-
-    expect(uiSpendLogsCall).not.toHaveBeenCalled();
-  });
-
-  it("should use backend filtered logs when backend filters are active and API returns data", async () => {
-    const backendLog = createLogEntry({ request_id: "backend-req" });
-    vi.mocked(uiSpendLogsCall).mockResolvedValue(
-      createPaginatedResponse([backendLog]),
-    );
-    const logs = createPaginatedResponse([createLogEntry({ request_id: "client-req" })]);
-    const { result } = renderHook(() => useLogFilterLogic({ ...defaultProps, logs }), { wrapper });
-
-    act(() => {
-      result.current.handleFilterChange({ "Key Alias": "alias-1" });
-    });
-
-    await waitFor(
-      () => {
-        expect(result.current.filteredLogs.data).toHaveLength(1);
-        expect(result.current.filteredLogs.data[0].request_id).toBe("backend-req");
-      },
-      { timeout: 500 },
-    );
-  });
-
-  it("should call uiSpendLogsCall with request_id when Request ID filter is set", async () => {
-    vi.mocked(uiSpendLogsCall).mockResolvedValue(
-      createPaginatedResponse([createLogEntry({ request_id: "req-xyz" })]),
-    );
-    const logs = createPaginatedResponse([createLogEntry()]);
-    const { result } = renderHook(() => useLogFilterLogic({ ...defaultProps, logs }), { wrapper });
-
-    act(() => {
-      result.current.handleFilterChange({ "Request ID": "req-xyz" });
-    });
-
-    await waitFor(
-      () => {
-        expect(uiSpendLogsCall).toHaveBeenCalledWith(
+      await waitFor(() => {
+        expect(uiSpendLogsCall).toHaveBeenLastCalledWith(
           expect.objectContaining({
-            params: expect.objectContaining({ request_id: "req-xyz" }),
-          }),
-        );
-      },
-      { timeout: 500 },
-    );
-  });
-
-  it("should call uiSpendLogsCall with user_id when User ID filter is set", async () => {
-    vi.mocked(uiSpendLogsCall).mockResolvedValue(
-      createPaginatedResponse([createLogEntry()]),
-    );
-    const logs = createPaginatedResponse([createLogEntry()]);
-    const { result } = renderHook(() => useLogFilterLogic({ ...defaultProps, logs }), { wrapper });
-
-    act(() => {
-      result.current.handleFilterChange({ "User ID": "user-123" });
-    });
-
-    await waitFor(
-      () => {
-        expect(uiSpendLogsCall).toHaveBeenCalledWith(
-          expect.objectContaining({
-            params: expect.objectContaining({ user_id: "user-123" }),
-          }),
-        );
-      },
-      { timeout: 500 },
-    );
-  });
-
-  it("should call uiSpendLogsCall with error_message when Error Message filter is set", async () => {
-    vi.mocked(uiSpendLogsCall).mockResolvedValue(
-      createPaginatedResponse([createLogEntry()]),
-    );
-    const logs = createPaginatedResponse([createLogEntry()]);
-    const { result } = renderHook(() => useLogFilterLogic({ ...defaultProps, logs }), { wrapper });
-
-    act(() => {
-      result.current.handleFilterChange({ "Error Message": "rate limit exceeded" });
-    });
-
-    await waitFor(
-      () => {
-        expect(uiSpendLogsCall).toHaveBeenCalledWith(
-          expect.objectContaining({
-            params: expect.objectContaining({ error_message: "rate limit exceeded" }),
-          }),
-        );
-      },
-      { timeout: 500 },
-    );
-  });
-
-  it("should return empty results when backend filters are active but API returns empty", async () => {
-    vi.mocked(uiSpendLogsCall).mockResolvedValue({
-      data: [],
-      total: 0,
-      page: 1,
-      page_size: 50,
-      total_pages: 0,
-    });
-    const clientLog = createLogEntry({ request_id: "client-req" });
-    const logs = createPaginatedResponse([clientLog]);
-    const { result } = renderHook(() => useLogFilterLogic({ ...defaultProps, logs }), { wrapper });
-
-    act(() => {
-      result.current.handleFilterChange({ "Key Alias": "alias-1" });
-    });
-
-    await waitFor(
-      () => {
-        expect(uiSpendLogsCall).toHaveBeenCalled();
-      },
-      { timeout: 500 },
-    );
-
-    expect(result.current.filteredLogs.data).toHaveLength(0);
-  });
-
-  it("should refetch when sortBy changes and backend filters are active", async () => {
-    vi.mocked(uiSpendLogsCall).mockResolvedValue(
-      createPaginatedResponse([createLogEntry()]),
-    );
-    const logs = createPaginatedResponse([createLogEntry()]);
-    const { result, rerender } = renderHook(
-      (props: { sortBy?: LogsSortField }) =>
-        useLogFilterLogic({ ...defaultProps, logs, ...props }),
-      { wrapper, initialProps: { sortBy: "startTime" as LogsSortField } },
-    );
-
-    act(() => {
-      result.current.handleFilterChange({ "Key Alias": "alias-1" });
-    });
-
-    await waitFor(() => expect(uiSpendLogsCall).toHaveBeenCalledTimes(1), {
-      timeout: 500,
-    });
-
-    rerender({ sortBy: "spend" as LogsSortField });
-
-    await waitFor(() => expect(uiSpendLogsCall).toHaveBeenCalledTimes(2), {
-      timeout: 500,
-    });
-    expect(uiSpendLogsCall).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        params: expect.objectContaining({ sort_by: "spend" }),
-      }),
-    );
-  });
-
-  it("should refetch when sortOrder changes and backend filters are active", async () => {
-    vi.mocked(uiSpendLogsCall).mockResolvedValue(
-      createPaginatedResponse([createLogEntry()]),
-    );
-    const logs = createPaginatedResponse([createLogEntry()]);
-    const { result, rerender } = renderHook(
-      (props: { sortOrder?: "asc" | "desc" }) =>
-        useLogFilterLogic({ ...defaultProps, logs, ...props }),
-      { wrapper, initialProps: { sortOrder: "desc" } },
-    );
-
-    act(() => {
-      result.current.handleFilterChange({ "Key Alias": "alias-1" });
-    });
-
-    await waitFor(() => expect(uiSpendLogsCall).toHaveBeenCalledTimes(1), {
-      timeout: 500,
-    });
-
-    rerender({ sortOrder: "asc" });
-
-    await waitFor(() => expect(uiSpendLogsCall).toHaveBeenCalledTimes(2), {
-      timeout: 500,
-    });
-    expect(uiSpendLogsCall).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        params: expect.objectContaining({ sort_order: "asc" }),
-      }),
-    );
-  });
-
-  it("should refetch when currentPage changes and backend filters are active", async () => {
-    vi.mocked(uiSpendLogsCall).mockResolvedValue(
-      createPaginatedResponse([createLogEntry()]),
-    );
-    const logs = createPaginatedResponse([createLogEntry()]);
-    const { result, rerender } = renderHook(
-      (props) => useLogFilterLogic({ ...defaultProps, logs, ...props }),
-      { wrapper, initialProps: { currentPage: 1 } },
-    );
-
-    act(() => {
-      result.current.handleFilterChange({ "Key Alias": "alias-1" });
-    });
-
-    await waitFor(() => expect(uiSpendLogsCall).toHaveBeenCalledTimes(1), {
-      timeout: 500,
-    });
-
-    rerender({ currentPage: 2 });
-
-    await waitFor(() => expect(uiSpendLogsCall).toHaveBeenCalledTimes(2), {
-      timeout: 500,
-    });
-    expect(uiSpendLogsCall).toHaveBeenLastCalledWith(
-      expect.objectContaining({ page: 2 }),
-    );
-  });
-
-  it("should refetch when startTime changes and backend filters are active", async () => {
-    vi.mocked(uiSpendLogsCall).mockResolvedValue(
-      createPaginatedResponse([createLogEntry()]),
-    );
-    const logs = createPaginatedResponse([createLogEntry()]);
-    const { result, rerender } = renderHook(
-      (props: { startTime?: string }) =>
-        useLogFilterLogic({ ...defaultProps, logs, ...props }),
-      { wrapper, initialProps: { startTime: "2025-01-01T00:00:00Z" } },
-    );
-
-    act(() => {
-      result.current.handleFilterChange({ "Key Alias": "alias-1" });
-    });
-
-    await waitFor(() => expect(uiSpendLogsCall).toHaveBeenCalledTimes(1), {
-      timeout: 500,
-    });
-
-    rerender({ startTime: "2025-01-02T00:00:00Z" });
-
-    await waitFor(() => expect(uiSpendLogsCall).toHaveBeenCalledTimes(2), {
-      timeout: 500,
-    });
-    expect(uiSpendLogsCall).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        start_date: "2025-01-02 00:00:00",
-      }),
-    );
-  });
-
-  it("should refetch when isCustomDate changes and backend filters are active", async () => {
-    vi.mocked(uiSpendLogsCall).mockResolvedValue(
-      createPaginatedResponse([createLogEntry()]),
-    );
-    const logs = createPaginatedResponse([createLogEntry()]);
-    const { result, rerender } = renderHook(
-      (props: { isCustomDate?: boolean }) =>
-        useLogFilterLogic({ ...defaultProps, logs, ...props }),
-      { wrapper, initialProps: { isCustomDate: false } },
-    );
-
-    act(() => {
-      result.current.handleFilterChange({ "Key Alias": "alias-1" });
-    });
-
-    await waitFor(() => expect(uiSpendLogsCall).toHaveBeenCalledTimes(1), {
-      timeout: 500,
-    });
-
-    rerender({ isCustomDate: true });
-
-    await waitFor(() => expect(uiSpendLogsCall).toHaveBeenCalledTimes(2), {
-      timeout: 500,
-    });
-  });
-
-  it("should not call setCurrentPage when handleFilterChange receives identical filters", async () => {
-    const setCurrentPage = vi.fn();
-    const logs = createPaginatedResponse([createLogEntry()]);
-    const { result } = renderHook(
-      () => useLogFilterLogic({ ...defaultProps, logs, setCurrentPage }),
-      { wrapper },
-    );
-
-    act(() => {
-      result.current.handleFilterChange({ "Team ID": "team-1" });
-    });
-
-    await waitFor(() => expect(setCurrentPage).toHaveBeenCalledTimes(1), {
-      timeout: 500,
-    });
-
-    setCurrentPage.mockClear();
-
-    await act(async () => {
-      result.current.handleFilterChange({ "Team ID": "team-1" });
-      await new Promise((resolve) => setTimeout(resolve, 350));
-    });
-
-    expect(setCurrentPage).not.toHaveBeenCalled();
-  });
-
-  it("should not crash when uiSpendLogsCall throws", async () => {
-    vi.mocked(uiSpendLogsCall).mockRejectedValue(new Error("Network error"));
-    const logs = createPaginatedResponse([createLogEntry()]);
-    const { result } = renderHook(() => useLogFilterLogic({ ...defaultProps, logs }), { wrapper });
-
-    act(() => {
-      result.current.handleFilterChange({ "Key Alias": "alias-1" });
-    });
-
-    await waitFor(() => expect(uiSpendLogsCall).toHaveBeenCalled(), {
-      timeout: 500,
-    });
-
-    expect(result.current.filteredLogs).toBeDefined();
-    expect(result.current.filters).toBeDefined();
-  });
-
-  it("should clear backendFilteredLogs when handleFilterReset is called", async () => {
-    const backendLog = createLogEntry({ request_id: "backend-req" });
-    vi.mocked(uiSpendLogsCall).mockResolvedValue(
-      createPaginatedResponse([backendLog]),
-    );
-    const logs = createPaginatedResponse([createLogEntry({ request_id: "client-req" })]);
-    const { result } = renderHook(() => useLogFilterLogic({ ...defaultProps, logs }), { wrapper });
-
-    act(() => {
-      result.current.handleFilterChange({ "Key Alias": "alias-1" });
-    });
-
-    await waitFor(
-      () => {
-        expect(result.current.filteredLogs.data[0].request_id).toBe("backend-req");
-      },
-      { timeout: 500 },
-    );
-
-    act(() => {
-      result.current.handleFilterReset();
-    });
-
-    expect(result.current.filteredLogs.data).toEqual(logs.data);
-    expect(result.current.filteredLogs.data[0].request_id).toBe("client-req");
-  });
-
-  it("should pass correct start_date, end_date, sort_by, and sort_order to uiSpendLogsCall", async () => {
-    vi.mocked(uiSpendLogsCall).mockResolvedValue(
-      createPaginatedResponse([createLogEntry()]),
-    );
-    const logs = createPaginatedResponse([createLogEntry()]);
-    const { result } = renderHook(
-      () =>
-        useLogFilterLogic({
-          ...defaultProps,
-          logs,
-          startTime: "2025-01-15T00:00:00Z",
-          endTime: "2025-01-15T23:59:59Z",
-          isCustomDate: true,
-          sortBy: "spend",
-          sortOrder: "asc",
-        }),
-      { wrapper },
-    );
-
-    act(() => {
-      result.current.handleFilterChange({ "Key Alias": "alias-1" });
-    });
-
-    await waitFor(
-      () => {
-        expect(uiSpendLogsCall).toHaveBeenCalledWith(
-          expect.objectContaining({
-            start_date: "2025-01-15 00:00:00",
-            end_date: "2025-01-15 23:59:59",
             params: expect.objectContaining({
-              sort_by: "spend",
-              sort_order: "asc",
+              team_id: undefined,
+              api_key: undefined,
+              request_id: undefined,
+              user_id: undefined,
+              end_user: undefined,
+              status_filter: undefined,
+              model_id: undefined,
+              key_alias: undefined,
+              error_code: undefined,
+              error_message: undefined,
             }),
           }),
         );
+      }, { timeout: 500 });
+    });
+  });
+
+  describe("handleFilterChange", () => {
+    it("calls setCurrentPage(1) when filters change", () => {
+      const setCurrentPage = vi.fn();
+      const { result } = renderFilterHook({ setCurrentPage });
+
+      act(() => {
+        result.current.handleFilterChange({ "Team ID": "team-1" });
+      });
+
+      expect(setCurrentPage).toHaveBeenCalledWith(1);
+    });
+
+    it("merges partial updates without clobbering other filter keys", () => {
+      const { result } = renderFilterHook();
+
+      act(() => {
+        result.current.handleFilterChange({ "Team ID": "team-a" });
+      });
+      expect(result.current.filters["Team ID"]).toBe("team-a");
+
+      act(() => {
+        result.current.handleFilterChange({ Model: "gpt-4" });
+      });
+
+      expect(result.current.filters["Team ID"]).toBe("team-a");
+      expect(result.current.filters["Model"]).toBe("gpt-4");
+    });
+
+    it("does not call setCurrentPage when filters are identical", async () => {
+      const setCurrentPage = vi.fn();
+      const { result } = renderFilterHook({ setCurrentPage });
+
+      act(() => {
+        result.current.handleFilterChange({ "Team ID": "team-1" });
+      });
+
+      await waitFor(() => expect(setCurrentPage).toHaveBeenCalledTimes(1), { timeout: 500 });
+
+      setCurrentPage.mockClear();
+
+      await act(async () => {
+        result.current.handleFilterChange({ "Team ID": "team-1" });
+        await new Promise((resolve) => setTimeout(resolve, 350));
+      });
+
+      expect(setCurrentPage).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("query params — filter keys", () => {
+    const filterCases: Array<{
+      filterKey: keyof LogFilterState;
+      paramName: string;
+      value: string;
+    }> = [
+      { filterKey: "Team ID", paramName: "team_id", value: "team-a" },
+      { filterKey: "Key Hash", paramName: "api_key", value: "key-x" },
+      { filterKey: "Request ID", paramName: "request_id", value: "req-xyz" },
+      { filterKey: "User ID", paramName: "user_id", value: "user-123" },
+      { filterKey: "End User", paramName: "end_user", value: "user-a" },
+      { filterKey: "Status", paramName: "status_filter", value: "error" },
+      { filterKey: "Model", paramName: "model_id", value: "gpt-4" },
+      { filterKey: "Error Code", paramName: "error_code", value: "429" },
+      { filterKey: "Error Message", paramName: "error_message", value: "rate limit exceeded" },
+    ];
+
+    it.each(filterCases)(
+      "forwards $filterKey as params.$paramName to uiSpendLogsCall",
+      async ({ filterKey, paramName, value }) => {
+        const { result } = renderFilterHook();
+
+        act(() => {
+          result.current.handleFilterChange({ [filterKey]: value } as Partial<LogFilterState>);
+        });
+
+        await waitFor(
+          () => {
+            expect(uiSpendLogsCall).toHaveBeenCalledWith(
+              expect.objectContaining({
+                params: expect.objectContaining({ [paramName]: value }),
+              }),
+            );
+          },
+          { timeout: 500 },
+        );
       },
-      { timeout: 500 },
     );
+  });
+
+  describe("query params — date & sort", () => {
+    it("passes start_date, end_date, sort_by, and sort_order to uiSpendLogsCall", async () => {
+      const { result } = renderFilterHook({
+        startTime: "2025-01-15T00:00:00Z",
+        endTime: "2025-01-15T23:59:59Z",
+        isCustomDate: true,
+        sortBy: "spend" as LogsSortField,
+        sortOrder: "asc",
+      });
+
+      act(() => {
+        result.current.handleFilterChange({ "Key Alias": "alias-1" });
+      });
+
+      await waitFor(
+        () => {
+          expect(uiSpendLogsCall).toHaveBeenCalledWith(
+            expect.objectContaining({
+              start_date: "2025-01-15 00:00:00",
+              end_date: "2025-01-15 23:59:59",
+              params: expect.objectContaining({
+                sort_by: "spend",
+                sort_order: "asc",
+              }),
+            }),
+          );
+        },
+        { timeout: 500 },
+      );
+    });
+  });
+
+  describe("debounce", () => {
+    it("calls uiSpendLogsCall after the debounce elapses", async () => {
+      const { result } = renderFilterHook();
+
+      act(() => {
+        result.current.handleFilterChange({ "Key Alias": "alias-1" });
+      });
+
+      await waitFor(() => expect(uiSpendLogsCall).toHaveBeenCalled(), { timeout: 500 });
+    });
+
+    it("does not call uiSpendLogsCall before the debounce elapses", async () => {
+      const { result } = renderFilterHook();
+
+      // Wait for the initial query fire, then reset the spy so we only observe
+      // calls triggered by the filter change below.
+      await waitFor(() => expect(uiSpendLogsCall).toHaveBeenCalled(), { timeout: 500 });
+      vi.mocked(uiSpendLogsCall).mockClear();
+
+      act(() => {
+        result.current.handleFilterChange({ "Key Alias": "alias-1" });
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(uiSpendLogsCall).not.toHaveBeenCalled();
+
+      await waitFor(() => expect(uiSpendLogsCall).toHaveBeenCalled(), { timeout: 500 });
+    });
+  });
+
+  describe("backend filtered logs", () => {
+    it("returns the query payload as filteredLogs when backend filters are active", async () => {
+      const backendLog = { request_id: "backend-req" };
+      vi.mocked(uiSpendLogsCall).mockResolvedValue({
+        data: [backendLog],
+        total: 1,
+        page: 1,
+        page_size: 50,
+        total_pages: 1,
+      } as PaginatedResponse);
+
+      const { result } = renderFilterHook();
+
+      act(() => {
+        result.current.handleFilterChange({ "Key Alias": "alias-1" });
+      });
+
+      await waitFor(
+        () => {
+          expect(result.current.filteredLogs.data).toHaveLength(1);
+          expect(result.current.filteredLogs.data[0].request_id).toBe("backend-req");
+        },
+        { timeout: 500 },
+      );
+    });
+
+    it("returns empty data when the API returns an empty payload", async () => {
+      vi.mocked(uiSpendLogsCall).mockResolvedValue(emptyResponse);
+      const { result } = renderFilterHook();
+
+      act(() => {
+        result.current.handleFilterChange({ "Key Alias": "alias-1" });
+      });
+
+      await waitFor(() => expect(uiSpendLogsCall).toHaveBeenCalled(), { timeout: 500 });
+
+      expect(result.current.filteredLogs.data).toHaveLength(0);
+    });
+  });
+
+  describe("refetch triggers", () => {
+    it("refetches when sortBy changes", async () => {
+      const { result, rerender } = renderHook(
+        (props: { sortBy: LogsSortField }) => {
+          const [filters, setFilters] = useState<LogFilterState>(defaultFilters);
+          const hook = useLogFilterLogic({
+            ...defaultProps,
+            filters,
+            setFilters,
+            setCurrentPage: vi.fn(),
+            sortBy: props.sortBy,
+          });
+          return { ...hook, filters, setFilters };
+        },
+        { wrapper, initialProps: { sortBy: "startTime" } },
+      );
+
+      act(() => {
+        result.current.handleFilterChange({ "Key Alias": "alias-1" });
+      });
+
+      await waitFor(() => expect(uiSpendLogsCall).toHaveBeenCalledTimes(1), { timeout: 500 });
+
+      rerender({ sortBy: "spend" });
+
+      await waitFor(() => expect(uiSpendLogsCall).toHaveBeenCalledTimes(2), { timeout: 500 });
+      expect(uiSpendLogsCall).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          params: expect.objectContaining({ sort_by: "spend" }),
+        }),
+      );
+    });
+
+    it("refetches when sortOrder changes", async () => {
+      const { result, rerender } = renderHook(
+        (props: { sortOrder: "asc" | "desc" }) => {
+          const [filters, setFilters] = useState<LogFilterState>(defaultFilters);
+          const hook = useLogFilterLogic({
+            ...defaultProps,
+            filters,
+            setFilters,
+            setCurrentPage: vi.fn(),
+            sortOrder: props.sortOrder,
+          });
+          return { ...hook, filters, setFilters };
+        },
+        { wrapper, initialProps: { sortOrder: "desc" } },
+      );
+
+      act(() => {
+        result.current.handleFilterChange({ "Key Alias": "alias-1" });
+      });
+
+      await waitFor(() => expect(uiSpendLogsCall).toHaveBeenCalledTimes(1), { timeout: 500 });
+
+      rerender({ sortOrder: "asc" });
+
+      await waitFor(() => expect(uiSpendLogsCall).toHaveBeenCalledTimes(2), { timeout: 500 });
+      expect(uiSpendLogsCall).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          params: expect.objectContaining({ sort_order: "asc" }),
+        }),
+      );
+    });
+
+    it("refetches when currentPage changes", async () => {
+      const { result, rerender } = renderHook(
+        (props: { currentPage: number }) => {
+          const [filters, setFilters] = useState<LogFilterState>(defaultFilters);
+          const hook = useLogFilterLogic({
+            ...defaultProps,
+            filters,
+            setFilters,
+            setCurrentPage: vi.fn(),
+            currentPage: props.currentPage,
+          });
+          return { ...hook, filters, setFilters };
+        },
+        { wrapper, initialProps: { currentPage: 1 } },
+      );
+
+      act(() => {
+        result.current.handleFilterChange({ "Key Alias": "alias-1" });
+      });
+
+      await waitFor(() => expect(uiSpendLogsCall).toHaveBeenCalledTimes(1), { timeout: 500 });
+
+      rerender({ currentPage: 2 });
+
+      await waitFor(() => expect(uiSpendLogsCall).toHaveBeenCalledTimes(2), { timeout: 500 });
+      expect(uiSpendLogsCall).toHaveBeenLastCalledWith(
+        expect.objectContaining({ page: 2 }),
+      );
+    });
+
+    it("refetches when startTime changes", async () => {
+      const { result, rerender } = renderHook(
+        (props: { startTime: string }) => {
+          const [filters, setFilters] = useState<LogFilterState>(defaultFilters);
+          const hook = useLogFilterLogic({
+            ...defaultProps,
+            filters,
+            setFilters,
+            setCurrentPage: vi.fn(),
+            startTime: props.startTime,
+          });
+          return { ...hook, filters, setFilters };
+        },
+        { wrapper, initialProps: { startTime: "2025-01-01T00:00:00Z" } },
+      );
+
+      act(() => {
+        result.current.handleFilterChange({ "Key Alias": "alias-1" });
+      });
+
+      await waitFor(() => expect(uiSpendLogsCall).toHaveBeenCalledTimes(1), { timeout: 500 });
+
+      rerender({ startTime: "2025-01-02T00:00:00Z" });
+
+      await waitFor(() => expect(uiSpendLogsCall).toHaveBeenCalledTimes(2), { timeout: 500 });
+      expect(uiSpendLogsCall).toHaveBeenLastCalledWith(
+        expect.objectContaining({ start_date: "2025-01-02 00:00:00" }),
+      );
+    });
+
+    it("refetches when isCustomDate changes", async () => {
+      const { result, rerender } = renderHook(
+        (props: { isCustomDate: boolean }) => {
+          const [filters, setFilters] = useState<LogFilterState>(defaultFilters);
+          const hook = useLogFilterLogic({
+            ...defaultProps,
+            filters,
+            setFilters,
+            setCurrentPage: vi.fn(),
+            isCustomDate: props.isCustomDate,
+          });
+          return { ...hook, filters, setFilters };
+        },
+        { wrapper, initialProps: { isCustomDate: false } },
+      );
+
+      act(() => {
+        result.current.handleFilterChange({ "Key Alias": "alias-1" });
+      });
+
+      await waitFor(() => expect(uiSpendLogsCall).toHaveBeenCalledTimes(1), { timeout: 500 });
+
+      rerender({ isCustomDate: true });
+
+      await waitFor(() => expect(uiSpendLogsCall).toHaveBeenCalledTimes(2), { timeout: 500 });
+    });
+  });
+
+  describe("query enablement", () => {
+    const nullCredentialCases: Array<{ name: string; override: HookOverrides }> = [
+      { name: "accessToken", override: { accessToken: null } },
+      { name: "token", override: { token: null } },
+      { name: "userRole", override: { userRole: null } },
+      { name: "userID", override: { userID: null } },
+    ];
+
+    it.each(nullCredentialCases)(
+      "does not call uiSpendLogsCall when $name is null",
+      async ({ override }) => {
+        const { result } = renderFilterHook(override);
+
+        act(() => {
+          result.current.handleFilterChange({ "Key Alias": "alias-1" });
+        });
+
+        await new Promise((resolve) => setTimeout(resolve, 350));
+
+        expect(uiSpendLogsCall).not.toHaveBeenCalled();
+      },
+    );
+
+    it("does not call uiSpendLogsCall when activeTab is not 'request logs'", async () => {
+      const { result } = renderFilterHook({ activeTab: "audit logs" });
+
+      act(() => {
+        result.current.handleFilterChange({ "Key Alias": "alias-1" });
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 350));
+
+      expect(uiSpendLogsCall).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("filterByCurrentUser", () => {
+    it("sends user_id: userID when the User ID filter is blank", async () => {
+      const { result } = renderFilterHook({
+        filterByCurrentUser: true,
+        userID: "me-123",
+      });
+
+      act(() => {
+        result.current.handleFilterChange({ "Key Alias": "alias-1" });
+      });
+
+      await waitFor(
+        () => {
+          expect(uiSpendLogsCall).toHaveBeenCalledWith(
+            expect.objectContaining({
+              params: expect.objectContaining({ user_id: "me-123" }),
+            }),
+          );
+        },
+        { timeout: 500 },
+      );
+    });
+  });
+
+  describe("error handling", () => {
+    it("does not crash when uiSpendLogsCall throws", async () => {
+      vi.mocked(uiSpendLogsCall).mockRejectedValue(new Error("Network error"));
+      const { result } = renderFilterHook();
+
+      act(() => {
+        result.current.handleFilterChange({ "Key Alias": "alias-1" });
+      });
+
+      await waitFor(() => expect(uiSpendLogsCall).toHaveBeenCalled(), { timeout: 500 });
+
+      expect(result.current.filteredLogs).toBeDefined();
+      expect(result.current.filteredLogs.data).toEqual([]);
+    });
   });
 });
