@@ -161,6 +161,32 @@ class CohereV2ChatConfig(OpenAIGPTConfig):
                 optional_params["seed"] = value
         return optional_params
 
+    @staticmethod
+    def _strip_cohere_unsupported_fields(
+        messages: List[AllMessageValues],
+    ) -> List[AllMessageValues]:
+        """Remove fields that Cohere's v2 API rejects.
+
+        * ``index`` on tool_calls inside assistant messages
+        * ``name`` on tool-role messages
+        """
+        cleaned: List[AllMessageValues] = []
+        for msg in messages:
+            if not isinstance(msg, dict):
+                cleaned.append(msg)
+                continue
+            role = msg.get("role")
+            if role == "assistant" and "tool_calls" in msg:
+                msg = {**msg}
+                msg["tool_calls"] = [
+                    {k: v for k, v in tc.items() if k != "index"}
+                    for tc in msg["tool_calls"]
+                ]
+            elif role == "tool" and "name" in msg:
+                msg = {k: v for k, v in msg.items() if k != "name"}
+            cleaned.append(msg)
+        return cleaned
+
     def transform_request(
         self,
         model: str,
@@ -172,6 +198,7 @@ class CohereV2ChatConfig(OpenAIGPTConfig):
         """
         Cohere v2 chat api is in openai format, so we can use the openai transform request function to transform the request.
         """
+        messages = self._strip_cohere_unsupported_fields(messages)
         data = super().transform_request(
             model, messages, optional_params, litellm_params, headers
         )
