@@ -390,6 +390,7 @@ async def invoke_agent_a2a(  # noqa: PLR0915
         if "metadata" not in body:
             body["metadata"] = {}
         body["metadata"]["agent_id"] = agent.agent_id
+        body["agent_id"] = agent.agent_id
 
         body.update(
             {
