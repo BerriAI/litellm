@@ -1,5 +1,14 @@
-import { Button, Select, SelectItem, TabPanel, Text, Title } from "@tremor/react";
-import { InputNumber } from "antd";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+// eslint-disable-next-line litellm-ui/no-banned-ui-imports
+import { TabPanel } from "@tremor/react";
 import React from "react";
 
 interface GlobalRetryPolicyObject {
@@ -15,10 +24,14 @@ interface ModelRetrySettingsTabProps {
   setSelectedModelGroup: (selectedModelGroup: string | null) => void;
   availableModelGroups: string[];
   globalRetryPolicy: GlobalRetryPolicyObject | null;
-  setGlobalRetryPolicy: React.Dispatch<React.SetStateAction<GlobalRetryPolicyObject | null>>;
+  setGlobalRetryPolicy: React.Dispatch<
+    React.SetStateAction<GlobalRetryPolicyObject | null>
+  >;
   defaultRetry: number;
   modelGroupRetryPolicy: RetryPolicyObject | null;
-  setModelGroupRetryPolicy: React.Dispatch<React.SetStateAction<RetryPolicyObject | null>>;
+  setModelGroupRetryPolicy: React.Dispatch<
+    React.SetStateAction<RetryPolicyObject | null>
+  >;
   handleSaveRetrySettings: () => void;
 }
 
@@ -42,79 +55,99 @@ const ModelRetrySettingsTab = ({
   setModelGroupRetryPolicy,
   handleSaveRetrySettings,
 }: ModelRetrySettingsTabProps) => {
-  //  const [modelGroupRetryPolicy, setModelGroupRetryPolicy] = useState<RetryPolicyObject | null>(null);
-
   return (
     <TabPanel>
       <div className="flex items-center gap-4 mb-6">
         <div className="flex items-center">
-          <Text>Retry Policy Scope:</Text>
+          <span>Retry Policy Scope:</span>
           <Select
-            className="ml-2 w-48"
-            defaultValue="global"
-            value={selectedModelGroup === "global" ? "global" : selectedModelGroup || availableModelGroups[0]}
+            value={
+              selectedModelGroup === "global"
+                ? "global"
+                : selectedModelGroup || availableModelGroups[0]
+            }
             onValueChange={(value) => setSelectedModelGroup(value)}
           >
-            <SelectItem value="global">Global Default</SelectItem>
-            {availableModelGroups.map((group, idx) => (
-              <SelectItem key={idx} value={group} onClick={() => setSelectedModelGroup(group)}>
-                {group}
-              </SelectItem>
-            ))}
+            <SelectTrigger className="ml-2 w-48">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="global">Global Default</SelectItem>
+              {availableModelGroups.map((group) => (
+                <SelectItem key={group} value={group}>
+                  {group}
+                </SelectItem>
+              ))}
+            </SelectContent>
           </Select>
         </div>
       </div>
 
       {selectedModelGroup === "global" ? (
         <>
-          <Title>Global Retry Policy</Title>
-          <Text className="mb-6">Default retry settings applied to all model groups unless overridden</Text>
+          <h3 className="text-lg font-semibold">Global Retry Policy</h3>
+          <p className="mb-6 text-muted-foreground">
+            Default retry settings applied to all model groups unless
+            overridden
+          </p>
         </>
       ) : (
         <>
-          <Title>Retry Policy for {selectedModelGroup}</Title>
-          <Text className="mb-6">Model-specific retry settings. Falls back to global defaults if not set.</Text>
+          <h3 className="text-lg font-semibold">
+            Retry Policy for {selectedModelGroup}
+          </h3>
+          <p className="mb-6 text-muted-foreground">
+            Model-specific retry settings. Falls back to global defaults if not
+            set.
+          </p>
         </>
       )}
-      {retryPolicyMap && (
-        <table>
-          <tbody>
-            {Object.entries(retryPolicyMap).map(([exceptionType, retryPolicyKey], idx) => {
+      <table>
+        <tbody>
+          {Object.entries(retryPolicyMap).map(
+            ([exceptionType, retryPolicyKey], idx) => {
               let retryCount: number;
 
               if (selectedModelGroup === "global") {
-                // Show global policy values
                 retryCount = globalRetryPolicy?.[retryPolicyKey] ?? defaultRetry;
               } else {
-                // Show model-group specific values with fallback to global
-                const modelSpecificCount = modelGroupRetryPolicy?.[selectedModelGroup!]?.[retryPolicyKey];
+                const modelSpecificCount =
+                  modelGroupRetryPolicy?.[selectedModelGroup!]?.[
+                    retryPolicyKey
+                  ];
                 if (modelSpecificCount != null) {
                   retryCount = modelSpecificCount;
                 } else {
-                  // Fall back to global policy, then default
-                  retryCount = globalRetryPolicy?.[retryPolicyKey] ?? defaultRetry;
+                  retryCount =
+                    globalRetryPolicy?.[retryPolicyKey] ?? defaultRetry;
                 }
               }
 
               return (
-                <tr key={idx} className="flex justify-between items-center mt-2">
+                <tr
+                  key={idx}
+                  className="flex justify-between items-center mt-2"
+                >
                   <td>
-                    <Text>{exceptionType}</Text>
+                    <span>{exceptionType}</span>
                     {selectedModelGroup !== "global" && (
-                      <Text className="text-xs text-gray-500 ml-2">
-                        (Global: {globalRetryPolicy?.[retryPolicyKey] ?? defaultRetry})
-                      </Text>
+                      <span className="text-xs text-muted-foreground ml-2">
+                        (Global:{" "}
+                        {globalRetryPolicy?.[retryPolicyKey] ?? defaultRetry})
+                      </span>
                     )}
                   </td>
                   <td>
-                    <InputNumber
-                      className="ml-5"
+                    <Input
+                      type="number"
+                      className="ml-5 w-24"
                       value={retryCount}
                       min={0}
                       step={1}
-                      onChange={(value) => {
+                      onChange={(e) => {
+                        const raw = e.target.value;
+                        const value = raw === "" ? null : Number(raw);
                         if (selectedModelGroup === "global") {
-                          // Update global policy
                           setGlobalRetryPolicy((prevGlobalRetryPolicy) => {
                             if (value == null) return prevGlobalRetryPolicy;
                             return {
@@ -123,27 +156,31 @@ const ModelRetrySettingsTab = ({
                             };
                           });
                         } else {
-                          // Update model-group specific policy
-                          setModelGroupRetryPolicy((prevModelGroupRetryPolicy) => {
-                            const prevRetryPolicy = prevModelGroupRetryPolicy?.[selectedModelGroup!] ?? {};
-                            return {
-                              ...(prevModelGroupRetryPolicy ?? {}),
-                              [selectedModelGroup!]: {
-                                ...prevRetryPolicy,
-                                [retryPolicyKey!]: value,
-                              },
-                            } as RetryPolicyObject;
-                          });
+                          setModelGroupRetryPolicy(
+                            (prevModelGroupRetryPolicy) => {
+                              const prevRetryPolicy =
+                                prevModelGroupRetryPolicy?.[
+                                  selectedModelGroup!
+                                ] ?? {};
+                              return {
+                                ...(prevModelGroupRetryPolicy ?? {}),
+                                [selectedModelGroup!]: {
+                                  ...prevRetryPolicy,
+                                  [retryPolicyKey!]: value,
+                                },
+                              } as RetryPolicyObject;
+                            },
+                          );
                         }
                       }}
                     />
                   </td>
                 </tr>
               );
-            })}
-          </tbody>
-        </table>
-      )}
+            },
+          )}
+        </tbody>
+      </table>
       <Button className="mt-6 mr-8" onClick={handleSaveRetrySettings}>
         Save
       </Button>
