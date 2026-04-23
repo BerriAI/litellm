@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowLeftOutlined, HistoryOutlined, ToolOutlined } from "@ant-design/icons";
+import { ArrowLeft as ArrowLeftOutlined, History as HistoryOutlined, Wrench as ToolOutlined } from "lucide-react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button, Select, Spin } from "antd";
 import React, { useCallback, useEffect, useMemo, useState } from "react";

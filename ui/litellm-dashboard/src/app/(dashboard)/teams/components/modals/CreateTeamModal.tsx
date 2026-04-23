@@ -1,7 +1,7 @@
 // eslint-disable-next-line litellm-ui/no-banned-ui-imports
 import { Button as Button2, Form, Input, Modal, Select as Select2, Switch, Tooltip } from "antd";
 import { Accordion, AccordionBody, AccordionHeader, Text, TextInput } from "@tremor/react";
-import { InfoCircleOutlined } from "@ant-design/icons";
+import { Info as InfoCircleOutlined } from "lucide-react";
 import {
   fetchAvailableModelsForTeamOrKey,
   getModelDisplayName,

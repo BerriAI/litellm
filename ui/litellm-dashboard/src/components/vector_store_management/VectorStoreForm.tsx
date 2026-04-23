@@ -2,7 +2,7 @@ import React, { useState, useEffect } from "react";
 // eslint-disable-next-line litellm-ui/no-banned-ui-imports
 import { TextInput, Button as TremorButton } from "@tremor/react";
 import { Modal, Form, Select, Tooltip, Input, Alert } from "antd";
-import { InfoCircleOutlined } from "@ant-design/icons";
+import { Info as InfoCircleOutlined } from "lucide-react";
 import { CredentialItem, vectorStoreCreateCall } from "../networking";
 import {
   VectorStoreProviders,

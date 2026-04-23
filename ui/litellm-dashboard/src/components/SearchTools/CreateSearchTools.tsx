@@ -1,5 +1,5 @@
 import { isAdminRole } from "@/utils/roles";
-import { InfoCircleOutlined } from "@ant-design/icons";
+import { Info as InfoCircleOutlined } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 // eslint-disable-next-line litellm-ui/no-banned-ui-imports
 import { Button, TextInput } from "@tremor/react";

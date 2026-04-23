@@ -4,7 +4,7 @@ import { useCallback, useDeferredValue, useEffect, useRef, useState } from "reac
 import GuardrailViewer from "@/components/view_logs/GuardrailViewer/GuardrailViewer";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { truncateString } from "@/utils/textUtils";
-import { SettingOutlined, SyncOutlined } from "@ant-design/icons";
+import { Settings as SettingOutlined, RefreshCcw as SyncOutlined } from "lucide-react";
 import { Row } from "@tanstack/react-table";
 // eslint-disable-next-line litellm-ui/no-banned-ui-imports
 import { Switch, Tab, TabGroup, TabList, TabPanel, TabPanels } from "@tremor/react";
@@ -594,7 +594,7 @@ export default function SpendLogsTable({
 
                           <Button
                             type="default"
-                            icon={<SyncOutlined spin={isButtonLoading} />}
+                            icon={<SyncOutlined className={isButtonLoading ? "animate-spin" : undefined} />}
                             onClick={handleRefresh}
                             disabled={isButtonLoading}
                             title="Fetch data"

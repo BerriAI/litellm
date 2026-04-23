@@ -8,7 +8,7 @@ import { getDisplayModelName } from "@/components/view_model/model_name_display"
 import DeleteResourceModal from "@/components/common_components/DeleteResourceModal";
 import NotificationsManager from "@/components/molecules/notifications_manager";
 import { modelDeleteCall } from "@/components/networking";
-import { InfoCircleOutlined, SettingOutlined } from "@ant-design/icons";
+import { Info as InfoCircleOutlined, Settings as SettingOutlined } from "lucide-react";
 import { PaginationState, SortingState } from "@tanstack/react-table";
 // eslint-disable-next-line litellm-ui/no-banned-ui-imports
 import { useQueryClient } from "@tanstack/react-query";

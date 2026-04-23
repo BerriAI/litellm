@@ -24,7 +24,7 @@ import {
 import PublicModelHub from "@/components/public_model_hub";
 import { isAdminRole } from "@/utils/roles";
 // eslint-disable-next-line litellm-ui/no-banned-ui-imports
-import { CopyOutlined } from "@ant-design/icons";
+import { Copy as CopyOutlined } from "lucide-react";
 import { Badge, Button, Card, Tab, TabGroup, TabList, TabPanel, TabPanels, Text, Title } from "@tremor/react";
 import { Modal } from "antd";
 import { Copy } from "lucide-react";

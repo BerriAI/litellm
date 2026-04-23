@@ -16,7 +16,7 @@ import {
   Button,
 } from "antd";
 import type { FormInstance } from "antd";
-import { PlusOutlined, MinusCircleOutlined } from "@ant-design/icons";
+import { Plus as PlusOutlined, MinusCircle as MinusCircleOutlined } from "lucide-react";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import { Team } from "../../key_team_helpers/key_list";

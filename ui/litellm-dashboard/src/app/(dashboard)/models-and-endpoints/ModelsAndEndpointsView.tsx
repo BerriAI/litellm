@@ -19,7 +19,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { Tab, TabGroup, TabList, TabPanel, TabPanels } from "@tremor/react";
 import type { UploadProps } from "antd";
 import { Form } from "antd";
-import { PlusCircleOutlined } from "@ant-design/icons";
+import { PlusCircle as PlusCircleOutlined } from "lucide-react";
 import React, { useEffect, useMemo, useState } from "react";
 import AddModelTab from "../../../components/add_model/add_model_tab";
 import HealthCheckComponent from "../../../components/model_dashboard/HealthCheckComponent";
