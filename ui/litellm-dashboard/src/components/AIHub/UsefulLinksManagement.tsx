@@ -1,11 +1,32 @@
 import TableIconActionButton from "@/components/common_components/IconActionButton/TableIconActionButtons/TableIconActionButton";
 import NotificationsManager from "@/components/molecules/notifications_manager";
 import { isAdminRole } from "@/utils/roles";
-import { ChevronDownIcon, ChevronRightIcon, ExternalLinkIcon, PlusCircleIcon } from "@heroicons/react/outline";
-import { Card, Table, TableBody, TableCell, TableHead, TableHeaderCell, TableRow, Text, Title } from "@tremor/react";
+import {
+  ChevronDown,
+  ChevronRight,
+  ExternalLink as ExternalLinkIcon,
+  Plus,
+} from "lucide-react";
+// eslint-disable-next-line litellm-ui/no-banned-ui-imports
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeaderCell,
+  TableRow,
+} from "@tremor/react";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { cn } from "@/lib/utils";
 import Link from "next/link";
-import React, { useEffect, useState } from "react";
-import { getProxyBaseUrl, getPublicModelHubInfo, updateUsefulLinksCall } from "../networking";
+import React, { useCallback, useEffect, useState } from "react";
+import {
+  getProxyBaseUrl,
+  getPublicModelHubInfo,
+  updateUsefulLinksCall,
+} from "../networking";
 
 interface UsefulLinksManagementProps {
   accessToken: string | null;
@@ -23,12 +44,13 @@ const UsefulLinksManagement: React.FC<UsefulLinksManagementProps> = ({ accessTok
   const [links, setLinks] = useState<Link[]>([]);
   const [newLink, setNewLink] = useState({ url: "", displayName: "" });
   const [editingLink, setEditingLink] = useState<Link | null>(null);
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [loading, setLoading] = useState(false);
   const [isExpanded, setIsExpanded] = useState(true);
   const [isRearranging, setIsRearranging] = useState(false);
   const [originalLinksOrder, setOriginalLinksOrder] = useState<Link[]>([]);
 
-  const fetchUsefulLinks = async () => {
+  const fetchUsefulLinks = useCallback(async () => {
     if (!accessToken) return;
 
     try {
@@ -38,20 +60,21 @@ const UsefulLinksManagement: React.FC<UsefulLinksManagementProps> = ({ accessTok
       if (response && response.useful_links) {
         const usefulLinks = response.useful_links || {};
 
-        // Convert object to array of links with ids
-        // Handle both old format (Dict[str, str]) and new format (Dict[str, {url, index}])
         const linksArray = Object.entries(usefulLinks)
           .map(([displayName, value]) => {
-            // Check if it's the new format with {url, index}
-            if (typeof value === "object" && value !== null && "url" in value) {
+            if (
+              typeof value === "object" &&
+              value !== null &&
+              "url" in value
+            ) {
+              const v = value as { url: string; index?: number };
               return {
-                id: `${(value as any).index ?? 0}-${displayName}`,
+                id: `${v.index ?? 0}-${displayName}`,
                 displayName,
-                url: (value as any).url as string,
-                index: (value as any).index ?? 0,
+                url: v.url,
+                index: v.index ?? 0,
               };
             } else {
-              // Old format: just a string URL
               return {
                 id: `0-${displayName}`,
                 displayName,
@@ -76,11 +99,11 @@ const UsefulLinksManagement: React.FC<UsefulLinksManagementProps> = ({ accessTok
     } finally {
       setLoading(false);
     }
-  };
+  }, [accessToken]);
 
   useEffect(() => {
     fetchUsefulLinks();
-  }, [accessToken]);
+  }, [fetchUsefulLinks]);
 
   // Check if user is admin
   if (!isAdminRole(userRole || "")) {
@@ -226,20 +249,26 @@ const UsefulLinksManagement: React.FC<UsefulLinksManagementProps> = ({ accessTok
     setLinks(newLinks);
   };
 
+  const addDisabled = !newLink.url || !newLink.displayName;
+
   return (
-    <Card className="mb-6">
-      <div className="flex items-center justify-between cursor-pointer" onClick={() => setIsExpanded(!isExpanded)}>
+    <Card className="mb-6 p-4">
+      <div
+        className="flex items-center justify-between cursor-pointer"
+        onClick={() => setIsExpanded(!isExpanded)}
+      >
         <div className="flex flex-col">
-          <Title className="mb-0">Link Management</Title>
-          <p className="text-sm text-gray-500">
-            Manage the links that are displayed under &apos;Useful Links&apos; on the public model hub.
+          <h3 className="mb-0 text-lg font-semibold">Link Management</h3>
+          <p className="text-sm text-muted-foreground">
+            Manage the links that are displayed under &apos;Useful Links&apos;
+            on the public model hub.
           </p>
         </div>
         <div className="flex items-center">
           {isExpanded ? (
-            <ChevronDownIcon className="w-5 h-5 text-gray-500" />
+            <ChevronDown className="w-5 h-5 text-muted-foreground" />
           ) : (
-            <ChevronRightIcon className="w-5 h-5 text-gray-500" />
+            <ChevronRight className="w-5 h-5 text-muted-foreground" />
           )}
         </div>
       </div>
@@ -247,11 +276,15 @@ const UsefulLinksManagement: React.FC<UsefulLinksManagementProps> = ({ accessTok
       {isExpanded && (
         <div className="mt-4">
           <div className="mb-6">
-            <Text className="text-sm font-medium text-gray-700 mb-2">Add New Link</Text>
+            <p className="text-sm font-medium text-foreground mb-2">
+              Add New Link
+            </p>
             <div className="grid grid-cols-3 gap-4">
               <div>
-                <label className="block text-xs text-gray-500 mb-1">Display Name</label>
-                <input
+                <label className="block text-xs text-muted-foreground mb-1">
+                  Display Name
+                </label>
+                <Input
                   type="text"
                   value={newLink.displayName}
                   onChange={(e) =>
@@ -261,12 +294,13 @@ const UsefulLinksManagement: React.FC<UsefulLinksManagementProps> = ({ accessTok
                     })
                   }
                   placeholder="Friendly name"
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm"
                 />
               </div>
               <div>
-                <label className="block text-xs text-gray-500 mb-1">URL</label>
-                <input
+                <label className="block text-xs text-muted-foreground mb-1">
+                  URL
+                </label>
+                <Input
                   type="text"
                   value={newLink.url}
                   onChange={(e) =>
@@ -276,29 +310,33 @@ const UsefulLinksManagement: React.FC<UsefulLinksManagementProps> = ({ accessTok
                     })
                   }
                   placeholder="https://example.com"
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm"
                 />
               </div>
               <div className="flex items-end">
-                <button
+                <Button
                   onClick={handleAddLink}
-                  disabled={!newLink.url || !newLink.displayName}
-                  className={`flex items-center px-4 py-2 rounded-md text-sm ${!newLink.url || !newLink.displayName ? "bg-gray-300 text-gray-500 cursor-not-allowed" : "bg-green-600 text-white hover:bg-green-700"}`}
+                  disabled={addDisabled}
+                  className={cn(
+                    !addDisabled &&
+                      "bg-emerald-600 text-white hover:bg-emerald-700",
+                  )}
                 >
-                  <PlusCircleIcon className="w-4 h-4 mr-1" />
+                  <Plus className="h-4 w-4" />
                   Add Link
-                </button>
+                </Button>
               </div>
             </div>
           </div>
           <div className="flex items-center justify-between mb-2">
-            <Text className="text-sm font-medium text-gray-700">Manage Existing Links</Text>
+            <p className="text-sm font-medium text-foreground">
+              Manage Existing Links
+            </p>
             <div className="flex items-center space-x-2">
               <Link
                 href={`${getProxyBaseUrl()}/ui/model_hub_table`}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="text-xs bg-blue-50 text-blue-600 px-3 py-1.5 rounded hover:bg-blue-100 flex items-center"
+                className="text-xs bg-blue-50 text-blue-600 dark:bg-blue-950/30 dark:text-blue-300 px-3 py-1.5 rounded hover:bg-blue-100 dark:hover:bg-blue-950/60 flex items-center"
                 title="Open Public Model Hub"
               >
                 Public Model Hub
@@ -306,22 +344,25 @@ const UsefulLinksManagement: React.FC<UsefulLinksManagementProps> = ({ accessTok
               </Link>
               {!isRearranging ? (
                 <button
+                  type="button"
                   onClick={handleStartRearranging}
-                  className="text-xs bg-purple-50 text-purple-600 px-3 py-1.5 rounded hover:bg-purple-100 flex items-center"
+                  className="text-xs bg-purple-50 text-purple-600 dark:bg-purple-950/30 dark:text-purple-300 px-3 py-1.5 rounded hover:bg-purple-100 dark:hover:bg-purple-950/60 flex items-center"
                 >
                   Rearrange Order
                 </button>
               ) : (
                 <div className="flex space-x-2">
                   <button
+                    type="button"
                     onClick={handleSaveRearranging}
-                    className="text-xs bg-green-600 text-white px-3 py-1.5 rounded hover:bg-green-700"
+                    className="text-xs bg-emerald-600 text-white px-3 py-1.5 rounded hover:bg-emerald-700"
                   >
                     Save Order
                   </button>
                   <button
+                    type="button"
                     onClick={handleCancelRearranging}
-                    className="text-xs bg-gray-50 text-gray-600 px-3 py-1.5 rounded hover:bg-gray-100"
+                    className="text-xs bg-muted text-muted-foreground px-3 py-1.5 rounded hover:bg-muted/70"
                   >
                     Cancel
                   </button>
@@ -345,7 +386,7 @@ const UsefulLinksManagement: React.FC<UsefulLinksManagementProps> = ({ accessTok
                       {editingLink && editingLink.id === link.id ? (
                         <>
                           <TableCell className="py-0.5">
-                            <input
+                            <Input
                               type="text"
                               value={editingLink.displayName}
                               onChange={(e) =>
@@ -354,11 +395,11 @@ const UsefulLinksManagement: React.FC<UsefulLinksManagementProps> = ({ accessTok
                                   displayName: e.target.value,
                                 })
                               }
-                              className="w-full px-2 py-1 border border-gray-300 rounded-md text-sm"
+                              className="h-8"
                             />
                           </TableCell>
                           <TableCell className="py-0.5">
-                            <input
+                            <Input
                               type="text"
                               value={editingLink.url}
                               onChange={(e) =>
@@ -367,20 +408,22 @@ const UsefulLinksManagement: React.FC<UsefulLinksManagementProps> = ({ accessTok
                                   url: e.target.value,
                                 })
                               }
-                              className="w-full px-2 py-1 border border-gray-300 rounded-md text-sm"
+                              className="h-8"
                             />
                           </TableCell>
                           <TableCell className="py-0.5 whitespace-nowrap">
                             <div className="flex space-x-2">
                               <button
+                                type="button"
                                 onClick={handleUpdateLink}
-                                className="text-xs bg-blue-50 text-blue-600 px-2 py-1 rounded hover:bg-blue-100"
+                                className="text-xs bg-blue-50 text-blue-600 dark:bg-blue-950/30 dark:text-blue-300 px-2 py-1 rounded hover:bg-blue-100 dark:hover:bg-blue-950/60"
                               >
                                 Save
                               </button>
                               <button
+                                type="button"
                                 onClick={handleCancelEdit}
-                                className="text-xs bg-gray-50 text-gray-600 px-2 py-1 rounded hover:bg-gray-100"
+                                className="text-xs bg-muted text-muted-foreground px-2 py-1 rounded hover:bg-muted/70"
                               >
                                 Cancel
                               </button>
@@ -389,8 +432,12 @@ const UsefulLinksManagement: React.FC<UsefulLinksManagementProps> = ({ accessTok
                         </>
                       ) : (
                         <>
-                          <TableCell className="py-0.5 text-sm text-gray-900">{link.displayName}</TableCell>
-                          <TableCell className="py-0.5 text-sm text-gray-500">{link.url}</TableCell>
+                          <TableCell className="py-0.5 text-sm text-foreground">
+                            {link.displayName}
+                          </TableCell>
+                          <TableCell className="py-0.5 text-sm text-muted-foreground">
+                            {link.url}
+                          </TableCell>
                           <TableCell className="py-0.5 whitespace-nowrap">
                             {isRearranging ? (
                               <div className="flex space-x-2">
@@ -440,7 +487,10 @@ const UsefulLinksManagement: React.FC<UsefulLinksManagementProps> = ({ accessTok
                   ))}
                   {links.length === 0 && (
                     <TableRow>
-                      <TableCell colSpan={3} className="py-0.5 text-sm text-gray-500 text-center">
+                      <TableCell
+                        colSpan={3}
+                        className="py-0.5 text-sm text-muted-foreground text-center"
+                      >
                         No links added yet. Add a new link above.
                       </TableCell>
                     </TableRow>

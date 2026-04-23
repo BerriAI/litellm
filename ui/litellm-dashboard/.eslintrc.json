@@ -75,6 +75,7 @@
         "src/components/team/LoggingSettings.tsx",
         "src/components/DeletedTeamsPage/DeletedTeamsTable/DeletedTeamsTable.tsx",
         "src/components/DeletedKeysPage/DeletedKeysTable/DeletedKeysTable.tsx",
+        "src/components/AIHub/UsefulLinksManagement.tsx",
         "src/components/permissions/VectorStorePermissions.tsx",
         "src/components/permissions/AgentPermissions.tsx",
         "src/components/permissions/MCPServerPermissions.tsx",
