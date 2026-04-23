@@ -111,49 +111,62 @@ async def test_proxy_failure_metrics():
         # Note: client_ip, user_agent, model_id are present but we use substring matching to be flexible
         # Check for both the new metric and deprecated metric for backwards compatibility
         expected_patterns = [
-            'litellm_proxy_failed_requests_metric_total{',  # New metric
-            'litellm_llm_api_failed_requests_metric_total{'  # Deprecated but may still be used
+            "litellm_proxy_failed_requests_metric_total{",  # New metric
+            "litellm_llm_api_failed_requests_metric_total{",  # Deprecated but may still be used
         ]
-        
+
         # Check if either pattern is in metrics and contains required fields
         found_metric = False
         for pattern in expected_patterns:
             for line in metrics.split("\n"):
                 # For proxy metric, check proxy-specific fields
-                if 'litellm_proxy_failed_requests_metric_total{' in line:
-                    if 'api_key_alias="None"' in line and \
-                       'exception_class="Openai.RateLimitError"' in line and \
-                       'exception_status="429"' in line and \
-                       'hashed_api_key="88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b"' in line and \
-                       'requested_model="fake-azure-endpoint"' in line and \
-                       'route="/chat/completions"' in line:
+                if "litellm_proxy_failed_requests_metric_total{" in line:
+                    if (
+                        'api_key_alias="None"' in line
+                        and 'exception_class="Openai.RateLimitError"' in line
+                        and 'exception_status="429"' in line
+                        and 'hashed_api_key="88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b"'
+                        in line
+                        and 'requested_model="fake-azure-endpoint"' in line
+                        and 'route="/chat/completions"' in line
+                    ):
                         found_metric = True
                         break
                 # For deprecated llm_api metric, check llm-specific fields
-                elif 'litellm_llm_api_failed_requests_metric_total{' in line:
-                    if 'hashed_api_key="88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b"' in line and \
-                       'model="429"' in line:  # The deprecated metric uses the actual model from the request
+                elif "litellm_llm_api_failed_requests_metric_total{" in line:
+                    if (
+                        'hashed_api_key="88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b"'
+                        in line
+                        and 'model="429"' in line
+                    ):  # The deprecated metric uses the actual model from the request
                         found_metric = True
                         break
             if found_metric:
                 break
-        
-        assert found_metric, f"Expected failure metric not found in /metrics. Looking for either litellm_proxy_failed_requests_metric_total or litellm_llm_api_failed_requests_metric_total with required fields"
 
-        # Check total requests metric similarly  
+        assert (
+            found_metric
+        ), f"Expected failure metric not found in /metrics. Looking for either litellm_proxy_failed_requests_metric_total or litellm_llm_api_failed_requests_metric_total with required fields"
+
+        # Check total requests metric similarly
         # The litellm_proxy_total_requests_metric_total should be present
-        total_requests_pattern = 'litellm_proxy_total_requests_metric_total{'
-        
+        total_requests_pattern = "litellm_proxy_total_requests_metric_total{"
+
         found_total_metric = False
         for line in metrics.split("\n"):
-            if total_requests_pattern in line and \
-               'hashed_api_key="88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b"' in line and \
-               'requested_model="fake-azure-endpoint"' in line and \
-               'status_code="429"' in line:
+            if (
+                total_requests_pattern in line
+                and 'hashed_api_key="88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b"'
+                in line
+                and 'requested_model="fake-azure-endpoint"' in line
+                and 'status_code="429"' in line
+            ):
                 found_total_metric = True
                 break
-        
-        assert found_total_metric, f"Expected total requests metric not found in /metrics. Looking for: {total_requests_pattern} with hashed_api_key and status_code=429"
+
+        assert (
+            found_total_metric
+        ), f"Expected total requests metric not found in /metrics. Looking for: {total_requests_pattern} with hashed_api_key and status_code=429"
 
 
 @pytest.mark.asyncio
@@ -187,28 +200,38 @@ async def test_proxy_success_metrics():
         # Note: The model can be "gpt-3.5-turbo-0301" or similar depending on what's returned
         found_request_latency = False
         for line in metrics.split("\n"):
-            if 'litellm_request_total_latency_metric_bucket{' in line and \
-               'api_key_alias="None"' in line and \
-               'hashed_api_key="88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b"' in line and \
-               'requested_model="fake-openai-endpoint"' in line and \
-               'le="0.005"' in line:
+            if (
+                "litellm_request_total_latency_metric_bucket{" in line
+                and 'api_key_alias="None"' in line
+                and 'hashed_api_key="88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b"'
+                in line
+                and 'requested_model="fake-openai-endpoint"' in line
+                and 'le="0.005"' in line
+            ):
                 found_request_latency = True
                 break
-        
-        assert found_request_latency, "Expected litellm_request_total_latency_metric_bucket not found in /metrics"
+
+        assert (
+            found_request_latency
+        ), "Expected litellm_request_total_latency_metric_bucket not found in /metrics"
 
         # Check for llm_api_latency_metric with required fields
         found_api_latency = False
         for line in metrics.split("\n"):
-            if 'litellm_llm_api_latency_metric_bucket{' in line and \
-               'api_key_alias="None"' in line and \
-               'hashed_api_key="88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b"' in line and \
-               'requested_model="fake-openai-endpoint"' in line and \
-               'le="0.005"' in line:
+            if (
+                "litellm_llm_api_latency_metric_bucket{" in line
+                and 'api_key_alias="None"' in line
+                and 'hashed_api_key="88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b"'
+                in line
+                and 'requested_model="fake-openai-endpoint"' in line
+                and 'le="0.005"' in line
+            ):
                 found_api_latency = True
                 break
-        
-        assert found_api_latency, "Expected litellm_llm_api_latency_metric_bucket not found in /metrics"
+
+        assert (
+            found_api_latency
+        ), "Expected litellm_llm_api_latency_metric_bucket not found in /metrics"
 
         verify_latency_metrics(metrics)
 
@@ -278,34 +301,44 @@ async def test_proxy_fallback_metrics():
         # Check if successful fallback metric is incremented - use flexible matching
         found_successful_fallback = False
         for line in metrics.split("\n"):
-            if 'litellm_deployment_successful_fallbacks_total{' in line and \
-               'api_key_alias="None"' in line and \
-               'exception_class="Openai.RateLimitError"' in line and \
-               'exception_status="429"' in line and \
-               'fallback_model="fake-openai-endpoint"' in line and \
-               'hashed_api_key="88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b"' in line and \
-               'requested_model="fake-azure-endpoint"' in line and \
-               '1.0' in line:
+            if (
+                "litellm_deployment_successful_fallbacks_total{" in line
+                and 'api_key_alias="None"' in line
+                and 'exception_class="Openai.RateLimitError"' in line
+                and 'exception_status="429"' in line
+                and 'fallback_model="fake-openai-endpoint"' in line
+                and 'hashed_api_key="88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b"'
+                in line
+                and 'requested_model="fake-azure-endpoint"' in line
+                and "1.0" in line
+            ):
                 found_successful_fallback = True
                 break
-        
-        assert found_successful_fallback, "Expected litellm_deployment_successful_fallbacks_total metric not found in /metrics"
+
+        assert (
+            found_successful_fallback
+        ), "Expected litellm_deployment_successful_fallbacks_total metric not found in /metrics"
 
         # Check if failed fallback metric is incremented - use flexible matching
         found_failed_fallback = False
         for line in metrics.split("\n"):
-            if 'litellm_deployment_failed_fallbacks_total{' in line and \
-               'api_key_alias="None"' in line and \
-               'exception_class="Openai.RateLimitError"' in line and \
-               'exception_status="429"' in line and \
-               'fallback_model="unknown-model"' in line and \
-               'hashed_api_key="88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b"' in line and \
-               'requested_model="fake-azure-endpoint"' in line and \
-               '1.0' in line:
+            if (
+                "litellm_deployment_failed_fallbacks_total{" in line
+                and 'api_key_alias="None"' in line
+                and 'exception_class="Openai.RateLimitError"' in line
+                and 'exception_status="429"' in line
+                and 'fallback_model="unknown-model"' in line
+                and 'hashed_api_key="88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b"'
+                in line
+                and 'requested_model="fake-azure-endpoint"' in line
+                and "1.0" in line
+            ):
                 found_failed_fallback = True
                 break
-        
-        assert found_failed_fallback, "Expected litellm_deployment_failed_fallbacks_total metric not found in /metrics"
+
+        assert (
+            found_failed_fallback
+        ), "Expected litellm_deployment_failed_fallbacks_total metric not found in /metrics"
 
 
 async def create_test_team(
@@ -566,12 +599,16 @@ def extract_user_budget_metrics(metrics_text: str, user_id: str) -> Dict[str, fl
     escaped_user_id = re.escape(user_id)
 
     # Get remaining budget
-    remaining_pattern = f'litellm_remaining_user_budget_metric{{user="{escaped_user_id}"}} ([0-9.]+)'
+    remaining_pattern = (
+        f'litellm_remaining_user_budget_metric{{user="{escaped_user_id}"}} ([0-9.]+)'
+    )
     remaining_match = re.search(remaining_pattern, metrics_text)
     metrics["remaining"] = float(remaining_match.group(1)) if remaining_match else None
 
     # Get total budget
-    total_pattern = f'litellm_user_max_budget_metric{{user="{escaped_user_id}"}} ([0-9.]+)'
+    total_pattern = (
+        f'litellm_user_max_budget_metric{{user="{escaped_user_id}"}} ([0-9.]+)'
+    )
     total_match = re.search(total_pattern, metrics_text)
     metrics["total"] = float(total_match.group(1)) if total_match else None
 
@@ -602,7 +639,9 @@ async def test_key_budget_metrics():
             "key_alias": unique_alias,
             "max_budget": 10,
             "budget_duration": "7d",
-            "budget_reset_at": (datetime.now(timezone.utc) + timedelta(days=7)).isoformat(),
+            "budget_reset_at": (
+                datetime.now(timezone.utc) + timedelta(days=7)
+            ).isoformat(),
         }
         key = await create_test_key_with_budget(session, key_data)
 
@@ -682,7 +721,9 @@ async def test_user_budget_metrics():
             "user_id": unique_user_id,
             "max_budget": 10,
             "budget_duration": "7d",
-            "budget_reset_at": (datetime.now(timezone.utc) + timedelta(days=7)).isoformat(),
+            "budget_reset_at": (
+                datetime.now(timezone.utc) + timedelta(days=7)
+            ).isoformat(),
         }
         user_info = await create_test_user(session, user_data)
         print("user_info", user_info)

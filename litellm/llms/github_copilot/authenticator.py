@@ -17,11 +17,11 @@ from .common_utils import (
     RefreshAPIKeyError,
 )
 
-# Constants
-GITHUB_CLIENT_ID = "Iv1.b507a08c87ecfe98"
-GITHUB_DEVICE_CODE_URL = "https://github.com/login/device/code"
-GITHUB_ACCESS_TOKEN_URL = "https://github.com/login/oauth/access_token"
-GITHUB_API_KEY_URL = "https://api.github.com/copilot_internal/v2/token"
+# Constants (default values — overridable via environment variables at call time)
+DEFAULT_GITHUB_CLIENT_ID = "Iv1.b507a08c87ecfe98"
+DEFAULT_GITHUB_DEVICE_CODE_URL = "https://github.com/login/device/code"
+DEFAULT_GITHUB_ACCESS_TOKEN_URL = "https://github.com/login/oauth/access_token"
+DEFAULT_GITHUB_API_KEY_URL = "https://api.github.com/copilot_internal/v2/token"
 
 
 class Authenticator:
@@ -161,12 +161,15 @@ class Authenticator:
         """
         access_token = self.get_access_token()
         headers = self._get_github_headers(access_token)
+        api_key_url = os.getenv(
+            "GITHUB_COPILOT_API_KEY_URL", DEFAULT_GITHUB_API_KEY_URL
+        )
 
         max_retries = 3
         for attempt in range(max_retries):
             try:
                 sync_client = _get_httpx_client()
-                response = sync_client.get(GITHUB_API_KEY_URL, headers=headers)
+                response = sync_client.get(api_key_url, headers=headers)
                 response.raise_for_status()
 
                 response_json = response.json()
@@ -232,10 +235,14 @@ class Authenticator:
         """
         try:
             sync_client = _get_httpx_client()
+            device_code_url = os.getenv(
+                "GITHUB_COPILOT_DEVICE_CODE_URL", DEFAULT_GITHUB_DEVICE_CODE_URL
+            )
+            client_id = os.getenv("GITHUB_COPILOT_CLIENT_ID", DEFAULT_GITHUB_CLIENT_ID)
             resp = sync_client.post(
-                GITHUB_DEVICE_CODE_URL,
+                device_code_url,
                 headers=self._get_github_headers(),
-                json={"client_id": GITHUB_CLIENT_ID, "scope": "read:user"},
+                json={"client_id": client_id, "scope": "read:user"},
             )
             resp.raise_for_status()
             resp_json = resp.json()
@@ -284,13 +291,18 @@ class Authenticator:
         sync_client = _get_httpx_client()
         max_attempts = 12  # 1 minute (12 * 5 seconds)
 
+        access_token_url = os.getenv(
+            "GITHUB_COPILOT_ACCESS_TOKEN_URL", DEFAULT_GITHUB_ACCESS_TOKEN_URL
+        )
+        client_id = os.getenv("GITHUB_COPILOT_CLIENT_ID", DEFAULT_GITHUB_CLIENT_ID)
+
         for attempt in range(max_attempts):
             try:
                 resp = sync_client.post(
-                    GITHUB_ACCESS_TOKEN_URL,
+                    access_token_url,
                     headers=self._get_github_headers(),
                     json={
-                        "client_id": GITHUB_CLIENT_ID,
+                        "client_id": client_id,
                         "device_code": device_code,
                         "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
                     },

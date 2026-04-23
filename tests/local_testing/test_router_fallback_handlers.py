@@ -117,7 +117,7 @@ async def test_run_async_fallback(function_name):
         original_exception=original_exception,
         max_fallbacks=5,
         fallback_depth=0,
-        **request_kwargs
+        **request_kwargs,
     )
 
     assert result is not None
@@ -219,9 +219,7 @@ async def test_log_failure_fallback_event():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "function_name", ["_acompletion", "_atext_completion"]
-)
+@pytest.mark.parametrize("function_name", ["_acompletion", "_atext_completion"])
 async def test_failed_fallbacks_raise_most_recent_exception(function_name):
     """
     Tests that if all fallbacks fail, the most recent occuring exception is raised
@@ -261,14 +259,12 @@ async def test_failed_fallbacks_raise_most_recent_exception(function_name):
             mock_response="litellm.RateLimitError",
             max_fallbacks=5,
             fallback_depth=0,
-            **request_kwargs
+            **request_kwargs,
         )
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "function_name", ["_acompletion", "_atext_completion"]
-)
+@pytest.mark.parametrize("function_name", ["_acompletion", "_atext_completion"])
 async def test_multiple_fallbacks(function_name):
     """
     Tests that if multiple fallbacks passed:
@@ -305,7 +301,7 @@ async def test_multiple_fallbacks(function_name):
         original_exception=original_exception,
         max_fallbacks=5,
         fallback_depth=0,
-        **request_kwargs
+        **request_kwargs,
     )
 
     print(result)

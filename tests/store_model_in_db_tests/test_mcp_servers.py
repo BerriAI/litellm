@@ -125,20 +125,26 @@ async def test_create_mcp_server_direct():
     Direct test of the MCP server creation logic without HTTP calls.
     """
     # Mock the database functions directly
-    with mock.patch(
-        "litellm.proxy.management_endpoints.mcp_management_endpoints.MCP_AVAILABLE",
-        True,
-    ), mock.patch(
-        "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw"
-    ) as mock_get_prisma, mock.patch(
-        "litellm.proxy.management_endpoints.mcp_management_endpoints.create_mcp_server",
-        new_callable=mock.AsyncMock,
-    ) as mock_create, mock.patch(
-        "litellm.proxy.management_endpoints.mcp_management_endpoints.get_mcp_server",
-        new_callable=mock.AsyncMock,
-    ) as mock_get_server, mock.patch(
-        "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager"
-    ) as mock_manager:
+    with (
+        mock.patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.MCP_AVAILABLE",
+            True,
+        ),
+        mock.patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw"
+        ) as mock_get_prisma,
+        mock.patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.create_mcp_server",
+            new_callable=mock.AsyncMock,
+        ) as mock_create,
+        mock.patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.get_mcp_server",
+            new_callable=mock.AsyncMock,
+        ) as mock_get_server,
+        mock.patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager"
+        ) as mock_manager,
+    ):
         # Import after mocking
         from litellm.proxy.management_endpoints.mcp_management_endpoints import (
             add_mcp_server,
@@ -215,15 +221,19 @@ async def test_create_duplicate_mcp_server():
     Test that creating a duplicate MCP server fails appropriately.
     """
     # Mock the database functions directly
-    with mock.patch(
-        "litellm.proxy.management_endpoints.mcp_management_endpoints.MCP_AVAILABLE",
-        True,
-    ), mock.patch(
-        "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw"
-    ) as mock_get_prisma, mock.patch(
-        "litellm.proxy.management_endpoints.mcp_management_endpoints.get_mcp_server",
-        new_callable=mock.AsyncMock,
-    ) as mock_get_server:
+    with (
+        mock.patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.MCP_AVAILABLE",
+            True,
+        ),
+        mock.patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw"
+        ) as mock_get_prisma,
+        mock.patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.get_mcp_server",
+            new_callable=mock.AsyncMock,
+        ) as mock_get_server,
+    ):
         # Import after mocking
         from litellm.proxy.management_endpoints.mcp_management_endpoints import (
             add_mcp_server,
@@ -276,12 +286,15 @@ async def test_create_mcp_server_auth_failure():
     Test that non-admin users cannot create MCP servers.
     """
     # Mock the database functions directly
-    with mock.patch(
-        "litellm.proxy.management_endpoints.mcp_management_endpoints.MCP_AVAILABLE",
-        True,
-    ), mock.patch(
-        "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw"
-    ) as mock_get_prisma:
+    with (
+        mock.patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.MCP_AVAILABLE",
+            True,
+        ),
+        mock.patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw"
+        ) as mock_get_prisma,
+    ):
         # Import after mocking
         from litellm.proxy.management_endpoints.mcp_management_endpoints import (
             add_mcp_server,
@@ -320,16 +333,21 @@ async def test_create_mcp_server_invalid_alias():
     """
     Test that creating an MCP server with a '-' in the alias fails with the correct error.
     """
-    with mock.patch(
-        "litellm.proxy.management_endpoints.mcp_management_endpoints.MCP_AVAILABLE",
-        True,
-    ), mock.patch(
-        "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw"
-    ) as mock_get_prisma, mock.patch(
-        "litellm.proxy.management_endpoints.mcp_management_endpoints.get_mcp_server"
-    ) as mock_get_server, mock.patch(
-        "litellm.proxy.management_endpoints.mcp_management_endpoints.create_mcp_server"
-    ) as mock_create:
+    with (
+        mock.patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.MCP_AVAILABLE",
+            True,
+        ),
+        mock.patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw"
+        ) as mock_get_prisma,
+        mock.patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.get_mcp_server"
+        ) as mock_get_server,
+        mock.patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.create_mcp_server"
+        ) as mock_create,
+    ):
         from litellm.proxy.management_endpoints.mcp_management_endpoints import (
             add_mcp_server,
         )
@@ -372,20 +390,26 @@ async def test_create_mcp_server_invalid_alias():
 @_SKIP_NO_MCP
 @pytest.mark.asyncio
 async def test_edit_mcp_server_redacts_credentials():
-    with mock.patch(
-        "litellm.proxy.management_endpoints.mcp_management_endpoints.MCP_AVAILABLE",
-        True,
-    ), mock.patch(
-        "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw"
-    ) as mock_get_prisma, mock.patch(
-        "litellm.proxy.management_endpoints.mcp_management_endpoints.update_mcp_server",
-        new_callable=mock.AsyncMock,
-    ) as mock_update, mock.patch(
-        "litellm.proxy.management_endpoints.mcp_management_endpoints.validate_and_normalize_mcp_server_payload",
-        autospec=True,
-    ) as mock_validate, mock.patch(
-        "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager"
-    ) as mock_manager:
+    with (
+        mock.patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.MCP_AVAILABLE",
+            True,
+        ),
+        mock.patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw"
+        ) as mock_get_prisma,
+        mock.patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.update_mcp_server",
+            new_callable=mock.AsyncMock,
+        ) as mock_update,
+        mock.patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.validate_and_normalize_mcp_server_payload",
+            autospec=True,
+        ) as mock_validate,
+        mock.patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager"
+        ) as mock_manager,
+    ):
         from litellm.proxy.management_endpoints.mcp_management_endpoints import (
             edit_mcp_server,
         )
@@ -433,6 +457,8 @@ async def test_edit_mcp_server_redacts_credentials():
         mock_update.assert_awaited_once()
         mock_manager.update_server.assert_called_once_with(updated_server)
         mock_manager.reload_servers_from_database.assert_awaited_once()
+
+
 def test_validate_mcp_server_name_direct():
     """
     Test the validation function directly to ensure it works.

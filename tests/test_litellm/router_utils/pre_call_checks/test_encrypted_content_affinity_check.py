@@ -327,13 +327,16 @@ async def test_encrypted_content_affinity_tracks_and_routes():
             return seq[0]
         return seq[1] if len(seq) > 1 else seq[0]
 
-    with patch(
-        "litellm.llms.custom_httpx.llm_http_handler.BaseLLMHTTPHandler.async_response_api_handler",
-        new_callable=AsyncMock,
-        return_value=mock_resp,
-    ), patch(
-        "litellm.router_strategy.simple_shuffle.random.choice",
-        side_effect=deterministic_choice,
+    with (
+        patch(
+            "litellm.llms.custom_httpx.llm_http_handler.BaseLLMHTTPHandler.async_response_api_handler",
+            new_callable=AsyncMock,
+            return_value=mock_resp,
+        ),
+        patch(
+            "litellm.router_strategy.simple_shuffle.random.choice",
+            side_effect=deterministic_choice,
+        ),
     ):
         # First request — goes to deployment-1 via deterministic_choice
         first_response = await router.aresponses(
@@ -456,13 +459,16 @@ async def test_encrypted_content_affinity_bypasses_rpm_limits():
             return seq[0]
         return seq[1] if len(seq) > 1 else seq[0]
 
-    with patch(
-        "litellm.llms.custom_httpx.llm_http_handler.BaseLLMHTTPHandler.async_response_api_handler",
-        new_callable=AsyncMock,
-        return_value=mock_resp,
-    ), patch(
-        "litellm.router_strategy.simple_shuffle.random.choice",
-        side_effect=deterministic_choice,
+    with (
+        patch(
+            "litellm.llms.custom_httpx.llm_http_handler.BaseLLMHTTPHandler.async_response_api_handler",
+            new_callable=AsyncMock,
+            return_value=mock_resp,
+        ),
+        patch(
+            "litellm.router_strategy.simple_shuffle.random.choice",
+            side_effect=deterministic_choice,
+        ),
     ):
         first_response = await router.aresponses(
             model="openai.gpt-5.1-codex",
@@ -597,13 +603,16 @@ async def test_encrypted_content_affinity_with_wrapped_content_no_id():
             return seq[0]
         return seq[1] if len(seq) > 1 else seq[0]
 
-    with patch(
-        "litellm.llms.custom_httpx.llm_http_handler.BaseLLMHTTPHandler.async_response_api_handler",
-        new_callable=AsyncMock,
-        return_value=mock_resp,
-    ), patch(
-        "litellm.router_strategy.simple_shuffle.random.choice",
-        side_effect=deterministic_choice,
+    with (
+        patch(
+            "litellm.llms.custom_httpx.llm_http_handler.BaseLLMHTTPHandler.async_response_api_handler",
+            new_callable=AsyncMock,
+            return_value=mock_resp,
+        ),
+        patch(
+            "litellm.router_strategy.simple_shuffle.random.choice",
+            side_effect=deterministic_choice,
+        ),
     ):
         # First request — goes to deployment-1
         first_response = await router.aresponses(
