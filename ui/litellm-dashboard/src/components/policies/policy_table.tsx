@@ -1,7 +1,28 @@
 import React, { useMemo, useState } from "react";
-import { Table, TableBody, TableCell, TableHead, TableHeaderCell, TableRow, Icon, Button, Badge } from "@tremor/react";
-import { TrashIcon, PencilIcon, SwitchVerticalIcon, ChevronUpIcon, ChevronDownIcon } from "@heroicons/react/outline";
-import { Tooltip, Tag } from "antd";
+// eslint-disable-next-line litellm-ui/no-banned-ui-imports
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeaderCell,
+  TableRow,
+} from "@tremor/react";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import {
+  ArrowUpDown,
+  ChevronDown,
+  ChevronUp,
+  Pencil,
+  Trash2,
+} from "lucide-react";
 import {
   ColumnDef,
   flexRender,
@@ -12,7 +33,6 @@ import {
 } from "@tanstack/react-table";
 import { Policy } from "./types";
 
-/** One row per policy name; primaryPolicy is used for display and for Edit (FlowBuilder loads all versions) */
 interface PolicyRow {
   policy_name: string;
   primaryPolicy: Policy;
@@ -28,12 +48,17 @@ function groupPoliciesByName(policies: Policy[]): PolicyRow[] {
   }
   const rows: PolicyRow[] = [];
   for (const [policyName, versions] of byName) {
-    // Prefer production, then highest version_number
     const primary =
       versions.find((v) => v.version_status === "production") ??
-      [...versions].sort((a, b) => (b.version_number ?? 0) - (a.version_number ?? 0))[0] ??
+      [...versions].sort(
+        (a, b) => (b.version_number ?? 0) - (a.version_number ?? 0),
+      )[0] ??
       versions[0];
-    rows.push({ policy_name: policyName, primaryPolicy: primary, versionCount: versions.length });
+    rows.push({
+      policy_name: policyName,
+      primaryPolicy: primary,
+      versionCount: versions.length,
+    });
   }
   return rows.sort((a, b) => a.policy_name.localeCompare(b.policy_name));
 }
@@ -47,6 +72,32 @@ interface PolicyTableProps {
   isAdmin?: boolean;
 }
 
+const chipList = (items: string[], classes: string) => {
+  if (items.length === 0)
+    return <span className="text-xs text-muted-foreground">-</span>;
+  return (
+    <div className="flex flex-wrap gap-1">
+      {items.slice(0, 2).map((g, i) => (
+        <Badge key={i} className={`text-xs ${classes}`}>
+          {g}
+        </Badge>
+      ))}
+      {items.length > 2 && (
+        <TooltipProvider>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Badge className="text-xs bg-muted text-muted-foreground">
+                +{items.length - 2}
+              </Badge>
+            </TooltipTrigger>
+            <TooltipContent>{items.slice(2).join(", ")}</TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
+      )}
+    </div>
+  );
+};
+
 const PolicyTable: React.FC<PolicyTableProps> = ({
   policies,
   isLoading,
@@ -55,7 +106,9 @@ const PolicyTable: React.FC<PolicyTableProps> = ({
   onViewClick,
   isAdmin = false,
 }) => {
-  const [sorting, setSorting] = useState<SortingState>([{ id: "policy_name", desc: false }]);
+  const [sorting, setSorting] = useState<SortingState>([
+    { id: "policy_name", desc: false },
+  ]);
 
   const rows = useMemo(() => groupPoliciesByName(policies), [policies]);
 
@@ -73,18 +126,28 @@ const PolicyTable: React.FC<PolicyTableProps> = ({
         const { primaryPolicy, versionCount } = row.original;
         return (
           <div className="flex items-center gap-2">
-            <Tooltip title={`${primaryPolicy.policy_name || "-"}${versionCount > 1 ? ` (${versionCount} versions)` : ""}`}>
-              <Button
-                size="xs"
-                variant="light"
-                className="font-medium text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs font-normal px-2 py-0.5 text-left"
-                onClick={() => primaryPolicy.policy_id && onViewClick(primaryPolicy.policy_id)}
-              >
-                {primaryPolicy.policy_name || "-"}
-              </Button>
-            </Tooltip>
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    className="font-medium text-blue-500 bg-blue-50 hover:bg-blue-100 dark:bg-blue-950/30 dark:hover:bg-blue-950/60 text-xs px-2 py-0.5 text-left rounded"
+                    onClick={() =>
+                      primaryPolicy.policy_id &&
+                      onViewClick(primaryPolicy.policy_id)
+                    }
+                  >
+                    {primaryPolicy.policy_name || "-"}
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent>
+                  {primaryPolicy.policy_name || "-"}
+                  {versionCount > 1 ? ` (${versionCount} versions)` : ""}
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
             {versionCount > 1 && (
-              <Badge color="gray" size="xs">
+              <Badge className="text-xs bg-muted text-muted-foreground">
                 {versionCount} version{versionCount !== 1 ? "s" : ""}
               </Badge>
             )}
@@ -98,11 +161,16 @@ const PolicyTable: React.FC<PolicyTableProps> = ({
       cell: ({ row }) => {
         const policy = row.original.primaryPolicy;
         return (
-          <Tooltip title={policy.description}>
-            <span className="text-xs truncate max-w-[200px] block">
-              {policy.description || "-"}
-            </span>
-          </Tooltip>
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span className="text-xs truncate max-w-[200px] block">
+                  {policy.description || "-"}
+                </span>
+              </TooltipTrigger>
+              <TooltipContent>{policy.description || "-"}</TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
         );
       },
     },
@@ -112,63 +180,32 @@ const PolicyTable: React.FC<PolicyTableProps> = ({
       cell: ({ row }) => {
         const policy = row.original.primaryPolicy;
         return policy.inherit ? (
-          <Badge color="blue" size="xs">
+          <Badge className="text-xs bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300">
             {policy.inherit}
           </Badge>
         ) : (
-          <span className="text-xs text-gray-400">-</span>
+          <span className="text-xs text-muted-foreground">-</span>
         );
       },
     },
     {
       header: "Guardrails (Add)",
       accessorFn: (row) => (row.primaryPolicy.guardrails_add ?? []).join(", "),
-      cell: ({ row }) => {
-        const policy = row.original.primaryPolicy;
-        const guardrails = policy.guardrails_add || [];
-        if (guardrails.length === 0) {
-          return <span className="text-xs text-gray-400">-</span>;
-        }
-        return (
-          <div className="flex flex-wrap gap-1">
-            {guardrails.slice(0, 2).map((g, i) => (
-              <Tag key={i} color="green" className="text-xs">
-                {g}
-              </Tag>
-            ))}
-            {guardrails.length > 2 && (
-              <Tooltip title={guardrails.slice(2).join(", ")}>
-                <Tag className="text-xs">+{guardrails.length - 2}</Tag>
-              </Tooltip>
-            )}
-          </div>
-        );
-      },
+      cell: ({ row }) =>
+        chipList(
+          row.original.primaryPolicy.guardrails_add || [],
+          "bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300",
+        ),
     },
     {
       header: "Guardrails (Remove)",
-      accessorFn: (row) => (row.primaryPolicy.guardrails_remove ?? []).join(", "),
-      cell: ({ row }) => {
-        const policy = row.original.primaryPolicy;
-        const guardrails = policy.guardrails_remove || [];
-        if (guardrails.length === 0) {
-          return <span className="text-xs text-gray-400">-</span>;
-        }
-        return (
-          <div className="flex flex-wrap gap-1">
-            {guardrails.slice(0, 2).map((g, i) => (
-              <Tag key={i} color="red" className="text-xs">
-                {g}
-              </Tag>
-            ))}
-            {guardrails.length > 2 && (
-              <Tooltip title={guardrails.slice(2).join(", ")}>
-                <Tag className="text-xs">+{guardrails.length - 2}</Tag>
-              </Tooltip>
-            )}
-          </div>
-        );
-      },
+      accessorFn: (row) =>
+        (row.primaryPolicy.guardrails_remove ?? []).join(", "),
+      cell: ({ row }) =>
+        chipList(
+          row.original.primaryPolicy.guardrails_remove || [],
+          "bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300",
+        ),
     },
     {
       header: "Model Condition",
@@ -180,18 +217,27 @@ const PolicyTable: React.FC<PolicyTableProps> = ({
         const policy = row.original.primaryPolicy;
         const modelCondition = policy.condition?.model;
         if (!modelCondition) {
-          return <span className="text-xs text-gray-400">-</span>;
+          return <span className="text-xs text-muted-foreground">-</span>;
         }
+        const asString =
+          typeof modelCondition === "string"
+            ? modelCondition
+            : JSON.stringify(modelCondition);
         return (
-          <Tooltip title={typeof modelCondition === "string" ? modelCondition : JSON.stringify(modelCondition)}>
-            <code className="text-xs bg-gray-100 px-1 py-0.5 rounded">
-              {typeof modelCondition === "string"
-                ? modelCondition.length > 20
-                  ? modelCondition.slice(0, 20) + "..."
-                  : modelCondition
-                : "Multiple"}
-            </code>
-          </Tooltip>
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <code className="text-xs bg-muted px-1 py-0.5 rounded">
+                  {typeof modelCondition === "string"
+                    ? modelCondition.length > 20
+                      ? modelCondition.slice(0, 20) + "..."
+                      : modelCondition
+                    : "Multiple"}
+                </code>
+              </TooltipTrigger>
+              <TooltipContent>{asString}</TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
         );
       },
     },
@@ -202,9 +248,14 @@ const PolicyTable: React.FC<PolicyTableProps> = ({
       cell: ({ row }) => {
         const policy = row.original.primaryPolicy;
         return (
-          <Tooltip title={policy.created_at}>
-            <span className="text-xs">{formatDate(policy.created_at)}</span>
-          </Tooltip>
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span className="text-xs">{formatDate(policy.created_at)}</span>
+              </TooltipTrigger>
+              <TooltipContent>{policy.created_at}</TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
         );
       },
     },
@@ -212,31 +263,49 @@ const PolicyTable: React.FC<PolicyTableProps> = ({
       id: "actions",
       header: "Actions",
       cell: ({ row }) => {
-        const { primaryPolicy } = row.original;
-        const policy = primaryPolicy;
+        const policy = row.original.primaryPolicy;
         return (
-          <div className="flex space-x-2">
+          <div className="flex space-x-2 items-center">
             {isAdmin && (
               <>
-                <Tooltip title="Edit policy">
-                  <Icon
-                    icon={PencilIcon}
-                    size="sm"
-                    onClick={() => onEditClick(policy)}
-                    className="cursor-pointer hover:text-blue-500"
-                  />
-                </Tooltip>
-                <Tooltip title="Delete policy">
-                  <Icon
-                    icon={TrashIcon}
-                    size="sm"
-                    onClick={() =>
-                      policy.policy_id &&
-                      onDeleteClick(policy.policy_id, policy.policy_name || "Unnamed Policy")
-                    }
-                    className="cursor-pointer hover:text-red-500"
-                  />
-                </Tooltip>
+                <TooltipProvider>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-7 w-7 text-muted-foreground hover:text-primary"
+                        onClick={() => onEditClick(policy)}
+                        aria-label="Edit policy"
+                      >
+                        <Pencil className="h-4 w-4" />
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent>Edit policy</TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
+                <TooltipProvider>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-7 w-7 text-muted-foreground hover:text-destructive"
+                        onClick={() =>
+                          policy.policy_id &&
+                          onDeleteClick(
+                            policy.policy_id,
+                            policy.policy_name || "Unnamed Policy",
+                          )
+                        }
+                        aria-label="Delete policy"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent>Delete policy</TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
               </>
             )}
           </div>
@@ -248,9 +317,7 @@ const PolicyTable: React.FC<PolicyTableProps> = ({
   const table = useReactTable({
     data: rows,
     columns,
-    state: {
-      sorting,
-    },
+    state: { sorting },
     onSortingChange: setSorting,
     getCoreRowModel: getCoreRowModel(),
     getSortedRowModel: getSortedRowModel(),
@@ -268,23 +335,34 @@ const PolicyTable: React.FC<PolicyTableProps> = ({
                   <TableHeaderCell
                     key={header.id}
                     className={`py-1 h-8 ${
-                      header.id === "actions" ? "sticky right-0 bg-white shadow-[-4px_0_8px_-6px_rgba(0,0,0,0.1)]" : ""
+                      header.id === "actions"
+                        ? "sticky right-0 bg-background shadow-[-4px_0_8px_-6px_rgba(0,0,0,0.1)]"
+                        : ""
                     }`}
                     onClick={header.column.getToggleSortingHandler()}
                   >
                     <div className="flex items-center justify-between gap-2">
                       <div className="flex items-center">
-                        {header.isPlaceholder ? null : flexRender(header.column.columnDef.header, header.getContext())}
+                        {header.isPlaceholder
+                          ? null
+                          : flexRender(
+                              header.column.columnDef.header,
+                              header.getContext(),
+                            )}
                       </div>
                       {header.id !== "actions" && (
                         <div className="w-4">
                           {header.column.getIsSorted() ? (
                             {
-                              asc: <ChevronUpIcon className="h-4 w-4 text-blue-500" />,
-                              desc: <ChevronDownIcon className="h-4 w-4 text-blue-500" />,
+                              asc: (
+                                <ChevronUp className="h-4 w-4 text-primary" />
+                              ),
+                              desc: (
+                                <ChevronDown className="h-4 w-4 text-primary" />
+                              ),
                             }[header.column.getIsSorted() as string]
                           ) : (
-                            <SwitchVerticalIcon className="h-4 w-4 text-gray-400" />
+                            <ArrowUpDown className="h-4 w-4 text-muted-foreground" />
                           )}
                         </div>
                       )}
@@ -297,8 +375,11 @@ const PolicyTable: React.FC<PolicyTableProps> = ({
           <TableBody>
             {isLoading ? (
               <TableRow>
-                <TableCell colSpan={columns.length} className="h-8 text-center">
-                  <div className="text-center text-gray-500">
+                <TableCell
+                  colSpan={columns.length}
+                  className="h-8 text-center"
+                >
+                  <div className="text-center text-muted-foreground">
                     <p>Loading...</p>
                   </div>
                 </TableCell>
@@ -311,19 +392,25 @@ const PolicyTable: React.FC<PolicyTableProps> = ({
                       key={cell.id}
                       className={`py-0.5 max-h-8 overflow-hidden text-ellipsis whitespace-nowrap ${
                         cell.column.id === "actions"
-                          ? "sticky right-0 bg-white shadow-[-4px_0_8px_-6px_rgba(0,0,0,0.1)]"
+                          ? "sticky right-0 bg-background shadow-[-4px_0_8px_-6px_rgba(0,0,0,0.1)]"
                           : ""
                       }`}
                     >
-                      {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                      {flexRender(
+                        cell.column.columnDef.cell,
+                        cell.getContext(),
+                      )}
                     </TableCell>
                   ))}
                 </TableRow>
               ))
             ) : (
               <TableRow>
-                <TableCell colSpan={columns.length} className="h-8 text-center">
-                  <div className="text-center text-gray-500">
+                <TableCell
+                  colSpan={columns.length}
+                  className="h-8 text-center"
+                >
+                  <div className="text-center text-muted-foreground">
                     <p>No policies found</p>
                   </div>
                 </TableCell>
