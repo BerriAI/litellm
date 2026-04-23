@@ -18,6 +18,7 @@ from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.types.utils import CredentialItem
 
 from .authenticator import Authenticator
+from .common_utils import GetAccessTokenError, RefreshAccessTokenError
 
 CREDENTIAL_TYPE = "chatgpt_oauth"
 
@@ -53,6 +54,61 @@ class DBAuthenticator(Authenticator):
         if not values:
             return None
         return _unpack_auth_record(values)
+
+    def get_access_token(self) -> str:
+        """
+        DB-backed token lookup with **no** fall-through to a server-side
+        device-code login. The parent ``Authenticator.get_access_token``
+        calls ``_login_device_code()`` as a last resort — that's the right
+        behaviour for the CLI but catastrophic in the proxy: it hits
+        OpenAI's ``/api/accounts/deviceauth/usercode`` unattended, gets
+        an instant 403, and the admin sees a cryptic ``GetLLMProvider``
+        error on Test Model. Instead, raise a clear
+        :class:`GetAccessTokenError` pointing the admin back to the UI
+        sign-in flow.
+        """
+        auth_data = self._read_auth_file()
+        if not auth_data:
+            raise GetAccessTokenError(
+                message=(
+                    f"No ChatGPT OAuth credential named "
+                    f"'{self.credential_name}' is loaded in the proxy's "
+                    "credential cache. Verify STORE_MODEL_IN_DB=True is "
+                    "set (so credentials survive restarts), and that the "
+                    "model's ``api_key`` matches the stored credential "
+                    "name — or re-run the Sign in with ChatGPT flow in "
+                    "the UI."
+                ),
+                status_code=401,
+            )
+
+        access_token = auth_data.get("access_token")
+        if access_token and not self._is_token_expired(auth_data, access_token):
+            return access_token
+
+        refresh_token = auth_data.get("refresh_token")
+        if refresh_token:
+            try:
+                refreshed = self._refresh_tokens(refresh_token)
+                return refreshed["access_token"]
+            except RefreshAccessTokenError as exc:
+                raise GetAccessTokenError(
+                    message=(
+                        f"ChatGPT OAuth credential '{self.credential_name}' "
+                        f"is expired and refresh failed: {exc.message}. "
+                        "Re-run Sign in with ChatGPT in the UI."
+                    ),
+                    status_code=401,
+                )
+
+        raise GetAccessTokenError(
+            message=(
+                f"ChatGPT OAuth credential '{self.credential_name}' has no "
+                "valid access_token and no refresh_token. Re-run Sign in "
+                "with ChatGPT in the UI."
+            ),
+            status_code=401,
+        )
 
     def _write_auth_file(self, data: Dict[str, Any]) -> None:
         credential_values = _pack_auth_record(data)

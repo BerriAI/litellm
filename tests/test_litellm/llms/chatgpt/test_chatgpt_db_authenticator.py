@@ -1,4 +1,5 @@
 import json
+import time
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -195,6 +196,88 @@ class _AsyncNone:
             return None
 
         return _coro().__await__()
+
+
+class TestGetAccessTokenNeverFallsThroughToDeviceCode:
+    """
+    Regression: the parent ``Authenticator.get_access_token`` calls
+    ``_login_device_code`` as a last resort. That's the right fall-through
+    for the CLI but **not** for the DB-backed proxy path: it would hit
+    OpenAI's device-auth endpoint unattended and get an instant 403.
+
+    ``DBAuthenticator`` overrides the method so every failure raises a
+    clear :class:`GetAccessTokenError` instead of attempting a login.
+    """
+
+    def test_raises_when_no_credential_is_loaded(self):
+        from litellm.llms.chatgpt.common_utils import GetAccessTokenError
+        from litellm.llms.chatgpt.db_authenticator import DBAuthenticator
+
+        auth = DBAuthenticator(credential_name="not-there")
+        with patch.object(DBAuthenticator, "_login_device_code") as login_device_code:
+            with pytest.raises(GetAccessTokenError) as exc_info:
+                auth.get_access_token()
+        login_device_code.assert_not_called()
+        assert "not-there" in exc_info.value.message
+
+    def test_returns_stored_token_when_not_expired(self):
+        from litellm.llms.chatgpt.db_authenticator import (
+            CREDENTIAL_TYPE,
+            DBAuthenticator,
+        )
+
+        future = int(time.time()) + 3600
+        litellm.credential_list = [
+            CredentialItem(
+                credential_name="test",
+                credential_values={
+                    "access_token": "live-token",
+                    "refresh_token": "r",
+                    "expires_at": str(future),
+                },
+                credential_info={"type": CREDENTIAL_TYPE},
+            )
+        ]
+        auth = DBAuthenticator(credential_name="test")
+        assert auth.get_access_token() == "live-token"
+
+    def test_refresh_path_raises_clean_error_on_failure(self):
+        from litellm.llms.chatgpt.common_utils import (
+            GetAccessTokenError,
+            RefreshAccessTokenError,
+        )
+        from litellm.llms.chatgpt.db_authenticator import (
+            CREDENTIAL_TYPE,
+            DBAuthenticator,
+        )
+
+        past = int(time.time()) - 10
+        litellm.credential_list = [
+            CredentialItem(
+                credential_name="test",
+                credential_values={
+                    "access_token": "expired",
+                    "refresh_token": "r1",
+                    "expires_at": str(past),
+                },
+                credential_info={"type": CREDENTIAL_TYPE},
+            )
+        ]
+        auth = DBAuthenticator(credential_name="test")
+        with (
+            patch.object(
+                DBAuthenticator,
+                "_refresh_tokens",
+                side_effect=RefreshAccessTokenError(
+                    status_code=400, message="refresh token revoked"
+                ),
+            ),
+            patch.object(DBAuthenticator, "_login_device_code") as login_device_code,
+        ):
+            with pytest.raises(GetAccessTokenError) as exc_info:
+                auth.get_access_token()
+        login_device_code.assert_not_called()
+        assert "refresh token revoked" in exc_info.value.message
 
 
 class TestPersistScheduling:
