@@ -28,7 +28,8 @@
         "src/components/GuardrailsMonitor/GuardrailDetail.tsx",
         "src/components/GuardrailsMonitor/LogViewer.tsx",
         "src/components/GuardrailsMonitor/GuardrailsOverview.tsx",
-        "src/components/common_components/IconActionButton/TableIconActionButtons/TableIconActionButton.tsx"
+        "src/components/common_components/IconActionButton/TableIconActionButtons/TableIconActionButton.tsx",
+        "src/components/GuardrailSettingsView.tsx"
       ],
       "rules": {
         "litellm-ui/no-banned-ui-imports": "off",

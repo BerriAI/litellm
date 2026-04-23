@@ -1,203 +1,220 @@
 import React, { useState, useEffect } from "react";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
 import {
-  Card,
   Table,
-  TableHead,
-  TableRow,
-  Badge,
-  TableHeaderCell,
-  TableCell,
   TableBody,
-  Text,
-  Button,
-  Icon,
-  Switch,
-} from "@tremor/react";
-import { TabPanel, TabPanels, TabGroup, TabList, Tab } from "@tremor/react";
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { CheckCircle, Trash2 } from "lucide-react";
 import {
   getGeneralSettingsCall,
   updateConfigFieldSetting,
   deleteConfigFieldSetting,
 } from "./networking";
-import { InputNumber } from "antd";
-import { TrashIcon, CheckCircleIcon } from "@heroicons/react/outline";
-
 import RouterSettings from "./router_settings";
 import Fallbacks from "./Settings/RouterSettings/Fallbacks/Fallbacks";
+
 interface GeneralSettingsPageProps {
   accessToken: string | null;
   userRole: string | null;
   userID: string | null;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   modelData: any;
 }
 
 interface generalSettingsItem {
   field_name: string;
   field_type: string;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   field_value: any;
   field_description: string;
   stored_in_db: boolean | null;
 }
 
-const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({ accessToken, userRole, userID, modelData }) => {
-  const [generalSettings, setGeneralSettings] = useState<generalSettingsItem[]>([]);
+const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({
+  accessToken,
+  userRole,
+  userID,
+  modelData,
+}) => {
+  const [generalSettings, setGeneralSettings] = useState<
+    generalSettingsItem[]
+  >([]);
 
   useEffect(() => {
-    if (!accessToken) {
-      return;
-    }
+    if (!accessToken) return;
     getGeneralSettingsCall(accessToken).then((data) => {
-      let general_settings = data;
-      setGeneralSettings(general_settings);
+      setGeneralSettings(data);
     });
   }, [accessToken]);
 
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const handleInputChange = (fieldName: string, newValue: any) => {
-    // Update the value in the state
     const updatedSettings = generalSettings.map((setting) =>
-      setting.field_name === fieldName ? { ...setting, field_value: newValue } : setting,
+      setting.field_name === fieldName
+        ? { ...setting, field_value: newValue }
+        : setting,
     );
     setGeneralSettings(updatedSettings);
   };
 
   const handleUpdateField = (fieldName: string, idx: number) => {
-    if (!accessToken) {
-      return;
-    }
-
-    let fieldValue = generalSettings[idx].field_value;
-
-    if (fieldValue == null || fieldValue == undefined) {
-      return;
-    }
+    if (!accessToken) return;
+    const fieldValue = generalSettings[idx].field_value;
+    if (fieldValue == null || fieldValue == undefined) return;
     try {
       updateConfigFieldSetting(accessToken, fieldName, fieldValue);
-      // update value in state
-
       const updatedSettings = generalSettings.map((setting) =>
-        setting.field_name === fieldName ? { ...setting, stored_in_db: true } : setting,
+        setting.field_name === fieldName
+          ? { ...setting, stored_in_db: true }
+          : setting,
       );
       setGeneralSettings(updatedSettings);
-    } catch (error) {
-      // do something
+    } catch {
+      // ignore
     }
   };
 
-  const handleResetField = (fieldName: string, idx: number) => {
-    if (!accessToken) {
-      return;
-    }
-
+  const handleResetField = (fieldName: string) => {
+    if (!accessToken) return;
     try {
       deleteConfigFieldSetting(accessToken, fieldName);
-      // update value in state
-
       const updatedSettings = generalSettings.map((setting) =>
-        setting.field_name === fieldName ? { ...setting, stored_in_db: null, field_value: null } : setting,
+        setting.field_name === fieldName
+          ? { ...setting, stored_in_db: null, field_value: null }
+          : setting,
       );
       setGeneralSettings(updatedSettings);
-    } catch (error) {
-      // do something
+    } catch {
+      // ignore
     }
   };
 
-  if (!accessToken) {
-    return null;
-  }
+  if (!accessToken) return null;
 
   return (
     <div className="w-full">
-      <TabGroup className="h-[75vh] w-full">
-        <TabList variant="line" defaultValue="1" className="px-8 pt-4">
-          <Tab value="1">Loadbalancing</Tab>
-          <Tab value="2">Fallbacks</Tab>
-          <Tab value="3">General</Tab>
-        </TabList>
-        <TabPanels className="px-8 py-6">
-          <TabPanel>
+      <Tabs defaultValue="loadbalancing" className="h-[75vh] w-full">
+        <TabsList className="px-8 pt-4 mx-8">
+          <TabsTrigger value="loadbalancing">Loadbalancing</TabsTrigger>
+          <TabsTrigger value="fallbacks">Fallbacks</TabsTrigger>
+          <TabsTrigger value="general">General</TabsTrigger>
+        </TabsList>
+        <div className="px-8 py-6">
+          <TabsContent value="loadbalancing">
             <RouterSettings
               accessToken={accessToken}
               userRole={userRole}
               userID={userID}
               modelData={modelData}
             />
-          </TabPanel>
-          <TabPanel>
+          </TabsContent>
+          <TabsContent value="fallbacks">
             <Fallbacks
               accessToken={accessToken}
               userRole={userRole}
               userID={userID}
               modelData={modelData}
             />
-          </TabPanel>
-          <TabPanel>
-            <Card>
+          </TabsContent>
+          <TabsContent value="general">
+            <Card className="p-6">
               <Table>
-                <TableHead>
+                <TableHeader>
                   <TableRow>
-                    <TableHeaderCell>Setting</TableHeaderCell>
-                    <TableHeaderCell>Value</TableHeaderCell>
-                    <TableHeaderCell>Status</TableHeaderCell>
-                    <TableHeaderCell>Action</TableHeaderCell>
+                    <TableHead>Setting</TableHead>
+                    <TableHead>Value</TableHead>
+                    <TableHead>Status</TableHead>
+                    <TableHead>Action</TableHead>
                   </TableRow>
-                </TableHead>
+                </TableHeader>
                 <TableBody>
                   {generalSettings
                     .filter((value) => value.field_type !== "TypedDictionary")
                     .map((value, index) => (
                       <TableRow key={index}>
                         <TableCell>
-                          <Text>{value.field_name}</Text>
-                          <p
-                            style={{
-                              fontSize: "0.65rem",
-                              color: "#808080",
-                              fontStyle: "italic",
-                            }}
-                            className="mt-1"
-                          >
+                          <p>{value.field_name}</p>
+                          <p className="text-[0.65rem] text-muted-foreground italic mt-1">
                             {value.field_description}
                           </p>
                         </TableCell>
                         <TableCell>
-                          {value.field_type == "Integer" ? (
-                            <InputNumber
+                          {value.field_type === "Integer" ? (
+                            <Input
+                              type="number"
                               step={1}
-                              value={value.field_value}
-                              onChange={(newValue) => handleInputChange(value.field_name, newValue)}
+                              value={value.field_value ?? ""}
+                              onChange={(e) =>
+                                handleInputChange(
+                                  value.field_name,
+                                  e.target.value === ""
+                                    ? null
+                                    : Number(e.target.value),
+                                )
+                              }
                             />
-                          ) : value.field_type == "Boolean" ? (
+                          ) : value.field_type === "Boolean" ? (
                             <Switch
-                              checked={value.field_value === true || value.field_value === "true"}
-                              onChange={(checked) => handleInputChange(value.field_name, checked)}
+                              checked={
+                                value.field_value === true ||
+                                value.field_value === "true"
+                              }
+                              onCheckedChange={(checked) =>
+                                handleInputChange(value.field_name, checked)
+                              }
                             />
                           ) : null}
                         </TableCell>
                         <TableCell>
-                          {value.stored_in_db == true ? (
-                            <Badge icon={CheckCircleIcon} className="text-white">
+                          {value.stored_in_db === true ? (
+                            <Badge className="gap-1">
+                              <CheckCircle size={12} />
                               In DB
                             </Badge>
-                          ) : value.stored_in_db == false ? (
-                            <Badge className="text-gray bg-white outline">In Config</Badge>
+                          ) : value.stored_in_db === false ? (
+                            <Badge variant="outline">In Config</Badge>
                           ) : (
-                            <Badge className="text-gray bg-white outline">Not Set</Badge>
+                            <Badge variant="outline">Not Set</Badge>
                           )}
                         </TableCell>
                         <TableCell>
-                          <Button onClick={() => handleUpdateField(value.field_name, index)}>Update</Button>
-                          <Icon icon={TrashIcon} color="red" onClick={() => handleResetField(value.field_name, index)}>
-                            Reset
-                          </Icon>
+                          <div className="flex items-center gap-2">
+                            <Button
+                              size="sm"
+                              onClick={() =>
+                                handleUpdateField(value.field_name, index)
+                              }
+                            >
+                              Update
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-8 w-8 text-destructive"
+                              onClick={() => handleResetField(value.field_name)}
+                              aria-label="Reset"
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
+                          </div>
                         </TableCell>
                       </TableRow>
                     ))}
                 </TableBody>
               </Table>
             </Card>
-          </TabPanel>
-        </TabPanels>
-      </TabGroup>
+          </TabsContent>
+        </div>
+      </Tabs>
     </div>
   );
 };
