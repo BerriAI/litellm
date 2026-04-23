@@ -2765,6 +2765,42 @@ class MCPServerManager:
                 servers.append(server)
         return servers
 
+    def expand_permission_list(self, identifiers: List[str]) -> List[str]:
+        """
+        Expand a permission list of server_ids/names/aliases into concrete
+        server_ids against the current region's config + DB registry union.
+
+        Entries that match a server_id pass through unchanged. Entries that
+        don't are looked up by alias/server_name/name and replaced with every
+        matching server_id (duplicate names grant access to all matches).
+        Entries that resolve to nothing are dropped and a debug log is
+        emitted so admins can diagnose stale/typo permission entries — the
+        final access-check still denies them either way.
+        """
+        if not identifiers:
+            return []
+        registry = self.get_registry()
+        expanded: Set[str] = set()
+        for identifier in identifiers:
+            if identifier in registry:
+                expanded.add(identifier)
+                continue
+            matches: List[str] = [
+                server_id
+                for server_id, server in registry.items()
+                if server.alias == identifier
+                or server.server_name == identifier
+                or server.name == identifier
+            ]
+            if matches:
+                expanded.update(matches)
+            else:
+                verbose_logger.debug(
+                    f"MCP permission entry '{identifier}' does not resolve "
+                    "to any known server (config + DB union). Skipping."
+                )
+        return list(expanded)
+
     def get_mcp_server_by_name(
         self, server_name: str, client_ip: Optional[str] = None
     ) -> Optional[MCPServer]:
