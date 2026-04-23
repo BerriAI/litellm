@@ -5,7 +5,6 @@ When current_secret_name == new_secret_name (e.g. key alias preserved during
 rotation), AWS must use PutSecretValue to update in place instead of
 create+delete, which would fail with ResourceExistsException.
 """
-
 from unittest.mock import AsyncMock, patch
 
 import pytest

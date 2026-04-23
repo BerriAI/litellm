@@ -14,7 +14,6 @@ from typing import Any, Callable, Dict, List, Literal, Optional, Type
 
 import litellm
 from litellm.constants import request_timeout as DEFAULT_REQUEST_TIMEOUT
-from litellm.containers.utils import decode_managed_container_id_for_request
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.containers.transformation import BaseContainerConfig
 from litellm.llms.custom_httpx.container_handler import generic_container_handler
@@ -54,7 +53,7 @@ def create_sync_endpoint_function(endpoint_config: Dict) -> Callable:
     @client
     def endpoint_func(
         timeout: int = 600,
-        custom_llm_provider: Literal["openai", "azure", "azure_text"] = "openai",
+        custom_llm_provider: Literal["openai"] = "openai",
         extra_headers: Optional[Dict[str, Any]] = None,
         extra_query: Optional[Dict[str, Any]] = None,
         extra_body: Optional[Dict[str, Any]] = None,
@@ -62,7 +61,6 @@ def create_sync_endpoint_function(endpoint_config: Dict) -> Callable:
     ):
         local_vars = locals()
         try:
-            resolved_custom_llm_provider: str = custom_llm_provider
             litellm_logging_obj: LiteLLMLoggingObj = kwargs.pop("litellm_logging_obj")
             litellm_call_id: Optional[str] = kwargs.get("litellm_call_id")
             _is_async = kwargs.pop("async_call", False) is True
@@ -78,27 +76,15 @@ def create_sync_endpoint_function(endpoint_config: Dict) -> Callable:
 
             # Get provider config
             litellm_params = GenericLiteLLMParams(**kwargs)
-            # Strip LiteLLM-managed container IDs before calling the provider API
-            # (OpenAI enforces max length 64 on container_id).
-            if "container_id" in kwargs and isinstance(kwargs["container_id"], str):
-                (
-                    kwargs["container_id"],
-                    resolved_custom_llm_provider,
-                    litellm_params,
-                ) = decode_managed_container_id_for_request(
-                    container_id=kwargs["container_id"],
-                    custom_llm_provider=resolved_custom_llm_provider,
-                    litellm_params=litellm_params,
-                )
-            container_provider_config: Optional[BaseContainerConfig] = (
-                ProviderConfigManager.get_provider_container_config(
-                    provider=litellm.LlmProviders(resolved_custom_llm_provider),
-                )
+            container_provider_config: Optional[
+                BaseContainerConfig
+            ] = ProviderConfigManager.get_provider_container_config(
+                provider=litellm.LlmProviders(custom_llm_provider),
             )
 
             if container_provider_config is None:
                 raise ValueError(
-                    f"Container provider config not found for: {resolved_custom_llm_provider}"
+                    f"Container provider config not found for: {custom_llm_provider}"
                 )
 
             # Build optional params for logging
@@ -110,7 +96,7 @@ def create_sync_endpoint_function(endpoint_config: Dict) -> Callable:
                 model="",
                 optional_params=optional_params,
                 litellm_params={"litellm_call_id": litellm_call_id},
-                custom_llm_provider=resolved_custom_llm_provider,
+                custom_llm_provider=custom_llm_provider,
             )
 
             # Use generic handler
@@ -129,7 +115,7 @@ def create_sync_endpoint_function(endpoint_config: Dict) -> Callable:
         except Exception as e:
             raise litellm.exception_type(
                 model="",
-                custom_llm_provider=resolved_custom_llm_provider,
+                custom_llm_provider=custom_llm_provider,
                 original_exception=e,
                 completion_kwargs=local_vars,
                 extra_kwargs=kwargs,
@@ -147,7 +133,7 @@ def create_async_endpoint_function(
     @client
     async def async_endpoint_func(
         timeout: int = 600,
-        custom_llm_provider: Literal["openai", "azure", "azure_text"] = "openai",
+        custom_llm_provider: Literal["openai"] = "openai",
         extra_headers: Optional[Dict[str, Any]] = None,
         extra_query: Optional[Dict[str, Any]] = None,
         extra_body: Optional[Dict[str, Any]] = None,

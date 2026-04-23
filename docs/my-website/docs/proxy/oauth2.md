@@ -63,19 +63,16 @@ Start the LiteLLM Proxy with [`--detailed_debug` mode and you should see more ve
 
 ## Using OAuth2 + JWT Together
 
-LiteLLM supports two OAuth2 + JWT modes:
+If both `enable_oauth2_auth` and `enable_jwt_auth` are enabled, LiteLLM can split auth paths:
+- JWT validation for user tokens
+- OAuth2 introspection for machine tokens
 
-1. **Global OAuth2 mode** (`enable_oauth2_auth: true`)  
-   OAuth2 auth is enabled on LLM + info routes.
-2. **Selective JWT override mode** (`enable_oauth2_auth: false`)  
-   Only JWT-shaped tokens that match `litellm_jwtauth.routing_overrides` are routed to OAuth2 on LLM + info routes.
-
-For selective routing (OAuth2 only for specific JWTs), configure:
+For JWT-shaped machine tokens, configure `litellm_jwtauth.routing_overrides`:
 
 ```yaml title="config.yaml"
 general_settings:
   enable_jwt_auth: true
-  enable_oauth2_auth: false
+  enable_oauth2_auth: true
   litellm_jwtauth:
     routing_overrides:
       - iss: "machine-issuer.example.com"

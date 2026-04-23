@@ -2,7 +2,6 @@
 Minimal test for Presidio Union[PiiEntityType, str] type fix.
 Tests only the core fix without heavy dependencies.
 """
-
 from enum import Enum
 from typing import Dict, Union
 

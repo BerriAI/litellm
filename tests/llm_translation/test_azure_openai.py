@@ -5,7 +5,6 @@ sys.path.insert(
     0, os.path.abspath("../../")
 )  # Adds the parent directory to the system path
 
-import httpx
 import pytest
 from litellm.llms.azure.common_utils import process_azure_headers
 from httpx import Headers

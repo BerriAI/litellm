@@ -10,7 +10,7 @@
 
 
 ```python
-!uv add litellm python-dotenv
+!pip install litellm python-dotenv
 ```
 
 

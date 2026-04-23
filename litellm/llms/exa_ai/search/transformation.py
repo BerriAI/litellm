@@ -3,7 +3,6 @@ Calls Exa AI's /search endpoint to search the web.
 
 Exa AI API Reference: https://docs.exa.ai/reference/search
 """
-
 from typing import Dict, List, Optional, TypedDict, Union
 
 import httpx

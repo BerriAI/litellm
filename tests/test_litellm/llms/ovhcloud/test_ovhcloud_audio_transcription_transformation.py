@@ -54,3 +54,6 @@ def test_ovhcloud_audio_transcription_config_installed():
 
     assert config is not None
     assert isinstance(config, BaseAudioTranscriptionConfig)
+
+
+

@@ -39,10 +39,7 @@ class ResponseTransformerLogger(CustomLogger):
                 "id": "transformed-response",
                 "choices": [
                     {
-                        "message": {
-                            "content": self.transform_content,
-                            "role": "assistant",
-                        },
+                        "message": {"content": self.transform_content, "role": "assistant"},
                         "index": 0,
                     }
                 ],

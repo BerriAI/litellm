@@ -170,3 +170,4 @@ def test_langgraph_provider_detection():
 
     assert provider == "langgraph"
     assert model == "agent"
+

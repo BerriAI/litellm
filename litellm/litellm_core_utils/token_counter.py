@@ -30,7 +30,6 @@ from litellm.constants import (
 )
 from litellm.litellm_core_utils.default_encoding import encoding as default_encoding
 from litellm.llms.custom_httpx.http_handler import _get_httpx_client
-from litellm.litellm_core_utils.url_utils import safe_get
 from litellm.types.llms.anthropic import (
     AnthropicMessagesToolResultParam,
     AnthropicMessagesToolUseParam,
@@ -211,15 +210,13 @@ def get_image_dimensions(
         Tuple[int, int]: The width and height of the image.
     """
     img_data = None
-    if data.startswith(("http://", "https://")):
-        try:
-            client = _get_httpx_client()
-            response = safe_get(client, data)
-            img_data = response.read()
-        except Exception:
-            pass
-    if img_data is None:
-        # Not a URL or fetch failed — assume base64
+    try:
+        # Try to open as URL
+        client = _get_httpx_client()
+        response = client.get(data)
+        img_data = response.read()
+    except Exception:
+        # If not URL, assume it's base64
         _header, encoded = data.split(",", 1)
         img_data = base64.b64decode(encoded)
 

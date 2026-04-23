@@ -44,7 +44,9 @@ class TestVertexAIPSCEndpointSupport:
         )
 
         expected_url = f"{psc_api_base}/v1/projects/{project_id}/locations/{location}/endpoints/{endpoint_id}:predict"
-        assert url == expected_url, f"Expected {expected_url}, but got {url}"
+        assert (
+            url == expected_url
+        ), f"Expected {expected_url}, but got {url}"
 
     def test_psc_endpoint_url_construction_with_streaming(self):
         """Test PSC endpoint URL construction with streaming enabled"""
@@ -70,7 +72,9 @@ class TestVertexAIPSCEndpointSupport:
         )
 
         expected_url = f"{psc_api_base}/v1/projects/{project_id}/locations/{location}/endpoints/{endpoint_id}:streamGenerateContent?alt=sse"
-        assert url == expected_url, f"Expected {expected_url}, but got {url}"
+        assert (
+            url == expected_url
+        ), f"Expected {expected_url}, but got {url}"
 
     def test_psc_endpoint_url_construction_v1beta1(self):
         """Test PSC endpoint URL construction with v1beta1 API version"""
@@ -96,7 +100,9 @@ class TestVertexAIPSCEndpointSupport:
         )
 
         expected_url = f"{psc_api_base}/v1beta1/projects/{project_id}/locations/{location}/endpoints/{endpoint_id}:predict"
-        assert url == expected_url, f"Expected {expected_url}, but got {url}"
+        assert (
+            url == expected_url
+        ), f"Expected {expected_url}, but got {url}"
 
     def test_psc_endpoint_url_with_https(self):
         """Test PSC endpoint URL construction with HTTPS"""
@@ -122,7 +128,9 @@ class TestVertexAIPSCEndpointSupport:
         )
 
         expected_url = f"{psc_api_base}/v1/projects/{project_id}/locations/{location}/endpoints/{endpoint_id}:predict"
-        assert url == expected_url, f"Expected {expected_url}, but got {url}"
+        assert (
+            url == expected_url
+        ), f"Expected {expected_url}, but got {url}"
 
     def test_psc_endpoint_with_trailing_slash(self):
         """Test that trailing slashes in api_base are handled correctly"""
@@ -149,7 +157,9 @@ class TestVertexAIPSCEndpointSupport:
 
         # rstrip('/') should remove the trailing slash
         expected_url = f"{psc_api_base.rstrip('/')}/v1/projects/{project_id}/locations/{location}/endpoints/{endpoint_id}:predict"
-        assert url == expected_url, f"Expected {expected_url}, but got {url}"
+        assert (
+            url == expected_url
+        ), f"Expected {expected_url}, but got {url}"
 
     def test_standard_proxy_with_googleapis(self):
         """Test that standard proxies with googleapis.com in URL use simple format"""
@@ -174,7 +184,9 @@ class TestVertexAIPSCEndpointSupport:
 
         # Should use simple format: api_base:endpoint
         expected_url = f"{proxy_api_base}:generateContent"
-        assert url == expected_url, f"Expected {expected_url}, but got {url}"
+        assert (
+            url == expected_url
+        ), f"Expected {expected_url}, but got {url}"
 
     def test_custom_proxy_with_numeric_model(self):
         """Test that numeric model IDs trigger PSC-style URL construction"""
@@ -201,7 +213,9 @@ class TestVertexAIPSCEndpointSupport:
 
         # Numeric model should trigger full path construction
         expected_url = f"{proxy_api_base}/v1/projects/{project_id}/locations/{location}/endpoints/{endpoint_id}:predict"
-        assert url == expected_url, f"Expected {expected_url}, but got {url}"
+        assert (
+            url == expected_url
+        ), f"Expected {expected_url}, but got {url}"
 
     def test_no_api_base_returns_original_url(self):
         """Test that when api_base is None, the original URL is returned"""
@@ -250,3 +264,4 @@ class TestVertexAIPSCEndpointSupport:
         assert (
             auth_header == test_auth_header
         ), f"Auth header should be preserved, got {auth_header}"
+

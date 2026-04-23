@@ -6,7 +6,9 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-sys.path.insert(0, os.path.abspath("../../.."))
+sys.path.insert(
+    0, os.path.abspath("../../..")
+)
 
 from litellm.proxy.discovery_endpoints.ui_discovery_endpoints import router
 from litellm.types.proxy.control_plane_endpoints import WorkerRegistryEntry
@@ -17,15 +19,13 @@ def test_ui_discovery_endpoints_with_defaults():
     app.include_router(router)
     client = TestClient(app)
 
-    with (
-        patch("litellm.proxy.utils.get_server_root_path", return_value="/"),
-        patch("litellm.proxy.utils.get_proxy_base_url", return_value=None),
-        patch("litellm.proxy.auth.auth_utils._has_user_setup_sso", return_value=False),
-        patch.dict(os.environ, {"DISABLE_ADMIN_UI": "false"}, clear=False),
-    ):
-
+    with patch("litellm.proxy.utils.get_server_root_path", return_value="/"), \
+         patch("litellm.proxy.utils.get_proxy_base_url", return_value=None), \
+         patch("litellm.proxy.auth.auth_utils._has_user_setup_sso", return_value=False), \
+         patch.dict(os.environ, {"DISABLE_ADMIN_UI": "false"}, clear=False):
+        
         response = client.get("/.well-known/litellm-ui-config")
-
+        
         assert response.status_code == 200
         data = response.json()
         assert data["server_root_path"] == "/"
@@ -40,15 +40,13 @@ def test_ui_discovery_endpoints_with_custom_server_root_path():
     app.include_router(router)
     client = TestClient(app)
 
-    with (
-        patch("litellm.proxy.utils.get_server_root_path", return_value="/litellm"),
-        patch("litellm.proxy.utils.get_proxy_base_url", return_value=None),
-        patch("litellm.proxy.auth.auth_utils._has_user_setup_sso", return_value=False),
-        patch.dict(os.environ, {"DISABLE_ADMIN_UI": "false"}, clear=False),
-    ):
-
+    with patch("litellm.proxy.utils.get_server_root_path", return_value="/litellm"), \
+         patch("litellm.proxy.utils.get_proxy_base_url", return_value=None), \
+         patch("litellm.proxy.auth.auth_utils._has_user_setup_sso", return_value=False), \
+         patch.dict(os.environ, {"DISABLE_ADMIN_UI": "false"}, clear=False):
+        
         response = client.get("/.well-known/litellm-ui-config")
-
+        
         assert response.status_code == 200
         data = response.json()
         assert data["server_root_path"] == "/litellm"
@@ -62,18 +60,13 @@ def test_ui_discovery_endpoints_with_proxy_base_url_when_set():
     app.include_router(router)
     client = TestClient(app)
 
-    with (
-        patch("litellm.proxy.utils.get_server_root_path", return_value="/"),
-        patch(
-            "litellm.proxy.utils.get_proxy_base_url",
-            return_value="https://proxy.example.com",
-        ),
-        patch("litellm.proxy.auth.auth_utils._has_user_setup_sso", return_value=False),
-        patch.dict(os.environ, {"DISABLE_ADMIN_UI": "false"}, clear=False),
-    ):
-
+    with patch("litellm.proxy.utils.get_server_root_path", return_value="/"), \
+         patch("litellm.proxy.utils.get_proxy_base_url", return_value="https://proxy.example.com"), \
+         patch("litellm.proxy.auth.auth_utils._has_user_setup_sso", return_value=False), \
+         patch.dict(os.environ, {"DISABLE_ADMIN_UI": "false"}, clear=False):
+        
         response = client.get("/litellm/.well-known/litellm-ui-config")
-
+        
         assert response.status_code == 200
         data = response.json()
         assert data["server_root_path"] == "/"
@@ -87,22 +80,13 @@ def test_ui_discovery_endpoints_with_sso_configured_and_auto_redirect_enabled():
     app.include_router(router)
     client = TestClient(app)
 
-    with (
-        patch("litellm.proxy.utils.get_server_root_path", return_value="/litellm"),
-        patch(
-            "litellm.proxy.utils.get_proxy_base_url",
-            return_value="https://proxy.example.com",
-        ),
-        patch("litellm.proxy.auth.auth_utils._has_user_setup_sso", return_value=True),
-        patch.dict(
-            os.environ,
-            {"AUTO_REDIRECT_UI_LOGIN_TO_SSO": "true", "DISABLE_ADMIN_UI": "false"},
-            clear=False,
-        ),
-    ):
-
+    with patch("litellm.proxy.utils.get_server_root_path", return_value="/litellm"), \
+         patch("litellm.proxy.utils.get_proxy_base_url", return_value="https://proxy.example.com"), \
+         patch("litellm.proxy.auth.auth_utils._has_user_setup_sso", return_value=True), \
+         patch.dict(os.environ, {"AUTO_REDIRECT_UI_LOGIN_TO_SSO": "true", "DISABLE_ADMIN_UI": "false"}, clear=False):
+        
         response = client.get("/.well-known/litellm-ui-config")
-
+        
         assert response.status_code == 200
         data = response.json()
         assert data["server_root_path"] == "/litellm"
@@ -117,15 +101,10 @@ def test_ui_discovery_endpoints_with_sso_configured_and_auto_redirect_not_set_de
     app.include_router(router)
     client = TestClient(app)
 
-    with (
-        patch("litellm.proxy.utils.get_server_root_path", return_value="/litellm"),
-        patch(
-            "litellm.proxy.utils.get_proxy_base_url",
-            return_value="https://proxy.example.com",
-        ),
-        patch("litellm.proxy.auth.auth_utils._has_user_setup_sso", return_value=True),
-        patch.dict(os.environ, {"DISABLE_ADMIN_UI": "false"}, clear=False),
-    ):
+    with patch("litellm.proxy.utils.get_server_root_path", return_value="/litellm"), \
+         patch("litellm.proxy.utils.get_proxy_base_url", return_value="https://proxy.example.com"), \
+         patch("litellm.proxy.auth.auth_utils._has_user_setup_sso", return_value=True), \
+         patch.dict(os.environ, {"DISABLE_ADMIN_UI": "false"}, clear=False):
         # Ensure AUTO_REDIRECT_UI_LOGIN_TO_SSO is not set (simulate default)
         os.environ.pop("AUTO_REDIRECT_UI_LOGIN_TO_SSO", None)
 
@@ -144,22 +123,13 @@ def test_ui_discovery_endpoints_with_sso_configured_but_auto_redirect_disabled()
     app.include_router(router)
     client = TestClient(app)
 
-    with (
-        patch("litellm.proxy.utils.get_server_root_path", return_value="/litellm"),
-        patch(
-            "litellm.proxy.utils.get_proxy_base_url",
-            return_value="https://proxy.example.com",
-        ),
-        patch("litellm.proxy.auth.auth_utils._has_user_setup_sso", return_value=True),
-        patch.dict(
-            os.environ,
-            {"AUTO_REDIRECT_UI_LOGIN_TO_SSO": "false", "DISABLE_ADMIN_UI": "false"},
-            clear=False,
-        ),
-    ):
-
+    with patch("litellm.proxy.utils.get_server_root_path", return_value="/litellm"), \
+         patch("litellm.proxy.utils.get_proxy_base_url", return_value="https://proxy.example.com"), \
+         patch("litellm.proxy.auth.auth_utils._has_user_setup_sso", return_value=True), \
+         patch.dict(os.environ, {"AUTO_REDIRECT_UI_LOGIN_TO_SSO": "false", "DISABLE_ADMIN_UI": "false"}, clear=False):
+        
         response = client.get("/.well-known/litellm-ui-config")
-
+        
         assert response.status_code == 200
         data = response.json()
         assert data["server_root_path"] == "/litellm"
@@ -173,19 +143,13 @@ def test_ui_discovery_endpoints_with_sso_not_configured_but_auto_redirect_enable
     app.include_router(router)
     client = TestClient(app)
 
-    with (
-        patch("litellm.proxy.utils.get_server_root_path", return_value="/"),
-        patch("litellm.proxy.utils.get_proxy_base_url", return_value=None),
-        patch("litellm.proxy.auth.auth_utils._has_user_setup_sso", return_value=False),
-        patch.dict(
-            os.environ,
-            {"AUTO_REDIRECT_UI_LOGIN_TO_SSO": "true", "DISABLE_ADMIN_UI": "false"},
-            clear=False,
-        ),
-    ):
-
+    with patch("litellm.proxy.utils.get_server_root_path", return_value="/"), \
+         patch("litellm.proxy.utils.get_proxy_base_url", return_value=None), \
+         patch("litellm.proxy.auth.auth_utils._has_user_setup_sso", return_value=False), \
+         patch.dict(os.environ, {"AUTO_REDIRECT_UI_LOGIN_TO_SSO": "true", "DISABLE_ADMIN_UI": "false"}, clear=False):
+        
         response = client.get("/.well-known/litellm-ui-config")
-
+        
         assert response.status_code == 200
         data = response.json()
         assert data["server_root_path"] == "/"
@@ -199,23 +163,14 @@ def test_ui_discovery_endpoints_both_routes_return_same_data():
     app.include_router(router)
     client = TestClient(app)
 
-    with (
-        patch("litellm.proxy.utils.get_server_root_path", return_value="/litellm"),
-        patch(
-            "litellm.proxy.utils.get_proxy_base_url",
-            return_value="https://proxy.example.com",
-        ),
-        patch("litellm.proxy.auth.auth_utils._has_user_setup_sso", return_value=True),
-        patch.dict(
-            os.environ,
-            {"AUTO_REDIRECT_UI_LOGIN_TO_SSO": "true", "DISABLE_ADMIN_UI": "false"},
-            clear=False,
-        ),
-    ):
-
+    with patch("litellm.proxy.utils.get_server_root_path", return_value="/litellm"), \
+         patch("litellm.proxy.utils.get_proxy_base_url", return_value="https://proxy.example.com"), \
+         patch("litellm.proxy.auth.auth_utils._has_user_setup_sso", return_value=True), \
+         patch.dict(os.environ, {"AUTO_REDIRECT_UI_LOGIN_TO_SSO": "true", "DISABLE_ADMIN_UI": "false"}, clear=False):
+        
         response1 = client.get("/.well-known/litellm-ui-config")
         response2 = client.get("/litellm/.well-known/litellm-ui-config")
-
+        
         assert response1.status_code == 200
         assert response2.status_code == 200
         assert response1.json() == response2.json()
@@ -227,16 +182,11 @@ def test_ui_discovery_endpoints_with_auto_redirect_via_general_settings():
     app.include_router(router)
     client = TestClient(app)
 
-    with (
-        patch("litellm.proxy.utils.get_server_root_path", return_value="/"),
-        patch("litellm.proxy.utils.get_proxy_base_url", return_value=None),
-        patch("litellm.proxy.auth.auth_utils._has_user_setup_sso", return_value=True),
-        patch(
-            "litellm.proxy.proxy_server.general_settings",
-            {"auto_redirect_ui_login_to_sso": True},
-        ),
-        patch.dict(os.environ, {"DISABLE_ADMIN_UI": "false"}, clear=False),
-    ):
+    with patch("litellm.proxy.utils.get_server_root_path", return_value="/"), \
+         patch("litellm.proxy.utils.get_proxy_base_url", return_value=None), \
+         patch("litellm.proxy.auth.auth_utils._has_user_setup_sso", return_value=True), \
+         patch("litellm.proxy.proxy_server.general_settings", {"auto_redirect_ui_login_to_sso": True}), \
+         patch.dict(os.environ, {"DISABLE_ADMIN_UI": "false"}, clear=False):
         os.environ.pop("AUTO_REDIRECT_UI_LOGIN_TO_SSO", None)
 
         response = client.get("/.well-known/litellm-ui-config")
@@ -253,20 +203,11 @@ def test_ui_discovery_endpoints_with_auto_redirect_env_var_overrides_general_set
     app.include_router(router)
     client = TestClient(app)
 
-    with (
-        patch("litellm.proxy.utils.get_server_root_path", return_value="/"),
-        patch("litellm.proxy.utils.get_proxy_base_url", return_value=None),
-        patch("litellm.proxy.auth.auth_utils._has_user_setup_sso", return_value=True),
-        patch(
-            "litellm.proxy.proxy_server.general_settings",
-            {"auto_redirect_ui_login_to_sso": False},
-        ),
-        patch.dict(
-            os.environ,
-            {"AUTO_REDIRECT_UI_LOGIN_TO_SSO": "true", "DISABLE_ADMIN_UI": "false"},
-            clear=False,
-        ),
-    ):
+    with patch("litellm.proxy.utils.get_server_root_path", return_value="/"), \
+         patch("litellm.proxy.utils.get_proxy_base_url", return_value=None), \
+         patch("litellm.proxy.auth.auth_utils._has_user_setup_sso", return_value=True), \
+         patch("litellm.proxy.proxy_server.general_settings", {"auto_redirect_ui_login_to_sso": False}), \
+         patch.dict(os.environ, {"AUTO_REDIRECT_UI_LOGIN_TO_SSO": "true", "DISABLE_ADMIN_UI": "false"}, clear=False):
 
         response = client.get("/.well-known/litellm-ui-config")
 
@@ -280,15 +221,13 @@ def test_ui_discovery_endpoints_with_admin_ui_disabled():
     app.include_router(router)
     client = TestClient(app)
 
-    with (
-        patch("litellm.proxy.utils.get_server_root_path", return_value="/"),
-        patch("litellm.proxy.utils.get_proxy_base_url", return_value=None),
-        patch("litellm.proxy.auth.auth_utils._has_user_setup_sso", return_value=False),
-        patch.dict(os.environ, {"DISABLE_ADMIN_UI": "true"}, clear=False),
-    ):
-
+    with patch("litellm.proxy.utils.get_server_root_path", return_value="/"), \
+         patch("litellm.proxy.utils.get_proxy_base_url", return_value=None), \
+         patch("litellm.proxy.auth.auth_utils._has_user_setup_sso", return_value=False), \
+         patch.dict(os.environ, {"DISABLE_ADMIN_UI": "true"}, clear=False):
+        
         response = client.get("/.well-known/litellm-ui-config")
-
+        
         assert response.status_code == 200
         data = response.json()
         assert data["server_root_path"] == "/"
@@ -303,12 +242,10 @@ def test_ui_discovery_endpoints_with_admin_ui_enabled():
     app.include_router(router)
     client = TestClient(app)
 
-    with (
-        patch("litellm.proxy.utils.get_server_root_path", return_value="/"),
-        patch("litellm.proxy.utils.get_proxy_base_url", return_value=None),
-        patch("litellm.proxy.auth.auth_utils._has_user_setup_sso", return_value=False),
-        patch.dict(os.environ, {"DISABLE_ADMIN_UI": "false"}, clear=False),
-    ):
+    with patch("litellm.proxy.utils.get_server_root_path", return_value="/"), \
+         patch("litellm.proxy.utils.get_proxy_base_url", return_value=None), \
+         patch("litellm.proxy.auth.auth_utils._has_user_setup_sso", return_value=False), \
+         patch.dict(os.environ, {"DISABLE_ADMIN_UI": "false"}, clear=False):
 
         response = client.get("/.well-known/litellm-ui-config")
 
@@ -333,13 +270,11 @@ def test_ui_discovery_endpoints_is_control_plane_true_when_workers_configured():
         ),
     ]
 
-    with (
-        patch("litellm.proxy.utils.get_server_root_path", return_value="/"),
-        patch("litellm.proxy.utils.get_proxy_base_url", return_value=None),
-        patch("litellm.proxy.auth.auth_utils._has_user_setup_sso", return_value=False),
-        patch("litellm.proxy.proxy_server.proxy_config", mock_config),
-        patch.dict(os.environ, {"DISABLE_ADMIN_UI": "false"}, clear=False),
-    ):
+    with patch("litellm.proxy.utils.get_server_root_path", return_value="/"), \
+         patch("litellm.proxy.utils.get_proxy_base_url", return_value=None), \
+         patch("litellm.proxy.auth.auth_utils._has_user_setup_sso", return_value=False), \
+         patch("litellm.proxy.proxy_server.proxy_config", mock_config), \
+         patch.dict(os.environ, {"DISABLE_ADMIN_UI": "false"}, clear=False):
 
         response = client.get("/.well-known/litellm-ui-config")
 
@@ -360,13 +295,11 @@ def test_ui_discovery_endpoints_is_control_plane_false_when_no_workers():
     mock_config = MagicMock()
     mock_config.worker_registry = []
 
-    with (
-        patch("litellm.proxy.utils.get_server_root_path", return_value="/"),
-        patch("litellm.proxy.utils.get_proxy_base_url", return_value=None),
-        patch("litellm.proxy.auth.auth_utils._has_user_setup_sso", return_value=False),
-        patch("litellm.proxy.proxy_server.proxy_config", mock_config),
-        patch.dict(os.environ, {"DISABLE_ADMIN_UI": "false"}, clear=False),
-    ):
+    with patch("litellm.proxy.utils.get_server_root_path", return_value="/"), \
+         patch("litellm.proxy.utils.get_proxy_base_url", return_value=None), \
+         patch("litellm.proxy.auth.auth_utils._has_user_setup_sso", return_value=False), \
+         patch("litellm.proxy.proxy_server.proxy_config", mock_config), \
+         patch.dict(os.environ, {"DISABLE_ADMIN_UI": "false"}, clear=False):
 
         response = client.get("/.well-known/litellm-ui-config")
 

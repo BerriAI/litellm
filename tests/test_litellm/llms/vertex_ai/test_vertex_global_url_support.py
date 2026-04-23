@@ -71,7 +71,9 @@ class TestChatCompletionURLs:
             ),
         ],
     )
-    def test_chat_url_construction(self, vertex_location, stream, expected_url_pattern):
+    def test_chat_url_construction(
+        self, vertex_location, stream, expected_url_pattern
+    ):
         """Test that chat URLs are correctly constructed for regional and global locations."""
         with patch(
             "litellm.VertexGeminiConfig.get_model_for_vertex_ai_url",
@@ -126,9 +128,7 @@ class TestChatCompletionURLs:
         if vertex_location == "global":
             assert url.startswith("https://aiplatform.googleapis.com")
         else:
-            assert url.startswith(
-                f"https://{vertex_location}-aiplatform.googleapis.com"
-            )
+            assert url.startswith(f"https://{vertex_location}-aiplatform.googleapis.com")
 
 
 class TestEmbeddingURLs:
@@ -182,9 +182,7 @@ class TestEmbeddingURLs:
             assert url.startswith("https://aiplatform.googleapis.com")
             assert "-aiplatform.googleapis.com" not in url
         else:
-            assert url.startswith(
-                f"https://{vertex_location}-aiplatform.googleapis.com"
-            )
+            assert url.startswith(f"https://{vertex_location}-aiplatform.googleapis.com")
 
     @pytest.mark.parametrize(
         "vertex_location",
@@ -427,3 +425,4 @@ class TestBackwardCompatibility:
 
         # Should include streaming endpoint and alt=sse
         assert ":streamGenerateContent?alt=sse" in url
+

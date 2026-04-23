@@ -18,7 +18,6 @@ from typing import (
     TYPE_CHECKING,
     Any,
     AsyncGenerator,
-    Dict,
     List,
     Literal,
     NamedTuple,
@@ -83,12 +82,7 @@ def _redact_pii_matches(response_json: dict) -> dict:
         redacted_response = copy.deepcopy(response_json)
 
         # Get assessments from the response
-        # NOTE: We use `.get("key") or []` instead of `.get("key", [])` because
-        # the Bedrock API can return explicit `null` for list fields (e.g. "regexes": null).
-        # In Python, dict.get("key", []) returns None (not []) when the key exists
-        # with a None/null value. The `or []` ensures we always get an iterable,
-        # preventing "TypeError: 'NoneType' object is not iterable".
-        assessments = redacted_response.get("assessments") or []
+        assessments = redacted_response.get("assessments", [])
         if not assessments:
             return redacted_response
 
@@ -96,13 +90,13 @@ def _redact_pii_matches(response_json: dict) -> dict:
             # Redact PII entities in sensitive information policy
             sensitive_info_policy = assessment.get("sensitiveInformationPolicy")
             if sensitive_info_policy:
-                pii_entities = sensitive_info_policy.get("piiEntities") or []
+                pii_entities = sensitive_info_policy.get("piiEntities", [])
                 for pii_entity in pii_entities:
                     if "match" in pii_entity:
                         pii_entity["match"] = "[REDACTED]"
 
                 # Redact regex matches
-                regexes = sensitive_info_policy.get("regexes") or []
+                regexes = sensitive_info_policy.get("regexes", [])
                 for regex_match in regexes:
                     if "match" in regex_match:
                         regex_match["match"] = "[REDACTED]"
@@ -110,12 +104,12 @@ def _redact_pii_matches(response_json: dict) -> dict:
             # Redact custom word matches in word policy
             word_policy = assessment.get("wordPolicy")
             if word_policy:
-                custom_words = word_policy.get("customWords") or []
+                custom_words = word_policy.get("customWords", [])
                 for custom_word in custom_words:
                     if "match" in custom_word:
                         custom_word["match"] = "[REDACTED]"
 
-                managed_words = word_policy.get("managedWordLists") or []
+                managed_words = word_policy.get("managedWordLists", [])
                 for managed_word in managed_words:
                     if "match" in managed_word:
                         managed_word["match"] = "[REDACTED]"
@@ -642,141 +636,6 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                 return (status_code, err)
         return (status_code, message)
 
-    def _extract_blocked_assessments(
-        self, response: BedrockGuardrailResponse
-    ) -> List[dict]:
-        """
-        Walk the Bedrock guardrail response and emit a structured list of
-        BLOCKED assessment entries describing exactly which policies fired.
-
-        Mirrors the iteration in `_should_raise_guardrail_blocked_exception()`
-        but produces a list of `{policy, matches}` dicts instead of a bool.
-        Each `match` carries the originating subcategory, type, action, and
-        matched term where available, so the client can render a precise
-        explanation of the violation.
-        """
-        blocked: List[dict] = []
-        assessments = response.get("assessments", []) or []
-
-        for assessment in assessments:
-            # Topic policy
-            topic_policy = assessment.get("topicPolicy")
-            if topic_policy:
-                topic_matches = [
-                    {
-                        "category": "topics",
-                        "name": t.get("name"),
-                        "type": t.get("type"),
-                        "action": t.get("action"),
-                    }
-                    for t in (topic_policy.get("topics") or [])
-                    if t.get("action") == "BLOCKED"
-                ]
-                if topic_matches:
-                    blocked.append({"policy": "topicPolicy", "matches": topic_matches})
-
-            # Content policy
-            content_policy = assessment.get("contentPolicy")
-            if content_policy:
-                content_matches = [
-                    {
-                        "category": "filters",
-                        "type": f.get("type"),
-                        "confidence": f.get("confidence"),
-                        "filterStrength": f.get("filterStrength"),
-                        "action": f.get("action"),
-                    }
-                    for f in (content_policy.get("filters") or [])
-                    if f.get("action") == "BLOCKED"
-                ]
-                if content_matches:
-                    blocked.append(
-                        {"policy": "contentPolicy", "matches": content_matches}
-                    )
-
-            # Word policy
-            word_policy = assessment.get("wordPolicy")
-            if word_policy:
-                word_matches: List[dict] = []
-                for w in word_policy.get("customWords") or []:
-                    if w.get("action") == "BLOCKED":
-                        word_matches.append(
-                            {
-                                "category": "customWords",
-                                "match": w.get("match"),
-                                "action": w.get("action"),
-                            }
-                        )
-                for mw in word_policy.get("managedWordLists") or []:
-                    if mw.get("action") == "BLOCKED":
-                        word_matches.append(
-                            {
-                                "category": "managedWordLists",
-                                "type": mw.get("type"),
-                                "match": mw.get("match"),
-                                "action": mw.get("action"),
-                            }
-                        )
-                if word_matches:
-                    blocked.append({"policy": "wordPolicy", "matches": word_matches})
-
-            # Sensitive information policy (PII)
-            sensitive_info = assessment.get("sensitiveInformationPolicy")
-            if sensitive_info:
-                pii_matches: List[dict] = []
-                for p in sensitive_info.get("piiEntities") or []:
-                    if p.get("action") == "BLOCKED":
-                        pii_matches.append(
-                            {
-                                "category": "piiEntities",
-                                "type": p.get("type"),
-                                "match": p.get("match"),
-                                "action": p.get("action"),
-                            }
-                        )
-                for r in sensitive_info.get("regexes") or []:
-                    if r.get("action") == "BLOCKED":
-                        pii_matches.append(
-                            {
-                                "category": "regexes",
-                                "name": r.get("name"),
-                                "regex": r.get("regex"),
-                                "match": r.get("match"),
-                                "action": r.get("action"),
-                            }
-                        )
-                if pii_matches:
-                    blocked.append(
-                        {
-                            "policy": "sensitiveInformationPolicy",
-                            "matches": pii_matches,
-                        }
-                    )
-
-            # Contextual grounding policy
-            contextual = assessment.get("contextualGroundingPolicy")
-            if contextual:
-                grounding_matches = [
-                    {
-                        "category": "filters",
-                        "type": f.get("type"),
-                        "threshold": f.get("threshold"),
-                        "score": f.get("score"),
-                        "action": f.get("action"),
-                    }
-                    for f in (contextual.get("filters") or [])
-                    if f.get("action") == "BLOCKED"
-                ]
-                if grounding_matches:
-                    blocked.append(
-                        {
-                            "policy": "contextualGroundingPolicy",
-                            "matches": grounding_matches,
-                        }
-                    )
-
-        return blocked
-
     def _get_http_exception_for_blocked_guardrail(
         self, response: BedrockGuardrailResponse
     ) -> Union[HTTPException, GuardrailInterventionNormalStringError]:
@@ -796,21 +655,14 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             return GuardrailInterventionNormalStringError(
                 message=bedrock_guardrail_output_text
             )
-
-        detail: Dict[str, Any] = {
-            "error": "Violated guardrail policy",
-            "bedrock_guardrail_response": bedrock_guardrail_output_text,
-        }
-        if self.guardrailIdentifier:
-            detail["guardrailIdentifier"] = self.guardrailIdentifier
-        if self.guardrailVersion:
-            detail["guardrailVersion"] = self.guardrailVersion
-
-        assessments = self._extract_blocked_assessments(response)
-        if assessments:
-            detail["assessments"] = assessments
-
-        return HTTPException(status_code=400, detail=detail)
+        else:
+            return HTTPException(
+                status_code=400,
+                detail={
+                    "error": "Violated guardrail policy",
+                    "bedrock_guardrail_response": bedrock_guardrail_output_text,
+                },
+            )
 
     def _should_raise_guardrail_blocked_exception(
         self, response: BedrockGuardrailResponse
@@ -830,9 +682,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             return False
 
         # Check assessments to determine if any actions were BLOCKED (vs ANONYMIZED)
-        # NOTE: Use `or []` instead of default param to handle explicit null from Bedrock API.
-        # See _redact_pii_matches() for detailed explanation of the null safety pattern.
-        assessments = response.get("assessments") or []
+        assessments = response.get("assessments", [])
         if not assessments:
             return False
 
@@ -840,7 +690,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             # Check topic policy
             topic_policy = assessment.get("topicPolicy")
             if topic_policy:
-                topics = topic_policy.get("topics") or []
+                topics = topic_policy.get("topics", [])
                 for topic in topics:
                     if topic.get("action") == "BLOCKED":
                         return True
@@ -848,7 +698,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             # Check content policy
             content_policy = assessment.get("contentPolicy")
             if content_policy:
-                filters = content_policy.get("filters") or []
+                filters = content_policy.get("filters", [])
                 for filter_item in filters:
                     if filter_item.get("action") == "BLOCKED":
                         return True
@@ -856,11 +706,11 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             # Check word policy
             word_policy = assessment.get("wordPolicy")
             if word_policy:
-                custom_words = word_policy.get("customWords") or []
+                custom_words = word_policy.get("customWords", [])
                 for custom_word in custom_words:
                     if custom_word.get("action") == "BLOCKED":
                         return True
-                managed_words = word_policy.get("managedWordLists") or []
+                managed_words = word_policy.get("managedWordLists", [])
                 for managed_word in managed_words:
                     if managed_word.get("action") == "BLOCKED":
                         return True
@@ -868,12 +718,12 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             # Check sensitive information policy
             sensitive_info_policy = assessment.get("sensitiveInformationPolicy")
             if sensitive_info_policy:
-                pii_entities = sensitive_info_policy.get("piiEntities") or []
+                pii_entities = sensitive_info_policy.get("piiEntities", [])
                 if pii_entities:
                     for pii_entity in pii_entities:
                         if pii_entity.get("action") == "BLOCKED":
                             return True
-                regexes = sensitive_info_policy.get("regexes") or []
+                regexes = sensitive_info_policy.get("regexes", [])
                 if regexes:
                     for regex in regexes:
                         if regex.get("action") == "BLOCKED":
@@ -882,7 +732,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             # Check contextual grounding policy
             contextual_grounding_policy = assessment.get("contextualGroundingPolicy")
             if contextual_grounding_policy:
-                grounding_filters = contextual_grounding_policy.get("filters") or []
+                grounding_filters = contextual_grounding_policy.get("filters", [])
                 for grounding_filter in grounding_filters:
                     if grounding_filter.get("action") == "BLOCKED":
                         return True
@@ -946,9 +796,9 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         #########################################################
         ########## 1. Make the Bedrock API request ##########
         #########################################################
-        bedrock_guardrail_response: Optional[Union[BedrockGuardrailResponse, str]] = (
-            None
-        )
+        bedrock_guardrail_response: Optional[
+            Union[BedrockGuardrailResponse, str]
+        ] = None
         try:
             bedrock_guardrail_response = await self.make_bedrock_api_request(
                 source="INPUT", messages=filtered_messages, request_data=data
@@ -1018,9 +868,9 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         #########################################################
         ########## 1. Make the Bedrock API request ##########
         #########################################################
-        bedrock_guardrail_response: Optional[Union[BedrockGuardrailResponse, str]] = (
-            None
-        )
+        bedrock_guardrail_response: Optional[
+            Union[BedrockGuardrailResponse, str]
+        ] = None
         try:
             bedrock_guardrail_response = await self.make_bedrock_api_request(
                 source="INPUT", messages=filtered_messages, request_data=data
@@ -1541,9 +1391,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         Raises:
             Exception: If content is blocked by Bedrock guardrail
         """
-        # NOTE: Use `or []` to handle case where inputs["texts"] is explicitly None.
-        # dict.get("texts", []) would return None if the key exists with a None value.
-        texts = inputs.get("texts") or []
+        texts = inputs.get("texts", [])
         try:
             verbose_proxy_logger.debug(
                 f"Bedrock Guardrail: Applying guardrail to {len(texts)} text(s)"

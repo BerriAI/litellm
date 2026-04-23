@@ -1,5 +1,4 @@
 """Base OCR transformation module."""
-
 from .transformation import (
     BaseOCRConfig,
     DocumentType,

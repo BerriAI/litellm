@@ -14,7 +14,7 @@
 
 1. Install Proxy dependencies 
 ```bash
-uv tool install 'litellm[proxy]' 'litellm[extra_proxy]'
+pip install 'litellm[proxy]' 'litellm[extra_proxy]'
 ```
 
 2. Save Azure details in your environment

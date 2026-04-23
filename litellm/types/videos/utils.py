@@ -4,7 +4,6 @@ Utility functions for video ID encoding/decoding with provider information.
 Follows the pattern used in responses/utils.py for consistency.
 Format: vid_{base64_encoded_string}
 """
-
 import base64
 from typing import Optional, Tuple
 

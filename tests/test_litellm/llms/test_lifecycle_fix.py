@@ -2,7 +2,6 @@
 Verifies that the httpx client used by AsyncOpenAI is NOT closed
 when AsyncHTTPHandler instances are garbage collected.
 """
-
 import asyncio
 import gc
 import httpx

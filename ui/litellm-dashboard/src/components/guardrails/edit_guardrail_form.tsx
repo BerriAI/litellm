@@ -1,12 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { Form, Typography, Select, Input, Switch, Modal } from "antd";
 import { Button, TextInput } from "@tremor/react";
-import {
-  guardrail_provider_map,
-  guardrailLogoMap,
-  getGuardrailProviders,
-  type SkipSystemMessageChoice,
-} from "./guardrail_info_helpers";
+import { guardrail_provider_map, guardrailLogoMap, getGuardrailProviders } from "./guardrail_info_helpers";
 import { getGuardrailUISettings, getGlobalLitellmHeaderName } from "../networking";
 import PiiConfiguration from "./pii_configuration";
 import NotificationsManager from "../molecules/notifications_manager";
@@ -20,15 +15,12 @@ interface EditGuardrailFormProps {
   accessToken: string | null;
   onSuccess: () => void;
   guardrailId: string;
-  /** Full stored params merged into PUT so optional fields (e.g. content filter) are preserved. */
-  fullLitellmParams?: Record<string, any> | null;
   initialValues: {
     guardrail_name: string;
     provider: string;
     mode: string;
     default_on: boolean;
     pii_entities_config?: { [key: string]: string };
-    skip_system_message_choice?: SkipSystemMessageChoice;
     [key: string]: any;
   };
 }
@@ -49,7 +41,6 @@ const EditGuardrailForm: React.FC<EditGuardrailFormProps> = ({
   accessToken,
   onSuccess,
   guardrailId,
-  fullLitellmParams,
   initialValues,
 }) => {
   const [form] = Form.useForm();
@@ -122,23 +113,31 @@ const EditGuardrailForm: React.FC<EditGuardrailFormProps> = ({
       // Get the guardrail provider value from the map
       const guardrailProvider = guardrail_provider_map[values.provider];
 
-      const litellm_params: Record<string, any> =
-        fullLitellmParams && typeof fullLitellmParams === "object" ? { ...fullLitellmParams } : {};
-
-      litellm_params.guardrail = guardrailProvider;
-      litellm_params.mode = values.mode;
-      litellm_params.default_on = values.default_on;
-
-      const skipChoice = values.skip_system_message_choice as SkipSystemMessageChoice | undefined;
-      if (skipChoice === "yes") {
-        litellm_params.skip_system_message_in_guardrail = true;
-      } else if (skipChoice === "no") {
-        litellm_params.skip_system_message_in_guardrail = false;
-      } else {
-        delete litellm_params.skip_system_message_in_guardrail;
-      }
-
-      let guardrail_info: any = {};
+      // Prepare the guardrail data with proper types for litellm_params
+      const guardrailData: {
+        guardrail_id: string;
+        guardrail: {
+          guardrail_name: string;
+          litellm_params: {
+            guardrail: string;
+            mode: string;
+            default_on: boolean;
+            [key: string]: any; // Allow dynamic properties
+          };
+          guardrail_info: any;
+        };
+      } = {
+        guardrail_id: guardrailId,
+        guardrail: {
+          guardrail_name: values.guardrail_name,
+          litellm_params: {
+            guardrail: guardrailProvider,
+            mode: values.mode,
+            default_on: values.default_on,
+          },
+          guardrail_info: {},
+        },
+      };
 
       // For Presidio PII, add the entity and action configurations
       if (values.provider === "PresidioPII" && selectedEntities.length > 0) {
@@ -147,7 +146,7 @@ const EditGuardrailForm: React.FC<EditGuardrailFormProps> = ({
           piiEntitiesConfig[entity] = selectedActions[entity] || "MASK"; // Default to MASK if no action selected
         });
 
-        litellm_params.pii_entities_config = piiEntitiesConfig;
+        guardrailData.guardrail.litellm_params.pii_entities_config = piiEntitiesConfig;
       }
       // Add config values to the guardrail_info if provided
       else if (values.config) {
@@ -157,14 +156,14 @@ const EditGuardrailForm: React.FC<EditGuardrailFormProps> = ({
           // Especially for providers like Bedrock that need guardrailIdentifier and guardrailVersion
           if (values.provider === "Bedrock" && configObj) {
             if (configObj.guardrail_id) {
-              litellm_params.guardrailIdentifier = configObj.guardrail_id;
+              guardrailData.guardrail.litellm_params.guardrailIdentifier = configObj.guardrail_id;
             }
             if (configObj.guardrail_version) {
-              litellm_params.guardrailVersion = configObj.guardrail_version;
+              guardrailData.guardrail.litellm_params.guardrailVersion = configObj.guardrail_version;
             }
           } else {
             // For other providers, add the config to guardrail_info
-            guardrail_info = configObj;
+            guardrailData.guardrail.guardrail_info = configObj;
           }
         } catch (error) {
           NotificationsManager.fromBackend("Invalid JSON in configuration");
@@ -172,22 +171,6 @@ const EditGuardrailForm: React.FC<EditGuardrailFormProps> = ({
           return;
         }
       }
-
-      const guardrailData: {
-        guardrail_id: string;
-        guardrail: {
-          guardrail_name: string;
-          litellm_params: Record<string, any>;
-          guardrail_info: any;
-        };
-      } = {
-        guardrail_id: guardrailId,
-        guardrail: {
-          guardrail_name: values.guardrail_name,
-          litellm_params,
-          guardrail_info,
-        },
-      };
 
       if (!accessToken) {
         throw new Error("No access token available");
@@ -418,18 +401,6 @@ const EditGuardrailForm: React.FC<EditGuardrailFormProps> = ({
           valuePropName="checked"
         >
           <Switch />
-        </Form.Item>
-
-        <Form.Item
-          name="skip_system_message_choice"
-          label="Skip system messages in guardrail"
-          tooltip="Unified guardrails only: whether role: system content is omitted from guardrail input (LLM still receives full messages). Use global default follows litellm_settings.skip_system_message_in_guardrail."
-        >
-          <Select>
-            <Option value="inherit">Use global default</Option>
-            <Option value="yes">Yes — exclude from guardrail scan</Option>
-            <Option value="no">No — always include in scan</Option>
-          </Select>
         </Form.Item>
 
         {renderProviderSpecificFields()}

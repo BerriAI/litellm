@@ -1,7 +1,6 @@
 """
 CRUD ENDPOINTS FOR SEARCH TOOLS
 """
-
 from datetime import datetime
 from typing import Any, Dict, List, Union
 
@@ -537,9 +536,9 @@ async def test_search_tool_connection(request: TestSearchToolConnectionRequest):
             "status": "success",
             "message": f"Successfully connected to {search_provider} search provider",
             "test_query": test_query,
-            "results_count": (
-                len(response.results) if response and response.results else 0
-            ),
+            "results_count": len(response.results)
+            if response and response.results
+            else 0,
         }
 
     except Exception as e:

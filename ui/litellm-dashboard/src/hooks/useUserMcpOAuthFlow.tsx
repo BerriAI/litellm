@@ -23,8 +23,6 @@ import {
 } from "@/components/networking";
 import NotificationsManager from "@/components/molecules/notifications_manager";
 import { extractErrorMessage } from "@/utils/errorUtils";
-import { generateCodeChallenge, generateCodeVerifier } from "@/utils/pkce";
-import { getSecureItem, setSecureItem } from "@/utils/secureStorage";
 
 export type UserMcpOAuthStatus = "idle" | "authorizing" | "exchanging" | "success" | "error";
 
@@ -61,12 +59,42 @@ type StoredFlowState = {
   scopes?: string[];
 };
 
+const b64url = (buf: ArrayBuffer) => {
+  const bytes = new Uint8Array(buf);
+  let s = "";
+  bytes.forEach((b) => (s += String.fromCharCode(b)));
+  return btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+};
+
+const genVerifier = () => {
+  const arr = new Uint8Array(32);
+  window.crypto.getRandomValues(arr);
+  return b64url(arr.buffer);
+};
+
+const genChallenge = async (verifier: string) => {
+  const data = new TextEncoder().encode(verifier);
+  const digest = await window.crypto.subtle.digest("SHA-256", data);
+  return b64url(digest);
+};
+
 const setStorage = (key: string, value: string) => {
-  setSecureItem(key, value);
+  try {
+    // Use sessionStorage only — do not write to localStorage.
+    // The flow state may contain the LiteLLM access token; writing it to
+    // localStorage would persist it across browser sessions and make it
+    // readable by any injected script (XSS).
+    // codeql[js/clear-text-storage-of-sensitive-data]
+    window.sessionStorage.setItem(key, value);
+  } catch (_) {}
 };
 
 const getStorage = (key: string): string | null => {
-  return getSecureItem(key);
+  try {
+    return window.sessionStorage.getItem(key);
+  } catch (_) {
+    return null;
+  }
 };
 
 const clearStorage = (...keys: string[]) => {
@@ -126,8 +154,8 @@ export const useUserMcpOAuthFlow = ({
         }
       }
 
-      const verifier = generateCodeVerifier();
-      const challenge = await generateCodeChallenge(verifier);
+      const verifier = genVerifier();
+      const challenge = await genChallenge(verifier);
       const state = crypto.randomUUID();
       const redirectUri = buildCallbackUrl();
       const scopeString = scopes?.filter((s) => s.trim()).join(" ");

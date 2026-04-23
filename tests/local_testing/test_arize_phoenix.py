@@ -5,10 +5,7 @@ from dotenv import load_dotenv
 
 import litellm
 from litellm._logging import verbose_logger, verbose_proxy_logger
-from litellm.integrations.arize.arize_phoenix import (
-    ArizePhoenixConfig,
-    ArizePhoenixLogger,
-)
+from litellm.integrations.arize.arize_phoenix import ArizePhoenixConfig, ArizePhoenixLogger
 
 load_dotenv()
 

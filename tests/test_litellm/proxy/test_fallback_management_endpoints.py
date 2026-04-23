@@ -53,9 +53,7 @@ class TestFallbackCreateRequest:
 
     def test_duplicate_fallback_models(self):
         """Test that duplicate fallback models raise validation error"""
-        with pytest.raises(
-            ValueError, match="fallback_models must not contain duplicates"
-        ):
+        with pytest.raises(ValueError, match="fallback_models must not contain duplicates"):
             FallbackCreateRequest(
                 model="gpt-3.5-turbo",
                 fallback_models=["gpt-4", "gpt-4"],
@@ -148,33 +146,25 @@ class TestCreateFallback:
             fallback_type="general",
         )
 
-        with (
-            patch(
-                "litellm.proxy.proxy_server.llm_router",
-                mock_router,
-            ),
-            patch(
-                "litellm.proxy.proxy_server.prisma_client",
-                mock_prisma_client,
-            ),
-            patch(
-                "litellm.proxy.proxy_server.proxy_config",
-                mock_proxy_config,
-            ),
-            patch(
-                "litellm.proxy.proxy_server.store_model_in_db",
-                True,
-            ),
+        with patch(
+            "litellm.proxy.proxy_server.llm_router",
+            mock_router,
+        ), patch(
+            "litellm.proxy.proxy_server.prisma_client",
+            mock_prisma_client,
+        ), patch(
+            "litellm.proxy.proxy_server.proxy_config",
+            mock_proxy_config,
+        ), patch(
+            "litellm.proxy.proxy_server.store_model_in_db",
+            True,
         ):
             response = await create_fallback(request, mock_user_api_key_dict)
 
             assert response.model == "gpt-3.5-turbo"
             assert response.fallback_models == ["gpt-4", "claude-3-haiku"]
             assert response.fallback_type == "general"
-            assert (
-                "created" in response.message.lower()
-                or "updated" in response.message.lower()
-            )
+            assert "created" in response.message.lower() or "updated" in response.message.lower()
 
             # Verify database was updated
             mock_prisma_client.db.litellm_config.upsert.assert_called_once()
@@ -188,13 +178,10 @@ class TestCreateFallback:
             fallback_models=["gpt-4"],
         )
 
-        with (
-            patch(
-                "litellm.proxy.proxy_server.llm_router",
-                None,
-            ),
-            pytest.raises(HTTPException) as exc_info,
-        ):
+        with patch(
+            "litellm.proxy.proxy_server.llm_router",
+            None,
+        ), pytest.raises(HTTPException) as exc_info:
             await create_fallback(request, mock_user_api_key_dict)
 
         assert exc_info.value.status_code == 500
@@ -209,21 +196,16 @@ class TestCreateFallback:
             fallback_models=["gpt-4"],
         )
 
-        with (
-            patch(
-                "litellm.proxy.proxy_server.llm_router",
-                mock_router,
-            ),
-            patch(
-                "litellm.proxy.proxy_server.prisma_client",
-                mock_prisma_client,
-            ),
-            patch(
-                "litellm.proxy.proxy_server.store_model_in_db",
-                True,
-            ),
-            pytest.raises(HTTPException) as exc_info,
-        ):
+        with patch(
+            "litellm.proxy.proxy_server.llm_router",
+            mock_router,
+        ), patch(
+            "litellm.proxy.proxy_server.prisma_client",
+            mock_prisma_client,
+        ), patch(
+            "litellm.proxy.proxy_server.store_model_in_db",
+            True,
+        ), pytest.raises(HTTPException) as exc_info:
             await create_fallback(request, mock_user_api_key_dict)
 
         assert exc_info.value.status_code == 404
@@ -238,21 +220,16 @@ class TestCreateFallback:
             fallback_models=["invalid-fallback-model"],
         )
 
-        with (
-            patch(
-                "litellm.proxy.proxy_server.llm_router",
-                mock_router,
-            ),
-            patch(
-                "litellm.proxy.proxy_server.prisma_client",
-                mock_prisma_client,
-            ),
-            patch(
-                "litellm.proxy.proxy_server.store_model_in_db",
-                True,
-            ),
-            pytest.raises(HTTPException) as exc_info,
-        ):
+        with patch(
+            "litellm.proxy.proxy_server.llm_router",
+            mock_router,
+        ), patch(
+            "litellm.proxy.proxy_server.prisma_client",
+            mock_prisma_client,
+        ), patch(
+            "litellm.proxy.proxy_server.store_model_in_db",
+            True,
+        ), pytest.raises(HTTPException) as exc_info:
             await create_fallback(request, mock_user_api_key_dict)
 
         assert exc_info.value.status_code == 400
@@ -267,21 +244,16 @@ class TestCreateFallback:
             fallback_models=["gpt-3.5-turbo", "gpt-4"],
         )
 
-        with (
-            patch(
-                "litellm.proxy.proxy_server.llm_router",
-                mock_router,
-            ),
-            patch(
-                "litellm.proxy.proxy_server.prisma_client",
-                mock_prisma_client,
-            ),
-            patch(
-                "litellm.proxy.proxy_server.store_model_in_db",
-                True,
-            ),
-            pytest.raises(HTTPException) as exc_info,
-        ):
+        with patch(
+            "litellm.proxy.proxy_server.llm_router",
+            mock_router,
+        ), patch(
+            "litellm.proxy.proxy_server.prisma_client",
+            mock_prisma_client,
+        ), patch(
+            "litellm.proxy.proxy_server.store_model_in_db",
+            True,
+        ), pytest.raises(HTTPException) as exc_info:
             await create_fallback(request, mock_user_api_key_dict)
 
         assert exc_info.value.status_code == 400
@@ -296,17 +268,13 @@ class TestCreateFallback:
             fallback_models=["gpt-4"],
         )
 
-        with (
-            patch(
-                "litellm.proxy.proxy_server.llm_router",
-                mock_router,
-            ),
-            patch(
-                "litellm.proxy.proxy_server.store_model_in_db",
-                False,
-            ),
-            pytest.raises(HTTPException) as exc_info,
-        ):
+        with patch(
+            "litellm.proxy.proxy_server.llm_router",
+            mock_router,
+        ), patch(
+            "litellm.proxy.proxy_server.store_model_in_db",
+            False,
+        ), pytest.raises(HTTPException) as exc_info:
             await create_fallback(request, mock_user_api_key_dict)
 
         assert exc_info.value.status_code == 400
@@ -322,23 +290,18 @@ class TestCreateFallback:
             fallback_type="context_window",
         )
 
-        with (
-            patch(
-                "litellm.proxy.proxy_server.llm_router",
-                mock_router,
-            ),
-            patch(
-                "litellm.proxy.proxy_server.prisma_client",
-                mock_prisma_client,
-            ),
-            patch(
-                "litellm.proxy.proxy_server.proxy_config",
-                mock_proxy_config,
-            ),
-            patch(
-                "litellm.proxy.proxy_server.store_model_in_db",
-                True,
-            ),
+        with patch(
+            "litellm.proxy.proxy_server.llm_router",
+            mock_router,
+        ), patch(
+            "litellm.proxy.proxy_server.prisma_client",
+            mock_prisma_client,
+        ), patch(
+            "litellm.proxy.proxy_server.proxy_config",
+            mock_proxy_config,
+        ), patch(
+            "litellm.proxy.proxy_server.store_model_in_db",
+            True,
         ):
             response = await create_fallback(request, mock_user_api_key_dict)
 
@@ -385,13 +348,10 @@ class TestGetFallback:
         self, mock_router_with_fallbacks, mock_user_api_key_dict
     ):
         """Test error when fallback is not found"""
-        with (
-            patch(
-                "litellm.proxy.proxy_server.llm_router",
-                mock_router_with_fallbacks,
-            ),
-            pytest.raises(HTTPException) as exc_info,
-        ):
+        with patch(
+            "litellm.proxy.proxy_server.llm_router",
+            mock_router_with_fallbacks,
+        ), pytest.raises(HTTPException) as exc_info:
             await get_fallback("gpt-4", "general", mock_user_api_key_dict)
 
         assert exc_info.value.status_code == 404
@@ -399,13 +359,10 @@ class TestGetFallback:
 
     async def test_get_fallback_router_not_initialized(self, mock_user_api_key_dict):
         """Test error when router is not initialized"""
-        with (
-            patch(
-                "litellm.proxy.proxy_server.llm_router",
-                None,
-            ),
-            pytest.raises(HTTPException) as exc_info,
-        ):
+        with patch(
+            "litellm.proxy.proxy_server.llm_router",
+            None,
+        ), pytest.raises(HTTPException) as exc_info:
             await get_fallback("gpt-3.5-turbo", "general", mock_user_api_key_dict)
 
         assert exc_info.value.status_code == 500
@@ -459,23 +416,18 @@ class TestDeleteFallback:
         mock_user_api_key_dict,
     ):
         """Test successful fallback deletion"""
-        with (
-            patch(
-                "litellm.proxy.proxy_server.llm_router",
-                mock_router_with_fallbacks,
-            ),
-            patch(
-                "litellm.proxy.proxy_server.prisma_client",
-                mock_prisma_client,
-            ),
-            patch(
-                "litellm.proxy.proxy_server.proxy_config",
-                mock_proxy_config,
-            ),
-            patch(
-                "litellm.proxy.proxy_server.store_model_in_db",
-                True,
-            ),
+        with patch(
+            "litellm.proxy.proxy_server.llm_router",
+            mock_router_with_fallbacks,
+        ), patch(
+            "litellm.proxy.proxy_server.prisma_client",
+            mock_prisma_client,
+        ), patch(
+            "litellm.proxy.proxy_server.proxy_config",
+            mock_proxy_config,
+        ), patch(
+            "litellm.proxy.proxy_server.store_model_in_db",
+            True,
         ):
             response = await delete_fallback(
                 "gpt-3.5-turbo", "general", mock_user_api_key_dict
@@ -496,25 +448,19 @@ class TestDeleteFallback:
         mock_user_api_key_dict,
     ):
         """Test error when fallback to delete is not found"""
-        with (
-            patch(
-                "litellm.proxy.proxy_server.llm_router",
-                mock_router_with_fallbacks,
-            ),
-            patch(
-                "litellm.proxy.proxy_server.prisma_client",
-                mock_prisma_client,
-            ),
-            patch(
-                "litellm.proxy.proxy_server.proxy_config",
-                mock_proxy_config,
-            ),
-            patch(
-                "litellm.proxy.proxy_server.store_model_in_db",
-                True,
-            ),
-            pytest.raises(HTTPException) as exc_info,
-        ):
+        with patch(
+            "litellm.proxy.proxy_server.llm_router",
+            mock_router_with_fallbacks,
+        ), patch(
+            "litellm.proxy.proxy_server.prisma_client",
+            mock_prisma_client,
+        ), patch(
+            "litellm.proxy.proxy_server.proxy_config",
+            mock_proxy_config,
+        ), patch(
+            "litellm.proxy.proxy_server.store_model_in_db",
+            True,
+        ), pytest.raises(HTTPException) as exc_info:
             await delete_fallback("gpt-4", "general", mock_user_api_key_dict)
 
         assert exc_info.value.status_code == 404
@@ -522,13 +468,10 @@ class TestDeleteFallback:
 
     async def test_delete_fallback_router_not_initialized(self, mock_user_api_key_dict):
         """Test error when router is not initialized"""
-        with (
-            patch(
-                "litellm.proxy.proxy_server.llm_router",
-                None,
-            ),
-            pytest.raises(HTTPException) as exc_info,
-        ):
+        with patch(
+            "litellm.proxy.proxy_server.llm_router",
+            None,
+        ), pytest.raises(HTTPException) as exc_info:
             await delete_fallback("gpt-3.5-turbo", "general", mock_user_api_key_dict)
 
         assert exc_info.value.status_code == 500
@@ -538,17 +481,13 @@ class TestDeleteFallback:
         self, mock_router_with_fallbacks, mock_user_api_key_dict
     ):
         """Test error when database storage is not enabled"""
-        with (
-            patch(
-                "litellm.proxy.proxy_server.llm_router",
-                mock_router_with_fallbacks,
-            ),
-            patch(
-                "litellm.proxy.proxy_server.store_model_in_db",
-                False,
-            ),
-            pytest.raises(HTTPException) as exc_info,
-        ):
+        with patch(
+            "litellm.proxy.proxy_server.llm_router",
+            mock_router_with_fallbacks,
+        ), patch(
+            "litellm.proxy.proxy_server.store_model_in_db",
+            False,
+        ), pytest.raises(HTTPException) as exc_info:
             await delete_fallback("gpt-3.5-turbo", "general", mock_user_api_key_dict)
 
         assert exc_info.value.status_code == 400

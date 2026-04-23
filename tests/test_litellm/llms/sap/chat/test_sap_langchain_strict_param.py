@@ -52,14 +52,14 @@ class TestLangChainAgentCompatibility:
                         "properties": {
                             "thought": {"type": "string"},
                             "action": {"type": "string"},
-                            "action_input": {"type": "string"},
+                            "action_input": {"type": "string"}
                         },
-                        "required": ["thought", "action", "action_input"],
-                    },
-                },
+                        "required": ["thought", "action", "action_input"]
+                    }
+                }
             },
             "strict": True,  # LangChain adds this at top level
-            "temperature": 0,
+            "temperature": 0
         }
 
         request = config.transform_request(
@@ -71,12 +71,8 @@ class TestLangChainAgentCompatibility:
         )
 
         # Verify strict is NOT in model.params (would cause 400 error)
-        model_params = request["config"]["modules"]["prompt_templating"]["model"][
-            "params"
-        ]
-        assert (
-            "strict" not in model_params
-        ), "strict should be filtered from model.params"
+        model_params = request["config"]["modules"]["prompt_templating"]["model"]["params"]
+        assert "strict" not in model_params, "strict should be filtered from model.params"
 
         # Verify other params are preserved
         assert model_params.get("temperature") == 0
@@ -110,14 +106,14 @@ class TestLangChainAgentCompatibility:
                         "type": "object",
                         "properties": {
                             "query": {"type": "string", "description": "Search query"},
-                            "max_results": {"type": "integer", "default": 10},
+                            "max_results": {"type": "integer", "default": 10}
                         },
-                        "required": ["query"],
-                    },
-                },
+                        "required": ["query"]
+                    }
+                }
             },
             "strict": True,
-            "max_tokens": 1000,
+            "max_tokens": 1000
         }
 
         request = config.transform_request(
@@ -128,9 +124,7 @@ class TestLangChainAgentCompatibility:
             headers={},
         )
 
-        model_params = request["config"]["modules"]["prompt_templating"]["model"][
-            "params"
-        ]
+        model_params = request["config"]["modules"]["prompt_templating"]["model"]["params"]
         assert "strict" not in model_params
         assert model_params.get("max_tokens") == 1000
 
@@ -142,21 +136,21 @@ class TestLangChainAgentCompatibility:
         config = GenAIHubOrchestrationConfig()
 
         tool_agent_params = {
-            "tools": [
-                {
-                    "type": "function",
-                    "function": {
-                        "name": "search_web",
-                        "description": "Search the web for information",
-                        "parameters": {
-                            "type": "object",
-                            "properties": {"query": {"type": "string"}},
-                            "required": ["query"],
+            "tools": [{
+                "type": "function",
+                "function": {
+                    "name": "search_web",
+                    "description": "Search the web for information",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "query": {"type": "string"}
                         },
-                        "strict": True,  # Tool-level strict
+                        "required": ["query"]
                     },
+                    "strict": True  # Tool-level strict
                 }
-            ],
+            }],
             "response_format": {
                 "type": "json_schema",
                 "json_schema": {
@@ -164,12 +158,12 @@ class TestLangChainAgentCompatibility:
                     "strict": True,
                     "schema": {
                         "type": "object",
-                        "properties": {"result": {"type": "string"}},
-                    },
-                },
+                        "properties": {"result": {"type": "string"}}
+                    }
+                }
             },
             "strict": True,  # Top-level strict from LangChain
-            "tool_choice": "auto",
+            "tool_choice": "auto"
         }
 
         request = config.transform_request(
@@ -181,9 +175,7 @@ class TestLangChainAgentCompatibility:
         )
 
         # Top-level strict should be filtered
-        model_params = request["config"]["modules"]["prompt_templating"]["model"][
-            "params"
-        ]
+        model_params = request["config"]["modules"]["prompt_templating"]["model"]["params"]
         assert "strict" not in model_params
 
         # Tools should be included
@@ -207,9 +199,7 @@ class TestLangChainAgentCompatibility:
             headers={},
         )
 
-        model_params = request["config"]["modules"]["prompt_templating"]["model"][
-            "params"
-        ]
+        model_params = request["config"]["modules"]["prompt_templating"]["model"]["params"]
         assert "strict" not in model_params
         assert model_params.get("temperature") == 0.5
 
@@ -223,14 +213,11 @@ class TestLangChainAgentCompatibility:
                 "json_schema": {
                     "name": "Response",
                     "strict": True,
-                    "schema": {
-                        "type": "object",
-                        "properties": {"answer": {"type": "string"}},
-                    },
-                },
+                    "schema": {"type": "object", "properties": {"answer": {"type": "string"}}}
+                }
             },
             "strict": True,
-            "max_tokens": 2000,
+            "max_tokens": 2000
         }
 
         request = config.transform_request(
@@ -241,9 +228,7 @@ class TestLangChainAgentCompatibility:
             headers={},
         )
 
-        model_params = request["config"]["modules"]["prompt_templating"]["model"][
-            "params"
-        ]
+        model_params = request["config"]["modules"]["prompt_templating"]["model"]["params"]
         # Anthropic models CAN have strict in model.params (SAP API accepts it)
         assert model_params.get("strict") is True
         assert model_params.get("max_tokens") == 2000
@@ -264,7 +249,7 @@ class TestLangChainRequestPayloadStructure:
             model="gpt-4o",
             messages=[
                 {"role": "system", "content": "You are a helpful assistant."},
-                {"role": "user", "content": "What is 2+2?"},
+                {"role": "user", "content": "What is 2+2?"}
             ],
             optional_params={
                 "strict": True,
@@ -278,10 +263,10 @@ class TestLangChainRequestPayloadStructure:
                         "schema": {
                             "type": "object",
                             "properties": {"answer": {"type": "integer"}},
-                            "required": ["answer"],
-                        },
-                    },
-                },
+                            "required": ["answer"]
+                        }
+                    }
+                }
             },
             litellm_params={},
             headers={},
@@ -336,12 +321,8 @@ class TestLangChainRequestPayloadStructure:
                 headers={},
             )
 
-            model_params = request["config"]["modules"]["prompt_templating"]["model"][
-                "params"
-            ]
-            assert (
-                "strict" not in model_params
-            ), f"strict leaked into model.params with input: {params}"
+            model_params = request["config"]["modules"]["prompt_templating"]["model"]["params"]
+            assert "strict" not in model_params, f"strict leaked into model.params with input: {params}"
 
 
 class TestEdgeCases:
@@ -359,9 +340,7 @@ class TestEdgeCases:
             headers={},
         )
 
-        model_params = request["config"]["modules"]["prompt_templating"]["model"][
-            "params"
-        ]
+        model_params = request["config"]["modules"]["prompt_templating"]["model"]["params"]
         assert "strict" not in model_params
 
     def test_empty_optional_params(self):
@@ -376,9 +355,7 @@ class TestEdgeCases:
             headers={},
         )
 
-        model_params = request["config"]["modules"]["prompt_templating"]["model"][
-            "params"
-        ]
+        model_params = request["config"]["modules"]["prompt_templating"]["model"]["params"]
         assert "strict" not in model_params
 
     def test_only_strict_in_params(self):
@@ -393,9 +370,7 @@ class TestEdgeCases:
             headers={},
         )
 
-        model_params = request["config"]["modules"]["prompt_templating"]["model"][
-            "params"
-        ]
+        model_params = request["config"]["modules"]["prompt_templating"]["model"]["params"]
         assert "strict" not in model_params
         # model_params might be empty or have other defaults, but no strict
 
@@ -420,15 +395,9 @@ class TestEdgeCases:
                 headers={},
             )
 
-            model_params = request["config"]["modules"]["prompt_templating"]["model"][
-                "params"
-            ]
-            assert (
-                "strict" not in model_params
-            ), f"strict should be filtered for GPT model: {model}"
-            assert (
-                model_params.get("temperature") == 0.5
-            ), f"temperature missing for model: {model}"
+            model_params = request["config"]["modules"]["prompt_templating"]["model"]["params"]
+            assert "strict" not in model_params, f"strict should be filtered for GPT model: {model}"
+            assert model_params.get("temperature") == 0.5, f"temperature missing for model: {model}"
 
     def test_non_gpt_models_preserve_strict(self):
         """Verify strict is preserved for non-GPT models (Anthropic, Gemini, Mistral, etc.)."""
@@ -450,12 +419,6 @@ class TestEdgeCases:
                 headers={},
             )
 
-            model_params = request["config"]["modules"]["prompt_templating"]["model"][
-                "params"
-            ]
-            assert (
-                model_params.get("strict") is True
-            ), f"strict should be preserved for non-GPT model: {model}"
-            assert (
-                model_params.get("temperature") == 0.5
-            ), f"temperature missing for model: {model}"
+            model_params = request["config"]["modules"]["prompt_templating"]["model"]["params"]
+            assert model_params.get("strict") is True, f"strict should be preserved for non-GPT model: {model}"
+            assert model_params.get("temperature") == 0.5, f"temperature missing for model: {model}"

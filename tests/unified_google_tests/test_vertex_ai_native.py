@@ -1,6 +1,5 @@
 from base_google_test import BaseGoogleGenAITest
 
-
 class TestVertexAIGenerateContent(BaseGoogleGenAITest):
     """Test Vertex AI"""
 

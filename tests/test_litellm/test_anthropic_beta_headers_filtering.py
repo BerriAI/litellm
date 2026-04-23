@@ -7,7 +7,6 @@ This test validates:
 3. Unknown headers (not in config) are filtered out
 4. For Bedrock providers, beta headers appear in the request body (not just HTTP headers)
 """
-
 import json
 import os
 from typing import Dict, List
@@ -30,12 +29,11 @@ class TestAnthropicBetaHeadersFiltering:
         """Load the beta headers config for testing."""
         # Force use of local config file for tests
         monkeypatch.setenv("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", "True")
-
+        
         # Clear the cached config to ensure fresh load with local config
         from litellm import anthropic_beta_headers_manager
-
         anthropic_beta_headers_manager._BETA_HEADERS_CONFIG = None
-
+        
         config_path = os.path.join(
             os.path.dirname(litellm.__file__),
             "anthropic_beta_headers_config.json",
@@ -138,7 +136,9 @@ class TestAnthropicBetaHeadersFiltering:
             provider="vertex_ai",
         )
 
-        assert filtered_headers.get("anthropic-beta") == "context-management-2025-06-27"
+        assert (
+            filtered_headers.get("anthropic-beta") == "context-management-2025-06-27"
+        )
         assert filtered_request_data.get("anthropic_beta") == [
             "context-management-2025-06-27"
         ]
@@ -252,9 +252,7 @@ class TestAnthropicBetaHeadersFiltering:
             mock_response = MagicMock()
             mock_response.status_code = 200
             mock_response.json.return_value = {
-                "output": {
-                    "message": {"role": "assistant", "content": [{"text": "Hello"}]}
-                },
+                "output": {"message": {"role": "assistant", "content": [{"text": "Hello"}]}},
                 "stopReason": "end_turn",
                 "usage": {"inputTokens": 10, "outputTokens": 20},
             }
@@ -404,13 +402,7 @@ class TestAnthropicBetaHeadersFiltering:
 
     def test_null_value_headers_filtered(self):
         """Test that headers with null values are always filtered out."""
-        for provider in [
-            "anthropic",
-            "azure_ai",
-            "bedrock_converse",
-            "bedrock",
-            "vertex_ai",
-        ]:
+        for provider in ["anthropic", "azure_ai", "bedrock_converse", "bedrock", "vertex_ai"]:
             unsupported = self.get_unsupported_headers(provider)
 
             if unsupported:
@@ -424,13 +416,7 @@ class TestAnthropicBetaHeadersFiltering:
 
     def test_empty_headers_list(self):
         """Test that empty headers list returns empty result."""
-        for provider in [
-            "anthropic",
-            "azure_ai",
-            "bedrock_converse",
-            "bedrock",
-            "vertex_ai",
-        ]:
+        for provider in ["anthropic", "azure_ai", "bedrock_converse", "bedrock", "vertex_ai"]:
             filtered = filter_and_transform_beta_headers(
                 beta_headers=[], provider=provider
             )
@@ -441,13 +427,7 @@ class TestAnthropicBetaHeadersFiltering:
 
     def test_mixed_supported_and_unsupported_headers(self):
         """Test filtering with a mix of supported, unsupported, and unknown headers."""
-        for provider in [
-            "anthropic",
-            "azure_ai",
-            "bedrock_converse",
-            "bedrock",
-            "vertex_ai",
-        ]:
+        for provider in ["anthropic", "azure_ai", "bedrock_converse", "bedrock", "vertex_ai"]:
             supported = self.get_supported_headers(provider)
             unsupported = self.get_unsupported_headers(provider)
             mapped_headers = self.get_mapped_headers(provider)
@@ -455,7 +435,11 @@ class TestAnthropicBetaHeadersFiltering:
             if not supported or not unsupported:
                 continue
 
-            test_headers = [supported[0]] + [unsupported[0]] + ["unknown-header-123"]
+            test_headers = (
+                [supported[0]]
+                + [unsupported[0]]
+                + ["unknown-header-123"]
+            )
 
             filtered = filter_and_transform_beta_headers(
                 beta_headers=test_headers, provider=provider

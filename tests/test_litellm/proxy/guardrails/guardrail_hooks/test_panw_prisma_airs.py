@@ -1676,12 +1676,11 @@ class TestPanwAirsApplyGuardrail:
         inputs: GenericGuardrailAPIInputs = {"texts": ["Hello world"]}
         request_data = {"litellm_call_id": "test-call-id", "model": "gpt-4"}
 
-        with (
-            patch.object(handler, "_call_panw_api", new_callable=AsyncMock) as mock_api,
-            patch(
-                "litellm.proxy.guardrails.guardrail_hooks.panw_prisma_airs.panw_prisma_airs.add_guardrail_to_applied_guardrails_header"
-            ) as mock_header,
-        ):
+        with patch.object(
+            handler, "_call_panw_api", new_callable=AsyncMock
+        ) as mock_api, patch(
+            "litellm.proxy.guardrails.guardrail_hooks.panw_prisma_airs.panw_prisma_airs.add_guardrail_to_applied_guardrails_header"
+        ) as mock_header:
             mock_api.return_value = {"action": "allow", "category": "benign"}
 
             result = await handler.apply_guardrail(
@@ -2264,7 +2263,7 @@ class TestPanwAirsMcpForceRun:
                 "test_panw_airs",
                 False,
                 "pre_call",
-                _simple_data(disable_global_guardrails=True),
+                _simple_data(disable_global_guardrail=True),
                 GuardrailEventHooks.pre_mcp_call,
                 False,
                 id="honors_disable_global_on_mcp_hooks",
@@ -2372,12 +2371,11 @@ class TestPanwAirsStreamingBytesScan:
             for chunk in sse_bytes:
                 yield chunk
 
-        with (
-            patch.object(handler, "_call_panw_api", new_callable=AsyncMock) as mock_api,
-            patch(
-                "litellm.proxy.guardrails.guardrail_hooks.panw_prisma_airs.panw_prisma_airs.add_guardrail_to_applied_guardrails_header"
-            ) as mock_header,
-        ):
+        with patch.object(
+            handler, "_call_panw_api", new_callable=AsyncMock
+        ) as mock_api, patch(
+            "litellm.proxy.guardrails.guardrail_hooks.panw_prisma_airs.panw_prisma_airs.add_guardrail_to_applied_guardrails_header"
+        ) as mock_header:
             mock_api.return_value = {"action": "allow", "category": "benign"}
 
             async for _ in handler.async_post_call_streaming_iterator_hook(
@@ -2394,7 +2392,9 @@ class TestPanwAirsStreamingBytesScan:
 
             # Verify standard logging was recorded in request_data metadata
             metadata = request_data.get("metadata", {})
-            guardrail_info_list = metadata.get("standard_logging_guardrail_information")
+            guardrail_info_list = metadata.get(
+                "standard_logging_guardrail_information"
+            )
             assert guardrail_info_list is not None
             # Find the entry with guardrail_status == "success" from _scan_raw_streaming_text
             success_entries = [
@@ -2509,12 +2509,11 @@ class TestPanwAirsStreamingPydanticEventsScan:
             for event in mock_events:
                 yield event
 
-        with (
-            patch.object(handler, "_call_panw_api", new_callable=AsyncMock) as mock_api,
-            patch(
-                "litellm.proxy.guardrails.guardrail_hooks.panw_prisma_airs.panw_prisma_airs.add_guardrail_to_applied_guardrails_header"
-            ) as mock_header,
-        ):
+        with patch.object(
+            handler, "_call_panw_api", new_callable=AsyncMock
+        ) as mock_api, patch(
+            "litellm.proxy.guardrails.guardrail_hooks.panw_prisma_airs.panw_prisma_airs.add_guardrail_to_applied_guardrails_header"
+        ) as mock_header:
             mock_api.return_value = {"action": "allow", "category": "benign"}
 
             async for _ in handler.async_post_call_streaming_iterator_hook(
@@ -2531,7 +2530,9 @@ class TestPanwAirsStreamingPydanticEventsScan:
 
             # Verify standard logging was recorded in request_data metadata
             metadata = request_data.get("metadata", {})
-            guardrail_info_list = metadata.get("standard_logging_guardrail_information")
+            guardrail_info_list = metadata.get(
+                "standard_logging_guardrail_information"
+            )
             assert guardrail_info_list is not None
             # Find the entry with guardrail_status == "success" from _scan_raw_streaming_text
             success_entries = [
@@ -2856,14 +2857,9 @@ class TestPanwAirsMcpToolEventScan:
             "mcp_arguments": {"path": "/etc/passwd"},
         }
 
-        with (
-            patch.object(
-                PanwPrismaAirsHandler,
-                "_get_mcp_server_name",
-                return_value="test_server",
-            ),
-            patch.object(handler, "_call_panw_api", new_callable=AsyncMock) as mock_api,
-        ):
+        with patch.object(
+            PanwPrismaAirsHandler, "_get_mcp_server_name", return_value="test_server"
+        ), patch.object(handler, "_call_panw_api", new_callable=AsyncMock) as mock_api:
             mock_api.return_value = {"action": "allow", "category": "benign"}
 
             await handler.apply_guardrail(
@@ -2970,14 +2966,9 @@ class TestPanwAirsMcpToolEventScan:
             "mcp_arguments": None,
         }
 
-        with (
-            patch.object(
-                PanwPrismaAirsHandler,
-                "_get_mcp_server_name",
-                return_value="test_server",
-            ),
-            patch.object(handler, "_call_panw_api", new_callable=AsyncMock) as mock_api,
-        ):
+        with patch.object(
+            PanwPrismaAirsHandler, "_get_mcp_server_name", return_value="test_server"
+        ), patch.object(handler, "_call_panw_api", new_callable=AsyncMock) as mock_api:
             mock_api.return_value = {"action": "allow", "category": "benign"}
 
             await handler.apply_guardrail(
@@ -3007,14 +2998,9 @@ class TestPanwAirsMcpToolEventScan:
             "mcp_arguments": "hello world",
         }
 
-        with (
-            patch.object(
-                PanwPrismaAirsHandler,
-                "_get_mcp_server_name",
-                return_value="test_server",
-            ),
-            patch.object(handler, "_call_panw_api", new_callable=AsyncMock) as mock_api,
-        ):
+        with patch.object(
+            PanwPrismaAirsHandler, "_get_mcp_server_name", return_value="test_server"
+        ), patch.object(handler, "_call_panw_api", new_callable=AsyncMock) as mock_api:
             mock_api.return_value = {"action": "allow", "category": "benign"}
 
             await handler.apply_guardrail(
@@ -3048,12 +3034,11 @@ class TestPanwAirsMcpToolEventScan:
         mock_server.name = "gmail-mcp"
         mock_server.server_id = "abc-123"
 
-        with (
-            patch(
-                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager"
-            ) as mock_manager,
-            patch.object(handler, "_call_panw_api", new_callable=AsyncMock) as mock_api,
-        ):
+        with patch(
+            "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager"
+        ) as mock_manager, patch.object(
+            handler, "_call_panw_api", new_callable=AsyncMock
+        ) as mock_api:
             mock_manager.get_mcp_server_by_id.return_value = mock_server
             mock_api.return_value = {"action": "allow", "category": "benign"}
 
@@ -3093,14 +3078,9 @@ class TestPanwAirsRestMcpFallback:
             "arguments": {"path": "/etc/shadow"},
         }
 
-        with (
-            patch.object(
-                PanwPrismaAirsHandler,
-                "_get_mcp_server_name",
-                return_value="test_server",
-            ),
-            patch.object(handler, "_call_panw_api", new_callable=AsyncMock) as mock_api,
-        ):
+        with patch.object(
+            PanwPrismaAirsHandler, "_get_mcp_server_name", return_value="test_server"
+        ), patch.object(handler, "_call_panw_api", new_callable=AsyncMock) as mock_api:
             mock_api.return_value = {"action": "allow", "category": "benign"}
 
             await handler.apply_guardrail(
@@ -3162,14 +3142,9 @@ class TestPanwAirsRestMcpFallback:
             "arguments": {"key": "rest_val"},
         }
 
-        with (
-            patch.object(
-                PanwPrismaAirsHandler,
-                "_get_mcp_server_name",
-                return_value="test_server",
-            ),
-            patch.object(handler, "_call_panw_api", new_callable=AsyncMock) as mock_api,
-        ):
+        with patch.object(
+            PanwPrismaAirsHandler, "_get_mcp_server_name", return_value="test_server"
+        ), patch.object(handler, "_call_panw_api", new_callable=AsyncMock) as mock_api:
             mock_api.return_value = {"action": "allow", "category": "benign"}
 
             await handler.apply_guardrail(
@@ -3245,14 +3220,9 @@ class TestPanwAirsDuplicateScanRegression:
             "mcp_arguments": {"path": "/tmp/test"},
         }
 
-        with (
-            patch.object(
-                PanwPrismaAirsHandler,
-                "_get_mcp_server_name",
-                return_value="test_server",
-            ),
-            patch.object(handler, "_call_panw_api", new_callable=AsyncMock) as mock_api,
-        ):
+        with patch.object(
+            PanwPrismaAirsHandler, "_get_mcp_server_name", return_value="test_server"
+        ), patch.object(handler, "_call_panw_api", new_callable=AsyncMock) as mock_api:
             mock_api.return_value = {"action": "allow", "category": "benign"}
 
             await handler.apply_guardrail(
@@ -4145,14 +4115,9 @@ class TestPanwAirsMcpRestToolInvoked:
             "mcp_arguments": {"key": "value"},
         }
 
-        with (
-            patch.object(
-                PanwPrismaAirsHandler,
-                "_get_mcp_server_name",
-                return_value="test_server",
-            ),
-            patch.object(handler, "_call_panw_api", new_callable=AsyncMock) as mock_api,
-        ):
+        with patch.object(
+            PanwPrismaAirsHandler, "_get_mcp_server_name", return_value="test_server"
+        ), patch.object(handler, "_call_panw_api", new_callable=AsyncMock) as mock_api:
             mock_api.return_value = {"action": "allow", "category": "benign"}
 
             await handler.apply_guardrail(
@@ -5346,12 +5311,9 @@ class TestPanwAirsDualScanIndependence:
             "mcp_arguments": {"path": "/etc/shadow"},
         }
 
-        with (
-            patch.object(
-                PanwPrismaAirsHandler, "_get_mcp_server_name", return_value="srv"
-            ),
-            patch.object(handler, "_call_panw_api", new_callable=AsyncMock) as mock_api,
-        ):
+        with patch.object(
+            PanwPrismaAirsHandler, "_get_mcp_server_name", return_value="srv"
+        ), patch.object(handler, "_call_panw_api", new_callable=AsyncMock) as mock_api:
             mock_api.return_value = {"action": "allow", "category": "benign"}
 
             await handler.apply_guardrail(

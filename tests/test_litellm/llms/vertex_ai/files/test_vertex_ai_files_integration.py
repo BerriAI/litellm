@@ -25,7 +25,9 @@ class TestVertexAIFilesIntegration:
             status_code=200,
             content=expected_content,
             headers={"content-type": "application/octet-stream"},
-            request=httpx.Request(method="GET", url="gs://test-bucket/test-file.txt"),
+            request=httpx.Request(
+                method="GET", url="gs://test-bucket/test-file.txt"
+            ),
         )
         mock_result = HttpxBinaryResponseContent(response=mock_response)
 
@@ -66,7 +68,9 @@ class TestVertexAIFilesIntegration:
             status_code=200,
             content=expected_content,
             headers={"content-type": "application/octet-stream"},
-            request=httpx.Request(method="GET", url="gs://test-bucket/test-file.txt"),
+            request=httpx.Request(
+                method="GET", url="gs://test-bucket/test-file.txt"
+            ),
         )
         mock_result = HttpxBinaryResponseContent(response=mock_response)
 
@@ -103,7 +107,9 @@ class TestVertexAIFilesIntegration:
             status_code=200,
             content=expected_content,
             headers={"content-type": "application/octet-stream"},
-            request=httpx.Request(method="GET", url="gs://test-bucket/test-file.txt"),
+            request=httpx.Request(
+                method="GET", url="gs://test-bucket/test-file.txt"
+            ),
         )
         mock_result = HttpxBinaryResponseContent(response=mock_response)
 
@@ -182,7 +188,9 @@ class TestVertexAIFilesIntegration:
             status_code=200,
             content=expected_content,
             headers={"content-type": "application/octet-stream"},
-            request=httpx.Request(method="GET", url="gs://test-bucket/test-file.txt"),
+            request=httpx.Request(
+                method="GET", url="gs://test-bucket/test-file.txt"
+            ),
         )
         mock_result = HttpxBinaryResponseContent(response=mock_response)
 

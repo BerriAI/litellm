@@ -75,8 +75,8 @@ async def test_async_post_call_failure_hook_includes_client_ip_user_agent():
 async def test_async_post_call_success_hook_includes_client_ip_user_agent():
     """
     Test that async_log_success_event includes client_ip and user_agent in UserAPIKeyLabelValues.
-
-    Note: After PR #21159, the metric increment was moved from async_post_call_success_hook
+    
+    Note: After PR #21159, the metric increment was moved from async_post_call_success_hook 
     to async_log_success_event to prevent double-counting.
     """
     # Mocking
@@ -99,7 +99,9 @@ async def test_async_post_call_success_hook_includes_client_ip_user_agent():
 
     kwargs = {
         "model": "gpt-4",
-        "litellm_params": {"metadata": {}},
+        "litellm_params": {
+            "metadata": {}
+        },
         "start_time": None,
         "standard_logging_object": {
             "model_group": "gpt-4",
@@ -116,8 +118,6 @@ async def test_async_post_call_success_hook_includes_client_ip_user_agent():
                 "user_api_key_alias": "alias_1",
                 "user_api_key_team_id": "team_1",
                 "user_api_key_team_alias": "team_alias_1",
-                "user_api_key_org_id": None,
-                "user_api_key_org_alias": None,
                 "user_api_key_user_email": "test@example.com",
                 "user_api_key_request_route": "/chat/completions",
                 "requester_ip_address": "192.168.1.1",

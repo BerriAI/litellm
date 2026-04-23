@@ -4,8 +4,8 @@ import random
 import re
 import shutil
 import subprocess
-import tempfile
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -256,11 +256,21 @@ class ProxyExtrasDBManager:
         if not database_url:
             logger.error("DATABASE_URL not set")
             return
-        # Prefer DIRECT_URL for schema introspection — pooler URLs (e.g. neon -pooler)
-        # do not support the extended query protocol required by prisma migrate diff.
-        diff_url = os.getenv("DIRECT_URL") or database_url
 
-        diff_dir = Path(tempfile.mkdtemp(prefix="litellm_migration_diff_"))
+        diff_dir = (
+            Path(migrations_dir)
+            / "migrations"
+            / f"{datetime.now().strftime('%Y%m%d%H%M%S')}_baseline_diff"
+        )
+        try:
+            diff_dir.mkdir(parents=True, exist_ok=True)
+        except Exception as e:
+            if "Permission denied" in str(e):
+                logger.warning(
+                    f"Permission denied - {e}\nunable to baseline db. Set LITELLM_MIGRATION_DIR environment variable to a writable directory to enable migrations."
+                )
+                return
+            raise e
         diff_sql_path = diff_dir / "migration.sql"
 
         # 1. Generate migration SQL for the diff between DB and schema
@@ -273,7 +283,7 @@ class ProxyExtrasDBManager:
                         "migrate",
                         "diff",
                         "--from-url",
-                        diff_url,
+                        database_url,
                         "--to-schema-datamodel",
                         schema_path,
                         "--script",
@@ -290,40 +300,7 @@ class ProxyExtrasDBManager:
 
         # check if the migration was created
         if not diff_sql_path.exists():
-            logger.warning(
-                "Migration diff was not created (prisma migrate diff failed — "
-                "likely a pooler URL). Falling back to direct SQL execution of "
-                "each migration file."
-            )
-            # Fall back: run each migration SQL file directly via prisma db execute.
-            # This works with pooler URLs (no schema introspection needed) and is
-            # safe to re-run because migrations use IF NOT EXISTS / IF EXISTS guards.
-            migration_files = sorted(Path(migrations_dir).glob("*/migration.sql"))
-            for mig_file in migration_files:
-                try:
-                    subprocess.run(
-                        [
-                            _get_prisma_command(),
-                            "db",
-                            "execute",
-                            "--file",
-                            str(mig_file),
-                            "--schema",
-                            schema_path,
-                        ],
-                        timeout=60,
-                        check=True,
-                        capture_output=True,
-                        text=True,
-                        env=_get_prisma_env(),
-                    )
-                    logger.info(f"Applied migration: {mig_file.parent.name}")
-                except subprocess.CalledProcessError as e:
-                    logger.warning(
-                        f"Failed to apply migration {mig_file.parent.name}: {e.stderr}"
-                    )
-                except subprocess.TimeoutExpired:
-                    logger.warning(f"Migration {mig_file.parent.name} timed out.")
+            logger.warning("Migration diff was not created")
             return
         logger.info(f"Migration diff created at {diff_sql_path}")
 
@@ -418,14 +395,6 @@ class ProxyExtrasDBManager:
 
                         logger.info("prisma migrate deploy completed")
 
-                        # Skip sanity check when deploy reports no pending migrations —
-                        # DB already matches schema, no drift to correct.
-                        if "No pending migrations to apply" in result.stdout:
-                            logger.info(
-                                "No pending migrations — skipping post-migration sanity check"
-                            )
-                            return True
-
                         # Run sanity check to ensure DB matches schema
                         logger.info("Running post-migration sanity check...")
                         ProxyExtrasDBManager._resolve_all_migrations(
@@ -450,10 +419,7 @@ class ProxyExtrasDBManager:
                                         ProxyExtrasDBManager._roll_back_migration(
                                             failed_migration
                                         )
-                                    except (
-                                        subprocess.CalledProcessError,
-                                        subprocess.TimeoutExpired,
-                                    ) as rollback_err:
+                                    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as rollback_err:
                                         logger.warning(
                                             f"Failed to roll back migration {failed_migration}: {rollback_err}. "
                                             f"It may already be in a rolled-back state."
@@ -465,19 +431,10 @@ class ProxyExtrasDBManager:
                                         logger.info(
                                             f"✅ Migration {failed_migration} resolved, retrying to apply remaining migrations"
                                         )
-                                    except (
-                                        subprocess.CalledProcessError,
-                                        subprocess.TimeoutExpired,
-                                    ) as resolve_err:
+                                    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as resolve_err:
                                         logger.warning(
                                             f"Failed to resolve migration {failed_migration}: {resolve_err}"
                                         )
-                                    # Apply any schema drift not covered by the marked-as-applied migration
-                                    ProxyExtrasDBManager._resolve_all_migrations(
-                                        migrations_dir,
-                                        schema_path,
-                                        mark_all_applied=False,
-                                    )
                                 else:
                                     logger.info(
                                         f"Found failed migration: {failed_migration}, marking as rolled back"
@@ -574,10 +531,7 @@ class ProxyExtrasDBManager:
                                         ProxyExtrasDBManager._roll_back_migration(
                                             migration_name
                                         )
-                                    except (
-                                        subprocess.CalledProcessError,
-                                        subprocess.TimeoutExpired,
-                                    ) as rollback_err:
+                                    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as rollback_err:
                                         logger.warning(
                                             f"Failed to roll back migration {migration_name}: {rollback_err}. "
                                             f"It may already be in a rolled-back state."
@@ -594,19 +548,10 @@ class ProxyExtrasDBManager:
                                             f"✅ Migration {migration_name} resolved, "
                                             f"retrying to apply remaining migrations"
                                         )
-                                    except (
-                                        subprocess.CalledProcessError,
-                                        subprocess.TimeoutExpired,
-                                    ) as resolve_err:
+                                    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as resolve_err:
                                         logger.warning(
                                             f"Failed to resolve migration {migration_name}: {resolve_err}"
                                         )
-                                    # Apply any schema drift not covered by the marked-as-applied migration
-                                    ProxyExtrasDBManager._resolve_all_migrations(
-                                        migrations_dir,
-                                        schema_path,
-                                        mark_all_applied=False,
-                                    )
                             else:
                                 # Unknown P3018 error - log and re-raise for safety
                                 logger.warning(

@@ -214,7 +214,7 @@ For GCP Memorystore Redis with IAM authentication, install the required dependen
 :::
 
 ```shell
-uv add google-cloud-iam
+pip install google-cloud-iam
 ```
 
 <Tabs>

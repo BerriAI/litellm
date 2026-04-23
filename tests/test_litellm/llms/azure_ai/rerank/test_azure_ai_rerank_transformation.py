@@ -97,3 +97,4 @@ class TestAzureAIRerankConfigGetCompleteUrl:
             model=self.model,
         )
         assert url == "https://my-resource.services.ai.azure.com/v1/rerank?r=1"
+

@@ -1,7 +1,6 @@
 """
 Unit tests for prometheus queue time and guardrail metrics
 """
-
 from datetime import datetime
 from unittest.mock import MagicMock
 

@@ -37,7 +37,7 @@ secret:
     - "docs/**"
     - "**/*.md"
     - "**/*.lock"
-    - "uv.lock"
+    - "poetry.lock"
     - "package-lock.json"
 
   # Ignore security incidents with the SHA256 of the occurrence (false positives)

@@ -3,7 +3,6 @@ Calls DataForSEO SERP API to search the web.
 
 DataForSEO API Reference: https://docs.dataforseo.com/v3/serp/google/organic/live/advanced/?bash
 """
-
 from typing import Any, Dict, List, Literal, Optional, Union
 
 import httpx

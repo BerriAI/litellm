@@ -9,7 +9,7 @@ git clone https://github.com/BerriAI/litellm.git
 
 #### Installation
 ```
-uv add mkdocs
+pip install mkdocs
 ```
 
 #### Locally Serving Docs

@@ -4,10 +4,9 @@
  */
 
 export interface PluginSource {
-  source: "github" | "url" | "git-subdir";
+  source: "github" | "url";
   repo?: string;  // Format: "org/repo" for GitHub
   url?: string;   // Full URL for other sources
-  path?: string;  // Subdirectory path for git-subdir
 }
 
 export interface PluginAuthor {
@@ -25,8 +24,6 @@ export interface Plugin {
   homepage?: string;
   keywords?: string[];
   category?: string;
-  domain?: string;
-  namespace?: string;
   enabled: boolean;
   created_at?: string;
   updated_at?: string;
@@ -43,8 +40,6 @@ export interface PluginListItem {
   homepage?: string;
   keywords?: string[];
   category?: string;
-  domain?: string;
-  namespace?: string;
   enabled: boolean;
   created_at?: string;
   updated_at?: string;
@@ -65,8 +60,6 @@ export interface RegisterPluginRequest {
   homepage?: string;
   keywords?: string[];
   category?: string;
-  domain?: string;
-  namespace?: string;
 }
 
 export interface RegisterPluginResponse {
@@ -107,10 +100,9 @@ export interface CategoryTab {
 
 export interface PluginFormData {
   name: string;
-  sourceType: "github" | "url" | "git-subdir";
+  sourceType: "github" | "url";
   repo: string;
   url: string;
-  path: string;
   version: string;
   description: string;
   authorName: string;
@@ -118,6 +110,4 @@ export interface PluginFormData {
   homepage: string;
   category: string;
   keywords: string;  // Comma-separated string, will be split into array
-  domain: string;
-  namespace: string;
 }

@@ -17,7 +17,7 @@ MLflow’s integration with LiteLLM supports advanced observability compatible w
 Install MLflow:
 
 ```shell
-uv add "litellm[mlflow]"
+pip install "litellm[mlflow]"
 ```
 
 To enable MLflow auto tracing for LiteLLM:
@@ -167,7 +167,7 @@ This approach generates a unified trace, combining your custom Python code with 
 For using `mlflow` on LiteLLM Proxy Server, you need to install the `mlflow` package on your docker container.
 
 ```shell
-uv add "mlflow>=3.1.4"
+pip install "mlflow>=3.1.4"
 ```
 
 ### Configuration

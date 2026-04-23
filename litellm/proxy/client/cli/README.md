@@ -5,7 +5,7 @@ The LiteLLM Proxy CLI is a command-line tool for managing your LiteLLM proxy ser
 ## Installation
 
 ```bash
-uv tool install 'litellm[proxy]'
+pip install 'litellm[proxy]'
 ```
 
 ## Configuration

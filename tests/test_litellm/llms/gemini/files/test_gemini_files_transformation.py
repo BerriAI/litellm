@@ -37,9 +37,12 @@ class TestGoogleAIStudioFilesTransformation:
             litellm_params=litellm_params,
         )
 
-        # API key is passed via x-goog-api-key header, not in URL
-        assert url == "https://generativelanguage.googleapis.com/v1beta/files/test123"
-        assert "key=" not in url
+        # Verify URL is constructed exactly as required:
+        # https://generativelanguage.googleapis.com/v1beta/files/{file_id}?key=API_KEY
+        assert (
+            url
+            == "https://generativelanguage.googleapis.com/v1beta/files/test123?key=test-api-key"
+        )
 
         # CRITICAL: params should be empty dict, not contain Content-Type or any other params
         # These would be incorrectly interpreted as query parameters
@@ -61,9 +64,12 @@ class TestGoogleAIStudioFilesTransformation:
             litellm_params=litellm_params,
         )
 
-        # API key is passed via x-goog-api-key header, not in URL
-        assert url == "https://generativelanguage.googleapis.com/v1beta/files/test123"
-        assert "key=" not in url
+        # Verify URL is constructed exactly as required:
+        # https://generativelanguage.googleapis.com/v1beta/files/{file_id}?key=API_KEY
+        assert (
+            url
+            == "https://generativelanguage.googleapis.com/v1beta/files/test123?key=test-api-key"
+        )
 
         # CRITICAL: params should be empty dict
         assert params == {}, f"Expected empty params dict, got: {params}"
@@ -73,10 +79,11 @@ class TestGoogleAIStudioFilesTransformation:
 
     def test_transform_retrieve_file_request_with_raw_id_only(self):
         """
-        Regression guard: API key must NOT appear in the URL.
+        Regression guard for the exact retrieval URL format.
 
-        The key is sent via x-goog-api-key header to prevent leaking
-        credentials in httpx error tracebacks.
+        If someone changes the method and stops producing:
+        https://generativelanguage.googleapis.com/v1beta/files/{file_id}?key=API_KEY
+        this test should fail.
         """
         file_id = "cctqueckiggb"
         litellm_params = {"api_key": "test-api-key"}
@@ -88,9 +95,9 @@ class TestGoogleAIStudioFilesTransformation:
         )
 
         assert (
-            url == "https://generativelanguage.googleapis.com/v1beta/files/cctqueckiggb"
+            url
+            == "https://generativelanguage.googleapis.com/v1beta/files/cctqueckiggb?key=test-api-key"
         )
-        assert "key=" not in url
         assert params == {}
 
     @patch.dict("os.environ", {}, clear=True)
@@ -278,10 +285,10 @@ class TestGoogleAIStudioFilesTransformation:
             litellm_params={},
         )
 
-        # Verify URL structure - API key must NOT be in URL
+        # Verify URL structure
         assert api_base in url
         assert "upload/v1beta/files" in url
-        assert "key=" not in url
+        assert f"key={api_key}" in url
 
     def test_transform_delete_file_request_with_full_uri(self):
         """Test delete file request transformation with full URI"""

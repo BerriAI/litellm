@@ -85,10 +85,6 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
             raise ValueError("api_key is required for Gemini API calls")
         api_base = api_base.replace("https://", "wss://")
         api_base = api_base.replace("http://", "ws://")
-        # WebSocket connections do not support custom HTTP headers in all clients,
-        # so the API key must remain as a query parameter here. This is an accepted
-        # limitation; httpx is not used for WebSocket so MaskedHTTPStatusError
-        # already covers the main leak vector.
         return f"{api_base}/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key={api_key}"
 
     def map_model_turn_event(
@@ -190,10 +186,10 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                 )
 
                 vertex_gemini_config = VertexGeminiConfig()
-                optional_params["generationConfig"]["tools"] = (
-                    vertex_gemini_config._map_function(
-                        value=value, optional_params=optional_params
-                    )
+                optional_params["generationConfig"][
+                    "tools"
+                ] = vertex_gemini_config._map_function(
+                    value=value, optional_params=optional_params
                 )
             elif key == "input_audio_transcription" and value is not None:
                 optional_params["inputAudioTranscription"] = {}
@@ -205,10 +201,10 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                 if (
                     len(transformed_audio_activity_config) > 0
                 ):  # if the config is not empty, add it to the optional params
-                    optional_params["realtimeInputConfig"] = (
-                        BidiGenerateContentRealtimeInputConfig(
-                            automaticActivityDetection=transformed_audio_activity_config
-                        )
+                    optional_params[
+                        "realtimeInputConfig"
+                    ] = BidiGenerateContentRealtimeInputConfig(
+                        automaticActivityDetection=transformed_audio_activity_config
                     )
         if len(optional_params["generationConfig"]) == 0:
             optional_params.pop("generationConfig")
@@ -868,9 +864,9 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
             "session_configuration_request"
         ]
         current_item_chunks = realtime_response_transform_input["current_item_chunks"]
-        current_delta_type: Optional[ALL_DELTA_TYPES] = (
-            realtime_response_transform_input["current_delta_type"]
-        )
+        current_delta_type: Optional[
+            ALL_DELTA_TYPES
+        ] = realtime_response_transform_input["current_delta_type"]
         returned_message: List[OpenAIRealtimeEvents] = []
 
         # Handle transcription events that arrive independently from model

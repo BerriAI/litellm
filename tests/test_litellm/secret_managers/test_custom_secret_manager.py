@@ -181,8 +181,9 @@ def test_custom_secret_manager_integration_with_litellm():
 
     # Set access mode to enable secret reading
     from litellm.types.secret_managers.main import KeyManagementSettings
-
-    litellm._key_management_settings = KeyManagementSettings(access_mode="read_only")
+    litellm._key_management_settings = KeyManagementSettings(
+        access_mode="read_only"
+    )
 
     try:
         # Test getting a secret through LiteLLM's get_secret function
@@ -199,6 +200,7 @@ def test_custom_secret_manager_integration_with_litellm():
         litellm.secret_manager_client = None
         litellm._key_management_system = None
         litellm._key_management_settings = None
+
 
 
 class MinimalCustomSecretManager(CustomSecretManager):
@@ -245,7 +247,6 @@ def test_minimal_custom_secret_manager():
     # Write should raise NotImplementedError
     with pytest.raises(NotImplementedError) as exc_info:
         import asyncio
-
         asyncio.run(secret_manager.async_write_secret("KEY", "value"))
 
     assert "Write operations are not implemented" in str(exc_info.value)
@@ -253,7 +254,6 @@ def test_minimal_custom_secret_manager():
     # Delete should raise NotImplementedError
     with pytest.raises(NotImplementedError) as exc_info:
         import asyncio
-
         asyncio.run(secret_manager.async_delete_secret("KEY"))
 
     assert "Delete operations are not implemented" in str(exc_info.value)

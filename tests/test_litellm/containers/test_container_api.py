@@ -25,7 +25,6 @@ from litellm.containers.main import (
 from litellm.main import base_llm_http_handler
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.llms.openai.containers.transformation import OpenAIContainerConfig
-from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.router import Router
 from litellm.types.containers.main import (
     ContainerListResponse,
@@ -62,18 +61,15 @@ class TestContainerAPI:
             status="running",
             expires_after={"anchor": "last_active_at", "minutes": 20},
             last_active_at=1747857508,
-            name="Test Container",
+            name="Test Container"
         )
-
-        with patch.object(
-            base_llm_http_handler,
-            "container_create_handler",
-            return_value=mock_response,
-        ):
+        
+        with patch.object(base_llm_http_handler, 'container_create_handler', return_value=mock_response):
             response = create_container(
-                name="Test Container", custom_llm_provider="openai"
+                name="Test Container",
+                custom_llm_provider="openai"
             )
-
+            
             assert isinstance(response, ContainerObject)
             assert response.id == "cntr_123456"
             assert response.name == "Test Container"
@@ -84,25 +80,21 @@ class TestContainerAPI:
         """Test container creation with expires_after parameter."""
         mock_response = ContainerObject(
             id="cntr_789",
-            object="container",
+            object="container", 
             created_at=1747857508,
             status="running",
             expires_after={"anchor": "last_active_at", "minutes": 30},
             last_active_at=1747857508,
-            name="Expiring Container",
+            name="Expiring Container"
         )
-
-        with patch.object(
-            base_llm_http_handler,
-            "container_create_handler",
-            return_value=mock_response,
-        ):
+        
+        with patch.object(base_llm_http_handler, 'container_create_handler', return_value=mock_response):
             response = create_container(
                 name="Expiring Container",
                 expires_after={"anchor": "last_active_at", "minutes": 30},
-                custom_llm_provider="openai",
+                custom_llm_provider="openai"
             )
-
+            
             assert response.expires_after.minutes == 30
             assert response.expires_after.anchor == "last_active_at"
 
@@ -115,20 +107,16 @@ class TestContainerAPI:
             status="running",
             expires_after={"anchor": "last_active_at", "minutes": 20},
             last_active_at=1747857508,
-            name="Container with Files",
+            name="Container with Files"
         )
-
-        with patch.object(
-            base_llm_http_handler,
-            "container_create_handler",
-            return_value=mock_response,
-        ):
+        
+        with patch.object(base_llm_http_handler, 'container_create_handler', return_value=mock_response):
             response = create_container(
                 name="Container with Files",
                 file_ids=["file_123", "file_456"],
-                custom_llm_provider="openai",
+                custom_llm_provider="openai"
             )
-
+            
             assert response.name == "Container with Files"
 
     @pytest.mark.asyncio
@@ -138,24 +126,22 @@ class TestContainerAPI:
             id="cntr_async_123",
             object="container",
             created_at=1747857508,
-            status="running",
+            status="running", 
             expires_after={"anchor": "last_active_at", "minutes": 20},
             last_active_at=1747857508,
-            name="Async Test Container",
+            name="Async Test Container"
         )
-
-        with patch.object(
-            base_llm_http_handler,
-            "container_create_handler",
-            return_value=mock_response,
-        ):
+        
+        with patch.object(base_llm_http_handler, 'container_create_handler', return_value=mock_response):
             response = await acreate_container(
-                name="Async Test Container", custom_llm_provider="openai"
+                name="Async Test Container",
+                custom_llm_provider="openai"
             )
-
+            
             assert isinstance(response, ContainerObject)
             assert response.id == "cntr_async_123"
             assert response.name == "Async Test Container"
+
 
     @pytest.mark.asyncio
     async def test_alist_containers_basic(self):
@@ -170,19 +156,19 @@ class TestContainerAPI:
                     status="running",
                     expires_after={"anchor": "last_active_at", "minutes": 20},
                     last_active_at=1747857508,
-                    name="Async List Container",
+                    name="Async List Container"
                 )
             ],
             first_id="cntr_async_list",
             last_id="cntr_async_list",
-            has_more=False,
+            has_more=False
         )
-
-        with patch.object(
-            base_llm_http_handler, "container_list_handler", return_value=mock_response
-        ):
-            response = await alist_containers(custom_llm_provider="openai")
-
+        
+        with patch.object(base_llm_http_handler, 'container_list_handler', return_value=mock_response):
+            response = await alist_containers(
+                custom_llm_provider="openai"
+            )
+            
             assert isinstance(response, ContainerListResponse)
             assert len(response.data) == 1
 
@@ -193,11 +179,9 @@ class TestContainerAPI:
             ("cntr_different_id", "Another Container", "stopped", "openai"),
         ],
     )
-    def test_retrieve_container_basic(
-        self, container_id, container_name, status, provider
-    ):
+    def test_retrieve_container_basic(self, container_id, container_name, status, provider):
         """Test basic container retrieval functionality.
-
+        
         This test verifies that:
         1. retrieve_container correctly calls the handler with the container_id
         2. The response is properly deserialized into a ContainerObject
@@ -212,24 +196,21 @@ class TestContainerAPI:
             status=status,
             expires_after={"anchor": "last_active_at", "minutes": 20},
             last_active_at=1747857508,
-            name=container_name,
+            name=container_name
         )
-
-        with patch.object(
-            base_llm_http_handler,
-            "container_retrieve_handler",
-            return_value=mock_response,
-        ) as mock_method:
+        
+        with patch.object(base_llm_http_handler, 'container_retrieve_handler', return_value=mock_response) as mock_method:
             # Act: Call retrieve_container
             response = retrieve_container(
-                container_id=container_id, custom_llm_provider=provider
+                container_id=container_id,
+                custom_llm_provider=provider
             )
-
+            
             # Assert: Verify the handler was called correctly
             mock_method.assert_called_once()
             call_kwargs = mock_method.call_args.kwargs
             assert call_kwargs["container_id"] == container_id
-
+            
             # Assert: Verify response structure and content
             assert isinstance(response, ContainerObject)
             assert response.id == container_id
@@ -238,76 +219,6 @@ class TestContainerAPI:
             assert response.object == "container"
             assert response.expires_after.minutes == 20
             assert response.expires_after.anchor == "last_active_at"
-
-    def test_retrieve_container_reencodes_short_managed_id_for_routing(self):
-        """Short cntr_ IDs must still re-encode output so follow-ups keep router affinity."""
-        short_managed_id = ResponsesAPIRequestUtils._build_container_id(
-            custom_llm_provider="azure",
-            model_id="router-gpt",
-            container_id="x",
-        )
-        assert short_managed_id.startswith("cntr_")
-        assert len(short_managed_id) < 100
-
-        mock_response = ContainerObject(
-            id="x",
-            object="container",
-            created_at=1747857508,
-            status="running",
-            expires_after={"anchor": "last_active_at", "minutes": 20},
-            last_active_at=1747857508,
-            name="Tiny",
-        )
-
-        with patch.object(
-            base_llm_http_handler,
-            "container_retrieve_handler",
-            return_value=mock_response,
-        ) as mock_method:
-            response = retrieve_container(
-                container_id=short_managed_id,
-                custom_llm_provider="openai",
-            )
-
-        mock_method.assert_called_once()
-        assert mock_method.call_args.kwargs["container_id"] == "x"
-        assert response.id.startswith("cntr_")
-        decoded = ResponsesAPIRequestUtils._decode_container_id(response.id)
-        assert decoded.get("response_id") == "x"
-        assert decoded.get("model_id") == "router-gpt"
-        assert decoded.get("custom_llm_provider") == "azure"
-
-    def test_delete_container_reencodes_short_managed_id_for_routing(self):
-        """Same as retrieve: short managed IDs must round-trip encoding on delete result."""
-        short_managed_id = ResponsesAPIRequestUtils._build_container_id(
-            custom_llm_provider="azure",
-            model_id="router-gpt",
-            container_id="z",
-        )
-        assert len(short_managed_id) < 100
-
-        mock_response = DeleteContainerResult(
-            id="z",
-            object="container.deleted",
-            deleted=True,
-        )
-
-        with patch.object(
-            base_llm_http_handler,
-            "container_delete_handler",
-            return_value=mock_response,
-        ) as mock_method:
-            response = delete_container(
-                container_id=short_managed_id,
-                custom_llm_provider="openai",
-            )
-
-        mock_method.assert_called_once()
-        assert mock_method.call_args.kwargs["container_id"] == "z"
-        assert response.id.startswith("cntr_")
-        decoded = ResponsesAPIRequestUtils._decode_container_id(response.id)
-        assert decoded.get("response_id") == "z"
-        assert decoded.get("model_id") == "router-gpt"
 
     @pytest.mark.asyncio
     async def test_aretrieve_container_basic(self):
@@ -320,18 +231,15 @@ class TestContainerAPI:
             status="running",
             expires_after={"anchor": "last_active_at", "minutes": 20},
             last_active_at=1747857508,
-            name="Async Retrieved Container",
+            name="Async Retrieved Container"
         )
-
-        with patch.object(
-            base_llm_http_handler,
-            "container_retrieve_handler",
-            return_value=mock_response,
-        ):
+        
+        with patch.object(base_llm_http_handler, 'container_retrieve_handler', return_value=mock_response):
             response = await aretrieve_container(
-                container_id=container_id, custom_llm_provider="openai"
+                container_id=container_id,
+                custom_llm_provider="openai"
             )
-
+            
             assert isinstance(response, ContainerObject)
             assert response.id == container_id
 
@@ -339,18 +247,17 @@ class TestContainerAPI:
         """Test basic container deletion functionality."""
         container_id = "cntr_delete_test"
         mock_response = DeleteContainerResult(
-            id=container_id, object="container.deleted", deleted=True
+            id=container_id,
+            object="container.deleted",
+            deleted=True
         )
-
-        with patch.object(
-            base_llm_http_handler,
-            "container_delete_handler",
-            return_value=mock_response,
-        ):
+        
+        with patch.object(base_llm_http_handler, 'container_delete_handler', return_value=mock_response):
             response = delete_container(
-                container_id=container_id, custom_llm_provider="openai"
+                container_id=container_id,
+                custom_llm_provider="openai"
             )
-
+            
             assert isinstance(response, DeleteContainerResult)
             assert response.id == container_id
             assert response.deleted == True
@@ -361,32 +268,28 @@ class TestContainerAPI:
         """Test basic async container deletion functionality."""
         container_id = "cntr_async_delete"
         mock_response = DeleteContainerResult(
-            id=container_id, object="container.deleted", deleted=True
+            id=container_id,
+            object="container.deleted",
+            deleted=True
         )
-
-        with patch.object(
-            base_llm_http_handler,
-            "container_delete_handler",
-            return_value=mock_response,
-        ):
+        
+        with patch.object(base_llm_http_handler, 'container_delete_handler', return_value=mock_response):
             response = await adelete_container(
-                container_id=container_id, custom_llm_provider="openai"
+                container_id=container_id,
+                custom_llm_provider="openai"
             )
-
+            
             assert isinstance(response, DeleteContainerResult)
             assert response.id == container_id
             assert response.deleted == True
 
     def test_create_container_error_handling(self):
         """Test error handling in container creation."""
-        with patch.object(
-            base_llm_http_handler,
-            "container_create_handler",
-            side_effect=Exception("API Error"),
-        ):
+        with patch.object(base_llm_http_handler, 'container_create_handler', side_effect=Exception("API Error")):
             with pytest.raises(Exception):
                 create_container(
-                    name="Error Test Container", custom_llm_provider="openai"
+                    name="Error Test Container",
+                    custom_llm_provider="openai"
                 )
 
     def test_container_provider_config_retrieval(self):
@@ -398,25 +301,18 @@ class TestContainerAPI:
             status="running",
             expires_after={"anchor": "last_active_at", "minutes": 20},
             last_active_at=1747857508,
-            name="Config Test",
+            name="Config Test"
         )
-
-        with patch(
-            "litellm.containers.main.ProviderConfigManager"
-        ) as mock_config_manager:
-            mock_config_manager.get_provider_container_config.return_value = (
-                OpenAIContainerConfig()
-            )
-
-            with patch.object(
-                base_llm_http_handler,
-                "container_create_handler",
-                return_value=mock_response,
-            ):
+        
+        with patch('litellm.containers.main.ProviderConfigManager') as mock_config_manager:
+            mock_config_manager.get_provider_container_config.return_value = OpenAIContainerConfig()
+            
+            with patch.object(base_llm_http_handler, 'container_create_handler', return_value=mock_response):
                 response = create_container(
-                    name="Config Test", custom_llm_provider="openai"
+                    name="Config Test",
+                    custom_llm_provider="openai"
                 )
-
+                
                 # Verify provider config was requested
                 mock_config_manager.get_provider_container_config.assert_called_once()
                 assert response.name == "Config Test"
@@ -436,19 +332,20 @@ class TestContainerAPI:
             status="running",
             expires_after={"anchor": "last_active_at", "minutes": 20},
             last_active_at=1747857508,
-            name="Test Container",
+            name="Test Container"
         )
 
         # Mock async_container_create_handler since router.acreate_container
         # uses _is_async=True which calls the async handler
         with patch.object(
             base_llm_http_handler,
-            "async_container_create_handler",
+            'async_container_create_handler',
             new_callable=AsyncMock,
-            return_value=mock_response,
+            return_value=mock_response
         ):
             result = await router.acreate_container(
-                name="Test Container", custom_llm_provider="openai"
+                name="Test Container",
+                custom_llm_provider="openai"
             )
 
             assert result.id == "cntr_test"

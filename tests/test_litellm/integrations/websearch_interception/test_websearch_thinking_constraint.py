@@ -23,7 +23,6 @@ from litellm.integrations.websearch_interception.handler import (
 # Helpers
 # ---------------------------------------------------------------------------
 
-
 def _make_tool_calls() -> List[Dict]:
     return [
         {
@@ -35,9 +34,7 @@ def _make_tool_calls() -> List[Dict]:
     ]
 
 
-def _make_logging_obj(
-    model: str = "bedrock/us.anthropic.claude-opus-4-6-v1",
-) -> MagicMock:
+def _make_logging_obj(model: str = "bedrock/us.anthropic.claude-opus-4-6-v1") -> MagicMock:
     obj = MagicMock()
     obj.model_call_details = {
         "agentic_loop_params": {"model": model, "custom_llm_provider": "bedrock"},
@@ -48,7 +45,6 @@ def _make_logging_obj(
 # ---------------------------------------------------------------------------
 # M1-I1 / M1-I3: max_tokens validation against thinking.budget_tokens
 # ---------------------------------------------------------------------------
-
 
 class TestThinkingBudgetTokensConstraint:
     """Validate that _execute_agentic_loop adjusts max_tokens when <= thinking.budget_tokens."""
@@ -63,13 +59,10 @@ class TestThinkingBudgetTokensConstraint:
             captured_kwargs.update(kw)
             return MagicMock()  # dummy response
 
-        with (
-            patch(
-                "litellm.integrations.websearch_interception.handler.anthropic_messages.acreate",
-                side_effect=_fake_acreate,
-            ),
-            patch.object(logger, "_execute_search", return_value="search result"),
-        ):
+        with patch(
+            "litellm.integrations.websearch_interception.handler.anthropic_messages.acreate",
+            side_effect=_fake_acreate,
+        ), patch.object(logger, "_execute_search", return_value="search result"):
 
             await logger._execute_agentic_loop(
                 model="us.anthropic.claude-opus-4-6-v1",
@@ -97,13 +90,10 @@ class TestThinkingBudgetTokensConstraint:
             captured_kwargs.update(kw)
             return MagicMock()
 
-        with (
-            patch(
-                "litellm.integrations.websearch_interception.handler.anthropic_messages.acreate",
-                side_effect=_fake_acreate,
-            ),
-            patch.object(logger, "_execute_search", return_value="search result"),
-        ):
+        with patch(
+            "litellm.integrations.websearch_interception.handler.anthropic_messages.acreate",
+            side_effect=_fake_acreate,
+        ), patch.object(logger, "_execute_search", return_value="search result"):
 
             await logger._execute_agentic_loop(
                 model="us.anthropic.claude-opus-4-6-v1",
@@ -131,13 +121,10 @@ class TestThinkingBudgetTokensConstraint:
             captured_kwargs.update(kw)
             return MagicMock()
 
-        with (
-            patch(
-                "litellm.integrations.websearch_interception.handler.anthropic_messages.acreate",
-                side_effect=_fake_acreate,
-            ),
-            patch.object(logger, "_execute_search", return_value="search result"),
-        ):
+        with patch(
+            "litellm.integrations.websearch_interception.handler.anthropic_messages.acreate",
+            side_effect=_fake_acreate,
+        ), patch.object(logger, "_execute_search", return_value="search result"):
 
             await logger._execute_agentic_loop(
                 model="us.anthropic.claude-opus-4-6-v1",
@@ -165,13 +152,10 @@ class TestThinkingBudgetTokensConstraint:
             captured_kwargs.update(kw)
             return MagicMock()
 
-        with (
-            patch(
-                "litellm.integrations.websearch_interception.handler.anthropic_messages.acreate",
-                side_effect=_fake_acreate,
-            ),
-            patch.object(logger, "_execute_search", return_value="search result"),
-        ):
+        with patch(
+            "litellm.integrations.websearch_interception.handler.anthropic_messages.acreate",
+            side_effect=_fake_acreate,
+        ), patch.object(logger, "_execute_search", return_value="search result"):
 
             await logger._execute_agentic_loop(
                 model="us.anthropic.claude-opus-4-6-v1",
@@ -196,13 +180,10 @@ class TestThinkingBudgetTokensConstraint:
             captured_kwargs.update(kw)
             return MagicMock()
 
-        with (
-            patch(
-                "litellm.integrations.websearch_interception.handler.anthropic_messages.acreate",
-                side_effect=_fake_acreate,
-            ),
-            patch.object(logger, "_execute_search", return_value="search result"),
-        ):
+        with patch(
+            "litellm.integrations.websearch_interception.handler.anthropic_messages.acreate",
+            side_effect=_fake_acreate,
+        ), patch.object(logger, "_execute_search", return_value="search result"):
 
             await logger._execute_agentic_loop(
                 model="us.anthropic.claude-opus-4-6-v1",
@@ -260,7 +241,6 @@ class TestResolveMaxTokensEdgeCases:
 # M2-I5 / M2-I8: litellm_logging_obj excluded from follow-up kwargs
 # ---------------------------------------------------------------------------
 
-
 class TestLoggingObjExcludedFromFollowUp:
     """Verify litellm_logging_obj is NOT forwarded to the follow-up acreate() call.
 
@@ -281,13 +261,10 @@ class TestLoggingObjExcludedFromFollowUp:
 
         fake_logging_obj = _make_logging_obj()
 
-        with (
-            patch(
-                "litellm.integrations.websearch_interception.handler.anthropic_messages.acreate",
-                side_effect=_fake_acreate,
-            ),
-            patch.object(logger, "_execute_search", return_value="search result"),
-        ):
+        with patch(
+            "litellm.integrations.websearch_interception.handler.anthropic_messages.acreate",
+            side_effect=_fake_acreate,
+        ), patch.object(logger, "_execute_search", return_value="search result"):
 
             await logger._execute_agentic_loop(
                 model="us.anthropic.claude-opus-4-6-v1",
@@ -320,13 +297,10 @@ class TestLoggingObjExcludedFromFollowUp:
             captured_kwargs.update(kw)
             return MagicMock()
 
-        with (
-            patch(
-                "litellm.integrations.websearch_interception.handler.anthropic_messages.acreate",
-                side_effect=_fake_acreate,
-            ),
-            patch.object(logger, "_execute_search", return_value="search result"),
-        ):
+        with patch(
+            "litellm.integrations.websearch_interception.handler.anthropic_messages.acreate",
+            side_effect=_fake_acreate,
+        ), patch.object(logger, "_execute_search", return_value="search result"):
 
             await logger._execute_agentic_loop(
                 model="us.anthropic.claude-opus-4-6-v1",
@@ -354,7 +328,6 @@ class TestLoggingObjExcludedFromFollowUp:
 # M3-I12: Regression tests for error scenarios
 # ---------------------------------------------------------------------------
 
-
 class TestFollowUpErrorScenarios:
     """Regression tests: the agentic loop must surface errors properly and
     not silently swallow them (except at the _call_agentic_completion_hooks
@@ -368,13 +341,10 @@ class TestFollowUpErrorScenarios:
         async def _fail_acreate(**kw):
             raise Exception("max_tokens must be greater than thinking.budget_tokens")
 
-        with (
-            patch(
-                "litellm.integrations.websearch_interception.handler.anthropic_messages.acreate",
-                side_effect=_fail_acreate,
-            ),
-            patch.object(logger, "_execute_search", return_value="search result"),
-        ):
+        with patch(
+            "litellm.integrations.websearch_interception.handler.anthropic_messages.acreate",
+            side_effect=_fail_acreate,
+        ), patch.object(logger, "_execute_search", return_value="search result"):
 
             with pytest.raises(Exception, match="max_tokens must be greater"):
                 await logger._execute_agentic_loop(
@@ -398,14 +368,11 @@ class TestFollowUpErrorScenarios:
             captured_kwargs.update(kw)
             return MagicMock()
 
-        with (
-            patch(
-                "litellm.integrations.websearch_interception.handler.anthropic_messages.acreate",
-                side_effect=_fake_acreate,
-            ),
-            patch.object(
-                logger, "_execute_search", side_effect=Exception("search API down")
-            ),
+        with patch(
+            "litellm.integrations.websearch_interception.handler.anthropic_messages.acreate",
+            side_effect=_fake_acreate,
+        ), patch.object(
+            logger, "_execute_search", side_effect=Exception("search API down")
         ):
 
             result = await logger._execute_agentic_loop(
@@ -445,13 +412,10 @@ class TestFollowUpErrorScenarios:
             "user_api_key_end_user_id": "end-user-001",
         }
 
-        with (
-            patch(
-                "litellm.integrations.websearch_interception.handler.anthropic_messages.acreate",
-                side_effect=_fake_acreate,
-            ),
-            patch.object(logger, "_execute_search", return_value="search result"),
-        ):
+        with patch(
+            "litellm.integrations.websearch_interception.handler.anthropic_messages.acreate",
+            side_effect=_fake_acreate,
+        ), patch.object(logger, "_execute_search", return_value="search result"):
 
             await logger._execute_agentic_loop(
                 model="us.anthropic.claude-opus-4-6-v1",

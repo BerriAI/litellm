@@ -1,1 +1,2 @@
 # MiniMax messages tests
+

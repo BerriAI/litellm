@@ -86,8 +86,6 @@ _SECRET_RE = _build_secret_patterns()
 
 
 def _redact_string(value: str) -> str:
-    if not _ENABLE_SECRET_REDACTION:
-        return value
     return _SECRET_RE.sub(_REDACTED, value)
 
 
@@ -244,12 +242,6 @@ class JsonFormatter(Formatter):
         for key, value in record.__dict__.items():
             if key not in _STANDARD_RECORD_ATTRS and key not in json_record:
                 json_record[key] = value
-
-        # Set component/logger only if not already supplied via extra={...}
-        if "component" not in json_record:
-            json_record["component"] = record.name
-        if "logger" not in json_record:
-            json_record["logger"] = f"{record.filename}:{record.lineno}"
 
         if record.exc_info:
             json_record["stacktrace"] = record.exc_text or self.formatException(

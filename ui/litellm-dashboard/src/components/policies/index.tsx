@@ -1,9 +1,8 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { Button, TabGroup, TabList, Tab, TabPanels, TabPanel } from "@tremor/react";
-import { Alert } from "antd";
-
+import { Modal, Alert } from "antd";
 import MessageManager from "@/components/molecules/message_manager";
-import { InfoCircleOutlined } from "@ant-design/icons";
+import { ExclamationCircleOutlined, InfoCircleOutlined } from "@ant-design/icons";
 import { isAdminRole } from "@/utils/roles";
 import PolicyTable from "./policy_table";
 import PolicyInfoView from "./policy_info";
@@ -16,11 +15,11 @@ import PolicyTemplates from "./policy_templates";
 import GuardrailSelectionModal from "./guardrail_selection_modal";
 import TemplateParameterModal from "./template_parameter_modal";
 import AiSuggestionModal from "./ai_suggestion_modal";
-import { useDeletePolicyAttachment } from "@/hooks/policies/useDeletePolicyAttachment";
 import {
   getPoliciesList,
   deletePolicyCall,
   getPolicyAttachmentsList,
+  deletePolicyAttachmentCall,
   getGuardrailsList,
   getPolicyInfo,
   createPolicyCall,
@@ -58,8 +57,6 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({
   const [isDeleting, setIsDeleting] = useState(false);
   const [policyToDelete, setPolicyToDelete] = useState<Policy | null>(null);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
-  const [attachmentToDelete, setAttachmentToDelete] = useState<PolicyAttachment | null>(null);
-  const [isDeleteAttachmentModalOpen, setIsDeleteAttachmentModalOpen] = useState(false);
   const [isGuardrailSelectionModalOpen, setIsGuardrailSelectionModalOpen] = useState(false);
   const [selectedTemplate, setSelectedTemplate] = useState<any>(null);
   const [existingGuardrailNames, setExistingGuardrailNames] = useState<Set<string>>(new Set());
@@ -169,28 +166,24 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({
     setPolicyToDelete(null);
   };
 
-  const deleteAttachmentMutation = useDeletePolicyAttachment({
-    accessToken,
-    onSuccess: fetchAttachments,
-  });
-
-  const handleDeleteAttachmentClick = (attachmentId: string) => {
-    const attachment = attachmentsList.find((a) => a.attachment_id === attachmentId) || null;
-    setAttachmentToDelete(attachment);
-    setIsDeleteAttachmentModalOpen(true);
-  };
-
-  const handleAttachmentDeleteCancel = () => {
-    setIsDeleteAttachmentModalOpen(false);
-    setAttachmentToDelete(null);
-  };
-
-  const handleAttachmentDeleteConfirm = () => {
-    if (!attachmentToDelete) return;
-    deleteAttachmentMutation.mutate(attachmentToDelete.attachment_id, {
-      onSettled: () => {
-        setIsDeleteAttachmentModalOpen(false);
-        setAttachmentToDelete(null);
+  const handleDeleteAttachment = (attachmentId: string) => {
+    Modal.confirm({
+      title: "Delete Attachment",
+      icon: <ExclamationCircleOutlined />,
+      content: "Are you sure you want to delete this attachment? This action cannot be undone.",
+      okText: "Delete",
+      okType: "danger",
+      cancelText: "Cancel",
+      onOk: async () => {
+        if (!accessToken) return;
+        try {
+          await deletePolicyAttachmentCall(accessToken, attachmentId);
+          MessageManager.success("Attachment deleted successfully");
+          fetchAttachments();
+        } catch (error) {
+          console.error("Error deleting attachment:", error);
+          MessageManager.error("Failed to delete attachment");
+        }
       },
     });
   };
@@ -586,7 +579,7 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({
             <AttachmentTable
               attachments={attachmentsList}
               isLoading={isAttachmentsLoading}
-              onDeleteClick={handleDeleteAttachmentClick}
+              onDeleteClick={handleDeleteAttachment}
               isAdmin={isAdmin}
               accessToken={accessToken}
             />
@@ -606,21 +599,6 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({
           </TabPanel>
         </TabPanels>
       </TabGroup>
-
-      <DeleteResourceModal
-        isOpen={isDeleteAttachmentModalOpen}
-        title="Delete Attachment"
-        message="Are you sure you want to delete this attachment? This action cannot be undone."
-        resourceInformationTitle="Attachment Information"
-        resourceInformation={[
-          { label: "Attachment ID", value: attachmentToDelete?.attachment_id, code: true },
-          { label: "Policy", value: attachmentToDelete?.policy_name ?? "-" },
-          { label: "Scope", value: attachmentToDelete?.scope ?? "-" },
-        ]}
-        onCancel={handleAttachmentDeleteCancel}
-        onOk={handleAttachmentDeleteConfirm}
-        confirmLoading={deleteAttachmentMutation.isPending}
-      />
 
       <AiSuggestionModal
         visible={isAiSuggestionModalOpen}

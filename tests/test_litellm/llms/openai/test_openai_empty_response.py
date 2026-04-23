@@ -13,7 +13,6 @@ sys.path.insert(0, os.path.abspath("../../../.."))
 from litellm.llms.openai.openai import OpenAIChatCompletion
 from litellm.llms.openai.common_utils import OpenAIError
 
-
 class TestEmptyResponseHandling:
     """Test that empty/invalid responses from LLM endpoints produce clear error messages"""
 

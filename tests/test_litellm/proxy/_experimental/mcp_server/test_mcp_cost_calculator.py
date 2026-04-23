@@ -32,12 +32,12 @@ class TestMCPCostCalculator:
                     "default_cost_per_query": 0.01,
                     "tool_name_to_cost_per_query": {
                         "search_web": 0.05,
-                        "generate_code": 0.03,
-                    },
-                },
+                        "generate_code": 0.03
+                    }
+                }
             }
         }
-
+        
         result = MCPCostCalculator.calculate_mcp_tool_call_cost(mock_logging_obj)
         assert result == 0.05
 
@@ -50,11 +50,13 @@ class TestMCPCostCalculator:
                 "name": "unknown_tool",
                 "mcp_server_cost_info": {
                     "default_cost_per_query": 0.02,
-                    "tool_name_to_cost_per_query": {"search_web": 0.05},
-                },
+                    "tool_name_to_cost_per_query": {
+                        "search_web": 0.05
+                    }
+                }
             }
         }
-
+        
         result = MCPCostCalculator.calculate_mcp_tool_call_cost(mock_logging_obj)
         assert result == 0.02
 
@@ -63,9 +65,12 @@ class TestMCPCostCalculator:
         # Mock the litellm_logging_obj with minimal metadata
         mock_logging_obj = MagicMock()
         mock_logging_obj.model_call_details = {
-            "mcp_tool_call_metadata": {"name": "some_tool", "mcp_server_cost_info": {}}
+            "mcp_tool_call_metadata": {
+                "name": "some_tool",
+                "mcp_server_cost_info": {}
+            }
         }
-
+        
         result = MCPCostCalculator.calculate_mcp_tool_call_cost(mock_logging_obj)
         assert result == 0.0
 
@@ -74,6 +79,7 @@ class TestMCPCostCalculator:
         # Mock the litellm_logging_obj with empty model_call_details
         mock_logging_obj = MagicMock()
         mock_logging_obj.model_call_details = {}
-
+        
         result = MCPCostCalculator.calculate_mcp_tool_call_cost(mock_logging_obj)
         assert result == 0.0
+

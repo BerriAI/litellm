@@ -3864,31 +3864,14 @@ class Router:
             self._add_deployment_model_to_endpoint_for_llm_passthrough_route(
                 kwargs=kwargs, model=model, model_name=model_name
             )
-
-            # Get custom_llm_provider from deployment params
-            try:
-                custom_llm_provider = data.get("custom_llm_provider")
-                _, inferred_custom_llm_provider, _, _ = get_llm_provider(
-                    model=data["model"],
-                    custom_llm_provider=custom_llm_provider,
-                )
-                custom_llm_provider = (
-                    custom_llm_provider or inferred_custom_llm_provider
-                )
-            except Exception:
-                custom_llm_provider = None
-
-            # Build response kwargs
-            response_kwargs = {
-                **data,
-                "caching": self.cache_responses,
-                **kwargs,
-            }
-            # Only set custom_llm_provider if it's not None
-            if custom_llm_provider is not None:
-                response_kwargs["custom_llm_provider"] = custom_llm_provider
-
-            response = original_generic_function(**response_kwargs)
+            ### get custom
+            response = original_generic_function(
+                **{
+                    **data,
+                    "caching": self.cache_responses,
+                    **kwargs,
+                }
+            )
 
             rpm_semaphore = self._get_client(
                 deployment=deployment,
@@ -3978,14 +3961,7 @@ class Router:
             self.routing_strategy_pre_call_checks(deployment=deployment)
 
             try:
-                custom_llm_provider = data.get("custom_llm_provider")
-                _, inferred_custom_llm_provider, _, _ = get_llm_provider(
-                    model=data["model"],
-                    custom_llm_provider=custom_llm_provider,
-                )
-                custom_llm_provider = (
-                    custom_llm_provider or inferred_custom_llm_provider
-                )
+                _, custom_llm_provider, _, _ = get_llm_provider(model=data["model"])
             except Exception:
                 custom_llm_provider = None
 
@@ -4243,15 +4219,8 @@ class Router:
                 self.total_calls[model_name] += 1
 
                 ## REPLACE MODEL IN FILE WITH SELECTED DEPLOYMENT ##
-                # For DB/config deployments, use provider from deployment params
-                custom_llm_provider = data.get("custom_llm_provider")
-                stripped_model, inferred_custom_llm_provider, _, _ = get_llm_provider(
-                    model=data["model"],
-                    custom_llm_provider=custom_llm_provider,
-                )
-                # Preserve explicitly stored provider, fallback to inferred
-                custom_llm_provider = (
-                    custom_llm_provider or inferred_custom_llm_provider
+                stripped_model, custom_llm_provider, _, _ = get_llm_provider(
+                    model=data["model"]
                 )
 
                 ## REPLACE MODEL IN FILE WITH SELECTED DEPLOYMENT ##
@@ -4398,13 +4367,8 @@ class Router:
             )
             self.total_calls[model_name] += 1
 
-            # Get custom provider from deployment params
-            custom_llm_provider = data.get("custom_llm_provider")
-            _, inferred_custom_llm_provider, _, _ = get_llm_provider(
-                model=data["model"],
-                custom_llm_provider=custom_llm_provider,
-            )
-            custom_llm_provider = custom_llm_provider or inferred_custom_llm_provider
+            # Get custom provider
+            _, custom_llm_provider, _, _ = get_llm_provider(model=data["model"])
 
             response = avector_store_create_sdk(
                 **{
@@ -4522,12 +4486,7 @@ class Router:
             self.total_calls[model_name] += 1
 
             ## SET CUSTOM PROVIDER TO SELECTED DEPLOYMENT ##
-            custom_llm_provider = data.get("custom_llm_provider")
-            _, inferred_custom_llm_provider, _, _ = get_llm_provider(
-                model=data["model"],
-                custom_llm_provider=custom_llm_provider,
-            )
-            custom_llm_provider = custom_llm_provider or inferred_custom_llm_provider
+            _, custom_llm_provider, _, _ = get_llm_provider(model=data["model"])
 
             response = litellm.acreate_batch(
                 **{
@@ -4761,12 +4720,7 @@ class Router:
             self.total_calls[model_name] += 1
 
             ## SET CUSTOM PROVIDER TO SELECTED DEPLOYMENT ##
-            custom_llm_provider = data.get("custom_llm_provider")
-            _, inferred_custom_llm_provider, _, _ = get_llm_provider(
-                model=data["model"],
-                custom_llm_provider=custom_llm_provider,
-            )
-            custom_llm_provider = custom_llm_provider or inferred_custom_llm_provider
+            _, custom_llm_provider, _, _ = get_llm_provider(model=data["model"])
 
             response = litellm.acancel_batch(
                 **{
@@ -5361,9 +5315,9 @@ class Router:
             e,
             (litellm.ContextWindowExceededError, litellm.ContentPolicyViolationError),
         )
-        _request_team_id: Optional[str] = (kwargs.get("metadata", {}) or {}).get(
-            "user_api_key_team_id"
-        )
+        _request_team_id: Optional[str] = (
+            kwargs.get("metadata", {}) or {}
+        ).get("user_api_key_team_id")
         all_deployments = self._get_all_deployments(
             model_name=original_model_group, team_id=_request_team_id
         )
@@ -6760,18 +6714,6 @@ class Router:
             _shared_model_info = {
                 k: v for k, v in _model_info.items() if k not in _custom_pricing_fields
             }
-            _existing_shared_mode = (
-                cast(Optional[dict], litellm.model_cost.get(_model_name, {})) or {}
-            ).get("mode")
-            if (
-                _existing_shared_mode is not None
-                and _shared_model_info.get("mode") != _existing_shared_mode
-            ):
-                # Keep the built-in bridge mode stable for shared backend keys.
-                # Multiple aliases can point at the same provider/model backend,
-                # but their deployment-level overrides should not downgrade the
-                # backend from responses -> chat via last-write-wins registration.
-                _shared_model_info.pop("mode", None)
             litellm.register_model(
                 model_cost={
                     _model_name: _shared_model_info,
@@ -8720,8 +8662,6 @@ class Router:
                 and self.routing_strategy == "latency-based-routing"
             ):
                 _settings_to_return[var] = self.lowestlatency_logger.routing_args.json()
-            elif var == "routing_strategy_args":
-                _settings_to_return[var] = None
         return _settings_to_return
 
     def update_settings(self, **kwargs):

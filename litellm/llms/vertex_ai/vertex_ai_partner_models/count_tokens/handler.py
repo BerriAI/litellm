@@ -5,7 +5,6 @@ This handler provides token counting for partner models hosted on Vertex AI.
 Unlike Gemini models which use Google's token counting API, partner models use
 their respective publisher-specific count-tokens endpoints.
 """
-
 from typing import Any, Dict, Optional
 
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
@@ -79,19 +78,6 @@ class VertexAIPartnerModelsTokenCounter(VertexBase):
 
         return endpoint
 
-    @staticmethod
-    def _strip_version_suffix(model: str) -> str:
-        """
-        Strip version suffixes (e.g. @default, @20251001) from model names.
-
-        The Vertex AI count-tokens endpoint rejects model names that include
-        version suffixes — for example, "claude-sonnet-4-6@default" returns
-        "not supported for token counting" while "claude-sonnet-4-6" works.
-        """
-        if "@" in model:
-            return model.split("@")[0]
-        return model
-
     async def handle_count_tokens_request(
         self,
         model: str,
@@ -112,15 +98,6 @@ class VertexAIPartnerModelsTokenCounter(VertexBase):
         Raises:
             ValueError: If required parameters are missing or invalid
         """
-        # Strip version suffixes (@default, @20251001, etc.) — the Vertex AI
-        # count-tokens endpoint does not accept versioned model names.
-        model = self._strip_version_suffix(model)
-        if "model" in request_data:
-            request_data = {
-                **request_data,
-                "model": self._strip_version_suffix(request_data["model"]),
-            }
-
         # Validate request
         if "messages" not in request_data:
             raise ValueError("messages required for token counting")

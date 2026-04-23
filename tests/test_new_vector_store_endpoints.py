@@ -2,7 +2,6 @@
 Comprehensive test for new vector store endpoints: retrieve, list, update, delete
 Tests both basic functionality and complex scenarios including target_model_names
 """
-
 import asyncio
 import os
 import sys
@@ -34,7 +33,7 @@ async def test_vector_store_retrieve_basic():
         "status": "completed",
         "usage_bytes": 12345,
     }
-
+    
     with patch(
         "litellm.vector_stores.main.aretrieve",
         new=AsyncMock(return_value=mock_response),
@@ -44,7 +43,7 @@ async def test_vector_store_retrieve_basic():
             vector_store_id="vs_test123",
             custom_llm_provider="openai",
         )
-
+        
         assert result["id"] == "vs_test123"
         assert result["object"] == "vector_store"
         assert result["status"] == "completed"
@@ -74,7 +73,7 @@ async def test_vector_store_list_basic():
         "last_id": "vs_test2",
         "has_more": False,
     }
-
+    
     with patch(
         "litellm.vector_stores.main.alist",
         new=AsyncMock(return_value=mock_response),
@@ -85,7 +84,7 @@ async def test_vector_store_list_basic():
             order="desc",
             custom_llm_provider="openai",
         )
-
+        
         assert result["object"] == "list"
         assert len(result["data"]) == 2
         assert result["data"][0]["id"] == "vs_test1"
@@ -103,7 +102,7 @@ async def test_vector_store_update_basic():
         "metadata": {"key": "value"},
         "status": "completed",
     }
-
+    
     with patch(
         "litellm.vector_stores.main.aupdate",
         new=AsyncMock(return_value=mock_response),
@@ -115,7 +114,7 @@ async def test_vector_store_update_basic():
             metadata={"key": "value"},
             custom_llm_provider="openai",
         )
-
+        
         assert result["id"] == "vs_test123"
         assert result["name"] == "Updated Name"
         assert result["metadata"]["key"] == "value"
@@ -130,7 +129,7 @@ async def test_vector_store_delete_basic():
         "object": "vector_store.deleted",
         "deleted": True,
     }
-
+    
     with patch(
         "litellm.vector_stores.main.adelete",
         new=AsyncMock(return_value=mock_response),
@@ -140,7 +139,7 @@ async def test_vector_store_delete_basic():
             vector_store_id="vs_test123",
             custom_llm_provider="openai",
         )
-
+        
         assert result["id"] == "vs_test123"
         assert result["deleted"] is True
         assert result["object"] == "vector_store.deleted"
@@ -155,7 +154,7 @@ async def test_async_vector_store_retrieve():
         "object": "vector_store",
         "name": "Async Test Store",
     }
-
+    
     with patch(
         "litellm.vector_stores.main.aretrieve",
         new=AsyncMock(return_value=mock_response),
@@ -165,7 +164,7 @@ async def test_async_vector_store_retrieve():
             vector_store_id="vs_async123",
             custom_llm_provider="openai",
         )
-
+        
         assert result["id"] == "vs_async123"
         mock_aretrieve.assert_called_once()
 
@@ -177,7 +176,7 @@ async def test_async_vector_store_list():
         "object": "list",
         "data": [{"id": "vs_1"}, {"id": "vs_2"}],
     }
-
+    
     with patch(
         "litellm.vector_stores.main.alist",
         new=AsyncMock(return_value=mock_response),
@@ -187,7 +186,7 @@ async def test_async_vector_store_list():
             limit=10,
             custom_llm_provider="openai",
         )
-
+        
         assert len(result["data"]) == 2
         mock_alist.assert_called_once()
 
@@ -199,7 +198,7 @@ async def test_async_vector_store_update():
         "id": "vs_async123",
         "name": "Updated Async Name",
     }
-
+    
     with patch(
         "litellm.vector_stores.main.aupdate",
         new=AsyncMock(return_value=mock_response),
@@ -210,7 +209,7 @@ async def test_async_vector_store_update():
             name="Updated Async Name",
             custom_llm_provider="openai",
         )
-
+        
         assert result["name"] == "Updated Async Name"
         mock_aupdate.assert_called_once()
 
@@ -222,7 +221,7 @@ async def test_async_vector_store_delete():
         "id": "vs_async123",
         "deleted": True,
     }
-
+    
     with patch(
         "litellm.vector_stores.main.adelete",
         new=AsyncMock(return_value=mock_response),
@@ -232,7 +231,7 @@ async def test_async_vector_store_delete():
             vector_store_id="vs_async123",
             custom_llm_provider="openai",
         )
-
+        
         assert result["deleted"] is True
         mock_adelete.assert_called_once()
 
@@ -247,7 +246,7 @@ async def test_vector_store_list_with_pagination():
         "first_id": "vs_0",
         "last_id": "vs_4",
     }
-
+    
     with patch(
         "litellm.vector_stores.main.list",
         return_value=mock_response,
@@ -259,10 +258,10 @@ async def test_vector_store_list_with_pagination():
             order="asc",
             custom_llm_provider="openai",
         )
-
+        
         assert result["has_more"] is True
         assert len(result["data"]) == 5
-
+        
         # Verify pagination params were passed
         call_kwargs = mock_list.call_args.kwargs
         assert call_kwargs["limit"] == 5
@@ -277,13 +276,13 @@ async def test_vector_store_update_with_expires_after():
         "anchor": "last_active_at",
         "days": 7,
     }
-
+    
     mock_response = {
         "id": "vs_test123",
         "expires_after": expires_after,
         "expires_at": 1699668576,
     }
-
+    
     with patch(
         "litellm.vector_stores.main.update",
         return_value=mock_response,
@@ -294,10 +293,10 @@ async def test_vector_store_update_with_expires_after():
             expires_after=expires_after,
             custom_llm_provider="openai",
         )
-
+        
         assert result["expires_after"]["days"] == 7
         assert result["expires_at"] is not None
-
+        
         call_kwargs = mock_update.call_args.kwargs
         assert call_kwargs["expires_after"] == expires_after
 
@@ -305,7 +304,7 @@ async def test_vector_store_update_with_expires_after():
 def test_router_initializes_new_endpoints():
     """Test that router properly initializes the new vector store endpoints."""
     router = litellm.Router(model_list=[])
-
+    
     # Verify all new endpoints are initialized
     assert hasattr(router, "vector_store_retrieve")
     assert hasattr(router, "avector_store_retrieve")
@@ -315,7 +314,7 @@ def test_router_initializes_new_endpoints():
     assert hasattr(router, "avector_store_update")
     assert hasattr(router, "vector_store_delete")
     assert hasattr(router, "avector_store_delete")
-
+    
     # Verify they are callable
     assert callable(router.vector_store_retrieve)
     assert callable(router.avector_store_retrieve)
@@ -330,12 +329,12 @@ def test_router_initializes_new_endpoints():
 if __name__ == "__main__":
     # Run basic smoke tests
     print("Running smoke tests for new vector store endpoints...")
-
+    
     # Test router initialization
     print("✓ Testing router initialization...")
     test_router_initializes_new_endpoints()
     print("✓ Router initialization successful")
-
+    
     # Test basic sync operations
     print("✓ Testing basic sync operations...")
     asyncio.run(test_vector_store_retrieve_basic())
@@ -343,7 +342,7 @@ if __name__ == "__main__":
     asyncio.run(test_vector_store_update_basic())
     asyncio.run(test_vector_store_delete_basic())
     print("✓ Basic sync operations successful")
-
+    
     # Test async operations
     print("✓ Testing async operations...")
     asyncio.run(test_async_vector_store_retrieve())
@@ -351,5 +350,5 @@ if __name__ == "__main__":
     asyncio.run(test_async_vector_store_update())
     asyncio.run(test_async_vector_store_delete())
     print("✓ Async operations successful")
-
+    
     print("\n✅ All smoke tests passed!")

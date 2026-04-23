@@ -341,7 +341,7 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 <TabItem value="python" label="python">
 
 ```python
-# uv add openai
+# pip install openai
 from openai import OpenAI
 
 client = OpenAI(

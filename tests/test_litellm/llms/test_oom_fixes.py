@@ -124,9 +124,7 @@ async def test_presidio_fix():
     # Cleanup
     await presidio._close_http_session()
 
-    print(
-        f"\n✅ RESULT: Session leak {'PREVENTED' if session_diff <= 1 else 'DETECTED'}"
-    )
+    print(f"\n✅ RESULT: Session leak {'PREVENTED' if session_diff <= 1 else 'DETECTED'}")
     print(
         f"   Expected: ≤1 new session (the shared one), Got: {session_diff} new sessions"
     )

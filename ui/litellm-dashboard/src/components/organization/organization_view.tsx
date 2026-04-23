@@ -1,6 +1,4 @@
 import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
-import { organizationKeys, useOrganization } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
-import { useQueryClient } from "@tanstack/react-query";
 import { formatNumberWithCommas, copyToClipboard as utilCopyToClipboard } from "@/utils/dataUtils";
 import { createTeamAliasMap } from "@/utils/teamUtils";
 import { ArrowLeftIcon } from "@heroicons/react/outline";
@@ -16,7 +14,7 @@ import {
 import { Button, Form, Input, Select, Tabs, Typography } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import { CheckIcon, CopyIcon } from "lucide-react";
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import MemberTable from "../common_components/MemberTable";
 import UserSearchModal from "../common_components/user_search_modal";
 import MCPServerSelector from "../mcp_server_management/MCPServerSelector";
@@ -25,6 +23,7 @@ import NotificationsManager from "../molecules/notifications_manager";
 import {
   Member,
   Organization,
+  organizationInfoCall,
   organizationMemberAddCall,
   organizationMemberDeleteCall,
   organizationMemberUpdateCall,
@@ -54,8 +53,8 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
   userModels,
   editOrg,
 }) => {
-  const queryClient = useQueryClient();
-  const { data: orgData, isLoading: loading } = useOrganization(organizationId);
+  const [orgData, setOrgData] = useState<Organization | null>(null);
+  const [loading, setLoading] = useState(true);
   const [form] = Form.useForm();
   const [isEditing, setIsEditing] = useState(false);
   const [isAddMemberModalVisible, setIsAddMemberModalVisible] = useState(false);
@@ -67,6 +66,24 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
   const { data: teams } = useTeams();
 
   const teamAliasMap = useMemo(() => createTeamAliasMap(teams), [teams]);
+
+  const fetchOrgInfo = async () => {
+    try {
+      setLoading(true);
+      if (!accessToken) return;
+      const response = await organizationInfoCall(accessToken, organizationId);
+      setOrgData(response);
+    } catch (error) {
+      NotificationsManager.fromBackend("Failed to load organization information");
+      console.error("Error fetching organization info:", error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchOrgInfo();
+  }, [organizationId, accessToken]);
 
   const handleMemberAdd = async (values: any) => {
     try {
@@ -84,7 +101,7 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
       NotificationsManager.success("Organization member added successfully");
       setIsAddMemberModalVisible(false);
       form.resetFields();
-      queryClient.invalidateQueries({ queryKey: organizationKeys.all });
+      fetchOrgInfo();
     } catch (error) {
       NotificationsManager.fromBackend("Failed to add organization member");
       console.error("Error adding organization member:", error);
@@ -105,7 +122,7 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
       NotificationsManager.success("Organization member updated successfully");
       setIsEditMemberModalVisible(false);
       form.resetFields();
-      queryClient.invalidateQueries({ queryKey: organizationKeys.all });
+      fetchOrgInfo();
     } catch (error) {
       NotificationsManager.fromBackend("Failed to update organization member");
       console.error("Error updating organization member:", error);
@@ -120,7 +137,7 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
       NotificationsManager.success("Organization member deleted successfully");
       setIsEditMemberModalVisible(false);
       form.resetFields();
-      queryClient.invalidateQueries({ queryKey: organizationKeys.all });
+      fetchOrgInfo();
     } catch (error) {
       NotificationsManager.fromBackend("Failed to delete organization member");
       console.error("Error deleting organization member:", error);
@@ -170,7 +187,7 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
 
       NotificationsManager.success("Organization settings updated successfully");
       setIsEditing(false);
-      queryClient.invalidateQueries({ queryKey: organizationKeys.all });
+      fetchOrgInfo();
     } catch (error) {
       NotificationsManager.fromBackend("Failed to update organization settings");
       console.error("Error updating organization:", error);

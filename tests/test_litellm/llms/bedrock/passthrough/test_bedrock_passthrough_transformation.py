@@ -14,17 +14,16 @@ def test_bedrock_passthrough_get_complete_url_default_endpoint():
     config = BedrockPassthroughConfig()
 
     # Mock the methods following the pattern from test_base_aws_llm.py
-    with (
-        patch.object(config, "_get_aws_region_name", return_value="us-east-1"),
-        patch.object(
-            config,
-            "get_runtime_endpoint",
-            return_value=(
-                "https://bedrock-runtime.us-east-1.amazonaws.com",
-                "https://bedrock-runtime.us-east-1.amazonaws.com",
-            ),
-        ) as mock_get_runtime,
-    ):
+    with patch.object(
+        config, "_get_aws_region_name", return_value="us-east-1"
+    ), patch.object(
+        config,
+        "get_runtime_endpoint",
+        return_value=(
+            "https://bedrock-runtime.us-east-1.amazonaws.com",
+            "https://bedrock-runtime.us-east-1.amazonaws.com",
+        ),
+    ) as mock_get_runtime:
         url, api_base = config.get_complete_url(
             api_base=None,
             api_key=None,
@@ -54,14 +53,13 @@ def test_bedrock_passthrough_get_complete_url_custom_endpoint_no_path():
     """Test get_complete_url with custom endpoint (no base path)"""
     config = BedrockPassthroughConfig()
 
-    with (
-        patch.object(config, "_get_aws_region_name", return_value="us-west-2"),
-        patch.object(
-            config,
-            "get_runtime_endpoint",
-            return_value=("http://proxy.com", "http://proxy.com"),
-        ) as mock_get_runtime,
-    ):
+    with patch.object(
+        config, "_get_aws_region_name", return_value="us-west-2"
+    ), patch.object(
+        config,
+        "get_runtime_endpoint",
+        return_value=("http://proxy.com", "http://proxy.com"),
+    ) as mock_get_runtime:
         url, api_base = config.get_complete_url(
             api_base="http://proxy.com",
             api_key=None,
@@ -88,17 +86,13 @@ def test_bedrock_passthrough_get_complete_url_custom_endpoint_with_path():
     """Test get_complete_url with custom endpoint that has a base path"""
     config = BedrockPassthroughConfig()
 
-    with (
-        patch.object(config, "_get_aws_region_name", return_value="us-west-2"),
-        patch.object(
-            config,
-            "get_runtime_endpoint",
-            return_value=(
-                "http://proxy.com/bedrockproxy",
-                "http://proxy.com/bedrockproxy",
-            ),
-        ) as mock_get_runtime,
-    ):
+    with patch.object(
+        config, "_get_aws_region_name", return_value="us-west-2"
+    ), patch.object(
+        config,
+        "get_runtime_endpoint",
+        return_value=("http://proxy.com/bedrockproxy", "http://proxy.com/bedrockproxy"),
+    ) as mock_get_runtime:
         url, api_base = config.get_complete_url(
             api_base="http://proxy.com/bedrockproxy",
             api_key=None,
@@ -209,15 +203,14 @@ def test_bedrock_passthrough_with_application_inference_profile():
     )
     endpoint = f"model/{model}/invoke"
 
-    with (
-        patch.object(config, "_get_aws_region_name", return_value="eu-west-1"),
-        patch.object(
-            config,
-            "get_runtime_endpoint",
-            return_value=(
-                "https://bedrock-runtime.eu-west-1.amazonaws.com",
-                "https://bedrock-runtime.eu-west-1.amazonaws.com",
-            ),
+    with patch.object(
+        config, "_get_aws_region_name", return_value="eu-west-1"
+    ), patch.object(
+        config,
+        "get_runtime_endpoint",
+        return_value=(
+            "https://bedrock-runtime.eu-west-1.amazonaws.com",
+            "https://bedrock-runtime.eu-west-1.amazonaws.com",
         ),
     ):
         url, api_base = config.get_complete_url(
@@ -256,15 +249,14 @@ def test_bedrock_passthrough_with_inference_profile_converse_endpoint():
     )
     endpoint = f"model/{model}/converse"
 
-    with (
-        patch.object(config, "_get_aws_region_name", return_value="us-east-1"),
-        patch.object(
-            config,
-            "get_runtime_endpoint",
-            return_value=(
-                "https://bedrock-runtime.us-east-1.amazonaws.com",
-                "https://bedrock-runtime.us-east-1.amazonaws.com",
-            ),
+    with patch.object(
+        config, "_get_aws_region_name", return_value="us-east-1"
+    ), patch.object(
+        config,
+        "get_runtime_endpoint",
+        return_value=(
+            "https://bedrock-runtime.us-east-1.amazonaws.com",
+            "https://bedrock-runtime.us-east-1.amazonaws.com",
         ),
     ):
         url, api_base = config.get_complete_url(
@@ -294,15 +286,14 @@ def test_bedrock_passthrough_without_model_id_backward_compatibility():
     model = "anthropic.claude-3-sonnet"
     endpoint = f"model/{model}/invoke"
 
-    with (
-        patch.object(config, "_get_aws_region_name", return_value="us-east-1"),
-        patch.object(
-            config,
-            "get_runtime_endpoint",
-            return_value=(
-                "https://bedrock-runtime.us-east-1.amazonaws.com",
-                "https://bedrock-runtime.us-east-1.amazonaws.com",
-            ),
+    with patch.object(
+        config, "_get_aws_region_name", return_value="us-east-1"
+    ), patch.object(
+        config,
+        "get_runtime_endpoint",
+        return_value=(
+            "https://bedrock-runtime.us-east-1.amazonaws.com",
+            "https://bedrock-runtime.us-east-1.amazonaws.com",
         ),
     ):
         url, api_base = config.get_complete_url(
@@ -381,15 +372,14 @@ def test_bedrock_passthrough_model_id_arn_encoding():
     model_id = "arn:aws:bedrock:us-east-1:590183661440:application-inference-profile/b943q2qbl3m7"
     endpoint = f"/model/{model}/converse"
 
-    with (
-        patch.object(config, "_get_aws_region_name", return_value="us-east-1"),
-        patch.object(
-            config,
-            "get_runtime_endpoint",
-            return_value=(
-                "https://bedrock-runtime.us-east-1.amazonaws.com",
-                "https://bedrock-runtime.us-east-1.amazonaws.com",
-            ),
+    with patch.object(
+        config, "_get_aws_region_name", return_value="us-east-1"
+    ), patch.object(
+        config,
+        "get_runtime_endpoint",
+        return_value=(
+            "https://bedrock-runtime.us-east-1.amazonaws.com",
+            "https://bedrock-runtime.us-east-1.amazonaws.com",
         ),
     ):
         url, api_base = config.get_complete_url(
@@ -431,15 +421,14 @@ def test_bedrock_passthrough_model_id_arn_encoding_invoke_endpoint():
     )
     endpoint = f"/model/{model}/invoke"
 
-    with (
-        patch.object(config, "_get_aws_region_name", return_value="us-east-1"),
-        patch.object(
-            config,
-            "get_runtime_endpoint",
-            return_value=(
-                "https://bedrock-runtime.us-east-1.amazonaws.com",
-                "https://bedrock-runtime.us-east-1.amazonaws.com",
-            ),
+    with patch.object(
+        config, "_get_aws_region_name", return_value="us-east-1"
+    ), patch.object(
+        config,
+        "get_runtime_endpoint",
+        return_value=(
+            "https://bedrock-runtime.us-east-1.amazonaws.com",
+            "https://bedrock-runtime.us-east-1.amazonaws.com",
         ),
     ):
         url, api_base = config.get_complete_url(
@@ -475,15 +464,14 @@ def test_bedrock_passthrough_model_id_without_arn():
     model_id = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
     endpoint = f"/model/{model}/converse"
 
-    with (
-        patch.object(config, "_get_aws_region_name", return_value="us-east-1"),
-        patch.object(
-            config,
-            "get_runtime_endpoint",
-            return_value=(
-                "https://bedrock-runtime.us-east-1.amazonaws.com",
-                "https://bedrock-runtime.us-east-1.amazonaws.com",
-            ),
+    with patch.object(
+        config, "_get_aws_region_name", return_value="us-east-1"
+    ), patch.object(
+        config,
+        "get_runtime_endpoint",
+        return_value=(
+            "https://bedrock-runtime.us-east-1.amazonaws.com",
+            "https://bedrock-runtime.us-east-1.amazonaws.com",
         ),
     ):
         url, api_base = config.get_complete_url(

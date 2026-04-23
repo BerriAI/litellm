@@ -49,7 +49,8 @@ from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 from litellm.types.utils import GenericGuardrailAPIInputs
 
-from .sandbox import build_sandbox_globals, compile_sandboxed
+from .code_validator import CustomCodeValidationError, validate_custom_code
+from .primitives import get_custom_code_primitives
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -145,10 +146,17 @@ class CustomCodeGuardrail(CustomGuardrail):
 
     def _do_compile(self) -> None:
         """Internal compilation method without lock. Expected to run inside _compile_lock."""
-        exec_globals = build_sandbox_globals()
-        compiled = compile_sandboxed(self.custom_code)
-        exec(compiled, exec_globals)  # noqa: S102
+        # Create a restricted execution environment
+        # Only include our safe primitives
+        exec_globals = get_custom_code_primitives().copy()
 
+        # CRITICAL: Restrict __builtins__ to prevent sandbox escape
+        exec_globals["__builtins__"] = {}
+
+        # Execute the user code in the restricted environment
+        exec(compile(self.custom_code, "<guardrail>", "exec"), exec_globals)
+
+        # Extract the apply_guardrail function
         if "apply_guardrail" not in exec_globals:
             raise CustomCodeCompilationError(
                 "Custom code must define an 'apply_guardrail' function. "
@@ -174,6 +182,13 @@ class CustomCodeGuardrail(CustomGuardrail):
                 return
 
             try:
+                # Step 1: Security validation — forbidden pattern check
+                try:
+                    validate_custom_code(self.custom_code)
+                except CustomCodeValidationError as e:
+                    raise CustomCodeCompilationError(str(e)) from e
+
+                # Step 2: Compile logic
                 self._do_compile()
                 verbose_proxy_logger.debug(
                     f"Custom code guardrail '{self.guardrail_name}' compiled successfully"
@@ -390,6 +405,12 @@ class CustomCodeGuardrail(CustomGuardrail):
         Raises:
             CustomCodeCompilationError: If the new code fails to compile
         """
+        # Validate BEFORE acquiring lock / resetting state
+        try:
+            validate_custom_code(new_code)
+        except CustomCodeValidationError as e:
+            raise CustomCodeCompilationError(str(e)) from e
+
         with self._compile_lock:
             # Reset state
             old_function = self._compiled_function

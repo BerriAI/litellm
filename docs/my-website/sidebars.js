@@ -83,7 +83,6 @@ const sidebars = {
           "proxy/guardrails/openai_moderation",
           "proxy/guardrails/pangea",
           "proxy/guardrails/pillar_security",
-          "proxy/guardrails/promptguard",
           "proxy/guardrails/pii_masking_v2",
           "proxy/guardrails/panw_prisma_airs",
           "proxy/guardrails/secret_detection",
@@ -91,10 +90,8 @@ const sidebars = {
           "proxy/guardrails/custom_code_guardrail",
           "proxy/guardrails/prompt_injection",
           "proxy/guardrails/tool_permission",
-          "proxy/guardrails/rubrik",
           "proxy/guardrails/zscaler_ai_guard",
-          "proxy/guardrails/javelin",
-          "proxy/guardrails/akto"
+          "proxy/guardrails/javelin"
         ].sort(),
       ],
     },
@@ -258,11 +255,6 @@ const sidebars = {
             },
             {
               type: "doc",
-              id: "completion/prompt_compression",
-              label: "compress()",
-            },
-            {
-              type: "doc",
               id: "audio_transcription",
               label: "transcription()",
             },
@@ -341,13 +333,6 @@ const sidebars = {
                 },
               ],
             },
-            {
-              type: "category",
-              label: "Skills Gateway",
-              items: [
-                "skills_gateway",
-              ],
-            },
           ],
         },
         {
@@ -364,7 +349,6 @@ const sidebars = {
             "proxy/debugging",
             "proxy/error_diagnosis",
             "proxy/deploy",
-            "proxy/docker_image_security",
             "proxy/health",
             "proxy/master_key_rotations",
             "proxy/model_management",
@@ -579,8 +563,7 @@ const sidebars = {
             "proxy/model_access",
             "proxy/model_access_groups",
             "proxy/access_groups",
-            "proxy/team_model_add",
-            "proxy/credential_routing"
+            "proxy/team_model_add"
           ]
         },
         {
@@ -876,7 +859,6 @@ const sidebars = {
           ]
         },
         "providers/anthropic",
-        "providers/anthropic_tool_search",
         "providers/aws_sagemaker",
         {
           type: "category",
@@ -1074,7 +1056,16 @@ const sidebars = {
         "proxy/health_check_routing"
       ],
     },
-    "benchmarks",
+    {
+      type: "category",
+      label: "Load Testing",
+      items: [
+        "benchmarks",
+        "load_test_advanced",
+        "load_test_sdk",
+        "load_test_rpm",
+      ]
+    },
     {
       type: "category",
       label: "Contributing",
@@ -1103,9 +1094,6 @@ const sidebars = {
         "data_retention",
         "proxy/security_encryption_faq",
         "migration_policy",
-        "load_test_advanced",
-        "load_test_sdk",
-        "load_test_rpm",
         {
           type: "category",
           label: "❤️ 🚅 Projects built on LiteLLM",
@@ -1158,7 +1146,6 @@ const sidebars = {
       label: "Troubleshooting",
       items: [
         "troubleshoot/ui_issues",
-        "troubleshoot/cost_discrepancy",
         "mcp_troubleshoot",
         {
           type: "category",
@@ -1243,7 +1230,6 @@ const learnSidebar = {
             "completion/web_fetch",
             "completion/computer_use",
             "guides/code_interpreter",
-            "completion/anthropic_advisor_tool",
             "completion/message_sanitization",
           ],
         },
@@ -1295,7 +1281,6 @@ const learnSidebar = {
           items: [
             "completion/prefix",
             "completion/predict_outputs",
-            "completion/prompt_compression",
             "completion/message_trimming",
             "completion/prompt_caching",
             "completion/prompt_formatting",

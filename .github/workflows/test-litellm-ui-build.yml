@@ -4,11 +4,7 @@ permissions:
 
 on:
   pull_request:
-    branches:
-      - main
-      - litellm_internal_staging
-      - litellm_oss_branch
-      - "litellm_**"
+    branches: [main]
 
 jobs:
   build-ui:

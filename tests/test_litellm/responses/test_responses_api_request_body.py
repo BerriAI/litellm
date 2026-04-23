@@ -2,7 +2,6 @@
 Test that litellm.responses() / litellm.aresponses() send the expected request body
 over the wire. Expected JSON bodies are stored in expected_responses_api_request/.
 """
-
 import json
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
@@ -99,6 +98,6 @@ async def test_aresponses_context_management_and_shell_request_body_matches_expe
 
         for key, expected_value in expected_body.items():
             assert key in request_body, f"Missing key in request body: {key}"
-            assert (
-                request_body[key] == expected_value
-            ), f"Mismatch for key {key}: got {request_body[key]!r}, expected {expected_value!r}"
+            assert request_body[key] == expected_value, (
+                f"Mismatch for key {key}: got {request_body[key]!r}, expected {expected_value!r}"
+            )

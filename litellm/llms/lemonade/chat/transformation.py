@@ -1,7 +1,6 @@
 """
 Translate from OpenAI's `/v1/chat/completions` to Lemonade's `/v1/chat/completions`
 """
-
 from typing import Any, List, Optional, Tuple, Union
 
 import httpx

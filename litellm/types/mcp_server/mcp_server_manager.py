@@ -27,21 +27,20 @@ class MCPServer(BaseModel):
     spec_path: Optional[str] = None
     auth_type: Optional[MCPAuthType] = None
     authentication_token: Optional[str] = None
-    instructions: Optional[str] = None
     mcp_info: Optional[MCPInfo] = None
-    extra_headers: Optional[List[str]] = (
-        None  # allow admin to specify which headers to forward from client to the MCP server
-    )
+    extra_headers: Optional[
+        List[str]
+    ] = None  # allow admin to specify which headers to forward from client to the MCP server
     allowed_tools: Optional[List[str]] = None
     disallowed_tools: Optional[List[str]] = None
     tool_name_to_display_name: Optional[Dict[str, str]] = None
     tool_name_to_description: Optional[Dict[str, str]] = None
-    allowed_params: Optional[Dict[str, List[str]]] = (
-        None  # map of tool names to allowed parameter lists
-    )
-    static_headers: Optional[Dict[str, str]] = (
-        None  # static headers to forward to the MCP server
-    )
+    allowed_params: Optional[
+        Dict[str, List[str]]
+    ] = None  # map of tool names to allowed parameter lists
+    static_headers: Optional[
+        Dict[str, str]
+    ] = None  # static headers to forward to the MCP server
     # OAuth-specific fields
     client_id: Optional[str] = None
     client_secret: Optional[str] = None
@@ -72,15 +71,6 @@ class MCPServer(BaseModel):
     # OAuth2 flow type.  Defaults to None (interactive / authorization_code).
     # Set to "client_credentials" to enable M2M token fetching.
     oauth2_flow: Optional[Literal["client_credentials", "authorization_code"]] = None
-    # Per-user OAuth server-side storage config.
-    # token_validation: key-value pairs that must match fields in the OAuth token
-    # response (supports dot-notation for nested fields, e.g. "team.enterprise_id").
-    # Tokens that fail validation are rejected before storage.
-    token_validation: Optional[Dict[str, Any]] = None
-    # Optional TTL override (seconds) for the Redis per-user token cache.
-    # Defaults to the token's expires_in minus the expiry buffer, or
-    # MCP_PER_USER_TOKEN_DEFAULT_TTL when expires_in is absent.
-    token_storage_ttl_seconds: Optional[int] = None
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     @property

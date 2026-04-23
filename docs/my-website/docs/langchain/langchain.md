@@ -5,7 +5,7 @@ import TabItem from '@theme/TabItem';
 
 ## Pre-Requisites
 ```shell
-!uv add litellm langchain
+!pip install litellm langchain
 ```
 ## Quick Start
 

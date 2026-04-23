@@ -15,7 +15,6 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
-from litellm.litellm_core_utils.url_utils import async_safe_get
 from litellm.proxy._experimental.mcp_server.tool_registry import (
     global_mcp_tool_registry,
 )
@@ -76,7 +75,9 @@ def load_openapi_spec(filepath: str) -> Dict[str, Any]:
 async def load_openapi_spec_async(filepath: str) -> Dict[str, Any]:
     if filepath.startswith("http://") or filepath.startswith("https://"):
         client = get_async_httpx_client(llm_provider=httpxSpecialProvider.MCP)
-        r = await async_safe_get(client, filepath)
+        # NOTE: do not close shared client if get_async_httpx_client returns a shared singleton.
+        # If it returns a new client each time, consider wrapping it in an async context manager.
+        r = await client.get(filepath)
         r.raise_for_status()
         return r.json()
 
