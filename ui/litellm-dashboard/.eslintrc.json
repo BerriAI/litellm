@@ -59,6 +59,7 @@
         "src/components/guardrails/content_filter/PatternTable.tsx",
         "src/components/guardrails/content_filter/ContentFilterDisplay.tsx",
         "src/components/prompts/prompt_editor_view/PromptEditorHeader.tsx",
+        "src/app/(dashboard)/teams/components/TeamsTable/ModelsCell.tsx",
         "src/components/policies/impact_preview_alert.tsx",
         "src/components/policies/impact_popover.tsx",
         "src/components/DeletedKeysPage/DeletedKeysPage.tsx",

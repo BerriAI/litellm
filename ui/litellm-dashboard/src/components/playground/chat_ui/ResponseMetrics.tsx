@@ -1,14 +1,19 @@
 import React from "react";
-import { Tooltip } from "antd";
 import {
-  ClockCircleOutlined,
-  NumberOutlined,
-  ImportOutlined,
-  ExportOutlined,
-  BulbOutlined,
-  ToolOutlined,
-  DollarOutlined,
-} from "@ant-design/icons";
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import {
+  Clock,
+  DollarSign,
+  Hash,
+  LogIn,
+  LogOut,
+  Lightbulb,
+  Wrench,
+} from "lucide-react";
 
 export interface TokenUsage {
   completionTokens?: number;
@@ -25,81 +30,104 @@ interface ResponseMetricsProps {
   toolName?: string;
 }
 
-const ResponseMetrics: React.FC<ResponseMetricsProps> = ({ timeToFirstToken, totalLatency, usage, toolName }) => {
+const TooltipIconStat: React.FC<{
+  tooltip: string;
+  icon: React.ReactNode;
+  children: React.ReactNode;
+}> = ({ tooltip, icon, children }) => (
+  <TooltipProvider>
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <div className="flex items-center">
+          {icon}
+          <span>{children}</span>
+        </div>
+      </TooltipTrigger>
+      <TooltipContent>{tooltip}</TooltipContent>
+    </Tooltip>
+  </TooltipProvider>
+);
+
+const ResponseMetrics: React.FC<ResponseMetricsProps> = ({
+  timeToFirstToken,
+  totalLatency,
+  usage,
+  toolName,
+}) => {
   if (!timeToFirstToken && !totalLatency && !usage) return null;
 
   return (
-    <div className="response-metrics mt-2 pt-2 border-t border-gray-100 text-xs text-gray-500 flex flex-wrap gap-3">
+    <div className="response-metrics mt-2 pt-2 border-t border-border text-xs text-muted-foreground flex flex-wrap gap-3">
       {timeToFirstToken !== undefined && (
-        <Tooltip title="Time to first token">
-          <div className="flex items-center">
-            <ClockCircleOutlined className="mr-1" />
-            <span>TTFT: {(timeToFirstToken / 1000).toFixed(2)}s</span>
-          </div>
-        </Tooltip>
+        <TooltipIconStat
+          tooltip="Time to first token"
+          icon={<Clock className="h-3 w-3 mr-1" />}
+        >
+          TTFT: {(timeToFirstToken / 1000).toFixed(2)}s
+        </TooltipIconStat>
       )}
 
       {totalLatency !== undefined && (
-        <Tooltip title="Total latency">
-          <div className="flex items-center">
-            <ClockCircleOutlined className="mr-1" />
-            <span>Total Latency: {(totalLatency / 1000).toFixed(2)}s</span>
-          </div>
-        </Tooltip>
+        <TooltipIconStat
+          tooltip="Total latency"
+          icon={<Clock className="h-3 w-3 mr-1" />}
+        >
+          Total Latency: {(totalLatency / 1000).toFixed(2)}s
+        </TooltipIconStat>
       )}
 
       {usage?.promptTokens !== undefined && (
-        <Tooltip title="Prompt tokens">
-          <div className="flex items-center">
-            <ImportOutlined className="mr-1" />
-            <span>In: {usage.promptTokens}</span>
-          </div>
-        </Tooltip>
+        <TooltipIconStat
+          tooltip="Prompt tokens"
+          icon={<LogIn className="h-3 w-3 mr-1" />}
+        >
+          In: {usage.promptTokens}
+        </TooltipIconStat>
       )}
 
       {usage?.completionTokens !== undefined && (
-        <Tooltip title="Completion tokens">
-          <div className="flex items-center">
-            <ExportOutlined className="mr-1" />
-            <span>Out: {usage.completionTokens}</span>
-          </div>
-        </Tooltip>
+        <TooltipIconStat
+          tooltip="Completion tokens"
+          icon={<LogOut className="h-3 w-3 mr-1" />}
+        >
+          Out: {usage.completionTokens}
+        </TooltipIconStat>
       )}
 
       {usage?.reasoningTokens !== undefined && (
-        <Tooltip title="Reasoning tokens">
-          <div className="flex items-center">
-            <BulbOutlined className="mr-1" />
-            <span>Reasoning: {usage.reasoningTokens}</span>
-          </div>
-        </Tooltip>
+        <TooltipIconStat
+          tooltip="Reasoning tokens"
+          icon={<Lightbulb className="h-3 w-3 mr-1" />}
+        >
+          Reasoning: {usage.reasoningTokens}
+        </TooltipIconStat>
       )}
 
       {usage?.totalTokens !== undefined && (
-        <Tooltip title="Total tokens">
-          <div className="flex items-center">
-            <NumberOutlined className="mr-1" />
-            <span>Total: {usage.totalTokens}</span>
-          </div>
-        </Tooltip>
+        <TooltipIconStat
+          tooltip="Total tokens"
+          icon={<Hash className="h-3 w-3 mr-1" />}
+        >
+          Total: {usage.totalTokens}
+        </TooltipIconStat>
       )}
 
       {usage?.cost !== undefined && (
-        <Tooltip title="Cost">
-          <div className="flex items-center">
-            <DollarOutlined className="mr-1" />
-            <span>${usage.cost.toFixed(6)}</span>
-          </div>
-        </Tooltip>
+        <TooltipIconStat
+          tooltip="Cost"
+          icon={<DollarSign className="h-3 w-3 mr-1" />}
+        >
+          ${usage.cost.toFixed(6)}
+        </TooltipIconStat>
       )}
 
       {toolName && (
-        <Tooltip title="Tool used">
-          <div className="flex items-center">
-            <ToolOutlined className="mr-1" />
-            <span>Tool: {toolName}</span>
-          </div>
-        </Tooltip>
+        <TooltipIconStat
+          tooltip="Tool used"
+          icon={<Wrench className="h-3 w-3 mr-1" />}
+        >
+          Tool: {toolName}
+        </TooltipIconStat>
       )}
     </div>
   );
