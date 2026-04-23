@@ -1170,6 +1170,57 @@ def test_get_model_info_shows_supports_computer_use():
     )  # Expecting None due to the default in ModelInfoBase
 
 
+def test_get_model_info_shows_supports_xhigh_reasoning_effort():
+    """
+    Tests that get_model_info correctly returns supports_xhigh_reasoning_effort.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/25096
+    where get_model_info omitted reasoning-effort capability fields even
+    though they exist in model_cost.
+    """
+    original_env_var = os.environ.get("LITELLM_LOCAL_MODEL_COST_MAP")
+    original_model_cost = getattr(litellm, "model_cost", None)
+    try:
+        os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+        litellm.model_cost = litellm.get_model_cost_map(url="")
+
+        model = "gpt-5.4"
+        info = litellm.get_model_info(model)
+        model_cost = litellm.model_cost[model]
+
+        assert info.get("supports_xhigh_reasoning_effort") == model_cost.get(
+            "supports_xhigh_reasoning_effort"
+        ), (
+            f"get_model_info should return supports_xhigh_reasoning_effort={model_cost.get('supports_xhigh_reasoning_effort')!r} "
+            f"for {model!r}, got {info.get('supports_xhigh_reasoning_effort')!r}"
+        )
+        assert info.get("supports_none_reasoning_effort") == model_cost.get(
+            "supports_none_reasoning_effort"
+        ), (
+            f"get_model_info should return supports_none_reasoning_effort={model_cost.get('supports_none_reasoning_effort')!r} "
+            f"for {model!r}, got {info.get('supports_none_reasoning_effort')!r}"
+        )
+        assert info.get("supports_minimal_reasoning_effort") == model_cost.get(
+            "supports_minimal_reasoning_effort"
+        ), (
+            f"get_model_info should return supports_minimal_reasoning_effort={model_cost.get('supports_minimal_reasoning_effort')!r} "
+            f"for {model!r}, got {info.get('supports_minimal_reasoning_effort')!r}"
+        )
+        assert info.get("supports_parallel_function_calling") == model_cost.get(
+            "supports_parallel_function_calling"
+        ), (
+            f"get_model_info should return supports_parallel_function_calling={model_cost.get('supports_parallel_function_calling')!r} "
+            f"for {model!r}, got {info.get('supports_parallel_function_calling')!r}"
+        )
+    finally:
+        if original_env_var is None:
+            os.environ.pop("LITELLM_LOCAL_MODEL_COST_MAP", None)
+        else:
+            os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = original_env_var
+        if original_model_cost is not None:
+            litellm.model_cost = original_model_cost
+
+
 @pytest.mark.parametrize(
     "model, custom_llm_provider",
     [
