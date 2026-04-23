@@ -516,15 +516,26 @@ class MCPRequestHandler:
                 user_api_key_auth
             )
 
-            # Extract tool permissions for this server
+            # Extract tool permissions for this server. Dict keys may be
+            # server_ids OR names/aliases; normalize to server_id-keyed form
+            # before lookup so a name-based key does not silently drop its
+            # tool restrictions when server_id is the resolved uuid.
+            from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+                global_mcp_server_manager,
+            )
+
             key_tools = (
-                key_obj_perm.mcp_tool_permissions.get(server_id)
-                if key_obj_perm and key_obj_perm.mcp_tool_permissions
+                global_mcp_server_manager.expand_tool_permissions(
+                    key_obj_perm.mcp_tool_permissions
+                ).get(server_id)
+                if key_obj_perm
                 else None
             )
             team_tools = (
-                team_obj_perm.mcp_tool_permissions.get(server_id)
-                if team_obj_perm and team_obj_perm.mcp_tool_permissions
+                global_mcp_server_manager.expand_tool_permissions(
+                    team_obj_perm.mcp_tool_permissions
+                ).get(server_id)
+                if team_obj_perm
                 else None
             )
 
@@ -660,8 +671,10 @@ class MCPRequestHandler:
             )
 
             # servers referenced in tool permissions should also be accessible
-            tool_perm_servers = global_mcp_server_manager.expand_permission_list(
-                list((key_object_permission.mcp_tool_permissions or {}).keys())
+            tool_perm_servers = list(
+                global_mcp_server_manager.expand_tool_permissions(
+                    key_object_permission.mcp_tool_permissions
+                ).keys()
             )
 
             # Combine all lists
@@ -708,8 +721,10 @@ class MCPRequestHandler:
             )
 
             # servers referenced in tool permissions should also be accessible
-            tool_perm_servers = global_mcp_server_manager.expand_permission_list(
-                list((object_permissions.mcp_tool_permissions or {}).keys())
+            tool_perm_servers = list(
+                global_mcp_server_manager.expand_tool_permissions(
+                    object_permissions.mcp_tool_permissions
+                ).keys()
             )
 
             # Combine all lists
@@ -775,8 +790,10 @@ class MCPRequestHandler:
             )
 
             # servers referenced in tool permissions should also be accessible
-            tool_perm_servers = global_mcp_server_manager.expand_permission_list(
-                list((end_user_obj.object_permission.mcp_tool_permissions or {}).keys())
+            tool_perm_servers = list(
+                global_mcp_server_manager.expand_tool_permissions(
+                    end_user_obj.object_permission.mcp_tool_permissions
+                ).keys()
             )
 
             # Combine all lists
@@ -905,12 +922,16 @@ class MCPRequestHandler:
                 return None
 
             mcp_tool_permissions = getattr(obj_perm, "mcp_tool_permissions", None)
-            if not mcp_tool_permissions:
+            if not mcp_tool_permissions or not isinstance(mcp_tool_permissions, dict):
                 return None
-            if isinstance(mcp_tool_permissions, dict):
-                tools = mcp_tool_permissions.get(server_id)
-            else:
-                tools = None
+            # Dict keys may be server_ids OR names/aliases; normalize before lookup.
+            from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+                global_mcp_server_manager,
+            )
+
+            tools = global_mcp_server_manager.expand_tool_permissions(
+                mcp_tool_permissions
+            ).get(server_id)
             return list(tools) if tools else None
         except Exception as e:
             verbose_logger.warning(
