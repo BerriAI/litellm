@@ -168,9 +168,9 @@ def _routing_selector_matches_claim(
     ):
         # OAuth/OIDC often sends scope as a single space-delimited string. Only split
         # for the scope selector: iss/aud/client_id must stay exact full-string match
-        # on unverified claims (see routing override security review).
-        split_values = [v for v in claim_value.strip().split(" ") if v]
-        claim_list = split_values if len(split_values) > 1 else [claim_value]
+        # on unverified claims (see routing override security review). The elif guard
+        # (`" " in claim_value.strip()`) ensures at least two non-empty tokens survive.
+        claim_list = [v for v in claim_value.strip().split(" ") if v]
     else:
         claim_list = [str(claim_value)]
 
