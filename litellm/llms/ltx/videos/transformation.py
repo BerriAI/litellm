@@ -31,6 +31,12 @@ LTX_VIDEO_STORAGE_MAX_AGE_SECONDS = 24 * 60 * 60
 
 
 def _get_ltx_video_storage_path(video_id: str) -> Path:
+    if not video_id or any(char in video_id for char in ("/", "\\", "\0")):
+        raise BaseLLMException(
+            status_code=400,
+            message="Invalid LTX video_id. video_id must not contain path separators.",
+        )
+
     return LTX_VIDEO_STORAGE_DIR / f"{video_id}.mp4"
 
 

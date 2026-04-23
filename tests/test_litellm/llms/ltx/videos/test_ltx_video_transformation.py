@@ -383,6 +383,28 @@ class TestLTXVideoTransformation:
         assert url == stored_video_path.resolve().as_uri()
         assert data == {}
 
+    def test_transform_video_content_request_rejects_path_traversal_video_id(
+        self, monkeypatch, tmp_path
+    ):
+        """Test content requests cannot traverse outside LTX video storage."""
+        storage_dir = tmp_path / "litellm_ltx_videos"
+        monkeypatch.setattr(
+            ltx_video_transformation, "LTX_VIDEO_STORAGE_DIR", storage_dir
+        )
+        sibling_video_path = tmp_path / "other_dir" / "secret"
+        sibling_video_path.parent.mkdir(parents=True)
+        sibling_video_path.with_suffix(".mp4").write_bytes(b"private-video")
+
+        with pytest.raises(BaseLLMException, match="must not contain path separators"):
+            self.config.transform_video_content_request(
+                video_id=encode_video_id_with_provider(
+                    "../other_dir/secret", "ltx", "ltx-2-3-fast"
+                ),
+                api_base="https://api.ltx.video/v1",
+                litellm_params=GenericLiteLLMParams(),
+                headers={},
+            )
+
     def test_video_content_handler_reads_local_file(self, monkeypatch, tmp_path):
         """Test the shared video content handler can serve local LTX artifacts."""
         monkeypatch.setattr(ltx_video_transformation, "LTX_VIDEO_STORAGE_DIR", tmp_path)
