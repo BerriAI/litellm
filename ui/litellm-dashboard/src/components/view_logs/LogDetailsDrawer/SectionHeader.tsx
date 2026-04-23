@@ -1,19 +1,20 @@
-/**
- * SectionHeader - Datadog-style header with icon, label, metrics, and copy
- */
-
-import { Typography, Button, Tooltip } from 'antd';
-import { 
-  MessageOutlined, 
-  CopyOutlined,
-  DownOutlined,
-  UpOutlined
-} from '@ant-design/icons';
-
-const { Text } = Typography;
+import { Button } from "@/components/ui/button";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import {
+  ChevronDown,
+  ChevronUp,
+  Copy,
+  MessageSquare,
+} from "lucide-react";
+import { cn } from "@/lib/utils";
 
 interface SectionHeaderProps {
-  type: 'input' | 'output';
+  type: "input" | "output";
   tokens?: number;
   cost?: number;
   onCopy: () => void;
@@ -22,87 +23,83 @@ interface SectionHeaderProps {
   turnCount?: number;
 }
 
-export function SectionHeader({ type, tokens, cost, onCopy, isCollapsed, onToggleCollapse, turnCount }: SectionHeaderProps) {
+export function SectionHeader({
+  type,
+  tokens,
+  cost,
+  onCopy,
+  isCollapsed,
+  onToggleCollapse,
+  turnCount,
+}: SectionHeaderProps) {
   return (
     <div
       onClick={onToggleCollapse}
-      style={{
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        padding: '10px 16px',
-        borderBottom: isCollapsed ? 'none' : '1px solid #f0f0f0',
-        background: '#fafafa',
-        cursor: onToggleCollapse ? 'pointer' : 'default',
-        transition: 'background 0.15s ease',
-      }}
-      onMouseEnter={(e) => {
-        if (onToggleCollapse) {
-          e.currentTarget.style.background = '#f5f5f5';
-        }
-      }}
-      onMouseLeave={(e) => {
-        e.currentTarget.style.background = '#fafafa';
-      }}
+      className={cn(
+        "flex items-center justify-between px-4 py-2.5 bg-muted/50 transition-colors",
+        !isCollapsed && "border-b border-border",
+        onToggleCollapse ? "cursor-pointer hover:bg-muted" : "",
+      )}
     >
-      <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-        {/* Collapse Arrow */}
+      <div className="flex items-center gap-4">
         {onToggleCollapse && (
-          <div style={{ display: 'flex', alignItems: 'center' }}>
+          <div className="flex items-center">
             {isCollapsed ? (
-              <DownOutlined style={{ fontSize: 10, color: '#8c8c8c' }} />
+              <ChevronDown className="h-2.5 w-2.5 text-muted-foreground" />
             ) : (
-              <UpOutlined style={{ fontSize: 10, color: '#8c8c8c' }} />
+              <ChevronUp className="h-2.5 w-2.5 text-muted-foreground" />
             )}
           </div>
         )}
 
-        {/* Icon + Label */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          {type === 'input' ? (
-            <MessageOutlined style={{ color: '#8c8c8c', fontSize: 14 }} />
+        <div className="flex items-center gap-2">
+          {type === "input" ? (
+            <MessageSquare className="h-3.5 w-3.5 text-muted-foreground" />
           ) : (
-            <span style={{ fontSize: 14, filter: 'grayscale(1)', opacity: 0.6 }}>✨</span>
+            <span className="text-sm grayscale opacity-60">✨</span>
           )}
-          <Text style={{ fontWeight: 500, fontSize: 14 }}>
-            {type === 'input' ? 'Input' : 'Output'}
-          </Text>
+          <span className="font-medium text-sm">
+            {type === "input" ? "Input" : "Output"}
+          </span>
         </div>
 
-        {/* Tokens */}
         {tokens !== undefined && (
-          <Text type="secondary" style={{ fontSize: 12 }}>
+          <span className="text-xs text-muted-foreground">
             Tokens: {tokens.toLocaleString()}
-          </Text>
+          </span>
         )}
 
-        {/* Cost */}
         {cost !== undefined && (
-          <Text type="secondary" style={{ fontSize: 12 }}>
+          <span className="text-xs text-muted-foreground">
             Cost: ${cost.toFixed(6)}
-          </Text>
+          </span>
         )}
 
-        {/* Turn count */}
         {turnCount !== undefined && turnCount > 0 && (
-          <Text type="secondary" style={{ fontSize: 12 }}>
+          <span className="text-xs text-muted-foreground">
             Turns: {turnCount}
-          </Text>
+          </span>
         )}
       </div>
 
-      {/* Copy Button */}
-      <Tooltip title="Copy">
-        <Button 
-          type="text" 
-          size="small" 
-          icon={<CopyOutlined />} 
-          onClick={(e) => {
-            e.stopPropagation(); // Prevent triggering collapse
-            onCopy();
-          }} 
-        />
-      </Tooltip>
+      <TooltipProvider>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-6 w-6"
+              onClick={(e) => {
+                e.stopPropagation();
+                onCopy();
+              }}
+            >
+              <Copy className="h-3 w-3" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>Copy</TooltipContent>
+        </Tooltip>
+      </TooltipProvider>
     </div>
   );
 }
