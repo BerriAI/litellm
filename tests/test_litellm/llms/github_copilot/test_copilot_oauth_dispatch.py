@@ -22,22 +22,28 @@ def _reset_cache():
 
 
 class TestChatTransformationDispatch:
-    def test_oauth_prefix_api_key_uses_db_authenticator(self):
+    def test_get_openai_compatible_provider_info_does_not_eagerly_fetch_api_key(self):
+        """
+        Symmetric to the ChatGPT fix: the resolution stage must not call
+        ``get_api_key`` on either authenticator. That would otherwise hit
+        GitHub's ``/copilot_internal/v2/token`` (or trigger a device-code
+        login if no access token is stored) at every
+        ``add_deployment`` cycle during proxy startup.
+        """
         config = GithubCopilotConfig()
         fs_auth = MagicMock(spec=Authenticator)
-        fs_auth.get_api_base.side_effect = AssertionError(
-            "Filesystem authenticator must not be used for oauth: prefix"
-        )
         fs_auth.get_api_key.side_effect = AssertionError(
-            "Filesystem authenticator must not be used for oauth: prefix"
+            "get_api_key must not be called at resolution time"
         )
+        fs_auth.get_api_base.return_value = None
         config.authenticator = fs_auth
 
-        with (
-            patch.object(
-                DBAuthenticator, "get_api_base", return_value="https://x.example"
+        with patch.object(
+            DBAuthenticator,
+            "get_api_key",
+            side_effect=AssertionError(
+                "get_api_key must not be called at resolution time"
             ),
-            patch.object(DBAuthenticator, "get_api_key", return_value="cop-key"),
         ):
             base, key, _ = config._get_openai_compatible_provider_info(
                 model="gpt-5",
@@ -45,22 +51,9 @@ class TestChatTransformationDispatch:
                 api_key=f"{OAUTH_CREDENTIAL_API_KEY_PREFIX}my-creds",
                 custom_llm_provider="github_copilot",
             )
-        assert key == "cop-key"
-        assert base == "https://x.example"
-
-    def test_plain_api_key_uses_filesystem_authenticator(self):
-        config = GithubCopilotConfig()
-        config.authenticator = MagicMock(spec=Authenticator)
-        config.authenticator.get_api_base.return_value = None
-        config.authenticator.get_api_key.return_value = "fs-key"
-
-        _, key, _ = config._get_openai_compatible_provider_info(
-            model="gpt-5",
-            api_base=None,
-            api_key="sk-plain",
-            custom_llm_provider="github_copilot",
-        )
-        assert key == "fs-key"
+        # Passthrough — validate_environment resolves at request time.
+        assert key == f"{OAUTH_CREDENTIAL_API_KEY_PREFIX}my-creds"
+        assert base is not None  # Falls back to GITHUB_COPILOT_API_BASE
 
 
 class TestResponsesTransformationDispatch:

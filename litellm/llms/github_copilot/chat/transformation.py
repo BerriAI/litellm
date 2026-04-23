@@ -1,7 +1,6 @@
 from typing import List, Optional, Tuple
 
 
-from litellm.exceptions import AuthenticationError
 from litellm.llms.openai.openai import OpenAIConfig
 from litellm.types.llms.openai import AllMessageValues
 
@@ -31,17 +30,17 @@ class GithubCopilotConfig(OpenAIConfig):
         api_key: Optional[str],
         custom_llm_provider: str,
     ) -> Tuple[Optional[str], Optional[str], str]:
+        # Do NOT call ``get_api_key()`` here — see the ChatGPT chat
+        # transformation for the full rationale. At startup-time proxy
+        # resolution, triggering the filesystem authenticator with no
+        # tokens would fire the GitHub device-code flow and block. Actual
+        # auth resolution happens in ``validate_environment`` at request
+        # time via ``resolve_authenticator``.
         authenticator = resolve_authenticator(api_key, None, self.authenticator)
-        dynamic_api_base = authenticator.get_api_base() or GITHUB_COPILOT_API_BASE
-        try:
-            dynamic_api_key = authenticator.get_api_key()
-        except GetAPIKeyError as e:
-            raise AuthenticationError(
-                model=model,
-                llm_provider=custom_llm_provider,
-                message=str(e),
-            )
-        return dynamic_api_base, dynamic_api_key, custom_llm_provider
+        dynamic_api_base = (
+            api_base or authenticator.get_api_base() or GITHUB_COPILOT_API_BASE
+        )
+        return dynamic_api_base, api_key, custom_llm_provider
 
     def _transform_messages(
         self,

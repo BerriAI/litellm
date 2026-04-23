@@ -18,25 +18,31 @@ from litellm.llms.chatgpt.db_authenticator import (
 
 
 class TestChatTransformationDispatch:
-    def test_get_openai_compatible_provider_info_uses_db_authenticator(self):
+    def test_get_openai_compatible_provider_info_does_not_eagerly_fetch_token(self):
+        """
+        At resolution time (startup ``add_deployment`` cycles, every 30s),
+        the chat transformation's ``_get_openai_compatible_provider_info``
+        must NOT call ``get_access_token``. The filesystem Authenticator
+        otherwise triggers ``_login_device_code`` with no tokens on disk,
+        which prints a device prompt and polls for 15 minutes — blocking
+        proxy startup. Actual token resolution happens at request time in
+        ``validate_environment``.
+        """
         config = ChatGPTConfig()
         fs_auth = MagicMock(spec=Authenticator)
         fs_auth.get_access_token.side_effect = AssertionError(
-            "Filesystem authenticator must not be called for oauth: prefix"
+            "get_access_token must not be called at resolution time"
         )
-        fs_auth.get_api_base.side_effect = AssertionError(
-            "Filesystem authenticator must not be called for oauth: prefix"
-        )
+        fs_auth.get_api_base.return_value = "https://chatgpt.com/backend-api/codex"
         config.authenticator = fs_auth
 
-        with (
-            patch.object(
-                DBAuthenticator,
-                "get_api_base",
-                return_value="https://chatgpt.com/backend-api/codex",
-            ),
-            patch.object(
-                DBAuthenticator, "get_access_token", return_value="db-access-token"
+        # Even the DB-backed authenticator's get_access_token must not
+        # fire here — resolution is a pure metadata pass.
+        with patch.object(
+            DBAuthenticator,
+            "get_access_token",
+            side_effect=AssertionError(
+                "get_access_token must not be called at resolution time"
             ),
         ):
             base, key, _ = config._get_openai_compatible_provider_info(
@@ -45,7 +51,9 @@ class TestChatTransformationDispatch:
                 api_key=f"{OAUTH_CREDENTIAL_API_KEY_PREFIX}my-creds",
                 custom_llm_provider="chatgpt",
             )
-        assert key == "db-access-token"
+        # The raw oauth: marker passes through; validate_environment
+        # resolves it at request time.
+        assert key == f"{OAUTH_CREDENTIAL_API_KEY_PREFIX}my-creds"
         assert base == "https://chatgpt.com/backend-api/codex"
 
     def test_validate_environment_uses_db_authenticator(self):

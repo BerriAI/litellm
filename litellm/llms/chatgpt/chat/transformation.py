@@ -1,12 +1,10 @@
 from typing import Any, List, Optional, Tuple
 
-from litellm.exceptions import AuthenticationError
 from litellm.llms.openai.openai import OpenAIConfig
 from litellm.types.llms.openai import AllMessageValues
 
 from ..authenticator import Authenticator
 from ..common_utils import (
-    GetAccessTokenError,
     ensure_chatgpt_session_id,
     get_chatgpt_default_headers,
 )
@@ -31,17 +29,20 @@ class ChatGPTConfig(OpenAIConfig):
         api_key: Optional[str],
         custom_llm_provider: str,
     ) -> Tuple[Optional[str], Optional[str], str]:
+        # NOTE: we deliberately do NOT call ``get_access_token()`` here.
+        # ``get_llm_provider`` is the resolution stage and runs at proxy
+        # startup for every deployment (via ``add_deployment`` cycles).
+        # Calling the filesystem ``Authenticator.get_access_token()`` with
+        # no tokens on disk triggers ``_login_device_code()``, which
+        # prints a device code to stdout and polls OpenAI for up to 15
+        # minutes — blocking proxy startup and spamming the logs every
+        # 30s once the background scheduler kicks in. Actual auth
+        # resolution happens in ``validate_environment`` at request time,
+        # which does the right thing via ``resolve_authenticator`` and
+        # the DB-backed cache.
         authenticator = resolve_authenticator(api_key, None, self.authenticator)
-        dynamic_api_base = authenticator.get_api_base()
-        try:
-            dynamic_api_key = authenticator.get_access_token()
-        except GetAccessTokenError as e:
-            raise AuthenticationError(
-                model=model,
-                llm_provider=custom_llm_provider,
-                message=str(e),
-            )
-        return dynamic_api_base, dynamic_api_key, custom_llm_provider
+        dynamic_api_base = api_base or authenticator.get_api_base()
+        return dynamic_api_base, api_key, custom_llm_provider
 
     def validate_environment(
         self,
