@@ -1,5 +1,7 @@
-import { FilterIcon } from "@heroicons/react/outline";
-import { Button, Input, Select } from "antd";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Select } from "antd";
+import { Filter } from "lucide-react";
 import debounce from "lodash/debounce";
 import React, { useCallback, useEffect, useState } from "react";
 
@@ -53,6 +55,7 @@ const FilterComponent: React.FC<FilterComponentProps> = ({
     [key: string]: boolean;
   }>({});
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   const debouncedSearch = useCallback(
     debounce(async (value: string, option: FilterOption) => {
       if (!option.isSearchable || !option.searchFn) return;
@@ -147,13 +150,15 @@ const FilterComponent: React.FC<FilterComponentProps> = ({
     <div className="w-full">
       <div className="flex items-center gap-2 mb-6">
         <Button
-          icon={<FilterIcon className="h-4 w-4" />}
+          variant="outline"
           onClick={() => setShowFilters(!showFilters)}
-          className="flex items-center gap-2"
         >
+          <Filter className="h-4 w-4" />
           {buttonLabel}
         </Button>
-        <Button onClick={resetFilters}>Reset Filters</Button>
+        <Button variant="outline" onClick={resetFilters}>
+          Reset Filters
+        </Button>
       </div>
 
       {showFilters && (
@@ -164,7 +169,9 @@ const FilterComponent: React.FC<FilterComponentProps> = ({
 
             return (
               <div key={option.name} className="flex flex-col gap-2">
-                <label className="text-sm text-gray-600">{option.label || option.name}</label>
+                <label className="text-sm text-muted-foreground">
+                  {option.label || option.name}
+                </label>
                 {option.isSearchable ? (
                   <Select
                     showSearch
@@ -219,8 +226,9 @@ const FilterComponent: React.FC<FilterComponentProps> = ({
                     className="w-full"
                     placeholder={`Enter ${option.label || option.name}...`}
                     value={tempValues[option.name] || ""}
-                    onChange={(e) => handleFilterChange(option.name, e.target.value)}
-                    allowClear
+                    onChange={(e) =>
+                      handleFilterChange(option.name, e.target.value)
+                    }
                   />
                 )}
               </div>
