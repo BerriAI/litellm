@@ -24,8 +24,16 @@ def validate_loopback_redirect_uri(redirect_uri: str) -> None:
     ``"127.0.0.1"`` alone would miss ``127.0.0.2`` and the full-form
     IPv6 loopback ``0:0:0:0:0:0:0:1``.
     """
-    parsed = urlparse(redirect_uri)
+    try:
+        parsed = urlparse(redirect_uri)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="invalid_request")
     if parsed.scheme not in ("http", "https"):
+        raise HTTPException(status_code=400, detail="invalid_request")
+    # Fragments are not allowed in OAuth redirect URIs (RFC 6749 §3.1.2)
+    # — rejecting them prevents a ``http://127.0.0.1/cb#frag?code=...``
+    # from silently eating the authorization code.
+    if parsed.fragment:
         raise HTTPException(status_code=400, detail="invalid_request")
     host = (parsed.hostname or "").lower()
     if host == "localhost":
@@ -34,5 +42,7 @@ def validate_loopback_redirect_uri(redirect_uri: str) -> None:
         if ip_address(host).is_loopback:
             return
     except ValueError:
+        # Unparseable host (malformed IPv6, etc.) — treat as invalid,
+        # don't let it bubble up as a 500.
         pass
     raise HTTPException(status_code=400, detail="invalid_request")

@@ -105,7 +105,15 @@ def _user_id_from_session_cookie(request: Request) -> Optional[str]:
     if not token:
         return None
     try:
-        payload = jwt.decode(token, master_key, algorithms=["HS256"])
+        payload = jwt.decode(
+            token,
+            master_key,
+            algorithms=["HS256"],
+            # Require an expiry claim so a leaked UI session cookie has a
+            # bounded lifetime. PyJWT verifies exp by default when present;
+            # require=["exp"] additionally rejects tokens that omit it.
+            options={"require": ["exp"]},
+        )
     except jwt.InvalidTokenError:
         return None
     if payload.get("type") == "byok_session":
@@ -791,10 +799,18 @@ async def byok_token(
     if not _verify_pkce(code_verifier, record["code_challenge"]):
         return _oauth_token_error("invalid_grant")
 
-    # RFC 6749 §4.1.3 / OAuth 2.1 §4.1.3: if redirect_uri was sent with the
-    # authorization request, the token request MUST include the identical
-    # value. Enforce exact match.
-    if record.get("redirect_uri") and redirect_uri != record["redirect_uri"]:
+    # RFC 6749 §4.1.3: if redirect_uri was sent with the authorization
+    # request, the token request MUST include the identical value.
+    # OAuth 2.1 draft-15 §4.1.3 drops this requirement — strict OAuth 2.1
+    # clients will omit it. Enforce equality ONLY when the client
+    # actually submitted a value, so we stay RFC 6749-backward-compatible
+    # without breaking OAuth 2.1 clients. PKCE + client_id binding
+    # (checked below) cover the security role redirect_uri played.
+    if (
+        record.get("redirect_uri")
+        and redirect_uri
+        and redirect_uri != record["redirect_uri"]
+    ):
         return _oauth_token_error("invalid_grant")
 
     # RFC 6749 §4.1.3: if the client was identified at /authorize, the
