@@ -571,6 +571,24 @@
     "default_model_placeholder": "gpt-3.5-turbo"
   },
   {
+    "provider": "ChatGPT",
+    "provider_display_name": "ChatGPT (OAuth)",
+    "litellm_provider": "chatgpt",
+    "credential_fields": [
+      {
+        "key": "api_key",
+        "label": "OAuth credential reference",
+        "placeholder": "oauth:my-chatgpt",
+        "tooltip": "Reference a stored ChatGPT OAuth credential by name, prefixed with 'oauth:'. Create the credential first via Credentials \u2192 Add Credential \u2192 ChatGPT (OAuth).",
+        "required": true,
+        "field_type": "text",
+        "options": null,
+        "default_value": "oauth:"
+      }
+    ],
+    "default_model_placeholder": "gpt-5.3-codex"
+  },
+  {
     "provider": "CLARIFAI",
     "provider_display_name": "Clarifai",
     "litellm_provider": "clarifai",
