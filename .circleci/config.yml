@@ -1844,6 +1844,9 @@ jobs:
             # Clean up first container
       - run:
           name: Stop and remove first container
+      - run:
+          name: Stop and remove first container
+          when: always
           command: |
             docker stop my-app
             docker rm my-app
