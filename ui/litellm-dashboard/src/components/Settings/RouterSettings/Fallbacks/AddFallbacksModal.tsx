@@ -1,9 +1,9 @@
-/**
- * Modal wrapper for the fallback selection form
- * Handles modal visibility and layout, but delegates content to children
- */
-
-import { Modal } from "antd";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { ArrowRight } from "lucide-react";
 import React from "react";
 
@@ -19,34 +19,26 @@ export function AddFallbacksModal({
   children,
 }: AddFallbacksModalProps) {
   return (
-    <Modal
-      title={
-        <div className="pb-4 border-b border-gray-100">
-          <div className="flex items-center gap-2 text-gray-800">
-            <div className="p-2 bg-indigo-50 rounded-lg">
-              <ArrowRight className="w-5 h-5 text-indigo-600" />
+    <Dialog open={open} onOpenChange={(o) => (!o ? onCancel() : undefined)}>
+      <DialogContent className="max-w-[900px]">
+        <DialogHeader>
+          <div className="flex items-center gap-2 text-foreground">
+            <div className="p-2 bg-indigo-50 dark:bg-indigo-950/30 rounded-lg">
+              <ArrowRight className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />
             </div>
             <div>
-              <h2 className="text-lg font-bold m-0">Configure Model Fallbacks</h2>
-              <p className="text-sm text-gray-500 font-normal m-0">
-                Manage multiple fallback chains for different models (up to 5 groups at a time)
+              <DialogTitle className="text-lg font-bold m-0">
+                Configure Model Fallbacks
+              </DialogTitle>
+              <p className="text-sm text-muted-foreground font-normal m-0">
+                Manage multiple fallback chains for different models (up to 5
+                groups at a time)
               </p>
             </div>
           </div>
-        </div>
-      }
-      open={open}
-      width={900}
-      footer={null}
-      onCancel={onCancel}
-      maskClosable={false}
-      className="top-8"
-      styles={{
-        body: { padding: "24px" },
-        header: { padding: "24px 24px 0 24px", border: "none" },
-      }}
-    >
-      <div className="mt-6">{children}</div>
-    </Modal>
+        </DialogHeader>
+        <div className="mt-2">{children}</div>
+      </DialogContent>
+    </Dialog>
   );
 }

@@ -1,6 +1,13 @@
 import React from "react";
-import { Button as TremorButton, Text } from "@tremor/react";
-import { Input, Modal } from "antd";
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 
 interface PublishModalProps {
   visible: boolean;
@@ -20,37 +27,50 @@ const PublishModal: React.FC<PublishModalProps> = ({
   onCancel,
 }) => {
   return (
-    <Modal
-      title="Publish Prompt"
+    <Dialog
       open={visible}
-      onCancel={onCancel}
-      footer={[
-        <div key="footer" className="flex justify-end gap-2">
-          <TremorButton variant="secondary" onClick={onCancel}>
-            Cancel
-          </TremorButton>
-          <TremorButton onClick={onPublish} loading={isSaving}>
-            Publish
-          </TremorButton>
-        </div>
-      ]}
+      onOpenChange={(open) => (!open ? onCancel() : undefined)}
     >
-      <div className="py-4">
-        <Text className="mb-2">Name</Text>
-        <Input
-          value={promptName}
-          onChange={(e) => onNameChange(e.target.value)}
-          placeholder="Enter prompt name"
-          onPressEnter={onPublish}
-          autoFocus
-        />
-        <Text className="text-gray-500 text-xs mt-2">
-          Published prompts can be used in API calls and are versioned for easy tracking.
-        </Text>
-      </div>
-    </Modal>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Publish Prompt</DialogTitle>
+        </DialogHeader>
+        <div className="py-2">
+          <label
+            htmlFor="publish-prompt-name"
+            className="block text-sm mb-2"
+          >
+            Name
+          </label>
+          <Input
+            id="publish-prompt-name"
+            value={promptName}
+            onChange={(e) => onNameChange(e.target.value)}
+            placeholder="Enter prompt name"
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                onPublish();
+              }
+            }}
+            autoFocus
+          />
+          <p className="text-muted-foreground text-xs mt-2">
+            Published prompts can be used in API calls and are versioned for
+            easy tracking.
+          </p>
+        </div>
+        <DialogFooter>
+          <Button variant="secondary" onClick={onCancel} disabled={isSaving}>
+            Cancel
+          </Button>
+          <Button onClick={onPublish} disabled={isSaving}>
+            {isSaving ? "Publishing…" : "Publish"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 };
 
 export default PublishModal;
-

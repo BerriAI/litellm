@@ -1,6 +1,5 @@
 import React from "react";
-import { LoadingOutlined } from "@ant-design/icons";
-import { Spin } from "antd";
+import { Loader2 } from "lucide-react";
 import EmptyState from "./EmptyState";
 import MessageBubble from "./MessageBubble";
 import { Message } from "./types";
@@ -18,8 +17,6 @@ const MessageList: React.FC<MessageListProps> = ({
   hasVariables,
   messagesEndRef,
 }) => {
-  const antIcon = <LoadingOutlined style={{ fontSize: 24 }} spin />;
-
   return (
     <div className="flex-1 overflow-y-auto p-4 pb-0">
       {messages.length === 0 && <EmptyState hasVariables={hasVariables} />}
@@ -30,13 +27,12 @@ const MessageList: React.FC<MessageListProps> = ({
 
       {isLoading && (
         <div className="flex justify-center items-center my-4">
-          <Spin indicator={antIcon} />
+          <Loader2 className="h-6 w-6 animate-spin text-primary" />
         </div>
       )}
-      <div ref={messagesEndRef} style={{ height: "1px" }} />
+      <div ref={messagesEndRef} className="h-px" />
     </div>
   );
 };
 
 export default MessageList;
-
