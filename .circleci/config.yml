@@ -1806,7 +1806,7 @@ jobs:
       - run:
           name: Install Dependencies
           command: |
-            uv sync --frozen --all-groups --all-extras --python 3.13
+            uv sync --frozen --all-groups --all-extras --python 3.12
       - run:
           name: Build Docker image
           command: |
