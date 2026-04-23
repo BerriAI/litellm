@@ -1,7 +1,15 @@
 import React from "react";
-import { Table, Badge, Tooltip } from "antd";
+import { Table } from "antd";
+import { Badge } from "@/components/ui/badge";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import { cn } from "@/lib/utils";
 import MessageManager from "@/components/molecules/message_manager";
-import { EyeOutlined, CopyOutlined, DeleteOutlined } from "@ant-design/icons";
+import { Copy, Eye, Trash2 } from "lucide-react";
 import { DocumentUpload } from "./types";
 
 interface DocumentsTableProps {
@@ -9,22 +17,43 @@ interface DocumentsTableProps {
   onRemove: (uid: string) => void;
 }
 
-const DocumentsTable: React.FC<DocumentsTableProps> = ({ documents, onRemove }) => {
+const DocumentsTable: React.FC<DocumentsTableProps> = ({
+  documents,
+  onRemove,
+}) => {
   const handleCopyId = (uid: string) => {
     navigator.clipboard.writeText(uid);
     MessageManager.success("Document ID copied to clipboard");
   };
 
   const getStatusBadge = (status: DocumentUpload["status"]) => {
-    const statusConfig = {
-      uploading: { color: "blue", text: "Uploading" },
-      done: { color: "green", text: "Ready" },
-      error: { color: "red", text: "Error" },
-      removed: { color: "default", text: "Removed" },
+    const statusConfig: Record<
+      DocumentUpload["status"],
+      { className: string; text: string }
+    > = {
+      uploading: {
+        className:
+          "bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300",
+        text: "Uploading",
+      },
+      done: {
+        className:
+          "bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300",
+        text: "Ready",
+      },
+      error: {
+        className:
+          "bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300",
+        text: "Error",
+      },
+      removed: {
+        className: "bg-muted text-muted-foreground",
+        text: "Removed",
+      },
     };
 
     const config = statusConfig[status];
-    return <Badge color={config.color} text={config.text} />;
+    return <Badge className={cn("text-xs", config.className)}>{config.text}</Badge>;
   };
 
   const formatFileSize = (bytes?: number) => {
@@ -42,7 +71,11 @@ const DocumentsTable: React.FC<DocumentsTableProps> = ({ documents, onRemove }) 
       render: (name: string, record: DocumentUpload) => (
         <div className="flex items-center space-x-2">
           <span className="text-sm">{name}</span>
-          {record.size && <span className="text-xs text-gray-400">({formatFileSize(record.size)})</span>}
+          {record.size && (
+            <span className="text-xs text-muted-foreground">
+              ({formatFileSize(record.size)})
+            </span>
+          )}
         </div>
       ),
     },
@@ -57,26 +90,53 @@ const DocumentsTable: React.FC<DocumentsTableProps> = ({ documents, onRemove }) 
       title: "Actions",
       key: "actions",
       width: 120,
-      render: (_: any, record: DocumentUpload) => (
+      render: (_: unknown, record: DocumentUpload) => (
         <div className="flex items-center space-x-2">
-          <Tooltip title="View details">
-            <EyeOutlined
-              className="cursor-pointer text-gray-600 hover:text-blue-500"
-              onClick={() => console.log("View", record)}
-            />
-          </Tooltip>
-          <Tooltip title="Copy ID">
-            <CopyOutlined
-              className="cursor-pointer text-gray-600 hover:text-blue-500"
-              onClick={() => handleCopyId(record.uid)}
-            />
-          </Tooltip>
-          <Tooltip title="Remove">
-            <DeleteOutlined
-              className="cursor-pointer text-gray-600 hover:text-red-500"
-              onClick={() => onRemove(record.uid)}
-            />
-          </Tooltip>
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  type="button"
+                  onClick={() => console.log("View", record)}
+                  className="cursor-pointer text-muted-foreground hover:text-primary"
+                  aria-label="View details"
+                >
+                  <Eye className="h-4 w-4" />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent>View details</TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  type="button"
+                  onClick={() => handleCopyId(record.uid)}
+                  className="cursor-pointer text-muted-foreground hover:text-primary"
+                  aria-label="Copy ID"
+                >
+                  <Copy className="h-4 w-4" />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent>Copy ID</TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  type="button"
+                  onClick={() => onRemove(record.uid)}
+                  className="cursor-pointer text-muted-foreground hover:text-destructive"
+                  aria-label="Remove"
+                >
+                  <Trash2 className="h-4 w-4" />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent>Remove</TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
         </div>
       ),
     },
@@ -89,7 +149,8 @@ const DocumentsTable: React.FC<DocumentsTableProps> = ({ documents, onRemove }) 
       rowKey="uid"
       pagination={false}
       locale={{
-        emptyText: "No documents uploaded yet. Upload documents above to get started.",
+        emptyText:
+          "No documents uploaded yet. Upload documents above to get started.",
       }}
       size="small"
     />
