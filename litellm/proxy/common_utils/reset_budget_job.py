@@ -634,8 +634,10 @@ class ResetBudgetJob:
 
         # --- Keys ---
         try:
+            # Avoid Prisma JSON null filters here; generated clients handle them
+            # inconsistently for optional Json fields across environments.
             all_keys = await self.prisma_client.db.litellm_verificationtoken.find_many(
-                where={"budget_limits": {"not": None}}  # type: ignore[arg-type]
+                select={"token": True, "budget_limits": True}
             )
             for key in all_keys:
                 raw = key.budget_limits  # type: ignore[attr-defined]
@@ -663,8 +665,10 @@ class ResetBudgetJob:
 
         # --- Teams ---
         try:
+            # Keep the same fetch strategy as keys to avoid Json filter parsing
+            # errors on optional Prisma Json columns.
             all_teams = await self.prisma_client.db.litellm_teamtable.find_many(
-                where={"budget_limits": {"not": None}}  # type: ignore[arg-type]
+                select={"team_id": True, "budget_limits": True}
             )
             for team in all_teams:
                 raw = team.budget_limits  # type: ignore[attr-defined]
