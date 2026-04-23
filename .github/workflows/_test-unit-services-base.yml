@@ -37,6 +37,11 @@ on:
         required: false
         type: string
         default: "loadscope"
+      keyword:
+        description: "Optional pytest -k expression to filter tests (e.g. 'test_a or test_c')"
+        required: false
+        type: string
+        default: ""
       artifact-name:
         description: "Unique name for the coverage artifact (must be unique per run)"
         required: false
@@ -130,8 +135,15 @@ jobs:
           WORKERS: ${{ inputs.workers }}
           RERUNS: ${{ inputs.reruns }}
           DIST: ${{ inputs.dist }}
+          KEYWORD: ${{ inputs.keyword }}
           DATABASE_URL: ${{ inputs.enable-postgres && secrets.DATABASE_URL || '' }}
         run: |
+          # Build optional -k filter as an array so expressions with spaces
+          # (e.g. "test_a or test_b") stay a single argv entry to pytest.
+          K_ARGS=()
+          if [ -n "${KEYWORD}" ]; then
+            K_ARGS=(-k "${KEYWORD}")
+          fi
           if [ "${WORKERS}" = "0" ]; then
             uv run --no-sync pytest ${TEST_PATH:?} \
               --tb=short -vv \
@@ -141,7 +153,8 @@ jobs:
               --durations=20 \
               --cov=litellm \
               --cov-report=xml:coverage.xml \
-              --cov-config=pyproject.toml
+              --cov-config=pyproject.toml \
+              "${K_ARGS[@]}"
           else
             uv run --no-sync pytest ${TEST_PATH:?} \
               --tb=short -vv \
@@ -153,7 +166,8 @@ jobs:
               --durations=20 \
               --cov=litellm \
               --cov-report=xml:coverage.xml \
-              --cov-config=pyproject.toml
+              --cov-config=pyproject.toml \
+              "${K_ARGS[@]}"
           fi
 
       - name: Save coverage report
