@@ -1,13 +1,24 @@
-import React, { useState, useEffect } from "react";
-import { Card, Button, InputNumber, Typography, Spin, Select, Tag, Row, Col } from "antd";
-import { EditOutlined, SaveOutlined } from "@ant-design/icons";
+import React, { useState, useEffect, useMemo } from "react";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Edit, Save, X } from "lucide-react";
 import { getDefaultTeamSettings, updateDefaultTeamSettings } from "./networking";
-import BudgetDurationDropdown, { getBudgetDurationLabel } from "./common_components/budget_duration_dropdown";
+import BudgetDurationDropdown, {
+  getBudgetDurationLabel,
+} from "./common_components/budget_duration_dropdown";
 import { getModelDisplayName } from "./key_team_helpers/fetch_available_models_team_key";
 import NotificationsManager from "./molecules/notifications_manager";
 import { ModelSelect } from "./ModelSelect/ModelSelect";
-
-const { Title, Text } = Typography;
 
 interface TeamSSOSettingsProps {
   accessToken: string | null;
@@ -40,28 +51,38 @@ interface SettingRowProps {
   editContent: React.ReactNode;
 }
 
-const SettingRow: React.FC<SettingRowProps> = ({ label, description, isEditing, viewContent, editContent }) => (
-  <Row className="py-5 border-b border-gray-100 last:border-0">
-    <Col span={8} className="pr-6">
-      <div className="text-sm font-semibold text-gray-900">{label}</div>
-      <div className="text-xs text-gray-500 mt-1 leading-relaxed">{description}</div>
-    </Col>
-    <Col span={16} className="flex items-center">
+const SettingRow: React.FC<SettingRowProps> = ({
+  label,
+  description,
+  isEditing,
+  viewContent,
+  editContent,
+}) => (
+  <div className="grid grid-cols-3 py-5 border-b border-border last:border-0">
+    <div className="col-span-1 pr-6">
+      <div className="text-sm font-semibold text-foreground">{label}</div>
+      <div className="text-xs text-muted-foreground mt-1 leading-relaxed">
+        {description}
+      </div>
+    </div>
+    <div className="col-span-2 flex items-center">
       <div className="w-full">{isEditing ? editContent : viewContent}</div>
-    </Col>
-  </Row>
+    </div>
+  </div>
 );
 
-const NotSet = () => <Text className="text-gray-400 italic">Not set</Text>;
+const NotSet = () => (
+  <span className="text-muted-foreground italic">Not set</span>
+);
 
 const renderTags = (values: string[], displayFn?: (v: string) => string) => {
   if (!values || values.length === 0) return <NotSet />;
   return (
     <div className="flex flex-wrap gap-2">
       {values.map((v) => (
-        <Tag key={v} color="blue">
+        <Badge key={v} variant="default">
           {displayFn ? displayFn(v) : v}
-        </Tag>
+        </Badge>
       ))}
     </div>
   );
@@ -89,7 +110,8 @@ const TeamSSOSettings: React.FC<TeamSSOSettingsProps> = ({ accessToken }) => {
   const [loading, setLoading] = useState<boolean>(true);
   const [values, setValues] = useState<SettingsValues>(DEFAULT_VALUES);
   const [isEditing, setIsEditing] = useState<boolean>(false);
-  const [editedValues, setEditedValues] = useState<SettingsValues>(DEFAULT_VALUES);
+  const [editedValues, setEditedValues] =
+    useState<SettingsValues>(DEFAULT_VALUES);
   const [saving, setSaving] = useState<boolean>(false);
   const [fetchError, setFetchError] = useState<boolean>(false);
 
@@ -99,7 +121,6 @@ const TeamSSOSettings: React.FC<TeamSSOSettingsProps> = ({ accessToken }) => {
         setLoading(false);
         return;
       }
-
       try {
         const data = await getDefaultTeamSettings(accessToken);
         const fetched = { ...DEFAULT_VALUES, ...(data.values || {}) };
@@ -113,21 +134,27 @@ const TeamSSOSettings: React.FC<TeamSSOSettingsProps> = ({ accessToken }) => {
         setLoading(false);
       }
     };
-
     fetchSettings();
   }, [accessToken]);
 
   const handleSave = async () => {
     if (!accessToken) return;
-
     setSaving(true);
     try {
-      const updatedSettings = await updateDefaultTeamSettings(accessToken, editedValues);
-      const newValues = { ...DEFAULT_VALUES, ...(updatedSettings.settings || {}) };
+      const updatedSettings = await updateDefaultTeamSettings(
+        accessToken,
+        editedValues,
+      );
+      const newValues = {
+        ...DEFAULT_VALUES,
+        ...(updatedSettings.settings || {}),
+      };
       setValues(newValues);
       setEditedValues(newValues);
       setIsEditing(false);
-      NotificationsManager.success("Default team settings updated successfully");
+      NotificationsManager.success(
+        "Default team settings updated successfully",
+      );
     } catch (error) {
       console.error("Error updating team settings:", error);
       NotificationsManager.fromBackend("Failed to update team settings");
@@ -141,50 +168,68 @@ const TeamSSOSettings: React.FC<TeamSSOSettingsProps> = ({ accessToken }) => {
     setEditedValues(values);
   };
 
-  const update = <K extends keyof SettingsValues>(key: K, value: SettingsValues[K]) => {
+  const update = <K extends keyof SettingsValues>(
+    key: K,
+    value: SettingsValues[K],
+  ) => {
     setEditedValues((prev) => ({ ...prev, [key]: value }));
   };
+
+  const remainingPermissions = useMemo(
+    () =>
+      PERMISSION_OPTIONS.filter(
+        (p) => !(editedValues.team_member_permissions ?? []).includes(p),
+      ),
+    [editedValues.team_member_permissions],
+  );
 
   if (loading) {
     return (
       <div className="flex justify-center items-center h-64">
-        <Spin size="large" />
+        <Skeleton className="h-32 w-full max-w-3xl" />
       </div>
     );
   }
 
   if (fetchError) {
     return (
-      <Card>
-        <Text>No team settings available or you do not have permission to view them.</Text>
+      <Card className="p-6">
+        <p className="text-sm">
+          No team settings available or you do not have permission to view them.
+        </p>
       </Card>
     );
   }
 
   return (
-    <Card styles={{ body: { padding: 32 } }}>
-      {/* Header */}
+    <Card className="p-8">
       <div className="flex justify-between items-start mb-2">
         <div>
-          <Title level={3} className="m-0 text-gray-900">
+          <h3 className="text-xl font-semibold m-0 text-foreground">
             Default Team Settings
-          </Title>
-          <Text className="text-gray-500 mt-1 block">
+          </h3>
+          <p className="text-muted-foreground text-sm mt-1">
             These settings will be applied by default when creating new teams.
-          </Text>
+          </p>
         </div>
         <div>
           {isEditing ? (
             <div className="flex gap-3">
-              <Button onClick={handleCancel} disabled={saving}>
+              <Button
+                variant="outline"
+                onClick={handleCancel}
+                disabled={saving}
+              >
                 Cancel
               </Button>
-              <Button type="primary" onClick={handleSave} loading={saving} icon={<SaveOutlined />}>
-                Save Changes
+              <Button onClick={handleSave} disabled={saving}>
+                <Save className="h-4 w-4" />
+                {saving ? "Saving…" : "Save Changes"}
               </Button>
             </div>
           ) : (
-            <Button onClick={() => setIsEditing(true)} icon={<EditOutlined />}>
+            <Button variant="outline" onClick={() => setIsEditing(true)}>
+              <Edit className="h-4 w-4" />
               Edit Settings
             </Button>
           )}
@@ -194,25 +239,41 @@ const TeamSSOSettings: React.FC<TeamSSOSettingsProps> = ({ accessToken }) => {
       <div className="mt-8">
         {/* Budget & Rate Limits */}
         <div className="mb-8">
-          <div className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-2">Budget & Rate Limits</div>
-          <div className="border-t border-gray-100">
+          <div className="text-xs font-bold text-muted-foreground uppercase tracking-wider mb-2">
+            Budget &amp; Rate Limits
+          </div>
+          <div className="border-t border-border">
             <SettingRow
               label="Max Budget"
               description="Maximum budget (in USD) for new automatically created teams."
               isEditing={isEditing}
               viewContent={
-                values.max_budget != null ? <Text>${Number(values.max_budget).toLocaleString()}</Text> : <NotSet />
+                values.max_budget != null ? (
+                  <span>${Number(values.max_budget).toLocaleString()}</span>
+                ) : (
+                  <NotSet />
+                )
               }
               editContent={
-                <InputNumber
-                  className="w-full"
-                  style={{ maxWidth: 320 }}
-                  value={editedValues.max_budget}
-                  onChange={(v) => update("max_budget", v)}
-                  placeholder="Not set"
-                  prefix="$"
-                  min={0}
-                />
+                <div className="relative max-w-xs">
+                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground text-sm">
+                    $
+                  </span>
+                  <Input
+                    type="number"
+                    min={0}
+                    step={0.01}
+                    value={editedValues.max_budget ?? ""}
+                    onChange={(e) =>
+                      update(
+                        "max_budget",
+                        e.target.value === "" ? null : Number(e.target.value),
+                      )
+                    }
+                    placeholder="Not set"
+                    className="pl-6"
+                  />
+                </div>
               }
             />
 
@@ -221,14 +282,19 @@ const TeamSSOSettings: React.FC<TeamSSOSettingsProps> = ({ accessToken }) => {
               description="How frequently the team's budget resets."
               isEditing={isEditing}
               viewContent={
-                values.budget_duration ? <Text>{getBudgetDurationLabel(values.budget_duration)}</Text> : <NotSet />
+                values.budget_duration ? (
+                  <span>{getBudgetDurationLabel(values.budget_duration)}</span>
+                ) : (
+                  <NotSet />
+                )
               }
               editContent={
-                <BudgetDurationDropdown
-                  value={editedValues.budget_duration || null}
-                  onChange={(v) => update("budget_duration", v)}
-                  style={{ maxWidth: 320 }}
-                />
+                <div className="max-w-xs">
+                  <BudgetDurationDropdown
+                    value={editedValues.budget_duration}
+                    onChange={(v) => update("budget_duration", v)}
+                  />
+                </div>
               }
             />
 
@@ -237,16 +303,25 @@ const TeamSSOSettings: React.FC<TeamSSOSettingsProps> = ({ accessToken }) => {
               description="Maximum tokens per minute allowed across all models."
               isEditing={isEditing}
               viewContent={
-                values.tpm_limit != null ? <Text>{values.tpm_limit.toLocaleString()}</Text> : <NotSet />
+                values.tpm_limit != null ? (
+                  <span>{values.tpm_limit.toLocaleString()}</span>
+                ) : (
+                  <NotSet />
+                )
               }
               editContent={
-                <InputNumber
-                  className="w-full"
-                  style={{ maxWidth: 320 }}
-                  value={editedValues.tpm_limit}
-                  onChange={(v) => update("tpm_limit", v)}
-                  placeholder="Not set"
+                <Input
+                  type="number"
                   min={0}
+                  className="max-w-xs"
+                  value={editedValues.tpm_limit ?? ""}
+                  onChange={(e) =>
+                    update(
+                      "tpm_limit",
+                      e.target.value === "" ? null : Number(e.target.value),
+                    )
+                  }
+                  placeholder="Not set"
                 />
               }
             />
@@ -256,16 +331,25 @@ const TeamSSOSettings: React.FC<TeamSSOSettingsProps> = ({ accessToken }) => {
               description="Maximum requests per minute allowed across all models."
               isEditing={isEditing}
               viewContent={
-                values.rpm_limit != null ? <Text>{values.rpm_limit.toLocaleString()}</Text> : <NotSet />
+                values.rpm_limit != null ? (
+                  <span>{values.rpm_limit.toLocaleString()}</span>
+                ) : (
+                  <NotSet />
+                )
               }
               editContent={
-                <InputNumber
-                  className="w-full"
-                  style={{ maxWidth: 320 }}
-                  value={editedValues.rpm_limit}
-                  onChange={(v) => update("rpm_limit", v)}
-                  placeholder="Not set"
+                <Input
+                  type="number"
                   min={0}
+                  className="max-w-xs"
+                  value={editedValues.rpm_limit ?? ""}
+                  onChange={(e) =>
+                    update(
+                      "rpm_limit",
+                      e.target.value === "" ? null : Number(e.target.value),
+                    )
+                  }
+                  placeholder="Not set"
                 />
               }
             />
@@ -274,8 +358,10 @@ const TeamSSOSettings: React.FC<TeamSSOSettingsProps> = ({ accessToken }) => {
 
         {/* Access & Permissions */}
         <div className="mb-8">
-          <div className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-2">Access & Permissions</div>
-          <div className="border-t border-gray-100">
+          <div className="text-xs font-bold text-muted-foreground uppercase tracking-wider mb-2">
+            Access &amp; Permissions
+          </div>
+          <div className="border-t border-border">
             <SettingRow
               label="Models"
               description="Default list of models that new teams can access."
@@ -298,24 +384,64 @@ const TeamSSOSettings: React.FC<TeamSSOSettingsProps> = ({ accessToken }) => {
               isEditing={isEditing}
               viewContent={renderTags(values.team_member_permissions)}
               editContent={
-                <Select
-                  mode="multiple"
-                  style={{ width: "100%" }}
-                  value={editedValues.team_member_permissions || []}
-                  onChange={(v) => update("team_member_permissions", v)}
-                  placeholder="Select permissions"
-                  tagRender={({ label, closable, onClose }) => (
-                    <Tag color="blue" closable={closable} onClose={onClose} className="mr-1 mt-1 mb-1">
-                      {label}
-                    </Tag>
+                <div className="space-y-2">
+                  <Select
+                    value=""
+                    onValueChange={(v) => {
+                      if (v)
+                        update("team_member_permissions", [
+                          ...(editedValues.team_member_permissions ?? []),
+                          v,
+                        ]);
+                    }}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Add permission" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {remainingPermissions.length === 0 ? (
+                        <div className="py-2 px-3 text-sm text-muted-foreground">
+                          No more permissions available
+                        </div>
+                      ) : (
+                        remainingPermissions.map((option) => (
+                          <SelectItem key={option} value={option}>
+                            {option}
+                          </SelectItem>
+                        ))
+                      )}
+                    </SelectContent>
+                  </Select>
+                  {(editedValues.team_member_permissions ?? []).length > 0 && (
+                    <div className="flex flex-wrap gap-1">
+                      {(editedValues.team_member_permissions ?? []).map(
+                        (p) => (
+                          <Badge
+                            key={p}
+                            variant="default"
+                            className="gap-1"
+                          >
+                            {p}
+                            <button
+                              type="button"
+                              onClick={() =>
+                                update(
+                                  "team_member_permissions",
+                                  (
+                                    editedValues.team_member_permissions ?? []
+                                  ).filter((x) => x !== p),
+                                )
+                              }
+                              aria-label={`Remove ${p}`}
+                            >
+                              <X size={10} />
+                            </button>
+                          </Badge>
+                        ),
+                      )}
+                    </div>
                   )}
-                >
-                  {PERMISSION_OPTIONS.map((option) => (
-                    <Select.Option key={option} value={option}>
-                      {option}
-                    </Select.Option>
-                  ))}
-                </Select>
+                </div>
               }
             />
           </div>
