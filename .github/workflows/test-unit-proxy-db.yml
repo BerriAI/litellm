@@ -25,7 +25,50 @@ concurrency:
 #     pinning the whole file to a single worker (the default --dist=loadscope
 #     behavior for single-file targets).
 jobs:
+  # Fast guard — fails the workflow if a test_*.py file under
+  # tests/proxy_unit_tests/ is not referenced by any matrix entry below.
+  # The semantic-shard design (no catch-all "remaining" bucket) relies on
+  # every test file being explicitly assigned; this guard prevents a new
+  # file from silently dropping out of CI.
+  assert-shard-coverage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          persist-credentials: false
+      - name: Assert every test_*.py is in a matrix shard
+        run: |
+          python3 - <<'PY'
+          import pathlib, re, sys, yaml
+          wf = yaml.safe_load(open(".github/workflows/test-unit-proxy-db.yml"))
+          matrix = wf["jobs"]["proxy-db"]["strategy"]["matrix"]["include"]
+          referenced = set()
+          for entry in matrix:
+              for token in entry["test-path"].split():
+                  if token.startswith("tests/proxy_unit_tests/"):
+                      referenced.add(pathlib.PurePosixPath(token).name)
+          actual = {p.name for p in pathlib.Path("tests/proxy_unit_tests").iterdir()
+                    if p.name.startswith("test_") and (p.suffix == ".py" or p.is_dir())
+                    and p.name != "test_configs"}
+          orphans = sorted(actual - referenced)
+          if orphans:
+              print("ERROR: the following files/dirs under tests/proxy_unit_tests/")
+              print("       are not assigned to any shard in test-unit-proxy-db.yml:")
+              for o in orphans:
+                  print(f"  - {o}")
+              print()
+              print("Add each to whichever semantic shard (auth-and-jwt, proxy-server,")
+              print("logging-and-callbacks, db-and-spend, guardrails-budget-hooks,")
+              print("endpoints-and-responses, proxy-utils, key-generation) it belongs to.")
+              sys.exit(1)
+          print(f"OK: all {len(actual)} files assigned to a shard.")
+          PY
+
   proxy-db:
+    needs: assert-shard-coverage
     permissions:
       contents: read
       id-token: write
