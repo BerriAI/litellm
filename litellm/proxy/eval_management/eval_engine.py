@@ -89,6 +89,37 @@ async def run_evals_for_agent(
             "judge_model": judge_model,
             "iteration": eval_result.iteration,
             "eval_error": eval_result.eval_error,
+            "verdicts": [
+                {
+                    "criterion_name": (
+                        v.get("criterion_name")
+                        if isinstance(v, dict)
+                        else getattr(v, "criterion_name", "")
+                    ),
+                    "score": (
+                        v.get("score")
+                        if isinstance(v, dict)
+                        else getattr(v, "score", 0)
+                    ),
+                    "reasoning": (
+                        v.get("reasoning")
+                        if isinstance(v, dict)
+                        else getattr(v, "reasoning", "")
+                    ),
+                    "passed": (
+                        v.get("passed")
+                        if isinstance(v, dict)
+                        else getattr(v, "passed", True)
+                    ),
+                    "weight": (
+                        v.get("weight")
+                        if isinstance(v, dict)
+                        else getattr(v, "weight", None)
+                    ),
+                }
+                for v in (eval_result.verdicts or [])
+            ],
+            "threshold": threshold,
         }
         eval_information.append(eval_info)
 
@@ -171,13 +202,13 @@ async def _run_single_eval_with_retry(
     if messages and feedback_msg:
         data["messages"] = messages + [{"role": "user", "content": feedback_msg}]
 
-        # Re-invoke the agent's LLM with the feedback
+        # Re-invoke the agent's LLM via the proxy router so routing/auth policies apply
         try:
-            import litellm
+            from litellm.proxy.proxy_server import llm_router
 
             model = data.get("model", "")
-            if model:
-                retry_response = await litellm.acompletion(
+            if model and llm_router is not None:
+                retry_response = await llm_router.acompletion(
                     model=model,
                     messages=data["messages"],
                 )
