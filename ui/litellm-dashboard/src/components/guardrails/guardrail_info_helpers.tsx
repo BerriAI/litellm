@@ -16,6 +16,7 @@ export const populateGuardrailProviders = (providerParamsResponse: Record<string
   providers.PresidioPII = "Presidio PII";
   providers.Bedrock = "Bedrock Guardrail";
   providers.Lakera = "Lakera";
+  providers.LlmAsAJudge = "LLM as a Judge";
 
   // Add dynamic providers from API response
   Object.entries(providerParamsResponse).forEach(([key, value]) => {
@@ -49,6 +50,7 @@ export const guardrail_provider_map: Record<string, string> = {
   ToolPermission: "tool_permission",
   BlockCodeExecution: "block_code_execution",
   Promptguard: "promptguard",
+  LlmAsAJudge: "llm_as_a_judge",
 };
 
 // Function to populate provider map from API response - updates the original map
@@ -101,6 +103,11 @@ export const shouldRenderContentFilterConfigSettings = (provider: string | null)
   const currentProviders = getGuardrailProviders();
   const providerEnum = currentProviders[provider as keyof typeof currentProviders];
   return providerEnum === "LiteLLM Content Filter";
+};
+
+export const shouldRenderLLMJudgeFields = (provider: string | null) => {
+  if (!provider) return false;
+  return guardrail_provider_map[provider] === "llm_as_a_judge";
 };
 
 const asset_logos_folder = "../ui/assets/logos/";
