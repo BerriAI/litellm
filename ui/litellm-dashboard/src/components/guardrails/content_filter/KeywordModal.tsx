@@ -1,8 +1,22 @@
 import React from "react";
-import { Typography, Select, Modal, Space, Button, Input } from "antd";
-
-const { Text } = Typography;
-const { Option } = Select;
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Textarea } from "@/components/ui/textarea";
 
 interface KeywordModalProps {
   visible: boolean;
@@ -28,62 +42,65 @@ const KeywordModal: React.FC<KeywordModalProps> = ({
   onCancel,
 }) => {
   return (
-    <Modal
-      title="Add blocked keyword"
+    <Dialog
       open={visible}
-      onCancel={onCancel}
-      footer={null}
-      width={800}
+      onOpenChange={(o) => (!o ? onCancel() : undefined)}
     >
-      <Space direction="vertical" style={{ width: "100%" }} size="large">
-        <div>
-          <Text strong>Keyword</Text>
-          <Input
-            placeholder="Enter sensitive keyword or phrase"
-            value={keyword}
-            onChange={(e) => onKeywordChange(e.target.value)}
-            style={{ marginTop: 8 }}
-          />
-        </div>
+      <DialogContent className="max-w-[800px]">
+        <DialogHeader>
+          <DialogTitle>Add blocked keyword</DialogTitle>
+        </DialogHeader>
+        <div className="flex flex-col gap-6">
+          <div>
+            <Label className="font-bold">Keyword</Label>
+            <Input
+              placeholder="Enter sensitive keyword or phrase"
+              value={keyword}
+              onChange={(e) => onKeywordChange(e.target.value)}
+              className="mt-2"
+            />
+          </div>
 
-        <div>
-          <Text strong>Action</Text>
-          <Text type="secondary" style={{ display: "block", marginTop: 4, marginBottom: 8 }}>
-            Choose what action the guardrail should take when this keyword is detected
-          </Text>
-          <Select
-            value={action}
-            onChange={onActionChange}
-            style={{ width: "100%" }}
-          >
-            <Option value="BLOCK">Block</Option>
-            <Option value="MASK">Mask</Option>
-          </Select>
-        </div>
+          <div>
+            <Label className="font-bold">Action</Label>
+            <p className="text-sm text-muted-foreground mt-1 mb-2">
+              Choose what action the guardrail should take when this keyword is
+              detected
+            </p>
+            <Select
+              value={action}
+              onValueChange={(v) => onActionChange(v as "BLOCK" | "MASK")}
+            >
+              <SelectTrigger className="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="BLOCK">Block</SelectItem>
+                <SelectItem value="MASK">Mask</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
 
-        <div>
-          <Text strong>Description (optional)</Text>
-          <Input.TextArea
-            placeholder="Explain why this keyword is sensitive"
-            value={description}
-            onChange={(e) => onDescriptionChange(e.target.value)}
-            rows={3}
-            style={{ marginTop: 8 }}
-          />
+          <div>
+            <Label className="font-bold">Description (optional)</Label>
+            <Textarea
+              placeholder="Explain why this keyword is sensitive"
+              value={description}
+              onChange={(e) => onDescriptionChange(e.target.value)}
+              rows={3}
+              className="mt-2"
+            />
+          </div>
         </div>
-      </Space>
-
-      <div style={{ display: "flex", justifyContent: "flex-end", gap: "8px", marginTop: "24px" }}>
-        <Button onClick={onCancel}>
-          Cancel
-        </Button>
-        <Button type="primary" onClick={onAdd}>
-          Add
-        </Button>
-      </div>
-    </Modal>
+        <DialogFooter>
+          <Button variant="outline" onClick={onCancel}>
+            Cancel
+          </Button>
+          <Button onClick={onAdd}>Add</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 };
 
 export default KeywordModal;
-

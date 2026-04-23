@@ -1,9 +1,21 @@
-import { DeleteOutlined } from "@ant-design/icons";
-import { Button, Select, Table, Typography } from "antd";
+import { Trash2 } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import React from "react";
-
-const { Text } = Typography;
-const { Option } = Select;
 
 interface BlockedWord {
   id: string;
@@ -14,6 +26,7 @@ interface BlockedWord {
 
 interface KeywordTableProps {
   keywords: BlockedWord[];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   onActionChange: (id: string, field: string, value: any) => void;
   onRemove: (id: string) => void;
 }
@@ -23,71 +36,61 @@ const KeywordTable: React.FC<KeywordTableProps> = ({
   onActionChange,
   onRemove,
 }) => {
-  const columns = [
-    {
-      title: "Keyword",
-      dataIndex: "keyword",
-      key: "keyword",
-    },
-    {
-      title: "Action",
-      dataIndex: "action",
-      key: "action",
-      width: 150,
-      render: (action: string, record: BlockedWord) => (
-        <Select
-          value={action}
-          onChange={(value) => onActionChange(record.id, "action", value)}
-          style={{ width: 120 }}
-          size="small"
-        >
-          <Option value="BLOCK">Block</Option>
-          <Option value="MASK">Mask</Option>
-        </Select>
-      ),
-    },
-    {
-      title: "Description",
-      dataIndex: "description",
-      key: "description",
-      render: (desc: string) => desc || "-",
-    },
-    {
-      title: "",
-      key: "actions",
-      width: 100,
-      render: (_: any, record: BlockedWord) => (
-        <Button
-          type="text"
-          danger
-          size="small"
-          icon={<DeleteOutlined />}
-          onClick={() => onRemove(record.id)}
-        >
-          Delete
-        </Button>
-      ),
-    },
-  ];
-
   if (keywords.length === 0) {
     return (
-      <div style={{ textAlign: "center", padding: "40px 0", color: "#999" }}>
+      <div className="text-center py-10 text-muted-foreground">
         No keywords added.
       </div>
     );
   }
 
   return (
-    <Table
-      dataSource={keywords}
-      columns={columns}
-      rowKey="id"
-      pagination={false}
-      size="small"
-    />
+    <div className="border border-border rounded-md overflow-hidden">
+      <Table>
+        <TableHeader>
+          <TableRow>
+            <TableHead>Keyword</TableHead>
+            <TableHead className="w-[150px]">Action</TableHead>
+            <TableHead>Description</TableHead>
+            <TableHead className="w-[100px]" />
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {keywords.map((record) => (
+            <TableRow key={record.id}>
+              <TableCell>{record.keyword}</TableCell>
+              <TableCell>
+                <Select
+                  value={record.action}
+                  onValueChange={(v) => onActionChange(record.id, "action", v)}
+                >
+                  <SelectTrigger className="w-[120px] h-8">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="BLOCK">Block</SelectItem>
+                    <SelectItem value="MASK">Mask</SelectItem>
+                  </SelectContent>
+                </Select>
+              </TableCell>
+              <TableCell>{record.description || "-"}</TableCell>
+              <TableCell>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="text-destructive hover:text-destructive hover:bg-destructive/10"
+                  onClick={() => onRemove(record.id)}
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                  Delete
+                </Button>
+              </TableCell>
+            </TableRow>
+          ))}
+        </TableBody>
+      </Table>
+    </div>
   );
 };
 
 export default KeywordTable;
-
