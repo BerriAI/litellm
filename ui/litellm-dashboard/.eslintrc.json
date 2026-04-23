@@ -69,6 +69,7 @@
         "src/components/vector_store_management/S3VectorsConfig.tsx",
         "src/components/mcp_tools/mcp_server_cost_config.tsx",
         "src/components/view_logs/GuardrailViewer/CompliancePanel.tsx",
+        "src/components/view_logs/LogDetailsDrawer/DrawerHeader.tsx",
         "src/components/prompts/prompt_editor_view/PromptEditorHeader.tsx",
         "src/components/prompts/prompt_editor_view/VersionHistorySidePanel.tsx",
         "src/app/(dashboard)/teams/components/TeamsTable/ModelsCell.tsx",

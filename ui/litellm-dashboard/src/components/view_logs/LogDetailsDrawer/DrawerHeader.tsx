@@ -1,5 +1,14 @@
-import { Button, Space, Tag, Tooltip, Typography } from "antd";
-import { CloseOutlined, UpOutlined, DownOutlined } from "@ant-design/icons";
+import React, { useState } from "react";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import { cn } from "@/lib/utils";
+import { Check, ChevronDown, ChevronUp, Copy, X } from "lucide-react";
 import moment from "moment";
 import { LogEntry } from "../columns";
 import { getProviderLogoAndName } from "../../provider_info_helpers";
@@ -8,14 +17,10 @@ import {
   COLOR_BORDER,
   COLOR_BACKGROUND,
   SPACING_MEDIUM,
-  SPACING_LARGE,
   FONT_SIZE_HEADER,
   FONT_SIZE_MEDIUM,
   FONT_FAMILY_MONO,
-  SPACING_SMALL,
 } from "./constants";
-
-const { Text } = Typography;
 
 interface DrawerHeaderProps {
   log: LogEntry;
@@ -27,10 +32,6 @@ interface DrawerHeaderProps {
   environment: string;
 }
 
-/**
- * Header component for the log details drawer.
- * Displays model/provider, request ID, navigation controls, status, environment, and timestamp.
- */
 export function DrawerHeader({
   log,
   onClose,
@@ -45,33 +46,41 @@ export function DrawerHeader({
 
   return (
     <div
+      className="sticky top-0 z-10 border-b"
       style={{
         padding: DRAWER_HEADER_PADDING,
-        borderBottom: `1px solid ${COLOR_BORDER}`,
+        borderBottomColor: COLOR_BORDER,
         backgroundColor: COLOR_BACKGROUND,
-        position: "sticky",
-        top: 0,
-        zIndex: 10,
       }}
     >
-      {/* Row 0: Model + Provider with Logo */}
-      <ModelProviderSection model={log.model} providerLogo={providerInfo?.logo} providerName={providerInfo?.displayName} />
+      <ModelProviderSection
+        model={log.model}
+        providerLogo={providerInfo?.logo}
+        providerName={providerInfo?.displayName}
+      />
 
-      {/* Row 1: Request ID + Actions */}
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: SPACING_MEDIUM }}>
+      <div
+        className="flex items-center justify-between"
+        style={{ marginBottom: SPACING_MEDIUM }}
+      >
         <RequestIdSection requestId={log.request_id} />
-        <NavigationSection onPrevious={onPrevious} onNext={onNext} onClose={onClose} />
+        <NavigationSection
+          onPrevious={onPrevious}
+          onNext={onNext}
+          onClose={onClose}
+        />
       </div>
 
-      {/* Row 2: Status + Env + Timestamp */}
-      <StatusBar log={log} statusLabel={statusLabel} statusColor={statusColor} environment={environment} />
+      <StatusBar
+        log={log}
+        statusLabel={statusLabel}
+        statusColor={statusColor}
+        environment={environment}
+      />
     </div>
   );
 }
 
-/**
- * Model and Provider display with logo
- */
 function ModelProviderSection({
   model,
   providerLogo,
@@ -82,62 +91,85 @@ function ModelProviderSection({
   providerName?: string;
 }) {
   return (
-    <Space size={SPACING_MEDIUM} style={{ marginBottom: SPACING_MEDIUM }}>
+    <div className="flex items-center gap-3 mb-3">
       {providerLogo && (
+        // eslint-disable-next-line @next/next/no-img-element
         <img
           src={providerLogo}
           alt={providerName || "Provider"}
-          style={{ width: 24, height: 24 }}
+          className="w-6 h-6"
           onError={(e) => {
             const target = e.target as HTMLImageElement;
             target.style.display = "none";
           }}
         />
       )}
-      <Space size={SPACING_MEDIUM} direction="horizontal">
-        <Text strong style={{ fontSize: 14 }}>
-          {model}
-        </Text>
+      <div className="flex items-center gap-3">
+        <span className="font-bold text-sm">{model}</span>
         {providerName && (
-          <Text type="secondary" style={{ fontSize: 12 }}>
-            {providerName}
-          </Text>
+          <span className="text-xs text-muted-foreground">{providerName}</span>
         )}
-      </Space>
-    </Space>
-  );
-}
-
-/**
- * Request ID display with copy functionality
- */
-function RequestIdSection({ requestId }: { requestId: string }) {
-  return (
-    <div style={{ flex: 1, minWidth: 0 }}>
-      <Tooltip title={requestId}>
-        <Text
-          strong
-          copyable={{ text: requestId, tooltips: ["Copy Request ID", "Copied!"] }}
-          style={{
-            fontSize: FONT_SIZE_HEADER,
-            fontFamily: FONT_FAMILY_MONO,
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            whiteSpace: "nowrap",
-            display: "block",
-          }}
-        >
-          {requestId}
-        </Text>
-      </Tooltip>
+      </div>
     </div>
   );
 }
 
-/**
- * Navigation controls (previous, next, close)
- * Shows keyboard shortcuts with bounding boxes for visibility
- */
+function RequestIdSection({ requestId }: { requestId: string }) {
+  const [copied, setCopied] = useState(false);
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(requestId);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    } catch (_err) {
+      /* noop */
+    }
+  };
+
+  return (
+    <div className="flex-1 min-w-0 flex items-center gap-1">
+      <TooltipProvider>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span
+              className="block overflow-hidden text-ellipsis whitespace-nowrap font-bold"
+              style={{
+                fontSize: FONT_SIZE_HEADER,
+                fontFamily: FONT_FAMILY_MONO,
+              }}
+            >
+              {requestId}
+            </span>
+          </TooltipTrigger>
+          <TooltipContent>{requestId}</TooltipContent>
+        </Tooltip>
+      </TooltipProvider>
+      <TooltipProvider>
+        <Tooltip open={copied || undefined}>
+          <TooltipTrigger asChild>
+            <button
+              type="button"
+              onClick={handleCopy}
+              className="text-muted-foreground hover:text-foreground shrink-0"
+              aria-label="Copy Request ID"
+            >
+              {copied ? (
+                <Check className="h-3 w-3 text-emerald-500" />
+              ) : (
+                <Copy className="h-3 w-3" />
+              )}
+            </button>
+          </TooltipTrigger>
+          <TooltipContent>
+            {copied ? "Copied!" : "Copy Request ID"}
+          </TooltipContent>
+        </Tooltip>
+      </TooltipProvider>
+    </div>
+  );
+}
+
 function NavigationSection({
   onPrevious,
   onNext,
@@ -147,36 +179,48 @@ function NavigationSection({
   onNext: () => void;
   onClose: () => void;
 }) {
-  const keyboardShortcutStyle = {
-    border: "1px solid #d9d9d9",
-    borderRadius: 4,
-    padding: "0 4px",
-    fontSize: 12,
-    fontFamily: "monospace",
-    marginLeft: 4,
-    background: "#fafafa",
-  };
+  const KeyHint = ({ children }: { children: React.ReactNode }) => (
+    <span className="border border-border rounded px-1 text-xs font-mono ml-1 bg-muted">
+      {children}
+    </span>
+  );
 
   return (
-    <Space size={SPACING_SMALL} split={<div style={{ width: 1, height: 20, background: COLOR_BORDER }} />}>
-      <Button type="text" size="small" onClick={onPrevious}>
-        <UpOutlined />
-        <span style={keyboardShortcutStyle}>K</span>
-      </Button>
-      <Button type="text" size="small" onClick={onNext}>
-        <DownOutlined />
-        <span style={keyboardShortcutStyle}>J</span>
-      </Button>
-      <Tooltip title="ESC to close">
-        <Button type="text" icon={<CloseOutlined />} onClick={onClose} />
-      </Tooltip>
-    </Space>
+    <div className="flex items-center gap-1 divide-x divide-border">
+      <div className="flex items-center gap-1 pr-1">
+        <Button variant="ghost" size="sm" onClick={onPrevious}>
+          <ChevronUp className="h-3.5 w-3.5" />
+          <KeyHint>K</KeyHint>
+        </Button>
+      </div>
+      <div className="flex items-center gap-1 px-1">
+        <Button variant="ghost" size="sm" onClick={onNext}>
+          <ChevronDown className="h-3.5 w-3.5" />
+          <KeyHint>J</KeyHint>
+        </Button>
+      </div>
+      <div className="flex items-center gap-1 pl-1">
+        <TooltipProvider>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={onClose}
+                className="h-7 w-7"
+                aria-label="Close"
+              >
+                <X className="h-4 w-4" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>ESC to close</TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
+      </div>
+    </div>
   );
 }
 
-/**
- * Status bar with tags and timestamp
- */
 function StatusBar({
   log,
   statusLabel,
@@ -189,17 +233,31 @@ function StatusBar({
   environment: string;
 }) {
   return (
-    <Space size={SPACING_LARGE}>
-      <Tag color={statusColor}>{statusLabel}</Tag>
-      <Tag>Env: {environment}</Tag>
-      <Space size={SPACING_MEDIUM}>
-        <Text type="secondary" style={{ fontSize: FONT_SIZE_MEDIUM }}>
+    <div className="flex items-center gap-4">
+      <Badge
+        className={cn(
+          statusColor === "error"
+            ? "bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300"
+            : "bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300",
+        )}
+      >
+        {statusLabel}
+      </Badge>
+      <Badge variant="secondary">Env: {environment}</Badge>
+      <div className="flex items-center gap-3">
+        <span
+          className="text-muted-foreground"
+          style={{ fontSize: FONT_SIZE_MEDIUM }}
+        >
           {moment(log.startTime).format("MMM D, YYYY h:mm:ss A")}
-        </Text>
-        <Text type="secondary" style={{ fontSize: FONT_SIZE_MEDIUM }}>
+        </span>
+        <span
+          className="text-muted-foreground"
+          style={{ fontSize: FONT_SIZE_MEDIUM }}
+        >
           ({moment(log.startTime).fromNow()})
-        </Text>
-      </Space>
-    </Space>
+        </span>
+      </div>
+    </div>
   );
 }
