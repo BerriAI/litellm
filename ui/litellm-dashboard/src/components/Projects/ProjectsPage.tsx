@@ -1,32 +1,33 @@
-import { useProjects, ProjectResponse } from "@/app/(dashboard)/hooks/projects/useProjects";
-import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
-import { LoadingOutlined, PlusOutlined } from "@ant-design/icons";
 import {
-  Button,
-  Card,
-  Flex,
-  Input,
-  Layout,
-  Pagination,
-  Space,
-  Spin,
-  Table,
-  Tag,
-  theme,
+  useProjects,
+  ProjectResponse,
+} from "@/app/(dashboard)/hooks/projects/useProjects";
+import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import {
   Tooltip,
-  Typography,
-} from "antd";
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import { Table } from "antd";
 import type { ColumnsType } from "antd/es/table";
-import { LayersIcon, SearchIcon } from "lucide-react";
+import {
+  ChevronLeft,
+  ChevronRight,
+  Layers,
+  Loader2,
+  Plus,
+  Search,
+} from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { CreateProjectModal } from "./ProjectModals/CreateProjectModal";
 import { ProjectDetail } from "./ProjectDetailsPage";
 
-const { Title, Text } = Typography;
-const { Content } = Layout;
-
 export function ProjectsPage() {
-  const { token } = theme.useToken();
   const { data: projects, isLoading } = useProjects();
   const { data: teams, isLoading: isTeamsLoading } = useTeams();
 
@@ -73,16 +74,19 @@ export function ProjectsPage() {
       key: "project_id",
       width: 170,
       render: (id: string) => (
-        <Tooltip title={id}>
-          <Text
-            ellipsis
-            className="text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs cursor-pointer"
-            style={{ fontSize: 14, padding: "1px 8px" }}
-            onClick={() => setSelectedProjectId(id)}
-          >
-            {id}
-          </Text>
-        </Tooltip>
+        <TooltipProvider>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span
+                onClick={() => setSelectedProjectId(id)}
+                className="text-blue-500 bg-blue-50 hover:bg-blue-100 dark:bg-blue-950/30 dark:hover:bg-blue-950/60 text-sm cursor-pointer px-2 py-0.5 rounded inline-block truncate max-w-[160px]"
+              >
+                {id}
+              </span>
+            </TooltipTrigger>
+            <TooltipContent>{id}</TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
       ),
     },
     {
@@ -104,7 +108,8 @@ export function ProjectsPage() {
         if (!record.team_id) return "—";
         const alias = teamAliasMap.get(record.team_id);
         if (alias) return alias;
-        if (isTeamsLoading) return <Spin indicator={<LoadingOutlined spin />} size="small" />;
+        if (isTeamsLoading)
+          return <Loader2 className="h-3.5 w-3.5 animate-spin" />;
         return record.team_id;
       },
     },
@@ -114,14 +119,19 @@ export function ProjectsPage() {
       render: (_: unknown, record: ProjectResponse) => {
         const models = record.models ?? [];
         return (
-          <Tooltip title={models.length > 0 ? models.join(", ") : "No models"}>
-            <Tag color="blue" style={{ fontSize: 14, padding: "2px 8px", margin: 0 }}>
-              <Flex align="center" gap={6}>
-                <LayersIcon size={14} />
-                {models.length}
-              </Flex>
-            </Tag>
-          </Tooltip>
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Badge className="bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300 gap-1.5">
+                  <Layers className="h-3.5 w-3.5" />
+                  {models.length}
+                </Badge>
+              </TooltipTrigger>
+              <TooltipContent>
+                {models.length > 0 ? models.join(", ") : "No models"}
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
         );
       },
     },
@@ -130,9 +140,15 @@ export function ProjectsPage() {
       dataIndex: "blocked",
       key: "status",
       render: (blocked: boolean) => (
-        <Tag color={blocked ? "red" : "green"}>
+        <Badge
+          className={
+            blocked
+              ? "bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300"
+              : "bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300"
+          }
+        >
           {blocked ? "Blocked" : "Active"}
-        </Tag>
+        </Badge>
       ),
     },
     {
@@ -161,59 +177,69 @@ export function ProjectsPage() {
     );
   }
 
+  const totalPages = Math.max(1, Math.ceil(filteredProjects.length / pageSize));
+
   return (
-    <Content
-      style={{ padding: token.paddingLG, paddingInline: token.paddingLG * 2 }}
-    >
-      <Flex
-        justify="space-between"
-        align="center"
-        style={{ marginBottom: 16 }}
-      >
-        <Space direction="vertical" size={0}>
-          <Title level={2} style={{ margin: 0 }}>
-            Projects
-          </Title>
-          <Text type="secondary">
+    <main className="p-6 md:px-12">
+      <div className="flex justify-between items-center mb-4">
+        <div className="flex flex-col">
+          <h2 className="text-2xl font-semibold m-0">Projects</h2>
+          <p className="text-muted-foreground">
             Manage projects within your teams
-          </Text>
-        </Space>
-        <Button
-          type="primary"
-          icon={<PlusOutlined />}
-          onClick={() => setIsCreateModalVisible(true)}
-        >
+          </p>
+        </div>
+        <Button onClick={() => setIsCreateModalVisible(true)}>
+          <Plus className="h-4 w-4" />
           Create Project
         </Button>
-      </Flex>
+      </div>
 
-      <Card styles={{ body: { padding: 0 } }}>
-        <Flex
-          justify="space-between"
-          align="center"
-          style={{ padding: "12px 16px" }}
-        >
-          <Input
-            prefix={<SearchIcon size={16} />}
-            placeholder="Search projects by name, ID, description, or team..."
-            style={{ maxWidth: 400 }}
-            value={searchText}
-            onChange={(e) => setSearchText(e.target.value)}
-            allowClear
-          />
-          <Pagination
-            current={currentPage}
-            total={filteredProjects.length}
-            pageSize={pageSize}
-            onChange={(page) => setCurrentPage(page)}
-            size="small"
-            showTotal={(total) => `${total} projects`}
-            showSizeChanger={false}
-          />
-        </Flex>
+      <Card className="p-0">
+        <div className="flex justify-between items-center px-4 py-3">
+          <div className="relative max-w-[400px] w-full">
+            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
+            <Input
+              placeholder="Search projects by name, ID, description, or team..."
+              className="pl-8"
+              value={searchText}
+              onChange={(e) => setSearchText(e.target.value)}
+            />
+          </div>
+          <div className="flex items-center gap-1 text-sm">
+            <span className="text-muted-foreground">
+              {filteredProjects.length} projects
+            </span>
+            <Button
+              size="icon"
+              variant="ghost"
+              className="h-6 w-6"
+              disabled={currentPage <= 1}
+              onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+              aria-label="Previous page"
+            >
+              <ChevronLeft className="h-4 w-4" />
+            </Button>
+            <span className="text-muted-foreground">
+              {currentPage}/{totalPages}
+            </span>
+            <Button
+              size="icon"
+              variant="ghost"
+              className="h-6 w-6"
+              disabled={currentPage >= totalPages}
+              onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+              aria-label="Next page"
+            >
+              <ChevronRight className="h-4 w-4" />
+            </Button>
+          </div>
+        </div>
         <Table
           columns={columns}
-          dataSource={filteredProjects.slice((currentPage - 1) * pageSize, currentPage * pageSize)}
+          dataSource={filteredProjects.slice(
+            (currentPage - 1) * pageSize,
+            currentPage * pageSize,
+          )}
           rowKey="project_id"
           loading={isLoading}
           pagination={false}
@@ -224,6 +250,6 @@ export function ProjectsPage() {
         isOpen={isCreateModalVisible}
         onClose={() => setIsCreateModalVisible(false)}
       />
-    </Content>
+    </main>
   );
 }
