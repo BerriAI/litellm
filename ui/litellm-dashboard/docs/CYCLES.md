@@ -23,5 +23,16 @@ Layer abbreviations: **TS** (tsc --noEmit), **Lint** (eslint), **Vitest**
 
 ## 2. Virtual Keys (api-keys)
 
-_(pending)_
+- Cycles used: 1 / 7
+- Layer outcomes per cycle:
+  - cycle 1: TS ✓ | Lint ✓ | Vitest ✓ (44/44) | Parity ⏭ | Snap ⏭
+- Final status: **done (scoped to VirtualKeysTable + BudgetWindowsEditor)**
+- Section scope: only the files directly under `src/components/VirtualKeysPage/` and
+  `src/components/key_team_helpers/` that imported banned libs. Heavier key-related
+  sub-components (e.g. `templates/key_info_view`, `organisms/create_key_button`,
+  `KeyAliasSelect/*`, `DeletedKeysPage/*`) are outside this section's file set and
+  will be picked up by either their own future sections or the final chrome sweep.
+- Blueprint stress-test outcome: no new patterns required. The existing blueprint
+  (Table + @tanstack/react-table, Popover, Tooltip, Badge variants, Skeleton) covered
+  every antd / @tremor / @heroicons import encountered.
 
