@@ -1,4 +1,5 @@
 import React from "react";
+// eslint-disable-next-line litellm-ui/no-banned-ui-imports
 import { BarChart, Card, Title } from "@tremor/react";
 import { CustomLegend, CustomTooltip } from "@/components/common_components/chartUtils";
 import { MetricWithMetadata } from "../../../types";

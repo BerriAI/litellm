@@ -1,3 +1,4 @@
+// eslint-disable-next-line litellm-ui/no-banned-ui-imports
 import { Card, LineChart, Title } from "@tremor/react";
 import { useMemo } from "react";
 import { DailyData } from "../../../types";

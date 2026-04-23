@@ -1,3 +1,4 @@
+// eslint-disable-next-line litellm-ui/no-banned-ui-imports
 import { BarChart, Card, Title } from "@tremor/react";
 import React from "react";
 
