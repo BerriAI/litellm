@@ -1,6 +1,6 @@
 "use client";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
-import { ChevronDownIcon, ChevronUpIcon, SwitchVerticalIcon } from "@heroicons/react/outline";
+import { ArrowUpDown, ChevronDown, ChevronUp } from "lucide-react";
 import {
   ColumnDef,
   flexRender,
@@ -11,6 +11,7 @@ import {
   SortingState,
   useReactTable,
 } from "@tanstack/react-table";
+// eslint-disable-next-line litellm-ui/no-banned-ui-imports
 import {
   Table,
   TableBody,
@@ -19,9 +20,31 @@ import {
   TableHeaderCell,
   TableRow,
 } from "@tremor/react";
-import { Tooltip } from "antd";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import React, { useState } from "react";
 import { KeyResponse } from "../../key_team_helpers/key_list";
+
+const TipSpan: React.FC<{
+  value: string | null | undefined;
+  className: string;
+}> = ({ value, className }) => {
+  if (!value) return <span className={className}>-</span>;
+  return (
+    <TooltipProvider>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <span className={className}>{value}</span>
+        </TooltipTrigger>
+        <TooltipContent>{value}</TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
+  );
+};
 
 interface DeletedKeysTableProps {
   keys: KeyResponse[];
@@ -66,16 +89,12 @@ export function DeletedKeysTable({
       header: "Key ID",
       size: 150,
       maxSize: 250,
-      cell: (info) => {
-        const value = info.getValue() as string;
-        return (
-          <Tooltip title={value}>
-            <span className="font-mono text-blue-500 text-xs truncate block max-w-[250px]">
-              {value || "-"}
-            </span>
-          </Tooltip>
-        );
-      },
+      cell: (info) => (
+        <TipSpan
+          value={info.getValue() as string}
+          className="font-mono text-blue-500 text-xs truncate block max-w-[250px]"
+        />
+      ),
     },
     {
       id: "key_alias",
@@ -83,16 +102,12 @@ export function DeletedKeysTable({
       header: "Key Alias",
       size: 150,
       maxSize: 200,
-      cell: (info) => {
-        const value = info.getValue() as string;
-        return (
-          <Tooltip title={value}>
-            <span className="font-mono text-xs truncate block max-w-[200px]">
-              {value ?? "-"}
-            </span>
-          </Tooltip>
-        );
-      },
+      cell: (info) => (
+        <TipSpan
+          value={info.getValue() as string}
+          className="font-mono text-xs truncate block max-w-[200px]"
+        />
+      ),
     },
     {
       id: "team_alias",
@@ -142,16 +157,12 @@ export function DeletedKeysTable({
       header: "User Email",
       size: 160,
       maxSize: 250,
-      cell: (info) => {
-        const value = info.getValue() as string;
-        return (
-          <Tooltip title={value}>
-            <span className="font-mono text-xs truncate block max-w-[250px]">
-              {value ?? "-"}
-            </span>
-          </Tooltip>
-        );
-      },
+      cell: (info) => (
+        <TipSpan
+          value={info.getValue() as string}
+          className="font-mono text-xs truncate block max-w-[250px]"
+        />
+      ),
     },
     {
       id: "user_id",
@@ -159,16 +170,12 @@ export function DeletedKeysTable({
       header: "User ID",
       size: 120,
       maxSize: 200,
-      cell: (info) => {
-        const userId = info.getValue() as string | null;
-        return (
-          <Tooltip title={userId || undefined}>
-            <span className="truncate block max-w-[200px]">
-              {userId || "-"}
-            </span>
-          </Tooltip>
-        );
-      },
+      cell: (info) => (
+        <TipSpan
+          value={info.getValue() as string | null}
+          className="truncate block max-w-[200px]"
+        />
+      ),
     },
     {
       id: "created_at",
@@ -192,13 +199,13 @@ export function DeletedKeysTable({
       size: 120,
       maxSize: 180,
       cell: (info) => {
-        const value = (info.row.original as any).created_by as string | null | undefined;
+        const value = (info.row.original as { created_by?: string | null })
+          .created_by;
         return (
-          <Tooltip title={value || undefined}>
-            <span className="truncate block max-w-[180px]">
-              {value || "-"}
-            </span>
-          </Tooltip>
+          <TipSpan
+            value={value}
+            className="truncate block max-w-[180px]"
+          />
         );
       },
     },
@@ -209,7 +216,8 @@ export function DeletedKeysTable({
       size: 120,
       maxSize: 140,
       cell: (info) => {
-        const value = (info.row.original as any).deleted_at as string | null | undefined;
+        const value = (info.row.original as { deleted_at?: string | null })
+          .deleted_at;
         return (
           <span className="block max-w-[140px]">
             {value ? new Date(value).toLocaleDateString() : "-"}
@@ -224,13 +232,13 @@ export function DeletedKeysTable({
       size: 120,
       maxSize: 180,
       cell: (info) => {
-        const value = (info.row.original as any).deleted_by as string | null | undefined;
+        const value = (info.row.original as { deleted_by?: string | null })
+          .deleted_by;
         return (
-          <Tooltip title={value || undefined}>
-            <span className="truncate block max-w-[180px]">
-              {value || "-"}
-            </span>
-          </Tooltip>
+          <TipSpan
+            value={value}
+            className="truncate block max-w-[180px]"
+          />
         );
       },
     },
@@ -270,34 +278,38 @@ export function DeletedKeysTable({
       <div className="border-b py-4 flex-1 overflow-hidden">
         <div className="flex items-center justify-between w-full mb-4">
           {isLoading || isFetching ? (
-            <span className="inline-flex text-sm text-gray-700">Loading...</span>
+            <span className="inline-flex text-sm text-foreground">
+              Loading...
+            </span>
           ) : (
-            <span className="inline-flex text-sm text-gray-700">
+            <span className="inline-flex text-sm text-foreground">
               Showing {rangeLabel} of {totalCount} results
             </span>
           )}
 
           <div className="inline-flex items-center gap-2">
             {isLoading || isFetching ? (
-              <span className="text-sm text-gray-700">Loading...</span>
+              <span className="text-sm text-foreground">Loading...</span>
             ) : (
-              <span className="text-sm text-gray-700">
+              <span className="text-sm text-foreground">
                 Page {currentPageIndex + 1} of {table.getPageCount()}
               </span>
             )}
 
             <button
+              type="button"
               onClick={() => table.previousPage()}
               disabled={isLoading || isFetching || !table.getCanPreviousPage()}
-              className="px-3 py-1 text-sm border rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+              className="px-3 py-1 text-sm border border-border rounded-md hover:bg-muted disabled:opacity-50 disabled:cursor-not-allowed"
             >
               Previous
             </button>
 
             <button
+              type="button"
               onClick={() => table.nextPage()}
               disabled={isLoading || isFetching || !table.getCanNextPage()}
-              className="px-3 py-1 text-sm border rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+              className="px-3 py-1 text-sm border border-border rounded-md hover:bg-muted disabled:opacity-50 disabled:cursor-not-allowed"
             >
               Next
             </button>
@@ -314,7 +326,7 @@ export function DeletedKeysTable({
                         <TableHeaderCell
                           key={header.id}
                           data-header-id={header.id}
-                          className={`py-1 h-8 relative hover:bg-gray-50`}
+                          className="py-1 h-8 relative hover:bg-muted"
                           style={{
                             width: header.getSize(),
                             maxWidth: header.column.columnDef.maxSize,
@@ -343,11 +355,15 @@ export function DeletedKeysTable({
                             <div className="w-4">
                               {header.column.getIsSorted() ? (
                                 {
-                                  asc: <ChevronUpIcon className="h-4 w-4 text-blue-500" />,
-                                  desc: <ChevronDownIcon className="h-4 w-4 text-blue-500" />,
+                                  asc: (
+                                    <ChevronUp className="h-4 w-4 text-primary" />
+                                  ),
+                                  desc: (
+                                    <ChevronDown className="h-4 w-4 text-primary" />
+                                  ),
                                 }[header.column.getIsSorted() as string]
                               ) : (
-                                <SwitchVerticalIcon className="h-4 w-4 text-gray-400" />
+                                <ArrowUpDown className="h-4 w-4 text-muted-foreground" />
                               )}
                             </div>
                             <div
@@ -377,8 +393,11 @@ export function DeletedKeysTable({
                 <TableBody>
                   {isLoading || isFetching ? (
                     <TableRow>
-                      <TableCell colSpan={columns.length} className="h-8 text-center">
-                        <div className="text-center text-gray-500">
+                      <TableCell
+                        colSpan={columns.length}
+                        className="h-8 text-center"
+                      >
+                        <div className="text-center text-muted-foreground">
                           <p>🚅 Loading keys...</p>
                         </div>
                       </TableCell>
@@ -404,8 +423,11 @@ export function DeletedKeysTable({
                     ))
                   ) : (
                     <TableRow>
-                      <TableCell colSpan={columns.length} className="h-8 text-center">
-                        <div className="text-center text-gray-500">
+                      <TableCell
+                        colSpan={columns.length}
+                        className="h-8 text-center"
+                      >
+                        <div className="text-center text-muted-foreground">
                           <p>No deleted keys found</p>
                         </div>
                       </TableCell>
