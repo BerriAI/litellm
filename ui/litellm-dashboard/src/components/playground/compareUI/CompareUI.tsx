@@ -1,7 +1,7 @@
 "use client";
 
 import NotificationsManager from "@/components/molecules/notifications_manager";
-import { ClearOutlined, DeleteOutlined, FilePdfOutlined, PlusOutlined } from "@ant-design/icons";
+import { Eraser as ClearOutlined, Trash2 as DeleteOutlined, FileText as FilePdfOutlined, Plus as PlusOutlined } from "lucide-react";
 import { Button, Input, Select, Tooltip } from "antd";
 import { useEffect, useMemo, useState } from "react";
 import { v4 as uuidv4 } from "uuid";

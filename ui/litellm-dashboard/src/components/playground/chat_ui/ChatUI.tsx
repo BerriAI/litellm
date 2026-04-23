@@ -1,26 +1,6 @@
 "use client";
 
-import {
-  ApiOutlined,
-  ArrowUpOutlined,
-  ClearOutlined,
-  CodeOutlined,
-  DatabaseOutlined,
-  DeleteOutlined,
-  FilePdfOutlined,
-  InfoCircleOutlined,
-  KeyOutlined,
-  LinkOutlined,
-  LoadingOutlined,
-  PictureOutlined,
-  RobotOutlined,
-  SafetyOutlined,
-  SettingOutlined,
-  SoundOutlined,
-  TagsOutlined,
-  ToolOutlined,
-  UserOutlined,
-} from "@ant-design/icons";
+import { Plug as ApiOutlined, ArrowUp as ArrowUpOutlined, Eraser as ClearOutlined, Code as CodeOutlined, Database as DatabaseOutlined, Trash2 as DeleteOutlined, FileText as FilePdfOutlined, Info as InfoCircleOutlined, Key as KeyOutlined, Link as LinkOutlined, Loader2 as LoadingOutlined, Image as PictureOutlined, Bot as RobotOutlined, ShieldCheck as SafetyOutlined, Settings as SettingOutlined, Volume2 as SoundOutlined, Tags as TagsOutlined, Wrench as ToolOutlined, User as UserOutlined } from "lucide-react";
 // eslint-disable-next-line litellm-ui/no-banned-ui-imports
 import { Card, Text, TextInput, Title, Button as TremorButton } from "@tremor/react";
 import { Button, Input, Modal, Popover, Select, Spin, Tooltip, Typography, Upload } from "antd";
@@ -1037,7 +1017,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
     return !model.mode || model.mode === "chat";
   };
 
-  const antIcon = <LoadingOutlined style={{ fontSize: 24 }} spin />;
+  const antIcon = <LoadingOutlined className="h-6 w-6 animate-spin" />;
 
   return (
     <div className={`w-full bg-white ${simplified ? "h-full flex flex-col" : "p-4 pb-0"}`}>
@@ -1940,7 +1920,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
                     <div className="flex items-center gap-2">
                       {isLoading ? (
                         <>
-                          <LoadingOutlined className="text-blue-500" spin />
+                          <LoadingOutlined className="text-blue-500 animate-spin" />
                           <span className="text-sm text-blue-700 font-medium">Running Python code...</span>
                         </>
                       ) : (

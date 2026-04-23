@@ -2,16 +2,7 @@ import React, { useState, useRef, useEffect } from "react";
 import { Modal, Select, Switch, Collapse, Input, Divider } from "antd";
 // eslint-disable-next-line litellm-ui/no-banned-ui-imports
 import { Button, TextInput } from "@tremor/react";
-import {
-  CodeOutlined,
-  PlayCircleOutlined,
-  CheckCircleOutlined,
-  CloseCircleOutlined,
-  CaretRightOutlined,
-  SaveOutlined,
-  UsergroupAddOutlined,
-  ExportOutlined,
-} from "@ant-design/icons";
+import { Code as CodeOutlined, PlayCircle as PlayCircleOutlined, CheckCircle2 as CheckCircleOutlined, XCircle as CloseCircleOutlined, ChevronRight as CaretRightOutlined, Save as SaveOutlined, UserRoundPlus as UsergroupAddOutlined, Upload as ExportOutlined } from "lucide-react";
 import { createGuardrailCall, updateGuardrailCall, testCustomCodeGuardrail } from "../../networking";
 import NotificationsManager from "../../molecules/notifications_manager";
 

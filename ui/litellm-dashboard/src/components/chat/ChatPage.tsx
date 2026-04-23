@@ -3,21 +3,7 @@
 import React, { useCallback, useEffect, useRef, useState, useLayoutEffect } from "react";
 import { Tooltip, Skeleton, Popover } from "antd";
 import MessageManager from "@/components/molecules/message_manager";
-import {
-  SettingOutlined,
-  PlusOutlined,
-  EditOutlined,
-  MenuFoldOutlined,
-  MenuUnfoldOutlined,
-  SearchOutlined,
-  MessageOutlined,
-  AppstoreOutlined,
-  KeyOutlined,
-  ArrowLeftOutlined,
-  DownOutlined,
-  CloseOutlined,
-  CheckOutlined,
-} from "@ant-design/icons";
+import { Settings as SettingOutlined, Plus as PlusOutlined, Pencil as EditOutlined, PanelLeftClose as MenuFoldOutlined, PanelLeft as MenuUnfoldOutlined, Search as SearchOutlined, MessageSquare as MessageOutlined, LayoutGrid as AppstoreOutlined, Key as KeyOutlined, ArrowLeft as ArrowLeftOutlined, ChevronDown as DownOutlined, X as CloseOutlined, Check as CheckOutlined } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { useRouter, useSearchParams } from "next/navigation";

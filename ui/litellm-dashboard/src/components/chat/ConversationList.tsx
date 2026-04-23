@@ -10,14 +10,7 @@ import {
   Avatar,
   Typography,
 } from "antd";
-import {
-  EditOutlined,
-  DeleteOutlined,
-  PlusOutlined,
-  SearchOutlined,
-  UserOutlined,
-  MessageOutlined,
-} from "@ant-design/icons";
+import { Pencil as EditOutlined, Trash2 as DeleteOutlined, Plus as PlusOutlined, Search as SearchOutlined, User as UserOutlined, MessageSquare as MessageOutlined } from "lucide-react";
 import dayjs from "dayjs";
 import { Conversation } from "./types";
 

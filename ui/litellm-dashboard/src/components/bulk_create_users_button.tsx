@@ -2,14 +2,7 @@
 import React, { useState, useEffect } from "react";
 import { Text } from "@tremor/react";
 import { Button, Modal, Table, Upload, Typography } from "antd";
-import {
-  UploadOutlined,
-  DownloadOutlined,
-  WarningOutlined,
-  FileTextOutlined,
-  DeleteOutlined,
-  FileExclamationOutlined,
-} from "@ant-design/icons";
+import { Upload as UploadOutlined, Download as DownloadOutlined, AlertTriangle as WarningOutlined, FileText as FileTextOutlined, Trash2 as DeleteOutlined, FileWarning as FileExclamationOutlined } from "lucide-react";
 import { userCreateCall, invitationCreateCall, getProxyUISettings } from "./networking";
 import Papa from "papaparse";
 import { CheckCircle2 as CheckCircleIcon, XCircle as XCircleIcon, AlertTriangle as ExclamationIcon } from "lucide-react";

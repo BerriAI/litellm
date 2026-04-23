@@ -6,14 +6,7 @@
 
 import { useState } from 'react';
 import { Typography, Tag, Tooltip } from 'antd';
-import {
-  SoundOutlined,
-  MessageOutlined,
-  SettingOutlined,
-  AudioOutlined,
-  DownOutlined,
-  UpOutlined,
-} from '@ant-design/icons';
+import { Volume2 as SoundOutlined, MessageSquare as MessageOutlined, Settings as SettingOutlined, Mic as AudioOutlined, ChevronDown as DownOutlined, ChevronUp as UpOutlined } from "lucide-react";
 import { SectionHeader } from './SectionHeader';
 
 const { Text } = Typography;

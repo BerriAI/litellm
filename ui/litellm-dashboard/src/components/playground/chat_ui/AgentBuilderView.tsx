@@ -1,6 +1,6 @@
 "use client";
 
-import { CommentOutlined, DeleteOutlined, ExperimentOutlined, LinkOutlined, PlusOutlined, RobotOutlined, SaveOutlined } from "@ant-design/icons";
+import { MessageCircle as CommentOutlined, Trash2 as DeleteOutlined, FlaskConical as ExperimentOutlined, Link as LinkOutlined, Plus as PlusOutlined, Bot as RobotOutlined, Save as SaveOutlined } from "lucide-react";
 import { Button, Input, Modal, Select, Spin, Tabs } from "antd";
 import React, { useCallback, useEffect, useState } from "react";
 import CodeBlock from "@/app/(dashboard)/api-reference/components/CodeBlock";

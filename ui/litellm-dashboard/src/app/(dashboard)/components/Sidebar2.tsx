@@ -1,26 +1,7 @@
 "use client";
 
 import { Layout, Menu, ConfigProvider } from "antd";
-import {
-  KeyOutlined,
-  PlayCircleOutlined,
-  BlockOutlined,
-  BarChartOutlined,
-  TeamOutlined,
-  BankOutlined,
-  UserOutlined,
-  SettingOutlined,
-  ApiOutlined,
-  AppstoreOutlined,
-  DatabaseOutlined,
-  FileTextOutlined,
-  LineChartOutlined,
-  SafetyOutlined,
-  ExperimentOutlined,
-  ToolOutlined,
-  TagsOutlined,
-  AuditOutlined,
-} from "@ant-design/icons";
+import { Key as KeyOutlined, PlayCircle as PlayCircleOutlined, Square as BlockOutlined, BarChart3 as BarChartOutlined, Users as TeamOutlined, Landmark as BankOutlined, User as UserOutlined, Settings as SettingOutlined, Plug as ApiOutlined, LayoutGrid as AppstoreOutlined, Database as DatabaseOutlined, FileText as FileTextOutlined, LineChart as LineChartOutlined, ShieldCheck as SafetyOutlined, FlaskConical as ExperimentOutlined, Wrench as ToolOutlined, Tags as TagsOutlined, ClipboardCheck as AuditOutlined } from "lucide-react";
 // import {
 //   all_admin_roles,
 //   rolesWithWriteAccess,

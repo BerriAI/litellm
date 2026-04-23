@@ -1,33 +1,7 @@
 import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
-import {
-  ApiOutlined,
-  AppstoreOutlined,
-  AuditOutlined,
-  BankOutlined,
-  BarChartOutlined,
-  BgColorsOutlined,
-  BlockOutlined,
-  BookOutlined,
-  CreditCardOutlined,
-  DatabaseOutlined,
-  ExperimentOutlined,
-  ExportOutlined,
-  FileTextOutlined,
-  FolderOutlined,
-  KeyOutlined,
-  LineChartOutlined,
-  PlayCircleOutlined,
-  RobotOutlined,
-  SafetyOutlined,
-  SearchOutlined,
-  SettingOutlined,
-  TagsOutlined,
-  TeamOutlined,
-  ToolOutlined,
-  UserOutlined,
-} from "@ant-design/icons";
+import { Plug as ApiOutlined, LayoutGrid as AppstoreOutlined, ClipboardCheck as AuditOutlined, Landmark as BankOutlined, BarChart3 as BarChartOutlined, Palette as BgColorsOutlined, Square as BlockOutlined, Book as BookOutlined, CreditCard as CreditCardOutlined, Database as DatabaseOutlined, FlaskConical as ExperimentOutlined, Upload as ExportOutlined, FileText as FileTextOutlined, Folder as FolderOutlined, Key as KeyOutlined, LineChart as LineChartOutlined, PlayCircle as PlayCircleOutlined, Bot as RobotOutlined, ShieldCheck as SafetyOutlined, Search as SearchOutlined, Settings as SettingOutlined, Tags as TagsOutlined, Users as TeamOutlined, Wrench as ToolOutlined, User as UserOutlined } from "lucide-react";
 import type { MenuProps } from "antd";
 import { ConfigProvider, Layout, Menu } from "antd";
 import { useMemo } from "react";

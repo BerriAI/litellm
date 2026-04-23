@@ -1,12 +1,6 @@
 "use client";
 
-import {
-  AudioMutedOutlined,
-  AudioOutlined,
-  CloseCircleOutlined,
-  SendOutlined,
-  SoundOutlined,
-} from "@ant-design/icons";
+import { MicOff as AudioMutedOutlined, Mic as AudioOutlined, XCircle as CloseCircleOutlined, Send as SendOutlined, Volume2 as SoundOutlined } from "lucide-react";
 import { Button, Input, Select, Typography } from "antd";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { getProxyBaseUrl } from "../../networking";
