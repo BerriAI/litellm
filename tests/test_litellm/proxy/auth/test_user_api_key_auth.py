@@ -2050,3 +2050,51 @@ async def test_centralized_common_checks_short_circuits_when_master_key_unset():
     finally:
         for k, v in originals.items():
             setattr(_proxy_server_mod, k, v)
+
+
+@pytest.mark.asyncio
+async def test_centralized_common_checks_http_exception_without_team_id():
+    """Regression: an HTTPException raised by any of the five parallel
+    fetches (user/project/end_user/global_spend) must not trigger the
+    _team_obj_from_token reconstruction when the token has no team_id —
+    the helper asserts team_id is not None. This is the Greptile P1
+    finding: the ``except HTTPException`` arm was team-fetch-biased."""
+    import litellm.proxy.proxy_server as _proxy_server_mod
+    from fastapi import HTTPException, Request
+    from starlette.datastructures import URL
+
+    token = UserAPIKeyAuth(api_key="sk-test", user_id="u", team_id=None)
+    request = Request(scope={"type": "http"})
+    request._url = URL(url="/chat/completions")
+
+    attrs = _proxy_attrs_for_centralized_checks(user_custom_auth=None)
+    originals = {a: getattr(_proxy_server_mod, a, None) for a in attrs}
+    try:
+        for k, v in attrs.items():
+            setattr(_proxy_server_mod, k, v)
+        # Make the user fetch raise HTTPException. asyncio.gather with
+        # return_exceptions=False propagates it.
+        with (
+            patch(
+                "litellm.proxy.auth.user_api_key_auth.get_user_object",
+                new_callable=AsyncMock,
+                side_effect=HTTPException(status_code=404, detail="user-not-found"),
+            ),
+            patch(
+                "litellm.proxy.auth.user_api_key_auth.common_checks",
+                new_callable=AsyncMock,
+            ) as mock_checks,
+        ):
+            # Should NOT raise AssertionError from _team_obj_from_token;
+            # should proceed with team_object=None.
+            await _run_centralized_common_checks(
+                user_api_key_auth_obj=token,
+                request=request,
+                request_data={"model": "gpt-4o"},
+                route="/chat/completions",
+            )
+            mock_checks.assert_awaited_once()
+            assert mock_checks.call_args.kwargs["team_object"] is None
+    finally:
+        for k, v in originals.items():
+            setattr(_proxy_server_mod, k, v)
