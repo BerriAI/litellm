@@ -1,7 +1,15 @@
 import React, { useState } from "react";
-import { Modal, Form, Select, Upload, Button, Divider } from "antd";
-import { TextInput } from "@tremor/react";
-import { UploadOutlined } from "@ant-design/icons";
+import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Form, Select, Upload } from "antd";
+import { Upload as UploadIcon } from "lucide-react";
 import type { UploadFile, UploadProps } from "antd";
 import { convertPromptFileToJson, createPromptCall } from "../networking";
 import NotificationsManager from "../molecules/notifications_manager";
@@ -51,6 +59,7 @@ const AddPromptForm: React.FC<AddPromptFormProps> = ({ visible, onClose, accessT
 
       setLoading(true);
 
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       let promptData: any = {};
 
       if (promptIntegration === "dotprompt" && fileList.length > 0) {
@@ -116,54 +125,72 @@ const AddPromptForm: React.FC<AddPromptFormProps> = ({ visible, onClose, accessT
   };
 
   return (
-    <Modal
-      title="Add New Prompt"
+    <Dialog
       open={visible}
-      onCancel={handleCancel}
-      footer={[
-        <Button key="cancel" onClick={handleCancel}>
-          Cancel
-        </Button>,
-        <Button key="submit" loading={loading} onClick={handleSubmit}>
-          Create Prompt
-        </Button>,
-      ]}
-      width={600}
+      onOpenChange={(o) => (!o ? handleCancel() : undefined)}
     >
-      <Form form={form} layout="vertical" requiredMark={false}>
-        <Form.Item
-          label="Prompt ID"
-          name="prompt_id"
-          rules={[
-            { required: true, message: "Please enter a prompt ID" },
-            {
-              pattern: /^[a-zA-Z0-9_-]+$/,
-              message: "Prompt ID can only contain letters, numbers, underscores, and hyphens",
-            },
-          ]}
-        >
-          <TextInput placeholder="Enter unique prompt ID (e.g., my_prompt_id)" />
-        </Form.Item>
+      <DialogContent className="max-w-[600px]">
+        <DialogHeader>
+          <DialogTitle>Add New Prompt</DialogTitle>
+        </DialogHeader>
+        <Form form={form} layout="vertical" requiredMark={false}>
+          <Form.Item
+            label="Prompt ID"
+            name="prompt_id"
+            rules={[
+              { required: true, message: "Please enter a prompt ID" },
+              {
+                pattern: /^[a-zA-Z0-9_-]+$/,
+                message:
+                  "Prompt ID can only contain letters, numbers, underscores, and hyphens",
+              },
+            ]}
+          >
+            <Input placeholder="Enter unique prompt ID (e.g., my_prompt_id)" />
+          </Form.Item>
 
-        <Form.Item label="Prompt Integration" name="prompt_integration" initialValue="dotprompt">
-          <Select value={promptIntegration} onChange={setPromptIntegration}>
-            <Option value="dotprompt">dotprompt</Option>
-          </Select>
-        </Form.Item>
+          <Form.Item
+            label="Prompt Integration"
+            name="prompt_integration"
+            initialValue="dotprompt"
+          >
+            <Select value={promptIntegration} onChange={setPromptIntegration}>
+              <Option value="dotprompt">dotprompt</Option>
+            </Select>
+          </Form.Item>
 
-        {promptIntegration === "dotprompt" && (
-          <>
-            <Divider />
-            <Form.Item label="Prompt File" extra="Upload a .prompt file that follows the Dotprompt specification">
-              <Upload {...uploadProps}>
-                <Button icon={<UploadOutlined />}>Select .prompt File</Button>
-              </Upload>
-              {fileList.length > 0 && <div className="mt-2 text-sm text-gray-600">Selected: {fileList[0].name}</div>}
-            </Form.Item>
-          </>
-        )}
-      </Form>
-    </Modal>
+          {promptIntegration === "dotprompt" && (
+            <>
+              <hr className="my-4 border-border" />
+              <Form.Item
+                label="Prompt File"
+                extra="Upload a .prompt file that follows the Dotprompt specification"
+              >
+                <Upload {...uploadProps}>
+                  <Button variant="outline" type="button">
+                    <UploadIcon className="h-4 w-4" />
+                    Select .prompt File
+                  </Button>
+                </Upload>
+                {fileList.length > 0 && (
+                  <div className="mt-2 text-sm text-muted-foreground">
+                    Selected: {fileList[0].name}
+                  </div>
+                )}
+              </Form.Item>
+            </>
+          )}
+        </Form>
+        <DialogFooter>
+          <Button variant="outline" onClick={handleCancel}>
+            Cancel
+          </Button>
+          <Button onClick={handleSubmit} disabled={loading}>
+            {loading ? "Creating…" : "Create Prompt"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 };
 
