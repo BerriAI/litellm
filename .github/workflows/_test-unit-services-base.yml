@@ -32,6 +32,11 @@ on:
         required: false
         type: boolean
         default: false
+      dist:
+        description: "pytest-xdist distribution mode (loadscope|load|worksteal|loadfile|no)"
+        required: false
+        type: string
+        default: "loadscope"
       artifact-name:
         description: "Unique name for the coverage artifact (must be unique per run)"
         required: false
@@ -124,6 +129,7 @@ jobs:
           MAX_FAILURES: ${{ inputs.max-failures }}
           WORKERS: ${{ inputs.workers }}
           RERUNS: ${{ inputs.reruns }}
+          DIST: ${{ inputs.dist }}
           DATABASE_URL: ${{ inputs.enable-postgres && secrets.DATABASE_URL || '' }}
         run: |
           if [ "${WORKERS}" = "0" ]; then
@@ -143,7 +149,7 @@ jobs:
               -n "${WORKERS}" \
               --reruns "${RERUNS}" \
               --reruns-delay 1 \
-              --dist=loadscope \
+              --dist="${DIST}" \
               --durations=20 \
               --cov=litellm \
               --cov-report=xml:coverage.xml \
