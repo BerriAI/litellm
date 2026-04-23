@@ -101,9 +101,13 @@ async def can_user_access_vector_store(
     if _object_permission_allows_vector_store(key_object_permission, vector_store_id):
         return True
 
-    team_object_permission = await _get_object_permission_for_id(
-        user_api_key_dict.team_object_permission_id
+    team_object_permission: Optional[LiteLLM_ObjectPermissionTable] = (
+        user_api_key_dict.team_object_permission
     )
+    if team_object_permission is None:
+        team_object_permission = await _get_object_permission_for_id(
+            user_api_key_dict.team_object_permission_id
+        )
     if _object_permission_allows_vector_store(team_object_permission, vector_store_id):
         return True
 
