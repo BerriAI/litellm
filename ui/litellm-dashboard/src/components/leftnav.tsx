@@ -180,6 +180,12 @@ const menuGroups: MenuGroup[] = [
             label: "Tool Policies",
             icon: <SafetyOutlined />,
           },
+          {
+            key: "memory",
+            page: "memory",
+            label: "Memory",
+            icon: <BookOutlined />,
+          },
         ],
       },
     ],
