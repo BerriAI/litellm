@@ -1,15 +1,20 @@
 import React, { useState } from "react";
-import { Button, Space } from "antd";
-import { MinusCircleOutlined, PlusOutlined } from "@ant-design/icons";
-import { TextInput } from "@tremor/react";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { MinusCircle, Plus } from "lucide-react";
 
 interface QueryParamInputProps {
   value?: Record<string, string>;
   onChange?: (value: Record<string, string>) => void;
 }
 
-const QueryParamInput: React.FC<QueryParamInputProps> = ({ value = {}, onChange }) => {
-  const [pairs, setPairs] = useState<[string, string][]>(Object.entries(value));
+const QueryParamInput: React.FC<QueryParamInputProps> = ({
+  value = {},
+  onChange,
+}) => {
+  const [pairs, setPairs] = useState<[string, string][]>(
+    Object.entries(value),
+  );
 
   const handleAdd = () => {
     setPairs([...pairs, ["", ""]]);
@@ -29,25 +34,36 @@ const QueryParamInput: React.FC<QueryParamInputProps> = ({ value = {}, onChange 
   };
 
   return (
-    <div>
+    <div className="space-y-2">
       {pairs.map(([key, val], index) => (
-        <Space key={index} style={{ display: "flex", marginBottom: 8 }} align="center">
-          <TextInput
+        <div key={index} className="flex items-center gap-2">
+          <Input
             placeholder="Parameter Name (e.g., version)"
             value={key}
             onChange={(e) => handleChange(index, e.target.value, val)}
           />
-          <TextInput
+          <Input
             placeholder="Parameter Value (e.g., v1)"
             value={val}
             onChange={(e) => handleChange(index, key, e.target.value)}
           />
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100%" }}>
-            <MinusCircleOutlined onClick={() => handleRemove(index)} style={{ cursor: "pointer" }} />
-          </div>
-        </Space>
+          <button
+            type="button"
+            onClick={() => handleRemove(index)}
+            className="shrink-0 text-muted-foreground hover:text-destructive"
+            aria-label={`Remove query parameter ${index + 1}`}
+          >
+            <MinusCircle className="h-4 w-4" />
+          </button>
+        </div>
       ))}
-      <Button type="dashed" onClick={handleAdd} icon={<PlusOutlined />}>
+      <Button
+        type="button"
+        variant="outline"
+        onClick={handleAdd}
+        className="border-dashed"
+      >
+        <Plus className="h-4 w-4" />
         Add Query Parameter
       </Button>
     </div>

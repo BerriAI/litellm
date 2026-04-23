@@ -1,6 +1,15 @@
 import React, { useState, useEffect } from "react";
-import { Button } from "@tremor/react";
-import { Modal } from "antd";
+import { Button } from "@/components/ui/button";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import {
   getClaudeCodePluginsList,
   deleteClaudeCodePlugin,
@@ -40,7 +49,7 @@ const ClaudeCodePluginsPanel: React.FC<ClaudeCodePluginsPanelProps> = ({
     try {
       const response: ListPluginsResponse = await getClaudeCodePluginsList(
         accessToken,
-        false
+        false,
       );
       setPluginsList(response.plugins);
     } catch (error) {
@@ -52,6 +61,7 @@ const ClaudeCodePluginsPanel: React.FC<ClaudeCodePluginsPanelProps> = ({
 
   useEffect(() => {
     fetchPlugins();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [accessToken]);
 
   const handleDeleteClick = (pluginName: string, displayName: string) => {
@@ -64,7 +74,9 @@ const ClaudeCodePluginsPanel: React.FC<ClaudeCodePluginsPanelProps> = ({
     setIsDeleting(true);
     try {
       await deleteClaudeCodePlugin(accessToken, pluginToDelete.name);
-      NotificationsManager.success(`Skill "${pluginToDelete.displayName}" deleted successfully`);
+      NotificationsManager.success(
+        `Skill "${pluginToDelete.displayName}" deleted successfully`,
+      );
       fetchPlugins();
     } catch (error) {
       console.error("Error deleting skill:", error);
@@ -89,13 +101,19 @@ const ClaudeCodePluginsPanel: React.FC<ClaudeCodePluginsPanelProps> = ({
         <>
           <div className="flex flex-col gap-2 mb-4">
             <h1 className="text-2xl font-bold">Skills</h1>
-            <p className="text-sm text-gray-600">
-              Register Claude Code skills. Published skills appear in the Skill Hub for all users and
-              are served via{" "}
-              <code className="bg-gray-100 px-1 rounded">/claude-code/marketplace.json</code>.
+            <p className="text-sm text-muted-foreground">
+              Register Claude Code skills. Published skills appear in the Skill
+              Hub for all users and are served via{" "}
+              <code className="bg-muted px-1 rounded">
+                /claude-code/marketplace.json
+              </code>
+              .
             </p>
             <div className="mt-2 flex gap-2">
-              <Button onClick={() => setIsAddModalVisible(true)} disabled={!accessToken || !isAdmin}>
+              <Button
+                onClick={() => setIsAddModalVisible(true)}
+                disabled={!accessToken || !isAdmin}
+              >
                 + Add Skill
               </Button>
             </div>
@@ -122,23 +140,34 @@ const ClaudeCodePluginsPanel: React.FC<ClaudeCodePluginsPanelProps> = ({
         onSuccess={fetchPlugins}
       />
 
-      {pluginToDelete && (
-        <Modal
-          title="Delete Skill"
-          open={pluginToDelete !== null}
-          onOk={handleDeleteConfirm}
-          onCancel={() => setPluginToDelete(null)}
-          confirmLoading={isDeleting}
-          okText="Delete"
-          okButtonProps={{ danger: true }}
-        >
-          <p>
-            Are you sure you want to delete skill:{" "}
-            <strong>{pluginToDelete.displayName}</strong>?
-          </p>
-          <p>This action cannot be undone.</p>
-        </Modal>
-      )}
+      <AlertDialog
+        open={pluginToDelete !== null}
+        onOpenChange={(o) => (!o ? setPluginToDelete(null) : undefined)}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete Skill</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to delete skill:{" "}
+              <strong>{pluginToDelete?.displayName}</strong>? This action cannot
+              be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={isDeleting}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={isDeleting}
+              onClick={(e) => {
+                e.preventDefault();
+                handleDeleteConfirm();
+              }}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              {isDeleting ? "Deleting…" : "Delete"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 };

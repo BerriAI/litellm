@@ -1,12 +1,18 @@
 import { ColumnDef } from "@tanstack/react-table";
-import { Badge, Text } from "@tremor/react";
-import { Tooltip } from "antd";
-import { CopyOutlined, LinkOutlined } from "@ant-design/icons";
+import { Badge } from "@/components/ui/badge";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import { Copy, Link as LinkIcon } from "lucide-react";
 import { Plugin } from "./claude_code_plugins/types";
 
 export const skillHubColumns = (
   showModal: (skill: Plugin) => void,
   copyToClipboard: (text: string) => void,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   publicPage: boolean = false,
 ): ColumnDef<Plugin>[] => [
   {
@@ -21,22 +27,31 @@ export const skillHubColumns = (
           <div className="flex items-center space-x-2">
             <button
               type="button"
-              className="font-medium text-sm cursor-pointer text-blue-600 hover:underline bg-transparent border-none p-0"
+              className="font-medium text-sm cursor-pointer text-primary hover:underline bg-transparent border-none p-0"
               onClick={() => showModal(skill)}
             >
               {skill.name}
             </button>
-            <Tooltip title="Copy skill name">
-              <CopyOutlined
-                onClick={() => copyToClipboard(skill.name)}
-                className="cursor-pointer text-gray-500 hover:text-blue-500 text-xs"
-              />
-            </Tooltip>
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    onClick={() => copyToClipboard(skill.name)}
+                    className="cursor-pointer text-muted-foreground hover:text-primary"
+                    aria-label="Copy skill name"
+                  >
+                    <Copy className="h-3 w-3" />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent>Copy skill name</TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
           </div>
           {skill.description && (
-            <Text className="text-xs text-gray-500 line-clamp-1 md:hidden">
+            <p className="text-xs text-muted-foreground line-clamp-1 md:hidden">
               {skill.description}
-            </Text>
+            </p>
           )}
         </div>
       );
@@ -47,7 +62,9 @@ export const skillHubColumns = (
     accessorKey: "description",
     enableSorting: false,
     cell: ({ row }) => (
-      <Text className="text-xs line-clamp-2">{row.original.description || "-"}</Text>
+      <p className="text-xs line-clamp-2">
+        {row.original.description || "-"}
+      </p>
     ),
   },
   {
@@ -56,8 +73,12 @@ export const skillHubColumns = (
     enableSorting: true,
     cell: ({ row }) => {
       const cat = row.original.category;
-      if (!cat) return <Text className="text-xs text-gray-400">-</Text>;
-      return <Badge color="blue" size="xs">{cat}</Badge>;
+      if (!cat) return <span className="text-xs text-muted-foreground">-</span>;
+      return (
+        <Badge className="bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300 text-xs">
+          {cat}
+        </Badge>
+      );
     },
   },
   {
@@ -65,7 +86,7 @@ export const skillHubColumns = (
     accessorKey: "domain",
     enableSorting: true,
     cell: ({ row }) => (
-      <Text className="text-xs">{row.original.domain || "-"}</Text>
+      <span className="text-xs">{row.original.domain || "-"}</span>
     ),
   },
   {
@@ -86,17 +107,18 @@ export const skillHubColumns = (
         url = src.url;
         label = src.url.replace(/^https?:\/\//, "");
       }
-      if (!url) return <Text className="text-xs text-gray-400">-</Text>;
+      if (!url)
+        return <span className="text-xs text-muted-foreground">-</span>;
       return (
         <a
           href={url}
           target="_blank"
           rel="noopener noreferrer"
-          className="flex items-center gap-1 text-xs text-blue-600 hover:underline truncate max-w-[180px]"
+          className="flex items-center gap-1 text-xs text-primary hover:underline truncate max-w-[180px]"
           title={label}
         >
           <span className="truncate">{label}</span>
-          <LinkOutlined className="shrink-0" style={{ fontSize: 10 }} />
+          <LinkIcon className="h-2.5 w-2.5 shrink-0" />
         </a>
       );
     },
@@ -106,7 +128,13 @@ export const skillHubColumns = (
     accessorKey: "enabled",
     enableSorting: true,
     cell: ({ row }) => (
-      <Badge color={row.original.enabled ? "green" : "gray"} size="xs">
+      <Badge
+        className={
+          row.original.enabled
+            ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300 text-xs"
+            : "bg-muted text-muted-foreground text-xs"
+        }
+      >
         {row.original.enabled ? "Public" : "Draft"}
       </Badge>
     ),

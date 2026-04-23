@@ -43,7 +43,8 @@
         "src/components/mcp_tools/ByokCredentialModal.tsx",
         "src/components/shared/usage_date_picker.tsx",
         "src/components/shared/advanced_date_picker.tsx",
-        "src/components/activity_metrics.tsx"
+        "src/components/activity_metrics.tsx",
+        "src/components/skill_hub_table_columns.tsx"
       ],
       "rules": {
         "litellm-ui/no-banned-ui-imports": "off",

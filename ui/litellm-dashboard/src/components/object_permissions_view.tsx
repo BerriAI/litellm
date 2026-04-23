@@ -1,5 +1,4 @@
 import React from "react";
-import { Text } from "@tremor/react";
 import VectorStorePermissions from "./permissions/VectorStorePermissions";
 import MCPServerPermissions from "./permissions/MCPServerPermissions";
 import AgentPermissions from "./permissions/AgentPermissions";
@@ -56,11 +55,15 @@ export function ObjectPermissionsView({
 
   if (variant === "card") {
     return (
-      <div className={`bg-white border border-gray-200 rounded-lg p-6 ${className}`}>
+      <div
+        className={`bg-background border border-border rounded-lg p-6 ${className}`}
+      >
         <div className="flex items-center gap-2 mb-6">
           <div>
-            <Text className="font-semibold text-gray-900">Object Permissions</Text>
-            <Text className="text-xs text-gray-500">Access control for Vector Stores and MCP Servers</Text>
+            <p className="font-semibold text-foreground">Object Permissions</p>
+            <p className="text-xs text-muted-foreground">
+              Access control for Vector Stores and MCP Servers
+            </p>
           </div>
         </div>
         {content}
@@ -70,7 +73,7 @@ export function ObjectPermissionsView({
 
   return (
     <div className={`${className}`}>
-      <Text className="font-medium text-gray-900 mb-3">Object Permissions</Text>
+      <p className="font-medium text-foreground mb-3">Object Permissions</p>
       {content}
     </div>
   );
