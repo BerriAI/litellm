@@ -1,5 +1,7 @@
 import React, { useState, useEffect } from "react";
-import { Form, Select, Spin, Input, Slider } from "antd";
+import { Form, Select, Input as AntInput, Slider } from "antd";
+import { Input } from "@/components/ui/input";
+import { Loader2 } from "lucide-react";
 import {
   guardrail_provider_map,
   populateGuardrailProviders,
@@ -13,6 +15,7 @@ interface GuardrailProviderFieldsProps {
   selectedProvider: string | null;
   accessToken?: string | null;
   providerParams?: ProviderParamsResponse | null;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   value?: Record<string, any> | null;
 }
 
@@ -61,7 +64,6 @@ const GuardrailProviderFields: React.FC<GuardrailProviderFieldsProps> = ({
 
       try {
         const data = await getGuardrailProviderSpecificParams(accessToken);
-        console.log("Provider params API response:", data);
         setProviderParams(data);
 
         // Populate dynamic providers from API response
@@ -88,12 +90,17 @@ const GuardrailProviderFields: React.FC<GuardrailProviderFieldsProps> = ({
 
   // Show loading state
   if (loading) {
-    return <Spin tip="Loading provider parameters..." />;
+    return (
+      <div className="flex items-center gap-2 text-sm text-muted-foreground">
+        <Loader2 className="h-4 w-4 animate-spin" />
+        Loading provider parameters...
+      </div>
+    );
   }
 
   // Show error state
   if (error) {
-    return <div className="text-red-500">{error}</div>;
+    return <div className="text-destructive">{error}</div>;
   }
 
   // Get the provider key matching the selected provider in the guardrail_provider_map
@@ -102,14 +109,10 @@ const GuardrailProviderFields: React.FC<GuardrailProviderFieldsProps> = ({
   // Get parameters for the selected provider
   const providerFields = providerParams && providerParams[providerKey];
 
-  console.log("Provider key:", providerKey);
-  console.log("Provider fields:", providerFields);
-
   if (!providerFields || Object.keys(providerFields).length === 0) {
     return <div>No configuration fields available for this provider.</div>;
   }
 
-  console.log("Value:", value);
   
   // Fields to skip for content filter provider (handled in dedicated steps)
   const contentFilterFieldsToSkip = new Set([
@@ -124,12 +127,15 @@ const GuardrailProviderFields: React.FC<GuardrailProviderFieldsProps> = ({
   
   const isContentFilterProvider = shouldRenderContentFilterConfigSettings(selectedProvider);
   
-  // Convert object to array of entries and render fields
-  const renderFields = (fields: { [key: string]: ProviderParam }, parentKey = "", parentValue?: any) => {
+  const renderFields = (
+    fields: { [key: string]: ProviderParam },
+    parentKey = "",
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    parentValue?: any,
+  ) => {
     return Object.entries(fields).map(([fieldKey, field]) => {
       const fullFieldKey = parentKey ? `${parentKey}.${fieldKey}` : fieldKey;
       const fieldValue = parentValue ? parentValue[fieldKey] : value?.[fieldKey];
-      console.log("Field value:", fieldValue);
       // Skip ui_friendly_name - it's metadata for the UI dropdown, not a user configuration field
       if (fieldKey === "ui_friendly_name") {
         return null;
@@ -150,7 +156,7 @@ const GuardrailProviderFields: React.FC<GuardrailProviderFieldsProps> = ({
         return (
           <div key={fullFieldKey}>
             <div className="mb-2 font-medium">{fieldKey}</div>
-            <div className="ml-4 border-l-2 border-gray-200 pl-4">
+            <div className="ml-4 border-l-2 border-border pl-4">
               {renderFields(field.fields, fullFieldKey, fieldValue)}
             </div>
           </div>
@@ -210,10 +216,18 @@ const GuardrailProviderFields: React.FC<GuardrailProviderFieldsProps> = ({
               placeholder={field.description}
               defaultValue={fieldValue !== undefined ? Number(fieldValue) : undefined}
             />
-          ) : fieldKey.includes("password") || fieldKey.includes("secret") || fieldKey.includes("key") ? (
-            <Input.Password placeholder={field.description} defaultValue={fieldValue || ""} />
+          ) : fieldKey.includes("password") ||
+            fieldKey.includes("secret") ||
+            fieldKey.includes("key") ? (
+            <AntInput.Password
+              placeholder={field.description}
+              defaultValue={fieldValue || ""}
+            />
           ) : (
-            <Input placeholder={field.description} defaultValue={fieldValue || ""} />
+            <Input
+              placeholder={field.description}
+              defaultValue={fieldValue || ""}
+            />
           )}
         </Form.Item>
       );
