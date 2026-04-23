@@ -102,9 +102,11 @@ def get_vendor_from_model(model: str) -> OCIVendors:
 class OCIChatConfig(BaseConfig):
     """LiteLLM BaseConfig implementation for OCI Generative AI chat."""
 
-    def __init__(self) -> None:
-        self.__class__.has_custom_stream_wrapper = True
+    @property
+    def has_custom_stream_wrapper(self) -> bool:
+        return True
 
+    def __init__(self) -> None:
         self.openai_to_oci_generic_param_map = {
             "stream": "isStream",
             "max_tokens": "maxTokens",
