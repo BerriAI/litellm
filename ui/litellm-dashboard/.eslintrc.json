@@ -47,7 +47,9 @@
         "src/components/skill_hub_table_columns.tsx",
         "src/components/common_components/PassThroughSecuritySection.tsx",
         "src/components/common_components/DeleteResourceModal.tsx",
-        "src/components/common_components/PremiumLoggingSettings.tsx"
+        "src/components/common_components/PremiumLoggingSettings.tsx",
+        "src/components/common_components/AutoRotationView.tsx",
+        "src/components/agents/agent_card.tsx"
       ],
       "rules": {
         "litellm-ui/no-banned-ui-imports": "off",
