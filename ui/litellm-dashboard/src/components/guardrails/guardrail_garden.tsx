@@ -1,6 +1,6 @@
 import React, { useState } from "react";
-import { Input } from "antd";
-import { SearchOutlined, ArrowRightOutlined } from "@ant-design/icons";
+import { Input } from "@/components/ui/input";
+import { ArrowRight, Search } from "lucide-react";
 import { GuardrailCardInfo, ALL_CARDS } from "./guardrail_garden_data";
 import GuardrailCard from "./guardrail_garden_card";
 import GuardrailDetailView from "./guardrail_garden_detail";
@@ -10,9 +10,14 @@ interface GuardrailGardenProps {
   onGuardrailCreated: () => void;
 }
 
-const GuardrailGarden: React.FC<GuardrailGardenProps> = ({ accessToken, onGuardrailCreated }) => {
+const GuardrailGarden: React.FC<GuardrailGardenProps> = ({
+  accessToken,
+  onGuardrailCreated,
+}) => {
   const [searchQuery, setSearchQuery] = useState("");
-  const [selectedCard, setSelectedCard] = useState<GuardrailCardInfo | null>(null);
+  const [selectedCard, setSelectedCard] = useState<GuardrailCardInfo | null>(
+    null,
+  );
   const [showAllLitellm, setShowAllLitellm] = useState(false);
   const CARDS_PER_ROW = 5;
   const VISIBLE_ROWS = 2;
@@ -43,63 +48,83 @@ const GuardrailGarden: React.FC<GuardrailGardenProps> = ({ accessToken, onGuardr
 
   return (
     <div>
-      {/* Search Bar */}
-      <div style={{ marginBottom: 24 }}>
-        <Input
-          size="large"
-          placeholder="Search guardrails"
-          prefix={<SearchOutlined style={{ color: "#9ca3af" }} />}
-          value={searchQuery}
-          onChange={(e) => setSearchQuery(e.target.value)}
-          style={{ borderRadius: 8 }}
-        />
+      <div className="mb-6">
+        <div className="relative">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
+          <Input
+            placeholder="Search guardrails"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="pl-9 h-11 rounded-lg"
+          />
+        </div>
       </div>
 
-      {/* LiteLLM Content Filter Section */}
-      <div style={{ marginBottom: 40 }}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
-          <h2 style={{ fontSize: 20, fontWeight: 600, color: "#111827", margin: 0 }}>LiteLLM Content Filter</h2>
-          <span
-            style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 14, color: "#1a73e8", cursor: "pointer" }}
+      <div className="mb-10">
+        <div className="flex items-center justify-between mb-1">
+          <h2 className="text-xl font-semibold text-foreground m-0">
+            LiteLLM Content Filter
+          </h2>
+          <button
+            type="button"
             onClick={() => setShowAllLitellm(!showAllLitellm)}
+            className="inline-flex items-center gap-1.5 text-sm text-primary cursor-pointer bg-transparent border-none"
           >
             {showAllLitellm ? (
               <>Show less</>
             ) : (
               <>
-                <ArrowRightOutlined style={{ fontSize: 12 }} />
+                <ArrowRight className="h-3 w-3" />
                 {`Show all (${litellmCards.length})`}
               </>
             )}
-          </span>
+          </button>
         </div>
-        <p style={{ fontSize: 13, color: "#6b7280", margin: "4px 0 20px 0" }}>
-          Built-in guardrails powered by LiteLLM. Zero latency, no external dependencies, no additional cost.
+        <p className="text-sm text-muted-foreground mt-1 mb-5">
+          Built-in guardrails powered by LiteLLM. Zero latency, no external
+          dependencies, no additional cost.
         </p>
-        <div style={{
-          display: "grid",
-          gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))",
-          gap: 16,
-        }}>
-          {(showAllLitellm ? litellmCards : litellmCards.slice(0, CARDS_PER_ROW * VISIBLE_ROWS)).map((card) => (
-            <GuardrailCard key={card.id} card={card} onClick={() => setSelectedCard(card)} />
+        <div
+          className="grid gap-4"
+          style={{
+            gridTemplateColumns:
+              "repeat(auto-fill, minmax(220px, 1fr))",
+          }}
+        >
+          {(showAllLitellm
+            ? litellmCards
+            : litellmCards.slice(0, CARDS_PER_ROW * VISIBLE_ROWS)
+          ).map((card) => (
+            <GuardrailCard
+              key={card.id}
+              card={card}
+              onClick={() => setSelectedCard(card)}
+            />
           ))}
         </div>
       </div>
 
-      {/* Partner Guardrails Section */}
-      <div style={{ marginBottom: 40 }}>
-        <h2 style={{ fontSize: 20, fontWeight: 600, color: "#111827", margin: "0 0 4px 0" }}>Partner Guardrails</h2>
-        <p style={{ fontSize: 13, color: "#6b7280", margin: "4px 0 20px 0" }}>
-          Third-party guardrail integrations from leading AI security providers.
+      <div className="mb-10">
+        <h2 className="text-xl font-semibold text-foreground mt-0 mb-1">
+          Partner Guardrails
+        </h2>
+        <p className="text-sm text-muted-foreground mt-1 mb-5">
+          Third-party guardrail integrations from leading AI security
+          providers.
         </p>
-        <div style={{
-          display: "grid",
-          gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))",
-          gap: 16,
-        }}>
+        <div
+          className="grid gap-4"
+          style={{
+            gridTemplateColumns:
+              "repeat(auto-fill, minmax(220px, 1fr))",
+          }}
+        >
           {partnerCards.map((card) => (
-            <GuardrailCard key={card.id} card={card} onClick={() => setSelectedCard(card)} />
+            <GuardrailCard
+              key={card.id}
+              card={card}
+              onClick={() => setSelectedCard(card)}
+            />
           ))}
         </div>
       </div>
