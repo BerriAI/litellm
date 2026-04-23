@@ -80,9 +80,9 @@ class StabilityImageGenerationConfig(BaseImageGenerationConfig):
                 if k in supported_params:
                     # Map size to aspect_ratio
                     if k == "size" and v in OPENAI_SIZE_TO_STABILITY_ASPECT_RATIO:
-                        optional_params[
-                            "aspect_ratio"
-                        ] = OPENAI_SIZE_TO_STABILITY_ASPECT_RATIO[v]
+                        optional_params["aspect_ratio"] = (
+                            OPENAI_SIZE_TO_STABILITY_ASPECT_RATIO[v]
+                        )
                     elif k == "n":
                         # Store n for later, but don't pass to Stability
                         optional_params["_n"] = v

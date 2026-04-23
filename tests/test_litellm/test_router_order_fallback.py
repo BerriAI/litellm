@@ -329,3 +329,39 @@ async def test_router_order_fallback_with_non_standard_fallbacks():
         fallbacks=["fallback-model"],  # non-standard format, passed per-request
     )
     assert response._hidden_params["model_id"] == "fallback"
+
+
+@pytest.mark.asyncio
+async def test_router_order_fallback_with_wildcard_model_group():
+    """Wildcard model groups should also advance across order levels."""
+    router = Router(
+        model_list=[
+            {
+                "model_name": "openai/*",
+                "litellm_params": {
+                    "model": "openai/*",
+                    "api_key": "bad",
+                    "mock_response": Exception("fail order 1"),
+                    "order": 1,
+                },
+                "model_info": {"id": "1"},
+            },
+            {
+                "model_name": "openai/*",
+                "litellm_params": {
+                    "model": "openai/*",
+                    "api_key": "good",
+                    "mock_response": "success from wildcard order 2",
+                    "order": 2,
+                },
+                "model_info": {"id": "2"},
+            },
+        ],
+        num_retries=0,
+    )
+
+    response = await router.acompletion(
+        model="openai/gpt-4.1-mini",
+        messages=[{"role": "user", "content": "hi"}],
+    )
+    assert response._hidden_params["model_id"] == "2"

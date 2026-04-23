@@ -1,6 +1,6 @@
 [project]
 name = "litellm-proxy-extras"
-version = "0.4.66"
+version = "0.4.68"
 description = "Additional files for the LiteLLM Proxy. Reduces the size of the main litellm package."
 readme = "README.md"
 requires-python = ">=3.9"
@@ -25,7 +25,7 @@ required-version = "==0.10.9"
 module-root = ""
 
 [tool.commitizen]
-version = "0.4.66"
+version = "0.4.68"
 version_files = [
     "pyproject.toml:^version",
     "../pyproject.toml:litellm-proxy-extras==",

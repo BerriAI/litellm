@@ -199,12 +199,12 @@ class RealTimeStreaming:
             if self.input_messages:
                 self.logging_obj.model_call_details["messages"] = self.input_messages
             if self.session_tools or self.tool_calls:
-                self.logging_obj.model_call_details[
-                    "realtime_tools"
-                ] = self.session_tools
-                self.logging_obj.model_call_details[
-                    "realtime_tool_calls"
-                ] = self.tool_calls
+                self.logging_obj.model_call_details["realtime_tools"] = (
+                    self.session_tools
+                )
+                self.logging_obj.model_call_details["realtime_tool_calls"] = (
+                    self.tool_calls
+                )
             ## ASYNC LOGGING
             # Create an event loop for the new thread
             asyncio.create_task(self.logging_obj.async_success_handler(self.messages))

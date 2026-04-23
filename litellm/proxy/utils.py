@@ -940,7 +940,11 @@ class ProxyLogging:
             Result from the guardrail execution
         """
         # Use unified_guardrail if callback has apply_guardrail method
-        use_unified = "apply_guardrail" in type(callback).__dict__
+        has_apply_guardrail = "apply_guardrail" in type(callback).__dict__
+        use_unified = has_apply_guardrail and not (
+            hook_type == "during_call"
+            and getattr(callback, "use_native_during_call_hook", False)
+        )
         if use_unified:
             data["guardrail_to_apply"] = callback
 
@@ -1540,6 +1544,7 @@ class ProxyLogging:
                 if (
                     "apply_guardrail" in type(callback).__dict__
                     and user_api_key_dict is not None
+                    and not getattr(callback, "use_native_during_call_hook", False)
                 ):
                     data["guardrail_to_apply"] = callback
                     guardrail_task = self._run_guardrail_task_with_enrichment(
@@ -1966,9 +1971,9 @@ class ProxyLogging:
                     normalized_call_type = CallTypes.aembedding.value
             if normalized_call_type is not None:
                 litellm_logging_obj.call_type = normalized_call_type
-                litellm_logging_obj.model_call_details[
-                    "call_type"
-                ] = normalized_call_type
+                litellm_logging_obj.model_call_details["call_type"] = (
+                    normalized_call_type
+                )
             # Pass-through endpoints are logged via the callback loop's
             # async_post_call_failure_hook — skip pre_call and failure handlers.
             if litellm_logging_obj.call_type == CallTypes.pass_through.value:
@@ -2066,10 +2071,12 @@ class ProxyLogging:
                         raise
                 else:
                     try:
-                        guardrail_response = await callback.async_post_call_success_hook(
-                            user_api_key_dict=user_api_key_dict,
-                            data=data,
-                            response=response,
+                        guardrail_response = (
+                            await callback.async_post_call_success_hook(
+                                user_api_key_dict=user_api_key_dict,
+                                data=data,
+                                response=response,
+                            )
                         )
                     except Exception as e:
                         _enrich_http_exception_with_guardrail_context(e, callback)
@@ -2282,13 +2289,15 @@ class ProxyLogging:
                         "async_post_call_streaming_iterator_hook"
                         in type(callback).__dict__
                     ):
-                        current_response = self._wrap_streaming_iterator_with_enrichment(
-                            _callback,
-                            _callback.async_post_call_streaming_iterator_hook(
-                                user_api_key_dict=user_api_key_dict,
-                                response=current_response,
-                                request_data=request_data,
-                            ),
+                        current_response = (
+                            self._wrap_streaming_iterator_with_enrichment(
+                                _callback,
+                                _callback.async_post_call_streaming_iterator_hook(
+                                    user_api_key_dict=user_api_key_dict,
+                                    response=current_response,
+                                    request_data=request_data,
+                                ),
+                            )
                         )
                     elif "apply_guardrail" in type(callback).__dict__:
                         request_data["guardrail_to_apply"] = callback
@@ -2301,13 +2310,15 @@ class ProxyLogging:
                             ),
                         )
                     else:
-                        current_response = self._wrap_streaming_iterator_with_enrichment(
-                            _callback,
-                            _callback.async_post_call_streaming_iterator_hook(
-                                user_api_key_dict=user_api_key_dict,
-                                response=current_response,
-                                request_data=request_data,
-                            ),
+                        current_response = (
+                            self._wrap_streaming_iterator_with_enrichment(
+                                _callback,
+                                _callback.async_post_call_streaming_iterator_hook(
+                                    user_api_key_dict=user_api_key_dict,
+                                    response=current_response,
+                                    request_data=request_data,
+                                ),
+                            )
                         )
 
         # Actually iterate through the chained async generator and yield chunks
@@ -3222,6 +3233,10 @@ class PrismaClient:
                 hashed_token = self.hash_token(token=token)
                 db_data = self.jsonify_object(data=data)
                 db_data["token"] = hashed_token
+                # Prisma rejects nullable JSON fields set to None (no default).
+                # Strip them so the DB stores NULL via the column's nullable constraint.
+                if db_data.get("budget_limits") is None:
+                    db_data.pop("budget_limits", None)
                 print_verbose(
                     "PrismaClient: Before upsert into litellm_verificationtoken"
                 )
@@ -4939,25 +4954,27 @@ async def update_daily_tag_spend(
 ):
     """
     Separate scheduler job to commit daily tag spend updates.
-    
+
     Runs at a longer interval (2.3x default) than the main update_spend job
     to reduce query contention for DailyTagSpend table.
-    
+
     This is called by a dedicated scheduler job and does NOT process:
     - Regular spend updates (user, key, team, org)
     - End-user spend
     - Agent spend
     - Spend logs
-    
+
     Only processes tag spend transactions from the daily_tag_spend_update_queue.
-    
+
     Args:
         prisma_client: PrismaClient instance
         proxy_logging_obj: ProxyLogging instance for error handling
     """
     n_retry_times = 3
     try:
-        if proxy_logging_obj.db_spend_update_writer.redis_update_buffer._should_commit_spend_updates_to_redis():
+        if (
+            proxy_logging_obj.db_spend_update_writer.redis_update_buffer._should_commit_spend_updates_to_redis()
+        ):
             await proxy_logging_obj.db_spend_update_writer._commit_daily_tag_spend_to_db_with_redis(
                 prisma_client=prisma_client,
                 n_retry_times=n_retry_times,
@@ -5345,6 +5362,7 @@ def _get_docs_url() -> Optional[str]:
         return None
 
     return "/"
+
 
 def _get_openapi_url() -> Optional[str]:
     """

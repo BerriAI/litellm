@@ -264,9 +264,9 @@ def get_policies_summary() -> Dict[str, Any]:
             "description": policy.description if policy else None,
             "guardrails_add": policy.guardrails.get_add() if policy else [],
             "guardrails_remove": policy.guardrails.get_remove() if policy else [],
-            "condition": policy.condition.model_dump()
-            if policy and policy.condition
-            else None,
+            "condition": (
+                policy.condition.model_dump() if policy and policy.condition else None
+            ),
             "resolved_guardrails": resolved_policy.guardrails,
             "inheritance_chain": resolved_policy.inheritance_chain,
         }

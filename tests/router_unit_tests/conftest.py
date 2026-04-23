@@ -13,6 +13,7 @@ import litellm
 
 import asyncio
 
+
 @pytest.fixture(scope="session")
 def event_loop():
     try:
@@ -21,8 +22,6 @@ def event_loop():
         loop = asyncio.new_event_loop()
     yield loop
     loop.close()
-
-
 
 
 @pytest.fixture(scope="function", autouse=True)
@@ -40,9 +39,9 @@ def setup_and_teardown():
     import asyncio
 
     from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+
     # flush all logs
     asyncio.run(GLOBAL_LOGGING_WORKER.clear_queue())
-
 
     importlib.reload(litellm)
 

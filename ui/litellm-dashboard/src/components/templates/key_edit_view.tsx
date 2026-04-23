@@ -16,6 +16,7 @@ import PassThroughRoutesSelector from "../common_components/PassThroughRoutesSel
 import RateLimitTypeFormItem from "../common_components/RateLimitTypeFormItem";
 import OrganizationDropdown from "../common_components/OrganizationDropdown";
 import { extractLoggingSettings, formatMetadataForDisplay, stripTagsFromMetadata } from "../key_info_utils";
+import { BudgetWindowEntry, BudgetWindowsEditor } from "../key_team_helpers/BudgetWindowsEditor";
 import { KeyResponse } from "../key_team_helpers/key_list";
 import MCPServerSelector from "../mcp_server_management/MCPServerSelector";
 import MCPToolPermissions from "../mcp_server_management/MCPToolPermissions";
@@ -77,6 +78,7 @@ const getKeyTypeFromRoutes = (allowedRoutes: string[] | null | undefined): strin
   return "default";
 };
 
+
 export function KeyEditView({
   keyData,
   onCancel,
@@ -103,6 +105,9 @@ export function KeyEditView({
   const [rotationInterval, setRotationInterval] = useState<string>(keyData.rotation_interval || "");
   const [neverExpire, setNeverExpire] = useState<boolean>(!keyData.expires);
   const [isKeySaving, setIsKeySaving] = useState(false);
+  const [budgetLimits, setBudgetLimits] = useState<BudgetWindowEntry[]>(
+    Array.isArray(keyData.budget_limits) ? keyData.budget_limits : []
+  );
   const { data: organizations, isLoading: isOrganizationsLoading } = useOrganizations();
   const { data: projects } = useProjects();
   const { data: uiSettingsData } = useUISettings();
@@ -274,6 +279,10 @@ export function KeyEditView({
         values.duration = null;
       }
 
+      // Include multi-window budget limits (filter out incomplete entries)
+      const validWindows = budgetLimits.filter((w) => w.budget_duration && w.max_budget !== null && w.max_budget !== undefined);
+      values.budget_limits = validWindows.length > 0 ? validWindows : undefined;
+
       await onSubmit(values);
     } finally {
       setIsKeySaving(false);
@@ -421,6 +430,22 @@ export function KeyEditView({
           <Select.Option value="weekly">Weekly</Select.Option>
           <Select.Option value="monthly">Monthly</Select.Option>
         </Select>
+      </Form.Item>
+
+      <Form.Item
+        label={
+          <span>
+            Budget Windows{" "}
+            <Tooltip title="Set multiple independent budget windows (e.g., hourly $10 AND monthly $200). Each window tracks spend separately and resets on its own schedule.">
+              <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+            </Tooltip>
+          </span>
+        }
+      >
+        <BudgetWindowsEditor
+          value={budgetLimits}
+          onChange={setBudgetLimits}
+        />
       </Form.Item>
 
       <Form.Item label="TPM Limit" name="tpm_limit">

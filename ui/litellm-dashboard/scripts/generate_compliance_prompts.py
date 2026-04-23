@@ -105,9 +105,7 @@ def main() -> None:
 
     # Header comment
     csv_basename = os.path.basename(args.csv)
-    lines.append(
-        f"// Auto-generated from {csv_basename} — do not edit manually."
-    )
+    lines.append(f"// Auto-generated from {csv_basename} — do not edit manually.")
     lines.append(
         f"// Regenerate: python scripts/generate_compliance_prompts.py --csv ... --output ..."
     )
@@ -141,9 +139,7 @@ def main() -> None:
     lines.append(f"export const {meta_name} = {{")
     lines.append(f'  name: "{escape_ts_string(args.framework)}",')
     lines.append(f'  icon: "{escape_ts_string(args.framework_icon)}",')
-    lines.append(
-        f'  description: "{escape_ts_string(args.framework_description)}",'
-    )
+    lines.append(f'  description: "{escape_ts_string(args.framework_description)}",')
     lines.append("};")
     lines.append("")
 
