@@ -10,9 +10,9 @@
  */
 
 import React, { useMemo, useState } from "react";
-import { Checkbox } from "antd";
-import { Text } from "@tremor/react";
-import { ChevronDownIcon, ChevronRightIcon } from "lucide-react";
+import { Checkbox } from "@/components/ui/checkbox";
+import { cn } from "@/lib/utils";
+import { ChevronDown, ChevronRight } from "lucide-react";
 import {
   CrudOp,
   MCPToolEntry,
@@ -43,26 +43,27 @@ interface McpCrudPermissionPanelProps {
 const CRUD_ORDER: CrudOp[] = ["read", "create", "update", "delete", "unknown"];
 
 const RISK_BADGE: Record<string, string> = {
-  low: "bg-green-100 text-green-800",
-  medium: "bg-yellow-100 text-yellow-800",
-  high: "bg-red-100 text-red-800 font-semibold",
-  unknown: "bg-gray-100 text-gray-700",
+  low: "bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300",
+  medium:
+    "bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300",
+  high: "bg-red-100 text-red-800 font-semibold dark:bg-red-950 dark:text-red-300",
+  unknown: "bg-muted text-muted-foreground",
 };
 
 const GROUP_BORDER: Record<CrudOp, string> = {
-  read: "border-green-200",
-  create: "border-blue-200",
-  update: "border-yellow-200",
-  delete: "border-red-300",
-  unknown: "border-gray-200",
+  read: "border-emerald-200 dark:border-emerald-900",
+  create: "border-blue-200 dark:border-blue-900",
+  update: "border-amber-200 dark:border-amber-900",
+  delete: "border-red-300 dark:border-red-900",
+  unknown: "border-border",
 };
 
 const GROUP_HEADER_BG: Record<CrudOp, string> = {
-  read: "bg-green-50",
-  create: "bg-blue-50",
-  update: "bg-yellow-50",
-  delete: "bg-red-50",
-  unknown: "bg-gray-50",
+  read: "bg-emerald-50 dark:bg-emerald-950/30",
+  create: "bg-blue-50 dark:bg-blue-950/30",
+  update: "bg-amber-50 dark:bg-amber-950/30",
+  delete: "bg-red-50 dark:bg-red-950/30",
+  unknown: "bg-muted",
 };
 
 // ---------------------------------------------------------------------------
@@ -164,44 +165,63 @@ const McpCrudPermissionPanel: React.FC<McpCrudPermissionPanelProps> = ({
         const isCollapsed = collapsed[op];
 
         return (
-          <div key={op} className={`rounded-lg border ${GROUP_BORDER[op]} overflow-hidden`}>
+          <div
+            key={op}
+            className={cn(
+              "rounded-lg border overflow-hidden",
+              GROUP_BORDER[op],
+            )}
+          >
             {/* Group header */}
-            <div className={`flex items-center justify-between px-4 py-3 ${GROUP_HEADER_BG[op]}`}>
+            <div
+              className={cn(
+                "flex items-center justify-between px-4 py-3",
+                GROUP_HEADER_BG[op],
+              )}
+            >
               <button
                 type="button"
                 className="flex items-center gap-2 flex-1 text-left"
                 onClick={() => toggleCollapse(op)}
               >
                 {isCollapsed ? (
-                  <ChevronRightIcon className="w-4 h-4 text-gray-500 flex-shrink-0" />
+                  <ChevronRight className="w-4 h-4 text-muted-foreground flex-shrink-0" />
                 ) : (
-                  <ChevronDownIcon className="w-4 h-4 text-gray-500 flex-shrink-0" />
+                  <ChevronDown className="w-4 h-4 text-muted-foreground flex-shrink-0" />
                 )}
-                <span className="font-semibold text-gray-900 text-sm">{meta.label}</span>
-                <span className={`text-xs px-2 py-0.5 rounded-full ${RISK_BADGE[meta.risk]}`}>
+                <span className="font-semibold text-foreground text-sm">
+                  {meta.label}
+                </span>
+                <span
+                  className={cn(
+                    "text-xs px-2 py-0.5 rounded-full",
+                    RISK_BADGE[meta.risk],
+                  )}
+                >
                   {meta.risk === "high"
                     ? "High Risk"
                     : meta.risk === "medium"
-                    ? "Medium Risk"
-                    : meta.risk === "low"
-                    ? "Safe"
-                    : "Unclassified"}
+                      ? "Medium Risk"
+                      : meta.risk === "low"
+                        ? "Safe"
+                        : "Unclassified"}
                 </span>
-                <span className="text-xs text-gray-500 ml-1">
-                  {group.filter((t) => effectiveAllowed.has(t.name)).length}/{group.length} allowed
+                <span className="text-xs text-muted-foreground ml-1">
+                  {group.filter((t) => effectiveAllowed.has(t.name)).length}/
+                  {group.length} allowed
                 </span>
               </button>
 
               {!readOnly && (
                 <div className="flex items-center gap-2 ml-4">
-                  <Text className="text-xs text-gray-500">
+                  <span className="text-xs text-muted-foreground">
                     {fullyAllowed ? "All on" : partial ? "Partial" : "All off"}
-                  </Text>
-                  {/* Checkbox supports `indeterminate`; Switch does not. */}
+                  </span>
                   <Checkbox
-                    checked={fullyAllowed}
-                    indeterminate={partial}
-                    onChange={(e) => toggleGroup(op, e.target.checked)}
+                    checked={
+                      partial ? "indeterminate" : fullyAllowed ? true : false
+                    }
+                    onCheckedChange={(c) => toggleGroup(op, c === true)}
                     onClick={(e) => e.stopPropagation()}
                   />
                 </div>
@@ -210,54 +230,66 @@ const McpCrudPermissionPanel: React.FC<McpCrudPermissionPanelProps> = ({
 
             {/* Description row */}
             {!isCollapsed && (
-              <div className="px-4 pt-2 pb-1 text-xs text-gray-500 bg-white border-b border-gray-100">
+              <div className="px-4 pt-2 pb-1 text-xs text-muted-foreground bg-background border-b border-border">
                 {meta.description}
               </div>
             )}
 
-            {/* Tool list — searchFilter narrows display only; group toggles still cover all tools */}
+            {/* Tool list */}
             {!isCollapsed && (
-              <div className="bg-white divide-y divide-gray-50">
+              <div className="bg-background divide-y divide-border">
                 {group
-                  .filter((t) =>
-                    !searchFilter ||
-                    t.name.toLowerCase().includes(searchFilter.toLowerCase()) ||
-                    (t.description ?? "").toLowerCase().includes(searchFilter.toLowerCase())
+                  .filter(
+                    (t) =>
+                      !searchFilter ||
+                      t.name
+                        .toLowerCase()
+                        .includes(searchFilter.toLowerCase()) ||
+                      (t.description ?? "")
+                        .toLowerCase()
+                        .includes(searchFilter.toLowerCase()),
                   )
                   .map((tool) => {
-                  const allowed = isToolAllowed(tool.name);
-                  return (
-                    <div
-                      key={tool.name}
-                      className={`flex items-start gap-3 px-4 py-2.5 transition-colors hover:bg-gray-50 ${
-                        !readOnly ? "cursor-pointer" : ""
-                      } ${allowed ? "" : "opacity-60"}`}
-                      onClick={() => toggleTool(tool.name)}
-                    >
-                      <Checkbox
-                        checked={allowed}
-                        onChange={() => toggleTool(tool.name)}
-                        disabled={readOnly}
-                        onClick={(e) => e.stopPropagation()}
-                      />
-                      <div className="flex-1 min-w-0">
-                        <Text className="font-medium text-gray-900 text-sm">{tool.name}</Text>
-                        {tool.description && (
-                          <Text className="text-xs text-gray-500 mt-0.5 leading-snug">
-                            {tool.description}
-                          </Text>
+                    const allowed = isToolAllowed(tool.name);
+                    return (
+                      <div
+                        key={tool.name}
+                        className={cn(
+                          "flex items-start gap-3 px-4 py-2.5 transition-colors hover:bg-muted",
+                          !readOnly && "cursor-pointer",
+                          !allowed && "opacity-60",
                         )}
-                      </div>
-                      <span
-                        className={`text-xs px-1.5 py-0.5 rounded flex-shrink-0 ${
-                          allowed ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-500"
-                        }`}
+                        onClick={() => toggleTool(tool.name)}
                       >
-                        {allowed ? "on" : "off"}
-                      </span>
-                    </div>
-                  );
-                })}
+                        <Checkbox
+                          checked={allowed}
+                          onCheckedChange={() => toggleTool(tool.name)}
+                          disabled={readOnly}
+                          onClick={(e) => e.stopPropagation()}
+                        />
+                        <div className="flex-1 min-w-0">
+                          <p className="font-medium text-foreground text-sm">
+                            {tool.name}
+                          </p>
+                          {tool.description && (
+                            <p className="text-xs text-muted-foreground mt-0.5 leading-snug">
+                              {tool.description}
+                            </p>
+                          )}
+                        </div>
+                        <span
+                          className={cn(
+                            "text-xs px-1.5 py-0.5 rounded flex-shrink-0",
+                            allowed
+                              ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300"
+                              : "bg-muted text-muted-foreground",
+                          )}
+                        >
+                          {allowed ? "on" : "off"}
+                        </span>
+                      </div>
+                    );
+                  })}
               </div>
             )}
           </div>
