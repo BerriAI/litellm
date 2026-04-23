@@ -1157,6 +1157,7 @@
         "supports_xhigh_reasoning_effort": true,
         "tool_use_system_prompt_tokens": 346,
         "supports_native_structured_output": true,
+        "supports_output_config": true,
         "supports_max_reasoning_effort": true,
         "supports_minimal_reasoning_effort": true
     },
@@ -1201,6 +1202,7 @@
         "supports_xhigh_reasoning_effort": true,
         "tool_use_system_prompt_tokens": 346,
         "supports_native_structured_output": true,
+        "supports_output_config": true,
         "supports_max_reasoning_effort": true,
         "supports_minimal_reasoning_effort": true
     },
@@ -1231,6 +1233,7 @@
         "supports_xhigh_reasoning_effort": true,
         "tool_use_system_prompt_tokens": 346,
         "supports_native_structured_output": true,
+        "supports_output_config": true,
         "supports_max_reasoning_effort": true,
         "supports_minimal_reasoning_effort": true
     },
@@ -1261,6 +1264,7 @@
         "supports_xhigh_reasoning_effort": true,
         "tool_use_system_prompt_tokens": 346,
         "supports_native_structured_output": true,
+        "supports_output_config": true,
         "supports_max_reasoning_effort": true,
         "supports_minimal_reasoning_effort": true
     },
@@ -1291,6 +1295,7 @@
         "supports_xhigh_reasoning_effort": true,
         "tool_use_system_prompt_tokens": 346,
         "supports_native_structured_output": true,
+        "supports_output_config": true,
         "supports_max_reasoning_effort": true,
         "supports_minimal_reasoning_effort": true
     },
@@ -1986,6 +1991,7 @@
         "supports_vision": true,
         "supports_xhigh_reasoning_effort": true,
         "tool_use_system_prompt_tokens": 159,
+        "supports_output_config": true,
         "supports_max_reasoning_effort": true,
         "supports_minimal_reasoning_effort": true
     },
@@ -31591,6 +31597,7 @@
         "supports_vision": true,
         "supports_xhigh_reasoning_effort": true,
         "tool_use_system_prompt_tokens": 346,
+        "supports_output_config": true,
         "supports_max_reasoning_effort": true,
         "supports_minimal_reasoning_effort": true
     },
@@ -31620,6 +31627,7 @@
         "supports_vision": true,
         "supports_xhigh_reasoning_effort": true,
         "tool_use_system_prompt_tokens": 346,
+        "supports_output_config": true,
         "supports_max_reasoning_effort": true,
         "supports_minimal_reasoning_effort": true
     },
