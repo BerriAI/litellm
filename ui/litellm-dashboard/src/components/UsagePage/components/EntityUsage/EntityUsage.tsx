@@ -34,6 +34,7 @@ import {
   customerDailyActivityCall,
   organizationDailyActivityCall,
   tagDailyActivityCall,
+  teamDailyActivityAggregatedCall,
   teamDailyActivityCall,
   userDailyActivityCall,
 } from "../../../networking";
@@ -130,21 +131,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
     enabled,
   });
 
-  const spendData = spendDataRaw as unknown as EntitySpendData;
 
-  const {
-    data: agentSpendDataRaw,
-    isFetchingMore: agentIsFetchingMore,
-    progress: agentProgress,
-    cancelled: agentCancelled,
-    cancel: agentCancel,
-  } = usePaginatedDailyActivity({
-    fetchFn: agentDailyActivityCall,
-    args: [accessToken, startTime, endTime, null],
-    enabled: enabled && entityType === "team",
-  });
-
-  const agentSpendData = agentSpendDataRaw as unknown as EntitySpendData;
 
   const modelMetrics = processActivityData(spendData, "models", teams || []);
   const keyMetrics = processActivityData(spendData, "api_keys", teams || []);
