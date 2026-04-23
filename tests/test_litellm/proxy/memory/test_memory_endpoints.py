@@ -59,6 +59,21 @@ class _InMemoryMemoryTable:
                 if not any(self._matches(row, clause) for clause in v):
                     return False
                 continue
+            # Support Prisma-style filter dicts: {"startsWith": "..."}, etc.
+            if isinstance(v, dict):
+                actual = getattr(row, k, None)
+                if "startsWith" in v:
+                    if not isinstance(actual, str) or not actual.startswith(
+                        v["startsWith"]
+                    ):
+                        return False
+                    continue
+                if "equals" in v:
+                    if actual != v["equals"]:
+                        return False
+                    continue
+                # Unknown filter — fall back to inequality (treat as no match).
+                return False
             if getattr(row, k, None) != v:
                 return False
         return True
@@ -225,6 +240,64 @@ class TestMemoryEndpoints:
         keys = {m["key"] for m in body["memories"]}
         assert keys == {"a", "c"}
         assert body["total"] == 2
+
+    def test_list_memory_key_prefix_filter(self):
+        """key_prefix should do a prefix match (Redis-style namespace scan)."""
+        table = self.prisma.db.litellm_memorytable
+        table.rows.extend(
+            [
+                _make_row(
+                    memory_id="m1", key="user:profile", user_id="user-a", team_id=None
+                ),
+                _make_row(
+                    memory_id="m2", key="user:prefs", user_id="user-a", team_id=None
+                ),
+                _make_row(
+                    memory_id="m3",
+                    key="project:context",
+                    user_id="user-a",
+                    team_id=None,
+                ),
+            ]
+        )
+        client = _make_client(_user_auth("user-a", "team-a"))
+        with _patch_prisma(self.prisma):
+            resp = client.get("/v1/memory?key_prefix=user:")
+        assert resp.status_code == 200
+        body = resp.json()
+        keys = {m["key"] for m in body["memories"]}
+        assert keys == {"user:profile", "user:prefs"}
+        assert body["total"] == 2
+
+    def test_list_memory_key_prefix_does_not_leak_across_scopes(self):
+        """
+        Even if a prefix would match another user's keys, the visibility
+        filter must still scope results to the caller.
+        """
+        table = self.prisma.db.litellm_memorytable
+        table.rows.extend(
+            [
+                # Caller's own "user:*" rows — should be visible.
+                _make_row(
+                    memory_id="m1", key="user:profile", user_id="user-a", team_id=None
+                ),
+                # Another user's "user:*" rows — must NOT leak.
+                _make_row(
+                    memory_id="m2", key="user:secret", user_id="user-b", team_id=None
+                ),
+                _make_row(
+                    memory_id="m3", key="user:token", user_id="user-b", team_id=None
+                ),
+            ]
+        )
+        client = _make_client(_user_auth("user-a", "team-a"))
+        with _patch_prisma(self.prisma):
+            resp = client.get("/v1/memory?key_prefix=user:")
+        assert resp.status_code == 200
+        body = resp.json()
+        keys = {m["key"] for m in body["memories"]}
+        assert keys == {"user:profile"}
+        assert body["total"] == 1
 
     def test_list_memory_admin_sees_all(self):
         table = self.prisma.db.litellm_memorytable

@@ -10011,11 +10011,22 @@ export interface MemoryListResponse {
 
 export const fetchMemoryList = async (
   accessToken: string,
-  options: { keyPrefix?: string; page?: number; pageSize?: number } = {},
+  options: {
+    key?: string;
+    keyPrefix?: string;
+    page?: number;
+    pageSize?: number;
+  } = {},
 ): Promise<MemoryListResponse> => {
   const base = proxyBaseUrl ? `${proxyBaseUrl}/v1/memory` : `/v1/memory`;
   const params = new URLSearchParams();
-  if (options.keyPrefix) params.append("key", options.keyPrefix);
+  // keyPrefix takes precedence — backend also does, but we omit `key`
+  // to keep the URL clean and intent obvious.
+  if (options.keyPrefix) {
+    params.append("key_prefix", options.keyPrefix);
+  } else if (options.key) {
+    params.append("key", options.key);
+  }
   if (options.page != null) params.append("page", String(options.page));
   if (options.pageSize != null)
     params.append("page_size", String(options.pageSize));

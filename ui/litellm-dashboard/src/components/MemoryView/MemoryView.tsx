@@ -74,7 +74,8 @@ export const MemoryView: React.FC<MemoryViewProps> = ({ accessToken }) => {
     queryKey: ["memoryList", appliedSearch],
     queryFn: () => {
       if (!accessToken) throw new Error("Access token required");
-      // Current API supports exact key match; treat empty search as list-all.
+      // Prefix search matches the Redis-style mental model (namespace scan):
+      // typing "user:" finds "user:profile", "user:prefs", etc.
       return fetchMemoryList(accessToken, {
         keyPrefix: appliedSearch || undefined,
         pageSize: 200,
@@ -254,7 +255,7 @@ export const MemoryView: React.FC<MemoryViewProps> = ({ accessToken }) => {
             <Space>
               <Input
                 allowClear
-                placeholder="Filter by exact key"
+                placeholder='Filter by key prefix, e.g. "user:"'
                 prefix={<SearchOutlined />}
                 value={searchInput}
                 onChange={(e) => setSearchInput(e.target.value)}
@@ -300,7 +301,7 @@ export const MemoryView: React.FC<MemoryViewProps> = ({ accessToken }) => {
                 <Empty
                   description={
                     appliedSearch
-                      ? `No memories found for key "${appliedSearch}"`
+                      ? `No memories with keys starting with "${appliedSearch}"`
                       : "No memories stored yet"
                   }
                 />

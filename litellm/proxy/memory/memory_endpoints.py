@@ -159,6 +159,13 @@ async def create_memory(
 )
 async def list_memory(
     key: Optional[str] = Query(None, description="Filter by exact key match."),
+    key_prefix: Optional[str] = Query(
+        None,
+        description=(
+            "Filter by key prefix (Redis-style namespace scan). "
+            "Mutually exclusive with `key`; if both are provided, `key_prefix` wins."
+        ),
+    ),
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=500),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
@@ -170,7 +177,12 @@ async def list_memory(
     vis = _visibility_filter(user_api_key_dict)
     if vis is not None:
         where.update(vis)
-    if key is not None:
+    # key_prefix takes precedence over exact `key` if both are passed.
+    # Both sit under the visibility filter (ANDed), so prefix scans can
+    # never leak across user/team scopes.
+    if key_prefix is not None:
+        where["key"] = {"startsWith": key_prefix}
+    elif key is not None:
         where["key"] = key
 
     try:
