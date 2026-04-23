@@ -53,6 +53,8 @@
         "src/components/permissions/VectorStorePermissions.tsx",
         "src/components/permissions/AgentPermissions.tsx",
         "src/components/permissions/MCPServerPermissions.tsx",
+        "src/components/policies/impact_preview_alert.tsx",
+        "src/components/policies/impact_popover.tsx",
         "src/components/DeletedKeysPage/DeletedKeysPage.tsx",
         "src/components/DeletedTeamsPage/DeletedTeamsPage.tsx"
       ],

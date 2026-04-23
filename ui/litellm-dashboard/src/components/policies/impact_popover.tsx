@@ -1,15 +1,32 @@
 import React, { useState } from "react";
-import { Icon } from "@tremor/react";
-import { EyeIcon } from "@heroicons/react/outline";
-import { Tooltip, Tag, Popover, Spin } from "antd";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import { Badge } from "@/components/ui/badge";
+import { Eye, Loader2 } from "lucide-react";
 import { PolicyAttachment } from "./types";
 import { estimateAttachmentImpactCall } from "../networking";
 
-const ImpactPopover: React.FC<{ attachment: PolicyAttachment; accessToken: string | null }> = ({
-  attachment,
-  accessToken,
-}) => {
-  const [impact, setImpact] = useState<any>(null);
+interface ImpactInfo {
+  affected_keys_count: number;
+  affected_teams_count: number;
+  sample_keys: string[];
+  sample_teams: string[];
+}
+
+const ImpactPopover: React.FC<{
+  attachment: PolicyAttachment;
+  accessToken: string | null;
+}> = ({ attachment, accessToken }) => {
+  const [impact, setImpact] = useState<ImpactInfo | null>(null);
   const [loading, setLoading] = useState(false);
   const [loaded, setLoaded] = useState(false);
 
@@ -34,49 +51,89 @@ const ImpactPopover: React.FC<{ attachment: PolicyAttachment; accessToken: strin
     }
   };
 
-  const content = loading ? (
-    <div className="p-2 text-center"><Spin size="small" /> Loading...</div>
-  ) : impact ? (
-    <div className="text-xs" style={{ maxWidth: 280 }}>
-      {impact.affected_keys_count === -1 ? (
-        <p className="font-medium text-amber-600">Global scope — affects all keys and teams</p>
-      ) : (
-        <>
-          <p className="mb-1">
-            <strong>{impact.affected_keys_count}</strong> key{impact.affected_keys_count !== 1 ? "s" : ""},{" "}
-            <strong>{impact.affected_teams_count}</strong> team{impact.affected_teams_count !== 1 ? "s" : ""} affected
-          </p>
-          {impact.sample_keys.length > 0 && (
-            <div className="mb-1">
-              <span className="text-gray-500">Keys: </span>
-              {impact.sample_keys.map((k: string) => (
-                <Tag key={k} style={{ fontSize: 10, margin: 1 }}>{k}</Tag>
-              ))}
-            </div>
-          )}
-          {impact.sample_teams.length > 0 && (
-            <div>
-              <span className="text-gray-500">Teams: </span>
-              {impact.sample_teams.map((t: string) => (
-                <Tag key={t} style={{ fontSize: 10, margin: 1 }}>{t}</Tag>
-              ))}
-            </div>
-          )}
-          {impact.affected_keys_count === 0 && impact.affected_teams_count === 0 && (
-            <p className="text-gray-400">No keys or teams currently affected</p>
-          )}
-        </>
-      )}
-    </div>
-  ) : (
-    <p className="text-xs text-gray-400">Click to load</p>
-  );
-
   return (
-    <Popover content={content} title="Blast Radius" trigger="click" onOpenChange={(open) => { if (open) loadImpact(); }}>
-      <Tooltip title="View blast radius">
-        <Icon icon={EyeIcon} size="sm" className="cursor-pointer hover:text-blue-500" />
-      </Tooltip>
+    <Popover
+      onOpenChange={(open) => {
+        if (open) loadImpact();
+      }}
+    >
+      <TooltipProvider>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <PopoverTrigger asChild>
+              <button
+                type="button"
+                className="inline-flex items-center justify-center cursor-pointer text-muted-foreground hover:text-primary"
+                aria-label="View blast radius"
+              >
+                <Eye className="h-3.5 w-3.5" />
+              </button>
+            </PopoverTrigger>
+          </TooltipTrigger>
+          <TooltipContent>View blast radius</TooltipContent>
+        </Tooltip>
+      </TooltipProvider>
+      <PopoverContent className="max-w-[320px]">
+        <div className="font-semibold text-sm mb-2">Blast Radius</div>
+        {loading ? (
+          <div className="p-2 text-center flex items-center justify-center gap-2 text-sm">
+            <Loader2 className="h-3 w-3 animate-spin" /> Loading...
+          </div>
+        ) : impact ? (
+          <div className="text-xs">
+            {impact.affected_keys_count === -1 ? (
+              <p className="font-medium text-amber-600 dark:text-amber-400">
+                Global scope — affects all keys and teams
+              </p>
+            ) : (
+              <>
+                <p className="mb-1">
+                  <strong>{impact.affected_keys_count}</strong> key
+                  {impact.affected_keys_count !== 1 ? "s" : ""},{" "}
+                  <strong>{impact.affected_teams_count}</strong> team
+                  {impact.affected_teams_count !== 1 ? "s" : ""} affected
+                </p>
+                {impact.sample_keys.length > 0 && (
+                  <div className="mb-1">
+                    <span className="text-muted-foreground">Keys: </span>
+                    {impact.sample_keys.map((k: string) => (
+                      <Badge
+                        key={k}
+                        variant="outline"
+                        className="text-[10px] m-0.5"
+                      >
+                        {k}
+                      </Badge>
+                    ))}
+                  </div>
+                )}
+                {impact.sample_teams.length > 0 && (
+                  <div>
+                    <span className="text-muted-foreground">Teams: </span>
+                    {impact.sample_teams.map((t: string) => (
+                      <Badge
+                        key={t}
+                        variant="outline"
+                        className="text-[10px] m-0.5"
+                      >
+                        {t}
+                      </Badge>
+                    ))}
+                  </div>
+                )}
+                {impact.affected_keys_count === 0 &&
+                  impact.affected_teams_count === 0 && (
+                    <p className="text-muted-foreground">
+                      No keys or teams currently affected
+                    </p>
+                  )}
+              </>
+            )}
+          </div>
+        ) : (
+          <p className="text-xs text-muted-foreground">Click to load</p>
+        )}
+      </PopoverContent>
     </Popover>
   );
 };
