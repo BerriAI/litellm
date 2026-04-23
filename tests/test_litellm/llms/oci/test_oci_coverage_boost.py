@@ -67,7 +67,9 @@ _GENERIC_MODEL = "meta.llama-3-70b-instruct"
 @patch("litellm.llms.oci.common_utils.load_private_key_from_str")
 @patch("litellm.llms.oci.common_utils.padding")
 @patch("litellm.llms.oci.common_utils.hashes")
-def test_sign_with_manual_credentials_inline_key(mock_hashes, mock_padding, mock_load_key):
+def test_sign_with_manual_credentials_inline_key(
+    mock_hashes, mock_padding, mock_load_key
+):
     """sign_with_manual_credentials succeeds with an inline oci_key string."""
     mock_key = MagicMock()
     mock_key.sign.return_value = b"fake_signature"
@@ -88,7 +90,9 @@ def test_sign_with_manual_credentials_inline_key(mock_hashes, mock_padding, mock
 @patch("litellm.llms.oci.common_utils.load_private_key_from_file")
 @patch("litellm.llms.oci.common_utils.padding")
 @patch("litellm.llms.oci.common_utils.hashes")
-def test_sign_with_manual_credentials_key_file(mock_hashes, mock_padding, mock_load_file):
+def test_sign_with_manual_credentials_key_file(
+    mock_hashes, mock_padding, mock_load_file
+):
     """sign_with_manual_credentials falls back to oci_key_file when oci_key absent."""
     mock_key = MagicMock()
     mock_key.sign.return_value = b"sig_from_file"
@@ -117,9 +121,7 @@ def test_sign_with_manual_credentials_authorization_contains_key_id(
     mock_key.sign.return_value = b"sig"
     mock_load_key.return_value = mock_key
 
-    result_headers, _ = sign_with_manual_credentials(
-        {}, _MANUAL_CREDS, {}, _API_BASE
-    )
+    result_headers, _ = sign_with_manual_credentials({}, _MANUAL_CREDS, {}, _API_BASE)
 
     auth = result_headers["authorization"]
     assert 'keyId="ocid1.tenancy.oc1..xxx/ocid1.user.oc1..xxx/aa:bb:cc:dd"' in auth
@@ -143,9 +145,7 @@ def test_sign_oci_request_routes_to_signer_when_present():
     """sign_oci_request delegates to sign_with_oci_signer when oci_signer is set."""
     signer = MagicMock()
     signer.do_request_sign.return_value = None
-    headers, body = sign_oci_request(
-        {}, {"oci_signer": signer}, {"data": 1}, _API_BASE
-    )
+    headers, body = sign_oci_request({}, {"oci_signer": signer}, {"data": 1}, _API_BASE)
     signer.do_request_sign.assert_called_once()
     assert isinstance(body, bytes)
 
@@ -229,7 +229,10 @@ def test_adapt_generic_assistant_tool_call_message():
                 {
                     "id": "call_xyz",
                     "type": "function",
-                    "function": {"name": "get_weather", "arguments": '{"city": "Rome"}'},
+                    "function": {
+                        "name": "get_weather",
+                        "arguments": '{"city": "Rome"}',
+                    },
                 }
             ],
         }
@@ -249,7 +252,10 @@ def test_adapt_generic_multipart_content():
             "role": "user",
             "content": [
                 {"type": "text", "text": "Look at this:"},
-                {"type": "image_url", "image_url": {"url": "https://example.com/img.png"}},
+                {
+                    "type": "image_url",
+                    "image_url": {"url": "https://example.com/img.png"},
+                },
             ],
         }
     ]
@@ -712,17 +718,13 @@ class TestOCIChatConfigGetOptionalParams:
 
     def test_cohere_maps_stop_to_stop_sequences(self):
         config = self._config()
-        result = config._get_optional_params(
-            OCIVendors.COHERE, {"stop": ["END"]}
-        )
+        result = config._get_optional_params(OCIVendors.COHERE, {"stop": ["END"]})
         assert "stopSequences" in result
         assert result["stopSequences"] == ["END"]
 
     def test_generic_maps_max_tokens(self):
         config = self._config()
-        result = config._get_optional_params(
-            OCIVendors.GENERIC, {"max_tokens": 512}
-        )
+        result = config._get_optional_params(OCIVendors.GENERIC, {"max_tokens": 512})
         assert result["maxTokens"] == 512
 
     def test_tool_choice_string_auto_converted_to_dict(self):
@@ -870,16 +872,20 @@ class TestOCIStreamWrapperChunkCreator:
 
     def test_cohere_chunk_dispatched_correctly(self):
         wrapper = self._make_wrapper(_COHERE_MODEL)
-        payload = json.dumps({"apiFormat": "COHERE", "text": "hi", "finishReason": None})
+        payload = json.dumps(
+            {"apiFormat": "COHERE", "text": "hi", "finishReason": None}
+        )
         result = wrapper.chunk_creator(f"data:{payload}")
         assert result.choices[0].delta.content == "hi"
 
     def test_generic_chunk_dispatched_correctly(self):
         wrapper = self._make_wrapper(_GENERIC_MODEL)
-        payload = json.dumps({
-            "finishReason": "COMPLETE",
-            "index": 0,
-        })
+        payload = json.dumps(
+            {
+                "finishReason": "COMPLETE",
+                "index": 0,
+            }
+        )
         result = wrapper.chunk_creator(f"data:{payload}")
         assert result.choices[0].finish_reason == "stop"
 

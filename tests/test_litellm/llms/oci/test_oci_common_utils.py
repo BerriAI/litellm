@@ -318,11 +318,7 @@ def test_resolve_schema_anyof_no_anyof_unchanged():
 
 
 def test_resolve_schema_anyof_nested():
-    schema = {
-        "properties": {
-            "age": {"anyOf": [{"type": "integer"}, {"type": "null"}]}
-        }
-    }
+    schema = {"properties": {"age": {"anyOf": [{"type": "integer"}, {"type": "null"}]}}}
     result = resolve_oci_schema_anyof(schema)
     assert result["properties"]["age"]["type"] == "integer"
 
