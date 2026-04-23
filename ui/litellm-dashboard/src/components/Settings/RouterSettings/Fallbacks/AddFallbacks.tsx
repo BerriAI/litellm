@@ -4,8 +4,8 @@
  * Works with forms - reads from and writes to router_settings.fallbacks
  */
 
-import { Button as TremorButton } from "@tremor/react";
-import { Button } from "antd";
+import { Button } from "@/components/ui/button";
+import { Plus } from "lucide-react";
 import React, { useEffect, useState } from "react";
 import MessageManager from "@/components/molecules/message_manager";
 import NotificationManager from "../../../molecules/notifications_manager";
@@ -128,13 +128,10 @@ export default function AddFallbacks({
 
   return (
     <div>
-      <TremorButton
-        className="mx-auto"
-        onClick={() => setIsModalVisible(true)}
-        icon={() => <span className="mr-1">+</span>}
-      >
+      <Button className="mx-auto" onClick={() => setIsModalVisible(true)}>
+        <Plus className="h-4 w-4" />
         Add Fallbacks
-      </TremorButton>
+      </Button>
       <AddFallbacksModal open={isModalVisible} onCancel={handleCancel}>
         <FallbackSelectionForm
           key={modalKey}
@@ -146,21 +143,21 @@ export default function AddFallbacks({
         />
         {/* Footer with Cancel and Save buttons */}
         {groups.length > 0 && (
-          <div className="flex items-center justify-end space-x-3 pt-6 mt-6 border-t border-gray-100">
+          <div className="flex items-center justify-end space-x-3 pt-6 mt-6 border-t border-border">
             <Button
-              type="default"
+              variant="outline"
               onClick={handleCancel}
               disabled={isSaving}
             >
               Cancel
             </Button>
             <Button
-              type="default"
               onClick={handleSaveAll}
               disabled={groups.length === 0 || isSaving}
-              loading={isSaving}
             >
-              {isSaving ? "Saving Configuration..." : "Save All Configurations"}
+              {isSaving
+                ? "Saving Configuration..."
+                : "Save All Configurations"}
             </Button>
           </div>
         )}

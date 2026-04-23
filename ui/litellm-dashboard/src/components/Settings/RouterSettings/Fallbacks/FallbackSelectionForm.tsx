@@ -1,12 +1,16 @@
 /**
- * Form component for selecting and configuring fallback groups
- * Manages groups state internally, but does not handle submission
- * Decoupled from form submission logic
+ * Form component for selecting and configuring fallback groups.
+ * Manages groups state internally, but does not handle submission.
  */
 
-import { Button } from "@tremor/react";
-import { Tabs } from "antd";
-import { Plus } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import {
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+} from "@/components/ui/tabs";
+import { Plus, X } from "lucide-react";
 import React, { useEffect, useState } from "react";
 import MessageManager from "@/components/molecules/message_manager";
 import { FallbackGroup, FallbackGroupConfig } from "./FallbackGroupConfig";
@@ -26,34 +30,26 @@ export function FallbackSelectionForm({
   maxFallbacks = 10,
   maxGroups = 5,
 }: FallbackSelectionFormProps) {
-  const [activeKey, setActiveKey] = useState(groups.length > 0 ? groups[0].id : "1");
+  const [activeKey, setActiveKey] = useState(
+    groups.length > 0 ? groups[0].id : "1",
+  );
 
-  // Reset activeKey when groups change (e.g., when modal reopens)
   useEffect(() => {
     if (groups.length > 0) {
-      // If current activeKey doesn't exist in groups, reset to first group
-      const activeKeyExists = groups.some((g) => g.id === activeKey);
-      if (!activeKeyExists) {
-        setActiveKey(groups[0].id);
-      }
+      const exists = groups.some((g) => g.id === activeKey);
+      if (!exists) setActiveKey(groups[0].id);
     } else {
-      // If groups is empty, reset activeKey
       setActiveKey("1");
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [groups]);
 
   const handleAddGroup = () => {
-    if (groups.length >= maxGroups) {
-      return;
-    }
+    if (groups.length >= maxGroups) return;
     const newId = Date.now().toString();
     const newGroups = [
       ...groups,
-      {
-        id: newId,
-        primaryModel: null,
-        fallbackModels: [],
-      },
+      { id: newId, primaryModel: null, fallbackModels: [] },
     ];
     onGroupsChange(newGroups);
     setActiveKey(newId);
@@ -72,39 +68,20 @@ export function FallbackSelectionForm({
   };
 
   const handleGroupUpdate = (updatedGroup: FallbackGroup) => {
-    const newGroups = groups.map((g) => (g.id === updatedGroup.id ? updatedGroup : g));
+    const newGroups = groups.map((g) =>
+      g.id === updatedGroup.id ? updatedGroup : g,
+    );
     onGroupsChange(newGroups);
   };
 
-  // Generate tab items
-  const items = groups.map((group, index) => {
-    const label = group.primaryModel
-      ? group.primaryModel
-      : `Group ${index + 1}`;
-    return {
-      key: group.id,
-      label: label,
-      closable: groups.length > 1, // Only allow closing if there's more than 1 group
-      children: (
-        <FallbackGroupConfig
-          group={group}
-          onChange={handleGroupUpdate}
-          availableModels={availableModels}
-          maxFallbacks={maxFallbacks}
-        />
-      ),
-    };
-  });
-
   if (groups.length === 0) {
     return (
-      <div className="text-center py-12 bg-gray-50 rounded-lg border border-dashed border-gray-300">
-        <p className="text-gray-500 mb-4">No fallback groups configured</p>
-        <Button
-          variant="primary"
-          onClick={handleAddGroup}
-          icon={() => <Plus className="w-4 h-4" />}
-        >
+      <div className="text-center py-12 bg-muted rounded-lg border border-dashed border-border">
+        <p className="text-muted-foreground mb-4">
+          No fallback groups configured
+        </p>
+        <Button onClick={handleAddGroup}>
+          <Plus className="w-4 h-4" />
           Create First Group
         </Button>
       </div>
@@ -112,22 +89,57 @@ export function FallbackSelectionForm({
   }
 
   return (
-    <Tabs
-      type="editable-card"
-      activeKey={activeKey}
-      onChange={setActiveKey}
-      onEdit={(targetKey, action) => {
-        if (action === "add") handleAddGroup();
-        else if (action === "remove" && groups.length > 1) {
-          handleRemoveGroup(targetKey as string);
-        }
-      }}
-      items={items}
-      className="fallback-tabs"
-      tabBarStyle={{
-        marginBottom: 0,
-      }}
-      hideAdd={groups.length >= maxGroups}
-    />
+    <div data-testid="fallback-selection-form">
+      <Tabs value={activeKey} onValueChange={setActiveKey}>
+        <div className="flex items-center justify-between mb-2">
+          <TabsList>
+            {groups.map((group, index) => {
+              const label = group.primaryModel || `Group ${index + 1}`;
+              return (
+                <TabsTrigger key={group.id} value={group.id}>
+                  <span className="inline-flex items-center gap-1">
+                    {label}
+                    {groups.length > 1 && (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleRemoveGroup(group.id);
+                        }}
+                        aria-label={`Remove ${label}`}
+                        className="inline-flex items-center"
+                      >
+                        <X size={12} />
+                      </button>
+                    )}
+                  </span>
+                </TabsTrigger>
+              );
+            })}
+          </TabsList>
+          {groups.length < maxGroups && (
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              onClick={handleAddGroup}
+            >
+              <Plus className="h-4 w-4" />
+              Add group
+            </Button>
+          )}
+        </div>
+        {groups.map((group) => (
+          <TabsContent key={group.id} value={group.id}>
+            <FallbackGroupConfig
+              group={group}
+              onChange={handleGroupUpdate}
+              availableModels={availableModels}
+              maxFallbacks={maxFallbacks}
+            />
+          </TabsContent>
+        ))}
+      </Tabs>
+    </div>
   );
 }
