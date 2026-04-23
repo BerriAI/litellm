@@ -72,6 +72,7 @@
         "src/components/policies/policy_templates.tsx",
         "src/components/mcp_tools/mcp_server_view.tsx",
         "src/components/claude_code_plugins/plugin_info.tsx",
+        "src/components/team/LoggingSettings.tsx",
         "src/components/permissions/VectorStorePermissions.tsx",
         "src/components/permissions/AgentPermissions.tsx",
         "src/components/permissions/MCPServerPermissions.tsx",
