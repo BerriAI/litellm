@@ -1,15 +1,21 @@
-import { CopyOutlined } from "@ant-design/icons";
-import { ArrowLeftIcon, ExternalLinkIcon } from "@heroicons/react/outline";
 import {
-  Badge,
-  Button,
-  Card,
-  Grid,
-  Text,
-  Title,
-} from "@tremor/react";
-import { Spin, Switch, Tooltip } from "antd";
-import React, { useEffect, useState } from "react";
+  ArrowLeft,
+  Copy,
+  ExternalLink,
+  Loader2,
+} from "lucide-react";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { Switch } from "@/components/ui/switch";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import { cn } from "@/lib/utils";
+import React, { useCallback, useEffect, useState } from "react";
 import NotificationsManager from "../molecules/notifications_manager";
 import {
   disableClaudeCodePlugin,
@@ -21,9 +27,33 @@ import {
   formatInstallCommand,
   getCategoryBadgeColor,
   getSourceDisplayText,
-  getSourceLink
+  getSourceLink,
 } from "./helpers";
 import { Plugin } from "./types";
+
+// Map tremor-style color tokens to categorical Tailwind palette classes.
+const BADGE_COLOR_CLASSES: Record<string, string> = {
+  gray: "bg-muted text-muted-foreground",
+  green:
+    "bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300",
+  red: "bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300",
+  blue: "bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300",
+  indigo:
+    "bg-indigo-100 text-indigo-700 dark:bg-indigo-950 dark:text-indigo-300",
+  purple:
+    "bg-purple-100 text-purple-700 dark:bg-purple-950 dark:text-purple-300",
+  orange:
+    "bg-orange-100 text-orange-700 dark:bg-orange-950 dark:text-orange-300",
+  amber: "bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300",
+  yellow: "bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300",
+  cyan: "bg-cyan-100 text-cyan-700 dark:bg-cyan-950 dark:text-cyan-300",
+  pink: "bg-pink-100 text-pink-700 dark:bg-pink-950 dark:text-pink-300",
+  rose: "bg-rose-100 text-rose-700 dark:bg-rose-950 dark:text-rose-300",
+  teal: "bg-teal-100 text-teal-700 dark:bg-teal-950 dark:text-teal-300",
+};
+
+const badgeClasses = (color: string): string =>
+  BADGE_COLOR_CLASSES[color] || BADGE_COLOR_CLASSES.gray;
 
 interface PluginInfoViewProps {
   pluginId: string;
@@ -44,21 +74,14 @@ const PluginInfoView: React.FC<PluginInfoViewProps> = ({
   const [isLoading, setIsLoading] = useState(true);
   const [isToggling, setIsToggling] = useState(false);
 
-  useEffect(() => {
-    fetchPluginInfo();
-  }, [pluginId, accessToken]);
-
-  const fetchPluginInfo = async () => {
+  const fetchPluginInfo = useCallback(async () => {
     if (!accessToken) return;
 
     setIsLoading(true);
     try {
-      // The backend expects plugin name, not ID
-      // We'll need to find the plugin by ID from the list
-      // For now, assume pluginId is actually the plugin name
       const data = await getClaudeCodePluginDetails(
         accessToken,
-        pluginId as string
+        pluginId as string,
       );
       setPlugin(data.plugin);
     } catch (error) {
@@ -67,7 +90,11 @@ const PluginInfoView: React.FC<PluginInfoViewProps> = ({
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [accessToken, pluginId]);
+
+  useEffect(() => {
+    fetchPluginInfo();
+  }, [fetchPluginInfo]);
 
   const handleToggleEnabled = async () => {
     if (!accessToken || !plugin) return;
@@ -83,7 +110,8 @@ const PluginInfoView: React.FC<PluginInfoViewProps> = ({
       }
       onPluginUpdated();
       fetchPluginInfo();
-    } catch (error) {
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    } catch (_error) {
       NotificationsManager.error("Failed to toggle plugin status");
     } finally {
       setIsToggling(false);
@@ -98,14 +126,14 @@ const PluginInfoView: React.FC<PluginInfoViewProps> = ({
   if (isLoading) {
     return (
       <div className="flex items-center justify-center p-8">
-        <Spin size="large" />
+        <Loader2 className="h-6 w-6 animate-spin text-primary" />
       </div>
     );
   }
 
   if (!plugin) {
     return (
-      <div className="p-8 text-center text-gray-500">
+      <div className="p-8 text-center text-muted-foreground">
         <p>Plugin not found</p>
         <Button className="mt-4" onClick={onClose}>
           Go Back
@@ -120,153 +148,157 @@ const PluginInfoView: React.FC<PluginInfoViewProps> = ({
 
   return (
     <div className="space-y-4">
-      {/* Header with Back Button */}
       <div className="flex items-center gap-3 mb-6">
-        <ArrowLeftIcon
-          className="h-5 w-5 cursor-pointer text-gray-500 hover:text-gray-700"
+        <ArrowLeft
+          className="h-5 w-5 cursor-pointer text-muted-foreground hover:text-foreground"
           onClick={onClose}
         />
         <h2 className="text-2xl font-bold">{plugin.name}</h2>
         {plugin.version && (
-          <Badge color="blue" size="xs">
+          <Badge className={cn("text-xs", badgeClasses("blue"))}>
             v{plugin.version}
           </Badge>
         )}
         {plugin.category && (
-          <Badge color={categoryBadgeColor} size="xs">
+          <Badge className={cn("text-xs", badgeClasses(categoryBadgeColor))}>
             {plugin.category}
           </Badge>
         )}
-        <Badge color={plugin.enabled ? "green" : "gray"} size="xs">
+        <Badge
+          className={cn(
+            "text-xs",
+            badgeClasses(plugin.enabled ? "green" : "gray"),
+          )}
+        >
           {plugin.enabled ? "Enabled" : "Disabled"}
         </Badge>
       </div>
 
       {/* Install Command */}
-      <Card>
+      <Card className="p-4">
         <div className="flex items-center justify-between">
           <div className="flex-1">
-            <Text className="text-gray-600 text-xs mb-2">Install Command</Text>
-            <div className="font-mono bg-gray-100 px-3 py-2 rounded text-sm">
+            <p className="text-muted-foreground text-xs mb-2">
+              Install Command
+            </p>
+            <div className="font-mono bg-muted px-3 py-2 rounded text-sm">
               {installCommand}
             </div>
           </div>
-          <Tooltip title="Copy install command">
-            <Button
-              size="xs"
-              variant="secondary"
-              icon={CopyOutlined}
-              onClick={() => copyToClipboard(installCommand)}
-              className="ml-4"
-            >
-              Copy
-            </Button>
-          </Tooltip>
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => copyToClipboard(installCommand)}
+                  className="ml-4"
+                >
+                  <Copy className="h-3.5 w-3.5" />
+                  Copy
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Copy install command</TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
         </div>
       </Card>
 
       {/* Plugin Details */}
-      <Card>
-        <Title>Plugin Details</Title>
-        <Grid
-          className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6 mt-4"
-        >
-          {/* Plugin ID */}
+      <Card className="p-4">
+        <h3 className="text-lg font-semibold">Plugin Details</h3>
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6 mt-4">
           <div>
-            <Text className="text-gray-600 text-xs">Plugin ID</Text>
+            <p className="text-muted-foreground text-xs">Plugin ID</p>
             <div className="flex items-center gap-2 mt-1">
-              <Text className="font-mono text-xs">{plugin.id}</Text>
-              <CopyOutlined
-                className="cursor-pointer text-gray-500 hover:text-blue-500 text-xs"
+              <span className="font-mono text-xs">{plugin.id}</span>
+              <Copy
+                className="h-3 w-3 cursor-pointer text-muted-foreground hover:text-primary"
                 onClick={() => copyToClipboard(plugin.id)}
               />
             </div>
           </div>
 
-          {/* Name */}
           <div>
-            <Text className="text-gray-600 text-xs">Name</Text>
-            <Text className="font-semibold mt-1">{plugin.name}</Text>
+            <p className="text-muted-foreground text-xs">Name</p>
+            <p className="font-semibold mt-1">{plugin.name}</p>
           </div>
 
-          {/* Version */}
           <div>
-            <Text className="text-gray-600 text-xs">Version</Text>
-            <Text className="font-semibold mt-1">
-              {plugin.version || "N/A"}
-            </Text>
+            <p className="text-muted-foreground text-xs">Version</p>
+            <p className="font-semibold mt-1">{plugin.version || "N/A"}</p>
           </div>
 
-          {/* Source */}
           <div className="col-span-2">
-            <Text className="text-gray-600 text-xs">Source</Text>
+            <p className="text-muted-foreground text-xs">Source</p>
             <div className="flex items-center gap-2 mt-1">
-              <Text className="font-semibold">
+              <p className="font-semibold">
                 {getSourceDisplayText(plugin.source)}
-              </Text>
+              </p>
               {sourceLink && (
                 <a
                   href={sourceLink}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="text-blue-500 hover:text-blue-700"
+                  className="text-primary hover:text-primary/80"
                 >
-                  <ExternalLinkIcon className="h-4 w-4" />
+                  <ExternalLink className="h-4 w-4" />
                 </a>
               )}
             </div>
           </div>
 
-          {/* Category */}
           <div>
-            <Text className="text-gray-600 text-xs">Category</Text>
+            <p className="text-muted-foreground text-xs">Category</p>
             <div className="mt-1">
               {plugin.category ? (
-                <Badge color={categoryBadgeColor} size="xs">
+                <Badge
+                  className={cn("text-xs", badgeClasses(categoryBadgeColor))}
+                >
                   {plugin.category}
                 </Badge>
               ) : (
-                <Text className="text-gray-400">Uncategorized</Text>
+                <p className="text-muted-foreground">Uncategorized</p>
               )}
             </div>
           </div>
 
-          {/* Enabled Status */}
           {isAdmin && (
             <div className="col-span-3">
-              <Text className="text-gray-600 text-xs">Status</Text>
+              <p className="text-muted-foreground text-xs">Status</p>
               <div className="flex items-center gap-3 mt-2">
                 <Switch
                   checked={plugin.enabled}
-                  loading={isToggling}
-                  onChange={handleToggleEnabled}
+                  disabled={isToggling}
+                  onCheckedChange={handleToggleEnabled}
                 />
-                <Text className="text-sm">
+                <p className="text-sm">
                   {plugin.enabled
                     ? "Plugin is enabled and visible in marketplace"
                     : "Plugin is disabled and hidden from marketplace"}
-                </Text>
+                </p>
               </div>
             </div>
           )}
-        </Grid>
+        </div>
       </Card>
 
-      {/* Description */}
       {plugin.description && (
-        <Card>
-          <Title>Description</Title>
-          <Text className="mt-2">{plugin.description}</Text>
+        <Card className="p-4">
+          <h3 className="text-lg font-semibold">Description</h3>
+          <p className="mt-2">{plugin.description}</p>
         </Card>
       )}
 
-      {/* Keywords */}
       {plugin.keywords && plugin.keywords.length > 0 && (
-        <Card>
-          <Title>Keywords</Title>
+        <Card className="p-4">
+          <h3 className="text-lg font-semibold">Keywords</h3>
           <div className="flex flex-wrap gap-2 mt-2">
             {plugin.keywords.map((keyword, index) => (
-              <Badge key={index} color="gray" size="xs">
+              <Badge
+                key={index}
+                className={cn("text-xs", badgeClasses("gray"))}
+              >
                 {keyword}
               </Badge>
             ))}
@@ -274,75 +306,70 @@ const PluginInfoView: React.FC<PluginInfoViewProps> = ({
         </Card>
       )}
 
-      {/* Author Information */}
       {plugin.author && (
-        <Card>
-          <Title>Author Information</Title>
-          <Grid className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-4">
+        <Card className="p-4">
+          <h3 className="text-lg font-semibold">Author Information</h3>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-4">
             {plugin.author.name && (
               <div>
-                <Text className="text-gray-600 text-xs">Name</Text>
-                <Text className="font-semibold mt-1">
-                  {plugin.author.name}
-                </Text>
+                <p className="text-muted-foreground text-xs">Name</p>
+                <p className="font-semibold mt-1">{plugin.author.name}</p>
               </div>
             )}
             {plugin.author.email && (
               <div>
-                <Text className="text-gray-600 text-xs">Email</Text>
-                <Text className="font-semibold mt-1">
+                <p className="text-muted-foreground text-xs">Email</p>
+                <p className="font-semibold mt-1">
                   <a
                     href={`mailto:${plugin.author.email}`}
-                    className="text-blue-500 hover:text-blue-700"
+                    className="text-primary hover:text-primary/80"
                   >
                     {plugin.author.email}
                   </a>
-                </Text>
+                </p>
               </div>
             )}
-          </Grid>
+          </div>
         </Card>
       )}
 
-      {/* Additional Links */}
       {plugin.homepage && (
-        <Card>
-          <Title>Homepage</Title>
+        <Card className="p-4">
+          <h3 className="text-lg font-semibold">Homepage</h3>
           <a
             href={plugin.homepage}
             target="_blank"
             rel="noopener noreferrer"
-            className="text-blue-500 hover:text-blue-700 flex items-center gap-2 mt-2"
+            className="text-primary hover:text-primary/80 flex items-center gap-2 mt-2"
           >
             {plugin.homepage}
-            <ExternalLinkIcon className="h-4 w-4" />
+            <ExternalLink className="h-4 w-4" />
           </a>
         </Card>
       )}
 
-      {/* Timestamps */}
-      <Card>
-        <Title>Metadata</Title>
-        <Grid className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-4">
+      <Card className="p-4">
+        <h3 className="text-lg font-semibold">Metadata</h3>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-4">
           <div>
-            <Text className="text-gray-600 text-xs">Created At</Text>
-            <Text className="font-semibold mt-1">
+            <p className="text-muted-foreground text-xs">Created At</p>
+            <p className="font-semibold mt-1">
               {formatDateString(plugin.created_at)}
-            </Text>
+            </p>
           </div>
           <div>
-            <Text className="text-gray-600 text-xs">Updated At</Text>
-            <Text className="font-semibold mt-1">
+            <p className="text-muted-foreground text-xs">Updated At</p>
+            <p className="font-semibold mt-1">
               {formatDateString(plugin.updated_at)}
-            </Text>
+            </p>
           </div>
           {plugin.created_by && (
             <div className="col-span-2">
-              <Text className="text-gray-600 text-xs">Created By</Text>
-              <Text className="font-semibold mt-1">{plugin.created_by}</Text>
+              <p className="text-muted-foreground text-xs">Created By</p>
+              <p className="font-semibold mt-1">{plugin.created_by}</p>
             </div>
           )}
-        </Grid>
+        </div>
       </Card>
     </div>
   );
