@@ -1,4 +1,6 @@
-from litellm.llms.base_llm.image_generation.transformation import BaseImageGenerationConfig
+from litellm.llms.base_llm.image_generation.transformation import (
+    BaseImageGenerationConfig,
+)
 
 from .transformation import DashScopeImageGenerationConfig
 
