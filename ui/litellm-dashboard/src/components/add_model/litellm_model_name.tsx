@@ -1,7 +1,6 @@
 import React from "react";
 import { Form, Select as AntSelect } from "antd";
-import { TextInput, Text } from "@tremor/react";
-import { Row, Col } from "antd";
+import { Input } from "@/components/ui/input";
 import { Providers } from "../provider_info_helpers";
 
 interface LiteLLMModelNameFieldProps {
@@ -79,6 +78,7 @@ const LiteLLMModelNameField: React.FC<LiteLLMModelNameFieldProps> = ({
 
     // Immediately update the model mappings
     const currentMappings = form.getFieldValue("model_mappings") || [];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const updatedMappings = currentMappings.map((mapping: any) => {
       if (mapping.public_name === "custom" || mapping.litellm_model === "custom") {
         if (selectedProvider === Providers.Azure) {
@@ -118,12 +118,14 @@ const LiteLLMModelNameField: React.FC<LiteLLMModelNameFieldProps> = ({
           {selectedProvider === Providers.Azure ||
           selectedProvider === Providers.OpenAI_Compatible ||
           selectedProvider === Providers.Ollama ? (
-            <>
-              <TextInput
-                placeholder={getPlaceholder(selectedProvider)}
-                onChange={selectedProvider === Providers.Azure ? handleAzureDeploymentNameChange : undefined}
-              />
-            </>
+            <Input
+              placeholder={getPlaceholder(selectedProvider)}
+              onChange={
+                selectedProvider === Providers.Azure
+                  ? handleAzureDeploymentNameChange
+                  : undefined
+              }
+            />
           ) : providerModels.length > 0 ? (
             <AntSelect
               data-testid="model-name-select"
@@ -151,7 +153,7 @@ const LiteLLMModelNameField: React.FC<LiteLLMModelNameFieldProps> = ({
               style={{ width: "100%" }}
             />
           ) : (
-            <TextInput placeholder={getPlaceholder(selectedProvider)} />
+            <Input placeholder={getPlaceholder(selectedProvider)} />
           )}
         </Form.Item>
 
@@ -164,12 +166,19 @@ const LiteLLMModelNameField: React.FC<LiteLLMModelNameFieldProps> = ({
               modelArray.includes("custom") && (
                 <Form.Item
                   name="custom_model_name"
-                  rules={[{ required: true, message: "Please enter a custom model name." }]}
+                  rules={[
+                    {
+                      required: true,
+                      message: "Please enter a custom model name.",
+                    },
+                  ]}
                   className="mt-2"
                 >
-                  <TextInput
+                  <Input
                     placeholder={
-                      selectedProvider === Providers.Azure ? "Enter Azure deployment name" : "Enter custom model name"
+                      selectedProvider === Providers.Azure
+                        ? "Enter Azure deployment name"
+                        : "Enter custom model name"
                     }
                     onChange={handleCustomModelNameChange}
                   />
@@ -179,16 +188,14 @@ const LiteLLMModelNameField: React.FC<LiteLLMModelNameFieldProps> = ({
           }}
         </Form.Item>
       </Form.Item>
-      <Row>
-        <Col span={10}></Col>
-        <Col span={14}>
-          <Text className="mb-3 mt-1">
-            {selectedProvider === Providers.Azure
-              ? "Your deployment name will be saved as the public model name, and LiteLLM will use 'azure/deployment-name' internally"
-              : "The model name LiteLLM will send to the LLM API"}
-          </Text>
-        </Col>
-      </Row>
+      <div className="grid grid-cols-24 gap-2">
+        <div className="col-span-10" />
+        <p className="col-span-14 mb-3 mt-1 text-sm text-muted-foreground">
+          {selectedProvider === Providers.Azure
+            ? "Your deployment name will be saved as the public model name, and LiteLLM will use 'azure/deployment-name' internally"
+            : "The model name LiteLLM will send to the LLM API"}
+        </p>
+      </div>
     </>
   );
 };
