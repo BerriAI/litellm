@@ -6,6 +6,7 @@ This module provides the configuration for GitHub Copilot's Embedding API.
 Implementation based on analysis of the copilot-api project by caozhiyuan:
 https://github.com/caozhiyuan/copilot-api
 """
+
 from typing import TYPE_CHECKING, Any, Optional
 
 import httpx
@@ -23,6 +24,7 @@ from ..common_utils import (
     GITHUB_COPILOT_API_BASE,
     get_copilot_default_headers,
 )
+from ..db_authenticator import resolve_authenticator
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -57,8 +59,13 @@ class GithubCopilotEmbeddingConfig(BaseEmbeddingConfig):
         Validate environment and set up headers for GitHub Copilot API.
         """
         try:
-            # Get GitHub Copilot API key via OAuth
-            api_key = self.authenticator.get_api_key()
+            # Route through DBAuthenticator when the caller passes
+            # ``api_key=oauth:<name>``; otherwise fall back to the
+            # filesystem authenticator that backs direct-SDK / CLI use.
+            authenticator = resolve_authenticator(
+                api_key, litellm_params, self.authenticator
+            )
+            api_key = authenticator.get_api_key()
 
             if not api_key:
                 raise AuthenticationError(
@@ -99,9 +106,10 @@ class GithubCopilotEmbeddingConfig(BaseEmbeddingConfig):
         Get the complete URL for GitHub Copilot Embedding API endpoint.
         """
         # Use provided api_base or fall back to authenticator's base or default
-        api_base = (
-            self.authenticator.get_api_base() or api_base or GITHUB_COPILOT_API_BASE
+        authenticator = resolve_authenticator(
+            api_key, litellm_params, self.authenticator
         )
+        api_base = authenticator.get_api_base() or api_base or GITHUB_COPILOT_API_BASE
 
         # Remove trailing slashes
         api_base = api_base.rstrip("/")

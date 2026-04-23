@@ -199,7 +199,8 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
         api_base: Optional[str],
         litellm_params: dict,
     ) -> str:
-        api_base = api_base or self.authenticator.get_api_base() or CHATGPT_API_BASE
+        authenticator = resolve_authenticator(None, litellm_params, self.authenticator)
+        api_base = api_base or authenticator.get_api_base() or CHATGPT_API_BASE
         api_base = api_base.rstrip("/")
         return f"{api_base}/responses"
 
