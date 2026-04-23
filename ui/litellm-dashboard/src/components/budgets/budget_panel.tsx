@@ -1,24 +1,19 @@
 /**
- * The parent pane, showing list of budgets
- *
+ * The parent pane, showing list of budgets.
+ * Migrated to shadcn in phase 1. See docs/BLUEPRINT.md.
  */
 
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
 import {
-  Button,
-  Card,
-  Tab,
-  TabGroup,
   Table,
   TableBody,
   TableCell,
   TableHead,
-  TableHeaderCell,
+  TableHeader,
   TableRow,
-  TabList,
-  TabPanel,
-  TabPanels,
-  Text,
-} from "@tremor/react";
+} from "@/components/ui/table";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import React, { useState } from "react";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import DeleteResourceModal from "../common_components/DeleteResourceModal";
@@ -27,7 +22,11 @@ import NotificationsManager from "../molecules/notifications_manager";
 import { useBudgets, useDeleteBudget } from "@/app/(dashboard)/hooks/budgets/useBudgets";
 import BudgetModal from "./budget_modal";
 import EditBudgetModal from "./edit_budget_modal";
-import { CREATE_END_USER_CURL_COMMAND, CHAT_COMPLETIONS_CURL_COMMAND, OPENAI_SDK_PYTHON_CODE } from "./constants";
+import {
+  CREATE_END_USER_CURL_COMMAND,
+  CHAT_COMPLETIONS_CURL_COMMAND,
+  OPENAI_SDK_PYTHON_CODE,
+} from "./constants";
 
 interface BudgetSettingsPageProps {
   accessToken: string | null;
@@ -50,10 +49,8 @@ const BudgetPanel: React.FC<BudgetSettingsPageProps> = ({ accessToken }) => {
   const { data: budgetList = [] } = useBudgets();
   const deleteBudget = useDeleteBudget();
 
-  const handleEditCall = async (budget: budgetItem) => {
-    if (accessToken == null) {
-      return;
-    }
+  const handleEditCall = (budget: budgetItem) => {
+    if (accessToken == null) return;
     setSelectedBudget(budget);
     setIsEditModalVisible(true);
   };
@@ -64,9 +61,7 @@ const BudgetPanel: React.FC<BudgetSettingsPageProps> = ({ accessToken }) => {
   };
 
   const handleDeleteConfirm = async () => {
-    if (!selectedBudget || accessToken == null) {
-      return;
-    }
+    if (!selectedBudget || accessToken == null) return;
     try {
       await deleteBudget.mutateAsync(selectedBudget.budget_id);
       NotificationsManager.success("Budget deleted.");
@@ -83,115 +78,132 @@ const BudgetPanel: React.FC<BudgetSettingsPageProps> = ({ accessToken }) => {
     }
   };
 
-  const handleDeleteCancel = () => {
-    setIsDeleteModalVisible(false);
-  };
+  const handleDeleteCancel = () => setIsDeleteModalVisible(false);
 
   return (
     <div className="w-full mx-auto flex-auto overflow-y-auto m-8 p-2">
-      <Button size="sm" variant="primary" className="mb-2" onClick={() => setIsCreateModelVisible(true)}>
+      <Button size="sm" className="mb-2" onClick={() => setIsCreateModelVisible(true)}>
         + Create Budget
       </Button>
-      <TabGroup>
-        <TabList>
-          <Tab>Budgets</Tab>
-          <Tab>Examples</Tab>
-        </TabList>
-        <TabPanels>
-          <TabPanel>
-            <div className="mt-6">
-              <BudgetModal
-                isModalVisible={isCreateModelVisible}
-                setIsModalVisible={setIsCreateModelVisible}
+      <Tabs defaultValue="budgets">
+        <TabsList>
+          <TabsTrigger value="budgets">Budgets</TabsTrigger>
+          <TabsTrigger value="examples">Examples</TabsTrigger>
+        </TabsList>
+        <TabsContent value="budgets">
+          <div className="mt-6">
+            <BudgetModal
+              isModalVisible={isCreateModelVisible}
+              setIsModalVisible={setIsCreateModelVisible}
+            />
+            {selectedBudget && (
+              <EditBudgetModal
+                isModalVisible={isEditModalVisible}
+                setIsModalVisible={setIsEditModalVisible}
+                existingBudget={selectedBudget}
               />
-              {selectedBudget && (
-                <EditBudgetModal
-                  isModalVisible={isEditModalVisible}
-                  setIsModalVisible={setIsEditModalVisible}
-                  existingBudget={selectedBudget}
-                />
-              )}
-              <Card>
-                <Text>Create a budget to assign to customers.</Text>
-                <Table>
-                  <TableHead>
-                    <TableRow>
-                      <TableHeaderCell>Budget ID</TableHeaderCell>
-                      <TableHeaderCell>Max Budget</TableHeaderCell>
-                      <TableHeaderCell>TPM</TableHeaderCell>
-                      <TableHeaderCell>RPM</TableHeaderCell>
-                    </TableRow>
-                  </TableHead>
+            )}
+            <Card className="p-6">
+              <p className="text-sm text-muted-foreground mb-3">
+                Create a budget to assign to customers.
+              </p>
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Budget ID</TableHead>
+                    <TableHead>Max Budget</TableHead>
+                    <TableHead>TPM</TableHead>
+                    <TableHead>RPM</TableHead>
+                    <TableHead>Actions</TableHead>
+                  </TableRow>
+                </TableHeader>
 
-                  <TableBody>
-                    {budgetList
-                      .slice()
-                      .sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime())
-                      .map((value: budgetItem) => (
-                        <TableRow key={value.budget_id}>
-                          <TableCell>{value.budget_id}</TableCell>
-                          <TableCell>{value.max_budget ? value.max_budget : "n/a"}</TableCell>
-                          <TableCell>{value.tpm_limit ? value.tpm_limit : "n/a"}</TableCell>
-                          <TableCell>{value.rpm_limit ? value.rpm_limit : "n/a"}</TableCell>
-                          <TableIconActionButton
-                            variant="Edit"
-                            tooltipText="Edit budget"
-                            onClick={() => handleEditCall(value)}
-                            dataTestId="edit-budget-button"
-                          />
-                          <TableIconActionButton
-                            variant="Delete"
-                            tooltipText="Delete budget"
-                            onClick={() => handleDeleteClick(value)}
-                            dataTestId="delete-budget-button"
-                          />
-                        </TableRow>
-                      ))}
-                  </TableBody>
-                </Table>
-              </Card>
-              <DeleteResourceModal
-                isOpen={isDeleteModalVisible}
-                title="Delete Budget?"
-                message="Are you sure you want to delete this budget? This action cannot be undone."
-                resourceInformationTitle="Budget Information"
-                resourceInformation={[
-                  { label: "Budget ID", value: selectedBudget?.budget_id, code: true },
-                  { label: "Max Budget", value: selectedBudget?.max_budget },
-                  { label: "TPM", value: selectedBudget?.tpm_limit },
-                  { label: "RPM", value: selectedBudget?.rpm_limit },
-                ]}
-                onCancel={handleDeleteCancel}
-                onOk={handleDeleteConfirm}
-                confirmLoading={deleteBudget.isPending}
-              />
-            </div>
-          </TabPanel>
-          <TabPanel>
-            <div className="mt-6">
-              <Text className="text-base">How to use budget id</Text>
-              <TabGroup>
-                <TabList>
-                  <Tab>Assign Budget to Customer</Tab>
-                  <Tab>Test it (Curl)</Tab>
-                  <Tab>Test it (OpenAI SDK)</Tab>
-                </TabList>
-                <TabPanels>
-                  <TabPanel>
-                    <SyntaxHighlighter language="bash">{CREATE_END_USER_CURL_COMMAND}</SyntaxHighlighter>
-                  </TabPanel>
-                  <TabPanel>
-                    <SyntaxHighlighter language="bash">{CHAT_COMPLETIONS_CURL_COMMAND}</SyntaxHighlighter>
-                  </TabPanel>
-                  <TabPanel>
-                    <SyntaxHighlighter language="python">{OPENAI_SDK_PYTHON_CODE}</SyntaxHighlighter>
-                  </TabPanel>
-                </TabPanels>
-              </TabGroup>
-            </div>
-          </TabPanel>
-        </TabPanels>
-      </TabGroup>
+                <TableBody>
+                  {budgetList
+                    .slice()
+                    .sort(
+                      (a, b) =>
+                        new Date(b.updated_at).getTime() -
+                        new Date(a.updated_at).getTime(),
+                    )
+                    .map((value: budgetItem) => (
+                      <TableRow key={value.budget_id}>
+                        <TableCell>{value.budget_id}</TableCell>
+                        <TableCell>
+                          {value.max_budget ? value.max_budget : "n/a"}
+                        </TableCell>
+                        <TableCell>
+                          {value.tpm_limit ? value.tpm_limit : "n/a"}
+                        </TableCell>
+                        <TableCell>
+                          {value.rpm_limit ? value.rpm_limit : "n/a"}
+                        </TableCell>
+                        <TableCell>
+                          <div className="flex gap-1">
+                            <TableIconActionButton
+                              variant="Edit"
+                              tooltipText="Edit budget"
+                              onClick={() => handleEditCall(value)}
+                              dataTestId="edit-budget-button"
+                            />
+                            <TableIconActionButton
+                              variant="Delete"
+                              tooltipText="Delete budget"
+                              onClick={() => handleDeleteClick(value)}
+                              dataTestId="delete-budget-button"
+                            />
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                </TableBody>
+              </Table>
+            </Card>
+            <DeleteResourceModal
+              isOpen={isDeleteModalVisible}
+              title="Delete Budget?"
+              message="Are you sure you want to delete this budget? This action cannot be undone."
+              resourceInformationTitle="Budget Information"
+              resourceInformation={[
+                { label: "Budget ID", value: selectedBudget?.budget_id, code: true },
+                { label: "Max Budget", value: selectedBudget?.max_budget },
+                { label: "TPM", value: selectedBudget?.tpm_limit },
+                { label: "RPM", value: selectedBudget?.rpm_limit },
+              ]}
+              onCancel={handleDeleteCancel}
+              onOk={handleDeleteConfirm}
+              confirmLoading={deleteBudget.isPending}
+            />
+          </div>
+        </TabsContent>
+        <TabsContent value="examples">
+          <div className="mt-6">
+            <p className="text-base font-medium">How to use budget id</p>
+            <Tabs defaultValue="assign">
+              <TabsList>
+                <TabsTrigger value="assign">Assign Budget to Customer</TabsTrigger>
+                <TabsTrigger value="curl">Test it (Curl)</TabsTrigger>
+                <TabsTrigger value="openai">Test it (OpenAI SDK)</TabsTrigger>
+              </TabsList>
+              <TabsContent value="assign">
+                <SyntaxHighlighter language="bash">
+                  {CREATE_END_USER_CURL_COMMAND}
+                </SyntaxHighlighter>
+              </TabsContent>
+              <TabsContent value="curl">
+                <SyntaxHighlighter language="bash">
+                  {CHAT_COMPLETIONS_CURL_COMMAND}
+                </SyntaxHighlighter>
+              </TabsContent>
+              <TabsContent value="openai">
+                <SyntaxHighlighter language="python">
+                  {OPENAI_SDK_PYTHON_CODE}
+                </SyntaxHighlighter>
+              </TabsContent>
+            </Tabs>
+          </div>
+        </TabsContent>
+      </Tabs>
     </div>
   );
 };

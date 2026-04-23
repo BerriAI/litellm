@@ -36,3 +36,10 @@ Layer abbreviations: **TS** (tsc --noEmit), **Lint** (eslint), **Vitest**
   (Table + @tanstack/react-table, Popover, Tooltip, Badge variants, Skeleton) covered
   every antd / @tremor / @heroicons import encountered.
 
+## 3. Budgets (experimental/budgets)
+
+- Cycles used: 1 / 7
+- Layer outcomes per cycle:
+  - cycle 1: TS ✓ | Lint ✓ (pre-existing unused-imports in test excluded) | Vitest ✓ (6/6) | Parity ⏭ | Snap ⏭
+- Final status: **done**
+
