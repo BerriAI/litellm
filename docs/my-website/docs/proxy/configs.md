@@ -604,7 +604,7 @@ Since you shouldn't use 12.5, round down to **10** to leave a safety buffer. Thi
 
 ## LiteLLM License Key (Enterprise)
 
-To enable [LiteLLM Enterprise features](https://docs.litellm.ai/docs/proxy/enterprise), set your license key as an environment variable:
+To enable [LiteLLM Enterprise features](https://docs.litellm.ai/docs/enterprise), set your license key as an environment variable:
 
 ```bash
 export LITELLM_LICENSE="eyJ..."
