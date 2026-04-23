@@ -1,13 +1,6 @@
-/**
- * SimpleMessageBlock - Simple message display without collapsing
- * Used for messages in tree view and last user message
- */
-
-import { Typography } from 'antd';
-import { ToolCall } from './prettyMessagesTypes';
-import { SimpleToolCallBlock } from './SimpleToolCallBlock';
-
-const { Text } = Typography;
+import { ToolCall } from "./prettyMessagesTypes";
+import { SimpleToolCallBlock } from "./SimpleToolCallBlock";
+import { cn } from "@/lib/utils";
 
 interface SimpleMessageBlockProps {
   label: string;
@@ -16,56 +9,45 @@ interface SimpleMessageBlockProps {
   isCompact?: boolean;
 }
 
-export function SimpleMessageBlock({ 
-  label, 
-  content, 
-  toolCalls, 
-  isCompact = false 
+export function SimpleMessageBlock({
+  label,
+  content,
+  toolCalls,
+  isCompact = false,
 }: SimpleMessageBlockProps) {
-  // Don't show "null" for empty content
-  const displayContent = content && content !== 'null' && content.length > 0 ? content : null;
+  const displayContent =
+    content && content !== "null" && content.length > 0 ? content : null;
   const hasToolCalls = toolCalls && toolCalls.length > 0;
 
-  // If no content and no tool calls, don't render
   if (!displayContent && !hasToolCalls) {
     return null;
   }
 
   return (
-    <div style={{ marginBottom: isCompact ? 8 : 0 }}>
-      <Text 
-        type="secondary" 
-        style={{ 
-          fontSize: 10, 
-          letterSpacing: '0.5px', 
-          textTransform: 'uppercase',
-          display: 'block', 
-          marginBottom: 3 
-        }}
-      >
+    <div className={cn(isCompact ? "mb-2" : "")}>
+      <span className="block text-[10px] tracking-wider uppercase text-muted-foreground mb-0.5">
         {label}
-      </Text>
+      </span>
 
       {displayContent && (
         <div
-          style={{
-            fontSize: 13,
-            lineHeight: 1.7,
-            color: '#262626',
-            whiteSpace: 'pre-wrap',
-            wordBreak: 'break-word',
-            marginBottom: hasToolCalls ? 6 : 0,
-          }}
+          className={cn(
+            "text-[13px] leading-7 text-foreground whitespace-pre-wrap break-words",
+            hasToolCalls ? "mb-1.5" : "",
+          )}
         >
           {displayContent}
         </div>
       )}
 
-      {/* Inline tool calls for assistant messages in history */}
       {hasToolCalls && (
         <div>
           {toolCalls.map((tc, index) => (
-            <SimpleToolCallBlock key={tc.id || index} tool={tc} compact={isCompact} />
+            <SimpleToolCallBlock
+              key={tc.id || index}
+              tool={tc}
+              compact={isCompact}
+            />
           ))}
         </div>
       )}

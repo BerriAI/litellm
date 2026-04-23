@@ -1,13 +1,5 @@
-/**
- * CollapsibleMessage - Collapsible message with arrow and char count
- * Used for system messages
- */
-
-import { useState } from 'react';
-import { Typography } from 'antd';
-import { DownOutlined, RightOutlined } from '@ant-design/icons';
-
-const { Text } = Typography;
+import { useState } from "react";
+import { ChevronDown, ChevronRight } from "lucide-react";
 
 interface CollapsibleMessageProps {
   label: string;
@@ -15,13 +7,12 @@ interface CollapsibleMessageProps {
   defaultExpanded?: boolean;
 }
 
-export function CollapsibleMessage({ 
-  label, 
-  content, 
-  defaultExpanded = false 
+export function CollapsibleMessage({
+  label,
+  content,
+  defaultExpanded = false,
 }: CollapsibleMessageProps) {
   const [isExpanded, setIsExpanded] = useState(defaultExpanded);
-  const [isHovered, setIsHovered] = useState(false);
   const charCount = content?.length || 0;
 
   if (!content || charCount === 0) {
@@ -29,57 +20,32 @@ export function CollapsibleMessage({
   }
 
   return (
-    <div style={{ marginBottom: 8 }}>
-      {/* Clickable Header with hover state */}
+    <div className="mb-2">
       <div
         onClick={() => setIsExpanded(!isExpanded)}
-        onMouseEnter={() => setIsHovered(true)}
-        onMouseLeave={() => setIsHovered(false)}
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 6,
-          cursor: 'pointer',
-          padding: '4px 0',
-          borderRadius: 4,
-          background: isHovered ? '#f5f5f5' : 'transparent',
-          transition: 'background 0.15s ease',
-          marginBottom: isExpanded ? 4 : 0,
-        }}
+        className="flex items-center gap-1.5 cursor-pointer py-1 rounded hover:bg-muted transition-colors"
       >
         {isExpanded ? (
-          <DownOutlined style={{ fontSize: 10, color: '#8c8c8c' }} />
+          <ChevronDown className="h-3 w-3 text-muted-foreground" />
         ) : (
-          <RightOutlined style={{ fontSize: 10, color: '#8c8c8c' }} />
+          <ChevronRight className="h-3 w-3 text-muted-foreground" />
         )}
-        <Text type="secondary" style={{ fontSize: 10, letterSpacing: '0.5px', textTransform: 'uppercase' }}>
+        <span className="text-[10px] tracking-wider uppercase text-muted-foreground">
           {label}
-        </Text>
-        <Text type="secondary" style={{ fontSize: 10 }}>
+        </span>
+        <span className="text-[10px] text-muted-foreground">
           ({charCount.toLocaleString()} chars)
-        </Text>
+        </span>
       </div>
 
-      {/* Content with smooth animation */}
       <div
+        className="overflow-hidden transition-[max-height,opacity] duration-200 ease-out"
         style={{
-          maxHeight: isExpanded ? '2000px' : '0px',
-          overflow: 'hidden',
-          transition: 'max-height 0.2s ease-out, opacity 0.2s ease-out',
+          maxHeight: isExpanded ? "2000px" : "0px",
           opacity: isExpanded ? 1 : 0,
         }}
       >
-        <div
-          style={{
-            paddingLeft: 16,
-            fontSize: 13,
-            lineHeight: 1.7,
-            color: '#262626',
-            borderLeft: '1px solid #f0f0f0',
-            whiteSpace: 'pre-wrap',
-            wordBreak: 'break-word',
-          }}
-        >
+        <div className="pl-4 text-[13px] leading-7 text-foreground border-l border-border whitespace-pre-wrap break-words">
           {content}
         </div>
       </div>
