@@ -510,11 +510,6 @@ class AmazonAnthropicClaudeMessagesConfig(
         # 5b. Bedrock Invoke supports output_config (effort) for Claude 4.6+ models,
         # but older models do not — strip it to avoid request rejection.
         # Ref: https://github.com/BerriAI/litellm/issues/22797
-        # ``model`` still carries the ``invoke/`` routing prefix here, which
-        # is not a valid provider and makes ``_supports_factory`` silently
-        # return False. Strip the prefix and pass the provider explicitly so
-        # the declarative ``supports_output_config`` flag in the cost map
-        # is actually consulted.
         if not _supports_factory(
             model=strip_bedrock_routing_prefix(model),
             custom_llm_provider="bedrock",

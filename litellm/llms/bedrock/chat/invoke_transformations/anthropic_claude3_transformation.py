@@ -171,12 +171,6 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         anthropic_request.pop("model", None)
         anthropic_request.pop("stream", None)
         anthropic_request.pop("output_format", None)
-        # ``model`` reaches this transformation with an ``invoke/`` routing
-        # prefix (e.g. ``invoke/us.anthropic.claude-opus-4-6-v1``) which is
-        # not a valid provider and makes ``_supports_factory`` silently
-        # return False. Strip the routing prefix and pass the provider
-        # explicitly so the declarative ``supports_output_config`` flag in
-        # ``model_prices_and_context_window.json`` is actually consulted.
         if not _supports_factory(
             model=strip_bedrock_routing_prefix(model),
             custom_llm_provider="bedrock",

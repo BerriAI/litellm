@@ -1203,12 +1203,6 @@ class AmazonConverseConfig(BaseConfig):
         output_config: Optional[OutputConfigBlock] = inference_params.pop(
             "outputConfig", None
         )
-        # Strip routing prefixes (e.g. ``converse/``) and pass the provider
-        # explicitly so the declarative ``supports_output_config`` flag in
-        # ``model_prices_and_context_window.json`` is actually consulted.
-        # Passing ``custom_llm_provider=None`` would make ``_supports_factory``
-        # silently return False for any model whose name doesn't resolve to a
-        # known provider prefix on its own.
         if not _supports_factory(
             model=strip_bedrock_routing_prefix(model),
             custom_llm_provider="bedrock",
