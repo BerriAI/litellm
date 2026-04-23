@@ -1,6 +1,13 @@
-import React, { useState, useEffect } from "react";
-import { Button, Dropdown, Tabs } from "antd";
-import { DownOutlined, PlusOutlined, CodeOutlined } from "@ant-design/icons";
+import React, { useCallback, useState, useEffect } from "react";
+import { Tabs } from "antd";
+import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { ChevronDown, Code, Plus } from "lucide-react";
 import { getGuardrailsList, deleteGuardrailCall } from "./networking";
 import AddGuardrailForm from "./guardrails/add_guardrail_form";
 import GuardrailTable from "./guardrails/guardrail_table";
@@ -49,7 +56,7 @@ const GuardrailsPanel: React.FC<GuardrailsPanelProps> = ({ accessToken, userRole
   const [selectedGuardrailId, setSelectedGuardrailId] = useState<string | null>(null);
   const isAdmin = userRole ? isAdminRole(userRole) : false;
 
-  const fetchGuardrails = async () => {
+  const fetchGuardrails = useCallback(async () => {
     if (!accessToken) {
       return;
     }
@@ -57,18 +64,17 @@ const GuardrailsPanel: React.FC<GuardrailsPanelProps> = ({ accessToken, userRole
     setIsLoading(true);
     try {
       const response: GuardrailsResponse = await getGuardrailsList(accessToken);
-      console.log(`guardrails: ${JSON.stringify(response)}`);
       setGuardrailsList(response.guardrails);
     } catch (error) {
       console.error("Error fetching guardrails:", error);
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [accessToken]);
 
   useEffect(() => {
     fetchGuardrails();
-  }, [accessToken]);
+  }, [fetchGuardrails]);
 
   const handleAddGuardrail = () => {
     if (selectedGuardrailId) {
@@ -96,8 +102,9 @@ const GuardrailsPanel: React.FC<GuardrailsPanelProps> = ({ accessToken, userRole
     fetchGuardrails();
   };
 
-  const handleDeleteClick = (guardrailId: string, guardrailName: string) => {
-    const guardrail = guardrailsList.find((g) => g.guardrail_id === guardrailId) || null;
+  const handleDeleteClick = (guardrailId: string, _guardrailName: string) => {
+    const guardrail =
+      guardrailsList.find((g) => g.guardrail_id === guardrailId) || null;
     setGuardrailToDelete(guardrail);
     setIsDeleteModalOpen(true);
   };
@@ -153,30 +160,28 @@ const GuardrailsPanel: React.FC<GuardrailsPanelProps> = ({ accessToken, userRole
                   children: (
                     <>
                       <div className="flex justify-between items-center mb-4">
-                        <Dropdown
-                          menu={{
-                            items: [
-                              {
-                                key: "provider",
-                                icon: <PlusOutlined />,
-                                label: "Add Provider Guardrail",
-                                onClick: handleAddGuardrail,
-                              },
-                              {
-                                key: "custom_code",
-                                icon: <CodeOutlined />,
-                                label: "Create Custom Code Guardrail",
-                                onClick: handleAddCustomCodeGuardrail,
-                              },
-                            ],
-                          }}
-                          trigger={["click"]}
-                          disabled={!accessToken}
-                        >
-                          <Button disabled={!accessToken}>
-                            + Add New Guardrail <DownOutlined className="ml-2" />
-                          </Button>
-                        </Dropdown>
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <Button variant="outline" disabled={!accessToken}>
+                              + Add New Guardrail
+                              <ChevronDown className="h-4 w-4 ml-1" />
+                            </Button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="start">
+                            <DropdownMenuItem
+                              onSelect={handleAddGuardrail}
+                            >
+                              <Plus className="h-4 w-4" />
+                              Add Provider Guardrail
+                            </DropdownMenuItem>
+                            <DropdownMenuItem
+                              onSelect={handleAddCustomCodeGuardrail}
+                            >
+                              <Code className="h-4 w-4" />
+                              Create Custom Code Guardrail
+                            </DropdownMenuItem>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
                       </div>
 
                       {selectedGuardrailId ? (
