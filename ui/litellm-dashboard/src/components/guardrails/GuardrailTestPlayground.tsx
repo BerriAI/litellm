@@ -1,6 +1,8 @@
 import React, { useState } from "react";
-import { Card, List, Empty, Spin, Input, Typography } from "antd";
-import { ExperimentOutlined, SearchOutlined } from "@ant-design/icons";
+import { Card } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { FlaskConical, Loader2, Search } from "lucide-react";
+import { cn } from "@/lib/utils";
 import GuardrailTestPanel from "./GuardrailTestPanel";
 import { applyGuardrail } from "../networking";
 import NotificationsManager from "../molecules/notifications_manager";
@@ -13,6 +15,7 @@ interface GuardrailItem {
     mode: string;
     default_on: boolean;
   };
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   guardrail_info: Record<string, any> | null;
   created_at?: string;
   updated_at?: string;
@@ -41,16 +44,19 @@ const GuardrailTestPlayground: React.FC<GuardrailTestPlaygroundProps> = ({
   guardrailsList,
   isLoading,
   accessToken,
-  onClose,
 }) => {
-  const [selectedGuardrails, setSelectedGuardrails] = useState<Set<string>>(new Set());
+  const [selectedGuardrails, setSelectedGuardrails] = useState<Set<string>>(
+    new Set(),
+  );
   const [searchQuery, setSearchQuery] = useState("");
   const [testResults, setTestResults] = useState<TestResult[]>([]);
   const [testErrors, setTestErrors] = useState<TestError[]>([]);
   const [isTesting, setIsTesting] = useState(false);
 
   const filteredGuardrails = guardrailsList.filter((guardrail) =>
-    guardrail.guardrail_name?.toLowerCase().includes(searchQuery.toLowerCase())
+    guardrail.guardrail_name
+      ?.toLowerCase()
+      .includes(searchQuery.toLowerCase()),
   );
 
   const toggleGuardrailSelection = (guardrailName: string) => {
@@ -79,7 +85,13 @@ const GuardrailTestPlayground: React.FC<GuardrailTestPlaygroundProps> = ({
       Array.from(selectedGuardrails).map(async (guardrailName) => {
         const startTime = Date.now();
         try {
-          const result = await applyGuardrail(accessToken, guardrailName, text, null, null);
+          const result = await applyGuardrail(
+            accessToken,
+            guardrailName,
+            text,
+            null,
+            null,
+          );
           const latency = Date.now() - startTime;
           results.push({
             guardrailName,
@@ -95,7 +107,7 @@ const GuardrailTestPlayground: React.FC<GuardrailTestPlaygroundProps> = ({
             latency,
           });
         }
-      })
+      }),
     );
 
     setTestResults(results);
@@ -104,122 +116,121 @@ const GuardrailTestPlayground: React.FC<GuardrailTestPlaygroundProps> = ({
 
     if (results.length > 0) {
       NotificationsManager.success(
-        `${results.length} guardrail${results.length > 1 ? "s" : ""} applied successfully`
+        `${results.length} guardrail${results.length > 1 ? "s" : ""} applied successfully`,
       );
     }
     if (errors.length > 0) {
       NotificationsManager.fromBackend(
-        `${errors.length} guardrail${errors.length > 1 ? "s" : ""} failed`
+        `${errors.length} guardrail${errors.length > 1 ? "s" : ""} failed`,
       );
     }
   };
 
   return (
     <div className="w-full h-[calc(100vh-200px)]">
-      <Card className="h-full" styles={{ body: { padding: 0, height: "100%" } }}>
+      <Card className="h-full p-0 overflow-hidden">
         <div className="flex h-full">
-          {/* Left Sidebar - Guardrails List */}
-          <div className="w-1/4 border-r border-gray-200 flex flex-col overflow-hidden">
-            <div className="p-4 border-b border-gray-200">
+          <div className="w-1/4 border-r border-border flex flex-col overflow-hidden">
+            <div className="p-4 border-b border-border">
               <div className="mb-3">
                 <h3 className="text-lg font-semibold mb-3">Guardrails</h3>
-                <Input
-                  prefix={<SearchOutlined />}
-                  placeholder="Search guardrails..."
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                />
+                <div className="relative">
+                  <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
+                  <Input
+                    placeholder="Search guardrails..."
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    className="pl-8"
+                  />
+                </div>
               </div>
             </div>
 
             <div className="flex-1 overflow-auto">
               {isLoading ? (
                 <div className="flex items-center justify-center h-32">
-                  <Spin />
+                  <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
                 </div>
               ) : filteredGuardrails.length === 0 ? (
-                <div className="p-4">
-                  <Empty
-                    description={
-                      searchQuery ? "No guardrails match your search" : "No guardrails available"
-                    }
-                  />
+                <div className="p-4 text-center text-sm text-muted-foreground">
+                  {searchQuery
+                    ? "No guardrails match your search"
+                    : "No guardrails available"}
                 </div>
               ) : (
-                <List
-                  dataSource={filteredGuardrails}
-                  renderItem={(guardrail) => (
-                    <List.Item
-                      onClick={() => {
-                        if (guardrail.guardrail_name) {
-                          toggleGuardrailSelection(guardrail.guardrail_name);
-                        }
-                      }}
-                      style={{ paddingLeft: 24, paddingRight: 16 }}
-                      className={`cursor-pointer hover:bg-gray-50 transition-colors ${
-                        selectedGuardrails.has(guardrail.guardrail_name || "")
-                          ? "bg-blue-50 border-l-4 border-l-blue-500"
-                          : "border-l-4 border-l-transparent"
-                      }`}
-                    >
-                      <List.Item.Meta
-                        title={
-                          <div className="flex items-center space-x-2">
-                            <ExperimentOutlined className="text-gray-400" />
-                            <span className="font-medium text-gray-900">
-                              {guardrail.guardrail_name}
+                <ul className="divide-y divide-border">
+                  {filteredGuardrails.map((guardrail) => {
+                    const isSelected = selectedGuardrails.has(
+                      guardrail.guardrail_name || "",
+                    );
+                    return (
+                      <li
+                        key={guardrail.guardrail_id || guardrail.guardrail_name}
+                        onClick={() => {
+                          if (guardrail.guardrail_name) {
+                            toggleGuardrailSelection(guardrail.guardrail_name);
+                          }
+                        }}
+                        className={cn(
+                          "pl-6 pr-4 py-3 cursor-pointer hover:bg-muted transition-colors border-l-4",
+                          isSelected
+                            ? "bg-blue-50 dark:bg-blue-950/30 border-l-blue-500"
+                            : "border-l-transparent",
+                        )}
+                      >
+                        <div className="flex items-center space-x-2">
+                          <FlaskConical className="h-4 w-4 text-muted-foreground" />
+                          <span className="font-medium text-foreground">
+                            {guardrail.guardrail_name}
+                          </span>
+                        </div>
+                        <div className="text-xs space-y-1 mt-1">
+                          <div>
+                            <span className="font-medium">Type: </span>
+                            <span className="text-muted-foreground">
+                              {guardrail.litellm_params.guardrail}
                             </span>
                           </div>
-                        }
-                        description={
-                          <div className="text-xs space-y-1 mt-1">
-                            <div>
-                              <span className="font-medium">Type: </span>
-                              <span className="text-gray-600">
-                                {guardrail.litellm_params.guardrail}
-                              </span>
-                            </div>
-                            <div>
-                              <span className="font-medium">Mode: </span>
-                              <span className="text-gray-600">
-                                {guardrail.litellm_params.mode}
-                              </span>
-                            </div>
+                          <div>
+                            <span className="font-medium">Mode: </span>
+                            <span className="text-muted-foreground">
+                              {guardrail.litellm_params.mode}
+                            </span>
                           </div>
-                        }
-                      />
-                    </List.Item>
-                  )}
-                />
+                        </div>
+                      </li>
+                    );
+                  })}
+                </ul>
               )}
             </div>
 
-            <div className="p-3 border-t border-gray-200 bg-gray-50">
-              <Typography.Text className="text-xs text-gray-600">
-                {selectedGuardrails.size} of {filteredGuardrails.length} selected
-              </Typography.Text>
+            <div className="p-3 border-t border-border bg-muted">
+              <span className="text-xs text-muted-foreground">
+                {selectedGuardrails.size} of {filteredGuardrails.length}{" "}
+                selected
+              </span>
             </div>
           </div>
 
-          {/* Right Panel - Test Area */}
-          <div className="w-3/4 flex flex-col bg-white">
-            <div className="p-4 border-b border-gray-200 flex justify-between items-center">
-              <Typography.Title level={2} className="text-xl font-semibold mb-0">
+          <div className="w-3/4 flex flex-col bg-background">
+            <div className="p-4 border-b border-border flex justify-between items-center">
+              <h2 className="text-xl font-semibold mb-0">
                 Guardrail Testing Playground
-              </Typography.Title>
+              </h2>
             </div>
 
             <div className="flex-1 overflow-auto p-4">
               {selectedGuardrails.size === 0 ? (
-                <div className="h-full flex flex-col items-center justify-center text-gray-400">
-                  <ExperimentOutlined style={{ fontSize: "48px", marginBottom: "16px" }} />
-                  <Typography.Paragraph className="text-lg font-medium text-gray-600 mb-2">
+                <div className="h-full flex flex-col items-center justify-center text-muted-foreground">
+                  <FlaskConical className="h-12 w-12 mb-4" />
+                  <p className="text-lg font-medium text-foreground mb-2">
                     Select Guardrails to Test
-                  </Typography.Paragraph>
-                  <Typography.Paragraph className="text-center text-gray-500 max-w-md">
-                    Choose one or more guardrails from the left sidebar to start testing and
-                    comparing results.
-                  </Typography.Paragraph>
+                  </p>
+                  <p className="text-center text-muted-foreground max-w-md">
+                    Choose one or more guardrails from the left sidebar to
+                    start testing and comparing results.
+                  </p>
                 </div>
               ) : (
                 <div className="h-full">
@@ -242,4 +253,3 @@ const GuardrailTestPlayground: React.FC<GuardrailTestPlaygroundProps> = ({
 };
 
 export default GuardrailTestPlayground;
-
