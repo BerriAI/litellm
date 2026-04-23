@@ -67,6 +67,7 @@
         "src/components/claude_code_plugins/MakeSkillPublicForm.tsx",
         "src/components/mcp_tools/MCPPermissionManagement.tsx",
         "src/components/model_add/credentials.tsx",
+        "src/components/model_dashboard/health_check_columns.tsx",
         "src/components/permissions/VectorStorePermissions.tsx",
         "src/components/permissions/AgentPermissions.tsx",
         "src/components/permissions/MCPServerPermissions.tsx",

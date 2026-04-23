@@ -1,7 +1,13 @@
 import { ColumnDef } from "@tanstack/react-table";
-import { Tooltip, Checkbox } from "antd";
-import { Text } from "@tremor/react";
-import { InformationCircleIcon, PlayIcon, RefreshIcon } from "@heroicons/react/outline";
+import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import { cn } from "@/lib/utils";
+import { Info, Play, RefreshCcw } from "lucide-react";
 import { Team } from "@/components/key_team_helpers/key_list";
 
 interface HealthCheckData {
@@ -28,6 +34,7 @@ interface HealthStatus {
   loading: boolean;
   error?: string;
   fullError?: string;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   successResponse?: any;
 }
 
@@ -38,9 +45,16 @@ export const healthCheckColumns = (
   handleModelSelection: (modelId: string, checked: boolean) => void,
   handleSelectAll: (checked: boolean) => void,
   runIndividualHealthCheck: (modelId: string) => void,
+  // eslint-disable-next-line no-undef
   getStatusBadge: (status: string) => JSX.Element,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   getDisplayModelName: (model: any) => string,
-  showErrorModal?: (modelName: string, cleanedError: string, fullError: string) => void,
+  showErrorModal?: (
+    modelName: string,
+    cleanedError: string,
+    fullError: string,
+  ) => void,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   showSuccessModal?: (modelName: string, response: any) => void,
   setSelectedModelId?: (modelId: string) => void,
   teams?: Team[] | null,
@@ -49,9 +63,14 @@ export const healthCheckColumns = (
     header: () => (
       <div className="flex items-center gap-2">
         <Checkbox
-          checked={allModelsSelected}
-          indeterminate={selectedModelsForHealth.length > 0 && !allModelsSelected}
-          onChange={(e) => handleSelectAll(e.target.checked)}
+          checked={
+            selectedModelsForHealth.length > 0 && !allModelsSelected
+              ? "indeterminate"
+              : allModelsSelected
+                ? true
+                : false
+          }
+          onCheckedChange={(c) => handleSelectAll(c === true)}
           onClick={(e) => e.stopPropagation()}
         />
         <span>Model ID</span>
@@ -69,17 +88,25 @@ export const healthCheckColumns = (
         <div className="flex items-center gap-2">
           <Checkbox
             checked={isSelected}
-            onChange={(e) => handleModelSelection(modelId, e.target.checked)}
+            onCheckedChange={(c) => handleModelSelection(modelId, c === true)}
             onClick={(e) => e.stopPropagation()}
           />
-          <Tooltip title={model.model_info.id}>
-            <div
-              className="font-mono text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs font-normal px-2 py-0.5 text-left w-full truncate whitespace-nowrap cursor-pointer max-w-[15ch]"
-              onClick={() => setSelectedModelId && setSelectedModelId(model.model_info.id)}
-            >
-              {model.model_info.id}
-            </div>
-          </Tooltip>
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  type="button"
+                  className="font-mono text-blue-500 bg-blue-50 hover:bg-blue-100 dark:bg-blue-950/30 dark:hover:bg-blue-950/60 text-xs font-normal px-2 py-0.5 text-left w-full truncate whitespace-nowrap cursor-pointer max-w-[15ch] rounded"
+                  onClick={() =>
+                    setSelectedModelId && setSelectedModelId(modelId)
+                  }
+                >
+                  {modelId}
+                </button>
+              </TooltipTrigger>
+              <TooltipContent>{modelId}</TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
         </div>
       );
     },
@@ -95,9 +122,14 @@ export const healthCheckColumns = (
 
       return (
         <div className="font-medium text-sm">
-          <Tooltip title={displayName}>
-            <div className="truncate max-w-[200px]">{displayName}</div>
-          </Tooltip>
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <div className="truncate max-w-[200px]">{displayName}</div>
+              </TooltipTrigger>
+              <TooltipContent>{displayName}</TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
         </div>
       );
     },
@@ -112,7 +144,7 @@ export const healthCheckColumns = (
       const teamId = model.model_info?.team_id;
 
       if (!teamId) {
-        return <span className="text-gray-400 text-sm">-</span>;
+        return <span className="text-muted-foreground text-sm">-</span>;
       }
 
       const team = teams?.find((t) => t.team_id === teamId);
@@ -120,9 +152,14 @@ export const healthCheckColumns = (
 
       return (
         <div className="text-sm">
-          <Tooltip title={teamAlias}>
-            <div className="truncate max-w-[150px]">{teamAlias}</div>
-          </Tooltip>
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <div className="truncate max-w-[150px]">{teamAlias}</div>
+              </TooltipTrigger>
+              <TooltipContent>{teamAlias}</TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
         </div>
       );
     },
@@ -131,11 +168,10 @@ export const healthCheckColumns = (
     header: "Health Status",
     accessorKey: "health_status",
     enableSorting: true,
-    sortingFn: (rowA, rowB, columnId) => {
+    sortingFn: (rowA, rowB) => {
       const statusA = (rowA.getValue("health_status") as string) || "unknown";
       const statusB = (rowB.getValue("health_status") as string) || "unknown";
 
-      // Define sorting order: healthy > checking > unknown > unhealthy
       const statusOrder = { healthy: 0, checking: 1, unknown: 2, unhealthy: 3 };
       const orderA = statusOrder[statusA as keyof typeof statusOrder] ?? 4;
       const orderB = statusOrder[statusB as keyof typeof statusOrder] ?? 4;
@@ -164,27 +200,41 @@ export const healthCheckColumns = (
                 style={{ animationDelay: "0.4s" }}
               ></div>
             </div>
-            <Text className="text-gray-600 text-sm">Checking...</Text>
+            <span className="text-muted-foreground text-sm">Checking...</span>
           </div>
         );
       }
 
       const modelId = model.model_info?.id ?? "";
       const displayName = getDisplayModelName(model) || model.model_name;
-      const hasSuccessResponse = healthStatus.status === "healthy" && modelHealthStatuses[modelId]?.successResponse;
+      const hasSuccessResponse =
+        healthStatus.status === "healthy" &&
+        modelHealthStatuses[modelId]?.successResponse;
 
       return (
         <div className="flex items-center space-x-2">
           {getStatusBadge(healthStatus.status)}
           {hasSuccessResponse && showSuccessModal && (
-            <Tooltip title="View response details" placement="top">
-              <button
-                onClick={() => showSuccessModal(displayName, modelHealthStatuses[modelId]?.successResponse)}
-                className="p-1 text-green-600 hover:text-green-800 hover:bg-green-50 rounded cursor-pointer transition-colors"
-              >
-                <InformationCircleIcon className="h-4 w-4" />
-              </button>
-            </Tooltip>
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      showSuccessModal(
+                        displayName,
+                        modelHealthStatuses[modelId]?.successResponse,
+                      )
+                    }
+                    className="p-1 text-emerald-600 hover:text-emerald-800 hover:bg-emerald-50 dark:hover:bg-emerald-950/30 rounded cursor-pointer transition-colors"
+                    aria-label="View response details"
+                  >
+                    <Info className="h-4 w-4" />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent>View response details</TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
           )}
         </div>
       );
@@ -201,7 +251,7 @@ export const healthCheckColumns = (
       const healthStatus = modelHealthStatuses[modelId];
 
       if (!healthStatus?.error) {
-        return <Text className="text-gray-400 text-sm">No errors</Text>;
+        return <span className="text-muted-foreground text-sm">No errors</span>;
       }
 
       const cleanedError = healthStatus.error;
@@ -210,19 +260,35 @@ export const healthCheckColumns = (
       return (
         <div className="flex items-center space-x-2">
           <div className="max-w-[200px]">
-            <Tooltip title={cleanedError} placement="top">
-              <Text className="text-red-600 text-sm truncate">{cleanedError}</Text>
-            </Tooltip>
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span className="text-red-600 text-sm truncate block">
+                    {cleanedError}
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent>{cleanedError}</TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
           </div>
           {showErrorModal && fullError !== cleanedError && (
-            <Tooltip title="View full error details" placement="top">
-              <button
-                onClick={() => showErrorModal(displayName, cleanedError, fullError)}
-                className="p-1 text-red-600 hover:text-red-800 hover:bg-red-50 rounded cursor-pointer transition-colors"
-              >
-                <InformationCircleIcon className="h-4 w-4" />
-              </button>
-            </Tooltip>
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      showErrorModal(displayName, cleanedError, fullError)
+                    }
+                    className="p-1 text-red-600 hover:text-red-800 hover:bg-red-50 dark:hover:bg-red-950/30 rounded cursor-pointer transition-colors"
+                    aria-label="View full error details"
+                  >
+                    <Info className="h-4 w-4" />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent>View full error details</TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
           )}
         </div>
       );
@@ -232,37 +298,40 @@ export const healthCheckColumns = (
     header: "Last Check",
     accessorKey: "last_check",
     enableSorting: true,
-    sortingFn: (rowA, rowB, columnId) => {
-      const lastCheckA = (rowA.getValue("last_check") as string) || "Never checked";
-      const lastCheckB = (rowB.getValue("last_check") as string) || "Never checked";
+    sortingFn: (rowA, rowB) => {
+      const lastCheckA =
+        (rowA.getValue("last_check") as string) || "Never checked";
+      const lastCheckB =
+        (rowB.getValue("last_check") as string) || "Never checked";
 
-      // Handle special cases
-      if (lastCheckA === "Never checked" && lastCheckB === "Never checked") return 0;
-      if (lastCheckA === "Never checked") return 1; // Never checked goes to bottom
+      if (lastCheckA === "Never checked" && lastCheckB === "Never checked")
+        return 0;
+      if (lastCheckA === "Never checked") return 1;
       if (lastCheckB === "Never checked") return -1;
-      if (lastCheckA === "Check in progress..." && lastCheckB === "Check in progress...") return 0;
-      if (lastCheckA === "Check in progress...") return -1; // In progress goes to top
+      if (
+        lastCheckA === "Check in progress..." &&
+        lastCheckB === "Check in progress..."
+      )
+        return 0;
+      if (lastCheckA === "Check in progress...") return -1;
       if (lastCheckB === "Check in progress...") return 1;
 
-      // Parse dates for comparison
       const dateA = new Date(lastCheckA);
       const dateB = new Date(lastCheckB);
 
-      // If dates are invalid, treat as never checked
       if (isNaN(dateA.getTime()) && isNaN(dateB.getTime())) return 0;
       if (isNaN(dateA.getTime())) return 1;
       if (isNaN(dateB.getTime())) return -1;
 
-      // Sort by date (most recent first)
       return dateB.getTime() - dateA.getTime();
     },
     cell: ({ row }) => {
       const model = row.original;
 
       return (
-        <Text className="text-gray-600 text-sm">
+        <span className="text-muted-foreground text-sm">
           {model.health_loading ? "Check in progress..." : model.last_check}
-        </Text>
+        </span>
       );
     },
   },
@@ -270,28 +339,27 @@ export const healthCheckColumns = (
     header: "Last Success",
     accessorKey: "last_success",
     enableSorting: true,
-    sortingFn: (rowA, rowB, columnId) => {
-      const lastSuccessA = (rowA.getValue("last_success") as string) || "Never succeeded";
-      const lastSuccessB = (rowB.getValue("last_success") as string) || "Never succeeded";
+    sortingFn: (rowA, rowB) => {
+      const lastSuccessA =
+        (rowA.getValue("last_success") as string) || "Never succeeded";
+      const lastSuccessB =
+        (rowB.getValue("last_success") as string) || "Never succeeded";
 
-      // Handle special cases
-      if (lastSuccessA === "Never succeeded" && lastSuccessB === "Never succeeded") return 0;
-      if (lastSuccessA === "Never succeeded") return 1; // Never succeeded goes to bottom
+      if (lastSuccessA === "Never succeeded" && lastSuccessB === "Never succeeded")
+        return 0;
+      if (lastSuccessA === "Never succeeded") return 1;
       if (lastSuccessB === "Never succeeded") return -1;
       if (lastSuccessA === "None" && lastSuccessB === "None") return 0;
-      if (lastSuccessA === "None") return 1; // None goes to bottom
+      if (lastSuccessA === "None") return 1;
       if (lastSuccessB === "None") return -1;
 
-      // Parse dates for comparison
       const dateA = new Date(lastSuccessA);
       const dateB = new Date(lastSuccessB);
 
-      // If dates are invalid, treat as never succeeded
       if (isNaN(dateA.getTime()) && isNaN(dateB.getTime())) return 0;
       if (isNaN(dateA.getTime())) return 1;
       if (isNaN(dateB.getTime())) return -1;
 
-      // Sort by date (most recent first)
       return dateB.getTime() - dateA.getTime();
     },
     cell: ({ row }) => {
@@ -300,7 +368,9 @@ export const healthCheckColumns = (
       const healthStatus = modelHealthStatuses[modelId];
       const lastSuccess = healthStatus?.lastSuccess || "None";
 
-      return <Text className="text-gray-600 text-sm">{lastSuccess}</Text>;
+      return (
+        <span className="text-muted-foreground text-sm">{lastSuccess}</span>
+      );
     },
   },
   {
@@ -310,7 +380,8 @@ export const healthCheckColumns = (
       const model = row.original;
       const modelId = model.model_info?.id ?? "";
 
-      const hasExistingStatus = model.health_status && model.health_status !== "none";
+      const hasExistingStatus =
+        model.health_status && model.health_status !== "none";
       const tooltipText = model.health_loading
         ? "Checking..."
         : hasExistingStatus
@@ -318,40 +389,47 @@ export const healthCheckColumns = (
           : "Run Health Check";
 
       return (
-        <Tooltip title={tooltipText} placement="top">
-          <button
-            data-testid="run-health-check-btn"
-            className={`p-2 rounded-md transition-colors ${
-              model.health_loading
-                ? "text-gray-400 cursor-not-allowed bg-gray-100"
-                : "text-indigo-600 hover:text-indigo-700 hover:bg-indigo-50"
-            }`}
-            onClick={() => {
-              if (!model.health_loading) {
-                runIndividualHealthCheck(modelId);
-              }
-            }}
-            disabled={model.health_loading}
-          >
-            {model.health_loading ? (
-              <div className="flex space-x-1">
-                <div className="w-1 h-1 bg-gray-400 rounded-full animate-pulse"></div>
-                <div
-                  className="w-1 h-1 bg-gray-400 rounded-full animate-pulse"
-                  style={{ animationDelay: "0.2s" }}
-                ></div>
-                <div
-                  className="w-1 h-1 bg-gray-400 rounded-full animate-pulse"
-                  style={{ animationDelay: "0.4s" }}
-                ></div>
-              </div>
-            ) : hasExistingStatus ? (
-              <RefreshIcon className="h-4 w-4" />
-            ) : (
-              <PlayIcon className="h-4 w-4" />
-            )}
-          </button>
-        </Tooltip>
+        <TooltipProvider>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                data-testid="run-health-check-btn"
+                className={cn(
+                  "p-2 rounded-md transition-colors",
+                  model.health_loading
+                    ? "text-muted-foreground cursor-not-allowed bg-muted"
+                    : "text-indigo-600 hover:text-indigo-700 hover:bg-indigo-50 dark:hover:bg-indigo-950/30",
+                )}
+                onClick={() => {
+                  if (!model.health_loading) {
+                    runIndividualHealthCheck(modelId);
+                  }
+                }}
+                disabled={model.health_loading}
+              >
+                {model.health_loading ? (
+                  <div className="flex space-x-1">
+                    <div className="w-1 h-1 bg-muted-foreground rounded-full animate-pulse"></div>
+                    <div
+                      className="w-1 h-1 bg-muted-foreground rounded-full animate-pulse"
+                      style={{ animationDelay: "0.2s" }}
+                    ></div>
+                    <div
+                      className="w-1 h-1 bg-muted-foreground rounded-full animate-pulse"
+                      style={{ animationDelay: "0.4s" }}
+                    ></div>
+                  </div>
+                ) : hasExistingStatus ? (
+                  <RefreshCcw className="h-4 w-4" />
+                ) : (
+                  <Play className="h-4 w-4" />
+                )}
+              </button>
+            </TooltipTrigger>
+            <TooltipContent>{tooltipText}</TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
       );
     },
     enableSorting: false,
