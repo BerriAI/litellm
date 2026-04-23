@@ -71,13 +71,13 @@ def _sanitize_think_tag_text_blocks(
             continue
 
         cleaned_text = text.split("</think>", 1)[1].lstrip()
-        if cleaned_text:
-            sanitized_block = dict(block)
-            sanitized_block["text"] = cleaned_text
-            sanitized_content.append(sanitized_block)
+        sanitized_block = dict(block)
+        sanitized_block["text"] = cleaned_text
+        sanitized_content.append(sanitized_block)
 
-    response["content"] = sanitized_content
-    return response
+    sanitized_response = dict(response)
+    sanitized_response["content"] = sanitized_content
+    return cast(AnthropicMessagesResponse, sanitized_response)
 
 
 ####### ENVIRONMENT VARIABLES ###################
