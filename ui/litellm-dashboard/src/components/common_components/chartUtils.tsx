@@ -1,3 +1,4 @@
+// eslint-disable-next-line litellm-ui/no-banned-ui-imports
 import type { CustomTooltipProps } from "@tremor/react";
 import { SpendMetrics } from "../UsagePage/types";
 
