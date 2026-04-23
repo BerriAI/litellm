@@ -1,85 +1,62 @@
 import React from "react";
-import { Button, Dropdown, MenuProps } from "antd";
-import { SwitchVerticalIcon, ChevronUpIcon, ChevronDownIcon, XIcon } from "@heroicons/react/outline";
+import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { ArrowUpDown, ChevronDown, ChevronUp, X } from "lucide-react";
+import { cn } from "@/lib/utils";
 
 export type SortState = "asc" | "desc" | false;
 
 interface TableHeaderSortDropdownProps {
-  /**
-   * Current sort state: "asc", "desc", or false for neutral
-   */
   sortState: SortState;
-  /**
-   * Callback when sort state changes
-   * @param newState - The new sort state: "asc", "desc", or false
-   */
   onSortChange: (newState: SortState) => void;
-  /**
-   * Optional column ID for identification
-   */
   columnId?: string;
 }
 
-export const TableHeaderSortDropdown: React.FC<TableHeaderSortDropdownProps> = ({
-  sortState,
-  onSortChange,
-}) => {
-  const handleMenuClick: MenuProps["onClick"] = ({ key }) => {
-    if (key === "asc") {
-      onSortChange("asc");
-    } else if (key === "desc") {
-      onSortChange("desc");
-    } else if (key === "reset") {
-      onSortChange(false);
-    }
-  };
-
-  const menuItems: MenuProps["items"] = [
-    {
-      key: "asc",
-      label: "Ascending",
-      icon: <ChevronUpIcon className="h-4 w-4" />,
-    },
-    {
-      key: "desc",
-      label: "Descending",
-      icon: <ChevronDownIcon className="h-4 w-4" />,
-    },
-    {
-      key: "reset",
-      label: "Reset",
-      icon: <XIcon className="h-4 w-4" />,
-    },
-  ];
-
-  // Determine which icon to display based on current sort state
+export const TableHeaderSortDropdown: React.FC<
+  TableHeaderSortDropdownProps
+> = ({ sortState, onSortChange }) => {
   const renderIcon = () => {
-    if (sortState === "asc") {
-      return <ChevronUpIcon className="h-4 w-4" />;
-    } else if (sortState === "desc") {
-      return <ChevronDownIcon className="h-4 w-4" />;
-    } else {
-      return <SwitchVerticalIcon className="h-4 w-4" />;
-    }
+    if (sortState === "asc") return <ChevronUp className="h-4 w-4" />;
+    if (sortState === "desc") return <ChevronDown className="h-4 w-4" />;
+    return <ArrowUpDown className="h-4 w-4" />;
   };
 
   return (
-    <Dropdown
-      menu={{
-        items: menuItems,
-        onClick: handleMenuClick,
-        selectable: true,
-        selectedKeys: sortState ? [sortState] : [],
-      }}
-      trigger={["click"]}
-      autoAdjustOverflow
-    >
-      <Button
-        type="text"
-        onClick={(e) => e.stopPropagation()}
-        icon={renderIcon()}
-        className={sortState ? "text-blue-500 hover:text-blue-600" : "text-gray-400 hover:text-blue-500"}
-      />
-    </Dropdown>
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          variant="ghost"
+          size="icon"
+          onClick={(e) => e.stopPropagation()}
+          className={cn(
+            "h-6 w-6",
+            sortState
+              ? "text-primary hover:text-primary"
+              : "text-muted-foreground hover:text-primary",
+          )}
+        >
+          {renderIcon()}
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end">
+        <DropdownMenuItem onClick={() => onSortChange("asc")}>
+          <ChevronUp className="mr-2 h-4 w-4" />
+          Ascending
+        </DropdownMenuItem>
+        <DropdownMenuItem onClick={() => onSortChange("desc")}>
+          <ChevronDown className="mr-2 h-4 w-4" />
+          Descending
+        </DropdownMenuItem>
+        <DropdownMenuItem onClick={() => onSortChange(false)}>
+          <X className="mr-2 h-4 w-4" />
+          Reset
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 };

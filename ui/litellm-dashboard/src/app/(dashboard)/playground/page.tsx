@@ -5,7 +5,12 @@ import AgentBuilderView from "@/components/playground/chat_ui/AgentBuilderView";
 import ChatUI from "@/components/playground/chat_ui/ChatUI";
 import CompareUI from "@/components/playground/compareUI/CompareUI";
 import ComplianceUI from "@/components/playground/complianceUI/ComplianceUI";
-import { TabGroup, TabList, Tab, TabPanels, TabPanel } from "@tremor/react";
+import {
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+} from "@/components/ui/tabs";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { fetchProxySettings } from "@/utils/proxyUtils";
 
@@ -15,8 +20,16 @@ interface ProxySettings {
 }
 
 export default function PlaygroundPage() {
-  const { accessToken, userRole, userId, disabledPersonalKeyCreation, token } = useAuthorized();
-  const [proxySettings, setProxySettings] = useState<ProxySettings | undefined>(undefined);
+  const {
+    accessToken,
+    userRole,
+    userId,
+    disabledPersonalKeyCreation,
+    token,
+  } = useAuthorized();
+  const [proxySettings, setProxySettings] = useState<ProxySettings | undefined>(
+    undefined,
+  );
 
   useEffect(() => {
     const initializeProxySettings = async () => {
@@ -36,15 +49,19 @@ export default function PlaygroundPage() {
 
   return (
     <div className="h-full w-full flex flex-col">
-    <TabGroup className="w-full" style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
-      <TabList className="mb-0">
-        <Tab>Chat</Tab>
-        <Tab>Compare</Tab>
-        <Tab>Compliance</Tab>
-        <Tab>Agent Builder (Experimental)</Tab>
-      </TabList>
-      <TabPanels className="h-full">
-        <TabPanel className="h-full">
+      <Tabs
+        defaultValue="chat"
+        className="w-full flex-1 flex flex-col min-h-0"
+      >
+        <TabsList>
+          <TabsTrigger value="chat">Chat</TabsTrigger>
+          <TabsTrigger value="compare">Compare</TabsTrigger>
+          <TabsTrigger value="compliance">Compliance</TabsTrigger>
+          <TabsTrigger value="agent-builder">
+            Agent Builder (Experimental)
+          </TabsTrigger>
+        </TabsList>
+        <TabsContent value="chat" className="h-full">
           <ChatUI
             accessToken={accessToken}
             token={token}
@@ -53,14 +70,20 @@ export default function PlaygroundPage() {
             disabledPersonalKeyCreation={disabledPersonalKeyCreation}
             proxySettings={proxySettings}
           />
-        </TabPanel>
-        <TabPanel className="h-full">
-          <CompareUI accessToken={accessToken} disabledPersonalKeyCreation={disabledPersonalKeyCreation} />
-        </TabPanel>
-        <TabPanel className="h-full">
-          <ComplianceUI accessToken={accessToken} disabledPersonalKeyCreation={disabledPersonalKeyCreation} />
-        </TabPanel>
-        <TabPanel className="h-full">
+        </TabsContent>
+        <TabsContent value="compare" className="h-full">
+          <CompareUI
+            accessToken={accessToken}
+            disabledPersonalKeyCreation={disabledPersonalKeyCreation}
+          />
+        </TabsContent>
+        <TabsContent value="compliance" className="h-full">
+          <ComplianceUI
+            accessToken={accessToken}
+            disabledPersonalKeyCreation={disabledPersonalKeyCreation}
+          />
+        </TabsContent>
+        <TabsContent value="agent-builder" className="h-full">
           <AgentBuilderView
             accessToken={accessToken}
             token={token}
@@ -68,11 +91,13 @@ export default function PlaygroundPage() {
             userRole={userRole}
             disabledPersonalKeyCreation={disabledPersonalKeyCreation}
             proxySettings={proxySettings}
-            customProxyBaseUrl={proxySettings?.LITELLM_UI_API_DOC_BASE_URL ?? proxySettings?.PROXY_BASE_URL}
+            customProxyBaseUrl={
+              proxySettings?.LITELLM_UI_API_DOC_BASE_URL ??
+              proxySettings?.PROXY_BASE_URL
+            }
           />
-        </TabPanel>
-      </TabPanels>
-    </TabGroup>
+        </TabsContent>
+      </Tabs>
     </div>
   );
 }

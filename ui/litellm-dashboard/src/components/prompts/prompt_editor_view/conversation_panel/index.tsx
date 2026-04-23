@@ -1,6 +1,6 @@
 import React from "react";
-import { ClearOutlined } from "@ant-design/icons";
-import { Button as TremorButton } from "@tremor/react";
+import { Eraser } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { ConversationPanelProps } from "./types";
 import { useConversation } from "./useConversation";
 import VariableInput from "./VariableInput";
@@ -8,7 +8,10 @@ import MessageList from "./MessageList";
 import VariableWarning from "./VariableWarning";
 import MessageInput from "./MessageInput";
 
-const ConversationPanel: React.FC<ConversationPanelProps> = ({ prompt, accessToken }) => {
+const ConversationPanel: React.FC<ConversationPanelProps> = ({
+  prompt,
+  accessToken,
+}) => {
   const {
     isLoading,
     messages,
@@ -27,7 +30,7 @@ const ConversationPanel: React.FC<ConversationPanelProps> = ({ prompt, accessTok
   } = useConversation(prompt, accessToken);
 
   return (
-    <div className="flex flex-col h-full bg-white">
+    <div className="flex flex-col h-full bg-background">
       {!variablesFilled && (
         <VariableInput
           extractedVariables={extractedVariables}
@@ -37,14 +40,15 @@ const ConversationPanel: React.FC<ConversationPanelProps> = ({ prompt, accessTok
       )}
 
       {messages.length > 0 && (
-        <div className="p-3 border-b border-gray-200 bg-white flex justify-end">
-          <TremorButton
+        <div className="p-3 border-b border-border bg-background flex justify-end">
+          <Button
+            variant="outline"
+            size="sm"
             onClick={handleClearConversation}
-            className="bg-gray-100 hover:bg-gray-200 text-gray-700 border-gray-300"
-            icon={ClearOutlined}
           >
+            <Eraser className="h-3.5 w-3.5" />
             Clear Chat
-          </TremorButton>
+          </Button>
         </div>
       )}
 
@@ -55,14 +59,19 @@ const ConversationPanel: React.FC<ConversationPanelProps> = ({ prompt, accessTok
         messagesEndRef={messagesEndRef}
       />
 
-      <div className="p-4 border-t border-gray-200 bg-white">
-        <VariableWarning extractedVariables={extractedVariables} variables={variables} />
+      <div className="p-4 border-t border-border bg-background">
+        <VariableWarning
+          extractedVariables={extractedVariables}
+          variables={variables}
+        />
 
         <MessageInput
           inputMessage={inputMessage}
           isLoading={isLoading}
           isDisabled={
-            isLoading || !inputMessage.trim() || (extractedVariables.length > 0 && !allVariablesFilled)
+            isLoading ||
+            !inputMessage.trim() ||
+            (extractedVariables.length > 0 && !allVariablesFilled)
           }
           onInputChange={setInputMessage}
           onSend={handleSendMessage}
@@ -75,4 +84,3 @@ const ConversationPanel: React.FC<ConversationPanelProps> = ({ prompt, accessTok
 };
 
 export default ConversationPanel;
-
