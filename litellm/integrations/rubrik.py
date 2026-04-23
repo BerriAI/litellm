@@ -320,12 +320,8 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
                         "content": system_prompt_msg_list,
                     }
                     if isinstance(standard_logging_payload["messages"], list):
-                        standard_logging_payload["messages"].insert(
-                            0, system_scaffold
-                        )
-                    elif isinstance(
-                        standard_logging_payload["messages"], (dict, str)
-                    ):
+                        standard_logging_payload["messages"].insert(0, system_scaffold)
+                    elif isinstance(standard_logging_payload["messages"], (dict, str)):
                         standard_logging_payload["messages"] = [
                             system_scaffold,
                             standard_logging_payload["messages"],
@@ -355,14 +351,10 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
                 exc_info=True,
             )
 
-    async def async_log_success_event(
-        self, kwargs, response_obj, start_time, end_time
-    ):
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         await self._enqueue_log_event(kwargs, "success")
 
-    async def async_log_failure_event(
-        self, kwargs, response_obj, start_time, end_time
-    ):
+    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
         await self._enqueue_log_event(kwargs, "failure")
 
     # -- Batch logging ---------------------------------------------------------
