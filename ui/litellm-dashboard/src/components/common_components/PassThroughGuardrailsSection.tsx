@@ -1,7 +1,13 @@
 import React, { useState, useEffect } from "react";
-import { Card, Title, Subtitle } from "@tremor/react";
-import { Form, Select, Tooltip, Alert } from "antd";
-import { InfoCircleOutlined } from "@ant-design/icons";
+import { Card } from "@/components/ui/card";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import { Form, Select } from "antd";
+import { Info } from "lucide-react";
 import GuardrailSelector from "../guardrails/GuardrailSelector";
 
 interface PassThroughGuardrailsSectionProps {
@@ -71,51 +77,72 @@ const PassThroughGuardrailsSection: React.FC<PassThroughGuardrailsSectionProps> 
 
   return (
     <Card className="p-6">
-      <Title className="text-lg font-semibold text-gray-900 mb-2">Guardrails</Title>
-      <Subtitle className="text-gray-600 mb-6">
-        Configure guardrails to enforce policies on requests and responses. Guardrails are opt-in for passthrough
-        endpoints.
-      </Subtitle>
+      <h3 className="text-lg font-semibold text-foreground mb-2">Guardrails</h3>
+      <p className="text-muted-foreground mb-6">
+        Configure guardrails to enforce policies on requests and responses.
+        Guardrails are opt-in for passthrough endpoints.
+      </p>
 
-      <Alert
-        message={
-          <span>
+      <div className="flex gap-2 items-start p-3 rounded-md bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-900 text-blue-800 dark:text-blue-200 mb-4">
+        <Info className="h-4 w-4 mt-0.5 shrink-0" />
+        <div className="flex-1">
+          <div className="font-semibold">
             Field-Level Targeting{" "}
             <a
               href="https://docs.litellm.ai/docs/proxy/pass_through_guardrails#field-level-targeting"
               target="_blank"
               rel="noopener noreferrer"
-              className="text-blue-600 hover:text-blue-800 underline"
+              className="underline"
             >
               (Learn More)
             </a>
-          </span>
-        }
-        description={
-          <div className="space-y-2">
-            <div>
-              Optionally specify which fields to check. If left empty, the entire request/response is sent to the guardrail.
+          </div>
+          <div className="space-y-2 mt-2">
+            <div className="text-sm">
+              Optionally specify which fields to check. If left empty, the
+              entire request/response is sent to the guardrail.
             </div>
             <div className="text-xs space-y-1 mt-2">
               <div className="font-medium">Common Examples:</div>
-              <div>• <code className="bg-gray-100 px-1 rounded">query</code> - Single field</div>
-              <div>• <code className="bg-gray-100 px-1 rounded">documents[*].text</code> - All text in documents array</div>
-              <div>• <code className="bg-gray-100 px-1 rounded">messages[*].content</code> - All message contents</div>
+              <div>
+                •{" "}
+                <code className="bg-background px-1 rounded">query</code> -
+                Single field
+              </div>
+              <div>
+                •{" "}
+                <code className="bg-background px-1 rounded">
+                  documents[*].text
+                </code>{" "}
+                - All text in documents array
+              </div>
+              <div>
+                •{" "}
+                <code className="bg-background px-1 rounded">
+                  messages[*].content
+                </code>{" "}
+                - All message contents
+              </div>
             </div>
           </div>
-        }
-        type="info"
-        showIcon
-        className="mb-4"
-      />
+        </div>
+      </div>
 
       <Form.Item
         label={
-          <span className="text-sm font-medium text-gray-700 flex items-center">
+          <span className="text-sm font-medium text-foreground flex items-center">
             Select Guardrails
-            <Tooltip title="Choose which guardrails should run on this endpoint. Org/team/key level guardrails will also be included.">
-              <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
-            </Tooltip>
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Info className="ml-2 h-3 w-3 inline text-primary cursor-help" />
+                </TooltipTrigger>
+                <TooltipContent className="max-w-xs">
+                  Choose which guardrails should run on this endpoint. Org/team/
+                  key level guardrails will also be included.
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
           </span>
         }
       >
@@ -130,41 +157,57 @@ const PassThroughGuardrailsSection: React.FC<PassThroughGuardrailsSectionProps> 
       {selectedGuardrails.length > 0 && (
         <div className="mt-6 space-y-4">
           <div className="flex items-center justify-between mb-3">
-            <div className="text-sm font-medium text-gray-700">Field Targeting (Optional)</div>
-            <div className="text-xs text-gray-500">
+            <div className="text-sm font-medium text-foreground">
+              Field Targeting (Optional)
+            </div>
+            <div className="text-xs text-muted-foreground">
               💡 Tip: Leave empty to check entire payload
             </div>
           </div>
           {selectedGuardrails.map((guardrailName) => (
-            <Card key={guardrailName} className="p-4 bg-gray-50">
-              <div className="text-sm font-medium text-gray-900 mb-3">{guardrailName}</div>
+            <Card key={guardrailName} className="p-4 bg-muted">
+              <div className="text-sm font-medium text-foreground mb-3">
+                {guardrailName}
+              </div>
               <div className="space-y-3">
                 <div>
                   <div className="flex items-center justify-between mb-1">
-                    <label className="text-xs text-gray-600 flex items-center">
+                    <label className="text-xs text-muted-foreground flex items-center">
                       Request Fields (pre_call)
-                      <Tooltip title={
-                        <div>
-                          <div className="font-medium mb-1">Specify which request fields to check</div>
-                          <div className="text-xs space-y-1">
-                            <div>Examples:</div>
-                            <div>• query</div>
-                            <div>• documents[*].text</div>
-                            <div>• messages[*].content</div>
-                          </div>
-                        </div>
-                      }>
-                        <InfoCircleOutlined className="ml-1 text-gray-400" />
-                      </Tooltip>
+                      <TooltipProvider>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Info className="ml-1 h-3 w-3 inline text-muted-foreground" />
+                          </TooltipTrigger>
+                          <TooltipContent>
+                            <div>
+                              <div className="font-medium mb-1">
+                                Specify which request fields to check
+                              </div>
+                              <div className="text-xs space-y-1">
+                                <div>Examples:</div>
+                                <div>• query</div>
+                                <div>• documents[*].text</div>
+                                <div>• messages[*].content</div>
+                              </div>
+                            </div>
+                          </TooltipContent>
+                        </Tooltip>
+                      </TooltipProvider>
                     </label>
                     <div className="flex gap-1">
                       <button
                         type="button"
                         onClick={() => {
-                          const current = guardrailSettings[guardrailName]?.request_fields || [];
-                          handleFieldChange(guardrailName, "request_fields", [...current, "query"]);
+                          const current =
+                            guardrailSettings[guardrailName]?.request_fields ||
+                            [];
+                          handleFieldChange(guardrailName, "request_fields", [
+                            ...current,
+                            "query",
+                          ]);
                         }}
-                        className="text-xs px-2 py-1 bg-white border border-gray-300 rounded hover:bg-gray-50"
+                        className="text-xs px-2 py-1 bg-background border border-border rounded hover:bg-muted"
                         disabled={disabled}
                       >
                         + query
@@ -172,10 +215,15 @@ const PassThroughGuardrailsSection: React.FC<PassThroughGuardrailsSectionProps> 
                       <button
                         type="button"
                         onClick={() => {
-                          const current = guardrailSettings[guardrailName]?.request_fields || [];
-                          handleFieldChange(guardrailName, "request_fields", [...current, "documents[*]"]);
+                          const current =
+                            guardrailSettings[guardrailName]?.request_fields ||
+                            [];
+                          handleFieldChange(guardrailName, "request_fields", [
+                            ...current,
+                            "documents[*]",
+                          ]);
                         }}
-                        className="text-xs px-2 py-1 bg-white border border-gray-300 rounded hover:bg-gray-50"
+                        className="text-xs px-2 py-1 bg-background border border-border rounded hover:bg-muted"
                         disabled={disabled}
                       >
                         + documents[*]
@@ -186,37 +234,53 @@ const PassThroughGuardrailsSection: React.FC<PassThroughGuardrailsSectionProps> 
                     mode="tags"
                     style={{ width: "100%" }}
                     placeholder="Type field name or use + buttons above (e.g., query, documents[*].text)"
-                    value={guardrailSettings[guardrailName]?.request_fields || []}
-                    onChange={(fields) => handleFieldChange(guardrailName, "request_fields", fields)}
+                    value={
+                      guardrailSettings[guardrailName]?.request_fields || []
+                    }
+                    onChange={(fields) =>
+                      handleFieldChange(guardrailName, "request_fields", fields)
+                    }
                     disabled={disabled}
                     tokenSeparators={[","]}
                   />
                 </div>
                 <div>
                   <div className="flex items-center justify-between mb-1">
-                    <label className="text-xs text-gray-600 flex items-center">
+                    <label className="text-xs text-muted-foreground flex items-center">
                       Response Fields (post_call)
-                      <Tooltip title={
-                        <div>
-                          <div className="font-medium mb-1">Specify which response fields to check</div>
-                          <div className="text-xs space-y-1">
-                            <div>Examples:</div>
-                            <div>• results[*].text</div>
-                            <div>• choices[*].message.content</div>
-                          </div>
-                        </div>
-                      }>
-                        <InfoCircleOutlined className="ml-1 text-gray-400" />
-                      </Tooltip>
+                      <TooltipProvider>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Info className="ml-1 h-3 w-3 inline text-muted-foreground" />
+                          </TooltipTrigger>
+                          <TooltipContent>
+                            <div>
+                              <div className="font-medium mb-1">
+                                Specify which response fields to check
+                              </div>
+                              <div className="text-xs space-y-1">
+                                <div>Examples:</div>
+                                <div>• results[*].text</div>
+                                <div>• choices[*].message.content</div>
+                              </div>
+                            </div>
+                          </TooltipContent>
+                        </Tooltip>
+                      </TooltipProvider>
                     </label>
                     <div className="flex gap-1">
                       <button
                         type="button"
                         onClick={() => {
-                          const current = guardrailSettings[guardrailName]?.response_fields || [];
-                          handleFieldChange(guardrailName, "response_fields", [...current, "results[*]"]);
+                          const current =
+                            guardrailSettings[guardrailName]?.response_fields ||
+                            [];
+                          handleFieldChange(guardrailName, "response_fields", [
+                            ...current,
+                            "results[*]",
+                          ]);
                         }}
-                        className="text-xs px-2 py-1 bg-white border border-gray-300 rounded hover:bg-gray-50"
+                        className="text-xs px-2 py-1 bg-background border border-border rounded hover:bg-muted"
                         disabled={disabled}
                       >
                         + results[*]
@@ -227,8 +291,16 @@ const PassThroughGuardrailsSection: React.FC<PassThroughGuardrailsSectionProps> 
                     mode="tags"
                     style={{ width: "100%" }}
                     placeholder="Type field name or use + buttons above (e.g., results[*].text)"
-                    value={guardrailSettings[guardrailName]?.response_fields || []}
-                    onChange={(fields) => handleFieldChange(guardrailName, "response_fields", fields)}
+                    value={
+                      guardrailSettings[guardrailName]?.response_fields || []
+                    }
+                    onChange={(fields) =>
+                      handleFieldChange(
+                        guardrailName,
+                        "response_fields",
+                        fields,
+                      )
+                    }
                     disabled={disabled}
                     tokenSeparators={[","]}
                   />

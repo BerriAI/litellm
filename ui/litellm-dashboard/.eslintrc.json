@@ -63,6 +63,7 @@
         "src/components/common_components/ModelAliasManager.tsx",
         "src/components/mcp_tools/mcp_server_columns.tsx",
         "src/components/playground/chat_ui/A2AMetrics.tsx",
+        "src/components/common_components/PassThroughGuardrailsSection.tsx",
         "src/components/permissions/VectorStorePermissions.tsx",
         "src/components/permissions/AgentPermissions.tsx",
         "src/components/permissions/MCPServerPermissions.tsx",
