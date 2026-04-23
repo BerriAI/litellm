@@ -452,7 +452,14 @@ def update_messages_with_model_file_ids(
                 for c in content:
                     if c["type"] == "file":
                         file_object = cast(ChatCompletionFileObject, c)
-                        file_object_file_field = file_object["file"]
+                        file_object_file_field = file_object.get("file")
+                        if not isinstance(file_object_file_field, dict):
+                            # Content block has `type: "file"` but not the
+                            # OpenAI Chat Completions shape (e.g. a LangChain
+                            # v1 standardized file block, or a provider-native
+                            # shape that also uses `type: "file"`). Nothing to
+                            # remap here, so skip instead of crashing.
+                            continue
                         file_id = file_object_file_field.get("file_id")
                         format = file_object_file_field.get(
                             "format", get_format_from_file_id(file_id)
@@ -1060,7 +1067,12 @@ def get_file_ids_from_messages(messages: List[AllMessageValues]) -> List[str]:
                 for c in content:
                     if c["type"] == "file":
                         file_object = cast(ChatCompletionFileObject, c)
-                        file_object_file_field = file_object["file"]
+                        file_object_file_field = file_object.get("file")
+                        if not isinstance(file_object_file_field, dict):
+                            # Content block has `type: "file"` but not the
+                            # OpenAI Chat Completions shape. No file_id to
+                            # extract, so skip instead of raising KeyError.
+                            continue
                         file_id = file_object_file_field.get("file_id")
                         if file_id:
                             file_ids.append(file_id)

@@ -11,6 +11,7 @@ sys.path.insert(
 
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     add_system_prompt_to_messages,
+    get_file_ids_from_messages,
     get_format_from_file_id,
     handle_any_messages_to_chat_completion_str_messages_conversion,
     split_concatenated_json_objects,
@@ -254,3 +255,115 @@ def test_split_concatenated_json_invalid_raises():
     """Completely invalid JSON raises JSONDecodeError."""
     with pytest.raises(json.JSONDecodeError):
         split_concatenated_json_objects("not json at all")
+
+
+# ---------------------------------------------------------------------------
+# Regression tests for non-OpenAI file content blocks.
+#
+# `type: "file"` is a public content-block discriminator. Several producers
+# (LangChain v1, provider-native shapes, custom user code) emit blocks with
+# `type: "file"` but without the OpenAI Chat Completions `file` sub-dict.
+# The discovery helpers below are used unconditionally inside
+# `AnthropicConfig.validate_environment`, so any crash there surfaces as a
+# `500 InternalServerError` before the request is even dispatched.
+# ---------------------------------------------------------------------------
+
+
+def test_get_file_ids_from_messages_skips_langchain_v1_file_block():
+    """A LangChain v1 standardized file block must not crash file-id discovery."""
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "summarise this PDF"},
+                # LangChain v1 shape produced by `_normalize_messages`.
+                # No `file` sub-dict: the discriminator is `type: "file"` but
+                # the payload lives on `base64`/`mime_type` siblings.
+                {
+                    "type": "file",
+                    "id": "lc_1",
+                    "base64": "JVBERi0xLjQK",
+                    "mime_type": "application/pdf",
+                    "extras": {"file_format": "application/pdf"},
+                },
+            ],
+        }
+    ]
+
+    assert get_file_ids_from_messages(messages) == []
+
+
+def test_get_file_ids_from_messages_still_extracts_from_openai_shape():
+    """Well-formed OpenAI file blocks still yield their file_id."""
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "what is this?"},
+                {"type": "file", "file": {"file_id": "file-abc"}},
+            ],
+        }
+    ]
+
+    assert get_file_ids_from_messages(messages) == ["file-abc"]
+
+
+def test_get_file_ids_from_messages_mixed_shapes():
+    """Mixed OpenAI and non-OpenAI file blocks: extract from the former,
+    ignore the latter."""
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "file", "file": {"file_id": "file-keep"}},
+                {
+                    "type": "file",
+                    "id": "lc_2",
+                    "base64": "AAA",
+                    "mime_type": "application/pdf",
+                },
+            ],
+        }
+    ]
+
+    assert get_file_ids_from_messages(messages) == ["file-keep"]
+
+
+def test_get_file_ids_from_messages_file_field_not_dict():
+    """`file` set to a non-dict value (e.g. stringified payload) must not crash."""
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "file", "file": "unexpectedly-a-string"},
+            ],
+        }
+    ]
+
+    assert get_file_ids_from_messages(messages) == []
+
+
+def test_update_messages_with_model_file_ids_skips_non_openai_file_blocks():
+    """`update_messages_with_model_file_ids` is also called on user content
+    before provider dispatch. It must tolerate non-OpenAI file blocks the same
+    way."""
+    langchain_v1_block = {
+        "type": "file",
+        "id": "lc_3",
+        "base64": "AAA",
+        "mime_type": "application/pdf",
+    }
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "hello"},
+                langchain_v1_block,
+            ],
+        }
+    ]
+
+    updated = update_messages_with_model_file_ids(messages, "model-1", {})
+
+    # Messages pass through unchanged when there is no `file` sub-dict to remap.
+    assert updated == messages
