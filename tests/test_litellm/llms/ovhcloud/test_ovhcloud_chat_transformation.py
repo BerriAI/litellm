@@ -8,6 +8,7 @@ import sys
 import pytest
 
 from litellm.llms.ovhcloud.utils import OVHCloudException
+from litellm.utils import get_optional_params
 
 sys.path.insert(
     0, os.path.abspath("../../../../..")
@@ -143,6 +144,38 @@ class TestOVHCloudConfig:
         assert isinstance(error, OVHCloudException)
         assert error.message == "Test error"
         assert error.status_code == 400
+
+    @pytest.mark.parametrize(
+        "model",
+        [
+            "Meta-Llama-3_3-70B-Instruct",
+            "Meta-Llama-3_1-70B-Instruct",
+            "Mixtral-8x7B-Instruct-v0.1",
+            "gpt-oss-120b",
+            "some-model-not-in-the-cost-map",
+        ],
+    )
+    def test_tools_not_filtered_by_static_model_map(self, model):
+        """
+        OVHCloud AI Endpoints are OpenAI-compatible; tools/tool_choice must pass
+        through for any model. The server is responsible for rejecting unsupported
+        tool calls — LiteLLM must not strip them based on a stale static catalog.
+        """
+
+        params = get_optional_params(
+            model=model,
+            custom_llm_provider="ovhcloud",
+            tools=[
+                {
+                    "type": "function",
+                    "function": {"name": "x", "parameters": {}},
+                }
+            ],
+            tool_choice="auto",
+        )
+
+        assert "tools" in params
+        assert "tool_choice" in params
 
 
 def test_ovhcloud_integration():
