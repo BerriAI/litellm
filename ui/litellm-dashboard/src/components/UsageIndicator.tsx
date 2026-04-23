@@ -1,5 +1,5 @@
 import { useDisableUsageIndicator } from "@/app/(dashboard)/hooks/useDisableUsageIndicator";
-import { Badge } from "@tremor/react";
+import { Badge } from "@/components/ui/badge";
 import { AlertTriangle, Calendar, ChevronDown, ChevronUp, Loader2, Minus, TrendingUp, UserCheck, Users } from "lucide-react";
 import { useEffect, useState } from "react";
 import { getRemainingUsers, getLicenseInfo, LicenseInfo } from "./networking";
@@ -146,10 +146,10 @@ export default function UsageIndicator({ accessToken, width = 220 }: UsageIndica
   const hasError = isOverLimit || isLicenseExpired;
   const hasWarning = (isNearLimit || isLicenseExpiringSoon) && !hasError;
 
-  const getStatusColor = () => {
-    if (hasError) return "red";
-    if (hasWarning) return "yellow";
-    return "green";
+  const getStatusColor = (): "destructive" | "default" | "secondary" => {
+    if (hasError) return "destructive";
+    if (hasWarning) return "secondary";
+    return "default";
   };
 
   const getStatusIcon = () => {
@@ -252,7 +252,7 @@ export default function UsageIndicator({ accessToken, width = 220 }: UsageIndica
             <Users className="h-4 w-4 flex-shrink-0" />
             <span className="text-sm font-medium truncate">Usage Status</span>
             {hasAnyIssue && (
-              <Badge color={getStatusColor()} className="text-xs px-1.5 py-0.5 flex-shrink-0">
+              <Badge variant={getStatusColor()} className="text-xs px-1.5 py-0.5 flex-shrink-0">
                 {getStatusIcon()}
               </Badge>
             )}
