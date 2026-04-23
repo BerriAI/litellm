@@ -1,7 +1,15 @@
 import { Fragment, useState } from "react";
 import { ColumnDef, flexRender, getCoreRowModel, getExpandedRowModel, Row, useReactTable, getSortedRowModel, SortingState } from "@tanstack/react-table";
 
-import { Table, TableHead, TableHeaderCell, TableBody, TableRow, TableCell } from "@tremor/react";
+// eslint-disable-next-line litellm-ui/no-banned-ui-imports
+import {
+  Table,
+  TableHead,
+  TableHeaderCell,
+  TableBody,
+  TableRow,
+  TableCell,
+} from "@tremor/react";
 
 interface DataTableProps<TData, TValue> {
   data: TData[];
@@ -46,6 +54,7 @@ export function DataTable<TData, TValue>({
     }),
     ...(supportsExpansion && { getRowCanExpand }),
     getRowId: (row: TData, index: number) => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const _row: any = row as any;
       return _row?.request_id ?? String(index);
     },
@@ -65,17 +74,28 @@ export function DataTable<TData, TValue>({
                 const isSorted = header.column.getIsSorted();
                 
                 return (
-                  <TableHeaderCell 
-                    key={header.id} 
-                    className={`py-1 h-8 ${canSort ? 'cursor-pointer select-none hover:bg-gray-50' : ''}`}
-                    onClick={canSort ? header.column.getToggleSortingHandler() : undefined}
+                  <TableHeaderCell
+                    key={header.id}
+                    className={`py-1 h-8 ${canSort ? "cursor-pointer select-none hover:bg-muted" : ""}`}
+                    onClick={
+                      canSort
+                        ? header.column.getToggleSortingHandler()
+                        : undefined
+                    }
                   >
                     {header.isPlaceholder ? null : (
                       <div className="flex items-center gap-1">
-                        {flexRender(header.column.columnDef.header, header.getContext())}
+                        {flexRender(
+                          header.column.columnDef.header,
+                          header.getContext(),
+                        )}
                         {canSort && (
-                          <span className="text-gray-400">
-                            {isSorted === 'asc' ? '↑' : isSorted === 'desc' ? '↓' : '⇅'}
+                          <span className="text-muted-foreground">
+                            {isSorted === "asc"
+                              ? "↑"
+                              : isSorted === "desc"
+                                ? "↓"
+                                : "⇅"}
                           </span>
                         )}
                       </div>
@@ -90,7 +110,7 @@ export function DataTable<TData, TValue>({
           {isLoading ? (
             <TableRow>
               <TableCell colSpan={columns.length} className="h-8 text-center">
-                <div className="text-center text-gray-500">
+                <div className="text-center text-muted-foreground">
                   <p>{loadingMessage}</p>
                 </div>
               </TableCell>
@@ -99,7 +119,7 @@ export function DataTable<TData, TValue>({
             table.getRowModel().rows.map((row) => (
               <Fragment key={row.id}>
                 <TableRow
-                  className={`h-8 ${onRowClick ? "cursor-pointer hover:bg-gray-50" : ""}`}
+                  className={`h-8 ${onRowClick ? "cursor-pointer hover:bg-muted" : ""}`}
                   onClick={() => onRowClick?.(row.original)}
                 >
                   {row.getVisibleCells().map((cell) => (
@@ -127,7 +147,7 @@ export function DataTable<TData, TValue>({
           ) : (
             <TableRow>
               <TableCell colSpan={columns.length} className="h-8 text-center">
-                <div className="text-center text-gray-500">
+                <div className="text-center text-muted-foreground">
                   <p>{noDataMessage}</p>
                 </div>
               </TableCell>
