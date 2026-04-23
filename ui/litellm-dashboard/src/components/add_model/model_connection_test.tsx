@@ -1,12 +1,18 @@
 import React from "react";
-import { Typography, Button, Divider } from "antd";
-import { WarningOutlined, InfoCircleOutlined, CopyOutlined } from "@ant-design/icons";
+import { Button } from "@/components/ui/button";
+import {
+  AlertTriangle,
+  CheckCircle2,
+  Copy,
+  Info,
+  Loader2,
+} from "lucide-react";
 import { testConnectionRequest } from "../networking";
 import { prepareModelAddRequest } from "./handle_add_model_submit";
 import NotificationsManager from "../molecules/notifications_manager";
-const { Text } = Typography;
 
 interface ModelConnectionTestProps {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   formValues: Record<string, any>;
   accessToken: string;
   testMode: string;
@@ -18,84 +24,84 @@ interface ModelConnectionTestProps {
 const ModelConnectionTest: React.FC<ModelConnectionTestProps> = ({
   formValues,
   accessToken,
-  testMode,
   modelName = "this model",
-  onClose,
   onTestComplete,
 }) => {
   const [error, setError] = React.useState<Error | string | null>(null);
-  const [rawRequest, setRawRequest] = React.useState<any>(null);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const [rawResponse, setRawResponse] = React.useState<any>(null);
   const [isLoading, setIsLoading] = React.useState<boolean>(true);
   const [isSuccess, setIsSuccess] = React.useState<boolean>(false);
   const [showDetails, setShowDetails] = React.useState<boolean>(false);
 
-  const testModelConnection = async () => {
-    setIsLoading(true);
-    setShowDetails(false);
-    setError(null);
-    setRawRequest(null);
-    setRawResponse(null);
-    setIsSuccess(false);
-
-    // Add a small delay to ensure form values are fully populated
-    await new Promise((resolve) => setTimeout(resolve, 100));
-
-    try {
-      console.log("Testing connection with form values:", formValues);
-      const result = await prepareModelAddRequest(formValues, accessToken, null);
-
-      if (!result) {
-        console.log("No result from prepareModelAddRequest");
-        setError("Failed to prepare model data. Please check your form inputs.");
-        setIsSuccess(false);
-        setIsLoading(false);
-        return;
-      }
-
-      console.log("Result from prepareModelAddRequest:", result);
-
-      const { litellmParamsObj, modelInfoObj, modelName: returnedModelName } = result[0];
-
-      const response = await testConnectionRequest(accessToken, litellmParamsObj, modelInfoObj, modelInfoObj?.mode);
-      if (response.status === "success") {
-        NotificationsManager.success("Connection test successful!");
-        setError(null);
-        setIsSuccess(true);
-      } else {
-        const errorMessage = response.result?.error || response.message || "Unknown error";
-        setError(errorMessage);
-        setRawRequest(litellmParamsObj);
-        setRawResponse(response.result?.raw_request_typed_dict);
-        setIsSuccess(false);
-      }
-    } catch (error) {
-      console.error("Test connection error:", error);
-      setError(error instanceof Error ? error.message : String(error));
-      setIsSuccess(false);
-    } finally {
-      setIsLoading(false);
-      if (onTestComplete) onTestComplete();
-    }
-  };
-
   React.useEffect(() => {
-    // Run the test once when component mounts
-    // Add a small timeout to ensure form values are ready
+    const testModelConnection = async () => {
+      setIsLoading(true);
+      setShowDetails(false);
+      setError(null);
+      setRawResponse(null);
+      setIsSuccess(false);
+
+      await new Promise((resolve) => setTimeout(resolve, 100));
+
+      try {
+        const result = await prepareModelAddRequest(
+          formValues,
+          accessToken,
+          null,
+        );
+
+        if (!result) {
+          setError(
+            "Failed to prepare model data. Please check your form inputs.",
+          );
+          setIsSuccess(false);
+          setIsLoading(false);
+          return;
+        }
+
+        const { litellmParamsObj, modelInfoObj } = result[0];
+
+        const response = await testConnectionRequest(
+          accessToken,
+          litellmParamsObj,
+          modelInfoObj,
+          modelInfoObj?.mode,
+        );
+        if (response.status === "success") {
+          NotificationsManager.success("Connection test successful!");
+          setError(null);
+          setIsSuccess(true);
+        } else {
+          const errorMessage =
+            response.result?.error || response.message || "Unknown error";
+          setError(errorMessage);
+          setRawResponse(response.result?.raw_request_typed_dict);
+          setIsSuccess(false);
+        }
+      } catch (err) {
+        console.error("Test connection error:", err);
+        setError(err instanceof Error ? err.message : String(err));
+        setIsSuccess(false);
+      } finally {
+        setIsLoading(false);
+        if (onTestComplete) onTestComplete();
+      }
+    };
+
     const timer = setTimeout(() => {
       testModelConnection();
     }, 200);
 
     return () => clearTimeout(timer);
-  }, []); // Empty dependency array means this runs once on mount
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const getCleanErrorMessage = (errorMsg: string) => {
     if (!errorMsg) return "Unknown error";
 
     const mainError = errorMsg.split("stack trace:")[0].trim();
-
     const cleanedError = mainError.replace(/^litellm\.(.*?)Error: /, "");
-
     return cleanedError;
   };
 
@@ -108,6 +114,7 @@ const ModelConnectionTest: React.FC<ModelConnectionTestProps> = ({
 
   const formatCurlCommand = (
     apiBase: string,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     requestBody: Record<string, any>,
     requestHeaders: Record<string, string>,
   ) => {
@@ -137,152 +144,104 @@ ${formattedBody}
     : "";
 
   return (
-    <div style={{ padding: "24px", borderRadius: "8px", backgroundColor: "#fff" }}>
+    <div className="p-6 rounded-lg bg-background">
       {isLoading ? (
-        <div style={{ textAlign: "center", padding: "32px 20px" }}>
-          <div className="loading-spinner" style={{ marginBottom: "16px" }}>
-            {/* Simple CSS spinner */}
-            <div
-              style={{
-                border: "3px solid #f3f3f3",
-                borderTop: "3px solid #1890ff",
-                borderRadius: "50%",
-                width: "30px",
-                height: "30px",
-                animation: "spin 1s linear infinite",
-                margin: "0 auto",
-              }}
-            />
+        <div className="text-center py-8 px-5">
+          <div className="mb-4 flex justify-center">
+            <Loader2 className="h-8 w-8 animate-spin text-primary" />
           </div>
-          <Text style={{ fontSize: "16px" }}>Testing connection to {modelName}...</Text>
-          <style jsx>{`
-            @keyframes spin {
-              0% {
-                transform: rotate(0deg);
-              }
-              100% {
-                transform: rotate(360deg);
-              }
-            }
-          `}</style>
+          <span className="text-base">Testing connection to {modelName}...</span>
         </div>
       ) : isSuccess ? (
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "center", padding: "32px 20px" }}>
-          <div style={{ color: "#52c41a", fontSize: "24px", display: "flex", alignItems: "center" }}>
-            <svg
-              viewBox="64 64 896 896"
-              focusable="false"
-              data-icon="check-circle"
-              width="1em"
-              height="1em"
-              fill="currentColor"
-              aria-hidden="true"
-            >
-              <path d="M512 64C264.6 64 64 264.6 64 512s200.6 448 448 448 448-200.6 448-448S759.4 64 512 64zm193.5 301.7l-210.6 292a31.8 31.8 0 01-51.7 0L318.5 484.9c-3.8-5.3 0-12.7 6.5-12.7h46.9c10.2 0 19.9 4.9 25.9 13.3l71.2 98.8 157.2-218c6-8.3 15.6-13.3 25.9-13.3H699c6.5 0 10.3 7.4 6.5 12.7z"></path>
-            </svg>
-          </div>
-          <Text data-testid="connection-success-msg" type="success" style={{ fontSize: "18px", fontWeight: 500, marginLeft: "10px" }}>
+        <div className="flex items-center justify-center py-8 px-5">
+          {/* eslint-disable-next-line litellm-ui/no-raw-tailwind-colors */}
+          <CheckCircle2 className="h-7 w-7 text-emerald-500" />
+          <span
+            data-testid="connection-success-msg"
+            // eslint-disable-next-line litellm-ui/no-raw-tailwind-colors
+            className="text-emerald-600 text-lg font-medium ml-2.5"
+          >
             Connection to {modelName} successful!
-          </Text>
+          </span>
         </div>
       ) : (
-        <>
-          <div>
-            <div style={{ display: "flex", alignItems: "center", marginBottom: "20px" }}>
-              <WarningOutlined style={{ color: "#ff4d4f", fontSize: "24px", marginRight: "12px" }} />
-              <Text data-testid="connection-failure-msg" type="danger" style={{ fontSize: "18px", fontWeight: 500 }}>
-                Connection to {modelName} failed
-              </Text>
-            </div>
-
-            <div
-              style={{
-                backgroundColor: "#fff2f0",
-                border: "1px solid #ffccc7",
-                borderRadius: "8px",
-                padding: "16px",
-                marginBottom: "20px",
-                boxShadow: "0 1px 2px rgba(0, 0, 0, 0.03)",
-              }}
+        <div>
+          <div className="flex items-center mb-5">
+            <AlertTriangle className="h-6 w-6 text-destructive mr-3" />
+            <span
+              data-testid="connection-failure-msg"
+              className="text-destructive text-lg font-medium"
             >
-              <Text strong style={{ display: "block", marginBottom: "8px" }}>
-                Error:{" "}
-              </Text>
-              <Text type="danger" style={{ fontSize: "14px", lineHeight: "1.5" }}>
-                {errorMessage}
-              </Text>
+              Connection to {modelName} failed
+            </span>
+          </div>
 
-              {error && (
-                <div style={{ marginTop: "12px" }}>
-                  <Button
-                    type="link"
-                    onClick={() => setShowDetails(!showDetails)}
-                    style={{ paddingLeft: 0, height: "auto" }}
-                  >
-                    {showDetails ? "Hide Details" : "Show Details"}
-                  </Button>
-                </div>
-              )}
-            </div>
+          <div className="bg-destructive/5 border border-destructive/30 rounded-lg p-4 mb-5">
+            <span className="block mb-2 font-semibold">Error: </span>
+            <span className="text-destructive text-sm leading-relaxed">
+              {errorMessage}
+            </span>
 
-            {showDetails && (
-              <div style={{ marginBottom: "20px" }}>
-                <Text strong style={{ display: "block", marginBottom: "8px", fontSize: "15px" }}>
-                  Troubleshooting Details
-                </Text>
-                <pre
-                  style={{
-                    backgroundColor: "#f5f5f5",
-                    padding: "16px",
-                    borderRadius: "8px",
-                    fontSize: "13px",
-                    maxHeight: "200px",
-                    overflow: "auto",
-                    border: "1px solid #e8e8e8",
-                    lineHeight: "1.5",
-                  }}
+            {error && (
+              <div className="mt-3">
+                <Button
+                  type="button"
+                  variant="link"
+                  onClick={() => setShowDetails(!showDetails)}
+                  className="p-0 h-auto"
                 >
-                  {typeof error === "string" ? error : JSON.stringify(error, null, 2)}
-                </pre>
+                  {showDetails ? "Hide Details" : "Show Details"}
+                </Button>
               </div>
             )}
-
-            <div>
-              <Text strong style={{ display: "block", marginBottom: "8px", fontSize: "15px" }}>
-                API Request
-              </Text>
-              <pre
-                style={{
-                  backgroundColor: "#f5f5f5",
-                  padding: "16px",
-                  borderRadius: "8px",
-                  fontSize: "13px",
-                  maxHeight: "250px",
-                  overflow: "auto",
-                  border: "1px solid #e8e8e8",
-                  lineHeight: "1.5",
-                }}
-              >
-                {curlCommand || "No request data available"}
-              </pre>
-              <Button
-                style={{ marginTop: "8px" }}
-                icon={<CopyOutlined />}
-                onClick={() => {
-                  navigator.clipboard.writeText(curlCommand || "");
-                  NotificationsManager.success("Copied to clipboard");
-                }}
-              >
-                Copy to Clipboard
-              </Button>
-            </div>
           </div>
-        </>
+
+          {showDetails && (
+            <div className="mb-5">
+              <span className="block mb-2 text-[15px] font-semibold">
+                Troubleshooting Details
+              </span>
+              <pre className="bg-muted p-4 rounded-lg text-xs max-h-[200px] overflow-auto border border-border leading-relaxed">
+                {typeof error === "string"
+                  ? error
+                  : JSON.stringify(error, null, 2)}
+              </pre>
+            </div>
+          )}
+
+          <div>
+            <span className="block mb-2 text-[15px] font-semibold">
+              API Request
+            </span>
+            <pre className="bg-muted p-4 rounded-lg text-xs max-h-[250px] overflow-auto border border-border leading-relaxed">
+              {curlCommand || "No request data available"}
+            </pre>
+            <Button
+              type="button"
+              variant="outline"
+              className="mt-2"
+              onClick={() => {
+                navigator.clipboard.writeText(curlCommand || "");
+                NotificationsManager.success("Copied to clipboard");
+              }}
+            >
+              <Copy className="h-4 w-4" />
+              Copy to Clipboard
+            </Button>
+          </div>
+        </div>
       )}
-      <Divider style={{ margin: "24px 0 16px" }} />
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <Button type="link" href="https://docs.litellm.ai/docs/providers" target="_blank" icon={<InfoCircleOutlined />}>
-          View Documentation
+      <hr className="border-border my-6" />
+      <div className="flex justify-between items-center">
+        <Button asChild variant="link" className="p-0 h-auto">
+          <a
+            href="https://docs.litellm.ai/docs/providers"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            <Info className="h-4 w-4" />
+            View Documentation
+          </a>
         </Button>
       </div>
     </div>
